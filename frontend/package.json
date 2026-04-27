@@ -1,0 +1,26 @@
+{
+  "name": "ild-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev",
+    "build": "tsc && vp build",
+    "preview": "vp preview",
+    "lint": "vp lint",
+    "check": "vp check",
+    "test": "vp test"
+  },
+  "dependencies": {
+    "@microsoft/signalr": "^8.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.21.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.43",
+    "@types/react-dom": "^18.2.17",
+    "@vitejs/plugin-react": "^6.0.1",
+    "typescript": "^5.3.3"
+  }
+}

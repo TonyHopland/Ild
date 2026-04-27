@@ -1,0 +1,42 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+*.cache
+ProjectAssets.json
+project.lock.json
+
+## Node
+node_modules/
+frontend/dist/
+npm-debug.log*
+
+## IDE
+.vs/
+.vscode/
+*.swp
+*.swo
+*~
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Data
+data/
+!data/.gitkeep
+*.db
+
+## Secrets
+.env
+
+## Worktrees
+worktrees/
+
+## Build artifacts
+*.log
+
+## Vite+ cache and hooks
+.pnpm-store/
+.vite-hooks/

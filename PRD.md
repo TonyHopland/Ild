@@ -152,29 +152,29 @@ The system runs in a single container, persists state in SQLite, and integrates 
 
 ### Resolved Design Decisions
 
-| Decision | Outcome |
-|----------|---------|
-| Node execution model | Sequential, single-threaded per loop run |
-| Worktree lifecycle | One worktree per work item, created on first run, destroyed on Done/cleanup |
-| State model | DB (`LoopRun`, `LoopRunNode` tables) is source of truth; event log is observability + AI context |
-| Tool architecture | In-process tool abstractions (not MCP subprocesses) |
-| Engine scheduling | Async `while` loop with `CancellationToken`; SignalR pushes per node transition |
-| Crash recovery | Re-execute in-flight node; per-template policy (auto-resume / needs review / cancel) |
-| Node editor | React Flow |
-| Dependency resolution | Push-based via webhook on PR merge |
-| SignalR reconnect | State snapshot + delta (not full event replay) |
-| Prompt rendering | Engine resolves placeholders; unknown placeholder validation on save |
-| Large payloads | Stored on disk under `data/payloads/{runId}/{sequence}.json`; DB stores path reference |
-| Webhook fallback | Webhook-only; manual PR link/merge override available |
-| DB migrations | EF Core auto-migrate on startup |
-| Auth | Single user, env vars only (`ILD_USERNAME`, `ILD_PASSWORD`), no wizard |
-| Edge traversal limits | 200 node executions + 24h wall-clock default; configurable per template |
-| Frontend | Vite+ + React + TypeScript |
-| Retry semantics | Error edge exists → follow immediately on failure; no error edge → auto-retry N times |
-| Edge types | `on_success` / `on_failure`; max one of each per node |
-| Node output | Structured output per node; last-executed node is `{{PreviousNode.Output}}` |
-| Cleanup behavior | Done → destroy worktree + branch; Failed/Cancelled → user chooses "Done" or "Backlog" |
-| Work item states | `Backlog → Work Queue → Ready → Running → Human Feedback → Done` |
+| Decision              | Outcome                                                                                          |
+| --------------------- | ------------------------------------------------------------------------------------------------ |
+| Node execution model  | Sequential, single-threaded per loop run                                                         |
+| Worktree lifecycle    | One worktree per work item, created on first run, destroyed on Done/cleanup                      |
+| State model           | DB (`LoopRun`, `LoopRunNode` tables) is source of truth; event log is observability + AI context |
+| Tool architecture     | In-process tool abstractions (not MCP subprocesses)                                              |
+| Engine scheduling     | Async `while` loop with `CancellationToken`; SignalR pushes per node transition                  |
+| Crash recovery        | Re-execute in-flight node; per-template policy (auto-resume / needs review / cancel)             |
+| Node editor           | React Flow                                                                                       |
+| Dependency resolution | Push-based via webhook on PR merge                                                               |
+| SignalR reconnect     | State snapshot + delta (not full event replay)                                                   |
+| Prompt rendering      | Engine resolves placeholders; unknown placeholder validation on save                             |
+| Large payloads        | Stored on disk under `data/payloads/{runId}/{sequence}.json`; DB stores path reference           |
+| Webhook fallback      | Webhook-only; manual PR link/merge override available                                            |
+| DB migrations         | EF Core auto-migrate on startup                                                                  |
+| Auth                  | Single user, env vars only (`ILD_USERNAME`, `ILD_PASSWORD`), no wizard                           |
+| Edge traversal limits | 200 node executions + 24h wall-clock default; configurable per template                          |
+| Frontend              | Vite+ + React + TypeScript                                                                       |
+| Retry semantics       | Error edge exists → follow immediately on failure; no error edge → auto-retry N times            |
+| Edge types            | `on_success` / `on_failure`; max one of each per node                                            |
+| Node output           | Structured output per node; last-executed node is `{{PreviousNode.Output}}`                      |
+| Cleanup behavior      | Done → destroy worktree + branch; Failed/Cancelled → user chooses "Done" or "Backlog"            |
+| Work item states      | `Backlog → Work Queue → Ready → Running → Human Feedback → Done`                                 |
 
 ### Module Architecture
 
@@ -276,6 +276,7 @@ Backlog → Work Queue → Ready → Running → Human Feedback → Done
 ### What Makes a Good Test
 
 Tests should verify external behavior and observable outcomes, not internal implementation details. Each test should:
+
 - Exercise a module through its public interface
 - Use mocks/fakes for external dependencies (database, filesystem, LLM providers, git providers)
 - Verify state transitions, event sequences, and business rules
