@@ -1,0 +1,31 @@
+{
+  "name": "AI Dev Container",
+  // "image": "mcr.microsoft.com/devcontainers/typescript-node",
+  "image": "mcr.microsoft.com/devcontainers/dotnet:latest",
+  "containerEnv": {
+    "ANTHROPIC_BASE_URL": "http://192.168.1.5:1234",
+    "ANTHROPIC_AUTH_TOKEN": "lmstudio",
+    "ANTHROPIC_MODEL": "default_model"
+  },
+
+  // Share the host network so the container can reach LM Studio on localhost
+  "runArgs": ["--network=host"],
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers/features/node:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "ms-vscode.vscode-typescript-next"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  },
+  "remoteUser": "root"
+}
