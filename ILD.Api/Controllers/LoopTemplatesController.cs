@@ -41,23 +41,43 @@ public class LoopTemplatesController : ControllerBase
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
 
-        throw new NotImplementedException();
+        try
+        {
+            var graph = new LoopTemplateGraph(Guid.Empty, request.Nodes, request.Edges);
+            var id = await _loopTemplateManager.CreateLoopTemplateAsync(request.Name, request.Description, graph);
+            return CreatedAtAction(nameof(GetById), new { id }, new { id });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(string id, [FromBody] LoopTemplateCreateRequest request)
     {
-        throw new NotImplementedException();
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+        try
+        {
+            var graph = new LoopTemplateGraph(Guid.Empty, request.Nodes, request.Edges);
+            var newId = await _loopTemplateManager.UpdateLoopTemplateAsync(guid, request.Name, request.Description, graph);
+            return Ok(new { id = newId });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
     [HttpPost("{id}/clone")]
-    public async Task<IActionResult> Clone(string id)
+    public async Task<IActionResult> Clone(string id, [FromQuery] string? newName = null)
     {
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
 
-        var cloned = await _loopTemplateManager.CloneLoopTemplateAsync(guid, "Clone");
-        return Ok(cloned);
+        var cloned = await _loopTemplateManager.CloneLoopTemplateAsync(guid, newName ?? "Clone");
+        return Ok(new { id = cloned });
     }
 
     [HttpGet("{id}/versions")]
@@ -65,17 +85,23 @@ public class LoopTemplatesController : ControllerBase
     {
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
-
-        throw new NotImplementedException();
+        var versions = await _loopTemplateManager.GetVersionsAsync(guid);
+        return Ok(versions);
     }
 
-    [HttpGet("{id}/validate")]
-    public async Task<IActionResult> Validate(string id)
+    [HttpPost("validate")]
+    public async Task<IActionResult> ValidateGraph([FromBody] LoopTemplateGraph graph)
+    {
+        var valid = await _loopTemplateManager.ValidateGraphAsync(graph);
+        return Ok(new { valid });
+    }
+
+    [HttpDelete("{id}")]
+    public async Task<IActionResult> Delete(string id)
     {
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
-
-        var valid = true;
-        return Ok(new { valid });
+        await _loopTemplateManager.DeleteLoopTemplateAsync(guid);
+        return NoContent();
     }
 }

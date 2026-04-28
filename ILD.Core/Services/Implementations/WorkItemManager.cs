@@ -1,94 +1,211 @@
-using ILD.Core.DTOs;
-using Microsoft.Extensions.Logging;
 using ILD.Core.Enums;
 using ILD.Core.Models;
 using ILD.Core.Services.Interfaces;
+using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Core.Services.Implementations;
 
 public class WorkItemManager : IWorkItemManager
 {
-    private readonly ILogger<WorkItemManager> _logger;
-    private readonly AppDbContext _dbContext;
+    private readonly AppDbContext _db;
 
-    public WorkItemManager(ILogger<WorkItemManager> logger, AppDbContext dbContext)
+    public WorkItemManager(AppDbContext db)
     {
-        _logger = logger;
-        _dbContext = dbContext;
+        _db = db;
     }
 
-    public Task<Guid> CreateWorkItemAsync(string title, string description, Guid? loopTemplateId, Guid? repositoryId)
+    public async Task<Guid> CreateWorkItemAsync(string title, string description, Guid? loopTemplateId, Guid? repositoryId)
     {
-        throw new NotImplementedException(nameof(CreateWorkItemAsync));
+        if (repositoryId == null)
+            throw new InvalidOperationException("RepositoryId is required");
+
+        Guid? versionId = null;
+        if (loopTemplateId.HasValue)
+        {
+            var latest = await _db.LoopTemplateVersions
+                .Where(v => v.LoopTemplateId == loopTemplateId.Value)
+                .OrderByDescending(v => v.VersionNumber)
+                .FirstOrDefaultAsync();
+            versionId = latest?.Id;
+        }
+
+        var wi = new WorkItem
+        {
+            Id = Guid.NewGuid(),
+            Title = title,
+            Description = description,
+            Priority = WorkItemPriority.Medium,
+            Status = WorkItemStatus.Backlog,
+            RepositoryId = repositoryId.Value,
+            LoopTemplateVersionId = versionId,
+        };
+        _db.WorkItems.Add(wi);
+        await _db.SaveChangesAsync();
+        return wi.Id;
     }
 
-    public Task<WorkItem?> GetWorkItemAsync(Guid workItemId)
+    public async Task<WorkItem?> GetWorkItemAsync(Guid workItemId)
+        => await _db.WorkItems.FindAsync(workItemId);
+
+    public async Task<IEnumerable<WorkItem>> GetWorkItemsByStatusAsync(WorkItemStatus status)
+        => await _db.WorkItems.Where(w => w.Status == status).ToListAsync();
+
+    public async Task<bool> TransitionToWorkQueueAsync(Guid workItemId)
     {
-        throw new NotImplementedException(nameof(GetWorkItemAsync));
+        var ok = await SetStatusAsync(workItemId, WorkItemStatus.WorkQueue,
+            from => from == WorkItemStatus.Backlog || from == WorkItemStatus.HumanFeedback);
+        if (!ok) return false;
+
+        // Auto-promote to Ready if all dependencies satisfied
+        if (await IsReadyAsync(workItemId))
+            await TransitionToReadyAsync(workItemId);
+        return true;
     }
 
-    public Task<IEnumerable<WorkItem>> GetWorkItemsByStatusAsync(WorkItemStatus status)
+    public async Task<bool> TransitionToReadyAsync(Guid workItemId)
     {
-        throw new NotImplementedException(nameof(GetWorkItemsByStatusAsync));
+        if (!await IsReadyAsync(workItemId)) return false;
+        return await SetStatusAsync(workItemId, WorkItemStatus.Ready,
+            from => from == WorkItemStatus.WorkQueue || from == WorkItemStatus.Backlog);
     }
 
-    public Task<bool> TransitionToWorkQueueAsync(Guid workItemId)
+    public async Task<bool> TransitionToRunningAsync(Guid workItemId)
+        => await SetStatusAsync(workItemId, WorkItemStatus.Running,
+            from => from == WorkItemStatus.Ready || from == WorkItemStatus.HumanFeedback);
+
+    public async Task<bool> TransitionToHumanFeedbackAsync(Guid workItemId, string reason)
     {
-        throw new NotImplementedException(nameof(TransitionToWorkQueueAsync));
+        var wi = await _db.WorkItems.FindAsync(workItemId);
+        if (wi == null) return false;
+        wi.Status = WorkItemStatus.HumanFeedback;
+        wi.HumanFeedbackReason = reason;
+        wi.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return true;
     }
 
-    public Task<bool> TransitionToReadyAsync(Guid workItemId)
+    public async Task<bool> TransitionToDoneAsync(Guid workItemId)
+        => await SetStatusAsync(workItemId, WorkItemStatus.Done, _ => true);
+
+    public async Task<bool> AddDependencyAsync(Guid workItemId, Guid dependsOnWorkItemId)
     {
-        throw new NotImplementedException(nameof(TransitionToReadyAsync));
+        if (workItemId == dependsOnWorkItemId)
+            throw new InvalidOperationException("A work item cannot depend on itself.");
+
+        if (await WouldCreateCycle(workItemId, dependsOnWorkItemId))
+            throw new InvalidOperationException("Adding this dependency would create a cycle.");
+
+        var exists = await _db.WorkItemDependencies
+            .AnyAsync(d => d.WorkItemId == workItemId && d.DependencyWorkItemId == dependsOnWorkItemId);
+        if (exists) return false;
+
+        _db.WorkItemDependencies.Add(new WorkItemDependency
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = workItemId,
+            DependencyWorkItemId = dependsOnWorkItemId,
+        });
+        await _db.SaveChangesAsync();
+        return true;
     }
 
-    public Task<bool> TransitionToRunningAsync(Guid workItemId)
+    public async Task<bool> RemoveDependencyAsync(Guid workItemId, Guid dependsOnWorkItemId)
     {
-        throw new NotImplementedException(nameof(TransitionToRunningAsync));
+        var dep = await _db.WorkItemDependencies
+            .FirstOrDefaultAsync(d => d.WorkItemId == workItemId && d.DependencyWorkItemId == dependsOnWorkItemId);
+        if (dep == null) return false;
+        _db.WorkItemDependencies.Remove(dep);
+        await _db.SaveChangesAsync();
+        return true;
     }
 
-    public Task<bool> TransitionToHumanFeedbackAsync(Guid workItemId, string reason)
+    public async Task<IEnumerable<WorkItem>> GetDependenciesAsync(Guid workItemId)
     {
-        throw new NotImplementedException(nameof(TransitionToHumanFeedbackAsync));
+        var ids = await _db.WorkItemDependencies
+            .Where(d => d.WorkItemId == workItemId)
+            .Select(d => d.DependencyWorkItemId)
+            .ToListAsync();
+        return await _db.WorkItems.Where(w => ids.Contains(w.Id)).ToListAsync();
     }
 
-    public Task<bool> TransitionToDoneAsync(Guid workItemId)
+    public async Task<IEnumerable<WorkItem>> GetDependentsAsync(Guid workItemId)
     {
-        throw new NotImplementedException(nameof(TransitionToDoneAsync));
+        var ids = await _db.WorkItemDependencies
+            .Where(d => d.DependencyWorkItemId == workItemId)
+            .Select(d => d.WorkItemId)
+            .ToListAsync();
+        return await _db.WorkItems.Where(w => ids.Contains(w.Id)).ToListAsync();
     }
 
-    public Task<bool> AddDependencyAsync(Guid workItemId, Guid dependsOnWorkItemId)
+    public async Task<bool> IsReadyAsync(Guid workItemId)
     {
-        throw new NotImplementedException(nameof(AddDependencyAsync));
+        var depIds = await _db.WorkItemDependencies
+            .Where(d => d.WorkItemId == workItemId)
+            .Select(d => d.DependencyWorkItemId)
+            .ToListAsync();
+        if (depIds.Count == 0) return true;
+
+        var unmergedExists = await _db.WorkItems
+            .Where(w => depIds.Contains(w.Id))
+            .AnyAsync(w => !w.IsPrMerged && w.Status != WorkItemStatus.Done);
+        return !unmergedExists;
     }
 
-    public Task<bool> RemoveDependencyAsync(Guid workItemId, Guid dependsOnWorkItemId)
+    public async Task<bool> LinkPullRequestAsync(Guid workItemId, string prUrl)
     {
-        throw new NotImplementedException(nameof(RemoveDependencyAsync));
+        var wi = await _db.WorkItems.FindAsync(workItemId);
+        if (wi == null) return false;
+        wi.PrUrl = prUrl;
+        wi.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return true;
     }
 
-    public Task<IEnumerable<WorkItem>> GetDependenciesAsync(Guid workItemId)
+    public async Task<bool> ManuallyMarkMergedAsync(Guid workItemId)
     {
-        throw new NotImplementedException(nameof(GetDependenciesAsync));
+        var wi = await _db.WorkItems.FindAsync(workItemId);
+        if (wi == null) return false;
+        wi.IsPrMerged = true;
+        wi.Status = WorkItemStatus.Done;
+        wi.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+
+        var dependents = await GetDependentsAsync(workItemId);
+        foreach (var d in dependents)
+        {
+            if (d.Status == WorkItemStatus.WorkQueue && await IsReadyAsync(d.Id))
+                await TransitionToReadyAsync(d.Id);
+        }
+        return true;
     }
 
-    public Task<IEnumerable<WorkItem>> GetDependentsAsync(Guid workItemId)
+    private async Task<bool> SetStatusAsync(Guid id, WorkItemStatus next, Func<WorkItemStatus, bool> isAllowedFrom)
     {
-        throw new NotImplementedException(nameof(GetDependentsAsync));
+        var wi = await _db.WorkItems.FindAsync(id);
+        if (wi == null) return false;
+        if (!isAllowedFrom(wi.Status)) return false;
+        wi.Status = next;
+        wi.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return true;
     }
 
-    public Task<bool> IsReadyAsync(Guid workItemId)
+    private async Task<bool> WouldCreateCycle(Guid workItemId, Guid newDepId)
     {
-        throw new NotImplementedException(nameof(IsReadyAsync));
-    }
-
-    public Task<bool> LinkPullRequestAsync(Guid workItemId, string prUrl)
-    {
-        throw new NotImplementedException(nameof(LinkPullRequestAsync));
-    }
-
-    public Task<bool> ManuallyMarkMergedAsync(Guid workItemId)
-    {
-        throw new NotImplementedException(nameof(ManuallyMarkMergedAsync));
+        var visited = new HashSet<Guid>();
+        var stack = new Stack<Guid>();
+        stack.Push(newDepId);
+        while (stack.Count > 0)
+        {
+            var cur = stack.Pop();
+            if (!visited.Add(cur)) continue;
+            if (cur == workItemId) return true;
+            var nextDeps = await _db.WorkItemDependencies
+                .Where(d => d.WorkItemId == cur)
+                .Select(d => d.DependencyWorkItemId)
+                .ToListAsync();
+            foreach (var n in nextDeps) stack.Push(n);
+        }
+        return false;
     }
 }

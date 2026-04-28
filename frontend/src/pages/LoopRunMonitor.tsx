@@ -1,24 +1,24 @@
 import { useState, useEffect } from "react";
-import { LoopRun, LoopRunStatus } from "../types";
+import { LoopRun, LoopRunStatus, LoopRunNodeStatus } from "../types";
 import { loopRunService } from "../services/auth";
 import { useSignalR } from "../hooks/useSignalR";
 
 export default function LoopRunMonitor() {
   const [runs, setRuns] = useState<LoopRun[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const { on } = useSignalR();
+  const { on } = useSignalR("/hubs/loop-run");
 
   useEffect(() => {
-    loadRuns();
+    void loadRuns();
   }, []);
 
   useEffect(() => {
-    on("loop_run_started" as any, async (message: any) => {
-      const newRun = message.payload as LoopRun;
-      setRuns((prev) => [newRun, ...prev]);
+    on("LoopRunStateChanged", async (message: any) => {
+      const updated = message.payload as LoopRun;
+      setRuns((prev) => prev.map((run) => (run.id === updated.id ? updated : run)));
     });
 
-    on("loop_run_updated" as any, async (message: any) => {
+    on("NodeStateChanged", async (message: any) => {
       const updated = message.payload as LoopRun;
       setRuns((prev) => prev.map((run) => (run.id === updated.id ? updated : run)));
     });
@@ -46,12 +46,20 @@ export default function LoopRunMonitor() {
     }
   };
 
-  const statusColors: Record<LoopRunStatus, string> = {
-    [LoopRunStatus.Pending]: "#f59e0b",
+  const statusColors: Record<string, string> = {
     [LoopRunStatus.Running]: "#3b82f6",
     [LoopRunStatus.Completed]: "#22c55e",
     [LoopRunStatus.Failed]: "#ef4444",
     [LoopRunStatus.Cancelled]: "#6b7280",
+  };
+
+  const nodeStatusColors: Record<string, string> = {
+    [LoopRunNodeStatus.Pending]: "#6b7280",
+    [LoopRunNodeStatus.Running]: "#3b82f6",
+    [LoopRunNodeStatus.Succeeded]: "#22c55e",
+    [LoopRunNodeStatus.Failed]: "#ef4444",
+    [LoopRunNodeStatus.Skipped]: "#4b5563",
+    [LoopRunNodeStatus.WaitingHuman]: "#f59e0b",
   };
 
   if (isLoading) {
@@ -76,21 +84,24 @@ export default function LoopRunMonitor() {
                 style={{ backgroundColor: statusColors[run.status] }}
               />
               <div className="loop-run-info">
-                <div className="loop-run-name">{run.templateName}</div>
+                <div className="loop-run-name">Run {run.id.slice(0, 8)}</div>
                 <div className="loop-run-meta">
-                  {new Date(run.startedAt).toLocaleString()}
-                  {run.durationMs != null && ` &middot; ${run.durationMs}ms`}
+                  {new Date(run.startedAt).toLocaleString()} &middot; {run.nodeExecutionCount}{" "}
+                  executions
+                  {run.isPaused && " &middot; Paused"}
                 </div>
               </div>
               <span className={`loop-run-status ${run.status.toLowerCase()}`}>{run.status}</span>
             </div>
-            {run.error && <div className="loop-run-error">{run.error}</div>}
-            <div className="loop-run-steps">
-              {run.steps.map((step) => (
-                <div key={step.id} className="loop-run-step">
-                  <span className="loop-run-step-name">{step.stepName}</span>
-                  <span className={`loop-run-step-status ${step.status.toLowerCase()}`}>
-                    {step.status}
+            <div className="loop-run-nodes">
+              {run.nodes.map((node) => (
+                <div key={node.id} className="loop-run-node">
+                  <span className="loop-run-node-label">{node.nodeLabel}</span>
+                  <span
+                    className={`loop-run-node-status ${node.status.toLowerCase()}`}
+                    style={{ color: nodeStatusColors[node.status] }}
+                  >
+                    {node.status}
                   </span>
                 </div>
               ))}
@@ -172,33 +183,19 @@ export default function LoopRunMonitor() {
           color: #f87171;
         }
 
-        .loop-run-status.pending {
-          background-color: #5f4a1e;
-          color: #fbbf24;
-        }
-
         .loop-run-status.cancelled {
           background-color: #3a3a5c;
           color: #a0a0b0;
         }
 
-        .loop-run-error {
-          margin-top: 0.5rem;
-          font-size: 0.8rem;
-          color: #f87171;
-          padding: 0.5rem;
-          background-color: #2a1e1e;
-          border-radius: 0.25rem;
-        }
-
-        .loop-run-steps {
+        .loop-run-nodes {
           margin-top: 0.5rem;
           display: flex;
           flex-direction: column;
           gap: 0.25rem;
         }
 
-        .loop-run-step {
+        .loop-run-node {
           display: flex;
           justify-content: space-between;
           font-size: 0.75rem;
@@ -207,12 +204,8 @@ export default function LoopRunMonitor() {
           border-radius: 0.25rem;
         }
 
-        .loop-run-step-name {
+        .loop-run-node-label {
           color: #c0c0d0;
-        }
-
-        .loop-run-step-status {
-          color: #707090;
         }
 
         .btn-danger {

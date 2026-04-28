@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { WorkItem, WorkItemStatus, WorkItemPriority, WorkItemType } from "../types";
+import { WorkItem, WorkItemStatus, WorkItemPriority } from "../types";
 import { workItemService } from "../services/auth";
 
 interface WorkItemModalProps {
@@ -14,7 +14,6 @@ export default function WorkItemModal({ workItem, isOpen, onClose, onSave }: Wor
   const [description, setDescription] = useState("");
   const [status, setStatus] = useState<WorkItemStatus>(WorkItemStatus.Backlog);
   const [priority, setPriority] = useState<WorkItemPriority>(WorkItemPriority.Medium);
-  const [type, setType] = useState<WorkItemType>(WorkItemType.Task);
   const [tags, setTags] = useState("");
 
   useEffect(() => {
@@ -23,14 +22,12 @@ export default function WorkItemModal({ workItem, isOpen, onClose, onSave }: Wor
       setDescription(workItem.description);
       setStatus(workItem.status);
       setPriority(workItem.priority);
-      setType(workItem.type);
-      setTags(workItem.tags.join(", "));
+      setTags(workItem.labels.join(", "));
     } else {
       setTitle("");
       setDescription("");
       setStatus(WorkItemStatus.Backlog);
       setPriority(WorkItemPriority.Medium);
-      setType(WorkItemType.Task);
       setTags("");
     }
   }, [workItem]);
@@ -40,7 +37,7 @@ export default function WorkItemModal({ workItem, isOpen, onClose, onSave }: Wor
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    const parsedTags = tags
+    const parsedLabels = tags
       .split(",")
       .map((t) => t.trim())
       .filter(Boolean);
@@ -50,8 +47,7 @@ export default function WorkItemModal({ workItem, isOpen, onClose, onSave }: Wor
       description,
       status,
       priority,
-      type,
-      tags: parsedTags,
+      labels: parsedLabels,
     };
 
     try {
@@ -107,9 +103,10 @@ export default function WorkItemModal({ workItem, isOpen, onClose, onSave }: Wor
                   onChange={(e) => setStatus(e.target.value as WorkItemStatus)}
                 >
                   <option value={WorkItemStatus.Backlog}>Backlog</option>
+                  <option value={WorkItemStatus.WorkQueue}>Work Queue</option>
                   <option value={WorkItemStatus.Ready}>Ready</option>
-                  <option value={WorkItemStatus.InProgress}>In Progress</option>
-                  <option value={WorkItemStatus.InReview}>In Review</option>
+                  <option value={WorkItemStatus.Running}>Running</option>
+                  <option value={WorkItemStatus.HumanFeedback}>Human Feedback</option>
                   <option value={WorkItemStatus.Done}>Done</option>
                 </select>
               </div>
@@ -126,22 +123,9 @@ export default function WorkItemModal({ workItem, isOpen, onClose, onSave }: Wor
                   <option value={WorkItemPriority.Critical}>Critical</option>
                 </select>
               </div>
-              <div className="form-group">
-                <label htmlFor="type">Type</label>
-                <select
-                  id="type"
-                  value={type}
-                  onChange={(e) => setType(e.target.value as WorkItemType)}
-                >
-                  <option value={WorkItemType.Feature}>Feature</option>
-                  <option value={WorkItemType.Bug}>Bug</option>
-                  <option value={WorkItemType.Task}>Task</option>
-                  <option value={WorkItemType.Epic}>Epic</option>
-                </select>
-              </div>
             </div>
             <div className="form-group">
-              <label htmlFor="tags">Tags (comma separated)</label>
+              <label htmlFor="tags">Labels (comma separated)</label>
               <input id="tags" type="text" value={tags} onChange={(e) => setTags(e.target.value)} />
             </div>
           </div>
@@ -236,7 +220,7 @@ export default function WorkItemModal({ workItem, isOpen, onClose, onSave }: Wor
 
         .form-row {
           display: grid;
-          grid-template-columns: repeat(3, 1fr);
+          grid-template-columns: repeat(2, 1fr);
           gap: 0.5rem;
         }
 

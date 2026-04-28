@@ -3,25 +3,19 @@ export const APP_NAME = "ILD";
 export const API_BASE_URL = "/api";
 
 export const WORK_ITEM_STATUSES = [
-  { value: "backlog", label: "Backlog" },
-  { value: "ready", label: "Ready" },
-  { value: "in_progress", label: "In Progress" },
-  { value: "in_review", label: "In Review" },
-  { value: "done", label: "Done" },
+  { value: "Backlog", label: "Backlog" },
+  { value: "WorkQueue", label: "Work Queue" },
+  { value: "Ready", label: "Ready" },
+  { value: "Running", label: "Running" },
+  { value: "HumanFeedback", label: "Human Feedback" },
+  { value: "Done", label: "Done" },
 ] as const;
 
 export const WORK_ITEM_PRIORITIES = [
-  { value: "low", label: "Low", color: "#6b7280" },
-  { value: "medium", label: "Medium", color: "#f59e0b" },
-  { value: "high", label: "High", color: "#ef4444" },
-  { value: "critical", label: "Critical", color: "#dc2626" },
-] as const;
-
-export const WORK_ITEM_TYPES = [
-  { value: "feature", label: "Feature" },
-  { value: "bug", label: "Bug" },
-  { value: "task", label: "Task" },
-  { value: "epic", label: "Epic" },
+  { value: "Low", label: "Low", color: "#6b7280" },
+  { value: "Medium", label: "Medium", color: "#f59e0b" },
+  { value: "High", label: "High", color: "#ef4444" },
+  { value: "Critical", label: "Critical", color: "#dc2626" },
 ] as const;
 
 export const ROUTES = {

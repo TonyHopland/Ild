@@ -1,18 +1,18 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import * as signalR from "@microsoft/signalr";
-import { SignalRMessage, SignalRMessageType } from "../types";
+import { SignalRMessage } from "../types";
 import { authService } from "../services/auth";
 
 type MessageHandler = (message: SignalRMessage) => void;
 
-export function useSignalR(hubUrl = "/api/signalr-hub") {
+export function useSignalR(hubUrl = "/hubs/work-item") {
   const [connectionState, setConnectionState] = useState<
     "disconnected" | "connecting" | "connected" | "reconnecting"
   >("disconnected");
   const connectionRef = useRef<signalR.HubConnection | null>(null);
-  const handlersRef = useRef<Map<SignalRMessageType, Set<MessageHandler>>>(new Map());
+  const handlersRef = useRef<Map<string, Set<MessageHandler>>>(new Map());
 
-  const on = useCallback((eventType: SignalRMessageType, handler: MessageHandler) => {
+  const on = useCallback((eventType: string, handler: MessageHandler) => {
     const handlers = handlersRef.current.get(eventType) || new Set();
     handlers.add(handler);
     handlersRef.current.set(eventType, handlers);
@@ -28,7 +28,7 @@ export function useSignalR(hubUrl = "/api/signalr-hub") {
     }
   }, []);
 
-  const off = useCallback((eventType: SignalRMessageType, handler: MessageHandler) => {
+  const off = useCallback((eventType: string, handler: MessageHandler) => {
     const handlers = handlersRef.current.get(eventType);
     handlers?.delete(handler);
   }, []);
@@ -62,7 +62,7 @@ export function useSignalR(hubUrl = "/api/signalr-hub") {
     connection.onreconnected(() => updateState(signalR.HubConnectionState.Connected));
     connection.onclose(() => updateState(signalR.HubConnectionState.Disconnected));
 
-    connection.start().then(() => {
+    void connection.start().then(() => {
       updateState(signalR.HubConnectionState.Connected);
 
       handlersRef.current.forEach((handlers, eventType) => {
@@ -78,7 +78,7 @@ export function useSignalR(hubUrl = "/api/signalr-hub") {
     });
 
     return () => {
-      connection.stop();
+      void connection.stop();
       connectionRef.current = null;
     };
   }, [hubUrl]);

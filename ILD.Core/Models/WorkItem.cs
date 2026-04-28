@@ -32,6 +32,20 @@ public class WorkItem
 
     public string? Labels { get; set; }
 
+    [MaxLength(1024)]
+    public string? WorktreePath { get; set; }
+
+    [MaxLength(256)]
+    public string? BranchName { get; set; }
+
+    [MaxLength(2048)]
+    public string? PrUrl { get; set; }
+
+    public bool IsPrMerged { get; set; }
+
+    [MaxLength(512)]
+    public string? HumanFeedbackReason { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     public DateTime? UpdatedAt { get; set; }

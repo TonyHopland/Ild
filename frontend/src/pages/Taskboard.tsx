@@ -14,7 +14,7 @@ export default function Taskboard() {
   const { on } = useSignalR();
 
   useEffect(() => {
-    loadWorkItems();
+    void loadWorkItems();
   }, []);
 
   useEffect(() => {

@@ -1,6 +1,8 @@
 import { ApiError } from "../types";
 
-const API_BASE = "/api";
+const API_BASE = "/api/v1";
+
+export const AUTH_UNAUTHORIZED_EVENT = "auth:unauthorized";
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const token = localStorage.getItem("auth_token");
@@ -20,6 +22,9 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   });
 
   if (!response.ok) {
+    if (response.status === 401 && !endpoint.startsWith("/auth/login")) {
+      window.dispatchEvent(new CustomEvent(AUTH_UNAUTHORIZED_EVENT));
+    }
     const errorBody = await response.text();
     const error: ApiError = {
       status: response.status,

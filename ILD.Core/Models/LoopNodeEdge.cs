@@ -19,6 +19,8 @@ public class LoopNodeEdge
 
     public EdgeType EdgeType { get; set; }
 
+    public int? MaxTraversals { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     [ForeignKey(nameof(SourceNodeId))]

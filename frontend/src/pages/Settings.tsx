@@ -17,14 +17,6 @@ export default function Settings() {
               <span className="settings-label">Username</span>
               <span className="settings-value">{user?.username}</span>
             </div>
-            <div className="settings-profile-field">
-              <span className="settings-label">Email</span>
-              <span className="settings-value">{user?.email}</span>
-            </div>
-            <div className="settings-profile-field">
-              <span className="settings-label">Role</span>
-              <span className="settings-value">{user?.role}</span>
-            </div>
           </div>
         </div>
 

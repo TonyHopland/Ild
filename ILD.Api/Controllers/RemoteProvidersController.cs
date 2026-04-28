@@ -1,6 +1,8 @@
 using ILD.Core.Services.Interfaces;
 using ILD.Core.DTOs;
+using ILD.Core.Models;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Api.Controllers;
 
@@ -8,34 +10,54 @@ namespace ILD.Api.Controllers;
 [Route("api/v1/[controller]")]
 public class RemoteProvidersController : ControllerBase
 {
-    private readonly IRemoteProvider _remoteProvider;
+    private readonly AppDbContext _db;
 
-    public RemoteProvidersController(IRemoteProvider remoteProvider)
+    public RemoteProvidersController(AppDbContext db)
     {
-        _remoteProvider = remoteProvider;
+        _db = db;
     }
 
     [HttpGet]
     public async Task<IActionResult> GetAll()
-    {
-        throw new NotImplementedException();
-    }
+        => Ok(await _db.RemoteProviders.AsNoTracking().ToListAsync());
 
     [HttpGet("{id}")]
     public async Task<IActionResult> GetById(string id)
     {
-        throw new NotImplementedException();
+        if (!Guid.TryParse(id, out var guid)) return BadRequest();
+        var p = await _db.RemoteProviders.FindAsync(guid);
+        return p == null ? NotFound() : Ok(p);
     }
 
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] RemoteProviderDto request)
     {
-        throw new NotImplementedException();
+        var p = new ILD.Core.Models.RemoteProvider
+        {
+            Id = Guid.NewGuid(),
+            Name = request.Name,
+            Type = request.ProviderType,
+            Url = request.BaseUrl,
+            ApiKey = request.Token,
+            CreatedAt = DateTime.UtcNow,
+        };
+        _db.RemoteProviders.Add(p);
+        await _db.SaveChangesAsync();
+        return CreatedAtAction(nameof(GetById), new { id = p.Id }, p);
     }
 
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(string id, [FromBody] RemoteProviderDto request)
     {
-        throw new NotImplementedException();
+        if (!Guid.TryParse(id, out var guid)) return BadRequest();
+        var p = await _db.RemoteProviders.FindAsync(guid);
+        if (p == null) return NotFound();
+        p.Name = request.Name;
+        p.Type = request.ProviderType;
+        p.Url = request.BaseUrl;
+        if (!string.IsNullOrEmpty(request.Token)) p.ApiKey = request.Token;
+        p.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return Ok(p);
     }
 }

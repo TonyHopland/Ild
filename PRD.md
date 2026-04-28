@@ -9,7 +9,7 @@ Software development workflows that involve coding, testing, reviewing, and merg
 ILD is a containerized AI-assisted development platform that provides:
 
 - A **taskboard** for creating and tracking work items with dependency management
-- **Configurable workflow loops** — directed graphs of nodes (command, AI, human) that execute autonomously
+- **Configurable workflow loops** — directed graphs of nodes (Cmd, AI, Human, PR) that execute autonomously
 - **Repository integration** — automatic worktree management, branch creation, and pull request lifecycle
 - **AI agent orchestration** — LLM-powered nodes with configurable prompts, in-process tool access, and multi-provider support
 - **Human-in-the-loop** — pause points for review, approval, and context injection at any time
@@ -32,7 +32,7 @@ The system runs in a single container, persists state in SQLite, and integrates 
 7. As a developer, I want to create a work item with a title and description, so that I can define a unit of work
 8. As a developer, I want to assign a loop template to a work item, so that the work follows a defined workflow
 9. As a developer, I want to assign a repository to a work item, so that the loop operates on the correct codebase
-10. As a developer, I want to set dependencies between work items, so that work items only become ready when their dependencies are merged
+10. As a developer, I want to set dependencies between work items, so that work items only become ready when their dependencies reach Done
 11. As a developer, I want to see work items that depend on mine, so that I understand the impact of my work
 12. As a developer, I want circular dependencies to be rejected, so that I don't create deadlocked work items
 13. As a developer, I want to view a work item's details in a modal, so that I can see all relevant information without leaving the board
@@ -44,7 +44,7 @@ The system runs in a single container, persists state in SQLite, and integrates 
 ### Taskboard
 
 18. As a developer, I want to see work items organized by status columns (Backlog, Work Queue, Ready, Running, Human Feedback, Done), so that I can see the state of all work at a glance
-19. As a developer, I want work items in Work Queue to automatically transition to Ready when all dependencies are merged, so that I know when work can begin
+19. As a developer, I want work items in Work Queue to automatically transition to Ready when all dependencies reach Done, so that I know when work can begin
 20. As a developer, I want work items with no dependencies in Work Queue to immediately transition to Ready, so that independent work flows without delay
 21. As a developer, I want to click a work item to open its details modal, so that I can inspect and start it
 22. As a developer, I want to click a Start button in the work item modal, so that I can begin a loop run
@@ -95,7 +95,7 @@ The system runs in a single container, persists state in SQLite, and integrates 
 58. As a developer, I want the cycle counter to reset when a human triggers a retry, so that my intervention resets the iteration budget
 59. As a developer, I want to view the event log for a loop run, so that I can trace what happened
 60. As a developer, I want the event log to show AI context used for each AI node, so that I can debug AI behavior
-61. As a developer, I want to pull/rebase a worktree during execution, so that parallel work items don't diverge from main
+61. As a developer, I want to pull/rebase a worktree at loop start, so that parallel work items don't diverge from main
 62. As a developer, I want rebase conflicts to route to a Human node, so that I can resolve them manually
 63. As a developer, I want the loop to check for pause signals before starting each node, so that I can interrupt execution
 64. As a developer, I want running commands to receive cancellation tokens, so that paused execution stops gracefully
@@ -116,7 +116,7 @@ The system runs in a single container, persists state in SQLite, and integrates 
 73. As a developer, I want PR comments from Forgejo to appear in the event log, so that feedback is captured in the loop context
 74. As a developer, I want webhook-based comment sync from Forgejo, so that comments appear in real time
 75. As a developer, I want the branch to be deleted after merge, so that the repository stays clean
-76. As a developer, I want the work item to transition to Done automatically when the PR is merged, so that the board reflects reality
+76. As a developer, I want the work item to transition to Done when Cleanup executes, so that the board reflects reality
 
 ### Crash Recovery
 
@@ -155,13 +155,13 @@ The system runs in a single container, persists state in SQLite, and integrates 
 | Decision              | Outcome                                                                                          |
 | --------------------- | ------------------------------------------------------------------------------------------------ |
 | Node execution model  | Sequential, single-threaded per loop run                                                         |
-| Worktree lifecycle    | One worktree per work item, created on first run, destroyed on Done/cleanup                      |
+| Worktree lifecycle    | One worktree per work item, created on first run, destroyed when Cleanup node executes           |
 | State model           | DB (`LoopRun`, `LoopRunNode` tables) is source of truth; event log is observability + AI context |
 | Tool architecture     | In-process tool abstractions (not MCP subprocesses)                                              |
 | Engine scheduling     | Async `while` loop with `CancellationToken`; SignalR pushes per node transition                  |
 | Crash recovery        | Re-execute in-flight node; per-template policy (auto-resume / needs review / cancel)             |
 | Node editor           | React Flow                                                                                       |
-| Dependency resolution | Push-based via webhook on PR merge                                                               |
+| Dependency resolution | Push-based via webhook on Done status                                                            |
 | SignalR reconnect     | State snapshot + delta (not full event replay)                                                   |
 | Prompt rendering      | Engine resolves placeholders; unknown placeholder validation on save                             |
 | Large payloads        | Stored on disk under `data/payloads/{runId}/{sequence}.json`; DB stores path reference           |
@@ -172,7 +172,7 @@ The system runs in a single container, persists state in SQLite, and integrates 
 | Frontend              | Vite+ + React + TypeScript                                                                       |
 | Retry semantics       | Error edge exists → follow immediately on failure; no error edge → auto-retry N times            |
 | Edge types            | `on_success` / `on_failure`; max one of each per node                                            |
-| Node output           | Structured output per node; last-executed node is `{{PreviousNode.Output}}`                      |
+| Node output           | Structured output per node; source node of incoming edge is `{{PreviousNode.Output}}`            |
 | Cleanup behavior      | Done → destroy worktree + branch; Failed/Cancelled → user chooses "Done" or "Backlog"            |
 | Work item states      | `Backlog → Work Queue → Ready → Running → Human Feedback → Done`                                 |
 
@@ -222,10 +222,10 @@ Loop templates are normalized relational model. Node config is JSON per node typ
 - Prompt templates with placeholders: `{{WorkItem.Title}}`, `{{WorkItem.Description}}`, `{{EventLog.LastN}}`, `{{EventLog.Summary}}`, `{{Node.Input}}`, `{{WorkTree.Diff}}`, `{{WorkTree.File:path}}`, `{{PreviousNode.Output}}`
 - Unknown placeholder validation on template save
 - Multi-provider via `ILlmProvider` (OpenAI-compatible API first), per-node provider selection with global default
-- In-process tools: git (scoped to `ild/*` branches), file read/write (worktree-scoped), command execution (allowlist + timeout)
+- In-process tools: git (scoped to `ild/*` branches), file read/write (worktree-scoped), command execution (allowlist + timeout). Read always available; write opt-in per node.
 - ILD API tools: `ild_create_workitem`, `ild_read_workitem`, `ild_list_loop_templates` (for AI-driven work item decomposition)
 - Tool allowlist configurable per node; default is read-only
-- Every node produces structured output; `{{PreviousNode.Output}}` resolves to the last-executed node's output
+- Every node produces structured output; `{{PreviousNode.Output}}` resolves to the source node of the incoming edge
 
 ### Work Item State Machine
 
@@ -236,21 +236,21 @@ Backlog → Work Queue → Ready → Running → Human Feedback → Done
 ```
 
 - Items with no dependencies auto-transition from Work Queue to Ready immediately
-- Items with dependencies transition from Work Queue to Ready when all deps are merged (push via webhook)
+- Items with dependencies transition from Work Queue to Ready when all deps reach Done (push via webhook)
 - `Running` → `Human Feedback` when: node retries exhausted, PR awaiting merge, rebase conflict, Human node awaiting input
 - `Human Feedback` → `Running` on retry, or → `Done` on merge/cleanup
 - Failed/Cancelled items: user chooses "Cleanup → Done" (discard) or "Cleanup → Backlog" (reset, destroy worktree, clear run state, allow re-editing)
-- Fully automated loops that succeed transition to `Done` directly (no forced human gate)
+- Loops transition to `Done` when Cleanup executes. Code-change items use a PR node before Cleanup.
 
 ### PR Workflow
 
-- PR created after code is complete, AI writes title and description
+- PR node in the loop graph creates the PR (or reuses existing one) and waits for webhook events
+- Merge routes to `on_success` (toward Cleanup), rejection routes to `on_failure` (back to AI coder)
 - Commits made by AI nodes via in-process tools
 - Human merge only (v1)
 - Forgejo webhooks push PR comments to ILD event log (webhook-only, no polling)
 - Manual PR link/merge override available as fallback when webhooks are unavailable
 - Squash merge on merge, branch deleted post-merge
-- Work item transitions to Done on merge
 
 ### Deployment
 
@@ -319,5 +319,5 @@ These modules follow the pattern of testing business logic through interfaces wi
 - Recovery is a first-class concern: the system must survive container restarts gracefully
 - The visual loop editor (React Flow) is a key UX surface — investing in good custom node rendering and edge UI is important
 - Tool access should be conservative by default — read-only unless explicitly granted
-- Worktree is one per work item and persists across runs — each new run resumes on the same branch
+- Worktree is one per work item, destroyed when Cleanup executes — each new run creates a fresh worktree
 - Vite+ is alpha; keep frontend dependencies minimal and be prepared for potential breaking changes

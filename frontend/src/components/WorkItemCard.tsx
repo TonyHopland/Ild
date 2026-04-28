@@ -10,36 +10,25 @@ export default function WorkItemCard({ workItem }: WorkItemCardProps) {
   };
 
   const priorityColors: Record<string, string> = {
-    low: "#6b7280",
-    medium: "#f59e0b",
-    high: "#ef4444",
-    critical: "#dc2626",
-  };
-
-  const typeIcons: Record<string, string> = {
-    feature: "F",
-    bug: "B",
-    task: "T",
-    epic: "E",
+    Low: "#6b7280",
+    Medium: "#f59e0b",
+    High: "#ef4444",
+    Critical: "#dc2626",
   };
 
   return (
     <div className="work-item-card" draggable onDragStart={handleDragStart}>
       <div className="work-item-card-header">
-        <span className="work-item-type-badge" style={{ backgroundColor: "#3a3a5c" }}>
-          {typeIcons[workItem.type] ?? "?"}
-        </span>
         <span
           className="work-item-priority-dot"
           style={{ backgroundColor: priorityColors[workItem.priority] ?? "#6b7280" }}
         />
       </div>
       <h4 className="work-item-title">{workItem.title}</h4>
-      {workItem.assigneeName && <div className="work-item-assignee">{workItem.assigneeName}</div>}
       <div className="work-item-tags">
-        {workItem.tags.map((tag) => (
-          <span key={tag} className="work-item-tag">
-            {tag}
+        {workItem.labels.map((label) => (
+          <span key={label} className="work-item-tag">
+            {label}
           </span>
         ))}
       </div>
@@ -64,21 +53,9 @@ export default function WorkItemCard({ workItem }: WorkItemCardProps) {
 
         .work-item-card-header {
           display: flex;
-          justify-content: space-between;
+          justify-content: flex-end;
           align-items: center;
           margin-bottom: 0.5rem;
-        }
-
-        .work-item-type-badge {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          width: 1.5rem;
-          height: 1.5rem;
-          border-radius: 0.25rem;
-          font-size: 0.7rem;
-          font-weight: 700;
-          color: #e0e0e0;
         }
 
         .work-item-priority-dot {
@@ -93,12 +70,6 @@ export default function WorkItemCard({ workItem }: WorkItemCardProps) {
           color: #e0e0e0;
           margin-bottom: 0.25rem;
           line-height: 1.4;
-        }
-
-        .work-item-assignee {
-          font-size: 0.75rem;
-          color: #808090;
-          margin-bottom: 0.25rem;
         }
 
         .work-item-tags {

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { LoopTemplate, LoopStep, LoopStepType } from "../types";
+import { LoopTemplate, LoopNode, NodeType, LoopNodeEdge } from "../types";
 import { loopTemplateService } from "../services/auth";
 
 export default function LoopEditor() {
@@ -7,11 +7,11 @@ export default function LoopEditor() {
   const [editingTemplate, setEditingTemplate] = useState<LoopTemplate | null>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [intervalMinutes, setIntervalMinutes] = useState(60);
-  const [steps, setSteps] = useState<LoopStep[]>([]);
+  const [nodes, setNodes] = useState<LoopNode[]>([]);
+  const [edges, setEdges] = useState<LoopNodeEdge[]>([]);
 
   useEffect(() => {
-    loadTemplates();
+    void loadTemplates();
   }, []);
 
   const loadTemplates = async () => {
@@ -27,24 +27,24 @@ export default function LoopEditor() {
     setEditingTemplate(template);
     setName(template.name);
     setDescription(template.description);
-    setIntervalMinutes(template.intervalMinutes);
-    setSteps(template.steps);
+    setNodes(template.nodes);
+    setEdges(template.edges);
   };
 
   const openCreate = () => {
     setEditingTemplate(null);
     setName("");
     setDescription("");
-    setIntervalMinutes(60);
-    setSteps([]);
+    setNodes([]);
+    setEdges([]);
   };
 
   const handleSave = async () => {
     const data: Partial<LoopTemplate> = {
       name,
       description,
-      intervalMinutes,
-      steps,
+      nodes,
+      edges,
     };
 
     try {
@@ -60,21 +60,24 @@ export default function LoopEditor() {
     }
   };
 
-  const addStep = () => {
-    setSteps([
-      ...steps,
+  const addNode = (type: NodeType) => {
+    setNodes([
+      ...nodes,
       {
         id: crypto.randomUUID(),
-        order: steps.length,
-        type: LoopStepType.ApiCall,
+        type,
+        label: `${type} Node`,
         config: {},
-        condition: null,
+        maxTraversals: null,
+        retryCount: null,
+        timeoutSeconds: null,
       },
     ]);
   };
 
-  const removeStep = (index: number) => {
-    setSteps(steps.filter((_, i) => i !== index));
+  const removeNode = (nodeId: string) => {
+    setNodes(nodes.filter((n) => n.id !== nodeId));
+    setEdges(edges.filter((e) => e.sourceNodeId !== nodeId && e.targetNodeId !== nodeId));
   };
 
   return (
@@ -96,10 +99,7 @@ export default function LoopEditor() {
             >
               <div className="loop-list-item-name">{template.name}</div>
               <div className="loop-list-item-meta">
-                Every {template.intervalMinutes}m &middot; {template.steps.length} steps
-              </div>
-              <div className={`loop-status-badge ${template.isActive ? "active" : "inactive"}`}>
-                {template.isActive ? "Active" : "Inactive"}
+                v{template.version} &middot; {template.nodes.length} nodes
               </div>
             </div>
           ))}
@@ -119,30 +119,29 @@ export default function LoopEditor() {
             />
           </div>
           <div className="form-group">
-            <label>Interval (minutes)</label>
-            <input
-              type="number"
-              value={intervalMinutes}
-              onChange={(e) => setIntervalMinutes(Number(e.target.value))}
-              min={1}
-            />
-          </div>
-          <div className="form-group">
-            <label>Steps</label>
-            <div className="loop-steps-list">
-              {steps.map((step, index) => (
-                <div key={step.id} className="loop-step-item">
-                  <span className="loop-step-order">{index + 1}</span>
-                  <span className="loop-step-type">{step.type}</span>
-                  <button className="btn btn-small" onClick={() => removeStep(index)}>
+            <label>Nodes</label>
+            <div className="node-buttons">
+              {(Object.values(NodeType) as NodeType[]).map((type) => (
+                <button
+                  key={type}
+                  className="btn btn-secondary btn-small"
+                  onClick={() => addNode(type)}
+                >
+                  + {type}
+                </button>
+              ))}
+            </div>
+            <div className="nodes-list">
+              {nodes.map((node) => (
+                <div key={node.id} className="node-item">
+                  <span className="node-type-badge">{node.type}</span>
+                  <span className="node-label">{node.label}</span>
+                  <button className="btn btn-small" onClick={() => removeNode(node.id)}>
                     Remove
                   </button>
                 </div>
               ))}
             </div>
-            <button className="btn btn-secondary" onClick={addStep}>
-              + Add Step
-            </button>
           </div>
           <button className="btn btn-primary" onClick={handleSave}>
             {editingTemplate ? "Update Loop" : "Create Loop"}
@@ -195,24 +194,6 @@ export default function LoopEditor() {
           color: #707090;
         }
 
-        .loop-status-badge {
-          display: inline-block;
-          font-size: 0.675rem;
-          padding: 0.1rem 0.4rem;
-          border-radius: 0.25rem;
-          margin-top: 0.25rem;
-        }
-
-        .loop-status-badge.active {
-          background-color: #065f46;
-          color: #6ee7b7;
-        }
-
-        .loop-status-badge.inactive {
-          background-color: #3a3a5c;
-          color: #a0a0b0;
-        }
-
         .loop-editor-form {
           background-color: #1e1e30;
           border-radius: 0.5rem;
@@ -242,14 +223,20 @@ export default function LoopEditor() {
           font-size: 0.875rem;
         }
 
-        .loop-steps-list {
+        .node-buttons {
           display: flex;
-          flex-direction: column;
-          gap: 0.5rem;
+          flex-wrap: wrap;
+          gap: 0.25rem;
           margin-bottom: 0.5rem;
         }
 
-        .loop-step-item {
+        .nodes-list {
+          display: flex;
+          flex-direction: column;
+          gap: 0.25rem;
+        }
+
+        .node-item {
           display: flex;
           align-items: center;
           gap: 0.5rem;
@@ -258,13 +245,18 @@ export default function LoopEditor() {
           border-radius: 0.375rem;
         }
 
-        .loop-step-order {
-          font-size: 0.75rem;
-          color: #707090;
-          width: 1.5rem;
+        .node-type-badge {
+          font-size: 0.7rem;
+          padding: 0.125rem 0.375rem;
+          background-color: #3a3a5c;
+          border-radius: 0.25rem;
+          color: #e0e0e0;
+          font-weight: 600;
+          min-width: 2.5rem;
+          text-align: center;
         }
 
-        .loop-step-type {
+        .node-label {
           font-size: 0.8rem;
           color: #c0c0d0;
           flex: 1;

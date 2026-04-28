@@ -1,0 +1,61 @@
+using FluentAssertions;
+using ILD.Core.Models;
+using ILD.Core.Services.Implementations;
+
+namespace ILD.Tests;
+
+public class AuthServiceTests
+{
+    private static AuthService Make(TestDb db, string password = "secret")
+    {
+        Environment.SetEnvironmentVariable("ILD_PASSWORD", password);
+        return new AuthService(db.Context);
+    }
+
+    [Fact]
+    public async Task Login_with_correct_password_returns_session_token()
+    {
+        using var db = new TestDb();
+        var svc = Make(db);
+
+        var result = await svc.LoginAsync("admin", "secret");
+
+        result.Success.Should().BeTrue();
+        result.SessionToken.Should().NotBeNullOrEmpty();
+        result.Username.Should().Be("admin");
+    }
+
+    [Fact]
+    public async Task Login_with_wrong_password_fails()
+    {
+        using var db = new TestDb();
+        var svc = Make(db);
+
+        var result = await svc.LoginAsync("admin", "nope");
+
+        result.Success.Should().BeFalse();
+        result.SessionToken.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ValidateSession_returns_true_after_login()
+    {
+        using var db = new TestDb();
+        var svc = Make(db);
+        var token = (await svc.LoginAsync("admin", "secret")).SessionToken!;
+
+        (await svc.ValidateSessionAsync(token)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Logout_invalidates_session()
+    {
+        using var db = new TestDb();
+        var svc = Make(db);
+        var token = (await svc.LoginAsync("admin", "secret")).SessionToken!;
+
+        await svc.LogoutAsync(token);
+
+        (await svc.ValidateSessionAsync(token)).Should().BeFalse();
+    }
+}

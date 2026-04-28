@@ -1,14 +1,7 @@
 export interface User {
   id: string;
   username: string;
-  email: string;
-  role: UserRole;
-}
-
-export enum UserRole {
-  Admin = "admin",
-  Member = "member",
-  Viewer = "viewer",
+  createdAt: string;
 }
 
 export interface AuthState {
@@ -21,25 +14,19 @@ export interface AuthState {
 }
 
 export enum WorkItemStatus {
-  Backlog = "backlog",
-  Ready = "ready",
-  InProgress = "in_progress",
-  InReview = "in_review",
-  Done = "done",
+  Backlog = "Backlog",
+  WorkQueue = "WorkQueue",
+  Ready = "Ready",
+  Running = "Running",
+  HumanFeedback = "HumanFeedback",
+  Done = "Done",
 }
 
 export enum WorkItemPriority {
-  Low = "low",
-  Medium = "medium",
-  High = "high",
-  Critical = "critical",
-}
-
-export enum WorkItemType {
-  Feature = "feature",
-  Bug = "bug",
-  Task = "task",
-  Epic = "epic",
+  Low = "Low",
+  Medium = "Medium",
+  High = "High",
+  Critical = "Critical",
 }
 
 export interface WorkItem {
@@ -48,101 +35,147 @@ export interface WorkItem {
   description: string;
   status: WorkItemStatus;
   priority: WorkItemPriority;
-  type: WorkItemType;
-  assigneeId: string | null;
-  assigneeName: string | null;
-  creatorId: string;
-  creatorName: string;
+  labels: string[];
+  loopTemplateId: string;
+  loopTemplateVersion: string;
+  repositoryId: string;
+  pullRequestUrl: string | null;
+  pullRequestBranch: string | null;
   createdAt: string;
-  updatedAt: string;
-  dueDate: string | null;
-  tags: string[];
-  parentId: string | null;
-  order: number;
+  startedAt: string | null;
+  completedAt: string | null;
+  dependencyIds: string[];
+  dependentIds: string[];
+}
+
+export enum NodeType {
+  Start = "Start",
+  Cmd = "Cmd",
+  AI = "AI",
+  Human = "Human",
+  Cleanup = "Cleanup",
+}
+
+export enum EdgeType {
+  OnSuccess = "OnSuccess",
+  OnFailure = "OnFailure",
+}
+
+export interface LoopNode {
+  id: string;
+  type: NodeType;
+  label: string;
+  config: Record<string, unknown>;
+  maxTraversals: number | null;
+  retryCount: number | null;
+  timeoutSeconds: number | null;
+}
+
+export interface LoopNodeEdge {
+  id: string;
+  sourceNodeId: string;
+  targetNodeId: string;
+  edgeType: EdgeType;
+  maxTraversals: number | null;
 }
 
 export interface LoopTemplate {
   id: string;
   name: string;
   description: string;
-  intervalMinutes: number;
-  steps: LoopStep[];
-  isActive: boolean;
-  createdBy: string;
+  version: number;
+  nodes: LoopNode[];
+  edges: LoopNodeEdge[];
   createdAt: string;
   updatedAt: string;
 }
 
-export interface LoopStep {
-  id: string;
-  order: number;
-  type: LoopStepType;
-  config: Record<string, unknown>;
-  condition: string | null;
+export enum LoopRunStatus {
+  Running = "Running",
+  Completed = "Completed",
+  Failed = "Failed",
+  Cancelled = "Cancelled",
 }
 
-export enum LoopStepType {
-  ApiCall = "api_call",
-  Script = "script",
-  Notification = "notification",
-  Delay = "delay",
-  Condition = "condition",
+export enum LoopRunNodeStatus {
+  Pending = "Pending",
+  Running = "Running",
+  Succeeded = "Succeeded",
+  Failed = "Failed",
+  Skipped = "Skipped",
+  WaitingHuman = "WaitingHuman",
+}
+
+export interface LoopRunNode {
+  id: string;
+  nodeId: string;
+  nodeLabel: string;
+  status: LoopRunNodeStatus;
+  output: string | null;
+  error: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  executionCount: number;
 }
 
 export interface LoopRun {
   id: string;
-  templateId: string;
-  templateName: string;
+  workItemId: string;
+  loopTemplateId: string;
+  templateVersion: number;
   status: LoopRunStatus;
+  currentNodeId: string | null;
+  isPaused: boolean;
+  nodeExecutionCount: number;
   startedAt: string;
   completedAt: string | null;
-  durationMs: number | null;
-  steps: LoopRunStep[];
-  error: string | null;
-  triggeredBy: string;
+  nodes: LoopRunNode[];
 }
 
-export enum LoopRunStatus {
-  Pending = "pending",
-  Running = "running",
-  Completed = "completed",
-  Failed = "failed",
-  Cancelled = "cancelled",
+export enum RecoveryPolicy {
+  AutoResume = "AutoResume",
+  NeedsReview = "NeedsReview",
+  Cancel = "Cancel",
 }
 
-export interface LoopRunStep {
-  id: string;
-  stepId: string;
-  stepName: string;
-  status: LoopRunStepStatus;
-  startedAt: string;
-  completedAt: string | null;
-  result: unknown;
-  error: string | null;
-}
-
-export enum LoopRunStepStatus {
-  Pending = "pending",
-  Running = "running",
-  Completed = "completed",
-  Failed = "failed",
-  Skipped = "skipped",
-}
-
-export interface SignalRMessage {
-  type: SignalRMessageType;
-  payload: unknown;
+export interface EventLogEntry {
+  sequence: number;
+  runId: string;
+  eventType: string;
+  nodeId: string | null;
+  payload: string;
   timestamp: string;
 }
 
-export enum SignalRMessageType {
-  WorkItemUpdated = "work_item_updated",
-  WorkItemCreated = "work_item_created",
-  WorkItemDeleted = "work_item_deleted",
-  LoopRunStarted = "loop_run_started",
-  LoopRunUpdated = "loop_run_updated",
-  LoopRunCompleted = "loop_run_completed",
-  Notification = "notification",
+export interface Repository {
+  id: string;
+  name: string;
+  remoteProviderId: string;
+  cloneUrl: string;
+  defaultBranch: string | null;
+  worktreesPath: string | null;
+  createdAt: string;
+}
+
+export interface RemoteProvider {
+  id: string;
+  name: string;
+  type: string;
+  baseUrl: string;
+  apiKey: string;
+  webhookSecret: string;
+  createdAt: string;
+}
+
+export interface AiProvider {
+  id: string;
+  name: string;
+  type: string;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  isDefault: boolean;
+  createdAt: string;
 }
 
 export interface ApiError {
@@ -151,9 +184,8 @@ export interface ApiError {
   details?: unknown;
 }
 
-export interface PaginatedResponse<T> {
-  items: T[];
-  total: number;
-  page: number;
-  pageSize: number;
+export interface SignalRMessage {
+  type: string;
+  payload: unknown;
+  timestamp: string;
 }

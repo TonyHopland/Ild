@@ -21,6 +21,8 @@ public class LoopRunNode
 
     public string? Output { get; set; }
 
+    public string? Error { get; set; }
+
     public int RetryCount { get; set; }
 
     public DateTime? StartedAt { get; set; }

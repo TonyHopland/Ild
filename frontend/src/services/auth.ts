@@ -1,16 +1,37 @@
 import { api } from "./api";
 import { User, WorkItem, LoopTemplate, LoopRun } from "../types";
 
+interface BackendLoginResponse {
+  token: string;
+  username: string;
+  expiresAt: string;
+}
+
 export const authService = {
   login: async (username: string, password: string): Promise<{ user: User; token: string }> => {
-    return api.post<{ user: User; token: string }>("/auth/login", {
+    const response = await api.post<BackendLoginResponse>("/auth/login", {
       username,
       password,
     });
+    if (!response?.token) {
+      throw { status: 401, message: "Invalid credentials" };
+    }
+    return {
+      token: response.token,
+      user: {
+        id: response.username,
+        username: response.username,
+        createdAt: new Date().toISOString(),
+      },
+    };
   },
 
   logout: async (): Promise<void> => {
-    await api.post("/auth/logout", {});
+    try {
+      await api.post("/auth/logout", {});
+    } catch {
+      // ignore — token may already be invalid
+    }
     localStorage.removeItem("auth_token");
     localStorage.removeItem("auth_user");
   },
@@ -46,62 +67,62 @@ export const authService = {
 
 export const workItemService = {
   getAll: async (): Promise<WorkItem[]> => {
-    return api.get<WorkItem[]>("/work-items");
+    return api.get<WorkItem[]>("/workitems");
   },
 
   getById: async (id: string): Promise<WorkItem> => {
-    return api.get<WorkItem>(`/work-items/${id}`);
+    return api.get<WorkItem>(`/workitems/${id}`);
   },
 
   create: async (data: Partial<WorkItem>): Promise<WorkItem> => {
-    return api.post<WorkItem>("/work-items", data);
+    return api.post<WorkItem>("/workitems", data);
   },
 
   update: async (id: string, data: Partial<WorkItem>): Promise<WorkItem> => {
-    return api.put<WorkItem>(`/work-items/${id}`, data);
+    return api.put<WorkItem>(`/workitems/${id}`, data);
   },
 
   delete: async (id: string): Promise<void> => {
-    return api.delete<void>(`/work-items/${id}`);
+    return api.delete<void>(`/workitems/${id}`);
   },
 };
 
 export const loopTemplateService = {
   getAll: async (): Promise<LoopTemplate[]> => {
-    return api.get<LoopTemplate[]>("/loop-templates");
+    return api.get<LoopTemplate[]>("/looptemplates");
   },
 
   getById: async (id: string): Promise<LoopTemplate> => {
-    return api.get<LoopTemplate>(`/loop-templates/${id}`);
+    return api.get<LoopTemplate>(`/looptemplates/${id}`);
   },
 
   create: async (data: Partial<LoopTemplate>): Promise<LoopTemplate> => {
-    return api.post<LoopTemplate>("/loop-templates", data);
+    return api.post<LoopTemplate>("/looptemplates", data);
   },
 
   update: async (id: string, data: Partial<LoopTemplate>): Promise<LoopTemplate> => {
-    return api.put<LoopTemplate>(`/loop-templates/${id}`, data);
+    return api.put<LoopTemplate>(`/looptemplates/${id}`, data);
   },
 
   delete: async (id: string): Promise<void> => {
-    return api.delete<void>(`/loop-templates/${id}`);
+    return api.delete<void>(`/looptemplates/${id}`);
   },
 };
 
 export const loopRunService = {
   getAll: async (): Promise<LoopRun[]> => {
-    return api.get<LoopRun[]>("/loop-runs");
+    return api.get<LoopRun[]>("/looptemplates");
   },
 
   getById: async (id: string): Promise<LoopRun> => {
-    return api.get<LoopRun>(`/loop-runs/${id}`);
+    return api.get<LoopRun>(`/looprun/${id}`);
   },
 
-  trigger: async (templateId: string): Promise<LoopRun> => {
-    return api.post<LoopRun>(`/loop-runs/trigger/${templateId}`, {});
+  trigger: async (workItemId: string): Promise<LoopRun> => {
+    return api.post<LoopRun>(`/workitems/${workItemId}/start`, {});
   },
 
   cancel: async (id: string): Promise<void> => {
-    return api.post<void>(`/loop-runs/${id}/cancel`, {});
+    return api.post<void>(`/looprun/${id}/cancel`, {});
   },
 };

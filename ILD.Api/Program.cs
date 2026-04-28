@@ -39,7 +39,11 @@ try
 
     builder.Services.AddIldServices();
 
-    builder.Services.AddControllers();
+    builder.Services.AddControllers()
+        .AddJsonOptions(o =>
+        {
+            o.JsonSerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles;
+        });
 
     builder.Services.AddSignalR();
 
@@ -66,6 +70,17 @@ try
         var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         dbContext.Database.EnsureCreated();
         Log.Information("Database ensured at {DataPath}", Path.Combine(dataPath, "ild.db"));
+
+        var mgr = scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Interfaces.ILoopTemplateManager>();
+        await ILD.Api.Configuration.TemplateSeeder.SeedAsync(dbContext, mgr);
+
+        // Best-effort recovery: any LoopRun left in Running across restart
+        var recovery = scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Interfaces.IRecoveryManager>();
+        foreach (var runId in await recovery.GetRecoverableRunIdsAsync())
+        {
+            try { await recovery.RecoverRunAsync(runId); }
+            catch (Exception ex) { Log.Warning(ex, "Recovery failed for run {RunId}", runId); }
+        }
     }
 
     app.UseSerilogRequestLogging();

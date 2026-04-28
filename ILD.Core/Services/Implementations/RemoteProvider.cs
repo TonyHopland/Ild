@@ -1,54 +1,148 @@
+using System.Net.Http.Json;
+using System.Text.Json;
 using ILD.Core.DTOs;
-using Microsoft.Extensions.Logging;
-using ILD.Core.Enums;
 using ILD.Core.Models;
 using ILD.Core.Services.Interfaces;
+using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Core.Services.Implementations;
 
+/// <summary>
+/// Forgejo / Gitea REST API client. Repo URL is expected to be
+/// "https://host/owner/repo" or "https://host/owner/repo.git".
+/// </summary>
 public class RemoteProvider : IRemoteProvider
 {
-    private readonly ILogger<RemoteProvider> _logger;
-    private readonly AppDbContext _dbContext;
+    private readonly AppDbContext _db;
+    private readonly HttpClient _http;
 
-    public RemoteProvider(ILogger<RemoteProvider> logger, AppDbContext dbContext)
+    public RemoteProvider(AppDbContext db, HttpClient http)
     {
-        _logger = logger;
-        _dbContext = dbContext;
+        _db = db;
+        _http = http;
     }
 
-    public Task<RemotePrResult> CreatePullRequestAsync(string repoUrl, string sourceBranch, string targetBranch, string title, string body)
+    public async Task<RemotePrResult> CreatePullRequestAsync(string repoUrl, string sourceBranch, string targetBranch, string title, string body)
     {
-        throw new NotImplementedException(nameof(CreatePullRequestAsync));
+        var (apiBase, owner, repo) = await ResolveAsync(repoUrl);
+        if (apiBase == null) return new RemotePrResult(null, null, RemotePrStatus.Open, "no provider configured");
+        var endpoint = $"{apiBase}/repos/{owner}/{repo}/pulls";
+        try
+        {
+            using var resp = await _http.PostAsJsonAsync(endpoint, new { title, body, head = sourceBranch, @base = targetBranch });
+            if (!resp.IsSuccessStatusCode)
+                return new RemotePrResult(null, null, RemotePrStatus.Open, $"HTTP {(int)resp.StatusCode}");
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            return new RemotePrResult(
+                doc.RootElement.GetProperty("url").GetString(),
+                doc.RootElement.TryGetProperty("html_url", out var h) ? h.GetString() : null,
+                RemotePrStatus.Open, null);
+        }
+        catch (Exception ex)
+        {
+            return new RemotePrResult(null, null, RemotePrStatus.Open, ex.Message);
+        }
     }
 
-    public Task<bool> MergePullRequestAsync(string repoUrl, string prNumber)
+    public async Task<bool> MergePullRequestAsync(string repoUrl, string prNumber)
     {
-        throw new NotImplementedException(nameof(MergePullRequestAsync));
+        var (apiBase, owner, repo) = await ResolveAsync(repoUrl);
+        if (apiBase == null) return false;
+        try
+        {
+            using var resp = await _http.PostAsJsonAsync($"{apiBase}/repos/{owner}/{repo}/pulls/{prNumber}/merge", new { Do = "merge" });
+            return resp.IsSuccessStatusCode;
+        }
+        catch { return false; }
     }
 
-    public Task<IEnumerable<RemotePrComment>> GetPullRequestCommentsAsync(string repoUrl, string prNumber)
+    public async Task<IEnumerable<RemotePrComment>> GetPullRequestCommentsAsync(string repoUrl, string prNumber)
     {
-        throw new NotImplementedException(nameof(GetPullRequestCommentsAsync));
+        var (apiBase, owner, repo) = await ResolveAsync(repoUrl);
+        if (apiBase == null) return Array.Empty<RemotePrComment>();
+        try
+        {
+            using var resp = await _http.GetAsync($"{apiBase}/repos/{owner}/{repo}/issues/{prNumber}/comments");
+            if (!resp.IsSuccessStatusCode) return Array.Empty<RemotePrComment>();
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            var list = new List<RemotePrComment>();
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                list.Add(new RemotePrComment(
+                    el.GetProperty("id").GetRawText(),
+                    el.GetProperty("body").GetString() ?? "",
+                    el.GetProperty("user").GetProperty("login").GetString() ?? "",
+                    el.GetProperty("created_at").GetDateTime()));
+            }
+            return list;
+        }
+        catch { return Array.Empty<RemotePrComment>(); }
     }
 
-    public Task RegisterWebhookAsync(string repoUrl, string callbackUrl)
+    public async Task RegisterWebhookAsync(string repoUrl, string callbackUrl)
     {
-        throw new NotImplementedException(nameof(RegisterWebhookAsync));
+        var (apiBase, owner, repo) = await ResolveAsync(repoUrl);
+        if (apiBase == null) return;
+        try
+        {
+            await _http.PostAsJsonAsync($"{apiBase}/repos/{owner}/{repo}/hooks", new
+            {
+                type = "gitea",
+                config = new { url = callbackUrl, content_type = "json" },
+                events = new[] { "push", "pull_request", "pull_request_comment" },
+                active = true,
+            });
+        }
+        catch { }
     }
 
-    public Task UnregisterWebhookAsync(string repoUrl, string callbackUrl)
+    public Task UnregisterWebhookAsync(string repoUrl, string callbackUrl) => Task.CompletedTask;
+
+    public async Task<RemotePrStatus> GetPullRequestStatusAsync(string repoUrl, string prNumber)
     {
-        throw new NotImplementedException(nameof(UnregisterWebhookAsync));
+        var (apiBase, owner, repo) = await ResolveAsync(repoUrl);
+        if (apiBase == null) return RemotePrStatus.Open;
+        try
+        {
+            using var resp = await _http.GetAsync($"{apiBase}/repos/{owner}/{repo}/pulls/{prNumber}");
+            if (!resp.IsSuccessStatusCode) return RemotePrStatus.Open;
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            if (doc.RootElement.TryGetProperty("merged", out var m) && m.GetBoolean()) return RemotePrStatus.Merged;
+            var state = doc.RootElement.GetProperty("state").GetString();
+            return state == "closed" ? RemotePrStatus.Closed : RemotePrStatus.Open;
+        }
+        catch { return RemotePrStatus.Open; }
     }
 
-    public Task<RemotePrStatus> GetPullRequestStatusAsync(string repoUrl, string prNumber)
+    public async Task<bool> DeleteBranchAsync(string repoUrl, string branchName)
     {
-        throw new NotImplementedException(nameof(GetPullRequestStatusAsync));
+        var (apiBase, owner, repo) = await ResolveAsync(repoUrl);
+        if (apiBase == null) return false;
+        try
+        {
+            using var resp = await _http.DeleteAsync($"{apiBase}/repos/{owner}/{repo}/branches/{branchName}");
+            return resp.IsSuccessStatusCode;
+        }
+        catch { return false; }
     }
 
-    public Task<bool> DeleteBranchAsync(string repoUrl, string branchName)
+    private async Task<(string? apiBase, string? owner, string? repo)> ResolveAsync(string repoUrl)
     {
-        throw new NotImplementedException(nameof(DeleteBranchAsync));
+        var providers = await _db.RemoteProviders.ToListAsync();
+        var match = providers.FirstOrDefault(p => repoUrl.StartsWith(p.Url, StringComparison.OrdinalIgnoreCase));
+        if (match == null) return (null, null, null);
+
+        // Parse owner/repo from path part of repoUrl.
+        var path = repoUrl.Substring(match.Url.Length).TrimStart('/');
+        if (path.EndsWith(".git", StringComparison.OrdinalIgnoreCase)) path = path[..^4];
+        var parts = path.Split('/', 2);
+        if (parts.Length < 2) return (null, null, null);
+
+        // Configure auth for this call.
+        if (!string.IsNullOrEmpty(match.ApiKey) && _http.DefaultRequestHeaders.Authorization == null)
+            _http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("token", match.ApiKey);
+
+        var apiBase = match.Url.TrimEnd('/') + "/api/v1";
+        return (apiBase, parts[0], parts[1]);
     }
 }

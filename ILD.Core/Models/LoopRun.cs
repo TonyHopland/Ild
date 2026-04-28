@@ -23,6 +23,16 @@ public class LoopRun
     [MaxLength(128)]
     public string RecoveryPolicy { get; set; } = string.Empty;
 
+    public bool IsPaused { get; set; }
+
+    public int NodeExecutionCount { get; set; }
+
+    public DateTime? StartedAt { get; set; }
+
+    public DateTime? CompletedAt { get; set; }
+
+    public Guid? CurrentNodeId { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     public DateTime? UpdatedAt { get; set; }

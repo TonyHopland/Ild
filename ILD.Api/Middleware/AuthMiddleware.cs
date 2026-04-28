@@ -10,17 +10,15 @@ namespace ILD.Api.Middleware;
 public class AuthMiddleware
 {
     private readonly RequestDelegate _next;
-    private readonly IAuthService _authService;
     private readonly AuthOptions _options;
 
-    public AuthMiddleware(RequestDelegate next, IAuthService authService, AuthOptions options)
+    public AuthMiddleware(RequestDelegate next, AuthOptions options)
     {
         _next = next;
-        _authService = authService;
         _options = options;
     }
 
-    public async Task InvokeAsync(HttpContext context)
+    public async Task InvokeAsync(HttpContext context, IAuthService authService)
     {
         if (IsExcludedPath(context.Request.Path))
         {
@@ -39,7 +37,7 @@ public class AuthMiddleware
             return;
         }
 
-        var isValid = await _authService.ValidateSessionAsync(token);
+        var isValid = await authService.ValidateSessionAsync(token);
 
         if (!isValid)
         {
@@ -51,7 +49,7 @@ public class AuthMiddleware
         }
 
         context.Items["SessionId"] = token;
-        var username = await _authService.GetUsernameAsync(token);
+        var username = await authService.GetUsernameAsync(token);
         if (!string.IsNullOrEmpty(username))
         {
             context.Items["Username"] = username;
@@ -107,7 +105,8 @@ public class AuthMiddleware
             return authHeader.Trim();
         }
 
-        var queryToken = context.Request.Query["token"].FirstOrDefault();
+        var queryToken = context.Request.Query["token"].FirstOrDefault()
+            ?? context.Request.Query["access_token"].FirstOrDefault();
 
         return string.IsNullOrWhiteSpace(queryToken) ? null : queryToken;
     }

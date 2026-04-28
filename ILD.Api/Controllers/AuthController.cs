@@ -24,6 +24,10 @@ public class AuthController : ControllerBase
         try
         {
             var result = await _authService.LoginAsync(request.Username, request.Password);
+            if (!result.Success || string.IsNullOrEmpty(result.SessionToken))
+            {
+                return Unauthorized(new { error = result.ErrorMessage ?? "Invalid username or password" });
+            }
             return Ok(new LoginResponse(result.SessionToken, result.Username));
         }
         catch
@@ -44,5 +48,15 @@ public class AuthController : ControllerBase
 
         await _authService.LogoutAsync(token);
         return NoContent();
+    }
+
+    [HttpGet("me")]
+    public IActionResult Me()
+    {
+        var username = HttpContext.Items["Username"] as string;
+        if (string.IsNullOrEmpty(username))
+            return Unauthorized();
+
+        return Ok(new { id = username, username, email = string.Empty, role = "admin" });
     }
 }

@@ -1,6 +1,9 @@
 using ILD.Core.Services.Interfaces;
 using ILD.Core.DTOs;
+using ILD.Core.Enums;
+using ILD.Core.Models;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Api.Controllers;
 
@@ -9,16 +12,24 @@ namespace ILD.Api.Controllers;
 public class WorkItemsController : ControllerBase
 {
     private readonly IWorkItemManager _workItemManager;
+    private readonly ILoopEngine _engine;
+    private readonly AppDbContext _db;
 
-    public WorkItemsController(IWorkItemManager workItemManager)
+    public WorkItemsController(IWorkItemManager workItemManager, ILoopEngine engine, AppDbContext db)
     {
         _workItemManager = workItemManager;
+        _engine = engine;
+        _db = db;
     }
 
     [HttpGet]
-    public async Task<IActionResult> GetAll()
+    public async Task<IActionResult> GetAll([FromQuery] string? status = null)
     {
-        throw new NotImplementedException();
+        IQueryable<WorkItem> q = _db.WorkItems.AsNoTracking();
+        if (!string.IsNullOrEmpty(status) && Enum.TryParse<WorkItemStatus>(status, true, out var s))
+            q = q.Where(w => w.Status == s);
+        var items = await q.OrderByDescending(w => w.CreatedAt).ToListAsync();
+        return Ok(items);
     }
 
     [HttpGet("{id}")]
@@ -52,7 +63,15 @@ public class WorkItemsController : ControllerBase
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(string id, [FromBody] WorkItemCreateRequest request)
     {
-        throw new NotImplementedException();
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+        var wi = await _db.WorkItems.FindAsync(guid);
+        if (wi == null) return NotFound();
+        wi.Title = request.Title;
+        wi.Description = request.Description;
+        wi.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return Ok(wi);
     }
 
     [HttpPost("{id}/start")]
@@ -61,8 +80,8 @@ public class WorkItemsController : ControllerBase
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
 
-        var success = await _workItemManager.TransitionToRunningAsync(guid);
-        return success ? Ok() : NotFound();
+        await _engine.StartRunAsync(guid);
+        return Accepted();
     }
 
     [HttpPost("{id}/transition")]
@@ -71,7 +90,18 @@ public class WorkItemsController : ControllerBase
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
 
-        throw new NotImplementedException();
+        if (!Enum.TryParse<WorkItemStatus>(request.TargetStatus, true, out var target))
+            return BadRequest(new { error = "Invalid target status" });
+        var ok = target switch
+        {
+            WorkItemStatus.WorkQueue => await _workItemManager.TransitionToWorkQueueAsync(guid),
+            WorkItemStatus.Ready => await _workItemManager.TransitionToReadyAsync(guid),
+            WorkItemStatus.Running => await _workItemManager.TransitionToRunningAsync(guid),
+            WorkItemStatus.HumanFeedback => await _workItemManager.TransitionToHumanFeedbackAsync(guid, "manual"),
+            WorkItemStatus.Done => await _workItemManager.TransitionToDoneAsync(guid),
+            _ => false,
+        };
+        return ok ? Ok() : BadRequest(new { error = "Transition not allowed" });
     }
 
     [HttpGet("{id}/dependencies")]
@@ -90,14 +120,42 @@ public class WorkItemsController : ControllerBase
         if (!Guid.TryParse(id, out var workItemId) || !Guid.TryParse(request.DependencyId, out var depId))
             return BadRequest(new { error = "Invalid GUID" });
 
-        var success = await _workItemManager.AddDependencyAsync(workItemId, depId);
-        return success ? Ok() : BadRequest();
+        try
+        {
+            var success = await _workItemManager.AddDependencyAsync(workItemId, depId);
+            return success ? Ok() : BadRequest();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpDelete("{id}/dependencies/{depId}")]
+    public async Task<IActionResult> RemoveDependency(string id, string depId)
+    {
+        if (!Guid.TryParse(id, out var wiId) || !Guid.TryParse(depId, out var dId))
+            return BadRequest(new { error = "Invalid GUID" });
+        var ok = await _workItemManager.RemoveDependencyAsync(wiId, dId);
+        return ok ? Ok() : NotFound();
     }
 
     [HttpGet("{id}/runs")]
     public async Task<IActionResult> GetRuns(string id)
     {
-        throw new NotImplementedException();
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+        var runs = await _db.LoopRuns.AsNoTracking().Where(r => r.WorkItemId == guid).OrderByDescending(r => r.StartedAt).ToListAsync();
+        return Ok(runs);
+    }
+
+    [HttpPost("{id}/mark-merged")]
+    public async Task<IActionResult> MarkMerged(string id)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+        var ok = await _workItemManager.ManuallyMarkMergedAsync(guid);
+        return ok ? Ok() : NotFound();
     }
 }
 

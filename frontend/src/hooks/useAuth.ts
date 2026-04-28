@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, createContext, useContext } from "react";
 import { User, AuthState } from "../types";
 import { authService } from "../services/auth";
+import { AUTH_UNAUTHORIZED_EVENT } from "../services/api";
 
 const AuthContext = createContext<AuthState | null>(null);
 
@@ -9,27 +10,46 @@ export function useProvideAuth(): AuthState {
   const [token, setToken] = useState<string | null>(authService.getToken());
   const [isLoading, setIsLoading] = useState(true);
 
-  useEffect(() => {
-    const initAuth = async () => {
-      const storedToken = authService.getToken();
-      const storedUser = authService.getUser();
+  const clear = useCallback(() => {
+    authService.clearAuth();
+    setUser(null);
+    setToken(null);
+  }, []);
 
-      if (storedToken && storedUser) {
-        try {
-          const me = await authService.getMe();
+  // Validate any persisted token against the backend on mount.
+  useEffect(() => {
+    let cancelled = false;
+    const init = async () => {
+      const storedToken = authService.getToken();
+      if (!storedToken) {
+        setIsLoading(false);
+        return;
+      }
+      try {
+        const me = await authService.getMe();
+        if (!cancelled) {
           setUser(me);
           setToken(storedToken);
-        } catch {
-          authService.clearAuth();
-          setUser(null);
-          setToken(null);
         }
+      } catch {
+        if (!cancelled) clear();
+      } finally {
+        if (!cancelled) setIsLoading(false);
       }
-      setIsLoading(false);
     };
+    void init();
+    return () => {
+      cancelled = true;
+    };
+  }, [clear]);
 
-    initAuth();
-  }, []);
+  // Any 401 from the API client tears down the session; the router will
+  // render <Login> because isAuthenticated flips to false.
+  useEffect(() => {
+    const onUnauthorized = () => clear();
+    window.addEventListener(AUTH_UNAUTHORIZED_EVENT, onUnauthorized);
+    return () => window.removeEventListener(AUTH_UNAUTHORIZED_EVENT, onUnauthorized);
+  }, [clear]);
 
   const login = useCallback(async (username: string, password: string) => {
     const result = await authService.login(username, password);
@@ -41,12 +61,10 @@ export function useProvideAuth(): AuthState {
   const logout = useCallback(async () => {
     try {
       await authService.logout();
-    } catch {
-      authService.clearAuth();
+    } finally {
+      clear();
     }
-    setUser(null);
-    setToken(null);
-  }, []);
+  }, [clear]);
 
   return {
     user,

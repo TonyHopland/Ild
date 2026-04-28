@@ -1,69 +1,145 @@
-using ILD.Core.DTOs;
-using Microsoft.Extensions.Logging;
-using ILD.Core.Enums;
-using ILD.Core.Models;
+using System.Diagnostics;
 using ILD.Core.Services.Interfaces;
+using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations;
 
+/// <summary>
+/// Wraps git CLI via System.Diagnostics.Process to manage repository worktrees.
+/// All operations are best-effort; non-zero exit codes return false (or empty for queries).
+/// </summary>
 public class RepositoryManager : IRepositoryManager
 {
-    private readonly ILogger<RepositoryManager> _logger;
-    private readonly AppDbContext _dbContext;
+    private readonly ILogger<RepositoryManager>? _logger;
 
-    public RepositoryManager(ILogger<RepositoryManager> logger, AppDbContext dbContext)
+    public RepositoryManager(ILogger<RepositoryManager>? logger = null)
     {
         _logger = logger;
-        _dbContext = dbContext;
     }
 
-    public Task<string> CreateWorktreeAsync(string repoPath, string branchName)
+    public async Task<string> CreateWorktreeAsync(string repoPath, string branchName)
     {
-        throw new NotImplementedException(nameof(CreateWorktreeAsync));
+        var worktreesRoot = Path.Combine(repoPath, "..", ".ild-worktrees");
+        Directory.CreateDirectory(worktreesRoot);
+        var worktreePath = Path.GetFullPath(Path.Combine(worktreesRoot, branchName));
+
+        // Try add as new branch first; if branch already exists, attach to it.
+        var (code, _, _) = await RunAsync(repoPath, "worktree", "add", "-b", branchName, worktreePath);
+        if (code != 0)
+        {
+            var (code2, _, _) = await RunAsync(repoPath, "worktree", "add", worktreePath, branchName);
+            if (code2 != 0)
+                throw new InvalidOperationException($"Failed to create worktree at {worktreePath}");
+        }
+        return worktreePath;
     }
 
-    public Task DestroyWorktreeAsync(string worktreePath)
+    public async Task DestroyWorktreeAsync(string worktreePath)
     {
-        throw new NotImplementedException(nameof(DestroyWorktreeAsync));
+        if (!Directory.Exists(worktreePath)) return;
+        var repoPath = await ResolveMainRepoPathAsync(worktreePath) ?? worktreePath;
+        await RunAsync(repoPath, "worktree", "remove", "--force", worktreePath);
+        if (Directory.Exists(worktreePath))
+        {
+            try { Directory.Delete(worktreePath, recursive: true); } catch { /* best effort */ }
+        }
     }
 
-    public Task<bool> ValidateWorktreeHealthAsync(string worktreePath)
+    public async Task<bool> ValidateWorktreeHealthAsync(string worktreePath)
     {
-        throw new NotImplementedException(nameof(ValidateWorktreeHealthAsync));
+        if (!Directory.Exists(worktreePath)) return false;
+        var (code, _, _) = await RunAsync(worktreePath, "rev-parse", "--is-inside-work-tree");
+        return code == 0;
     }
 
-    public Task<bool> CheckoutBranchAsync(string worktreePath, string branchName)
+    public async Task<bool> CheckoutBranchAsync(string worktreePath, string branchName)
     {
-        throw new NotImplementedException(nameof(CheckoutBranchAsync));
+        var (code, _, _) = await RunAsync(worktreePath, "checkout", branchName);
+        return code == 0;
     }
 
-    public Task<bool> PullAsync(string worktreePath, CancellationToken cancellationToken = default)
+    public async Task<bool> PullAsync(string worktreePath, CancellationToken cancellationToken = default)
     {
-        throw new NotImplementedException(nameof(PullAsync));
+        var (code, _, _) = await RunAsync(worktreePath, new[] { "pull", "--ff-only" }, cancellationToken);
+        return code == 0;
     }
 
-    public Task<bool> RebaseAsync(string worktreePath, string upstreamBranch, CancellationToken cancellationToken = default)
+    public async Task<bool> RebaseAsync(string worktreePath, string upstreamBranch, CancellationToken cancellationToken = default)
     {
-        throw new NotImplementedException(nameof(RebaseAsync));
+        var (code, _, _) = await RunAsync(worktreePath, new[] { "rebase", upstreamBranch }, cancellationToken);
+        return code == 0;
     }
 
-    public Task<bool> CommitAsync(string worktreePath, string message)
+    public async Task<bool> CommitAsync(string worktreePath, string message)
     {
-        throw new NotImplementedException(nameof(CommitAsync));
+        await RunAsync(worktreePath, "add", "-A");
+        var (code, _, _) = await RunAsync(worktreePath, "commit", "-m", message);
+        return code == 0;
     }
 
-    public Task<bool> PushAsync(string worktreePath, string branchName, CancellationToken cancellationToken = default)
+    public async Task<bool> PushAsync(string worktreePath, string branchName, CancellationToken cancellationToken = default)
     {
-        throw new NotImplementedException(nameof(PushAsync));
+        var (code, _, _) = await RunAsync(worktreePath, new[] { "push", "-u", "origin", branchName }, cancellationToken);
+        return code == 0;
     }
 
-    public Task<string?> GetDiffAsync(string worktreePath)
+    public async Task<string?> GetDiffAsync(string worktreePath)
     {
-        throw new NotImplementedException(nameof(GetDiffAsync));
+        var (code, stdout, _) = await RunAsync(worktreePath, "diff", "HEAD");
+        return code == 0 ? stdout : null;
     }
 
     public Task<string?> ReadFileAsync(string worktreePath, string relativePath)
     {
-        throw new NotImplementedException(nameof(ReadFileAsync));
+        var full = Path.GetFullPath(Path.Combine(worktreePath, relativePath));
+        // Path traversal guard.
+        var root = Path.GetFullPath(worktreePath);
+        if (!full.StartsWith(root, StringComparison.Ordinal))
+            return Task.FromResult<string?>(null);
+        if (!File.Exists(full)) return Task.FromResult<string?>(null);
+        return File.ReadAllTextAsync(full).ContinueWith(t => (string?)t.Result);
+    }
+
+    private async Task<string?> ResolveMainRepoPathAsync(string worktreePath)
+    {
+        var (code, stdout, _) = await RunAsync(worktreePath, "rev-parse", "--git-common-dir");
+        if (code != 0) return null;
+        var gitDir = stdout.Trim();
+        if (!Path.IsPathRooted(gitDir)) gitDir = Path.GetFullPath(Path.Combine(worktreePath, gitDir));
+        return Path.GetDirectoryName(gitDir);
+    }
+
+    private Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(string cwd, params string[] args)
+        => RunAsync(cwd, args, CancellationToken.None);
+
+    private async Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(string cwd, IReadOnlyList<string> args, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = cwd,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+
+        using var proc = Process.Start(psi)!;
+        var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+        var stderrTask = proc.StandardError.ReadToEndAsync();
+        try
+        {
+            await proc.WaitForExitAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            try { proc.Kill(entireProcessTree: true); } catch { }
+            throw;
+        }
+        var stdout = await stdoutTask;
+        var stderr = await stderrTask;
+        if (proc.ExitCode != 0)
+            _logger?.LogDebug("git {Args} exited {Code}: {Err}", string.Join(' ', args), proc.ExitCode, stderr);
+        return (proc.ExitCode, stdout, stderr);
     }
 }

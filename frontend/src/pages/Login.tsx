@@ -1,12 +1,14 @@
 import { useState } from "react";
-import { useProvideAuth } from "../hooks/useAuth";
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "../hooks/useAuth";
 
 export default function Login() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const { login } = useProvideAuth();
+  const { login } = useAuth();
+  const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -15,8 +17,10 @@ export default function Login() {
 
     try {
       await login(username, password);
-    } catch {
-      setError("Invalid credentials. Please try again.");
+      navigate("/taskboard", { replace: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Invalid credentials. Please try again.";
+      setError(message || "Invalid credentials. Please try again.");
     } finally {
       setIsLoading(false);
     }
