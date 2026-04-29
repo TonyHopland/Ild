@@ -110,13 +110,22 @@ public sealed class AINodeExecutor : INodeExecutor
         {
             var dict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(cfg);
             if (dict == null) return NodeExecutionResult.Fail("AI config missing");
-            var provider = dict.GetValueOrDefault("provider")?.ToString() ?? "default";
-            var model = dict.GetValueOrDefault("model")?.ToString() ?? "default";
-            var prompt = dict.GetValueOrDefault("prompt")?.ToString() ?? "";
+            var providerKey = dict.GetValueOrDefault("provider")?.ToString();
+            var initialPrompt = dict.GetValueOrDefault("initialPrompt")?.ToString()
+                ?? dict.GetValueOrDefault("prompt")?.ToString() ?? "";
+            var loopPrompt = dict.GetValueOrDefault("loopPrompt")?.ToString() ?? initialPrompt;
 
             using var scope = _sp.CreateScope();
-            var ai = scope.ServiceProvider.GetRequiredService<IAIProviderService>();
-            var rendered = await ai.RenderPromptAsync(prompt, new ILD.Data.DTOs.LoopRunContext(
+            var providerStore = scope.ServiceProvider.GetRequiredService<IProviderStore>();
+            var provider = await ResolveProviderAsync(providerStore, providerKey);
+            if (provider == null) return NodeExecutionResult.Fail("No AI provider found");
+
+            var registry = scope.ServiceProvider.GetRequiredService<IAgentAdapterRegistry>();
+            var adapter = registry.ResolveForProvider(provider)();
+
+            var executionCount = await CountNodeVisitsAsync(scope.ServiceProvider, ctx.Run.Id, ctx.Node.Id);
+
+            var runContext = new ILD.Data.DTOs.LoopRunContext(
                 ctx.Run.Id,
                 ctx.WorkItem.Id,
                 ctx.WorkItem.Title,
@@ -124,11 +133,38 @@ public sealed class AINodeExecutor : INodeExecutor
                 ctx.WorkItem.WorktreePath ?? "",
                 ctx.WorkItem.BranchName ?? "",
                 new List<string>(),
-                ctx.PreviousNodeOutput));
-            var response = await ai.CompleteAsync(rendered, provider, ctx.CancellationToken);
-            return NodeExecutionResult.Ok(response);
+                ctx.PreviousNodeOutput);
+
+            var agentCtx = new ILD.Data.DTOs.AgentExecutionContext(
+                provider,
+                initialPrompt,
+                loopPrompt,
+                runContext,
+                executionCount,
+                ctx.CancellationToken);
+
+            return await adapter.ExecuteAsync(agentCtx);
         }
         catch (Exception ex) { return NodeExecutionResult.Fail(ex.Message); }
+    }
+
+    private static async Task<int> CountNodeVisitsAsync(IServiceProvider sp, Guid runId, Guid nodeId)
+    {
+        var loopRunStore = sp.GetRequiredService<ILoopRunStore>();
+        var runNodes = await loopRunStore.GetRunNodesAsync(runId);
+        return runNodes.Count(n => n.LoopNodeId == nodeId);
+    }
+
+    private static async Task<AiProvider?> ResolveProviderAsync(IProviderStore store, string? providerKey)
+    {
+        if (string.IsNullOrEmpty(providerKey))
+            return await store.GetDefaultAiProviderAsync()
+                ?? await store.GetFirstAiProviderAsync();
+
+        if (Guid.TryParse(providerKey, out var id))
+            return await store.GetAiProviderByIdAsync(id);
+
+        return await store.GetAiProviderByNameAsync(providerKey);
     }
 }
 

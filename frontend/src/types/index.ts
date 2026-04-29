@@ -208,3 +208,21 @@ export interface LoopTemplateVersion {
   nodeCount: number;
   edgeCount: number;
 }
+
+export enum ConfigFieldType {
+  Text = "Text",
+  Number = "Number",
+  Toggle = "Toggle",
+  Textarea = "Textarea",
+  Select = "Select",
+}
+
+export interface ConfigFieldDescriptor {
+  name: string;
+  type: ConfigFieldType;
+  label: string;
+  required: boolean;
+  defaultValue: string | number | boolean | null;
+  description: string | null;
+  options: string[] | null;
+}

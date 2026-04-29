@@ -12,9 +12,10 @@ import {
   addEdge,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { LoopTemplate, NodeType, EdgeType } from "../types";
-import { loopTemplateService } from "../services/auth";
+import { LoopTemplate, NodeType, EdgeType, ConfigFieldDescriptor, AiProvider } from "../types";
+import { loopTemplateService, agentAdapterService, aiProviderService } from "../services/auth";
 import LoopNodeComponent from "../components/LoopNodeComponent";
+import AdapterConfigFields from "../components/AdapterConfigFields";
 import {
   templateToNodes,
   templateToEdges,
@@ -67,9 +68,15 @@ export default function LoopEditor() {
   const [showVersionHistory, setShowVersionHistory] = useState(false);
   const [versionHistory, setVersionHistory] = useState<any[]>([]);
   const [readOnlyVersion, setReadOnlyVersion] = useState<number | null>(null);
+  const [adapterConfigSchema, setAdapterConfigSchema] = useState<ConfigFieldDescriptor[]>([]);
+  const [adapterConfigValues, setAdapterConfigValues] = useState<
+    Record<string, string | number | boolean>
+  >({});
+  const [aiProviders, setAiProviders] = useState<AiProvider[]>([]);
 
   useEffect(() => {
     void loadTemplates();
+    void loadAiProviders();
   }, []);
 
   const loadTemplates = async () => {
@@ -78,6 +85,15 @@ export default function LoopEditor() {
       setTemplates(data);
     } catch (error) {
       console.error("Failed to load loop templates:", error);
+    }
+  };
+
+  const loadAiProviders = async () => {
+    try {
+      const data = await aiProviderService.getAll();
+      setAiProviders(data);
+    } catch (error) {
+      console.error("Failed to load AI providers:", error);
     }
   };
 
@@ -300,6 +316,20 @@ export default function LoopEditor() {
     setAiTools((config.toolAllowlist as string[]) || []);
     setStartCreateWorktree((config.createWorktree as boolean) ?? true);
     setHumanInputLabel((config.inputLabel as string) || "");
+
+    if (data.type === NodeType.AI) {
+      const providerType = "openai";
+      void agentAdapterService.getConfigSchema(providerType).then((schema) => {
+        setAdapterConfigSchema(schema);
+        const initialValues: Record<string, string | number | boolean> = {};
+        for (const field of schema) {
+          if (field.defaultValue !== null && field.defaultValue !== undefined) {
+            initialValues[field.name] = field.defaultValue;
+          }
+        }
+        setAdapterConfigValues(initialValues);
+      });
+    }
   }, []);
 
   const updateNodeLabel = useCallback(
@@ -357,6 +387,30 @@ export default function LoopEditor() {
             ? {
                 ...nd,
                 data: { ...nd.data, config: { ...currentConfig, ...configUpdate } },
+              }
+            : nd,
+        ),
+      );
+    },
+    [selectedNode, setNodes],
+  );
+
+  const handleAdapterConfigChange = useCallback(
+    (name: string, value: string | number | boolean) => {
+      if (!selectedNode) return;
+      setAdapterConfigValues((prev) => ({ ...prev, [name]: value }));
+      const currentConfig =
+        (selectedNode.data as { config?: Record<string, unknown> }).config || {};
+      const adapterConfig = (currentConfig.adapterConfig as Record<string, unknown>) || {};
+      setNodes((nds) =>
+        nds.map((nd) =>
+          nd.id === selectedNode?.id
+            ? {
+                ...nd,
+                data: {
+                  ...nd.data,
+                  config: { ...currentConfig, adapterConfig: { ...adapterConfig, [name]: value } },
+                },
               }
             : nd,
         ),
@@ -687,11 +741,45 @@ export default function LoopEditor() {
                           onChange={(e) => {
                             setAiProvider(e.target.value);
                             updateNodeConfig({ aiProviderId: e.target.value });
+                            const selected = aiProviders.find((p) => p.id === e.target.value);
+                            if (selected) {
+                              void agentAdapterService
+                                .getConfigSchema(selected.type)
+                                .then((schema) => {
+                                  setAdapterConfigSchema(schema);
+                                  const initialValues: Record<string, string | number | boolean> =
+                                    {};
+                                  for (const field of schema) {
+                                    if (
+                                      field.defaultValue !== null &&
+                                      field.defaultValue !== undefined
+                                    ) {
+                                      initialValues[field.name] = field.defaultValue;
+                                    }
+                                  }
+                                  setAdapterConfigValues(initialValues);
+                                });
+                            } else {
+                              setAdapterConfigSchema([]);
+                              setAdapterConfigValues({});
+                            }
                           }}
                         >
                           <option value="">Default</option>
+                          {aiProviders.map((provider) => (
+                            <option key={provider.id} value={provider.id}>
+                              {provider.name}
+                            </option>
+                          ))}
                         </select>
                       </div>
+                      {adapterConfigSchema.length > 0 && (
+                        <AdapterConfigFields
+                          schema={adapterConfigSchema}
+                          values={adapterConfigValues}
+                          onChange={handleAdapterConfigChange}
+                        />
+                      )}
                       <div className="config-field">
                         <label>Tool Allowlist</label>
                         <div className="tool-checklist">

@@ -4,7 +4,7 @@ PRD.md
 
 ## Status
 
-**READY**
+**COMPLETE**
 
 ## What to build
 
@@ -16,14 +16,14 @@ EF Core migration adds the column with a default of `{}`. Existing providers are
 
 ## Acceptance criteria
 
-- [ ] `AiProvider` entity has a new `Config` property of type `string?` (JSON)
-- [ ] EF Core migration adds the column with nullable/default empty JSON
-- [ ] `AiProviderDto` includes the `Config` field for API serialization
-- [ ] `IProviderStore` and `ProviderStore` read/write the `Config` field through CRUD operations
-- [ ] API endpoints (`POST /api/v1/aiproviders`, `PUT /api/v1/aiproviders/{id}`) accept and return the `Config` JSON
-- [ ] Existing providers without `Config` continue to work (backward compatible)
-- [ ] Backend tests cover: create provider with config, update provider config, read provider returns config, missing config defaults to empty
-- [ ] `vp check` and `vp test` pass
+- [x] `AiProvider` entity has a new `Config` property of type `string?` (JSON)
+- [x] EF Core migration adds the column with nullable/default empty JSON
+- [x] `AiProviderDto` includes the `Config` field for API serialization
+- [x] `IProviderStore` and `ProviderStore` read/write the `Config` field through CRUD operations
+- [x] API endpoints (`POST /api/v1/aiproviders`, `PUT /api/v1/aiproviders/{id}`) accept and return the `Config` JSON
+- [x] Existing providers without `Config` continue to work (backward compatible)
+- [x] Backend tests cover: create provider with config, update provider config, read provider returns config, missing config defaults to empty
+- [x] `vp check` and `vp test` pass
 
 ## Blocked by
 

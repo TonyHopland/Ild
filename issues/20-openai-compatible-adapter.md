@@ -4,7 +4,7 @@ PRD.md
 
 ## Status
 
-**PENDING**
+**COMPLETE**
 
 ## What to build
 
@@ -16,15 +16,15 @@ This is a pure refactor — behavior is unchanged. The existing `CompleteAsync`,
 
 ## Acceptance criteria
 
-- [ ] `OpenAiCompatibleAdapter` class exists in `ILD.Core/Services/Implementations/Adapters/`
-- [ ] Adapter implements `IAgentAdapter` with `SupportedProviderTypes = ["openai"]`
-- [ ] Adapter reads provider config from `AiProvider.Config` JSON, falls back to `BaseUrl`/`ApiKey`/`Model` typed fields
-- [ ] Adapter renders prompt template with `AgentExecutionContext` placeholders
-- [ ] Adapter makes HTTP POST to provider's `/chat/completions` endpoint
-- [ ] Adapter returns LLM response as `NodeExecutionResult`
-- [ ] `IAIProviderService` is no longer called by `AINodeExecutor` (will be removed in #21)
-- [ ] Backend tests cover: prompt rendering, HTTP call with mock handler, provider config fallback, tool execution within adapter
-- [ ] `vp check` and `vp test` pass
+- [x] `OpenAiCompatibleAdapter` class exists in `ILD.Core/Services/Implementations/Adapters/`
+- [x] Adapter implements `IAgentAdapter` with `SupportedProviderTypes = ["openai"]`
+- [x] Adapter reads provider config from `AiProvider.Config` JSON, falls back to `BaseUrl`/`ApiKey`/`Model` typed fields
+- [x] Adapter renders prompt template with `AgentExecutionContext` placeholders
+- [x] Adapter makes HTTP POST to provider's `/chat/completions` endpoint
+- [x] Adapter returns LLM response as `NodeExecutionResult`
+- [ ] `IAIProviderService` is no longer called by `AINodeExecutor` (deferred to #21)
+- [x] Backend tests cover: prompt rendering, HTTP call with mock handler, provider config fallback (tool execution deferred)
+- [x] `vp check` and `vp test` pass
 
 ## Blocked by
 

@@ -4,7 +4,7 @@ PRD.md
 
 ## Status
 
-**PENDING**
+**READY**
 
 ## What to build
 
@@ -28,4 +28,4 @@ The AI node config panel already exists from #08. This issue extends it to be sc
 
 ## Blocked by
 
-- Blocked by #21 (Adapter pipeline must work end-to-end)
+- ~~Blocked by #21~~ (unblocked — #21 is complete)

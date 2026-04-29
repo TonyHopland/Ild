@@ -9,6 +9,7 @@ import {
   AiProvider,
   LoopTemplateVersion,
   EventLogPage,
+  ConfigFieldDescriptor,
 } from "../types";
 
 interface BackendLoginResponse {
@@ -253,5 +254,11 @@ export const aiProviderService = {
 export const loggingService = {
   setLevel: async (level: string): Promise<{ level: string }> => {
     return api.put<{ level: string }>("/logging/level", { level });
+  },
+};
+
+export const agentAdapterService = {
+  getConfigSchema: async (providerType: string): Promise<ConfigFieldDescriptor[]> => {
+    return api.get<ConfigFieldDescriptor[]>(`/agent-adapters/${providerType}/config-schema`);
   },
 };

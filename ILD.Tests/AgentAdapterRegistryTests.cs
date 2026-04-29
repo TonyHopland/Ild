@@ -13,6 +13,7 @@ public class AgentAdapterRegistryTests
     {
         public string Name => "TestOpenAi";
         public string[] SupportedProviderTypes => ["openai"];
+        public ConfigFieldDescriptor[] ConfigSchema => [];
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
             => Task.FromResult(NodeExecutionResult.Ok("openai"));
     }
@@ -21,6 +22,7 @@ public class AgentAdapterRegistryTests
     {
         public string Name => "TestCustom";
         public string[] SupportedProviderTypes => ["custom"];
+        public ConfigFieldDescriptor[] ConfigSchema => [];
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
             => Task.FromResult(NodeExecutionResult.Ok("custom"));
     }

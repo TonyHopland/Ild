@@ -4,7 +4,7 @@ PRD.md
 
 ## Status
 
-**READY**
+**COMPLETE**
 
 ## What to build
 
@@ -32,14 +32,14 @@ interface IAgentAdapterRegistry {
 
 ## Acceptance criteria
 
-- [ ] `IAgentAdapter` interface exists in `ILD.Core/Services/Interfaces/`
-- [ ] `AgentExecutionContext` record exists in `ILD.Data/DTOs/` with fields: `AiProvider Provider`, `string InitialPrompt`, `string LoopPrompt`, `LoopRunContext RunContext`, `int ExecutionCount`, `CancellationToken Cancel`
-- [ ] `IAgentAdapterRegistry` interface exists with `ResolveForProvider` method
-- [ ] `AgentAdapterRegistry` implementation auto-registers all `IAgentAdapter` via DI service descriptor enumeration
-- [ ] Registry throws `InvalidOperationException` if no adapter matches a provider type
-- [ ] Adapter instances are scoped per (LoopRunId, LoopNodeId) — not shared across sibling AI nodes
-- [ ] Backend tests cover: registry resolution by type, multiple adapters registered, mismatched type throws, per-node-isolation of adapter instances
-- [ ] `vp check` and `vp test` pass
+- [x] `IAgentAdapter` interface exists in `ILD.Core/Services/Interfaces/`
+- [x] `AgentExecutionContext` record exists in `ILD.Data/DTOs/` with fields: `AiProvider Provider`, `string InitialPrompt`, `string LoopPrompt`, `LoopRunContext RunContext`, `int ExecutionCount`, `CancellationToken Cancel`
+- [x] `IAgentAdapterRegistry` interface exists with `ResolveForProvider` method
+- [x] `AgentAdapterRegistry` implementation auto-registers all `IAgentAdapter` via DI service descriptor enumeration
+- [x] Registry throws `InvalidOperationException` if no adapter matches a provider type
+- [x] Adapter instances are scoped per (LoopRunId, LoopNodeId) — not shared across sibling AI nodes
+- [x] Backend tests cover: registry resolution by type, multiple adapters registered, mismatched type throws, per-node-isolation of adapter instances
+- [x] `vp check` and `vp test` pass
 
 ## Blocked by
 

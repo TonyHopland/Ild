@@ -4,7 +4,7 @@ PRD.md
 
 ## Status
 
-**PENDING**
+**DONE**
 
 ## What to build
 
@@ -16,15 +16,15 @@ Adapter instance is scoped per (LoopRunId, LoopNodeId) so each AI node in a loop
 
 ## Acceptance criteria
 
-- [ ] `AINodeExecutor` resolves `AiProvider` from config using existing provider resolution logic (ID → name → default → first)
-- [ ] `AINodeExecutor` asks `IAgentAdapterRegistry.ResolveForProvider()` for the matching adapter
-- [ ] `AINodeExecutor` creates an `AgentExecutionContext` with provider, prompts, run context, execution count, and cancellation token
-- [ ] `AINodeExecutor` calls `adapter.ExecuteAsync(context)` and returns the result
-- [ ] `IAIProviderService` is removed as a dependency of `AINodeExecutor`
-- [ ] Adapter instance is scoped per (LoopRunId, LoopNodeId) — not cached across nodes
-- [ ] Backend tests cover: provider resolution chain, adapter delegation, context construction, cancellation propagation
-- [ ] `vp check` and `vp test` pass
+- [x] `AINodeExecutor` resolves `AiProvider` from config using existing provider resolution logic (ID → name → default → first)
+- [x] `AINodeExecutor` asks `IAgentAdapterRegistry.ResolveForProvider()` for the matching adapter
+- [x] `AINodeExecutor` creates an `AgentExecutionContext` with provider, prompts, run context, execution count, and cancellation token
+- [x] `AINodeExecutor` calls `adapter.ExecuteAsync(context)` and returns the result
+- [x] `IAIProviderService` is removed as a dependency of `AINodeExecutor`
+- [x] Adapter instance is scoped per (LoopRunId, LoopNodeId) — not cached across nodes
+- [x] Backend tests cover: provider resolution chain, adapter delegation, context construction, cancellation propagation
+- [x] `vp check` and `vp test` pass
 
 ## Blocked by
 
-- Blocked by #20 (OpenAI-compatible adapter must exist as the default adapter)
+- ~~Blocked by #20~~ (unblocked — #20 is complete)
