@@ -8,10 +8,16 @@ namespace ILD.Core.Services.Implementations;
 public class WorkItemManager : IWorkItemManager
 {
     private readonly IWorkItemStore _store;
+    private readonly IRepositoryManager _repoManager;
+    private readonly IEventLogService _eventLog;
+    private readonly ILoopRunStore _loopRunStore;
 
-    public WorkItemManager(IWorkItemStore store)
+    public WorkItemManager(IWorkItemStore store, IRepositoryManager repoManager, IEventLogService eventLog, ILoopRunStore loopRunStore)
     {
         _store = store;
+        _repoManager = repoManager;
+        _eventLog = eventLog;
+        _loopRunStore = loopRunStore;
     }
 
     public async Task<Guid> CreateWorkItemAsync(string title, string description, Guid? loopTemplateId, Guid? repositoryId)
@@ -206,5 +212,84 @@ public class WorkItemManager : IWorkItemManager
             foreach (var n in nextDeps) stack.Push(n);
         }
         return false;
+    }
+
+    public async Task<bool> CleanupToDoneAsync(Guid workItemId)
+    {
+        var wi = await _store.GetByIdAsync(workItemId);
+        if (wi == null) return false;
+
+        if (!string.IsNullOrEmpty(wi.WorktreePath))
+        {
+            await _repoManager.DestroyWorktreeAsync(wi.WorktreePath);
+            wi.WorktreePath = null;
+        }
+
+        wi.Status = WorkItemStatus.Done;
+        wi.HumanFeedbackReason = null;
+        wi.UpdatedAt = DateTime.UtcNow;
+        await _store.UpdateAsync(wi);
+        return true;
+    }
+
+    public async Task<bool> CleanupToBacklogAsync(Guid workItemId)
+    {
+        var wi = await _store.GetByIdAsync(workItemId);
+        if (wi == null) return false;
+
+        if (!string.IsNullOrEmpty(wi.WorktreePath))
+        {
+            await _repoManager.DestroyWorktreeAsync(wi.WorktreePath);
+            wi.WorktreePath = null;
+        }
+
+        wi.Status = WorkItemStatus.Backlog;
+        wi.HumanFeedbackReason = null;
+        wi.CurrentLoopRunId = null;
+        wi.BranchName = null;
+        wi.UpdatedAt = DateTime.UtcNow;
+        await _store.UpdateAsync(wi);
+        return true;
+    }
+
+    public async Task<bool> SubmitHumanFeedbackInputAsync(Guid workItemId, string input)
+    {
+        var wi = await _store.GetByIdAsync(workItemId);
+        if (wi == null) return false;
+        if (wi.CurrentLoopRunId == null) return false;
+
+        await _eventLog.AppendAsync(wi.CurrentLoopRunId.Value, "HumanFeedbackReceived", input);
+
+        wi.Status = WorkItemStatus.Running;
+        wi.HumanFeedbackReason = null;
+        wi.UpdatedAt = DateTime.UtcNow;
+        await _store.UpdateAsync(wi);
+        return true;
+    }
+
+    public async Task<bool> RejectHumanFeedbackAsync(Guid workItemId)
+    {
+        var wi = await _store.GetByIdAsync(workItemId);
+        if (wi == null) return false;
+        if (wi.CurrentLoopRunId == null) return false;
+
+        var run = await _loopRunStore.GetByIdAsync(wi.CurrentLoopRunId.Value);
+        if (run == null) return false;
+
+        var nodes = await _loopRunStore.GetRunNodesAsync(run.Id);
+        var currentRunNode = nodes.FirstOrDefault(n => n.LoopNodeId == run.CurrentNodeId);
+        if (currentRunNode != null)
+        {
+            currentRunNode.Status = LoopRunNodeStatus.Failed;
+            await _loopRunStore.UpdateRunNodeAsync(currentRunNode);
+        }
+
+        await _eventLog.AppendAsync(run.Id, "HumanFeedbackReceived", "rejected by user");
+
+        wi.Status = WorkItemStatus.Running;
+        wi.HumanFeedbackReason = null;
+        wi.UpdatedAt = DateTime.UtcNow;
+        await _store.UpdateAsync(wi);
+        return true;
     }
 }

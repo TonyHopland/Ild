@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
 import { LoopRun, LoopRunStatus, LoopRunNodeStatus } from "../types";
 import { loopRunService } from "../services/auth";
 import { useSignalR } from "../hooks/useSignalR";
@@ -84,7 +85,9 @@ export default function LoopRunMonitor() {
                 style={{ backgroundColor: statusColors[run.status] }}
               />
               <div className="loop-run-info">
-                <div className="loop-run-name">Run {run.id.slice(0, 8)}</div>
+                <Link to={`/loop-runs/${run.id}/events`} className="loop-run-name">
+                  Run {run.id.slice(0, 8)}
+                </Link>
                 <div className="loop-run-meta">
                   {new Date(run.startedAt).toLocaleString()} &middot; {run.nodeExecutionCount}{" "}
                   executions
@@ -153,6 +156,11 @@ export default function LoopRunMonitor() {
           font-size: 0.875rem;
           font-weight: 500;
           color: #e0e0e0;
+          text-decoration: none;
+        }
+
+        .loop-run-name:hover {
+          color: #60a5fa;
         }
 
         .loop-run-meta {

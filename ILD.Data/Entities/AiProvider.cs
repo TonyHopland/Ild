@@ -29,6 +29,8 @@ public class AiProvider
 
     public bool IsDefault { get; set; }
 
+    public string? Config { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     public DateTime? UpdatedAt { get; set; }

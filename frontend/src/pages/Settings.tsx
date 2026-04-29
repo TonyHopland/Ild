@@ -1,10 +1,32 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAuth } from "../hooks/useAuth";
+import { loggingService } from "../services/auth";
+
+const LOG_LEVELS = ["Debug", "Information", "Warning", "Error"] as const;
 
 export default function Settings() {
   const { user } = useAuth();
   const [backendUrl, setBackendUrl] = useState("http://localhost:5000");
   const [signalrEnabled, setSignalrEnabled] = useState(true);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  const [logLevel, setLogLevel] = useState("Information");
+
+  useEffect(() => {
+    const stored = localStorage.getItem("ild_notifications_enabled");
+    if (stored !== null) {
+      setNotificationsEnabled(stored !== "false");
+    }
+  }, []);
+
+  const handleLogLevelChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const newLevel = e.target.value;
+    setLogLevel(newLevel);
+    try {
+      await loggingService.setLevel(newLevel);
+    } catch {
+      setLogLevel(logLevel);
+    }
+  };
 
   return (
     <div className="page-container">
@@ -40,6 +62,41 @@ export default function Settings() {
               />{" "}
               Enable SignalR real-time updates
             </label>
+          </div>
+          <div className="form-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={notificationsEnabled}
+                onChange={(e) => {
+                  const val = e.target.checked;
+                  setNotificationsEnabled(val);
+                  localStorage.setItem("ild_notifications_enabled", val ? "true" : "false");
+                  if (
+                    val &&
+                    typeof Notification !== "undefined" &&
+                    Notification.permission === "default"
+                  ) {
+                    void Notification.requestPermission();
+                  }
+                }}
+              />{" "}
+              Enable browser notifications
+            </label>
+          </div>
+        </div>
+
+        <div className="settings-section">
+          <h2 className="settings-section-title">Logging</h2>
+          <div className="form-group">
+            <label htmlFor="logLevel">Backend Log Level</label>
+            <select id="logLevel" value={logLevel} onChange={handleLogLevelChange}>
+              {LOG_LEVELS.map((level) => (
+                <option key={level} value={level}>
+                  {level}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 
@@ -112,6 +169,16 @@ export default function Settings() {
         }
 
         .settings-section .form-group input[type="text"] {
+          width: 100%;
+          padding: 0.5rem;
+          background-color: #2a2a40;
+          border: 1px solid #3a3a5c;
+          border-radius: 0.375rem;
+          color: #e0e0e0;
+          font-size: 0.875rem;
+        }
+
+        .settings-section .form-group select {
           width: 100%;
           padding: 0.5rem;
           background-color: #2a2a40;

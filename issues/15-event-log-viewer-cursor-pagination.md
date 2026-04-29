@@ -4,7 +4,7 @@ PRD.md
 
 ## Status
 
-**READY**
+**COMPLETE**
 
 ## What to build
 
@@ -14,16 +14,16 @@ The page is accessible from the LoopRun monitor and from the WorkItem's run hist
 
 ## Acceptance criteria
 
-- [ ] New route `/loop-runs/{runId}/events` or integrated into LoopRunMonitor
-- [ ] Event list displays: sequence number, timestamp, event type badge, node reference, truncated message
-- [ ] Clicking an event expands to show full message and AI context (for AI node events)
-- [ ] Cursor-based pagination: "Load More" button fetches next page using cursor from last event
-- [ ] API endpoint `GET /api/v1/loopruns/{id}/events?cursor={cursor}&limit={limit}` returns paginated events
-- [ ] Backend replaces skip/take with cursor-based pagination in `EventLogService`
-- [ ] Large payload events (>10KB) show a "load payload" button that fetches from disk
-- [ ] Frontend tests cover: event list rendering, expand/collapse, cursor pagination loads more, AI context display
-- [ ] Backend tests cover: cursor pagination returns correct pages, sequence ordering is monotonic
-- [ ] `vp check` and `vp test` pass
+- [x] New route `/loop-runs/{runId}/events` or integrated into LoopRunMonitor
+- [x] Event list displays: sequence number, timestamp, event type badge, node reference, truncated message
+- [x] Clicking an event expands to show full message and AI context (for AI node events)
+- [x] Cursor-based pagination: "Load More" button fetches next page using cursor from last event
+- [x] API endpoint `GET /api/v1/loopruns/{id}/events?cursor={cursor}&limit={limit}` returns paginated events
+- [x] Backend replaces skip/take with cursor-based pagination in `EventLogService`
+- [x] Large payload events (>10KB) show a "load payload" button that fetches from disk
+- [x] Frontend tests cover: event list rendering, expand/collapse, cursor pagination loads more, AI context display
+- [x] Backend tests cover: cursor pagination returns correct pages, sequence ordering is monotonic
+- [x] `vp check` and `vp test` pass
 
 ## Blocked by
 

@@ -103,4 +103,46 @@ public class EventLogServiceTests
         (await svc.GetByRunIdAsync(runId)).Should().BeEmpty();
         (await svc.GetByRunIdAsync(failedRun.Id)).Should().HaveCount(1);
     }
+
+    [Fact]
+    public async Task CursorPagination_returns_pages_in_sequence_order_with_correct_cursor()
+    {
+        var (svc, db, runId) = Setup();
+        using var _ = db;
+
+        for (var i = 1; i <= 7; i++)
+            await svc.AppendAsync(runId, "NodeStarted", $"event-{i}");
+
+        var page1 = await svc.GetByRunIdAfterCursorAsync(runId, cursor: 0, limit: 3);
+        page1.Entries.Should().HaveCount(3);
+        page1.Entries[0].Sequence.Should().Be(1);
+        page1.Entries[2].Sequence.Should().Be(3);
+        page1.HasMore.Should().BeTrue();
+        page1.NextCursor.Should().Be(3);
+
+        var page2 = await svc.GetByRunIdAfterCursorAsync(runId, cursor: 3, limit: 3);
+        page2.Entries.Should().HaveCount(3);
+        page2.Entries[0].Sequence.Should().Be(4);
+        page2.Entries[2].Sequence.Should().Be(6);
+        page2.HasMore.Should().BeTrue();
+        page2.NextCursor.Should().Be(6);
+
+        var page3 = await svc.GetByRunIdAfterCursorAsync(runId, cursor: 6, limit: 3);
+        page3.Entries.Should().HaveCount(1);
+        page3.Entries[0].Sequence.Should().Be(7);
+        page3.HasMore.Should().BeFalse();
+        page3.NextCursor.Should().Be(7);
+    }
+
+    [Fact]
+    public async Task CursorPagination_empty_run_returns_empty_page()
+    {
+        var (svc, db, runId) = Setup();
+        using var _ = db;
+
+        var page = await svc.GetByRunIdAfterCursorAsync(runId, cursor: 0, limit: 10);
+        page.Entries.Should().BeEmpty();
+        page.HasMore.Should().BeFalse();
+        page.NextCursor.Should().Be(0);
+    }
 }

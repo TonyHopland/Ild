@@ -5,11 +5,16 @@ using ILD.Api.Middleware;
 using ILD.Api.Hubs;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
+using Serilog.Core;
+using Serilog.Events;
+using Serilog.Formatting.Json;
+
+var loggingLevelSwitch = new LoggingLevelSwitch(LogEventLevel.Information);
 
 Log.Logger = new LoggerConfiguration()
-    .WriteTo.Console(
-        outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
+    .WriteTo.Console(new JsonFormatter())
     .Enrich.FromLogContext()
+    .MinimumLevel.ControlledBy(loggingLevelSwitch)
     .CreateBootstrapLogger();
 
 try
@@ -39,6 +44,8 @@ try
     });
 
     builder.Services.AddIldServices();
+
+    builder.Services.AddSingleton<LoggingLevelSwitch>(loggingLevelSwitch);
 
     builder.Services.AddControllers()
         .AddJsonOptions(o =>

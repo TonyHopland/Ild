@@ -120,4 +120,19 @@ public class EventLogService : IEventLogService
         var found = match.FirstOrDefault(e => e.Sequence == (int)eventLogId);
         return found?.PayloadPath;
     }
+
+    public async Task<EventLogPage> GetByRunIdAfterCursorAsync(Guid runId, int cursor, int limit)
+    {
+        var entries = await _eventLogStore.GetByRunIdAfterCursorAsync(runId, cursor, limit);
+        var list = entries.ToList();
+        var hasMore = list.Count >= limit;
+        var nextCursor = list.Count > 0 ? list[^1].Sequence : cursor;
+
+        return new EventLogPage
+        {
+            Entries = list,
+            NextCursor = nextCursor,
+            HasMore = hasMore
+        };
+    }
 }

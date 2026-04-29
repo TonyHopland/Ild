@@ -158,6 +158,11 @@ The system runs in a single container, persists state in SQLite, and integrates 
 | Worktree lifecycle    | One worktree per work item, created on first run, destroyed when Cleanup node executes           |
 | State model           | DB (`LoopRun`, `LoopRunNode` tables) is source of truth; event log is observability + AI context |
 | Tool architecture     | In-process tool abstractions (not MCP subprocesses)                                              |
+| Agent adapter model   | `IAgentAdapter` resolved by `AiProvider.Type`; adapter controls full execution lifecycle         |
+| Adapter lifecycle     | Per AI node per `LoopRun`; sibling AI nodes do not share state                                   |
+| AI node prompts       | `initialPrompt` for first execution, `loopPrompt` for loopback executions                        |
+| Provider config       | Free-form JSON `Config` column on `AiProvider`; adapter reads what it needs                      |
+| HIL pattern           | Graph-level only (AI → Human → loopback edge); adapter has no HIL awareness                      |
 | Engine scheduling     | Async `while` loop with `CancellationToken`; SignalR pushes per node transition                  |
 | Crash recovery        | Re-execute in-flight node; per-template policy (auto-resume / needs review / cancel)             |
 | Node editor           | React Flow                                                                                       |
@@ -185,7 +190,7 @@ The system is organized into the following deep modules:
 3. **Event Log** — Append-only event store with monotonic sequence numbers, retention policy enforcement; serves as AI context and observability (not source of truth — DB is)
 4. **Remote Provider** — Pluggable interface (`IRemoteProvider`) for git providers (Forgejo first, extensible to GitHub/GitLab). Handles PR creation, webhook registration, comment polling
 5. **Repository Manager** — Worktree lifecycle (one per work item, create/destroy/validate), branch management, git operations (pull, rebase, commit, push)
-6. **AI Provider** — LLM provider abstraction (`ILlmProvider`), prompt template rendering with placeholder substitution and validation, in-process tool orchestration with per-node tool allowlists
+6. **Agent Adapter** — Pluggable `IAgentAdapter` implementations resolved by `AiProvider.Type`. Each adapter controls full AI node execution lifecycle (multi-turn loops, tool use, internal state). Auto-registered via DI. Adapter instance scoped per AI node per `LoopRun`. Default adapter is OpenAI-compatible.
 7. **Workitem Manager** — Workitem lifecycle, dependency graph with cycle detection, state machine transitions (`Backlog → Work Queue → Ready → Running → Human Feedback → Done`), readiness evaluation
 8. **Loop Template Manager** — Template CRUD, auto-versioning on save, validation (reachability, required nodes), cloning
 9. **PR Sync Service** — Webhook ingestion from git providers, comment-to-event translation, merge state detection
@@ -220,12 +225,15 @@ Loop templates are normalized relational model. Node config is JSON per node typ
 
 ### AI Node Model
 
+- Two prompt fields per AI node: `initialPrompt` (first execution) and `loopPrompt` (subsequent loopback executions). Falls back to `initialPrompt` if `loopPrompt` is unset.
 - Prompt templates with placeholders: `{{WorkItem.Title}}`, `{{WorkItem.Description}}`, `{{EventLog.LastN}}`, `{{EventLog.Summary}}`, `{{Node.Input}}`, `{{WorkTree.Diff}}`, `{{WorkTree.File:path}}`, `{{PreviousNode.Output}}`
 - Unknown placeholder validation on template save
-- Multi-provider via `ILlmProvider` (OpenAI-compatible API first), per-node provider selection with global default
-- In-process tools: git (scoped to `ild/*` branches), file read/write (worktree-scoped), command execution (allowlist + timeout). Read always available; write opt-in per node.
-- ILD API tools: `ild_create_workitem`, `ild_read_workitem`, `ild_list_loop_templates` (for AI-driven work item decomposition)
-- Tool allowlist configurable per node; default is read-only
+- `AINodeExecutor` resolves `IAgentAdapter` via `IAgentAdapterRegistry` based on `AiProvider.Type`
+- Adapter controls full execution lifecycle: multi-turn LLM calls, tool use, internal state management
+- Adapter instance scoped per AI node per `LoopRun` — sibling AI nodes do not share state
+- Default adapter is OpenAI-compatible (`/chat/completions`). New adapters (Opencode, Pi, etc.) auto-register via DI
+- `AiProvider.Config` is a free-form JSON blob; each adapter reads what it needs
+- Tools are declared by the adapter (full autonomy). Per-node tool allowlists are a future enhancement
 - Every node produces structured output; `{{PreviousNode.Output}}` resolves to the source node of the incoming edge
 
 ### Work Item State Machine
@@ -291,7 +299,7 @@ Tests should verify external behavior and observable outcomes, not internal impl
 4. **Loop Template Manager** — Test auto-versioning, validation rules (start/cleanup required, reachability), cloning, version pinning semantics. Mock the database.
 5. **Auth Service** — Test login/logout, session lifecycle, password hashing, API key storage. Mock the user store.
 6. **Remote Provider** — Test PR creation payload, webhook registration, comment parsing. Mock HTTP calls to the git provider API.
-7. **AI Provider** — Test prompt template rendering with all placeholders, unknown placeholder validation, provider selection (per-node vs global default), tool allowlist enforcement, ILD API tool access. Mock the LLM provider and tools.
+7. **Agent Adapter** — Test prompt template rendering with all placeholders, unknown placeholder validation, provider selection (per-node vs global default), adapter delegation, adapter-declared tool execution. Mock the adapter and tools.
 
 ### Prior Art
 

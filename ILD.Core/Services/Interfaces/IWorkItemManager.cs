@@ -21,4 +21,8 @@ public interface IWorkItemManager
     Task<bool> IsReadyAsync(Guid workItemId);
     Task<bool> LinkPullRequestAsync(Guid workItemId, string prUrl);
     Task<bool> ManuallyMarkMergedAsync(Guid workItemId);
+    Task<bool> CleanupToDoneAsync(Guid workItemId);
+    Task<bool> CleanupToBacklogAsync(Guid workItemId);
+    Task<bool> SubmitHumanFeedbackInputAsync(Guid workItemId, string input);
+    Task<bool> RejectHumanFeedbackAsync(Guid workItemId);
 }

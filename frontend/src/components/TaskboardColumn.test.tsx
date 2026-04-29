@@ -1,7 +1,12 @@
-import { describe, expect, test } from "vite-plus/test";
-import { render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, test } from "vite-plus/test";
+import { render, screen, cleanup } from "@testing-library/react";
 import TaskboardColumn from "./TaskboardColumn";
+import WorkItemCard from "./WorkItemCard";
 import { WorkItem, WorkItemPriority, WorkItemStatus } from "../types";
+
+afterEach(() => {
+  cleanup();
+});
 
 function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
   return {
@@ -16,6 +21,7 @@ function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
     repositoryId: "",
     pullRequestUrl: null,
     pullRequestBranch: null,
+    humanFeedbackReason: null,
     createdAt: new Date().toISOString(),
     startedAt: null,
     completedAt: null,
@@ -55,5 +61,44 @@ describe("TaskboardColumn", () => {
 
     expect(screen.getByText("Done")).toBeTruthy();
     expect(screen.getByText("0")).toBeTruthy();
+  });
+});
+
+describe("WorkItemCard", () => {
+  test("shows human feedback badge when reason is set", () => {
+    const item = makeItem({
+      status: WorkItemStatus.HumanFeedback,
+      humanFeedbackReason: "PR Awaiting Merge",
+    });
+    render(<WorkItemCard workItem={item} />);
+
+    expect(screen.getByText("PR Awaiting Merge")).toBeTruthy();
+  });
+
+  test("hides badge when no reason is set", () => {
+    const item = makeItem({
+      status: WorkItemStatus.HumanFeedback,
+      humanFeedbackReason: null,
+    });
+    render(<WorkItemCard workItem={item} />);
+
+    expect(screen.queryByText("PR Awaiting Merge")).toBeFalsy();
+    expect(screen.queryByText("Node Failed")).toBeFalsy();
+    expect(screen.queryByText("Rebase Conflict")).toBeFalsy();
+    expect(screen.queryByText("Human Input Needed")).toBeFalsy();
+  });
+
+  test("displays correct badge for each reason type", () => {
+    const reasons = ["Node Failed", "Rebase Conflict", "Human Input Needed"];
+
+    for (const reason of reasons) {
+      const item = makeItem({
+        id: reason,
+        status: WorkItemStatus.HumanFeedback,
+        humanFeedbackReason: reason,
+      });
+      render(<WorkItemCard workItem={item} />);
+      expect(screen.getByText(reason)).toBeTruthy();
+    }
   });
 });

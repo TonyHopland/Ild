@@ -41,6 +41,7 @@ export interface WorkItem {
   repositoryId: string;
   pullRequestUrl: string | null;
   pullRequestBranch: string | null;
+  humanFeedbackReason: string | null;
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;
@@ -146,6 +147,13 @@ export interface EventLogEntry {
   nodeId: string | null;
   payload: string;
   timestamp: string;
+  hasPayload: boolean;
+}
+
+export interface EventLogPage {
+  entries: EventLogEntry[];
+  nextCursor: number;
+  hasMore: boolean;
 }
 
 export interface Repository {

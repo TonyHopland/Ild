@@ -47,6 +47,7 @@ function makeWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     repositoryId: "repo-1",
     pullRequestUrl: null,
     pullRequestBranch: null,
+    humanFeedbackReason: null,
     createdAt: "2025-01-01T00:00:00Z",
     startedAt: null,
     completedAt: null,
@@ -529,5 +530,324 @@ describe("WorkItemModal", () => {
     );
 
     expect(screen.queryByText("Mark Merged")).toBeFalsy();
+  });
+
+  test("detail view shows Human Feedback input section when reason is Human Input Needed", async () => {
+    const workItem = makeWorkItem({
+      status: WorkItemStatus.HumanFeedback,
+      humanFeedbackReason: "Human Input Needed",
+    });
+
+    const fetchMock = mockFetch([]);
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const onClose = vi.fn();
+    const onSave = vi.fn();
+
+    render(
+      <WorkItemModal
+        workItem={workItem}
+        isOpen={true}
+        onClose={onClose}
+        onSave={onSave}
+        editMode={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Human Feedback")).toBeTruthy();
+    });
+
+    expect(screen.getByText("Continue")).toBeTruthy();
+    expect(screen.getByText("Reject")).toBeTruthy();
+  });
+
+  test("clicking Continue calls the human-feedback/input API endpoint", async () => {
+    const workItem = makeWorkItem({
+      status: WorkItemStatus.HumanFeedback,
+      humanFeedbackReason: "Human Input Needed",
+    });
+
+    const fetchMock = mockFetch([]);
+    // Initial fetches for repos, templates, runs
+    fetchMock
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([])),
+          json: () => Promise.resolve([]),
+        }),
+      )
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([])),
+          json: () => Promise.resolve([]),
+        }),
+      )
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([])),
+          json: () => Promise.resolve([]),
+        }),
+      );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const onClose = vi.fn();
+    const onSave = vi.fn();
+
+    render(
+      <WorkItemModal
+        workItem={workItem}
+        isOpen={true}
+        onClose={onClose}
+        onSave={onSave}
+        editMode={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Continue")).toBeTruthy();
+    });
+
+    const textarea = document.querySelector("textarea") as HTMLTextAreaElement;
+    if (textarea) {
+      fireEvent.change(textarea, { target: { value: "proceed with the change" } });
+    }
+
+    fireEvent.click(screen.getByText("Continue"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/workitems/wi-1/human-feedback/input"),
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+  });
+
+  test("clicking Reject calls the human-feedback/reject API endpoint", async () => {
+    const workItem = makeWorkItem({
+      status: WorkItemStatus.HumanFeedback,
+      humanFeedbackReason: "Human Input Needed",
+    });
+
+    const fetchMock = mockFetch([]);
+    // Initial fetches for repos, templates, runs
+    fetchMock
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([])),
+          json: () => Promise.resolve([]),
+        }),
+      )
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([])),
+          json: () => Promise.resolve([]),
+        }),
+      )
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([])),
+          json: () => Promise.resolve([]),
+        }),
+      );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const onClose = vi.fn();
+    const onSave = vi.fn();
+
+    render(
+      <WorkItemModal
+        workItem={workItem}
+        isOpen={true}
+        onClose={onClose}
+        onSave={onSave}
+        editMode={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Reject")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("Reject"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/workitems/wi-1/human-feedback/reject"),
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+  });
+
+  test("detail view shows cleanup buttons for failed WorkItem", async () => {
+    const workItem = makeWorkItem({
+      status: WorkItemStatus.HumanFeedback,
+      humanFeedbackReason: "Node Failed",
+    });
+
+    const fetchMock = mockFetch([]);
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const onClose = vi.fn();
+    const onSave = vi.fn();
+
+    render(
+      <WorkItemModal
+        workItem={workItem}
+        isOpen={true}
+        onClose={onClose}
+        onSave={onSave}
+        editMode={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Human Feedback")).toBeTruthy();
+    });
+
+    expect(screen.getByText("Cleanup -> Done")).toBeTruthy();
+    expect(screen.getByText("Cleanup -> Backlog")).toBeTruthy();
+  });
+
+  test("clicking Cleanup Done calls the cleanup-to-done API endpoint", async () => {
+    const workItem = makeWorkItem({
+      status: WorkItemStatus.HumanFeedback,
+      humanFeedbackReason: "Node Failed",
+    });
+
+    const fetchMock = mockFetch([]);
+    // Initial fetches for repos, templates, runs
+    fetchMock
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([])),
+          json: () => Promise.resolve([]),
+        }),
+      )
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([])),
+          json: () => Promise.resolve([]),
+        }),
+      )
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([])),
+          json: () => Promise.resolve([]),
+        }),
+      );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const onClose = vi.fn();
+    const onSave = vi.fn();
+
+    render(
+      <WorkItemModal
+        workItem={workItem}
+        isOpen={true}
+        onClose={onClose}
+        onSave={onSave}
+        editMode={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Cleanup -> Done")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("Cleanup -> Done"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/workitems/wi-1/cleanup-to-done"),
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+  });
+
+  test("clicking Cleanup Backlog calls the cleanup-to-backlog API endpoint", async () => {
+    const workItem = makeWorkItem({
+      status: WorkItemStatus.HumanFeedback,
+      humanFeedbackReason: "Node Failed",
+    });
+
+    const fetchMock = mockFetch([]);
+    // Initial fetches for repos, templates, runs
+    fetchMock
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([])),
+          json: () => Promise.resolve([]),
+        }),
+      )
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([])),
+          json: () => Promise.resolve([]),
+        }),
+      )
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([])),
+          json: () => Promise.resolve([]),
+        }),
+      );
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const onClose = vi.fn();
+    const onSave = vi.fn();
+
+    render(
+      <WorkItemModal
+        workItem={workItem}
+        isOpen={true}
+        onClose={onClose}
+        onSave={onSave}
+        editMode={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Cleanup -> Backlog")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("Cleanup -> Backlog"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/workitems/wi-1/cleanup-to-backlog"),
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
   });
 });

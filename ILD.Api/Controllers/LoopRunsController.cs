@@ -58,12 +58,45 @@ public class LoopRunsController : ControllerBase
     }
 
     [HttpGet("{id}/events")]
-    public async Task<IActionResult> GetEvents(string id, [FromQuery] int skip = 0, [FromQuery] int take = 100)
+    public async Task<IActionResult> GetEvents(string id, [FromQuery] int cursor = 0, [FromQuery] int limit = 100)
     {
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
 
-        var events = await _eventLogService.GetByRunIdAsync(guid, take);
-        return Ok(events);
+        var page = await _eventLogService.GetByRunIdAfterCursorAsync(guid, cursor, limit);
+        return Ok(new
+        {
+            entries = page.Entries.Select(e => new
+            {
+                sequence = e.Sequence,
+                runId = e.LoopRunId,
+                eventType = e.EventType.ToString(),
+                timestamp = e.Timestamp,
+                payload = e.Data ?? string.Empty,
+                hasPayload = !string.IsNullOrEmpty(e.PayloadPath)
+            }),
+            nextCursor = page.NextCursor,
+            hasMore = page.HasMore
+        });
+    }
+
+    [HttpGet("{id}/events/payload")]
+    public async Task<IActionResult> GetPayload(string id, [FromQuery] int sequence)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+
+        var entry = await _eventLogService.GetBySequenceAsync(guid, sequence);
+        if (entry == null)
+            return NotFound(new { error = "Event not found" });
+
+        if (string.IsNullOrEmpty(entry.PayloadPath))
+            return Ok(new { payload = entry.Data ?? string.Empty });
+
+        if (!System.IO.File.Exists(entry.PayloadPath))
+            return NotFound(new { error = "Payload file not found" });
+
+        var content = await System.IO.File.ReadAllTextAsync(entry.PayloadPath);
+        return Ok(new { payload = content });
     }
 }

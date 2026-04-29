@@ -37,8 +37,8 @@ Executes a shell command in the worktree with a configurable timeout. Succeeds o
 _Avoid_: shell, command
 
 **AI Node**:
-Renders a prompt template with placeholders and calls an LLM. Has tiered tool access: read always available, write opt-in per node.
-_Avoid_: LLM, agent, model
+Delegates execution to an `IAgentAdapter` resolved by `AiProvider.Type`. The adapter controls the full execution lifecycle including multi-turn loops, tool use, and internal state. Has two prompt fields: `initialPrompt` (first execution) and `loopPrompt` (subsequent loopback executions).
+_Avoid_: LLM node, model node
 
 **Human Node**:
 A pause point that awaits human input. The input becomes `{{PreviousNode.Output}}` for downstream nodes. Can form conversational loops with AI nodes (e.g., grill-me planning).
@@ -54,9 +54,13 @@ _Avoid_: teardown, end node
 
 ### Execution & Recovery
 
-**Tool Tier**:
-AI node tool access is tiered: read operations (file read, git read) are always available; write operations (file write, git commit/push, command execution) are opt-in per node.
-_Avoid_: tool permissions, access control
+**Agent Adapter**:
+A pluggable component implementing `IAgentAdapter` that handles full AI node execution. Each adapter declares `SupportedProviderTypes` and is auto-registered via DI. Adapter instance is scoped per AI node per `LoopRun` — sibling AI nodes in the same loop do not share state. The OpenAI-compatible adapter is the default.
+_Avoid_: LLM provider, model driver
+
+**Tool Autonomy**:
+Adapters have full autonomy over tool execution. Tools are declared by the adapter, not the engine. (Per-node tool allowlists are a future enhancement.)
+_Avoid_: tool sandbox, tool permissions
 
 **Event Log**:
 Append-only audit stream per LoopRun. Serves as AI context and observability. Large payloads (>10KB) stored on disk; DB stores path reference. Retained for 7 days after successful completion; failed runs preserved until manually closed.
@@ -91,6 +95,8 @@ _Avoid_: draft, planned
 - A **Worktree** is created on first run, destroyed on Cleanup. Re-starting a WorkItem creates a fresh worktree
 - `{{PreviousNode.Output}}` resolves to the source node of the incoming edge, not the chronologically previous execution
 - `{{EventLog.LastN}}` defaults to N=10, capped at 50
+- AI node uses `initialPrompt` on first execution, `loopPrompt` on loopback executions
+- `AiProvider.Config` is a free-form JSON blob; each adapter reads what it needs
 - Rebase happens only at loop start, not before each node
 - Failed/cancelled WorkItems: "Done" destroys worktree and discards; "Backlog" fully resets for re-planning
 - Safety net (max node execs + wall clock): finishes current node, then cancels the run

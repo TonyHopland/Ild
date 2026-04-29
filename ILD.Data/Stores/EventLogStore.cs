@@ -43,4 +43,11 @@ public class EventLogStore : IEventLogStore
         _db.EventLogs.RemoveRange(entries);
         await _db.SaveChangesAsync();
     }
+
+    public async Task<IReadOnlyList<EventLog>> GetByRunIdAfterCursorAsync(Guid runId, int cursor, int limit)
+        => await _db.EventLogs
+            .Where(e => e.LoopRunId == runId && e.Sequence > cursor)
+            .OrderBy(e => e.Sequence)
+            .Take(limit)
+            .ToListAsync();
 }

@@ -4,7 +4,7 @@ PRD.md
 
 ## Status
 
-**PENDING**
+**COMPLETE**
 
 ## What to build
 

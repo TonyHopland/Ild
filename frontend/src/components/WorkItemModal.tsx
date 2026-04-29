@@ -42,6 +42,7 @@ export default function WorkItemModal({
   const [runs, setRuns] = useState<LoopRun[]>([]);
   const [showLinkPr, setShowLinkPr] = useState(false);
   const [prUrlInput, setPrUrlInput] = useState("");
+  const [feedbackInput, setFeedbackInput] = useState("");
 
   useEffect(() => {
     repositoryService
@@ -74,6 +75,7 @@ export default function WorkItemModal({
       setLoopTemplateId(workItem.loopTemplateId);
       setShowLinkPr(false);
       setPrUrlInput("");
+      setFeedbackInput("");
     } else {
       setTitle("");
       setDescription("");
@@ -119,6 +121,50 @@ export default function WorkItemModal({
       onSave(updated);
     } catch (error) {
       console.error("Failed to mark merged:", error);
+    }
+  };
+
+  const handleContinue = async () => {
+    if (!workItem) return;
+    try {
+      await workItemService.humanFeedbackInput(workItem.id, feedbackInput);
+      const updated = await workItemService.getById(workItem.id);
+      onSave(updated);
+    } catch (error) {
+      console.error("Failed to submit feedback:", error);
+    }
+  };
+
+  const handleReject = async () => {
+    if (!workItem) return;
+    try {
+      await workItemService.humanFeedbackReject(workItem.id);
+      const updated = await workItemService.getById(workItem.id);
+      onSave(updated);
+    } catch (error) {
+      console.error("Failed to reject:", error);
+    }
+  };
+
+  const handleCleanupDone = async () => {
+    if (!workItem) return;
+    try {
+      await workItemService.cleanupToDone(workItem.id);
+      const updated = await workItemService.getById(workItem.id);
+      onSave(updated);
+    } catch (error) {
+      console.error("Failed to cleanup to done:", error);
+    }
+  };
+
+  const handleCleanupBacklog = async () => {
+    if (!workItem) return;
+    try {
+      await workItemService.cleanupToBacklog(workItem.id);
+      const updated = await workItemService.getById(workItem.id);
+      onSave(updated);
+    } catch (error) {
+      console.error("Failed to cleanup to backlog:", error);
     }
   };
 
@@ -220,6 +266,55 @@ export default function WorkItemModal({
                 </div>
               </div>
             )}
+            {workItem.status === WorkItemStatus.HumanFeedback &&
+              workItem.humanFeedbackReason === "Human Input Needed" && (
+                <div className="detail-section human-feedback-section">
+                  <span className="detail-label">Human Feedback</span>
+                  <textarea
+                    className="feedback-textarea"
+                    value={feedbackInput}
+                    onChange={(e) => setFeedbackInput(e.target.value)}
+                    placeholder="Provide input or context..."
+                    rows={3}
+                  />
+                  <div className="feedback-actions">
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-primary"
+                      onClick={handleContinue}
+                    >
+                      Continue
+                    </button>
+                    <button type="button" className="btn btn-sm btn-danger" onClick={handleReject}>
+                      Reject
+                    </button>
+                  </div>
+                </div>
+              )}
+            {workItem.status === WorkItemStatus.HumanFeedback &&
+              workItem.humanFeedbackReason &&
+              workItem.humanFeedbackReason !== "Human Input Needed" && (
+                <div className="detail-section human-feedback-section">
+                  <span className="detail-label">Human Feedback</span>
+                  <div className="feedback-reason">{workItem.humanFeedbackReason}</div>
+                  <div className="feedback-actions">
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-warning"
+                      onClick={handleCleanupDone}
+                    >
+                      Cleanup -&gt; Done
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-secondary"
+                      onClick={handleCleanupBacklog}
+                    >
+                      Cleanup -&gt; Backlog
+                    </button>
+                  </div>
+                </div>
+              )}
           </div>
           <div className="modal-footer">
             {workItem.status === WorkItemStatus.Ready && (
@@ -661,6 +756,61 @@ export default function WorkItemModal({
 
         .btn-success:hover {
           background-color: #15803d;
+        }
+
+        .human-feedback-section {
+          margin-top: 0.5rem;
+          padding: 0.75rem;
+          background-color: #1e1e30;
+          border: 1px solid #3a3a5c;
+          border-radius: 0.375rem;
+        }
+
+        .feedback-textarea {
+          width: 100%;
+          padding: 0.5rem;
+          background-color: #2a2a40;
+          border: 1px solid #3a3a5c;
+          border-radius: 0.375rem;
+          color: #e0e0e0;
+          font-size: 0.875rem;
+          resize: vertical;
+          margin-top: 0.25rem;
+        }
+
+        .feedback-textarea:focus {
+          outline: none;
+          border-color: #6366f1;
+        }
+
+        .feedback-actions {
+          display: flex;
+          gap: 0.375rem;
+          margin-top: 0.5rem;
+        }
+
+        .feedback-reason {
+          font-size: 0.8125rem;
+          color: #f59e0b;
+          margin-top: 0.25rem;
+        }
+
+        .btn-danger {
+          background-color: #dc2626;
+          color: #fff;
+        }
+
+        .btn-danger:hover {
+          background-color: #b91c1c;
+        }
+
+        .btn-warning {
+          background-color: #d97706;
+          color: #fff;
+        }
+
+        .btn-warning:hover {
+          background-color: #b45309;
         }
       `}</style>
     </div>

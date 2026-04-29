@@ -30,6 +30,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<INodeExecutor, CleanupNodeExecutor>();
         services.AddSingleton<INodeExecutorRegistry, NodeExecutorRegistry>();
         services.AddSingleton<ILoopEngine, LoopEngine>();
+        services.AddSingleton<IMetricsCollector, MetricsCollector>();
 
         services.AddHttpClient();
 

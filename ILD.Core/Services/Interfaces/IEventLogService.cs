@@ -11,4 +11,5 @@ public interface IEventLogService
     Task<EventLogEntry?> GetBySequenceAsync(Guid runId, long sequence);
     Task<int> EnforceRetentionPolicyAsync(DateTimeOffset before);
     Task<string?> GetPayloadPathAsync(long eventLogId);
+    Task<EventLogPage> GetByRunIdAfterCursorAsync(Guid runId, int cursor, int limit);
 }

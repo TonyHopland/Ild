@@ -8,6 +8,7 @@ import {
   RemoteProvider,
   AiProvider,
   LoopTemplateVersion,
+  EventLogPage,
 } from "../types";
 
 interface BackendLoginResponse {
@@ -106,6 +107,22 @@ export const workItemService = {
   markMerged: async (id: string): Promise<void> => {
     return api.post<void>(`/workitems/${id}/mark-merged`, {});
   },
+
+  humanFeedbackInput: async (id: string, input: string): Promise<void> => {
+    return api.post<void>(`/workitems/${id}/human-feedback/input`, { input });
+  },
+
+  humanFeedbackReject: async (id: string): Promise<void> => {
+    return api.post<void>(`/workitems/${id}/human-feedback/reject`, {});
+  },
+
+  cleanupToDone: async (id: string): Promise<void> => {
+    return api.post<void>(`/workitems/${id}/cleanup-to-done`, {});
+  },
+
+  cleanupToBacklog: async (id: string): Promise<void> => {
+    return api.post<void>(`/workitems/${id}/cleanup-to-backlog`, {});
+  },
 };
 
 export const loopTemplateService = {
@@ -160,6 +177,14 @@ export const loopRunService = {
 
   cancel: async (id: string): Promise<void> => {
     return api.post<void>(`/looprun/${id}/cancel`, {});
+  },
+
+  getEvents: async (runId: string, cursor = 0, limit = 100): Promise<EventLogPage> => {
+    return api.get<EventLogPage>(`/loopruns/${runId}/events?cursor=${cursor}&limit=${limit}`);
+  },
+
+  getPayload: async (runId: string, sequence: number): Promise<{ payload: string }> => {
+    return api.get<{ payload: string }>(`/loopruns/${runId}/events/payload?sequence=${sequence}`);
   },
 };
 
@@ -222,5 +247,11 @@ export const aiProviderService = {
 
   update: async (id: string, data: Partial<AiProvider>): Promise<AiProvider> => {
     return api.put<AiProvider>(`/aiproviders/${id}`, data);
+  },
+};
+
+export const loggingService = {
+  setLevel: async (level: string): Promise<{ level: string }> => {
+    return api.put<{ level: string }>("/logging/level", { level });
   },
 };

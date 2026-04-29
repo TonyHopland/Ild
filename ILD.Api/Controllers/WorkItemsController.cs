@@ -195,9 +195,71 @@ public class WorkItemsController : ControllerBase
 
         return Ok();
     }
+
+    [HttpPost("{id}/human-feedback/input")]
+    public async Task<IActionResult> HumanFeedbackInput(string id, [FromBody] HumanFeedbackInputRequest request)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+
+        if (!ModelState.IsValid)
+            return BadRequest(ModelState);
+
+        var ok = await _workItemManager.SubmitHumanFeedbackInputAsync(guid, request.Input);
+        if (!ok) return NotFound();
+
+        // Resume the engine
+        var wi = await _workItemManager.GetWorkItemAsync(guid);
+        if (wi?.CurrentLoopRunId != null && _engine is ILD.Core.Services.Implementations.LoopEngine le)
+            _ = Task.Run(() => le.RunAsync(wi.CurrentLoopRunId.Value));
+
+        return Ok();
+    }
+
+    [HttpPost("{id}/human-feedback/reject")]
+    public async Task<IActionResult> HumanFeedbackReject(string id)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+
+        var ok = await _workItemManager.RejectHumanFeedbackAsync(guid);
+        if (!ok) return NotFound();
+
+        // Resume the engine to route failure edge
+        var wi = await _workItemManager.GetWorkItemAsync(guid);
+        if (wi?.CurrentLoopRunId != null && _engine is ILD.Core.Services.Implementations.LoopEngine le)
+            _ = Task.Run(() => le.RunAsync(wi.CurrentLoopRunId.Value));
+
+        return Ok();
+    }
+
+    [HttpPost("{id}/cleanup-to-done")]
+    public async Task<IActionResult> CleanupToDone(string id)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+
+        var ok = await _workItemManager.CleanupToDoneAsync(guid);
+        return ok ? Ok() : NotFound();
+    }
+
+    [HttpPost("{id}/cleanup-to-backlog")]
+    public async Task<IActionResult> CleanupToBacklog(string id)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+
+        var ok = await _workItemManager.CleanupToBacklogAsync(guid);
+        return ok ? Ok() : NotFound();
+    }
 }
 
 public class AddDependencyRequest
 {
     public string DependencyId { get; set; } = string.Empty;
+}
+
+public class HumanFeedbackInputRequest
+{
+    public string Input { get; set; } = string.Empty;
 }

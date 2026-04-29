@@ -124,6 +124,8 @@ public class RepositoryManager : IRepositoryManager
         };
         foreach (var a in args) psi.ArgumentList.Add(a);
 
+        _logger?.LogDebug("Executing git {Args} in {Worktree}", string.Join(' ', args), cwd);
+
         using var proc = Process.Start(psi)!;
         var stdoutTask = proc.StandardOutput.ReadToEndAsync();
         var stderrTask = proc.StandardError.ReadToEndAsync();
@@ -133,11 +135,13 @@ public class RepositoryManager : IRepositoryManager
         }
         catch (OperationCanceledException)
         {
+            _logger?.LogDebug("git {Args} in {Worktree} timed out, killing process", string.Join(' ', args), cwd);
             try { proc.Kill(entireProcessTree: true); } catch { }
             throw;
         }
         var stdout = await stdoutTask;
         var stderr = await stderrTask;
+        _logger?.LogDebug("git {Args} in {Worktree} exited {Code}", string.Join(' ', args), cwd, proc.ExitCode);
         if (proc.ExitCode != 0)
             _logger?.LogDebug("git {Args} exited {Code}: {Err}", string.Join(' ', args), proc.ExitCode, stderr);
         return (proc.ExitCode, stdout, stderr);

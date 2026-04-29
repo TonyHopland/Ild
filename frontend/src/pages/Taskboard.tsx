@@ -18,6 +18,28 @@ export default function Taskboard() {
   }, []);
 
   useEffect(() => {
+    on("HumanFeedbackRequired" as any, async (message: any) => {
+      const { workItemId, reason } = message.payload as { workItemId: string; reason: string };
+      setWorkItems((prev) =>
+        prev.map((item) =>
+          item.id === workItemId
+            ? { ...item, status: WorkItemStatus.HumanFeedback, humanFeedbackReason: reason }
+            : item,
+        ),
+      );
+
+      const notificationsEnabled = localStorage.getItem("ild_notifications_enabled") !== "false";
+      if (
+        notificationsEnabled &&
+        typeof Notification !== "undefined" &&
+        Notification.permission === "granted"
+      ) {
+        new Notification("Work Item Needs Attention", {
+          body: reason,
+        });
+      }
+    });
+
     on("work_item_updated" as any, async (message: any) => {
       const updated = message.payload as WorkItem;
       setWorkItems((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));

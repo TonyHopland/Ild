@@ -5,6 +5,7 @@ import Login from "./pages/Login";
 import Taskboard from "./pages/Taskboard";
 import LoopEditor from "./pages/LoopEditor";
 import LoopRunMonitor from "./pages/LoopRunMonitor";
+import EventLogViewer from "./pages/EventLogViewer";
 import Settings from "./pages/Settings";
 import Repositories from "./pages/Repositories";
 import RemoteProviders from "./pages/RemoteProviders";
@@ -66,6 +67,14 @@ function AppRoutes() {
             element={
               <ProtectedRoute>
                 <LoopRunMonitor />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/loop-runs/:runId/events"
+            element={
+              <ProtectedRoute>
+                <EventLogViewer />
               </ProtectedRoute>
             }
           />

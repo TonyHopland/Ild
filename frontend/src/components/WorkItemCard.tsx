@@ -4,6 +4,13 @@ interface WorkItemCardProps {
   workItem: WorkItem;
 }
 
+const REASON_STYLES: Record<string, { bg: string; color: string; border: string }> = {
+  "PR Awaiting Merge": { bg: "#1a2744", color: "#60a5fa", border: "#2563eb" },
+  "Node Failed": { bg: "#2d1a1a", color: "#f87171", border: "#dc2626" },
+  "Rebase Conflict": { bg: "#2d2a1a", color: "#fbbf24", border: "#d97706" },
+  "Human Input Needed": { bg: "#1a2d2a", color: "#34d399", border: "#059669" },
+};
+
 export default function WorkItemCard({ workItem }: WorkItemCardProps) {
   const handleDragStart = (e: React.DragEvent) => {
     e.dataTransfer.setData("text/plain", workItem.id);
@@ -16,6 +23,14 @@ export default function WorkItemCard({ workItem }: WorkItemCardProps) {
     Critical: "#dc2626",
   };
 
+  const reasonStyle = workItem.humanFeedbackReason
+    ? (REASON_STYLES[workItem.humanFeedbackReason] ?? {
+        bg: "#2d2d44",
+        color: "#a0a0b0",
+        border: "#6366f1",
+      })
+    : null;
+
   return (
     <div className="work-item-card" draggable onDragStart={handleDragStart}>
       <div className="work-item-card-header">
@@ -25,6 +40,18 @@ export default function WorkItemCard({ workItem }: WorkItemCardProps) {
         />
       </div>
       <h4 className="work-item-title">{workItem.title}</h4>
+      {reasonStyle && workItem.humanFeedbackReason && (
+        <div
+          className="human-feedback-badge"
+          style={{
+            backgroundColor: reasonStyle.bg,
+            color: reasonStyle.color,
+            borderLeft: `3px solid ${reasonStyle.border}`,
+          }}
+        >
+          {workItem.humanFeedbackReason}
+        </div>
+      )}
       <div className="work-item-tags">
         {workItem.labels.map((label) => (
           <span key={label} className="work-item-tag">
@@ -70,6 +97,16 @@ export default function WorkItemCard({ workItem }: WorkItemCardProps) {
           color: #e0e0e0;
           margin-bottom: 0.25rem;
           line-height: 1.4;
+        }
+
+        .human-feedback-badge {
+          font-size: 0.7rem;
+          font-weight: 600;
+          padding: 0.2rem 0.5rem;
+          border-radius: 0.25rem;
+          margin-bottom: 0.375rem;
+          text-transform: uppercase;
+          letter-spacing: 0.03em;
         }
 
         .work-item-tags {

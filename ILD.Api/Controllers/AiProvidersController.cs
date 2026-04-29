@@ -42,6 +42,7 @@ public class AiProvidersController : ControllerBase
             BaseUrl = request.BaseUrl,
             Model = request.DefaultModel,
             IsDefault = request.IsDefault,
+            Config = request.Config,
             CreatedAt = DateTime.UtcNow,
         };
         _db.AiProviders.Add(p);
@@ -60,6 +61,7 @@ public class AiProvidersController : ControllerBase
         p.BaseUrl = request.BaseUrl;
         p.Model = request.DefaultModel;
         p.IsDefault = request.IsDefault;
+        p.Config = request.Config;
         p.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
         return Ok(p);

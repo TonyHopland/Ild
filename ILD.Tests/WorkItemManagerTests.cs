@@ -2,12 +2,14 @@ using FluentAssertions;
 using ILD.Data.Enums;
 using ILD.Data.Entities;
 using ILD.Core.Services.Implementations;
+using ILD.Core.Services.Interfaces;
+using Moq;
 
 namespace ILD.Tests;
 
 public class WorkItemManagerTests
 {
-    private static (WorkItemManager mgr, TestDb db, Guid repoId) Setup()
+    private static (WorkItemManager mgr, TestDb db, Guid repoId, Mock<IRepositoryManager> repoMgr, Mock<IEventLogService> eventLog) Setup()
     {
         var db = new TestDb();
         var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
@@ -15,13 +17,17 @@ public class WorkItemManagerTests
         db.Context.RemoteProviders.Add(remote);
         db.Context.Repositories.Add(repo);
         db.Context.SaveChanges();
-        return (new WorkItemManager(db.WorkItems), db, repo.Id);
+        var repoMgr = new Mock<IRepositoryManager>();
+        var eventLog = new Mock<IEventLogService>();
+        eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync(1L);
+        return (new WorkItemManager(db.WorkItems, repoMgr.Object, eventLog.Object, db.LoopRuns), db, repo.Id, repoMgr, eventLog);
     }
 
     [Fact]
     public async Task CreateWorkItem_lands_in_WorkQueue_when_repo_default_is_WorkQueue()
     {
-        var (mgr, db, repoId) = Setup();
+        var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
         var repo = await db.Context.Repositories.FindAsync(repoId);
@@ -37,7 +43,7 @@ public class WorkItemManagerTests
     [Fact]
     public async Task CreateWorkItem_lands_in_Backlog_when_repo_default_is_Backlog()
     {
-        var (mgr, db, repoId) = Setup();
+        var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
         var repo = await db.Context.Repositories.FindAsync(repoId);
@@ -53,7 +59,7 @@ public class WorkItemManagerTests
     [Fact]
     public async Task IsReady_true_for_workitem_with_no_dependencies()
     {
-        var (mgr, db, repoId) = Setup();
+        var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
         var id = await mgr.CreateWorkItemAsync("a", "", null, repoId);
@@ -65,7 +71,7 @@ public class WorkItemManagerTests
     [Fact]
     public async Task IsReady_false_when_dependency_not_merged()
     {
-        var (mgr, db, repoId) = Setup();
+        var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
         var dep = await mgr.CreateWorkItemAsync("dep", "", null, repoId);
@@ -78,7 +84,7 @@ public class WorkItemManagerTests
     [Fact]
     public async Task IsReady_true_after_dependency_marked_merged()
     {
-        var (mgr, db, repoId) = Setup();
+        var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
         var dep = await mgr.CreateWorkItemAsync("dep", "", null, repoId);
@@ -94,7 +100,7 @@ public class WorkItemManagerTests
     [Fact]
     public async Task AddDependency_rejects_self_loop()
     {
-        var (mgr, db, repoId) = Setup();
+        var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
         var id = await mgr.CreateWorkItemAsync("a", "", null, repoId);
@@ -106,7 +112,7 @@ public class WorkItemManagerTests
     [Fact]
     public async Task AddDependency_rejects_cycle()
     {
-        var (mgr, db, repoId) = Setup();
+        var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
         var a = await mgr.CreateWorkItemAsync("a", "", null, repoId);
@@ -123,7 +129,7 @@ public class WorkItemManagerTests
     [Fact]
     public async Task TransitionToReady_fails_when_dependencies_unmerged()
     {
-        var (mgr, db, repoId) = Setup();
+        var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
         var dep = await mgr.CreateWorkItemAsync("dep", "", null, repoId);
@@ -140,7 +146,7 @@ public class WorkItemManagerTests
     [Fact]
     public async Task LinkPullRequest_persists_pr_url()
     {
-        var (mgr, db, repoId) = Setup();
+        var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
         var id = await mgr.CreateWorkItemAsync("a", "", null, repoId);
@@ -155,7 +161,7 @@ public class WorkItemManagerTests
     [Fact]
     public async Task ManuallyMarkMerged_transitions_workitem_to_Done()
     {
-        var (mgr, db, repoId) = Setup();
+        var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
         var id = await mgr.CreateWorkItemAsync("a", "", null, repoId);
@@ -172,9 +178,27 @@ public class WorkItemManagerTests
     }
 
     [Fact]
+    public async Task TransitionToHumanFeedback_sets_reason_on_workitem()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("a", "", null, repoId);
+        await mgr.TransitionToReadyAsync(id);
+        await mgr.TransitionToRunningAsync(id);
+
+        var ok = await mgr.TransitionToHumanFeedbackAsync(id, "PR Awaiting Merge");
+
+        ok.Should().BeTrue();
+        var wi = await mgr.GetWorkItemAsync(id);
+        wi!.Status.Should().Be(WorkItemStatus.HumanFeedback);
+        wi.HumanFeedbackReason.Should().Be("PR Awaiting Merge");
+    }
+
+    [Fact]
     public async Task ManuallyMarkMerged_does_not_set_Done_when_active_LoopRun_exists()
     {
-        var (mgr, db, repoId) = Setup();
+        var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
         var id = await mgr.CreateWorkItemAsync("a", "", null, repoId);
@@ -209,5 +233,212 @@ public class WorkItemManagerTests
         var after = await mgr.GetWorkItemAsync(id);
         after!.IsPrMerged.Should().BeTrue();
         after.Status.Should().NotBe(WorkItemStatus.Done);
+    }
+
+    [Fact]
+    public async Task CleanupToDone_destroys_worktree_and_marks_workitem_Done()
+    {
+        var (mgr, db, repoId, repoMgr, _) = Setup();
+        using var _ = db;
+
+        var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
+        db.Context.LoopTemplates.Add(lt);
+        var ltv = new LoopTemplateVersion
+        {
+            Id = Guid.NewGuid(),
+            LoopTemplateId = lt.Id,
+            VersionNumber = 1,
+            CreatedAt = DateTime.UtcNow,
+        };
+        db.Context.LoopTemplateVersions.Add(ltv);
+        await db.Context.SaveChangesAsync();
+
+        var id = await mgr.CreateWorkItemAsync("a", "", lt.Id, repoId);
+        var wi = await db.Context.WorkItems.FindAsync(id);
+        wi!.WorktreePath = "/tmp/worktrees/test-wi";
+        wi.Status = WorkItemStatus.HumanFeedback;
+        wi.HumanFeedbackReason = "Node Failed";
+        await db.Context.SaveChangesAsync();
+
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = id,
+            LoopTemplateVersionId = ltv.Id,
+            Status = LoopRunStatus.Failed,
+            StartedAt = DateTime.UtcNow,
+            CompletedAt = DateTime.UtcNow,
+        };
+        db.Context.LoopRuns.Add(run);
+        await db.Context.SaveChangesAsync();
+
+        await mgr.CleanupToDoneAsync(id);
+
+        repoMgr.Verify(r => r.DestroyWorktreeAsync("/tmp/worktrees/test-wi"), Times.Once);
+        var after = await mgr.GetWorkItemAsync(id);
+        after!.Status.Should().Be(WorkItemStatus.Done);
+        after.WorktreePath.Should().BeNullOrEmpty();
+        after.HumanFeedbackReason.Should().BeNullOrEmpty();
+    }
+
+    [Fact]
+    public async Task CleanupToBacklog_destroys_worktree_resets_to_Backlog_and_clears_run_state()
+    {
+        var (mgr, db, repoId, repoMgr, _) = Setup();
+        using var _ = db;
+
+        var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
+        db.Context.LoopTemplates.Add(lt);
+        var ltv = new LoopTemplateVersion
+        {
+            Id = Guid.NewGuid(),
+            LoopTemplateId = lt.Id,
+            VersionNumber = 1,
+            CreatedAt = DateTime.UtcNow,
+        };
+        db.Context.LoopTemplateVersions.Add(ltv);
+        await db.Context.SaveChangesAsync();
+
+        var id = await mgr.CreateWorkItemAsync("a", "", lt.Id, repoId);
+
+        var runId = Guid.NewGuid();
+        var run = new LoopRun
+        {
+            Id = runId,
+            WorkItemId = id,
+            LoopTemplateVersionId = ltv.Id,
+            Status = LoopRunStatus.Cancelled,
+            StartedAt = DateTime.UtcNow,
+            CompletedAt = DateTime.UtcNow,
+        };
+        db.Context.LoopRuns.Add(run);
+
+        var wi = await db.Context.WorkItems.FindAsync(id);
+        wi!.WorktreePath = "/tmp/worktrees/test-wi";
+        wi.Status = WorkItemStatus.HumanFeedback;
+        wi.HumanFeedbackReason = "Node Failed";
+        wi.LoopTemplateVersionId = ltv.Id;
+        wi.CurrentLoopRunId = runId;
+        await db.Context.SaveChangesAsync();
+
+        await mgr.CleanupToBacklogAsync(id);
+
+        repoMgr.Verify(r => r.DestroyWorktreeAsync("/tmp/worktrees/test-wi"), Times.Once);
+        var after = await mgr.GetWorkItemAsync(id);
+        after!.Status.Should().Be(WorkItemStatus.Backlog);
+        after.WorktreePath.Should().BeNullOrEmpty();
+        after.HumanFeedbackReason.Should().BeNullOrEmpty();
+        after.CurrentLoopRunId.Should().BeNull();
+        after.BranchName.Should().BeNullOrEmpty();
+    }
+
+    [Fact]
+    public async Task SubmitHumanFeedbackInput_appends_to_event_log_and_resumes_run()
+    {
+        var (mgr, db, repoId, _, eventLog) = Setup();
+        using var _ = db;
+
+        var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
+        db.Context.LoopTemplates.Add(lt);
+        var ltv = new LoopTemplateVersion
+        {
+            Id = Guid.NewGuid(),
+            LoopTemplateId = lt.Id,
+            VersionNumber = 1,
+            CreatedAt = DateTime.UtcNow,
+        };
+        db.Context.LoopTemplateVersions.Add(ltv);
+        await db.Context.SaveChangesAsync();
+
+        var id = await mgr.CreateWorkItemAsync("a", "", lt.Id, repoId);
+        var runId = Guid.NewGuid();
+        var run = new LoopRun
+        {
+            Id = runId,
+            WorkItemId = id,
+            LoopTemplateVersionId = ltv.Id,
+            Status = LoopRunStatus.Running,
+            StartedAt = DateTime.UtcNow,
+        };
+        db.Context.LoopRuns.Add(run);
+
+        var wi = await db.Context.WorkItems.FindAsync(id);
+        wi!.Status = WorkItemStatus.HumanFeedback;
+        wi.HumanFeedbackReason = "Human Input Needed";
+        wi.CurrentLoopRunId = runId;
+        await db.Context.SaveChangesAsync();
+
+        await mgr.SubmitHumanFeedbackInputAsync(id, "proceed with the change");
+
+        eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "proceed with the change", null), Times.Once);
+        var after = await mgr.GetWorkItemAsync(id);
+        after!.Status.Should().Be(WorkItemStatus.Running);
+        after.HumanFeedbackReason.Should().BeNullOrEmpty();
+    }
+
+    [Fact]
+    public async Task RejectHumanFeedback_fails_current_node_and_resumes_run()
+    {
+        var (mgr, db, repoId, _, eventLog) = Setup();
+        using var _ = db;
+
+        var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
+        db.Context.LoopTemplates.Add(lt);
+        var ltv = new LoopTemplateVersion
+        {
+            Id = Guid.NewGuid(),
+            LoopTemplateId = lt.Id,
+            VersionNumber = 1,
+            CreatedAt = DateTime.UtcNow,
+        };
+        db.Context.LoopTemplateVersions.Add(ltv);
+        await db.Context.SaveChangesAsync();
+
+        var id = await mgr.CreateWorkItemAsync("a", "", lt.Id, repoId);
+        var runId = Guid.NewGuid();
+        var nodeId = Guid.NewGuid();
+        var run = new LoopRun
+        {
+            Id = runId,
+            WorkItemId = id,
+            LoopTemplateVersionId = ltv.Id,
+            Status = LoopRunStatus.Running,
+            StartedAt = DateTime.UtcNow,
+            CurrentNodeId = nodeId,
+        };
+        db.Context.LoopRuns.Add(run);
+
+        var loopNode = new LoopNode
+        {
+            Id = nodeId,
+            LoopTemplateVersionId = ltv.Id,
+            NodeType = NodeType.Human,
+            Label = "human-review",
+        };
+        db.Context.LoopNodes.Add(loopNode);
+
+        var runNode = new LoopRunNode
+        {
+            Id = Guid.NewGuid(),
+            LoopRunId = runId,
+            LoopNodeId = nodeId,
+            Status = LoopRunNodeStatus.WaitingHuman,
+        };
+        db.Context.LoopRunNodes.Add(runNode);
+
+        var wi = await db.Context.WorkItems.FindAsync(id);
+        wi!.Status = WorkItemStatus.HumanFeedback;
+        wi.HumanFeedbackReason = "Human Input Needed";
+        wi.CurrentLoopRunId = runId;
+        await db.Context.SaveChangesAsync();
+
+        await mgr.RejectHumanFeedbackAsync(id);
+
+        eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "rejected by user", null), Times.Once);
+        var afterNode = await db.Context.LoopRunNodes.FindAsync(runNode.Id);
+        afterNode!.Status.Should().Be(LoopRunNodeStatus.Failed);
+        var after = await mgr.GetWorkItemAsync(id);
+        after!.Status.Should().Be(WorkItemStatus.Running);
+        after.HumanFeedbackReason.Should().BeNullOrEmpty();
     }
 }
