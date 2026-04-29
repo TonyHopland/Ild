@@ -149,13 +149,51 @@ public class WorkItemsController : ControllerBase
         return Ok(runs);
     }
 
+    [HttpPost("{id}/link-pr")]
+    public async Task<IActionResult> LinkPr(string id, [FromBody] LinkPrRequest request)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+
+        if (!ModelState.IsValid)
+            return BadRequest(ModelState);
+
+        var ok = await _workItemManager.LinkPullRequestAsync(guid, request.PrUrl);
+        return ok ? Ok() : NotFound();
+    }
+
     [HttpPost("{id}/mark-merged")]
     public async Task<IActionResult> MarkMerged(string id)
     {
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
+
         var ok = await _workItemManager.ManuallyMarkMergedAsync(guid);
-        return ok ? Ok() : NotFound();
+        if (!ok) return NotFound();
+
+        // If there's an active LoopRun, signal the engine to resume via Cleanup
+        var activeRun = await _db.LoopRuns
+            .FirstOrDefaultAsync(r => r.WorkItemId == guid && r.Status == ILD.Core.Enums.LoopRunStatus.Running);
+
+        if (activeRun != null)
+        {
+            var prRunNode = await _db.LoopRunNodes
+                .FirstOrDefaultAsync(n =>
+                    n.LoopRunId == activeRun.Id &&
+                    n.LoopNode.NodeType == ILD.Core.Enums.NodeType.PR &&
+                    n.Status == ILD.Core.Enums.LoopRunNodeStatus.WaitingHuman);
+
+            if (prRunNode != null)
+            {
+                await _engine.SignalPrResultAsync(activeRun.Id, prRunNode.Id, true);
+
+                // Resume the engine to route through Cleanup node
+                if (_engine is ILD.Core.Services.Implementations.LoopEngine le)
+                    _ = Task.Run(() => le.RunAsync(activeRun.Id));
+            }
+        }
+
+        return Ok();
     }
 }
 

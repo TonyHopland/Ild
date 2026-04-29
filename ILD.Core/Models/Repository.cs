@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
+using ILD.Core.Enums;
 
 namespace ILD.Core.Models;
 
@@ -25,6 +26,8 @@ public class Repository
 
     [MaxLength(1024)]
     public string? WorktreesPath { get; set; }
+
+    public WorkItemStatus DefaultIntakeStatus { get; set; }
 
     public DateTime CreatedAt { get; set; }
 

@@ -127,6 +127,49 @@ public class LoopEngine : ILoopEngine
         {
             while (true)
             {
+                // Check if resuming from a signaled PR node
+                if (run.CurrentNodeId.HasValue)
+                {
+                    var currentLoopNode = nodes.FirstOrDefault(n => n.Id == run.CurrentNodeId);
+                    if (currentLoopNode?.NodeType == NodeType.PR)
+                    {
+                        var existingRunNode = await loadDb.LoopRunNodes
+                            .FirstOrDefaultAsync(rn => rn.LoopRunId == run.Id && rn.LoopNodeId == run.CurrentNodeId, ct);
+                        if (existingRunNode != null &&
+                            (existingRunNode.Status == LoopRunNodeStatus.Succeeded ||
+                             existingRunNode.Status == LoopRunNodeStatus.Failed))
+                        {
+                            current = currentLoopNode;
+                            previousOutput = existingRunNode.Output;
+                            var prSuccess = existingRunNode.Status == LoopRunNodeStatus.Succeeded;
+
+                            if (prSuccess && current.NodeType == NodeType.Cleanup)
+                                return await CompleteRunAsync(runId);
+
+                            var prWantedType = prSuccess ? EdgeType.OnSuccess : EdgeType.OnFailure;
+                            var prEdge = edges.FirstOrDefault(e => e.SourceNodeId == current.Id && e.EdgeType == prWantedType);
+
+                            if (prEdge == null && !prSuccess)
+                            {
+                                await TransitionWorkItemAsync(workItem.Id, WorkItemStatus.HumanFeedback, "PR rejected; no on_failure edge");
+                                return await FailRunAsync(runId, "PR rejected with no on_failure edge");
+                            }
+                            if (prEdge == null && prSuccess)
+                                return await FailRunAsync(runId, $"Node {current.Label} succeeded but has no outgoing on_success edge");
+
+                            traversalCounts.TryGetValue(prEdge!.Id, out var prTraversed);
+                            if (prEdge.MaxTraversals.HasValue && prTraversed >= prEdge.MaxTraversals.Value)
+                                return await FailRunAsync(runId, $"Edge exceeded max traversals ({prEdge.MaxTraversals})");
+
+                            traversalCounts[prEdge.Id] = prTraversed + 1;
+                            await PersistEdgeTraversalAsync(runId, prEdge.Id, traversalCounts[prEdge.Id]);
+                            current = nodes.First(n => n.Id == prEdge.TargetNodeId);
+                            run.CurrentNodeId = null;
+                            continue;
+                        }
+                    }
+                }
+
                 ct.ThrowIfCancellationRequested();
                 while (control.IsPaused)
                 {
@@ -145,7 +188,10 @@ public class LoopEngine : ILoopEngine
 
                 if (outcome.Status == LoopRunNodeStatus.WaitingHuman)
                 {
-                    await TransitionWorkItemAsync(workItem.Id, WorkItemStatus.HumanFeedback, "Human node awaiting input");
+                    var reason = current.NodeType == NodeType.PR
+                        ? "PR awaiting merge"
+                        : "Human node awaiting input";
+                    await TransitionWorkItemAsync(workItem.Id, WorkItemStatus.HumanFeedback, reason);
                     return LoopRunStatus.Running;
                 }
 
@@ -231,6 +277,16 @@ public class LoopEngine : ILoopEngine
             catch (Exception ex)
             {
                 execResult = NodeExecutionResult.Fail(ex.Message);
+            }
+
+            if (node.NodeType == NodeType.PR && execResult.Success)
+            {
+                runNode.Status = LoopRunNodeStatus.WaitingHuman;
+                runNode.Output = execResult.Output;
+                runNode.CompletedAt = DateTime.UtcNow;
+                await db.SaveChangesAsync(ct);
+                await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.WaitingHuman);
+                return new RunNodeOutcome(LoopRunNodeStatus.WaitingHuman, execResult.Output);
             }
 
             if (execResult.Success)
@@ -334,5 +390,34 @@ public class LoopEngine : ILoopEngine
         if (reason != null) wi.HumanFeedbackReason = reason;
         wi.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync();
+    }
+
+    public async Task SignalPrResultAsync(Guid runId, Guid prRunNodeId, bool merged)
+    {
+        await using var db = _dbFactory();
+        var prRunNode = await db.LoopRunNodes.FindAsync(prRunNodeId);
+        if (prRunNode == null) return;
+
+        prRunNode.Status = merged ? LoopRunNodeStatus.Succeeded : LoopRunNodeStatus.Failed;
+        prRunNode.CompletedAt = DateTime.UtcNow;
+        prRunNode.Error = merged ? null : "PR rejected";
+
+        var run = await db.LoopRuns.FindAsync(runId);
+        if (run != null)
+        {
+            run.CurrentNodeId = prRunNode.LoopNodeId;
+            run.Status = LoopRunStatus.Running;
+        }
+
+        var wi = await db.WorkItems.FindAsync(run?.WorkItemId);
+        if (wi != null)
+        {
+            wi.Status = WorkItemStatus.Running;
+            wi.HumanFeedbackReason = null;
+            wi.UpdatedAt = DateTime.UtcNow;
+        }
+
+        await db.SaveChangesAsync();
+        await _notifier.NodeStateChangedAsync(runId, prRunNode.LoopNodeId, LoopRunNodeStatus.WaitingHuman, prRunNode.Status);
     }
 }

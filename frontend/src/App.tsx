@@ -6,6 +6,9 @@ import Taskboard from "./pages/Taskboard";
 import LoopEditor from "./pages/LoopEditor";
 import LoopRunMonitor from "./pages/LoopRunMonitor";
 import Settings from "./pages/Settings";
+import Repositories from "./pages/Repositories";
+import RemoteProviders from "./pages/RemoteProviders";
+import AiProviders from "./pages/AiProviders";
 import "./App.css";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -71,6 +74,30 @@ function AppRoutes() {
             element={
               <ProtectedRoute>
                 <Settings />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/repositories"
+            element={
+              <ProtectedRoute>
+                <Repositories />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/remote-providers"
+            element={
+              <ProtectedRoute>
+                <RemoteProviders />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/ai-providers"
+            element={
+              <ProtectedRoute>
+                <AiProviders />
               </ProtectedRoute>
             }
           />

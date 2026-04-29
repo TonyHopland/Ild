@@ -3,6 +3,9 @@
   "scripts": {
     "prepare": "vp config"
   },
+  "dependencies": {
+    "@xyflow/react": "^12.10.2"
+  },
   "devDependencies": {
     "vite-plus": "catalog:"
   },

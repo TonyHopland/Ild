@@ -19,6 +19,10 @@ public class WorkItemManager : IWorkItemManager
         if (repositoryId == null)
             throw new InvalidOperationException("RepositoryId is required");
 
+        var repo = await _db.Repositories.FindAsync(repositoryId.Value);
+        if (repo == null)
+            throw new InvalidOperationException("Repository not found");
+
         Guid? versionId = null;
         if (loopTemplateId.HasValue)
         {
@@ -35,7 +39,7 @@ public class WorkItemManager : IWorkItemManager
             Title = title,
             Description = description,
             Priority = WorkItemPriority.Medium,
-            Status = WorkItemStatus.Backlog,
+            Status = repo.DefaultIntakeStatus,
             RepositoryId = repositoryId.Value,
             LoopTemplateVersionId = versionId,
         };
@@ -166,8 +170,16 @@ public class WorkItemManager : IWorkItemManager
         var wi = await _db.WorkItems.FindAsync(workItemId);
         if (wi == null) return false;
         wi.IsPrMerged = true;
-        wi.Status = WorkItemStatus.Done;
         wi.UpdatedAt = DateTime.UtcNow;
+
+        // Only set Done directly if there's no active LoopRun.
+        // When a run is active, the engine handles the transition via Cleanup node.
+        var activeRun = await _db.LoopRuns
+            .FirstOrDefaultAsync(r => r.WorkItemId == workItemId && r.Status == LoopRunStatus.Running);
+
+        if (activeRun == null)
+            wi.Status = WorkItemStatus.Done;
+
         await _db.SaveChangesAsync();
 
         var dependents = await GetDependentsAsync(workItemId);

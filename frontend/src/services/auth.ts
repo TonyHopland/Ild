@@ -1,5 +1,13 @@
 import { api } from "./api";
-import { User, WorkItem, LoopTemplate, LoopRun } from "../types";
+import {
+  User,
+  WorkItem,
+  LoopTemplate,
+  LoopRun,
+  Repository,
+  RemoteProvider,
+  AiProvider,
+} from "../types";
 
 interface BackendLoginResponse {
   token: string;
@@ -85,6 +93,18 @@ export const workItemService = {
   delete: async (id: string): Promise<void> => {
     return api.delete<void>(`/workitems/${id}`);
   },
+
+  getRuns: async (id: string): Promise<LoopRun[]> => {
+    return api.get<LoopRun[]>(`/workitems/${id}/runs`);
+  },
+
+  linkPr: async (id: string, prUrl: string): Promise<void> => {
+    return api.post<void>(`/workitems/${id}/link-pr`, { prUrl });
+  },
+
+  markMerged: async (id: string): Promise<void> => {
+    return api.post<void>(`/workitems/${id}/mark-merged`, {});
+  },
 };
 
 export const loopTemplateService = {
@@ -124,5 +144,67 @@ export const loopRunService = {
 
   cancel: async (id: string): Promise<void> => {
     return api.post<void>(`/looprun/${id}/cancel`, {});
+  },
+};
+
+export const repositoryService = {
+  getAll: async (): Promise<Repository[]> => {
+    return api.get<Repository[]>("/repositories");
+  },
+
+  getById: async (id: string): Promise<Repository> => {
+    return api.get<Repository>(`/repositories/${id}`);
+  },
+
+  create: async (data: Partial<Repository>): Promise<Repository> => {
+    return api.post<Repository>("/repositories", data);
+  },
+
+  update: async (id: string, data: Partial<Repository>): Promise<Repository> => {
+    return api.put<Repository>(`/repositories/${id}`, data);
+  },
+
+  delete: async (id: string): Promise<void> => {
+    return api.delete<void>(`/repositories/${id}`);
+  },
+};
+
+export const remoteProviderService = {
+  getAll: async (): Promise<RemoteProvider[]> => {
+    return api.get<RemoteProvider[]>("/remoteproviders");
+  },
+
+  getById: async (id: string): Promise<RemoteProvider> => {
+    return api.get<RemoteProvider>(`/remoteproviders/${id}`);
+  },
+
+  create: async (data: Partial<RemoteProvider>): Promise<RemoteProvider> => {
+    return api.post<RemoteProvider>("/remoteproviders", data);
+  },
+
+  update: async (id: string, data: Partial<RemoteProvider>): Promise<RemoteProvider> => {
+    return api.put<RemoteProvider>(`/remoteproviders/${id}`, data);
+  },
+
+  delete: async (id: string): Promise<void> => {
+    return api.delete<void>(`/remoteproviders/${id}`);
+  },
+};
+
+export const aiProviderService = {
+  getAll: async (): Promise<AiProvider[]> => {
+    return api.get<AiProvider[]>("/aiproviders");
+  },
+
+  getById: async (id: string): Promise<AiProvider> => {
+    return api.get<AiProvider>(`/aiproviders/${id}`);
+  },
+
+  create: async (data: Partial<AiProvider>): Promise<AiProvider> => {
+    return api.post<AiProvider>("/aiproviders", data);
+  },
+
+  update: async (id: string, data: Partial<AiProvider>): Promise<AiProvider> => {
+    return api.put<AiProvider>(`/aiproviders/${id}`, data);
   },
 };

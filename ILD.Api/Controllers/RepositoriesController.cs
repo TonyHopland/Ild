@@ -43,11 +43,27 @@ public class RepositoriesController : ControllerBase
             CloneUrl = request.CloneUrl,
             DefaultBranch = request.DefaultBranch,
             RemoteProviderId = providerId,
+            DefaultIntakeStatus = request.DefaultIntakeStatus,
             CreatedAt = DateTime.UtcNow,
         };
         _db.Repositories.Add(repo);
         await _db.SaveChangesAsync();
         return CreatedAtAction(nameof(GetById), new { id = repo.Id }, repo);
+    }
+
+    [HttpPut("{id}")]
+    public async Task<IActionResult> Update(string id, [FromBody] RepositoryDto request)
+    {
+        if (!Guid.TryParse(id, out var guid)) return BadRequest();
+        var repo = await _db.Repositories.FindAsync(guid);
+        if (repo == null) return NotFound();
+        repo.Name = request.Name;
+        repo.CloneUrl = request.CloneUrl;
+        repo.DefaultBranch = request.DefaultBranch;
+        repo.DefaultIntakeStatus = request.DefaultIntakeStatus;
+        repo.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return Ok(repo);
     }
 
     [HttpDelete("{id}")]

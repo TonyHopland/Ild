@@ -53,6 +53,7 @@ export enum NodeType {
   Cmd = "Cmd",
   AI = "AI",
   Human = "Human",
+  PR = "PR",
   Cleanup = "Cleanup",
 }
 
@@ -154,6 +155,7 @@ export interface Repository {
   cloneUrl: string;
   defaultBranch: string | null;
   worktreesPath: string | null;
+  defaultIntakeStatus: WorkItemStatus;
   createdAt: string;
 }
 

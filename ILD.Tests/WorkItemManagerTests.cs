@@ -19,10 +19,30 @@ public class WorkItemManagerTests
     }
 
     [Fact]
-    public async Task CreateWorkItem_starts_in_Backlog()
+    public async Task CreateWorkItem_lands_in_WorkQueue_when_repo_default_is_WorkQueue()
     {
         var (mgr, db, repoId) = Setup();
         using var _ = db;
+
+        var repo = await db.Context.Repositories.FindAsync(repoId);
+        repo!.DefaultIntakeStatus = WorkItemStatus.WorkQueue;
+        await db.Context.SaveChangesAsync();
+
+        var id = await mgr.CreateWorkItemAsync("title", "desc", null, repoId);
+
+        var wi = await mgr.GetWorkItemAsync(id);
+        wi!.Status.Should().Be(WorkItemStatus.WorkQueue);
+    }
+
+    [Fact]
+    public async Task CreateWorkItem_lands_in_Backlog_when_repo_default_is_Backlog()
+    {
+        var (mgr, db, repoId) = Setup();
+        using var _ = db;
+
+        var repo = await db.Context.Repositories.FindAsync(repoId);
+        repo!.DefaultIntakeStatus = WorkItemStatus.Backlog;
+        await db.Context.SaveChangesAsync();
 
         var id = await mgr.CreateWorkItemAsync("title", "desc", null, repoId);
 
@@ -118,6 +138,21 @@ public class WorkItemManagerTests
     }
 
     [Fact]
+    public async Task LinkPullRequest_persists_pr_url()
+    {
+        var (mgr, db, repoId) = Setup();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("a", "", null, repoId);
+
+        var result = await mgr.LinkPullRequestAsync(id, "https://forgejo/pr/42");
+
+        result.Should().BeTrue();
+        var wi = await mgr.GetWorkItemAsync(id);
+        wi!.PrUrl.Should().Be("https://forgejo/pr/42");
+    }
+
+    [Fact]
     public async Task ManuallyMarkMerged_transitions_workitem_to_Done()
     {
         var (mgr, db, repoId) = Setup();
@@ -134,5 +169,47 @@ public class WorkItemManagerTests
         var after = await mgr.GetWorkItemAsync(id);
         after!.Status.Should().Be(WorkItemStatus.Done);
         after.IsPrMerged.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ManuallyMarkMerged_does_not_set_Done_when_active_LoopRun_exists()
+    {
+        var (mgr, db, repoId) = Setup();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("a", "", null, repoId);
+        var wi = await db.Context.WorkItems.FindAsync(id);
+        wi!.Status = WorkItemStatus.Running;
+        await db.Context.SaveChangesAsync();
+
+        // Create an active LoopRun with proper foreign keys
+        var lt = new ILD.Core.Models.LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
+        db.Context.LoopTemplates.Add(lt);
+        var ltv = new ILD.Core.Models.LoopTemplateVersion
+        {
+            Id = Guid.NewGuid(),
+            LoopTemplateId = lt.Id,
+            VersionNumber = 1,
+            CreatedAt = DateTime.UtcNow,
+        };
+        db.Context.LoopTemplateVersions.Add(ltv);
+
+        var run = new ILD.Core.Models.LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = id,
+            LoopTemplateVersionId = ltv.Id,
+            Status = ILD.Core.Enums.LoopRunStatus.Running,
+            StartedAt = DateTime.UtcNow,
+        };
+        db.Context.LoopRuns.Add(run);
+        await db.Context.SaveChangesAsync();
+
+        await mgr.ManuallyMarkMergedAsync(id);
+
+        var after = await mgr.GetWorkItemAsync(id);
+        after!.IsPrMerged.Should().BeTrue();
+        // Status should NOT be Done when an active LoopRun exists — engine handles transition via Cleanup
+        after.Status.Should().NotBe(WorkItemStatus.Done);
     }
 }

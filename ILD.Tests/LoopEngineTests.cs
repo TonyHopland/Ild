@@ -147,4 +147,75 @@ public class LoopEngineTests
         h.ReloadWorkItem().Status.Should().Be(WorkItemStatus.HumanFeedback);
         h.ReloadRunNodes().Should().Contain(n => n.Status == LoopRunNodeStatus.WaitingHuman);
     }
+
+    [Fact]
+    public async Task PR_node_pauses_run_and_sets_PrUrl_on_workitem()
+    {
+        using var h = new EngineHarness();
+        h.BuildSimpleGraph(
+            ("s", NodeType.Start),
+            ("pr", NodeType.PR),
+            ("c", NodeType.Cleanup));
+        h.AddEdge("e1", "s", "pr");
+        h.AddEdge("e2", "pr", "c");
+        h.Save();
+
+        await h.Engine.RunAsync(h.RunId);
+
+        h.ReloadWorkItem().Status.Should().Be(WorkItemStatus.HumanFeedback);
+        h.ReloadWorkItem().HumanFeedbackReason.Should().Contain("PR");
+    }
+
+    [Fact]
+    public async Task PR_merge_signal_resumes_run_and_routes_to_on_success()
+    {
+        using var h = new EngineHarness();
+        h.BuildSimpleGraph(
+            ("s", NodeType.Start),
+            ("pr", NodeType.PR),
+            ("c", NodeType.Cleanup));
+        h.AddEdge("e1", "s", "pr");
+        h.AddEdge("e2", "pr", "c");
+        h.Save();
+
+        await h.Engine.RunAsync(h.RunId);
+        h.ReloadWorkItem().Status.Should().Be(WorkItemStatus.HumanFeedback);
+
+        var prNodeId = h.NodesById["pr"].Id;
+        var prRunNode = h.ReloadRunNodes().First(n => n.LoopNodeId == prNodeId);
+        await h.Engine.SignalPrResultAsync(h.RunId, prRunNode.Id, true);
+        await h.Engine.RunAsync(h.RunId);
+
+        h.ReloadRun().Status.Should().Be(LoopRunStatus.Completed);
+        var cleanupNodeId = h.NodesById["c"].Id;
+        h.ReloadRunNodes().Should().Contain(n => n.LoopNodeId == cleanupNodeId && n.Status == LoopRunNodeStatus.Succeeded);
+    }
+
+    [Fact]
+    public async Task PR_rejection_signal_resumes_run_and_routes_to_on_failure()
+    {
+        using var h = new EngineHarness();
+        h.BuildSimpleGraph(
+            ("s", NodeType.Start),
+            ("pr", NodeType.PR),
+            ("fix", NodeType.Cmd),
+            ("c", NodeType.Cleanup));
+        h.AddEdge("e1", "s", "pr");
+        h.AddEdge("e2", "pr", "c", EdgeType.OnSuccess);
+        h.AddEdge("e3", "pr", "fix", EdgeType.OnFailure);
+        h.AddEdge("e4", "fix", "c");
+        h.Save();
+
+        await h.Engine.RunAsync(h.RunId);
+        h.ReloadWorkItem().Status.Should().Be(WorkItemStatus.HumanFeedback);
+
+        var prNodeId = h.NodesById["pr"].Id;
+        var prRunNode = h.ReloadRunNodes().First(n => n.LoopNodeId == prNodeId);
+        await h.Engine.SignalPrResultAsync(h.RunId, prRunNode.Id, false);
+        await h.Engine.RunAsync(h.RunId);
+
+        h.ReloadRun().Status.Should().Be(LoopRunStatus.Completed);
+        var fixNodeId = h.NodesById["fix"].Id;
+        h.ReloadRunNodes().Should().Contain(n => n.LoopNodeId == fixNodeId && n.Status == LoopRunNodeStatus.Succeeded);
+    }
 }

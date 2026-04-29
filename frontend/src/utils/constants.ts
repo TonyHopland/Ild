@@ -25,6 +25,9 @@ export const ROUTES = {
   LOOP_EDITOR: "/loop-editor",
   LOOP_RUNS: "/loop-runs",
   SETTINGS: "/settings",
+  REPOSITORIES: "/repositories",
+  REMOTE_PROVIDERS: "/remote-providers",
+  AI_PROVIDERS: "/ai-providers",
 } as const;
 
 export const NAV_ITEMS = [
@@ -32,6 +35,9 @@ export const NAV_ITEMS = [
   { label: "Loop Editor", path: ROUTES.LOOP_EDITOR },
   { label: "Loop Runs", path: ROUTES.LOOP_RUNS },
   { label: "Settings", path: ROUTES.SETTINGS },
+  { label: "Repositories", path: ROUTES.REPOSITORIES },
+  { label: "Remote Providers", path: ROUTES.REMOTE_PROVIDERS },
+  { label: "AI Providers", path: ROUTES.AI_PROVIDERS },
 ] as const;
 
 export const DEFAULT_PAGE_SIZE = 20;
