@@ -1,26 +1,28 @@
-using ILD.Core.DTOs;
-using ILD.Core.Enums;
-using ILD.Core.Models;
+using ILD.Data.DTOs;
+using ILD.Data.Entities;
+using ILD.Data.Enums;
+using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
-using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Core.Services.Implementations;
 
 public class PrSyncService : IPrSyncService
 {
-    private readonly AppDbContext _db;
+    private readonly IWorkItemStore _workItemStore;
+    private readonly IEventLogStore _eventLogStore;
     private readonly IWorkItemManager _workItems;
 
-    public PrSyncService(AppDbContext db, IWorkItemManager workItems)
+    public PrSyncService(IWorkItemStore workItemStore, IEventLogStore eventLogStore, IWorkItemManager workItems)
     {
-        _db = db;
+        _workItemStore = workItemStore;
+        _eventLogStore = eventLogStore;
         _workItems = workItems;
     }
 
     public async Task HandleWebhookAsync(WebhookPayload payload)
     {
         if (payload == null || string.IsNullOrEmpty(payload.PullRequestUrl)) return;
-        var wi = await _db.WorkItems.FirstOrDefaultAsync(w => w.PrUrl == payload.PullRequestUrl);
+        var wi = await FindByPrUrlAsync(payload.PullRequestUrl);
         if (wi == null) return;
 
         if (string.Equals(payload.MergeStatus, "merged", StringComparison.OrdinalIgnoreCase) ||
@@ -29,17 +31,16 @@ public class PrSyncService : IPrSyncService
             await _workItems.ManuallyMarkMergedAsync(wi.Id);
         }
 
-        if (!string.IsNullOrEmpty(payload.Comment))
+        if (!string.IsNullOrEmpty(payload.Comment) && wi.CurrentLoopRunId.HasValue)
         {
-            _db.EventLogs.Add(new EventLog
+            await _eventLogStore.AppendAsync(new EventLog
             {
                 Id = Guid.NewGuid(),
-                LoopRunId = wi.CurrentLoopRunId,
+                LoopRunId = wi.CurrentLoopRunId.Value,
                 EventType = EventType.HumanFeedbackReceived,
                 Data = payload.Comment,
                 Timestamp = DateTime.UtcNow,
             });
-            await _db.SaveChangesAsync();
         }
     }
 
@@ -49,16 +50,29 @@ public class PrSyncService : IPrSyncService
 
     public async Task RegisterWorkItemPrLinkAsync(Guid workItemId, string prUrl)
     {
-        var wi = await _db.WorkItems.FindAsync(workItemId);
+        var wi = await _workItemStore.GetByIdAsync(workItemId);
         if (wi == null) return;
         wi.PrUrl = prUrl;
         wi.UpdatedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync();
+        await _workItemStore.UpdateAsync(wi);
     }
 
     public async Task<string?> GetPrUrlForWorkItemAsync(Guid workItemId)
     {
-        var wi = await _db.WorkItems.FindAsync(workItemId);
+        var wi = await _workItemStore.GetByIdAsync(workItemId);
         return wi?.PrUrl;
+    }
+
+    private async Task<WorkItem?> FindByPrUrlAsync(string prUrl)
+    {
+        foreach (var status in Enum.GetValues<WorkItemStatus>())
+        {
+            foreach (var w in await _workItemStore.GetByStatusAsync(status))
+            {
+                if (w.PrUrl == prUrl)
+                    return w;
+            }
+        }
+        return null;
     }
 }

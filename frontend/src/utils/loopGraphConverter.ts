@@ -1,6 +1,6 @@
 import type { Node, Edge } from "@xyflow/react";
-import type { LoopTemplate } from "../types";
-import { EdgeType } from "../types";
+import type { LoopTemplate, LoopNodeEdge, LoopNode } from "../types";
+import { EdgeType, NodeType } from "../types";
 
 function layoutPosition(index: number): { x: number; y: number } {
   const columns = 2;
@@ -22,6 +22,7 @@ export function templateToNodes(template: LoopTemplate): Node[] {
       data: {
         label: node.label,
         type: node.type,
+        config: node.config,
       },
     };
   });
@@ -43,4 +44,34 @@ export function templateToEdges(template: LoopTemplate): Edge[] {
     labelBgPadding: [4, 2] as [number, number],
     labelBgBorderRadius: 4,
   }));
+}
+
+export function edgesToLoopNodeEdges(edges: Edge[]): LoopNodeEdge[] {
+  return edges.map((edge) => ({
+    id: edge.id,
+    sourceNodeId: edge.source,
+    targetNodeId: edge.target,
+    edgeType: (edge.data as { edgeType?: EdgeType })?.edgeType ?? EdgeType.OnSuccess,
+    maxTraversals: (edge.data as { maxTraversals?: number | null })?.maxTraversals ?? null,
+  }));
+}
+
+export function nodesToLoopNodes(nodes: Node[]): LoopNode[] {
+  return nodes.map((node) => {
+    const data = node.data as {
+      label: string;
+      type: string;
+      config?: Record<string, unknown>;
+    };
+    const config = data.config || {};
+    return {
+      id: node.id,
+      type: data.type as NodeType,
+      label: data.label,
+      config: config as Record<string, unknown>,
+      maxTraversals: null,
+      retryCount: (config.maxRetries as number) ?? null,
+      timeoutSeconds: (config.timeout as number) ?? null,
+    };
+  });
 }

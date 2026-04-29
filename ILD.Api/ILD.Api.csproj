@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\ILD.Core\ILD.Core.csproj" />
+    <ProjectReference Include="..\ILD.Data\ILD.Data.csproj" />
   </ItemGroup>
 
 </Project>

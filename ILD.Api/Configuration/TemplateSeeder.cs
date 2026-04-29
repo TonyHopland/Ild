@@ -1,7 +1,6 @@
-using ILD.Core.DTOs;
-using ILD.Core.Models;
+using ILD.Data.DTOs;
+using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
-using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Api.Configuration;
 
@@ -10,9 +9,10 @@ namespace ILD.Api.Configuration;
 /// </summary>
 public static class TemplateSeeder
 {
-    public static async Task SeedAsync(AppDbContext db, ILoopTemplateManager mgr)
+    public static async Task SeedAsync(ILoopTemplateStore templateStore, ILoopTemplateManager mgr)
     {
-        if (await db.LoopTemplates.AnyAsync()) return;
+        var existing = await templateStore.GetAllAsync();
+        if (existing.Any()) return;
 
         await CreateSimpleCodeChangeAsync(mgr);
         await CreateAiAssistedFeatureAsync(mgr);

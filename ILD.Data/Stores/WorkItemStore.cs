@@ -1,0 +1,89 @@
+using ILD.Data.Entities;
+using ILD.Data.Enums;
+using ILD.Data.Stores.Interfaces;
+using Microsoft.EntityFrameworkCore;
+
+namespace ILD.Data.Stores;
+
+public class WorkItemStore : IWorkItemStore
+{
+    private readonly AppDbContext _db;
+
+    public WorkItemStore(AppDbContext db)
+    {
+        _db = db;
+    }
+
+    public async Task<WorkItem?> GetByIdAsync(Guid id)
+        => await _db.WorkItems.FindAsync(id).AsTask();
+
+    public async Task<IReadOnlyList<WorkItem>> GetByStatusAsync(WorkItemStatus status)
+        => await _db.WorkItems.Where(w => w.Status == status).ToListAsync();
+
+    public async Task<WorkItem?> GetByRepositoryAsync(Guid repositoryId)
+        => await _db.WorkItems.FirstOrDefaultAsync(w => w.RepositoryId == repositoryId);
+
+    public async Task<IReadOnlyList<WorkItem>> GetByRepositoryIdsAsync(IReadOnlyList<Guid> repositoryIds)
+        => await _db.WorkItems.Where(w => repositoryIds.Contains(w.RepositoryId)).ToListAsync();
+
+    public async Task CreateAsync(WorkItem workItem)
+    {
+        _db.WorkItems.Add(workItem);
+        await _db.SaveChangesAsync();
+    }
+
+    public async Task UpdateAsync(WorkItem workItem)
+    {
+        await _db.SaveChangesAsync();
+    }
+
+    public async Task<bool> AddDependencyAsync(Guid workItemId, Guid dependencyWorkItemId)
+    {
+        var exists = await _db.WorkItemDependencies
+            .AnyAsync(d => d.WorkItemId == workItemId && d.DependencyWorkItemId == dependencyWorkItemId);
+        if (exists) return false;
+
+        _db.WorkItemDependencies.Add(new WorkItemDependency
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = workItemId,
+            DependencyWorkItemId = dependencyWorkItemId,
+        });
+        await _db.SaveChangesAsync();
+        return true;
+    }
+
+    public async Task<bool> RemoveDependencyAsync(Guid workItemId, Guid dependencyWorkItemId)
+    {
+        var dep = await _db.WorkItemDependencies
+            .FirstOrDefaultAsync(d => d.WorkItemId == workItemId && d.DependencyWorkItemId == dependencyWorkItemId);
+        if (dep == null) return false;
+        _db.WorkItemDependencies.Remove(dep);
+        await _db.SaveChangesAsync();
+        return true;
+    }
+
+    public async Task<IReadOnlyList<Guid>> GetDependencyIdsAsync(Guid workItemId)
+        => await _db.WorkItemDependencies
+            .Where(d => d.WorkItemId == workItemId)
+            .Select(d => d.DependencyWorkItemId)
+            .ToListAsync();
+
+    public async Task<IReadOnlyList<Guid>> GetDependentIdsAsync(Guid workItemId)
+        => await _db.WorkItemDependencies
+            .Where(d => d.DependencyWorkItemId == workItemId)
+            .Select(d => d.WorkItemId)
+            .ToListAsync();
+
+    public Task<bool> HasRunningRunAsync(Guid workItemId)
+        => _db.LoopRuns.AnyAsync(r => r.WorkItemId == workItemId && r.Status == LoopRunStatus.Running);
+
+    public async Task<LoopTemplateVersion?> GetLatestTemplateVersionAsync(Guid templateId)
+        => await _db.LoopTemplateVersions
+            .Where(v => v.LoopTemplateId == templateId)
+            .OrderByDescending(v => v.VersionNumber)
+            .FirstOrDefaultAsync();
+
+    public async Task<Repository?> GetRepositoryAsync(Guid id)
+        => await _db.Repositories.FindAsync(id).AsTask();
+}

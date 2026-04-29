@@ -45,30 +45,36 @@ ILD turns the repetitive cycle of _plan → code → test → review → merge_ 
 │                        Browser (React)                         │
 │  Taskboard · WorkItemModal · LoopEditor · EventLog (SignalR)   │
 └──────────────────────────────┬─────────────────────────────────┘
-                               │ /api/v1 + /hubs/* (SignalR)
+                                │ /api/v1 + /hubs/* (SignalR)
 ┌──────────────────────────────┴─────────────────────────────────┐
 │                          ILD.Api (ASP.NET Core 10)             │
 │  Controllers · AuthMiddleware · LoopRunHub · WorkItemHub       │
 └──────────────────────────────┬─────────────────────────────────┘
-                               │ DI
+                                │ DI
 ┌──────────────────────────────┴─────────────────────────────────┐
 │                          ILD.Core (services)                   │
 │  LoopEngine · NodeExecutors · WorkItemManager · AuthService    │
 │  RepositoryManager · AIProviderService · RemoteProvider        │
 │  PrSyncService · RecoveryManager · EventLogService             │
 └──────────────────────────────┬─────────────────────────────────┘
-                               │ EF Core
+                                │ Store interfaces
+┌──────────────────────────────┴─────────────────────────────────┐
+│                         ILD.Data (EF Core)                     │
+│  AppDbContext · Entities · DTOs · Enums · Store implementations│
+└──────────────────────────────┬─────────────────────────────────┘
+                                │ EF Core
 ┌──────────────────────────────┴─────────────────────────────────┐
 │                  SQLite ( /data/ild.db )  +  /worktrees         │
 └────────────────────────────────────────────────────────────────┘
 ```
 
-- **`ILD.Core`** owns the domain model (15 entities), DTOs, enums, and all business services.
+- **`ILD.Core`** owns all business services. It depends on `ILD.Data` for entities, DTOs, enums, and store interfaces, but has no direct EF Core dependency.
+- **`ILD.Data`** owns the EF Core data layer: `AppDbContext`, entity models, DTOs, enums, and store implementations (`IWorkItemStore`, `ILoopRunStore`, etc.).
 - **`ILD.Api`** is the ASP.NET Core host: 8 controllers, 2 SignalR hubs, auth middleware, DI composition, and startup template seeding + run recovery.
-- **`ILD.Tests`** is the xUnit suite — 40 tests covering `EventLogService`, `LoopTemplateValidator`, `LoopTemplateManager`, `WorkItemManager`, `LoopEngine`, `AuthService`, `RepositoryManager`, and `AIProviderService`.
+- **`ILD.Tests`** is the xUnit suite — 48 tests covering `EventLogService`, `LoopTemplateValidator`, `LoopTemplateManager`, `WorkItemManager`, `LoopEngine`, `AuthService`, `RepositoryManager`, and `AIProviderService`.
 - **`frontend/`** is a React 18 + Vite+ SPA proxied to the .NET API at dev time and served from `wwwroot/` in production.
 
-`LoopEngine` and the node executors are registered as singletons. They use a `Func<AppDbContext>` factory to create a per-operation EF scope, which allows long-running runs to share a single engine instance while still using transient DB contexts. SignalR notifications flow through `IRunNotifier` → `SignalRRunNotifier` → `LoopRunHub` group `runId.ToString()`.
+`LoopEngine` and the node executors are registered as singletons. The engine injects `IServiceProvider` and creates scoped DB access per operation, allowing long-running runs to share a single engine instance while still using transient DB contexts. SignalR notifications flow through `IRunNotifier` → `SignalRRunNotifier` → `LoopRunHub` group `runId.ToString()`.
 
 ---
 
@@ -183,7 +189,7 @@ A `LoopTemplateGraph` is rejected on save unless:
 
 ```
 ild/
-├── ILD.sln                       # .NET solution (Core + Api + Tests)
+├── ILD.sln                       # .NET solution (Data + Core + Api + Tests)
 ├── ild.slnx                      # New-style solution file
 ├── docker-compose.yml            # Single-container deployment
 ├── Dockerfile                    # Multi-stage: frontend → backend → runtime
@@ -191,10 +197,17 @@ ild/
 ├── package.json                  # Vite+ workspace root
 ├── pnpm-workspace.yaml
 ├── vite.config.ts                # Vite+ root config (lint/fmt/check)
-├── ILD.Core/                     # Domain + services (no ASP.NET deps)
-│   ├── DTOs/                     # Wire types
+├── ILD.Data/                     # EF Core data layer
+│   ├── AppDbContext.cs           # DbContext + model configuration
+│   ├── Entities/                 # EF entity models (WorkItem, LoopRun, etc.)
+│   ├── DTOs/                     # Wire types and request/response DTOs
 │   ├── Enums/                    # Status / type enums
-│   ├── Models/                   # EF entities + AppDbContext
+│   ├── Stores/                   # IWorkItemStore, ILoopRunStore, etc.
+│   │   ├── Interfaces/
+│   │   └── (implementations)
+│   ├── ServiceCollectionExtensions.cs
+│   └── DesignTimeDbContextFactory.cs
+├── ILD.Core/                     # Business services (no EF Core dep)
 │   └── Services/
 │       ├── Interfaces/
 │       └── Implementations/
@@ -221,7 +234,7 @@ ild/
 │   │   │                         # AiProviders, Webhooks, Health
 │   ├── Hubs/                     # LoopRunHub, WorkItemHub
 │   └── Middleware/               # AuthMiddleware
-├── ILD.Tests/                    # xUnit + FluentAssertions + Moq + EF Sqlite InMemory
+├── ILD.Tests/                    # xUnit + FluentAssertions + Moq + EF Sqlite in-memory
 └── frontend/
     ├── package.json
     ├── vite.config.ts            # Vite+ + jsdom for Vitest
@@ -264,12 +277,12 @@ Vite+ rules of thumb (see [AGENTS.md](AGENTS.md)):
 
 | Suite           | Command                                             | Count  |
 | --------------- | --------------------------------------------------- | ------ |
-| Backend xUnit   | `dotnet test ILD.Tests/ILD.Tests.csproj --no-build` | **40** |
+| Backend xUnit   | `dotnet test ILD.Tests/ILD.Tests.csproj --no-build` | **48** |
 | Frontend Vitest | `cd frontend && vp test --run`                      | **2**  |
 
 Backend tests use:
 
-- `Microsoft.EntityFrameworkCore.Sqlite` with an in-memory shared-cache connection (`TestDb`).
+- `Microsoft.EntityFrameworkCore.Sqlite` with a real in-memory SQLite database (`TestDb`), exercising the same store layer as production.
 - `FluentAssertions` for readable assertions.
 - `Moq` for collaborator stubs.
 - `Microsoft.AspNetCore.Mvc.Testing` for any HTTP-level integration test.
@@ -334,7 +347,7 @@ For multi-tenant or HTTPS deployments, terminate TLS at a reverse proxy (Caddy, 
 ## Troubleshooting
 
 **`Cannot resolve scoped service '…' from root provider`**
-A singleton (engine / executor) tried to inject a scoped service directly. Inject `IServiceProvider` and create a scope, or inject `Func<AppDbContext>` (already done for the engine).
+A singleton (engine / executor) tried to inject a scoped service directly. Inject `IServiceProvider` and create a scope with `sp.CreateScope()`. The `LoopEngine` follows this pattern, resolving store interfaces from scoped services.
 
 **`A possible object cycle was detected`**
 EF navigation properties make cycles. JSON output uses `ReferenceHandler.IgnoreCycles` — keep it that way when adding new endpoints.

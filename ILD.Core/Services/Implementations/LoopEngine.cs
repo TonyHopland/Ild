@@ -1,14 +1,15 @@
-using ILD.Core.Enums;
-using ILD.Core.Models;
+using ILD.Data.Entities;
+using ILD.Data.Enums;
+using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
-using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using System.Collections.Concurrent;
 
 namespace ILD.Core.Services.Implementations;
 
 public class LoopEngine : ILoopEngine
 {
-    private readonly Func<AppDbContext> _dbFactory;
+    private readonly IServiceProvider _sp;
     private readonly INodeExecutorRegistry _registry;
     private readonly IRunNotifier _notifier;
     private readonly ConcurrentDictionary<Guid, RunControl> _runs = new();
@@ -20,9 +21,9 @@ public class LoopEngine : ILoopEngine
         public Task? Task { get; set; }
     }
 
-    public LoopEngine(Func<AppDbContext> dbFactory, INodeExecutorRegistry registry, IRunNotifier notifier)
+    public LoopEngine(IServiceProvider sp, INodeExecutorRegistry registry, IRunNotifier notifier)
     {
-        _dbFactory = dbFactory;
+        _sp = sp;
         _registry = registry;
         _notifier = notifier;
     }
@@ -30,9 +31,12 @@ public class LoopEngine : ILoopEngine
     public async Task StartRunAsync(Guid workItemId, CancellationToken cancellationToken = default)
     {
         Guid runId;
-        await using (var db = _dbFactory())
+        using (var scope = _sp.CreateScope())
         {
-            var wi = await db.WorkItems.FindAsync(workItemId)
+            var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
+            var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+
+            var wi = await workItemStore.GetByIdAsync(workItemId)
                 ?? throw new InvalidOperationException($"WorkItem {workItemId} not found");
             if (!wi.LoopTemplateVersionId.HasValue)
                 throw new InvalidOperationException($"WorkItem {workItemId} has no loop template");
@@ -46,10 +50,10 @@ public class LoopEngine : ILoopEngine
                 Status = LoopRunStatus.Running,
                 StartedAt = DateTime.UtcNow,
             };
-            db.LoopRuns.Add(run);
+            await loopRunStore.CreateRunAsync(run);
             wi.CurrentLoopRunId = run.Id;
             wi.Status = WorkItemStatus.Running;
-            await db.SaveChangesAsync();
+            await workItemStore.UpdateAsync(wi);
             runId = run.Id;
         }
 
@@ -77,38 +81,47 @@ public class LoopEngine : ILoopEngine
 
     public async Task<LoopRunStatus> GetRunStatusAsync(Guid runId)
     {
-        await using var db = _dbFactory();
-        var run = await db.LoopRuns.FindAsync(runId);
+        using var scope = _sp.CreateScope();
+        var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+        var run = await loopRunStore.GetByIdAsync(runId);
         return run?.Status ?? LoopRunStatus.Failed;
     }
 
     public Task<IEnumerable<Guid>> GetActiveRunIdsAsync()
         => Task.FromResult<IEnumerable<Guid>>(_runs.Keys.ToList());
 
-    /// <summary>
-    /// Drives a single loop run to completion. Public for tests and recovery.
-    /// </summary>
     public async Task<LoopRunStatus> RunAsync(Guid runId, CancellationToken externalCt = default)
     {
         var control = _runs.GetOrAdd(runId, _ => new RunControl());
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(externalCt, control.Cts.Token);
         var ct = linkedCts.Token;
 
-        await using var loadDb = _dbFactory();
-        var run = await loadDb.LoopRuns.FirstOrDefaultAsync(r => r.Id == runId, ct)
-            ?? throw new InvalidOperationException($"Run {runId} not found");
-        var workItem = await loadDb.WorkItems.FirstAsync(w => w.Id == run.WorkItemId, ct);
-        var version = await loadDb.LoopTemplateVersions
-            .Include(v => v.LoopTemplate)
-            .FirstAsync(v => v.Id == run.LoopTemplateVersionId, ct);
-        var template = version.LoopTemplate;
-        var nodes = await loadDb.LoopNodes
-            .Where(n => n.LoopTemplateVersionId == run.LoopTemplateVersionId)
-            .ToListAsync(ct);
-        var nodeIds = nodes.Select(n => n.Id).ToList();
-        var edges = await loadDb.LoopNodeEdges
-            .Where(e => nodeIds.Contains(e.SourceNodeId))
-            .ToListAsync(ct);
+        LoopRun run;
+        WorkItem workItem;
+        LoopTemplateVersion version;
+        LoopTemplate template;
+        List<LoopNode> nodes;
+        List<LoopNodeEdge> edges;
+
+        using (var scope = _sp.CreateScope())
+        {
+            var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+            var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
+            var providerStore = scope.ServiceProvider.GetRequiredService<IProviderStore>();
+            var loopTemplateStore = scope.ServiceProvider.GetRequiredService<ILoopTemplateStore>();
+
+            run = await loopRunStore.GetByIdAsync(runId)
+                ?? throw new InvalidOperationException($"Run {runId} not found");
+            workItem = await workItemStore.GetByIdAsync(run.WorkItemId)
+                ?? throw new InvalidOperationException($"WorkItem {run.WorkItemId} not found");
+            version = await loopTemplateStore.GetVersionByIdAsync(run.LoopTemplateVersionId)
+                ?? throw new InvalidOperationException($"Version {run.LoopTemplateVersionId} not found");
+            template = await providerStore.GetLoopTemplateByVersionIdAsync(run.LoopTemplateVersionId)
+                ?? throw new InvalidOperationException($"Template for version {run.LoopTemplateVersionId} not found");
+            nodes = (await loopRunStore.GetNodesForVersionAsync(run.LoopTemplateVersionId)).ToList();
+            var nodeIds = nodes.Select(n => n.Id).ToList();
+            edges = (await loopRunStore.GetEdgesForNodeIdsAsync(nodeIds)).ToList();
+        }
 
         var startNode = nodes.FirstOrDefault(n => n.NodeType == NodeType.Start);
         if (startNode == null)
@@ -127,14 +140,17 @@ public class LoopEngine : ILoopEngine
         {
             while (true)
             {
-                // Check if resuming from a signaled PR node
                 if (run.CurrentNodeId.HasValue)
                 {
                     var currentLoopNode = nodes.FirstOrDefault(n => n.Id == run.CurrentNodeId);
                     if (currentLoopNode?.NodeType == NodeType.PR)
                     {
-                        var existingRunNode = await loadDb.LoopRunNodes
-                            .FirstOrDefaultAsync(rn => rn.LoopRunId == run.Id && rn.LoopNodeId == run.CurrentNodeId, ct);
+                        LoopRunNode? existingRunNode = null;
+                        using (var scope = _sp.CreateScope())
+                        {
+                            var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+                            existingRunNode = await loopRunStore.GetRunNodeAsync(run.Id, run.CurrentNodeId.Value);
+                        }
                         if (existingRunNode != null &&
                             (existingRunNode.Status == LoopRunNodeStatus.Succeeded ||
                              existingRunNode.Status == LoopRunNodeStatus.Failed))
@@ -239,30 +255,41 @@ public class LoopEngine : ILoopEngine
         while (true)
         {
             attempt++;
-            await using var db = _dbFactory();
-            var runEntity = await db.LoopRuns.FirstAsync(r => r.Id == run.Id, ct);
-            var runNode = new LoopRunNode
+            LoopRunNode runNode;
+            using (var scope = _sp.CreateScope())
             {
-                Id = Guid.NewGuid(),
-                LoopRunId = run.Id,
-                LoopNodeId = node.Id,
-                Status = LoopRunNodeStatus.Running,
-                RetryCount = attempt - 1,
-                StartedAt = DateTime.UtcNow,
-            };
-            db.LoopRunNodes.Add(runNode);
-            runEntity.NodeExecutionCount++;
-            runEntity.CurrentNodeId = node.Id;
-            await db.SaveChangesAsync(ct);
+                var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+                var runEntity = await loopRunStore.GetByIdAsync(run.Id);
+                if (runEntity == null)
+                    return new RunNodeOutcome(LoopRunNodeStatus.Failed, null);
+
+                runNode = new LoopRunNode
+                {
+                    Id = Guid.NewGuid(),
+                    LoopRunId = run.Id,
+                    LoopNodeId = node.Id,
+                    Status = LoopRunNodeStatus.Running,
+                    RetryCount = attempt - 1,
+                    StartedAt = DateTime.UtcNow,
+                };
+                await loopRunStore.CreateRunNodeAsync(runNode);
+                runEntity.NodeExecutionCount++;
+                runEntity.CurrentNodeId = node.Id;
+                await loopRunStore.UpdateRunAsync(runEntity);
+            }
             await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Pending, LoopRunNodeStatus.Running);
 
-            var ctx = new NodeExecutionContext(runEntity, runNode, node, wi, prevOutput, ct);
+            var ctx = new NodeExecutionContext(run, runNode, node, wi, prevOutput, ct);
 
             if (node.NodeType == NodeType.Human)
             {
                 runNode.Status = LoopRunNodeStatus.WaitingHuman;
                 runNode.CompletedAt = DateTime.UtcNow;
-                await db.SaveChangesAsync(ct);
+                using (var scope = _sp.CreateScope())
+                {
+                    var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+                    await loopRunStore.UpdateRunNodeAsync(runNode);
+                }
                 await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.WaitingHuman);
                 return new RunNodeOutcome(LoopRunNodeStatus.WaitingHuman, null);
             }
@@ -284,7 +311,11 @@ public class LoopEngine : ILoopEngine
                 runNode.Status = LoopRunNodeStatus.WaitingHuman;
                 runNode.Output = execResult.Output;
                 runNode.CompletedAt = DateTime.UtcNow;
-                await db.SaveChangesAsync(ct);
+                using (var scope = _sp.CreateScope())
+                {
+                    var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+                    await loopRunStore.UpdateRunNodeAsync(runNode);
+                }
                 await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.WaitingHuman);
                 return new RunNodeOutcome(LoopRunNodeStatus.WaitingHuman, execResult.Output);
             }
@@ -294,7 +325,11 @@ public class LoopEngine : ILoopEngine
                 runNode.Status = LoopRunNodeStatus.Succeeded;
                 runNode.Output = execResult.Output;
                 runNode.CompletedAt = DateTime.UtcNow;
-                await db.SaveChangesAsync(ct);
+                using (var scope = _sp.CreateScope())
+                {
+                    var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+                    await loopRunStore.UpdateRunNodeAsync(runNode);
+                }
                 await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Succeeded);
                 return new RunNodeOutcome(LoopRunNodeStatus.Succeeded, execResult.Output);
             }
@@ -303,13 +338,19 @@ public class LoopEngine : ILoopEngine
             runNode.Error = execResult.Error;
             runNode.Output = execResult.Output;
             runNode.CompletedAt = DateTime.UtcNow;
-            await db.SaveChangesAsync(ct);
+            using (var scope = _sp.CreateScope())
+            {
+                var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+                await loopRunStore.UpdateRunNodeAsync(runNode);
+            }
             await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Failed);
 
-            // If there's an on_failure edge, route immediately (no retry).
-            await using var look = _dbFactory();
-            var hasFailureEdge = await look.LoopNodeEdges
-                .AnyAsync(e => e.SourceNodeId == node.Id && e.EdgeType == EdgeType.OnFailure, ct);
+            bool hasFailureEdge;
+            using (var scope = _sp.CreateScope())
+            {
+                var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+                hasFailureEdge = await loopRunStore.HasFailureEdgeAsync(node.Id);
+            }
             if (hasFailureEdge)
                 return new RunNodeOutcome(LoopRunNodeStatus.Failed, execResult.Output);
 
@@ -320,47 +361,38 @@ public class LoopEngine : ILoopEngine
 
     private async Task PersistEdgeTraversalAsync(Guid runId, Guid edgeId, int count)
     {
-        await using var db = _dbFactory();
-        var existing = await db.LoopRunEdgeTraversals.FirstOrDefaultAsync(t => t.LoopRunId == runId && t.EdgeId == edgeId);
-        if (existing == null)
-        {
-            db.LoopRunEdgeTraversals.Add(new LoopRunEdgeTraversal
-            {
-                Id = Guid.NewGuid(),
-                LoopRunId = runId,
-                EdgeId = edgeId,
-                TraversalCount = count,
-            });
-        }
-        else
-        {
-            existing.TraversalCount = count;
-        }
-        await db.SaveChangesAsync();
+        using var scope = _sp.CreateScope();
+        var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+        await loopRunStore.PersistEdgeTraversalAsync(runId, edgeId, count);
     }
 
     private async Task<LoopRunStatus> CompleteRunAsync(Guid runId)
     {
-        await using var db = _dbFactory();
-        var run = await db.LoopRuns.FirstAsync(r => r.Id == runId);
-        run.Status = LoopRunStatus.Completed;
-        run.CompletedAt = DateTime.UtcNow;
-        run.UpdatedAt = DateTime.UtcNow;
-        await db.SaveChangesAsync();
+        using var scope = _sp.CreateScope();
+        var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+        var run = await loopRunStore.GetByIdAsync(runId);
+        if (run != null)
+        {
+            run.Status = LoopRunStatus.Completed;
+            run.CompletedAt = DateTime.UtcNow;
+            run.UpdatedAt = DateTime.UtcNow;
+            await loopRunStore.UpdateRunAsync(run);
+        }
         await _notifier.RunStateChangedAsync(runId, LoopRunStatus.Running, LoopRunStatus.Completed);
         return LoopRunStatus.Completed;
     }
 
     private async Task<LoopRunStatus> FailRunAsync(Guid runId, string reason)
     {
-        await using var db = _dbFactory();
-        var run = await db.LoopRuns.FirstOrDefaultAsync(r => r.Id == runId);
+        using var scope = _sp.CreateScope();
+        var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+        var run = await loopRunStore.GetByIdAsync(runId);
         if (run != null)
         {
             run.Status = LoopRunStatus.Failed;
             run.CompletedAt = DateTime.UtcNow;
             run.UpdatedAt = DateTime.UtcNow;
-            await db.SaveChangesAsync();
+            await loopRunStore.UpdateRunAsync(run);
         }
         await _notifier.EventLoggedAsync(runId, $"Run failed: {reason}");
         await _notifier.RunStateChangedAsync(runId, LoopRunStatus.Running, LoopRunStatus.Failed);
@@ -369,55 +401,62 @@ public class LoopEngine : ILoopEngine
 
     private async Task CancelRunInternalAsync(Guid runId)
     {
-        await using var db = _dbFactory();
-        var run = await db.LoopRuns.FirstOrDefaultAsync(r => r.Id == runId);
+        using var scope = _sp.CreateScope();
+        var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+        var run = await loopRunStore.GetByIdAsync(runId);
         if (run != null)
         {
             run.Status = LoopRunStatus.Cancelled;
             run.CompletedAt = DateTime.UtcNow;
             run.UpdatedAt = DateTime.UtcNow;
-            await db.SaveChangesAsync();
+            await loopRunStore.UpdateRunAsync(run);
         }
         await _notifier.RunStateChangedAsync(runId, LoopRunStatus.Running, LoopRunStatus.Cancelled);
     }
 
     private async Task TransitionWorkItemAsync(Guid workItemId, WorkItemStatus next, string? reason)
     {
-        await using var db = _dbFactory();
-        var wi = await db.WorkItems.FindAsync(workItemId);
+        using var scope = _sp.CreateScope();
+        var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
+        var wi = await workItemStore.GetByIdAsync(workItemId);
         if (wi == null) return;
         wi.Status = next;
         if (reason != null) wi.HumanFeedbackReason = reason;
         wi.UpdatedAt = DateTime.UtcNow;
-        await db.SaveChangesAsync();
+        await workItemStore.UpdateAsync(wi);
     }
 
     public async Task SignalPrResultAsync(Guid runId, Guid prRunNodeId, bool merged)
     {
-        await using var db = _dbFactory();
-        var prRunNode = await db.LoopRunNodes.FindAsync(prRunNodeId);
+        using var scope = _sp.CreateScope();
+        var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+        var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
+
+        var prRunNode = await loopRunStore.GetRunNodeByIdAsync(prRunNodeId);
         if (prRunNode == null) return;
 
         prRunNode.Status = merged ? LoopRunNodeStatus.Succeeded : LoopRunNodeStatus.Failed;
         prRunNode.CompletedAt = DateTime.UtcNow;
         prRunNode.Error = merged ? null : "PR rejected";
+        await loopRunStore.UpdateRunNodeAsync(prRunNode);
 
-        var run = await db.LoopRuns.FindAsync(runId);
+        var run = await loopRunStore.GetByIdAsync(runId);
         if (run != null)
         {
             run.CurrentNodeId = prRunNode.LoopNodeId;
             run.Status = LoopRunStatus.Running;
+            await loopRunStore.UpdateRunAsync(run);
         }
 
-        var wi = await db.WorkItems.FindAsync(run?.WorkItemId);
+        var wi = run != null ? await workItemStore.GetByIdAsync(run.WorkItemId) : null;
         if (wi != null)
         {
             wi.Status = WorkItemStatus.Running;
             wi.HumanFeedbackReason = null;
             wi.UpdatedAt = DateTime.UtcNow;
+            await workItemStore.UpdateAsync(wi);
         }
 
-        await db.SaveChangesAsync();
         await _notifier.NodeStateChangedAsync(runId, prRunNode.LoopNodeId, LoopRunNodeStatus.WaitingHuman, prRunNode.Status);
     }
 }

@@ -1,7 +1,7 @@
 using ILD.Core.Services.Interfaces;
-using ILD.Core.DTOs;
-using ILD.Core.Enums;
-using ILD.Core.Models;
+using ILD.Data.DTOs;
+using ILD.Data.Enums;
+using ILD.Data.Entities;
 namespace ILD.Api.Middleware;
 
 public class AuthOptions

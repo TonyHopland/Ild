@@ -1,5 +1,5 @@
-using ILD.Core.Enums;
-using ILD.Core.Models;
+using ILD.Data.Enums;
+using ILD.Data.Entities;
 
 namespace ILD.Core.Services.Interfaces;
 

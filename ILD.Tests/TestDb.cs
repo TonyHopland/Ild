@@ -1,19 +1,22 @@
-using ILD.Core.Models;
+using ILD.Data.Entities;
+using ILD.Data.Stores;
+using ILD.Data.Stores.Interfaces;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Tests;
 
-/// <summary>
-/// Spins up a fresh AppDbContext on a private in-memory SQLite database
-/// for each test. The connection is kept open for the lifetime of the
-/// test so the schema persists.
-/// </summary>
 public sealed class TestDb : IDisposable
 {
     private readonly SqliteConnection _connection;
 
     public AppDbContext Context { get; }
+    public IWorkItemStore WorkItems { get; }
+    public ILoopRunStore LoopRuns { get; }
+    public ILoopTemplateStore LoopTemplates { get; }
+    public IEventLogStore EventLogs { get; }
+    public IAuthStore Auth { get; }
+    public IProviderStore Providers { get; }
 
     public TestDb()
     {
@@ -26,6 +29,13 @@ public sealed class TestDb : IDisposable
 
         Context = new AppDbContext(options);
         Context.Database.EnsureCreated();
+
+        WorkItems = new WorkItemStore(Context);
+        LoopRuns = new LoopRunStore(Context);
+        LoopTemplates = new LoopTemplateStore(Context);
+        EventLogs = new EventLogStore(Context);
+        Auth = new AuthStore(Context);
+        Providers = new ProviderStore(Context);
     }
 
     public AppDbContext Fresh()

@@ -1,5 +1,5 @@
 using FluentAssertions;
-using ILD.Core.Models;
+using ILD.Data.Entities;
 using ILD.Core.Services.Implementations;
 
 namespace ILD.Tests;
@@ -9,7 +9,7 @@ public class AuthServiceTests
     private static AuthService Make(TestDb db, string password = "secret")
     {
         Environment.SetEnvironmentVariable("ILD_PASSWORD", password);
-        return new AuthService(db.Context);
+        return new AuthService(db.Auth);
     }
 
     [Fact]

@@ -1,5 +1,5 @@
 using ILD.Core.Services.Interfaces;
-using ILD.Core.DTOs;
+using ILD.Data.DTOs;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ILD.Api.Controllers;

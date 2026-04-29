@@ -2,6 +2,10 @@
 
 PRD.md
 
+## Status
+
+**PENDING**
+
 ## What to build
 
 Build the Human Feedback input UI and retry/cleanup controls. When a WorkItem is in Human Feedback due to a Human node awaiting input, the user can provide text input and choose Continue or Reject. For failed or cancelled WorkItems, the user chooses "Cleanup -> Done" (discard worktree) or "Cleanup -> Backlog" (reset for re-planning).

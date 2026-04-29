@@ -1,8 +1,8 @@
 using System.Security.Cryptography;
-using ILD.Core.DTOs;
-using ILD.Core.Models;
+using ILD.Data.DTOs;
+using ILD.Data.Entities;
+using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
-using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Core.Services.Implementations;
 
@@ -13,17 +13,17 @@ public class AuthService : IAuthService
     private const int HashBytes = 32;
     private const string DefaultUsername = "admin";
 
-    private readonly AppDbContext _db;
+    private readonly IAuthStore _authStore;
 
-    public AuthService(AppDbContext db)
+    public AuthService(IAuthStore authStore)
     {
-        _db = db;
+        _authStore = authStore;
     }
 
     public async Task<AuthResult> LoginAsync(string username, string password)
     {
         var envPassword = Environment.GetEnvironmentVariable("ILD_PASSWORD");
-        var user = await _db.Users.FirstOrDefaultAsync(u => u.Username == username);
+        var user = await _authStore.GetByUsernameAsync(username);
 
         if (user == null && username == DefaultUsername && !string.IsNullOrEmpty(envPassword))
         {
@@ -34,8 +34,7 @@ public class AuthService : IAuthService
                 PasswordHash = HashPassword(envPassword),
                 CreatedAt = DateTime.UtcNow,
             };
-            _db.Users.Add(user);
-            await _db.SaveChangesAsync();
+            await _authStore.CreateUserAsync(user);
         }
 
         if (user == null || !VerifyPassword(password, user.PasswordHash))
@@ -43,30 +42,30 @@ public class AuthService : IAuthService
 
         user.SessionToken = GenerateToken();
         user.UpdatedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync();
+        await _authStore.UpdateUserAsync(user);
 
         return new AuthResult(true, user.SessionToken, user.Username, null);
     }
 
     public async Task LogoutAsync(string sessionId)
     {
-        var user = await _db.Users.FirstOrDefaultAsync(u => u.SessionToken == sessionId);
+        var user = await _authStore.GetBySessionTokenAsync(sessionId);
         if (user == null) return;
         user.SessionToken = null;
         user.UpdatedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync();
+        await _authStore.UpdateUserAsync(user);
     }
 
     public async Task<bool> ValidateSessionAsync(string sessionId)
     {
         if (string.IsNullOrEmpty(sessionId)) return false;
-        return await _db.Users.AnyAsync(u => u.SessionToken == sessionId);
+        return await _authStore.ExistsBySessionTokenAsync(sessionId);
     }
 
     public async Task<string?> GetUsernameAsync(string sessionId)
     {
         if (string.IsNullOrEmpty(sessionId)) return null;
-        var user = await _db.Users.FirstOrDefaultAsync(u => u.SessionToken == sessionId);
+        var user = await _authStore.GetBySessionTokenAsync(sessionId);
         return user?.Username;
     }
 

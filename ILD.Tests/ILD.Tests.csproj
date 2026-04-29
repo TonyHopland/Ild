@@ -11,7 +11,6 @@
     <PackageReference Include="coverlet.collector" Version="6.0.4" />
     <PackageReference Include="FluentAssertions" Version="8.9.0" />
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.7" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.7" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.7" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="Moq" Version="4.20.72" />
@@ -26,6 +25,7 @@
   <ItemGroup>
     <ProjectReference Include="..\ILD.Core\ILD.Core.csproj" />
     <ProjectReference Include="..\ILD.Api\ILD.Api.csproj" />
+    <ProjectReference Include="..\ILD.Data\ILD.Data.csproj" />
   </ItemGroup>
 
 </Project>

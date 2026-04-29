@@ -7,6 +7,7 @@ import {
   Repository,
   RemoteProvider,
   AiProvider,
+  LoopTemplateVersion,
 } from "../types";
 
 interface BackendLoginResponse {
@@ -126,6 +127,21 @@ export const loopTemplateService = {
 
   delete: async (id: string): Promise<void> => {
     return api.delete<void>(`/looptemplates/${id}`);
+  },
+
+  validate: async (data: unknown): Promise<{ valid: boolean }> => {
+    return api.post<{ valid: boolean }>("/looptemplates/validate", data);
+  },
+
+  clone: async (id: string, newName: string): Promise<{ id: string }> => {
+    return api.post<{ id: string }>(
+      `/looptemplates/${id}/clone?newName=${encodeURIComponent(newName)}`,
+      {},
+    );
+  },
+
+  getVersions: async (id: string): Promise<LoopTemplateVersion[]> => {
+    return api.get<LoopTemplateVersion[]>(`/looptemplates/${id}/versions`);
   },
 };
 

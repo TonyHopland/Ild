@@ -2,6 +2,10 @@
 
 PRD.md
 
+## Status
+
+**READY**
+
 ## What to build
 
 Add a Prometheus metrics endpoint at `/metrics` that exposes loop run counts, node execution times, LLM API latency and token usage, and system health metrics. The endpoint outputs in Prometheus text format and is excluded from auth middleware.

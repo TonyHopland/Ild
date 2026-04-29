@@ -191,3 +191,12 @@ export interface SignalRMessage {
   payload: unknown;
   timestamp: string;
 }
+
+export interface LoopTemplateVersion {
+  id: string;
+  loopTemplateId: string;
+  versionNumber: number;
+  createdAt: string;
+  nodeCount: number;
+  edgeCount: number;
+}

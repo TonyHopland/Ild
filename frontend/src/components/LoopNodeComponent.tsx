@@ -53,11 +53,15 @@ export default function LoopNodeComponent({ data }: NodeProps) {
       <Handle
         type="target"
         position={Position.Left}
+        id="target-handle"
+        data-testid="target-handle"
         style={{ background: "#555", borderColor: "#777" }}
       />
       <Handle
         type="source"
         position={Position.Right}
+        id="source-handle"
+        data-testid="source-handle"
         style={{ background: "#555", borderColor: "#777" }}
       />
       <div

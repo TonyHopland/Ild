@@ -1,17 +1,17 @@
-using ILD.Core.Enums;
-using ILD.Core.Models;
+using ILD.Data.Entities;
+using ILD.Data.Enums;
+using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
-using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Core.Services.Implementations;
 
 public class WorkItemManager : IWorkItemManager
 {
-    private readonly AppDbContext _db;
+    private readonly IWorkItemStore _store;
 
-    public WorkItemManager(AppDbContext db)
+    public WorkItemManager(IWorkItemStore store)
     {
-        _db = db;
+        _store = store;
     }
 
     public async Task<Guid> CreateWorkItemAsync(string title, string description, Guid? loopTemplateId, Guid? repositoryId)
@@ -19,17 +19,14 @@ public class WorkItemManager : IWorkItemManager
         if (repositoryId == null)
             throw new InvalidOperationException("RepositoryId is required");
 
-        var repo = await _db.Repositories.FindAsync(repositoryId.Value);
+        var repo = await _store.GetRepositoryAsync(repositoryId.Value);
         if (repo == null)
             throw new InvalidOperationException("Repository not found");
 
         Guid? versionId = null;
         if (loopTemplateId.HasValue)
         {
-            var latest = await _db.LoopTemplateVersions
-                .Where(v => v.LoopTemplateId == loopTemplateId.Value)
-                .OrderByDescending(v => v.VersionNumber)
-                .FirstOrDefaultAsync();
+            var latest = await _store.GetLatestTemplateVersionAsync(loopTemplateId.Value);
             versionId = latest?.Id;
         }
 
@@ -43,16 +40,15 @@ public class WorkItemManager : IWorkItemManager
             RepositoryId = repositoryId.Value,
             LoopTemplateVersionId = versionId,
         };
-        _db.WorkItems.Add(wi);
-        await _db.SaveChangesAsync();
+        await _store.CreateAsync(wi);
         return wi.Id;
     }
 
     public async Task<WorkItem?> GetWorkItemAsync(Guid workItemId)
-        => await _db.WorkItems.FindAsync(workItemId);
+        => await _store.GetByIdAsync(workItemId);
 
     public async Task<IEnumerable<WorkItem>> GetWorkItemsByStatusAsync(WorkItemStatus status)
-        => await _db.WorkItems.Where(w => w.Status == status).ToListAsync();
+        => await _store.GetByStatusAsync(status);
 
     public async Task<bool> TransitionToWorkQueueAsync(Guid workItemId)
     {
@@ -60,7 +56,6 @@ public class WorkItemManager : IWorkItemManager
             from => from == WorkItemStatus.Backlog || from == WorkItemStatus.HumanFeedback);
         if (!ok) return false;
 
-        // Auto-promote to Ready if all dependencies satisfied
         if (await IsReadyAsync(workItemId))
             await TransitionToReadyAsync(workItemId);
         return true;
@@ -79,12 +74,12 @@ public class WorkItemManager : IWorkItemManager
 
     public async Task<bool> TransitionToHumanFeedbackAsync(Guid workItemId, string reason)
     {
-        var wi = await _db.WorkItems.FindAsync(workItemId);
+        var wi = await _store.GetByIdAsync(workItemId);
         if (wi == null) return false;
         wi.Status = WorkItemStatus.HumanFeedback;
         wi.HumanFeedbackReason = reason;
         wi.UpdatedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync();
+        await _store.UpdateAsync(wi);
         return true;
     }
 
@@ -99,88 +94,83 @@ public class WorkItemManager : IWorkItemManager
         if (await WouldCreateCycle(workItemId, dependsOnWorkItemId))
             throw new InvalidOperationException("Adding this dependency would create a cycle.");
 
-        var exists = await _db.WorkItemDependencies
-            .AnyAsync(d => d.WorkItemId == workItemId && d.DependencyWorkItemId == dependsOnWorkItemId);
-        if (exists) return false;
-
-        _db.WorkItemDependencies.Add(new WorkItemDependency
-        {
-            Id = Guid.NewGuid(),
-            WorkItemId = workItemId,
-            DependencyWorkItemId = dependsOnWorkItemId,
-        });
-        await _db.SaveChangesAsync();
-        return true;
+        return await _store.AddDependencyAsync(workItemId, dependsOnWorkItemId);
     }
 
     public async Task<bool> RemoveDependencyAsync(Guid workItemId, Guid dependsOnWorkItemId)
-    {
-        var dep = await _db.WorkItemDependencies
-            .FirstOrDefaultAsync(d => d.WorkItemId == workItemId && d.DependencyWorkItemId == dependsOnWorkItemId);
-        if (dep == null) return false;
-        _db.WorkItemDependencies.Remove(dep);
-        await _db.SaveChangesAsync();
-        return true;
-    }
+        => await _store.RemoveDependencyAsync(workItemId, dependsOnWorkItemId);
 
     public async Task<IEnumerable<WorkItem>> GetDependenciesAsync(Guid workItemId)
     {
-        var ids = await _db.WorkItemDependencies
-            .Where(d => d.WorkItemId == workItemId)
-            .Select(d => d.DependencyWorkItemId)
-            .ToListAsync();
-        return await _db.WorkItems.Where(w => ids.Contains(w.Id)).ToListAsync();
+        var ids = await _store.GetDependencyIdsAsync(workItemId);
+        var idList = ids.ToList();
+        var all = await _store.GetByStatusAsync(WorkItemStatus.Backlog);
+        var result = new List<WorkItem>();
+        foreach (var status in Enum.GetValues<WorkItemStatus>())
+        {
+            foreach (var w in await _store.GetByStatusAsync(status))
+            {
+                if (idList.Contains(w.Id) && !result.Any(r => r.Id == w.Id))
+                    result.Add(w);
+            }
+        }
+        return result;
     }
 
     public async Task<IEnumerable<WorkItem>> GetDependentsAsync(Guid workItemId)
     {
-        var ids = await _db.WorkItemDependencies
-            .Where(d => d.DependencyWorkItemId == workItemId)
-            .Select(d => d.WorkItemId)
-            .ToListAsync();
-        return await _db.WorkItems.Where(w => ids.Contains(w.Id)).ToListAsync();
+        var ids = await _store.GetDependentIdsAsync(workItemId);
+        var idList = ids.ToList();
+        var result = new List<WorkItem>();
+        foreach (var status in Enum.GetValues<WorkItemStatus>())
+        {
+            foreach (var w in await _store.GetByStatusAsync(status))
+            {
+                if (idList.Contains(w.Id) && !result.Any(r => r.Id == w.Id))
+                    result.Add(w);
+            }
+        }
+        return result;
     }
 
     public async Task<bool> IsReadyAsync(Guid workItemId)
     {
-        var depIds = await _db.WorkItemDependencies
-            .Where(d => d.WorkItemId == workItemId)
-            .Select(d => d.DependencyWorkItemId)
-            .ToListAsync();
-        if (depIds.Count == 0) return true;
+        var depIds = await _store.GetDependencyIdsAsync(workItemId);
+        var depIdList = depIds.ToList();
+        if (depIdList.Count == 0) return true;
 
-        var unmergedExists = await _db.WorkItems
-            .Where(w => depIds.Contains(w.Id))
-            .AnyAsync(w => !w.IsPrMerged && w.Status != WorkItemStatus.Done);
-        return !unmergedExists;
+        foreach (var status in Enum.GetValues<WorkItemStatus>())
+        {
+            foreach (var w in await _store.GetByStatusAsync(status))
+            {
+                if (depIdList.Contains(w.Id) && !w.IsPrMerged && w.Status != WorkItemStatus.Done)
+                    return false;
+            }
+        }
+        return true;
     }
 
     public async Task<bool> LinkPullRequestAsync(Guid workItemId, string prUrl)
     {
-        var wi = await _db.WorkItems.FindAsync(workItemId);
+        var wi = await _store.GetByIdAsync(workItemId);
         if (wi == null) return false;
         wi.PrUrl = prUrl;
         wi.UpdatedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync();
+        await _store.UpdateAsync(wi);
         return true;
     }
 
     public async Task<bool> ManuallyMarkMergedAsync(Guid workItemId)
     {
-        var wi = await _db.WorkItems.FindAsync(workItemId);
+        var wi = await _store.GetByIdAsync(workItemId);
         if (wi == null) return false;
         wi.IsPrMerged = true;
         wi.UpdatedAt = DateTime.UtcNow;
 
-        // Only set Done directly if there's no active LoopRun.
-        // When a run is active, the engine handles the transition via Cleanup node.
-        var activeRun = await _db.LoopRuns
-            .FirstOrDefaultAsync(r => r.WorkItemId == workItemId && r.Status == LoopRunStatus.Running);
-
-        if (activeRun == null)
+        if (!await _store.HasRunningRunAsync(workItemId))
             wi.Status = WorkItemStatus.Done;
 
-        await _db.SaveChangesAsync();
+        await _store.UpdateAsync(wi);
 
         var dependents = await GetDependentsAsync(workItemId);
         foreach (var d in dependents)
@@ -193,12 +183,12 @@ public class WorkItemManager : IWorkItemManager
 
     private async Task<bool> SetStatusAsync(Guid id, WorkItemStatus next, Func<WorkItemStatus, bool> isAllowedFrom)
     {
-        var wi = await _db.WorkItems.FindAsync(id);
+        var wi = await _store.GetByIdAsync(id);
         if (wi == null) return false;
         if (!isAllowedFrom(wi.Status)) return false;
         wi.Status = next;
         wi.UpdatedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync();
+        await _store.UpdateAsync(wi);
         return true;
     }
 
@@ -212,10 +202,7 @@ public class WorkItemManager : IWorkItemManager
             var cur = stack.Pop();
             if (!visited.Add(cur)) continue;
             if (cur == workItemId) return true;
-            var nextDeps = await _db.WorkItemDependencies
-                .Where(d => d.WorkItemId == cur)
-                .Select(d => d.DependencyWorkItemId)
-                .ToListAsync();
+            var nextDeps = await _store.GetDependencyIdsAsync(cur);
             foreach (var n in nextDeps) stack.Push(n);
         }
         return false;

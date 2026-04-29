@@ -1,5 +1,5 @@
-using ILD.Core.Models;
-using ILD.Core.DTOs;
+using ILD.Data.Entities;
+using ILD.Data.DTOs;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 

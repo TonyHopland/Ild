@@ -1,6 +1,6 @@
 using ILD.Core.Services.Interfaces;
-using ILD.Core.DTOs;
-using ILD.Core.Models;
+using ILD.Data.DTOs;
+using ILD.Data.Entities;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -32,7 +32,7 @@ public class RemoteProvidersController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] RemoteProviderDto request)
     {
-        var p = new ILD.Core.Models.RemoteProvider
+        var p = new ILD.Data.Entities.RemoteProvider
         {
             Id = Guid.NewGuid(),
             Name = request.Name,

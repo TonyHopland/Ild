@@ -1,5 +1,5 @@
 using ILD.Api.Hubs;
-using ILD.Core.Enums;
+using ILD.Data.Enums;
 using ILD.Core.Services.Interfaces;
 using Microsoft.AspNetCore.SignalR;
 

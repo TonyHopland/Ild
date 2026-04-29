@@ -2,6 +2,10 @@
 
 PRD.md
 
+## Status
+
+**READY**
+
 ## What to build
 
 Build an Event Log viewer page that displays the append-only event stream for a LoopRun. Events show timestamp, event type, node reference, and message. For AI node events, the AI context used is expandable. Pagination uses cursor-based navigation instead of skip/take.

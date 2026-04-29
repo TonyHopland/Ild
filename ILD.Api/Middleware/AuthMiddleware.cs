@@ -1,6 +1,6 @@
-using ILD.Core.DTOs;
-using ILD.Core.Enums;
-using ILD.Core.Models;
+using ILD.Data.DTOs;
+using ILD.Data.Enums;
+using ILD.Data.Entities;
 using System.Net;
 using System.Text.Json;
 using ILD.Core.Services.Interfaces;

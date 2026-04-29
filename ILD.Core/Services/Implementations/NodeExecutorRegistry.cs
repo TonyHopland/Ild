@@ -1,4 +1,4 @@
-using ILD.Core.Enums;
+using ILD.Data.Enums;
 using ILD.Core.Services.Interfaces;
 
 namespace ILD.Core.Services.Implementations;

@@ -1,26 +1,27 @@
-using ILD.Core.DTOs;
-using ILD.Core.Enums;
-using ILD.Core.Models;
+using ILD.Data.DTOs;
+using ILD.Data.Entities;
+using ILD.Data.Enums;
+using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
-using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Core.Services.Implementations;
 
 public class EventLogService : IEventLogService
 {
-    private readonly AppDbContext _db;
+    private readonly IEventLogStore _eventLogStore;
+    private readonly ILoopRunStore _loopRunStore;
     private readonly EventLogOptions _options;
     private static readonly SemaphoreSlim _seqLock = new(1, 1);
 
-    public EventLogService(AppDbContext db, EventLogOptions? options = null)
+    public EventLogService(IEventLogStore eventLogStore, ILoopRunStore loopRunStore, EventLogOptions? options = null)
     {
-        _db = db;
+        _eventLogStore = eventLogStore;
+        _loopRunStore = loopRunStore;
         _options = options ?? new EventLogOptions();
     }
 
-    // Test convenience overload
-    public EventLogService(AppDbContext db, string payloadDirectory)
-        : this(db, new EventLogOptions { PayloadDirectory = payloadDirectory })
+    public EventLogService(IEventLogStore eventLogStore, ILoopRunStore loopRunStore, string payloadDirectory)
+        : this(eventLogStore, loopRunStore, new EventLogOptions { PayloadDirectory = payloadDirectory })
     {
     }
 
@@ -32,12 +33,8 @@ public class EventLogService : IEventLogService
         await _seqLock.WaitAsync();
         try
         {
-            var lastSequence = await _db.EventLogs
-                .Where(e => e.LoopRunId == runId)
-                .OrderByDescending(e => e.Sequence)
-                .Select(e => (int?)e.Sequence)
-                .FirstOrDefaultAsync() ?? 0;
-
+            var existing = await _eventLogStore.GetByRunIdAsync(runId);
+            var lastSequence = existing.Any() ? existing.Max(e => e.Sequence) : 0;
             var nextSequence = lastSequence + 1;
 
             string? finalPayloadPath = payloadPath;
@@ -63,8 +60,7 @@ public class EventLogService : IEventLogService
                 Data = data
             };
 
-            _db.EventLogs.Add(entry);
-            await _db.SaveChangesAsync();
+            await _eventLogStore.AppendAsync(entry);
 
             return nextSequence;
         }
@@ -76,16 +72,13 @@ public class EventLogService : IEventLogService
 
     public async Task<IEnumerable<EventLogEntry>> GetByRunIdAsync(Guid runId, int? limit = null)
     {
-        var q = _db.EventLogs
-            .Where(e => e.LoopRunId == runId)
-            .OrderBy(e => e.Sequence)
-            .AsQueryable();
+        var entries = await _eventLogStore.GetByRunIdAsync(runId);
+        var list = entries.ToList();
 
         if (limit.HasValue)
-            q = q.Take(limit.Value);
+            list = list.Take(limit.Value).ToList();
 
-        var results = await q.ToListAsync();
-        return results.Select(e => new EventLogEntry(
+        return list.Select(e => new EventLogEntry(
             e.LoopRunId,
             e.EventType.ToString(),
             e.Data ?? string.Empty,
@@ -94,8 +87,7 @@ public class EventLogService : IEventLogService
 
     public async Task<EventLogEntry?> GetBySequenceAsync(Guid runId, long sequence)
     {
-        var entry = await _db.EventLogs
-            .FirstOrDefaultAsync(e => e.LoopRunId == runId && e.Sequence == sequence);
+        var entry = await _eventLogStore.GetBySequenceAsync(runId, (int)sequence);
         return entry == null ? null : new EventLogEntry(entry.LoopRunId, entry.EventType.ToString(), entry.Data ?? string.Empty, entry.PayloadPath);
     }
 
@@ -103,14 +95,12 @@ public class EventLogService : IEventLogService
     {
         var cutoff = before.UtcDateTime;
 
-        var failedRunIds = await _db.LoopRuns
-            .Where(r => r.Status == LoopRunStatus.Failed)
-            .Select(r => (Guid?)r.Id)
-            .ToListAsync();
+        var failedRunIds = (await _loopRunStore.GetFailedRunIdsAsync()).ToHashSet();
 
-        var toRemove = await _db.EventLogs
-            .Where(e => e.Timestamp < cutoff && (e.LoopRunId == null || !failedRunIds.Contains(e.LoopRunId)))
-            .ToListAsync();
+        var older = await _eventLogStore.GetOlderThanAsync(before);
+        var toRemove = older
+            .Where(e => e.LoopRunId == null || !failedRunIds.Contains(e.LoopRunId.Value))
+            .ToList();
 
         foreach (var entry in toRemove)
         {
@@ -120,14 +110,14 @@ public class EventLogService : IEventLogService
             }
         }
 
-        _db.EventLogs.RemoveRange(toRemove);
-        await _db.SaveChangesAsync();
+        await _eventLogStore.RemoveRangeAsync(toRemove);
         return toRemove.Count;
     }
 
     public async Task<string?> GetPayloadPathAsync(long eventLogId)
     {
-        var match = await _db.EventLogs.FirstOrDefaultAsync(e => e.Sequence == (int)eventLogId);
-        return match?.PayloadPath;
+        var match = await _eventLogStore.GetByRunIdAsync(Guid.Empty);
+        var found = match.FirstOrDefault(e => e.Sequence == (int)eventLogId);
+        return found?.PayloadPath;
     }
 }

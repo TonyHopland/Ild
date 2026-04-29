@@ -1,18 +1,18 @@
-using ILD.Core.DTOs;
-using ILD.Core.Enums;
-using ILD.Core.Models;
+using ILD.Data.DTOs;
+using ILD.Data.Entities;
+using ILD.Data.Enums;
+using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
-using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Core.Services.Implementations;
 
 public class LoopTemplateManager : ILoopTemplateManager
 {
-    private readonly AppDbContext _db;
+    private readonly ILoopTemplateStore _store;
 
-    public LoopTemplateManager(AppDbContext db)
+    public LoopTemplateManager(ILoopTemplateStore store)
     {
-        _db = db;
+        _store = store;
     }
 
     public async Task<Guid> CreateLoopTemplateAsync(string name, string description, LoopTemplateGraph graph)
@@ -30,22 +30,21 @@ public class LoopTemplateManager : ILoopTemplateManager
             MaxNodeExecutions = 200,
             MaxWallClockHours = 24,
         };
-        _db.LoopTemplates.Add(template);
+        await _store.CreateTemplateAsync(template);
 
-        AddVersionFromGraph(template.Id, 1, graph);
+        await AddVersionFromGraph(template.Id, 1, graph);
 
-        await _db.SaveChangesAsync();
         return template.Id;
     }
 
     public async Task<LoopTemplate?> GetLoopTemplateAsync(Guid templateId)
-        => await _db.LoopTemplates.Include(t => t.Versions).FirstOrDefaultAsync(t => t.Id == templateId);
+        => await _store.GetByIdAsync(templateId);
 
     public async Task<LoopTemplate?> GetLatestVersionAsync(Guid templateId)
-        => await _db.LoopTemplates.Include(t => t.Versions).FirstOrDefaultAsync(t => t.Id == templateId);
+        => await _store.GetByIdAsync(templateId);
 
     public async Task<IEnumerable<LoopTemplate>> GetAllLoopTemplatesAsync()
-        => await _db.LoopTemplates.Include(t => t.Versions).ToListAsync();
+        => await _store.GetAllAsync();
 
     public async Task<Guid> UpdateLoopTemplateAsync(Guid templateId, string name, string description, LoopTemplateGraph graph)
     {
@@ -53,57 +52,51 @@ public class LoopTemplateManager : ILoopTemplateManager
         if (errors.Count > 0)
             throw new InvalidOperationException("Invalid loop template graph: " + string.Join("; ", errors));
 
-        var template = await _db.LoopTemplates.FirstOrDefaultAsync(t => t.Id == templateId)
+        var template = await _store.GetByIdAsync(templateId)
             ?? throw new InvalidOperationException($"Template {templateId} not found");
 
         template.Name = name;
         template.Description = description;
         template.UpdatedAt = DateTime.UtcNow;
+        await _store.UpdateTemplateAsync(template);
 
-        var nextVersion = (await _db.LoopTemplateVersions.Where(v => v.LoopTemplateId == templateId).MaxAsync(v => (int?)v.VersionNumber) ?? 0) + 1;
-        AddVersionFromGraph(templateId, nextVersion, graph);
+        var nextVersion = await _store.GetNextVersionNumberAsync(templateId);
+        await AddVersionFromGraph(templateId, nextVersion, graph);
 
-        await _db.SaveChangesAsync();
         return templateId;
     }
 
     public async Task<Guid> CloneLoopTemplateAsync(Guid sourceTemplateId, string newName)
     {
-        var src = await _db.LoopTemplates
-            .Include(t => t.Versions)
-            .FirstOrDefaultAsync(t => t.Id == sourceTemplateId)
+        var src = await _store.GetByIdAsync(sourceTemplateId)
             ?? throw new InvalidOperationException($"Template {sourceTemplateId} not found");
 
-        var latest = src.Versions.OrderByDescending(v => v.VersionNumber).First();
+        var latest = await _store.GetLatestVersionAsync(sourceTemplateId);
+        if (latest == null)
+            throw new InvalidOperationException($"No versions found for template {sourceTemplateId}");
 
         var graph = await BuildGraphFromVersion(latest);
         return await CreateLoopTemplateAsync(newName, src.Description ?? string.Empty, graph);
     }
 
     public async Task<LoopTemplateVersion> GetVersionAsync(Guid templateId, int version)
-        => await _db.LoopTemplateVersions
-            .Include(v => v.Nodes)
-            .FirstOrDefaultAsync(v => v.LoopTemplateId == templateId && v.VersionNumber == version)
+        => await _store.GetVersionAsync(templateId, version)
             ?? throw new InvalidOperationException($"Version {version} not found for template {templateId}");
 
     public async Task<IEnumerable<LoopTemplateVersion>> GetVersionsAsync(Guid templateId)
-        => await _db.LoopTemplateVersions
-            .Where(v => v.LoopTemplateId == templateId)
-            .OrderBy(v => v.VersionNumber)
-            .ToListAsync();
+        => await _store.GetVersionsAsync(templateId);
 
     public Task<bool> ValidateGraphAsync(LoopTemplateGraph graph)
         => Task.FromResult(LoopTemplateValidator.Validate(graph).Count == 0);
 
     public async Task DeleteLoopTemplateAsync(Guid templateId)
     {
-        var template = await _db.LoopTemplates.FindAsync(templateId);
+        var template = await _store.GetByIdAsync(templateId);
         if (template == null) return;
-        _db.LoopTemplates.Remove(template);
-        await _db.SaveChangesAsync();
+        await _store.DeleteTemplateAsync(template);
     }
 
-    private void AddVersionFromGraph(Guid templateId, int versionNumber, LoopTemplateGraph graph)
+    private async Task AddVersionFromGraph(Guid templateId, int versionNumber, LoopTemplateGraph graph)
     {
         var version = new LoopTemplateVersion
         {
@@ -111,11 +104,11 @@ public class LoopTemplateManager : ILoopTemplateManager
             LoopTemplateId = templateId,
             VersionNumber = versionNumber,
         };
-        _db.LoopTemplateVersions.Add(version);
+        await _store.CreateVersionAsync(version);
 
         var idMap = new Dictionary<string, Guid>();
 
-        foreach (var n in graph.Nodes)
+        var nodes = graph.Nodes.Select(n =>
         {
             var nodeId = Guid.NewGuid();
             idMap[n.Id] = nodeId;
@@ -123,7 +116,7 @@ public class LoopTemplateManager : ILoopTemplateManager
             if (!Enum.TryParse<NodeType>(n.NodeType, ignoreCase: true, out var type))
                 type = NodeType.Cmd;
 
-            _db.LoopNodes.Add(new LoopNode
+            return new LoopNode
             {
                 Id = nodeId,
                 LoopTemplateVersionId = version.Id,
@@ -132,36 +125,38 @@ public class LoopTemplateManager : ILoopTemplateManager
                 Config = System.Text.Json.JsonSerializer.Serialize(n.Config),
                 MaxRetries = n.RetryCount ?? 0,
                 TimeoutSeconds = n.TimeoutSeconds ?? 300,
-            });
-        }
+            };
+        }).ToList();
 
-        foreach (var e in graph.Edges)
+        await _store.CreateNodesAsync(nodes);
+
+        var edges = graph.Edges.Select(e =>
         {
-            if (!idMap.TryGetValue(e.SourceNodeId, out var srcId)) continue;
-            if (!idMap.TryGetValue(e.TargetNodeId, out var tgtId)) continue;
+            if (!idMap.TryGetValue(e.SourceNodeId, out var srcId)) return null;
+            if (!idMap.TryGetValue(e.TargetNodeId, out var tgtId)) return null;
 
             var edgeType = string.Equals(e.EdgeType, "OnFailure", StringComparison.OrdinalIgnoreCase) ? EdgeType.OnFailure : EdgeType.OnSuccess;
-
             var srcDto = graph.Nodes.First(n => n.Id == e.SourceNodeId);
 
-            _db.LoopNodeEdges.Add(new LoopNodeEdge
+            return new LoopNodeEdge
             {
                 Id = Guid.NewGuid(),
                 SourceNodeId = srcId,
                 TargetNodeId = tgtId,
                 EdgeType = edgeType,
                 MaxTraversals = srcDto.MaxTraversals,
-            });
-        }
+            };
+        }).Where(e => e != null).Cast<LoopNodeEdge>().ToList();
+
+        if (edges.Count > 0)
+            await _store.CreateEdgesAsync(edges);
     }
 
     private async Task<LoopTemplateGraph> BuildGraphFromVersion(LoopTemplateVersion v)
     {
-        var nodes = await _db.LoopNodes.Where(n => n.LoopTemplateVersionId == v.Id).ToListAsync();
-        var nodeIdSet = nodes.Select(n => n.Id).ToList();
-        var edges = await _db.LoopNodeEdges.Where(e => nodeIdSet.Contains(e.SourceNodeId)).ToListAsync();
+        var nodes = await _store.GetNodesForVersionAsync(v.Id);
+        var edges = await _store.GetEdgesForVersionAsync(v.Id);
 
-        // Map back DB node guid -> short id (use guid string for stable round-trip)
         var nodeDtos = nodes.Select(n => new LoopNodeDto
         {
             Id = n.Id.ToString(),

@@ -1,7 +1,7 @@
 using ILD.Core.Services.Interfaces;
-using ILD.Core.DTOs;
-using ILD.Core.Enums;
-using ILD.Core.Models;
+using ILD.Data.DTOs;
+using ILD.Data.Enums;
+using ILD.Data.Entities;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -173,15 +173,15 @@ public class WorkItemsController : ControllerBase
 
         // If there's an active LoopRun, signal the engine to resume via Cleanup
         var activeRun = await _db.LoopRuns
-            .FirstOrDefaultAsync(r => r.WorkItemId == guid && r.Status == ILD.Core.Enums.LoopRunStatus.Running);
+            .FirstOrDefaultAsync(r => r.WorkItemId == guid && r.Status == ILD.Data.Enums.LoopRunStatus.Running);
 
         if (activeRun != null)
         {
             var prRunNode = await _db.LoopRunNodes
                 .FirstOrDefaultAsync(n =>
                     n.LoopRunId == activeRun.Id &&
-                    n.LoopNode.NodeType == ILD.Core.Enums.NodeType.PR &&
-                    n.Status == ILD.Core.Enums.LoopRunNodeStatus.WaitingHuman);
+                    n.LoopNode.NodeType == ILD.Data.Enums.NodeType.PR &&
+                    n.Status == ILD.Data.Enums.LoopRunNodeStatus.WaitingHuman);
 
             if (prRunNode != null)
             {

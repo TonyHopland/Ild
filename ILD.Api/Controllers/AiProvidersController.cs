@@ -1,6 +1,6 @@
 using ILD.Core.Services.Interfaces;
-using ILD.Core.DTOs;
-using ILD.Core.Models;
+using ILD.Data.DTOs;
+using ILD.Data.Entities;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 

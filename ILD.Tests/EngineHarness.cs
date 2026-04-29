@@ -1,24 +1,24 @@
 using FluentAssertions;
-using ILD.Core.Enums;
-using ILD.Core.Models;
+using ILD.Data.Enums;
+using ILD.Data.Entities;
+using ILD.Data.Stores;
+using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Tests;
 
-/// <summary>
-/// Engine-test scaffolding: builds a minimal DB graph and provides
-/// a fake executor registry so tests can assert end-to-end engine behaviour.
-/// </summary>
 internal sealed class EngineHarness : IDisposable
 {
     public TestDb Db { get; }
+    public IServiceProvider ServiceProvider { get; }
     public LoopEngine Engine { get; }
     public Dictionary<NodeType, FakeExecutor> Fakes { get; } = new();
     public Guid WorkItemId { get; private set; }
     public Guid RunId { get; private set; }
-    public Dictionary<string, LoopNode> NodesById { get; } = new(); // user-supplied node label
+    public Dictionary<string, LoopNode> NodesById { get; } = new();
     public Dictionary<string, LoopNodeEdge> EdgesById { get; } = new();
 
     public EngineHarness()
@@ -29,13 +29,26 @@ internal sealed class EngineHarness : IDisposable
             Fakes[type] = new FakeExecutor(type);
 
         var registry = new NodeExecutorRegistry(Fakes.Values);
-        Engine = new LoopEngine(() => Db.Fresh(), registry, new NoopRunNotifier());
+
+        var services = new ServiceCollection();
+        services.AddSingleton<INodeExecutorRegistry>(registry);
+        services.AddSingleton<IRunNotifier, NoopRunNotifier>();
+        services.AddSingleton<LoopEngine>();
+        services.AddSingleton<IWorkItemStore>(Db.WorkItems);
+        services.AddSingleton<ILoopRunStore>(Db.LoopRuns);
+        services.AddSingleton<ILoopTemplateStore>(Db.LoopTemplates);
+        services.AddSingleton<IProviderStore>(Db.Providers);
+        services.AddSingleton<IEventLogStore>(Db.EventLogs);
+        services.AddSingleton<IAuthStore>(Db.Auth);
+
+        ServiceProvider = services.BuildServiceProvider();
+        Engine = ServiceProvider.GetRequiredService<LoopEngine>();
     }
 
     public void BuildSimpleGraph(params (string id, NodeType type)[] nodes)
     {
-        var remote = new ILD.Core.Models.RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
-        var repo = new ILD.Core.Models.Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/r.git" };
+        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/r.git" };
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = "AutoResume", MaxNodeExecutions = 200, MaxWallClockHours = 24 };
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
 
@@ -55,6 +68,7 @@ internal sealed class EngineHarness : IDisposable
         var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = wi.Id, LoopTemplateVersionId = version.Id, RecoveryPolicy = "AutoResume", Status = LoopRunStatus.Running };
         Db.Context.WorkItems.Add(wi);
         Db.Context.LoopRuns.Add(run);
+        Db.Context.SaveChanges();
         WorkItemId = wi.Id;
         RunId = run.Id;
     }

@@ -1,4 +1,5 @@
-using ILD.Core.Models;
+using ILD.Data;
+using ILD.Data.Entities;
 using ILD.Api.Configuration;
 using ILD.Api.Middleware;
 using ILD.Api.Hubs;
@@ -31,7 +32,7 @@ try
     if (!Directory.Exists(worktreesPath))
         Directory.CreateDirectory(worktreesPath);
 
-    builder.Services.AddDbContext<AppDbContext>(options =>
+    builder.Services.AddDataLayer(options =>
     {
         var dbPath = Path.Combine(dataPath, "ild.db");
         options.UseSqlite($"Data Source={dbPath}");
@@ -71,8 +72,9 @@ try
         dbContext.Database.EnsureCreated();
         Log.Information("Database ensured at {DataPath}", Path.Combine(dataPath, "ild.db"));
 
+        var templateStore = scope.ServiceProvider.GetRequiredService<ILD.Data.Stores.Interfaces.ILoopTemplateStore>();
         var mgr = scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Interfaces.ILoopTemplateManager>();
-        await ILD.Api.Configuration.TemplateSeeder.SeedAsync(dbContext, mgr);
+        await ILD.Api.Configuration.TemplateSeeder.SeedAsync(templateStore, mgr);
 
         // Best-effort recovery: any LoopRun left in Running across restart
         var recovery = scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Interfaces.IRecoveryManager>();

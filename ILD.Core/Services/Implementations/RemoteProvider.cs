@@ -1,9 +1,9 @@
 using System.Net.Http.Json;
 using System.Text.Json;
-using ILD.Core.DTOs;
-using ILD.Core.Models;
+using ILD.Data.DTOs;
+using ILD.Data.Entities;
+using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
-using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Core.Services.Implementations;
 
@@ -11,14 +11,14 @@ namespace ILD.Core.Services.Implementations;
 /// Forgejo / Gitea REST API client. Repo URL is expected to be
 /// "https://host/owner/repo" or "https://host/owner/repo.git".
 /// </summary>
-public class RemoteProvider : IRemoteProvider
+public class RemoteProviderService : IRemoteProvider
 {
-    private readonly AppDbContext _db;
+    private readonly IProviderStore _providerStore;
     private readonly HttpClient _http;
 
-    public RemoteProvider(AppDbContext db, HttpClient http)
+    public RemoteProviderService(IProviderStore providerStore, HttpClient http)
     {
-        _db = db;
+        _providerStore = providerStore;
         _http = http;
     }
 
@@ -128,17 +128,15 @@ public class RemoteProvider : IRemoteProvider
 
     private async Task<(string? apiBase, string? owner, string? repo)> ResolveAsync(string repoUrl)
     {
-        var providers = await _db.RemoteProviders.ToListAsync();
+        var providers = await _providerStore.GetAllRemoteProvidersAsync();
         var match = providers.FirstOrDefault(p => repoUrl.StartsWith(p.Url, StringComparison.OrdinalIgnoreCase));
         if (match == null) return (null, null, null);
 
-        // Parse owner/repo from path part of repoUrl.
         var path = repoUrl.Substring(match.Url.Length).TrimStart('/');
         if (path.EndsWith(".git", StringComparison.OrdinalIgnoreCase)) path = path[..^4];
         var parts = path.Split('/', 2);
         if (parts.Length < 2) return (null, null, null);
 
-        // Configure auth for this call.
         if (!string.IsNullOrEmpty(match.ApiKey) && _http.DefaultRequestHeaders.Authorization == null)
             _http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("token", match.ApiKey);
 

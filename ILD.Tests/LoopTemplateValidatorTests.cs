@@ -1,5 +1,5 @@
 using FluentAssertions;
-using ILD.Core.DTOs;
+using ILD.Data.DTOs;
 using ILD.Core.Services.Implementations;
 
 namespace ILD.Tests;

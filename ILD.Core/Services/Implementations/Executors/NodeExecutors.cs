@@ -1,6 +1,7 @@
 using System.Diagnostics;
-using ILD.Core.Enums;
-using ILD.Core.Models;
+using ILD.Data.Entities;
+using ILD.Data.Enums;
+using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -10,20 +11,23 @@ public sealed class StartNodeExecutor : INodeExecutor
 {
     public NodeType NodeType => NodeType.Start;
     private readonly IRepositoryManager _repo;
-    private readonly Func<AppDbContext> _dbFactory;
+    private readonly IServiceProvider _sp;
 
-    public StartNodeExecutor(IRepositoryManager repo, Func<AppDbContext> dbFactory)
+    public StartNodeExecutor(IRepositoryManager repo, IServiceProvider sp)
     {
         _repo = repo;
-        _dbFactory = dbFactory;
+        _sp = sp;
     }
 
     public async Task<NodeExecutionResult> ExecuteAsync(NodeExecutionContext ctx)
     {
-        await using var db = _dbFactory();
-        var wi = await db.WorkItems.FindAsync(ctx.WorkItem.Id);
+        using var scope = _sp.CreateScope();
+        var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
+        var providerStore = scope.ServiceProvider.GetRequiredService<IProviderStore>();
+
+        var wi = await workItemStore.GetByIdAsync(ctx.WorkItem.Id);
         if (wi == null) return NodeExecutionResult.Fail("WorkItem not found");
-        var repo = await db.Repositories.FindAsync(wi.RepositoryId);
+        var repo = await providerStore.GetRepositoryByIdAsync(wi.RepositoryId);
         if (repo == null) return NodeExecutionResult.Ok("no repository attached; skipping worktree");
 
         if (string.IsNullOrEmpty(wi.WorktreePath) || !Directory.Exists(wi.WorktreePath))
@@ -32,7 +36,7 @@ public sealed class StartNodeExecutor : INodeExecutor
             var path = await _repo.CreateWorktreeAsync(repo.WorktreesPath ?? Path.GetDirectoryName(repo.CloneUrl) ?? ".", branch);
             wi.WorktreePath = path;
             wi.BranchName = branch;
-            await db.SaveChangesAsync();
+            await workItemStore.UpdateAsync(wi);
         }
         return NodeExecutionResult.Ok($"worktree={wi.WorktreePath}");
     }
@@ -112,7 +116,7 @@ public sealed class AINodeExecutor : INodeExecutor
 
             using var scope = _sp.CreateScope();
             var ai = scope.ServiceProvider.GetRequiredService<IAIProviderService>();
-            var rendered = await ai.RenderPromptAsync(prompt, new DTOs.LoopRunContext(
+            var rendered = await ai.RenderPromptAsync(prompt, new ILD.Data.DTOs.LoopRunContext(
                 ctx.Run.Id,
                 ctx.WorkItem.Id,
                 ctx.WorkItem.Title,
@@ -131,7 +135,6 @@ public sealed class AINodeExecutor : INodeExecutor
 public sealed class HumanNodeExecutor : INodeExecutor
 {
     public NodeType NodeType => NodeType.Human;
-    // The engine special-cases human nodes; this is a defensive fallback.
     public Task<NodeExecutionResult> ExecuteAsync(NodeExecutionContext ctx)
         => Task.FromResult(NodeExecutionResult.Ok("waiting human"));
 }
@@ -140,26 +143,27 @@ public sealed class CleanupNodeExecutor : INodeExecutor
 {
     public NodeType NodeType => NodeType.Cleanup;
     private readonly IRepositoryManager _repo;
-    private readonly Func<AppDbContext> _dbFactory;
+    private readonly IServiceProvider _sp;
 
-    public CleanupNodeExecutor(IRepositoryManager repo, Func<AppDbContext> dbFactory)
+    public CleanupNodeExecutor(IRepositoryManager repo, IServiceProvider sp)
     {
         _repo = repo;
-        _dbFactory = dbFactory;
+        _sp = sp;
     }
 
     public async Task<NodeExecutionResult> ExecuteAsync(NodeExecutionContext ctx)
     {
-        await using var db = _dbFactory();
-        var wi = await db.WorkItems.FindAsync(ctx.WorkItem.Id);
+        using var scope = _sp.CreateScope();
+        var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
+
+        var wi = await workItemStore.GetByIdAsync(ctx.WorkItem.Id);
         if (wi == null) return NodeExecutionResult.Fail("WorkItem not found");
 
         if (!string.IsNullOrEmpty(wi.WorktreePath) && Directory.Exists(wi.WorktreePath))
         {
             try { await _repo.DestroyWorktreeAsync(wi.WorktreePath); } catch { }
         }
-        // WorkItem stays in Running until PR merge sync transitions it.
-        await db.SaveChangesAsync();
+        await workItemStore.UpdateAsync(wi);
         return NodeExecutionResult.Ok("cleanup complete");
     }
 }

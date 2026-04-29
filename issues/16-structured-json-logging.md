@@ -2,6 +2,10 @@
 
 PRD.md
 
+## Status
+
+**READY**
+
 ## What to build
 
 Switch Serilog to structured JSON console output and add runtime log level control. Logs are emitted as parseable JSON objects. An API endpoint and Settings UI control allow changing the log level at runtime without restarting the container.

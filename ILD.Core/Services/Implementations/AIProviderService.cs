@@ -2,10 +2,10 @@ using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using ILD.Core.DTOs;
-using ILD.Core.Models;
+using ILD.Data.DTOs;
+using ILD.Data.Entities;
+using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
-using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Core.Services.Implementations;
 
@@ -14,14 +14,14 @@ namespace ILD.Core.Services.Implementations;
 /// </summary>
 public class AIProviderService : IAIProviderService
 {
-    private readonly AppDbContext _db;
+    private readonly IProviderStore _providerStore;
     private readonly HttpClient _http;
 
     private static readonly Regex Placeholder = new(@"\{\{\s*([A-Za-z][A-Za-z0-9_.:/\\-]*)\s*\}\}", RegexOptions.Compiled);
 
-    public AIProviderService(AppDbContext db, HttpClient http)
+    public AIProviderService(IProviderStore providerStore, HttpClient http)
     {
-        _db = db;
+        _providerStore = providerStore;
         _http = http;
     }
 
@@ -87,7 +87,6 @@ public class AIProviderService : IAIProviderService
 
     public Task<bool> ValidatePromptTemplateAsync(string template)
     {
-        // Reuse known placeholders set; reject unknown names that don't have a colon prefix wildcard.
         var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "WorkItem.Title","WorkItem.Description","WorkTree.Diff",
@@ -103,7 +102,7 @@ public class AIProviderService : IAIProviderService
     }
 
     public async Task<IEnumerable<string>> GetAvailableProvidersAsync()
-        => await _db.AiProviders.Select(p => p.Name).ToListAsync();
+        => await _providerStore.GetAiProviderNamesAsync();
 
     public Task<IEnumerable<string>> GetAvailableToolsAsync()
         => Task.FromResult<IEnumerable<string>>(new[]
@@ -149,11 +148,11 @@ public class AIProviderService : IAIProviderService
     private async Task<AiProvider?> ResolveProviderAsync(string? providerId)
     {
         if (Guid.TryParse(providerId, out var id))
-            return await _db.AiProviders.FindAsync(id);
+            return await _providerStore.GetAiProviderByIdAsync(id);
         if (!string.IsNullOrEmpty(providerId))
-            return await _db.AiProviders.FirstOrDefaultAsync(p => p.Name == providerId);
-        return await _db.AiProviders.FirstOrDefaultAsync(p => p.IsDefault)
-            ?? await _db.AiProviders.FirstOrDefaultAsync();
+            return await _providerStore.GetAiProviderByNameAsync(providerId);
+        return await _providerStore.GetDefaultAiProviderAsync()
+            ?? await _providerStore.GetFirstAiProviderAsync();
     }
 
     private static string? SafePath(string root, string relative)

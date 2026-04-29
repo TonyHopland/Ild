@@ -1,9 +1,11 @@
 using FluentAssertions;
-using ILD.Core.DTOs;
-using ILD.Core.Enums;
-using ILD.Core.Models;
+using ILD.Data.DTOs;
+using ILD.Data.Enums;
+using ILD.Data.Entities;
+using ILD.Data.Stores;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
 namespace ILD.Tests;
@@ -38,7 +40,12 @@ public class PRNodeExecutorTests
         mockRemote.Setup(r => r.CreatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
             .ReturnsAsync(new RemotePrResult(prUrl, prUrl, RemotePrStatus.Open, null));
 
-        var executor = new PRNodeExecutor(mockRemote.Object, () => db.Fresh());
+        var services = new ServiceCollection();
+        services.AddSingleton(mockRemote.Object);
+        services.AddSingleton(db.WorkItems);
+        var sp = services.BuildServiceProvider();
+
+        var executor = new PRNodeExecutor(sp);
 
         var runNode = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = run.Id, LoopNodeId = node.Id };
         var ctx = new NodeExecutionContext(run, runNode, node, wi, null, CancellationToken.None);
@@ -75,7 +82,12 @@ public class PRNodeExecutorTests
 
         var mockRemote = new Mock<IRemoteProvider>();
 
-        var executor = new PRNodeExecutor(mockRemote.Object, () => db.Fresh());
+        var services = new ServiceCollection();
+        services.AddSingleton(mockRemote.Object);
+        services.AddSingleton(db.WorkItems);
+        var sp = services.BuildServiceProvider();
+
+        var executor = new PRNodeExecutor(sp);
 
         var runNode = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = run.Id, LoopNodeId = node.Id };
         var ctx = new NodeExecutionContext(run, runNode, node, wi, null, CancellationToken.None);

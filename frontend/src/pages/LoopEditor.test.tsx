@@ -272,11 +272,11 @@ describe("Loop Editor canvas", () => {
       expect(screen.getByText("Initialize")).toBeTruthy();
     });
 
-    // Each node should have a type badge showing its type
-    expect(screen.getByText(NodeType.Start)).toBeTruthy();
-    expect(screen.getByText(NodeType.AI)).toBeTruthy();
-    expect(screen.getByText(NodeType.Cmd)).toBeTruthy();
-    expect(screen.getByText(NodeType.Cleanup)).toBeTruthy();
+    // Each node should have a type badge showing its type (at least 2: palette + node badge)
+    expect(screen.getAllByText(NodeType.Start).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText(NodeType.AI).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText(NodeType.Cmd).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText(NodeType.Cleanup).length).toBeGreaterThanOrEqual(2);
   });
 
   test("edges are rendered between nodes", async () => {
@@ -341,5 +341,405 @@ describe("Loop Editor canvas", () => {
     const failureEdge = edges.find((e) => e.id === "e-2");
     expect(failureEdge?.style?.stroke).toBe("#ef4444");
     expect(failureEdge?.style?.strokeDasharray).toBe("8 4");
+  });
+});
+
+describe("Loop Editor template clone", () => {
+  test("clicking clone sends POST to clone endpoint with new name", async () => {
+    const fetchCalls: Array<{ url: string; method: string }> = [];
+
+    const trackingFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      const method = (init?.method as string) ?? "GET";
+      fetchCalls.push({ url: String(url), method });
+
+      if (method === "GET" && url.includes("looptemplates")) {
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([sampleTemplate])),
+        };
+      }
+
+      if (method === "POST" && url.includes("clone")) {
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify({ id: "cloned-template-id" })),
+        };
+      }
+
+      return { ok: false, status: 500, text: () => Promise.resolve("") };
+    });
+
+    vi.stubGlobal("fetch", trackingFetch);
+
+    const authValue = {
+      user: { id: "1", username: "test", createdAt: "" },
+      token: "test-token",
+      isAuthenticated: true,
+      isLoading: false,
+      login: vi.fn(),
+      logout: vi.fn(),
+    };
+
+    render(
+      <MemoryRouter>
+        <AuthContext.Provider value={authValue}>
+          <LoopEditor />
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText("Dev Loop")).toBeTruthy());
+
+    // Click clone button on the template
+    fireEvent.click(screen.getByText("Clone"));
+
+    // Enter a new name in the inline input
+    const cloneInput = screen.getByPlaceholderText(/clone name/i);
+    fireEvent.change(cloneInput, { target: { value: "My Cloned Template" } });
+
+    // Confirm clone
+    fireEvent.click(screen.getByText("Clone"));
+
+    await waitFor(() => {
+      const cloneCall = fetchCalls.find((c) => c.method === "POST" && c.url.includes("clone"));
+      expect(cloneCall).toBeTruthy();
+      expect(cloneCall!.url).toContain(sampleTemplate.id);
+      expect(cloneCall!.url).toContain("newName=");
+    });
+
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("Loop Editor version history", () => {
+  test("clicking versions button fetches version history and displays list", async () => {
+    const fetchCalls: Array<{ url: string; method: string }> = [];
+    const sampleVersions = [
+      {
+        id: "v1-id",
+        loopTemplateId: sampleTemplate.id,
+        versionNumber: 1,
+        createdAt: "2025-01-01T00:00:00Z",
+        nodeCount: 3,
+        edgeCount: 2,
+      },
+      {
+        id: "v2-id",
+        loopTemplateId: sampleTemplate.id,
+        versionNumber: 2,
+        createdAt: "2025-02-01T00:00:00Z",
+        nodeCount: 4,
+        edgeCount: 3,
+      },
+    ];
+
+    const trackingFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      const method = (init?.method as string) ?? "GET";
+      fetchCalls.push({ url: String(url), method });
+
+      if (method === "GET" && url.includes("looptemplates") && !url.includes("versions")) {
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([sampleTemplate])),
+        };
+      }
+
+      if (method === "GET" && url.includes("versions")) {
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify(sampleVersions)),
+        };
+      }
+
+      return { ok: false, status: 500, text: () => Promise.resolve("") };
+    });
+
+    vi.stubGlobal("fetch", trackingFetch);
+
+    const authValue = {
+      user: { id: "1", username: "test", createdAt: "" },
+      token: "test-token",
+      isAuthenticated: true,
+      isLoading: false,
+      login: vi.fn(),
+      logout: vi.fn(),
+    };
+
+    render(
+      <MemoryRouter>
+        <AuthContext.Provider value={authValue}>
+          <LoopEditor />
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText("Dev Loop")).toBeTruthy());
+
+    // Click versions button
+    fireEvent.click(screen.getByText("Versions"));
+
+    // Verify versions API was called
+    await waitFor(() => {
+      const versionsCall = fetchCalls.find((c) => c.method === "GET" && c.url.includes("versions"));
+      expect(versionsCall).toBeTruthy();
+    });
+
+    // Verify version history header is visible
+    await waitFor(() => {
+      expect(screen.getByText("Version History")).toBeTruthy();
+    });
+
+    // Verify version entries are displayed
+    expect(screen.getByText("v1")).toBeTruthy();
+    expect(screen.getByText("v2")).toBeTruthy();
+
+    vi.unstubAllGlobals();
+  });
+
+  test("back button returns to template list", async () => {
+    const sampleVersions = [
+      {
+        id: "v1-id",
+        loopTemplateId: sampleTemplate.id,
+        versionNumber: 1,
+        createdAt: "2025-01-01T00:00:00Z",
+        nodeCount: 3,
+        edgeCount: 2,
+      },
+    ];
+
+    const trackingFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      const method = (init?.method as string) ?? "GET";
+
+      if (method === "GET" && url.includes("looptemplates") && !url.includes("versions")) {
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([sampleTemplate])),
+        };
+      }
+
+      if (method === "GET" && url.includes("versions")) {
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify(sampleVersions)),
+        };
+      }
+
+      return { ok: false, status: 500, text: () => Promise.resolve("") };
+    });
+
+    vi.stubGlobal("fetch", trackingFetch);
+
+    const authValue = {
+      user: { id: "1", username: "test", createdAt: "" },
+      token: "test-token",
+      isAuthenticated: true,
+      isLoading: false,
+      login: vi.fn(),
+      logout: vi.fn(),
+    };
+
+    render(
+      <MemoryRouter>
+        <AuthContext.Provider value={authValue}>
+          <LoopEditor />
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText("Dev Loop")).toBeTruthy());
+
+    // Click versions button
+    fireEvent.click(screen.getByText("Versions"));
+    await waitFor(() => expect(screen.getByText("Version History")).toBeTruthy());
+
+    // Click back button
+    fireEvent.click(screen.getByText("← Back"));
+
+    // Template list should be visible again
+    await waitFor(() => {
+      expect(screen.getByText("Dev Loop")).toBeTruthy();
+    });
+
+    // Version history header should no longer be visible
+    expect(screen.queryByText("Version History")).toBeFalsy();
+
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("Loop Editor read-only version inspection", () => {
+  test("selecting a version shows read-only banner and disables save", async () => {
+    const sampleVersions = [
+      {
+        id: "v1-id",
+        loopTemplateId: sampleTemplate.id,
+        versionNumber: 1,
+        createdAt: "2025-01-01T00:00:00Z",
+        nodeCount: 3,
+        edgeCount: 2,
+      },
+    ];
+
+    const trackingFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      const method = (init?.method as string) ?? "GET";
+
+      if (method === "GET" && url.includes("looptemplates") && !url.includes("versions")) {
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([sampleTemplate])),
+        };
+      }
+
+      if (method === "GET" && url.includes("versions") && !url.includes("versions/")) {
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify(sampleVersions)),
+        };
+      }
+
+      // When loading a specific version for inspection
+      if (method === "GET" && url.includes("versions/1")) {
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify({ ...sampleTemplate, version: 1 })),
+        };
+      }
+
+      return { ok: false, status: 500, text: () => Promise.resolve("") };
+    });
+
+    vi.stubGlobal("fetch", trackingFetch);
+
+    const authValue = {
+      user: { id: "1", username: "test", createdAt: "" },
+      token: "test-token",
+      isAuthenticated: true,
+      isLoading: false,
+      login: vi.fn(),
+      logout: vi.fn(),
+    };
+
+    render(
+      <MemoryRouter>
+        <AuthContext.Provider value={authValue}>
+          <LoopEditor />
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText("Dev Loop")).toBeTruthy());
+
+    // Open version history
+    fireEvent.click(screen.getByText("Versions"));
+    await waitFor(() => expect(screen.getByText("Version History")).toBeTruthy());
+
+    // Select version 1
+    fireEvent.click(screen.getByText("v1"));
+
+    // Read-only banner should appear
+    await waitFor(() => {
+      expect(screen.getByText(/read-only/i)).toBeTruthy();
+    });
+
+    // Save button should not be visible in read-only mode
+    expect(screen.queryByText("Save")).toBeFalsy();
+
+    // Palette should be disabled (have the disabled class)
+    const palette = document.querySelector(".node-palette");
+    expect(palette?.classList.contains("palette-disabled")).toBe(true);
+
+    vi.unstubAllGlobals();
+  });
+
+  test("clicking read-only banner exits read-only mode", async () => {
+    const sampleVersions = [
+      {
+        id: "v1-id",
+        loopTemplateId: sampleTemplate.id,
+        versionNumber: 1,
+        createdAt: "2025-01-01T00:00:00Z",
+        nodeCount: 3,
+        edgeCount: 2,
+      },
+    ];
+
+    const trackingFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      const method = (init?.method as string) ?? "GET";
+
+      if (method === "GET" && url.includes("looptemplates") && !url.includes("versions")) {
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([sampleTemplate])),
+        };
+      }
+
+      if (method === "GET" && url.includes("versions") && !url.includes("versions/")) {
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify(sampleVersions)),
+        };
+      }
+
+      if (method === "GET" && url.includes("versions/1")) {
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify({ ...sampleTemplate, version: 1 })),
+        };
+      }
+
+      return { ok: false, status: 500, text: () => Promise.resolve("") };
+    });
+
+    vi.stubGlobal("fetch", trackingFetch);
+
+    const authValue = {
+      user: { id: "1", username: "test", createdAt: "" },
+      token: "test-token",
+      isAuthenticated: true,
+      isLoading: false,
+      login: vi.fn(),
+      logout: vi.fn(),
+    };
+
+    render(
+      <MemoryRouter>
+        <AuthContext.Provider value={authValue}>
+          <LoopEditor />
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.getByText("Dev Loop")).toBeTruthy());
+
+    // Open version history and select version
+    fireEvent.click(screen.getByText("Versions"));
+    await waitFor(() => expect(screen.getByText("Version History")).toBeTruthy());
+    fireEvent.click(screen.getByText("v1"));
+    await waitFor(() => expect(screen.getByText(/read-only/i)).toBeTruthy());
+
+    // Click the banner to exit read-only mode
+    fireEvent.click(screen.getByText(/read-only/i));
+
+    // Banner should no longer be visible
+    expect(screen.queryByText(/read-only/i)).toBeFalsy();
+
+    // Palette should no longer be disabled
+    const palette = document.querySelector(".node-palette");
+    expect(palette?.classList.contains("palette-disabled")).toBe(false);
+
+    vi.unstubAllGlobals();
   });
 });

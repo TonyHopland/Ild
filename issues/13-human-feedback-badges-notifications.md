@@ -2,6 +2,10 @@
 
 PRD.md
 
+## Status
+
+**READY**
+
 ## What to build
 
 Enhance the Human Feedback status column on the taskboard to display reason badges indicating why each WorkItem needs attention. Reasons include: PR awaiting merge, node failure exhaustion, rebase conflict, Human node input. Add browser notifications when a WorkItem transitions to Human Feedback.

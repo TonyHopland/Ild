@@ -2,6 +2,10 @@
 
 PRD.md
 
+## Status
+
+**COMPLETE**
+
 ## What to build
 
 Implement the save and load round-trip for loop templates through the React Flow editor. Saving a template validates the graph (Start node exists, Cleanup node exists, all nodes reachable from Start, at least one path leads to Cleanup, unknown placeholder validation for AI node prompts). Validation errors display inline on the canvas.

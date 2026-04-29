@@ -1,8 +1,8 @@
 using ILD.Core.Services.Interfaces;
-using ILD.Core.DTOs;
-using ILD.Core.Models;
+using ILD.Data.DTOs;
+using ILD.Data.Entities;
 using System.Collections.Concurrent;
-using ILD.Core.Enums;
+using ILD.Data.Enums;
 using Microsoft.AspNetCore.SignalR;
 
 namespace ILD.Api.Hubs;

@@ -2,6 +2,10 @@
 
 PRD.md
 
+## Status
+
+**COMPLETE**
+
 ## What to build
 
 Add edge drawing between nodes on the React Flow canvas. Users connect nodes by dragging from a source node's output handle to a target node's input handle. Edge configuration includes type (`on_success` or `on_failure`) and max traversals.

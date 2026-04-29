@@ -2,6 +2,10 @@
 
 PRD.md
 
+## Status
+
+**READY**
+
 ## What to build
 
 Implement per-node tool allowlists for AI nodes and ILD API tools (`ild_create_workitem`, `ild_read_workitem`, `ild_list_loop_templates`). AI node tool access is tiered: read operations (file read, git read) are always available; write operations (file write, git commit/push, command execution) are opt-in per node via the node configuration.

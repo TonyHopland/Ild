@@ -1,6 +1,6 @@
 using FluentAssertions;
-using ILD.Core.Enums;
-using ILD.Core.Models;
+using ILD.Data.Enums;
+using ILD.Data.Entities;
 using ILD.Core.Services.Implementations;
 
 namespace ILD.Tests;
@@ -10,12 +10,12 @@ public class WorkItemManagerTests
     private static (WorkItemManager mgr, TestDb db, Guid repoId) Setup()
     {
         var db = new TestDb();
-        var remote = new ILD.Core.Models.RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
-        var repo = new ILD.Core.Models.Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/repo.git" };
+        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/repo.git" };
         db.Context.RemoteProviders.Add(remote);
         db.Context.Repositories.Add(repo);
         db.Context.SaveChanges();
-        return (new WorkItemManager(db.Context), db, repo.Id);
+        return (new WorkItemManager(db.WorkItems), db, repo.Id);
     }
 
     [Fact]
@@ -113,10 +113,10 @@ public class WorkItemManagerTests
         var b = await mgr.CreateWorkItemAsync("b", "", null, repoId);
         var c = await mgr.CreateWorkItemAsync("c", "", null, repoId);
 
-        await mgr.AddDependencyAsync(b, a); // b depends on a
-        await mgr.AddDependencyAsync(c, b); // c depends on b
+        await mgr.AddDependencyAsync(b, a);
+        await mgr.AddDependencyAsync(c, b);
 
-        var act = async () => await mgr.AddDependencyAsync(a, c); // would close cycle
+        var act = async () => await mgr.AddDependencyAsync(a, c);
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*cycle*");
     }
 
@@ -182,10 +182,9 @@ public class WorkItemManagerTests
         wi!.Status = WorkItemStatus.Running;
         await db.Context.SaveChangesAsync();
 
-        // Create an active LoopRun with proper foreign keys
-        var lt = new ILD.Core.Models.LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
+        var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
         db.Context.LoopTemplates.Add(lt);
-        var ltv = new ILD.Core.Models.LoopTemplateVersion
+        var ltv = new LoopTemplateVersion
         {
             Id = Guid.NewGuid(),
             LoopTemplateId = lt.Id,
@@ -194,12 +193,12 @@ public class WorkItemManagerTests
         };
         db.Context.LoopTemplateVersions.Add(ltv);
 
-        var run = new ILD.Core.Models.LoopRun
+        var run = new LoopRun
         {
             Id = Guid.NewGuid(),
             WorkItemId = id,
             LoopTemplateVersionId = ltv.Id,
-            Status = ILD.Core.Enums.LoopRunStatus.Running,
+            Status = LoopRunStatus.Running,
             StartedAt = DateTime.UtcNow,
         };
         db.Context.LoopRuns.Add(run);
@@ -209,7 +208,6 @@ public class WorkItemManagerTests
 
         var after = await mgr.GetWorkItemAsync(id);
         after!.IsPrMerged.Should().BeTrue();
-        // Status should NOT be Done when an active LoopRun exists — engine handles transition via Cleanup
         after.Status.Should().NotBe(WorkItemStatus.Done);
     }
 }

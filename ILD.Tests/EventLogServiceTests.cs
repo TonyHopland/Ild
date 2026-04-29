@@ -1,6 +1,6 @@
 using FluentAssertions;
-using ILD.Core.Models;
-using ILD.Core.Enums;
+using ILD.Data.Entities;
+using ILD.Data.Enums;
 using ILD.Core.Services.Implementations;
 
 namespace ILD.Tests;
@@ -12,7 +12,7 @@ public class EventLogServiceTests
         var db = new TestDb();
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = "AutoResume" };
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
-        var remote = new ILD.Core.Models.RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
+        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
         var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/repo.git" };
         var workItem = new WorkItem { Id = Guid.NewGuid(), Title = "wi", RepositoryId = repo.Id, Status = WorkItemStatus.Running };
         var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = workItem.Id, LoopTemplateVersionId = version.Id, RecoveryPolicy = "AutoResume" };
@@ -25,7 +25,8 @@ public class EventLogServiceTests
         db.Context.LoopRuns.Add(run);
         db.Context.SaveChanges();
 
-        var svc = new EventLogService(db.Context, payloadDir ?? Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString()));
+        var opts = payloadDir != null ? new EventLogOptions { PayloadDirectory = payloadDir } : null;
+        var svc = new EventLogService(db.EventLogs, db.LoopRuns, opts);
         return (svc, db, run.Id);
     }
 
@@ -85,7 +86,6 @@ public class EventLogServiceTests
         var (svc, db, runId) = Setup();
         using var _ = db;
 
-        // failed run with old event
         var failedRun = new LoopRun { Id = Guid.NewGuid(), WorkItemId = db.Context.WorkItems.First().Id, LoopTemplateVersionId = db.Context.LoopTemplateVersions.First().Id, RecoveryPolicy = "Cancel", Status = LoopRunStatus.Failed };
         db.Context.LoopRuns.Add(failedRun);
         db.Context.SaveChanges();
@@ -93,7 +93,6 @@ public class EventLogServiceTests
         await svc.AppendAsync(runId, "NodeStarted", "succ");
         await svc.AppendAsync(failedRun.Id, "NodeFailed", "boom");
 
-        // backdate both
         foreach (var e in db.Context.EventLogs)
             e.Timestamp = DateTime.UtcNow.AddDays(-30);
         db.Context.SaveChanges();

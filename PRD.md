@@ -180,20 +180,21 @@ The system runs in a single container, persists state in SQLite, and integrates 
 
 The system is organized into the following deep modules:
 
-1. **Loop Engine** — Core orchestration: sequential async `while` loop that executes nodes, evaluates `on_success`/`on_failure` edges, counts edge traversals, manages pause/resume via `CancellationToken`, handles retry logic (error edge immediate vs auto-retry N times)
-2. **Event Log** — Append-only event store with monotonic sequence numbers, retention policy enforcement; serves as AI context and observability (not source of truth — DB is)
-3. **Remote Provider** — Pluggable interface (`IRemoteProvider`) for git providers (Forgejo first, extensible to GitHub/GitLab). Handles PR creation, webhook registration, comment polling
-4. **Repository Manager** — Worktree lifecycle (one per work item, create/destroy/validate), branch management, git operations (pull, rebase, commit, push)
-5. **AI Provider** — LLM provider abstraction (`ILlmProvider`), prompt template rendering with placeholder substitution and validation, in-process tool orchestration with per-node tool allowlists
-6. **Workitem Manager** — Workitem lifecycle, dependency graph with cycle detection, state machine transitions (`Backlog → Work Queue → Ready → Running → Human Feedback → Done`), readiness evaluation
-7. **Loop Template Manager** — Template CRUD, auto-versioning on save, validation (reachability, required nodes), cloning
-8. **PR Sync Service** — Webhook ingestion from git providers, comment-to-event translation, merge state detection
-9. **Auth Service** — Single-user username/password from env vars, session management, API key storage
-10. **Recovery Manager** — Crash recovery orchestration, re-execute in-flight node, worktree health validation, per-template recovery policy
+1. **ILD.Data** — EF Core data layer: `AppDbContext`, entity models, DTOs, enums, and store interfaces (`IWorkItemStore`, `ILoopRunStore`, `ILoopTemplateStore`, etc.). Isolated from business logic so `ILD.Core` has no direct EF dependency.
+2. **Loop Engine** — Core orchestration: sequential async `while` loop that executes nodes, evaluates `on_success`/`on_failure` edges, counts edge traversals, manages pause/resume via `CancellationToken`, handles retry logic (error edge immediate vs auto-retry N times)
+3. **Event Log** — Append-only event store with monotonic sequence numbers, retention policy enforcement; serves as AI context and observability (not source of truth — DB is)
+4. **Remote Provider** — Pluggable interface (`IRemoteProvider`) for git providers (Forgejo first, extensible to GitHub/GitLab). Handles PR creation, webhook registration, comment polling
+5. **Repository Manager** — Worktree lifecycle (one per work item, create/destroy/validate), branch management, git operations (pull, rebase, commit, push)
+6. **AI Provider** — LLM provider abstraction (`ILlmProvider`), prompt template rendering with placeholder substitution and validation, in-process tool orchestration with per-node tool allowlists
+7. **Workitem Manager** — Workitem lifecycle, dependency graph with cycle detection, state machine transitions (`Backlog → Work Queue → Ready → Running → Human Feedback → Done`), readiness evaluation
+8. **Loop Template Manager** — Template CRUD, auto-versioning on save, validation (reachability, required nodes), cloning
+9. **PR Sync Service** — Webhook ingestion from git providers, comment-to-event translation, merge state detection
+10. **Auth Service** — Single-user username/password from env vars, session management, API key storage
+11. **Recovery Manager** — Crash recovery orchestration, re-execute in-flight node, worktree health validation, per-template recovery policy
 
 ### Stack
 
-- **Backend**: .NET with EF Core + SQLite, auto-migrate on startup
+- **Backend**: .NET with a three-project split: `ILD.Data` (EF Core + SQLite), `ILD.Core` (business services), `ILD.Api` (ASP.NET Core host). Auto-migrate on startup.
 - **Frontend**: Vite+ + React + TypeScript SPA
 - **Real-time**: SignalR (WebSockets) with hub-based channels; state snapshot on reconnect (not full event replay)
 - **Auth**: Single user, env vars (`ILD_USERNAME`, `ILD_PASSWORD`), PBKDF2 password hashing, server-side session

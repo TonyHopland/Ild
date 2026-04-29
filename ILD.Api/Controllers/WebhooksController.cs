@@ -1,4 +1,4 @@
-using ILD.Core.DTOs;
+using ILD.Data.DTOs;
 using ILD.Core.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 

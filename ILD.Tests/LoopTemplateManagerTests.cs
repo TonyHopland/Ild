@@ -1,5 +1,5 @@
 using FluentAssertions;
-using ILD.Core.DTOs;
+using ILD.Data.DTOs;
 using ILD.Core.Services.Implementations;
 using Microsoft.EntityFrameworkCore;
 
@@ -23,7 +23,7 @@ public class LoopTemplateManagerTests
     public async Task Create_creates_template_with_version_number_1()
     {
         using var db = new TestDb();
-        var mgr = new LoopTemplateManager(db.Context);
+        var mgr = new LoopTemplateManager(db.LoopTemplates);
 
         var id = await mgr.CreateLoopTemplateAsync("seed", "desc", MinimalGraph());
 
@@ -38,7 +38,7 @@ public class LoopTemplateManagerTests
     public async Task Create_invalid_graph_throws()
     {
         using var db = new TestDb();
-        var mgr = new LoopTemplateManager(db.Context);
+        var mgr = new LoopTemplateManager(db.LoopTemplates);
 
         var bad = new LoopTemplateGraph(Guid.Empty, new() { new LoopNodeDto { Id = "x", NodeType = "Cmd", Label = "x" } }, new());
 
@@ -50,7 +50,7 @@ public class LoopTemplateManagerTests
     public async Task Update_creates_a_new_version_each_time()
     {
         using var db = new TestDb();
-        var mgr = new LoopTemplateManager(db.Context);
+        var mgr = new LoopTemplateManager(db.LoopTemplates);
 
         var id = await mgr.CreateLoopTemplateAsync("t", "", MinimalGraph());
         await mgr.UpdateLoopTemplateAsync(id, "t", "v2", MinimalGraph());
@@ -64,10 +64,10 @@ public class LoopTemplateManagerTests
     public async Task Clone_creates_a_separate_template_with_version_1()
     {
         using var db = new TestDb();
-        var mgr = new LoopTemplateManager(db.Context);
+        var mgr = new LoopTemplateManager(db.LoopTemplates);
 
         var srcId = await mgr.CreateLoopTemplateAsync("src", "", MinimalGraph());
-        await mgr.UpdateLoopTemplateAsync(srcId, "src", "", MinimalGraph()); // bump to v2
+        await mgr.UpdateLoopTemplateAsync(srcId, "src", "", MinimalGraph());
 
         var cloneId = await mgr.CloneLoopTemplateAsync(srcId, "src-copy");
 
