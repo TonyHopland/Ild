@@ -51,4 +51,22 @@ public class AgentAdaptersControllerTests
 
         result.Should().BeOfType<NotFoundObjectResult>();
     }
+
+    [Fact]
+    public void GetSupportedProviderTypes_returns_all_registered_types()
+    {
+        var registry = new Mock<IAgentAdapterRegistry>();
+        registry.Setup(r => r.GetAllSupportedProviderTypes())
+            .Returns(new[] { "openai", "opencode" });
+
+        var controller = new AgentAdaptersController(registry.Object);
+
+        var result = controller.GetSupportedProviderTypes();
+
+        result.Should().BeOfType<OkObjectResult>();
+        var okResult = (Microsoft.AspNetCore.Mvc.OkObjectResult)result;
+        var types = (string[])okResult.Value!;
+        types.Should().Contain("openai");
+        types.Should().Contain("opencode");
+    }
 }

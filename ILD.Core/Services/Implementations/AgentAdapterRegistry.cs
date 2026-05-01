@@ -9,21 +9,15 @@ public class AgentAdapterRegistry : IAgentAdapterRegistry
     private readonly IServiceProvider _sp;
     private readonly Dictionary<string, Type> _adapterTypes = new();
 
-    public AgentAdapterRegistry(IServiceProvider sp, IEnumerable<ServiceDescriptor> descriptors)
+    public AgentAdapterRegistry(IServiceProvider sp, IEnumerable<IAgentAdapter> adapters)
     {
         _sp = sp;
-        foreach (var descriptor in descriptors)
+        foreach (var adapter in adapters)
         {
-            if (descriptor.ServiceType == typeof(IAgentAdapter) && descriptor.ImplementationType != null)
+            var adapterType = adapter.GetType();
+            foreach (var type in adapter.SupportedProviderTypes)
             {
-                var instance = Activator.CreateInstance(descriptor.ImplementationType, new object[0]) as IAgentAdapter;
-                if (instance != null)
-                {
-                    foreach (var type in instance.SupportedProviderTypes)
-                    {
-                        _adapterTypes[type] = descriptor.ImplementationType;
-                    }
-                }
+                _adapterTypes[type] = adapterType;
             }
         }
     }
@@ -35,5 +29,10 @@ public class AgentAdapterRegistry : IAgentAdapterRegistry
                 $"No adapter registered for provider type '{provider.Type}'");
 
         return () => (IAgentAdapter)ActivatorUtilities.CreateInstance(_sp, adapterType);
+    }
+
+    public string[] GetAllSupportedProviderTypes()
+    {
+        return _adapterTypes.Keys.ToArray();
     }
 }

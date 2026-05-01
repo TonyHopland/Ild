@@ -318,7 +318,10 @@ export const loggingService = {
 };
 
 export const agentAdapterService = {
+  getSupportedProviderTypes: async (): Promise<string[]> => {
+    return api.get<string[]>("/AgentAdapters");
+  },
   getConfigSchema: async (providerType: string): Promise<ConfigFieldDescriptor[]> => {
-    return api.get<ConfigFieldDescriptor[]>(`/agent-adapters/${providerType}/config-schema`);
+    return api.get<ConfigFieldDescriptor[]>(`/AgentAdapters/${providerType}/config-schema`);
   },
 };

@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
+using Microsoft.Extensions.Http;
 
 namespace ILD.Core.Services.Implementations.Adapters;
 
@@ -12,7 +13,7 @@ public class OpenAiCompatibleAdapter : IAgentAdapter
     private static readonly Regex Placeholder = new(
         @"\{\{\s*([A-Za-z][A-Za-z0-9_.:/\\-]*)\s*\}\}", RegexOptions.Compiled);
 
-    private readonly HttpClient _http;
+    private readonly IHttpClientFactory _factory;
 
     public string Name => "OpenAI Compatible";
     public string[] SupportedProviderTypes => ["openai"];
@@ -25,9 +26,9 @@ public class OpenAiCompatibleAdapter : IAgentAdapter
         new("maxTokens", ConfigFieldType.Number, "Max Tokens", false, 4096, "Maximum tokens in the response"),
     };
 
-    public OpenAiCompatibleAdapter(HttpClient http)
+    public OpenAiCompatibleAdapter(IHttpClientFactory factory)
     {
-        _http = http;
+        _factory = factory;
     }
 
     public async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
@@ -49,7 +50,8 @@ public class OpenAiCompatibleAdapter : IAgentAdapter
 
         try
         {
-            using var resp = await _http.SendAsync(req, ctx.Cancel);
+            using var client = _factory.CreateClient();
+            using var resp = await client.SendAsync(req, ctx.Cancel);
             resp.EnsureSuccessStatusCode();
             var stream = await resp.Content.ReadAsStreamAsync(ctx.Cancel);
             using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ctx.Cancel);

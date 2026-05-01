@@ -31,8 +31,8 @@ public class AgentAdapterRegistryTests
         Action<ServiceCollection> configureAdapters)
     {
         var services = new ServiceCollection();
+        services.AddHttpClient();
         configureAdapters(services);
-        services.AddSingleton<IEnumerable<ServiceDescriptor>>(services);
         services.AddSingleton<IAgentAdapterRegistry, AgentAdapterRegistry>();
         return services.BuildServiceProvider();
     }

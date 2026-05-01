@@ -1,6 +1,7 @@
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
+using ILD.Core.Services.Implementations.Adapters;
 using ILD.Api.Middleware;
 
 namespace ILD.Api.Configuration;
@@ -32,6 +33,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ILoopEngine, LoopEngine>();
         services.AddScoped<IMetricsCollector, MetricsCollector>();
         services.AddSingleton<IAgentAdapterRegistry, AgentAdapterRegistry>();
+        services.AddSingleton<IAgentAdapter, OpenAiCompatibleAdapter>();
+        services.AddSingleton<IAgentAdapter, OpenCodeAdapter>();
 
         services.AddHttpClient();
 

@@ -3,6 +3,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
+using Microsoft.Extensions.Http;
 using System.Net;
 using System.Text.Json;
 
@@ -15,8 +16,8 @@ public class OpenAiCompatibleAdapterTests
     {
         var handler = new TestHttpHandler(
             responseJson: """{"choices":[{"message":{"content":"hello My Task"}}]}""");
-        var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.test/") };
-        var adapter = new OpenAiCompatibleAdapter(http);
+        var factory = BuildFactory(handler);
+        var adapter = new OpenAiCompatibleAdapter(factory);
 
         var ctx = new AgentExecutionContext(
             Provider: new AiProvider { Name = "test", Type = "openai", BaseUrl = "https://api.test", Model = "gpt-4" },
@@ -39,8 +40,8 @@ public class OpenAiCompatibleAdapterTests
     {
         var handler = new TestHttpHandler(
             responseJson: """{"choices":[{"message":{"content":"continued"}}]}""");
-        var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.test/") };
-        var adapter = new OpenAiCompatibleAdapter(http);
+        var factory = BuildFactory(handler);
+        var adapter = new OpenAiCompatibleAdapter(factory);
 
         var ctx = new AgentExecutionContext(
             Provider: new AiProvider { Name = "test", Type = "openai", BaseUrl = "https://api.test", Model = "gpt-4" },
@@ -63,8 +64,8 @@ public class OpenAiCompatibleAdapterTests
     {
         var handler = new TestHttpHandler(
             responseJson: """{"choices":[{"message":{"content":"done"}}]}""");
-        var http = new HttpClient(handler) { BaseAddress = new Uri("https://config-override/") };
-        var adapter = new OpenAiCompatibleAdapter(http);
+        var factory = BuildFactory(handler);
+        var adapter = new OpenAiCompatibleAdapter(factory);
 
         var ctx = new AgentExecutionContext(
             Provider: new AiProvider
@@ -95,8 +96,8 @@ public class OpenAiCompatibleAdapterTests
     {
         var handler = new TestHttpHandler(
             responseJson: """{"choices":[{"message":{"content":"fallback"}}]}""");
-        var http = new HttpClient(handler) { BaseAddress = new Uri("https://fallback/") };
-        var adapter = new OpenAiCompatibleAdapter(http);
+        var factory = BuildFactory(handler);
+        var adapter = new OpenAiCompatibleAdapter(factory);
 
         var ctx = new AgentExecutionContext(
             Provider: new AiProvider
@@ -125,8 +126,8 @@ public class OpenAiCompatibleAdapterTests
     public async Task ExecuteAsync_when_llm_fails_returns_failure_result()
     {
         var handler = new TestHttpHandler(statusCode: 500);
-        var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.test/") };
-        var adapter = new OpenAiCompatibleAdapter(http);
+        var factory = BuildFactory(handler);
+        var adapter = new OpenAiCompatibleAdapter(factory);
 
         var ctx = new AgentExecutionContext(
             Provider: new AiProvider { Name = "test", Type = "openai", BaseUrl = "https://api.test", Model = "gpt-4" },
@@ -141,6 +142,26 @@ public class OpenAiCompatibleAdapterTests
 
         result.Success.Should().BeFalse();
         result.Error.Should().NotBeNull();
+    }
+
+    private static TestHttpClientFactory BuildFactory(HttpMessageHandler handler)
+    {
+        return new TestHttpClientFactory(handler);
+    }
+
+    private sealed class TestHttpClientFactory : IHttpClientFactory
+    {
+        private readonly HttpMessageHandler _handler;
+
+        public TestHttpClientFactory(HttpMessageHandler handler)
+        {
+            _handler = handler;
+        }
+
+        public HttpClient CreateClient(string? name = null)
+        {
+            return new HttpClient(_handler);
+        }
     }
 
     private sealed class TestHttpHandler : HttpMessageHandler

@@ -141,7 +141,7 @@ describe("Adapter config schema", () => {
         };
       }
 
-      if (method === "GET" && url.includes("agent-adapters")) {
+      if (method === "GET" && url.includes("AgentAdapters")) {
         return {
           ok: true,
           status: 200,
@@ -171,7 +171,7 @@ describe("Adapter config schema", () => {
     // The schema endpoint should have been called
     await waitFor(() => {
       const schemaCall = fetchCalls.find(
-        (c) => c.method === "GET" && c.url.includes("agent-adapters"),
+        (c) => c.method === "GET" && c.url.includes("AgentAdapters"),
       );
       expect(schemaCall).toBeTruthy();
     });
@@ -192,7 +192,7 @@ describe("Adapter config schema", () => {
         };
       }
 
-      if (method === "GET" && url.includes("agent-adapters")) {
+      if (method === "GET" && url.includes("AgentAdapters")) {
         return {
           ok: true,
           status: 200,
@@ -285,7 +285,7 @@ describe("Adapter config schema", () => {
         };
       }
 
-      if (method === "GET" && url.includes("agent-adapters")) {
+      if (method === "GET" && url.includes("AgentAdapters")) {
         schemaCalls.push(url);
         if (url.includes("anthropic")) {
           return {
@@ -369,7 +369,7 @@ describe("Adapter config schema", () => {
         };
       }
 
-      if (method === "GET" && url.includes("agent-adapters")) {
+      if (method === "GET" && url.includes("AgentAdapters")) {
         return {
           ok: true,
           status: 200,
@@ -421,7 +421,7 @@ describe("Adapter config schema", () => {
         };
       }
 
-      if (method === "GET" && url.includes("agent-adapters")) {
+      if (method === "GET" && url.includes("AgentAdapters")) {
         return {
           ok: true,
           status: 200,
@@ -496,7 +496,7 @@ describe("Adapter config schema", () => {
         };
       }
 
-      if (method === "GET" && url.includes("agent-adapters")) {
+      if (method === "GET" && url.includes("AgentAdapters")) {
         return {
           ok: true,
           status: 200,

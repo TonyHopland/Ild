@@ -1,4 +1,5 @@
 using ILD.Core.Services.Interfaces;
+using ILD.Data.Entities;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ILD.Api.Controllers;
@@ -14,10 +15,17 @@ public class AgentAdaptersController : ControllerBase
         _registry = registry;
     }
 
+    [HttpGet]
+    public IActionResult GetSupportedProviderTypes()
+    {
+        var types = _registry.GetAllSupportedProviderTypes();
+        return Ok(types);
+    }
+
     [HttpGet("{providerType}/config-schema")]
     public IActionResult GetConfigSchema(string providerType)
     {
-        var fakeProvider = new ILD.Data.Entities.AiProvider { Type = providerType };
+        var fakeProvider = new AiProvider { Type = providerType };
         try
         {
             var factory = _registry.ResolveForProvider(fakeProvider);

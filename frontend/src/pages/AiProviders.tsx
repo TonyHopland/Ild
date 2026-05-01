@@ -1,11 +1,10 @@
 import { useState, useEffect } from "react";
 import { AiProvider } from "../types";
-import { aiProviderService } from "../services/auth";
-
-const AI_PROVIDER_TYPES = ["OpenAI", "Anthropic", "Google", "OpenRouter"];
+import { aiProviderService, agentAdapterService } from "../services/auth";
 
 export default function AiProviders() {
   const [providers, setProviders] = useState<AiProvider[]>([]);
+  const [providerTypes, setProviderTypes] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingProvider, setEditingProvider] = useState<AiProvider | null>(null);
@@ -22,8 +21,12 @@ export default function AiProviders() {
 
   const loadData = async () => {
     try {
-      const result = await aiProviderService.getAll();
-      setProviders(result);
+      const [providersResult, typesResult] = await Promise.all([
+        aiProviderService.getAll(),
+        agentAdapterService.getSupportedProviderTypes(),
+      ]);
+      setProviders(providersResult);
+      setProviderTypes(typesResult);
     } catch (error) {
       console.error("Failed to load AI providers:", error);
     } finally {
@@ -167,7 +170,7 @@ export default function AiProviders() {
                 <label htmlFor="apType">Type</label>
                 <select id="apType" value={type} onChange={(e) => setType(e.target.value)} required>
                   <option value="">Select type...</option>
-                  {AI_PROVIDER_TYPES.map((t) => (
+                  {providerTypes.map((t) => (
                     <option key={t} value={t}>
                       {t}
                     </option>

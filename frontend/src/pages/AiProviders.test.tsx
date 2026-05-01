@@ -70,6 +70,13 @@ describe("AI Providers page", () => {
         text: () => Promise.resolve(JSON.stringify(providers)),
       }),
     );
+    fetchMock.mockReturnValueOnce(
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify(["openai", "opencode"])),
+      }),
+    );
 
     renderPage(fetchMock);
 
@@ -102,6 +109,13 @@ describe("AI Providers page", () => {
         ok: true,
         status: 200,
         text: () => Promise.resolve(JSON.stringify(providers)),
+      }),
+    );
+    fetchMock.mockReturnValueOnce(
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify(["openai", "opencode"])),
       }),
     );
 
@@ -137,6 +151,13 @@ describe("AI Providers page", () => {
         text: () => Promise.resolve(JSON.stringify(providers)),
       }),
     );
+    fetchMock.mockReturnValueOnce(
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify(["openai", "opencode"])),
+      }),
+    );
 
     renderPage(fetchMock);
 
@@ -157,7 +178,7 @@ describe("AI Providers page", () => {
 
     const typeSelect = screen.getByLabelText("Type");
     fireEvent.change(typeSelect, {
-      target: { value: "Google" },
+      target: { value: "openai" },
     });
 
     fireEvent.change(screen.getByLabelText("Base URL"), {
@@ -182,6 +203,13 @@ describe("AI Providers page", () => {
           ok: true,
           status: 200,
           text: () => Promise.resolve(JSON.stringify([createdProvider])),
+        }),
+      )
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify(["openai", "opencode"])),
         }),
       );
 
@@ -225,6 +253,13 @@ describe("AI Providers page", () => {
         text: () => Promise.resolve(JSON.stringify(providers)),
       }),
     );
+    fetchMock.mockReturnValueOnce(
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify(["openai", "opencode"])),
+      }),
+    );
 
     renderPage(fetchMock);
 
@@ -261,6 +296,13 @@ describe("AI Providers page", () => {
           ok: true,
           status: 200,
           text: () => Promise.resolve(JSON.stringify([updatedProvider])),
+        }),
+      )
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify(["openai", "opencode"])),
         }),
       );
 
@@ -307,6 +349,13 @@ describe("AI Providers page", () => {
         ok: true,
         status: 200,
         text: () => Promise.resolve(JSON.stringify(providers)),
+      }),
+    );
+    fetchMock.mockReturnValueOnce(
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify(["openai", "opencode"])),
       }),
     );
 
