@@ -4,7 +4,7 @@ using ILD.Data.Enums;
 
 namespace ILD.Data.Entities;
 
-public class WorkItem
+public class WorkItem : IHasUpdatedAt
 {
     [Key]
     public Guid Id { get; set; }

@@ -6,11 +6,11 @@ Remove entries from `_runs` in `CompleteRunAsync`, `FailRunAsync`, and `CancelRu
 
 ## Acceptance criteria
 
-- [ ] `RunControl` entries are removed from `_runs` when run reaches terminal state (Completed, Failed, Cancelled)
-- [ ] `CancellationTokenSource` is disposed when run ends
-- [ ] `RunControl` implements `IDisposable` or disposes `Cts` explicitly
-- [ ] No memory growth observable after many loop runs complete
-- [ ] Existing LoopEngine tests still pass
+- [x] `RunControl` entries are removed from `_runs` when run reaches terminal state (Completed, Failed, Cancelled)
+- [x] `CancellationTokenSource` is disposed when run ends
+- [x] `RunControl` implements `IDisposable` or disposes `Cts` explicitly
+- [x] No memory growth observable after many loop runs complete
+- [x] Existing LoopEngine tests still pass
 
 ## Blocked by
 

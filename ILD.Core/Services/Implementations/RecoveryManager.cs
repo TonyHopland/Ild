@@ -9,15 +9,15 @@ public class RecoveryManager : IRecoveryManager
 {
     private readonly IWorkItemStore _workItemStore;
     private readonly ILoopRunStore _loopRunStore;
-    private readonly IProviderStore _providerStore;
+    private readonly ILoopTemplateStore _templateStore;
     private readonly IRepositoryManager _repo;
     private readonly ILoopEngine _engine;
 
-    public RecoveryManager(IWorkItemStore workItemStore, ILoopRunStore loopRunStore, IProviderStore providerStore, IRepositoryManager repo, ILoopEngine engine)
+    public RecoveryManager(IWorkItemStore workItemStore, ILoopRunStore loopRunStore, IProviderStore providerStore, ILoopTemplateStore templateStore, IRepositoryManager repo, ILoopEngine engine)
     {
         _workItemStore = workItemStore;
         _loopRunStore = loopRunStore;
-        _providerStore = providerStore;
+        _templateStore = templateStore;
         _repo = repo;
         _engine = engine;
     }
@@ -33,7 +33,7 @@ public class RecoveryManager : IRecoveryManager
         var run = await _loopRunStore.GetByIdAsync(runId);
         if (run == null || run.Status != LoopRunStatus.Running) return false;
 
-        var policy = ParsePolicy(run.RecoveryPolicy);
+        var policy = run.RecoveryPolicy;
         if (policy == RecoveryPolicy.Cancel)
         {
             await _engine.CancelRunAsync(runId);
@@ -52,8 +52,7 @@ public class RecoveryManager : IRecoveryManager
             return true;
         }
 
-        if (_engine is LoopEngine le)
-            _ = Task.Run(() => le.RunAsync(runId, CancellationToken.None));
+        await _engine.ResumeRecoveredRunAsync(runId);
         return true;
     }
 
@@ -68,21 +67,18 @@ public class RecoveryManager : IRecoveryManager
 
     public async Task<RecoveryPolicy> GetRecoveryPolicyAsync(Guid templateId)
     {
-        var template = await _providerStore.GetLoopTemplateByIdAsync(templateId);
-        return ParsePolicy(template?.RecoveryPolicy);
+        var template = await _templateStore.GetByIdAsync(templateId);
+        return template?.RecoveryPolicy ?? RecoveryPolicy.AutoResume;
     }
 
     public async Task SetRecoveryPolicyAsync(Guid templateId, RecoveryPolicy policy)
     {
-        var template = await _providerStore.GetLoopTemplateByIdAsync(templateId);
+        var template = await _templateStore.GetByIdAsync(templateId);
         if (template == null) return;
-        template.RecoveryPolicy = policy.ToString();
+        template.RecoveryPolicy = policy;
         template.UpdatedAt = DateTime.UtcNow;
-        await _providerStore.UpdateLoopTemplateAsync(template);
+        await _templateStore.UpdateTemplateAsync(template);
     }
 
     public Task ClearRecoveryStateAsync(Guid runId) => Task.CompletedTask;
-
-    private static RecoveryPolicy ParsePolicy(string? s)
-        => Enum.TryParse<RecoveryPolicy>(s, true, out var p) ? p : RecoveryPolicy.AutoResume;
 }

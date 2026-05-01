@@ -89,15 +89,15 @@ public class RepositoryManager : IRepositoryManager
         return code == 0 ? stdout : null;
     }
 
-    public Task<string?> ReadFileAsync(string worktreePath, string relativePath)
+    public async Task<string?> ReadFileAsync(string worktreePath, string relativePath)
     {
         var full = Path.GetFullPath(Path.Combine(worktreePath, relativePath));
         // Path traversal guard.
         var root = Path.GetFullPath(worktreePath);
         if (!full.StartsWith(root, StringComparison.Ordinal))
-            return Task.FromResult<string?>(null);
-        if (!File.Exists(full)) return Task.FromResult<string?>(null);
-        return File.ReadAllTextAsync(full).ContinueWith(t => (string?)t.Result);
+            return null;
+        if (!File.Exists(full)) return null;
+        return await File.ReadAllTextAsync(full);
     }
 
     private async Task<string?> ResolveMainRepoPathAsync(string worktreePath)
@@ -136,7 +136,18 @@ public class RepositoryManager : IRepositoryManager
         catch (OperationCanceledException)
         {
             _logger?.LogDebug("git {Args} in {Worktree} timed out, killing process", string.Join(' ', args), cwd);
-            try { proc.Kill(entireProcessTree: true); } catch { }
+            try
+            {
+                proc.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+                // Process has already exited; nothing to kill.
+            }
+            catch (Exception killEx)
+            {
+                _logger?.LogWarning(killEx, "Unexpected error killing git process");
+            }
             throw;
         }
         var stdout = await stdoutTask;

@@ -1,6 +1,6 @@
 import { ApiError } from "../types";
 
-const API_BASE = "/api/v1";
+const API_BASE: string = (import.meta.env?.VITE_API_BASE as string | undefined) ?? "/api/v1";
 
 export const AUTH_UNAUTHORIZED_EVENT = "auth:unauthorized";
 

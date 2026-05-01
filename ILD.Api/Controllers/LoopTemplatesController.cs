@@ -16,9 +16,12 @@ public class LoopTemplatesController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<IActionResult> GetAll()
+    public async Task<IActionResult> GetAll([FromQuery] int skip = 0, [FromQuery] int take = 100)
     {
-        var templates = await _loopTemplateManager.GetAllLoopTemplatesAsync();
+        if (skip < 0) skip = 0;
+        if (take <= 0) take = 100;
+        if (take > 500) take = 500;
+        var templates = await _loopTemplateManager.GetAllLoopTemplatesAsync(skip, take);
         return Ok(templates);
     }
 

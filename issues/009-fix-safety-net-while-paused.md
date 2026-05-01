@@ -10,10 +10,10 @@ Add a wall-clock check inside the pause loop. Pass `ct` to `Task.Delay` so cance
 
 ## Acceptance criteria
 
-- [ ] Wall-clock deadline is checked inside the pause loop (not just the main loop)
-- [ ] `Task.Delay` in pause loop uses the run's `CancellationToken` (not `CancellationToken.None`)
-- [ ] A paused run that exceeds the wall-clock deadline is cancelled and fails gracefully
-- [ ] Cancellation during pause is responsive (no 50ms delay blocking shutdown)
+- [x] Wall-clock deadline is checked inside the pause loop (not just the main loop)
+- [x] `Task.Delay` in pause loop uses the run's `CancellationToken` (not `CancellationToken.None`)
+- [x] A paused run that exceeds the wall-clock deadline is cancelled and fails gracefully
+- [x] Cancellation during pause is responsive (no 50ms delay blocking shutdown)
 
 ## Blocked by
 

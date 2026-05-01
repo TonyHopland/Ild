@@ -6,6 +6,6 @@ public enum NodeType
     Cmd = 1,
     AI = 2,
     Human = 3,
-    PR = 5,
-    Cleanup = 4
+    PR = 4,
+    Cleanup = 10
 }

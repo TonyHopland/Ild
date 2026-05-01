@@ -6,11 +6,11 @@ Replace `EnsureCreated()` with `Migrate()`. Set up the migration infrastructure 
 
 ## Acceptance criteria
 
-- [ ] `EnsureCreated()` replaced with `Migrate()` in `Program.cs`
-- [ ] Migration infrastructure set up (`ILD.Data/Migrations/` with design-time factory)
-- [ ] Initial migration generated and applied successfully
-- [ ] Database schema matches entity models after migration
-- [ ] Existing data preserved across migration application
+- [x] `EnsureCreated()` replaced with `Migrate()` in `Program.cs`
+- [x] Migration infrastructure set up (`ILD.Data/Migrations/` with design-time factory)
+- [x] Initial migration generated and applied successfully
+- [x] Database schema matches entity models after migration
+- [x] Existing data preserved across migration application
 
 ## Blocked by
 

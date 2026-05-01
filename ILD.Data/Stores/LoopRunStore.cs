@@ -20,6 +20,26 @@ public class LoopRunStore : ILoopRunStore
     public async Task<LoopRun?> GetByWorkItemAsync(Guid workItemId)
         => await _db.LoopRuns.FirstOrDefaultAsync(r => r.WorkItemId == workItemId);
 
+    public async Task<IReadOnlyList<LoopRun>> GetAllByWorkItemAsync(Guid workItemId)
+        => await _db.LoopRuns
+            .Where(r => r.WorkItemId == workItemId)
+            .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
+            .ToListAsync();
+
+    public async Task<LoopRun?> GetCurrentByWorkItemAsync(Guid workItemId)
+        => await _db.LoopRuns
+            .Where(r => r.WorkItemId == workItemId && r.Status == LoopRunStatus.Running)
+            .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
+            .FirstOrDefaultAsync();
+
+    public async Task<IReadOnlyList<LoopRun>> GetAllAsync(int skip = 0, int take = 100)
+        => await _db.LoopRuns
+            .Include(r => r.RunNodes).ThenInclude(rn => rn.LoopNode)
+            .Include(r => r.LoopTemplateVersion)
+            .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
+            .Skip(skip).Take(take)
+            .ToListAsync();
+
     public async Task<IReadOnlyList<LoopRun>> GetRunningRunsAsync()
         => await _db.LoopRuns.Where(r => r.Status == LoopRunStatus.Running).ToListAsync();
 
@@ -40,6 +60,7 @@ public class LoopRunStore : ILoopRunStore
 
     public async Task UpdateRunAsync(LoopRun run)
     {
+        _db.LoopRuns.Update(run);
         await _db.SaveChangesAsync();
     }
 
@@ -51,6 +72,7 @@ public class LoopRunStore : ILoopRunStore
 
     public async Task UpdateRunNodeAsync(LoopRunNode runNode)
     {
+        _db.LoopRunNodes.Update(runNode);
         await _db.SaveChangesAsync();
     }
 

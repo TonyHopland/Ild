@@ -14,13 +14,13 @@ Several data model issues need fixing:
 
 ## Acceptance criteria
 
-- [ ] `LoopTemplate.RecoveryPolicy` and `LoopRun.RecoveryPolicy` are typed as `RecoveryPolicy` enum
-- [ ] `NodeType` enum values are sequential (Start=0, Cmd=1, AI=2, Human=3, PR=4, Cleanup=10)
-- [ ] `CleanupNodeExecutor` sets `WorkItem.WorktreePath = null` after destroying worktree
-- [ ] `UpdatedAt` is auto-set on save via `AppDbContext.SaveChanges` override
-- [ ] `LoopTemplate` CRUD moved from `ProviderStore` to `LoopTemplateStore`
-- [ ] EF migration generated and applied for enum type change
-- [ ] All existing tests still pass
+- [x] `LoopTemplate.RecoveryPolicy` and `LoopRun.RecoveryPolicy` are typed as `RecoveryPolicy` enum
+- [x] `NodeType` enum values are sequential (Start=0, Cmd=1, AI=2, Human=3, PR=4, Cleanup=10)
+- [x] `CleanupNodeExecutor` sets `WorkItem.WorktreePath = null` after destroying worktree
+- [x] `UpdatedAt` is auto-set on save via `AppDbContext.SaveChanges` override
+- [x] `LoopTemplate` CRUD moved from `ProviderStore` to `LoopTemplateStore`
+- [x] EF migration generated and applied for enum type change
+- [x] All existing tests still pass
 
 ## Blocked by
 

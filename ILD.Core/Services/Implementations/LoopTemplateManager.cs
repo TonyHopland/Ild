@@ -26,7 +26,7 @@ public class LoopTemplateManager : ILoopTemplateManager
             Id = Guid.NewGuid(),
             Name = name,
             Description = description,
-            RecoveryPolicy = nameof(RecoveryPolicy.AutoResume),
+            RecoveryPolicy = RecoveryPolicy.AutoResume,
             MaxNodeExecutions = 200,
             MaxWallClockHours = 24,
         };
@@ -43,8 +43,8 @@ public class LoopTemplateManager : ILoopTemplateManager
     public async Task<LoopTemplate?> GetLatestVersionAsync(Guid templateId)
         => await _store.GetByIdAsync(templateId);
 
-    public async Task<IEnumerable<LoopTemplate>> GetAllLoopTemplatesAsync()
-        => await _store.GetAllAsync();
+    public async Task<IEnumerable<LoopTemplate>> GetAllLoopTemplatesAsync(int skip = 0, int take = 100)
+        => await _store.GetAllAsync(skip, take);
 
     public async Task<Guid> UpdateLoopTemplateAsync(Guid templateId, string name, string description, LoopTemplateGraph graph)
     {

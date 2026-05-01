@@ -200,6 +200,48 @@ export interface SignalRMessage {
   timestamp: string;
 }
 
+// SignalR payloads (mirror ILD.Data.DTOs.SignalRPayloads).
+export interface NodeStateChangedPayload {
+  runId: string;
+  nodeId: string;
+  oldStatus: LoopRunNodeStatus;
+  newStatus: LoopRunNodeStatus;
+}
+
+export interface LoopRunStateChangedPayload {
+  runId: string;
+  oldStatus: LoopRunStatus;
+  newStatus: LoopRunStatus;
+}
+
+export interface EventLoggedPayload {
+  runId: string;
+  message: string;
+}
+
+export interface RunPausedPayload {
+  runId: string;
+}
+
+export interface RunResumedPayload {
+  runId: string;
+}
+
+export interface WorkItemStateChangedPayload {
+  workItemId: string;
+  oldStatus: WorkItemStatus;
+  newStatus: WorkItemStatus;
+}
+
+export interface DependencyResolvedPayload {
+  workItemId: string;
+}
+
+export interface HumanFeedbackRequiredPayload {
+  workItemId: string;
+  reason: string;
+}
+
 export interface LoopTemplateVersion {
   id: string;
   loopTemplateId: string;

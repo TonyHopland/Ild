@@ -25,11 +25,17 @@ try
 
     builder.Host.UseSerilog();
 
-    var dataPath = Environment.GetEnvironmentVariable("ILD_DATA_PATH") ?? "data";
-    var worktreesPath = Environment.GetEnvironmentVariable("ILD_WORKTREES_PATH") ?? Path.Combine(dataPath, "worktrees");
+    var dataPath = Environment.GetEnvironmentVariable("ILD_DATA_PATH")
+        ?? builder.Configuration["Storage:DataRoot"]
+        ?? "data";
+    var worktreesSubdir = builder.Configuration["Storage:WorktreesSubdir"] ?? "worktrees";
+    var dbFile = builder.Configuration["Storage:DatabaseFile"] ?? "ild.db";
+    var worktreesPath = Environment.GetEnvironmentVariable("ILD_WORKTREES_PATH")
+        ?? Path.Combine(dataPath, worktreesSubdir);
 
     builder.Configuration["App:DataPath"] = dataPath;
     builder.Configuration["App:WorktreesPath"] = worktreesPath;
+    builder.Configuration["App:DatabaseFile"] = dbFile;
 
     if (!Directory.Exists(dataPath))
         Directory.CreateDirectory(dataPath);
@@ -39,7 +45,7 @@ try
 
     builder.Services.AddDataLayer(options =>
     {
-        var dbPath = Path.Combine(dataPath, "ild.db");
+        var dbPath = Path.Combine(dataPath, dbFile);
         options.UseSqlite($"Data Source={dbPath}");
     });
 
@@ -57,8 +63,10 @@ try
 
     builder.Services.AddCors(options =>
     {
+        var allowedOrigins = ILD.Api.Configuration.CorsConfiguration.ParseAllowedOrigins(
+            Environment.GetEnvironmentVariable("ILD_ALLOWED_ORIGINS"));
         options.AddPolicy("AllowFrontend", policy =>
-            policy.SetIsOriginAllowed(_ => true)
+            policy.WithOrigins(allowedOrigins)
                 .AllowAnyHeader()
                 .AllowAnyMethod()
                 .AllowCredentials());
@@ -76,8 +84,8 @@ try
     using (var scope = app.Services.CreateScope())
     {
         var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        dbContext.Database.EnsureCreated();
-        Log.Information("Database ensured at {DataPath}", Path.Combine(dataPath, "ild.db"));
+        dbContext.Database.Migrate();
+        Log.Information("Database migrated at {DataPath}", Path.Combine(dataPath, dbFile));
 
         var templateStore = scope.ServiceProvider.GetRequiredService<ILD.Data.Stores.Interfaces.ILoopTemplateStore>();
         var mgr = scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Interfaces.ILoopTemplateManager>();
@@ -93,6 +101,11 @@ try
     }
 
     app.UseSerilogRequestLogging();
+    if (!app.Environment.IsDevelopment())
+    {
+        app.UseHsts();
+    }
+    app.UseSecurityHeaders();
     app.UseCors("AllowFrontend");
     app.UseMiddleware<AuthMiddleware>();
     app.UseRouting();
@@ -120,3 +133,6 @@ finally
 {
     Log.CloseAndFlush();
 }
+
+// Required for WebApplicationFactory<Program> in integration tests.
+public partial class Program;

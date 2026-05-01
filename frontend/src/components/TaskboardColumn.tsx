@@ -8,6 +8,10 @@ interface TaskboardColumnProps {
   label: string;
   workItems: WorkItem[];
   onWorkItemUpdate: (workItem: WorkItem) => void;
+  onWorkItemClick?: (workItem: WorkItem) => void;
+  onWorkItemDeleted?: (id: string) => void;
+  onError?: (message: string) => void;
+  onMoveWorkItem?: (workItem: WorkItem, direction: "prev" | "next") => void;
 }
 
 export default function TaskboardColumn({
@@ -15,6 +19,10 @@ export default function TaskboardColumn({
   label,
   workItems,
   onWorkItemUpdate,
+  onWorkItemClick,
+  onWorkItemDeleted,
+  onError,
+  onMoveWorkItem,
 }: TaskboardColumnProps) {
   const [dragOver, setDragOver] = useState(false);
 
@@ -35,10 +43,19 @@ export default function TaskboardColumn({
     if (!workItemId) return;
 
     try {
-      const updated = await workItemService.update(workItemId, { status });
+      await workItemService.transition(workItemId, status);
+      const updated = await workItemService.getById(workItemId);
       onWorkItemUpdate(updated);
     } catch (error) {
-      console.error("Failed to update work item status:", error);
+      const fallback = "Failed to update work item status.";
+      const msg =
+        error instanceof Error && error.message
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : fallback;
+      if (onError) onError(msg);
+      else console.error("Failed to update work item status:", error);
     }
   };
 
@@ -55,7 +72,13 @@ export default function TaskboardColumn({
       </div>
       <div className="taskboard-column-body">
         {workItems.map((item) => (
-          <WorkItemCard key={item.id} workItem={item} />
+          <WorkItemCard
+            key={item.id}
+            workItem={item}
+            onClick={onWorkItemClick}
+            onDeleted={onWorkItemDeleted}
+            onMove={onMoveWorkItem}
+          />
         ))}
       </div>
       <style>{`

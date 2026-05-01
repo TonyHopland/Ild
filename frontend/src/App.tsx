@@ -1,10 +1,12 @@
+import { lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthContext, useProvideAuth, useAuth } from "./hooks/useAuth";
 import Header from "./components/Header";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import Login from "./pages/Login";
 import Taskboard from "./pages/Taskboard";
-import LoopEditor from "./pages/LoopEditor";
-import LoopRunMonitor from "./pages/LoopRunMonitor";
+const LoopEditor = lazy(() => import("./pages/LoopEditor"));
+const LoopRunMonitor = lazy(() => import("./pages/LoopRunMonitor"));
 import EventLogViewer from "./pages/EventLogViewer";
 import Settings from "./pages/Settings";
 import Repositories from "./pages/Repositories";
@@ -58,7 +60,15 @@ function AppRoutes() {
             path="/loop-editor"
             element={
               <ProtectedRoute>
-                <LoopEditor />
+                <Suspense
+                  fallback={
+                    <div className="page-container">
+                      <p>Loading...</p>
+                    </div>
+                  }
+                >
+                  <LoopEditor />
+                </Suspense>
               </ProtectedRoute>
             }
           />
@@ -66,7 +76,15 @@ function AppRoutes() {
             path="/loop-runs"
             element={
               <ProtectedRoute>
-                <LoopRunMonitor />
+                <Suspense
+                  fallback={
+                    <div className="page-container">
+                      <p>Loading...</p>
+                    </div>
+                  }
+                >
+                  <LoopRunMonitor />
+                </Suspense>
               </ProtectedRoute>
             }
           />
@@ -122,9 +140,11 @@ export default function App() {
 
   return (
     <AuthContext.Provider value={auth}>
-      <BrowserRouter>
-        <AppRoutes />
-      </BrowserRouter>
+      <ErrorBoundary>
+        <BrowserRouter>
+          <AppRoutes />
+        </BrowserRouter>
+      </ErrorBoundary>
     </AuthContext.Provider>
   );
 }

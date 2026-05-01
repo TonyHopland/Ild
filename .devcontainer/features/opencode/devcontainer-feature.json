@@ -1,0 +1,20 @@
+{
+  "id": "opencode",
+  "version": "1.0.0",
+  "name": "OpenCode",
+  "documentationURL": "https://github.com/anomalyco/opencode",
+  "description": "Installs OpenCode - open source AI coding agent.",
+  "options": {},
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "github.copilot.chat.codeGeneration.instructions": [
+          {
+            "text": "This dev container includes OpenCode (opencode), which is pre-installed and available on the PATH."
+          }
+        ]
+      }
+    }
+  },
+  "installsAfter": []
+}

@@ -18,9 +18,10 @@ import {
 interface WorkItemModalProps {
   workItem: WorkItem | null;
   isOpen: boolean;
+  editMode?: boolean;
   onClose: () => void;
   onSave: (workItem: WorkItem) => void;
-  editMode?: boolean;
+  onDelete?: (id: string) => void;
 }
 
 export default function WorkItemModal({
@@ -28,6 +29,7 @@ export default function WorkItemModal({
   isOpen,
   onClose,
   onSave,
+  onDelete,
   editMode = true,
 }: WorkItemModalProps) {
   const [title, setTitle] = useState("");
@@ -40,7 +42,13 @@ export default function WorkItemModal({
   const [repositories, setRepositories] = useState<Repository[]>([]);
   const [templates, setTemplates] = useState<LoopTemplate[]>([]);
   const [runs, setRuns] = useState<LoopRun[]>([]);
+  const [dependencies, setDependencies] = useState<WorkItem[]>([]);
+  const [allWorkItems, setAllWorkItems] = useState<WorkItem[]>([]);
+  const [showAddDep, setShowAddDep] = useState(false);
+  const [selectedDepId, setSelectedDepId] = useState("");
   const [showLinkPr, setShowLinkPr] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [prUrlInput, setPrUrlInput] = useState("");
   const [feedbackInput, setFeedbackInput] = useState("");
 
@@ -59,10 +67,26 @@ export default function WorkItemModal({
     if (workItem && !editMode) {
       workItemService
         .getRuns(workItem.id)
-        .then(setRuns)
+        .then((r) => setRuns(Array.isArray(r) ? r : []))
+        .catch(() => {});
+      workItemService
+        .getDependencies(workItem.id)
+        .then((d) => setDependencies(Array.isArray(d) ? d : []))
+        .catch(() => {});
+      workItemService
+        .getAll()
+        .then((w) => setAllWorkItems(Array.isArray(w) ? w : []))
         .catch(() => {});
     }
   }, [workItem?.id, editMode]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
   useEffect(() => {
     if (workItem) {
@@ -85,7 +109,7 @@ export default function WorkItemModal({
       setRepositoryId("");
       setLoopTemplateId("");
     }
-  }, [workItem]);
+  }, [workItem?.id]);
 
   if (!isOpen) return null;
 
@@ -168,10 +192,51 @@ export default function WorkItemModal({
     }
   };
 
+  const handleDelete = async () => {
+    if (!workItem) return;
+    if (!confirm(`Delete work item "${workItem.title}"?`)) return;
+    try {
+      await workItemService.delete(workItem.id);
+      onDelete?.(workItem.id);
+      onClose();
+    } catch (error) {
+      console.error("Failed to delete work item:", error);
+    }
+  };
+
+  const handleAddDependency = async () => {
+    if (!workItem || !selectedDepId) return;
+    try {
+      await workItemService.addDependency(workItem.id, selectedDepId);
+      const deps = await workItemService.getDependencies(workItem.id);
+      setDependencies(deps);
+      setShowAddDep(false);
+      setSelectedDepId("");
+    } catch (error) {
+      console.error("Failed to add dependency:", error);
+    }
+  };
+
+  const handleRemoveDependency = async (depId: string) => {
+    if (!workItem) return;
+    try {
+      await workItemService.removeDependency(workItem.id, depId);
+      setDependencies((prev) => prev.filter((d) => d.id !== depId));
+    } catch (error) {
+      console.error("Failed to remove dependency:", error);
+    }
+  };
+
   if (workItem && !editMode) {
     return (
       <div className="modal-overlay" onClick={onClose}>
-        <div className="modal-content modal-content-detail" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="modal-content modal-content-detail"
+          onClick={(e) => e.stopPropagation()}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Work item details"
+        >
           <div className="modal-header">
             <h2>{workItem.title}</h2>
             <button className="modal-close" onClick={onClose}>
@@ -239,18 +304,71 @@ export default function WorkItemModal({
                 </button>
               )}
             </div>
-            {workItem.dependencyIds.length > 0 && (
-              <div className="detail-section">
-                <span className="detail-label">Dependencies</span>
-                <div className="dependency-list">
-                  {workItem.dependencyIds.map((depId) => (
-                    <span key={depId} className="dependency-tag">
-                      {depId}
-                    </span>
-                  ))}
-                </div>
+            <div className="detail-section">
+              <span className="detail-label">Dependencies</span>
+              <div className="dependency-list">
+                {dependencies.length === 0 && <span className="detail-value">No dependencies</span>}
+                {dependencies.map((dep) => (
+                  <span key={dep.id} className="dependency-tag">
+                    <Link to={`/workitems/${dep.id}`} className="dependency-link">
+                      {dep.title}
+                    </Link>
+                    <button
+                      type="button"
+                      className="dependency-remove-btn"
+                      onClick={() => handleRemoveDependency(dep.id)}
+                      aria-label={`Remove dependency ${dep.title}`}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
               </div>
-            )}
+              {showAddDep ? (
+                <div className="link-pr-form">
+                  <select
+                    value={selectedDepId}
+                    onChange={(e) => setSelectedDepId(e.target.value)}
+                    className="pr-input"
+                  >
+                    <option value="">Select work item...</option>
+                    {allWorkItems
+                      .filter(
+                        (w) => w.id !== workItem.id && !dependencies.some((d) => d.id === w.id),
+                      )
+                      .map((w) => (
+                        <option key={w.id} value={w.id}>
+                          {w.title}
+                        </option>
+                      ))}
+                  </select>
+                  <div className="link-pr-actions">
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-primary"
+                      onClick={handleAddDependency}
+                    >
+                      Add
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-secondary"
+                      onClick={() => setShowAddDep(false)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-secondary"
+                  onClick={() => setShowAddDep(true)}
+                >
+                  Add Dependency
+                </button>
+              )}
+            </div>
             {runs.length > 0 && (
               <div className="detail-section">
                 <span className="detail-label">Run History</span>
@@ -327,6 +445,9 @@ export default function WorkItemModal({
                 Mark Merged
               </button>
             )}
+            <button type="button" className="btn btn-danger" onClick={handleDelete}>
+              Delete
+            </button>
             <button type="button" className="btn btn-secondary" onClick={onClose}>
               Close
             </button>
@@ -338,6 +459,9 @@ export default function WorkItemModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
+    setSubmitting(true);
+    setSubmitError(null);
 
     const parsedLabels = tags
       .split(",")
@@ -358,6 +482,17 @@ export default function WorkItemModal({
       let saved: WorkItem;
       if (workItem) {
         saved = await workItemService.update(workItem.id, data);
+        if (workItem.status !== status) {
+          try {
+            await workItemService.transition(workItem.id, status);
+            saved = await workItemService.getById(workItem.id);
+          } catch (err) {
+            console.error("Failed to transition status:", err);
+            setSubmitError(
+              `Status transition failed: ${err instanceof Error ? err.message : "Unknown error"}`,
+            );
+          }
+        }
       } else {
         saved = await workItemService.create(data);
       }
@@ -365,12 +500,21 @@ export default function WorkItemModal({
       onClose();
     } catch (error) {
       console.error("Failed to save work item:", error);
+      setSubmitError(`Failed to save: ${error instanceof Error ? error.message : "Unknown error"}`);
+    } finally {
+      setSubmitting(false);
     }
   };
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="modal-content"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label={workItem ? "Edit work item" : "New work item"}
+      >
         <div className="modal-header">
           <h2>{workItem ? "Edit Work Item" : "New Work Item"}</h2>
           <button className="modal-close" onClick={onClose}>
@@ -464,355 +608,27 @@ export default function WorkItemModal({
               <label htmlFor="tags">Labels (comma separated)</label>
               <input id="tags" type="text" value={tags} onChange={(e) => setTags(e.target.value)} />
             </div>
+            {submitError && (
+              <div role="alert" className="form-error">
+                {submitError}
+              </div>
+            )}
           </div>
           <div className="modal-footer">
-            <button type="button" className="btn btn-secondary" onClick={onClose}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={onClose}
+              disabled={submitting}
+            >
               Cancel
             </button>
-            <button type="submit" className="btn btn-primary">
-              {workItem ? "Update" : "Create"}
+            <button type="submit" className="btn btn-primary" disabled={submitting}>
+              {submitting ? "Saving..." : workItem ? "Update" : "Create"}
             </button>
           </div>
         </form>
       </div>
-      <style>{`
-        .modal-overlay {
-          position: fixed;
-          inset: 0;
-          background-color: rgba(0, 0, 0, 0.6);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          z-index: 200;
-        }
-
-        .modal-content {
-          background-color: #1e1e30;
-          border-radius: 0.5rem;
-          width: 100%;
-          max-width: 500px;
-          border: 1px solid #2d2d44;
-        }
-
-        .modal-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          padding: 1rem;
-          border-bottom: 1px solid #2d2d44;
-        }
-
-        .modal-header h2 {
-          font-size: 1rem;
-          color: #e0e0e0;
-        }
-
-        .modal-close {
-          background: none;
-          border: none;
-          color: #808090;
-          font-size: 1.5rem;
-          cursor: pointer;
-          line-height: 1;
-        }
-
-        .modal-close:hover {
-          color: #e0e0e0;
-        }
-
-        .modal-body {
-          padding: 1rem;
-        }
-
-        .form-group {
-          margin-bottom: 0.75rem;
-        }
-
-        .form-group label {
-          display: block;
-          font-size: 0.75rem;
-          color: #a0a0b0;
-          margin-bottom: 0.25rem;
-        }
-
-        .form-group input,
-        .form-group textarea,
-        .form-group select {
-          width: 100%;
-          padding: 0.5rem;
-          background-color: #2a2a40;
-          border: 1px solid #3a3a5c;
-          border-radius: 0.375rem;
-          color: #e0e0e0;
-          font-size: 0.875rem;
-        }
-
-        .form-group input:focus,
-        .form-group textarea:focus,
-        .form-group select:focus {
-          outline: none;
-          border-color: #6366f1;
-        }
-
-        .form-row {
-          display: grid;
-          grid-template-columns: repeat(2, 1fr);
-          gap: 0.5rem;
-        }
-
-        .modal-footer {
-          display: flex;
-          justify-content: flex-end;
-          gap: 0.5rem;
-          padding: 1rem;
-          border-top: 1px solid #2d2d44;
-        }
-
-        .btn-secondary {
-          background-color: #2d2d44;
-          color: #a0a0b0;
-        }
-
-        .btn-secondary:hover {
-          background-color: #3a3a5c;
-        }
-
-        .btn-primary {
-          background-color: #6366f1;
-          color: #fff;
-        }
-
-        .btn-primary:hover {
-          background-color: #5558e6;
-        }
-
-        .modal-content-detail {
-          max-width: 550px;
-        }
-
-        .detail-row {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          padding: 0.5rem 0;
-          border-bottom: 1px solid #2d2d44;
-        }
-
-        .detail-label {
-          font-size: 0.75rem;
-          color: #a0a0b0;
-        }
-
-        .detail-value {
-          font-size: 0.875rem;
-          color: #e0e0e0;
-        }
-
-        .status-badge {
-          padding: 0.25rem 0.5rem;
-          border-radius: 0.25rem;
-          font-size: 0.75rem;
-          font-weight: 600;
-        }
-
-        .status-ready {
-          background-color: #16a34a;
-          color: #fff;
-        }
-
-        .status-running {
-          background-color: #2563eb;
-          color: #fff;
-        }
-
-        .status-backlog {
-          background-color: #6b7280;
-          color: #fff;
-        }
-
-        .status-workqueue {
-          background-color: #d97706;
-          color: #fff;
-        }
-
-        .status-done {
-          background-color: #059669;
-          color: #fff;
-        }
-
-        .status-humanfeedback {
-          background-color: #9333ea;
-          color: #fff;
-        }
-
-        .detail-section {
-          margin-top: 0.5rem;
-          padding: 0.5rem 0;
-          border-bottom: 1px solid #2d2d44;
-        }
-
-        .dependency-list {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 0.25rem;
-          margin-top: 0.25rem;
-        }
-
-        .dependency-tag {
-          background-color: #2a2a40;
-          color: #a0a0b0;
-          padding: 0.125rem 0.5rem;
-          border-radius: 0.25rem;
-          font-size: 0.75rem;
-          cursor: pointer;
-        }
-
-        .dependency-tag:hover {
-          background-color: #3a3a5c;
-          color: #e0e0e0;
-        }
-
-        .run-history {
-          margin-top: 0.25rem;
-        }
-
-        .run-history-item {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          padding: 0.375rem 0;
-          border-bottom: 1px solid #2d2d44;
-        }
-
-        .run-time {
-          font-size: 0.75rem;
-          color: #808090;
-        }
-
-        .run-history-item {
-          text-decoration: none;
-          color: inherit;
-        }
-
-        .run-history-item:hover {
-          opacity: 0.8;
-        }
-
-        .pr-section {
-          margin-top: 0.5rem;
-        }
-
-        .pr-link {
-          color: #6366f1;
-          font-size: 0.8125rem;
-          word-break: break-all;
-        }
-
-        .pr-link:hover {
-          color: #818cf8;
-        }
-
-        .pr-none {
-          color: #606070;
-          font-style: italic;
-        }
-
-        .link-pr-form {
-          display: flex;
-          flex-direction: column;
-          gap: 0.375rem;
-          margin-top: 0.375rem;
-        }
-
-        .pr-input {
-          width: 100%;
-          padding: 0.375rem 0.5rem;
-          background-color: #2a2a40;
-          border: 1px solid #3a3a5c;
-          border-radius: 0.375rem;
-          color: #e0e0e0;
-          font-size: 0.8125rem;
-        }
-
-        .pr-input:focus {
-          outline: none;
-          border-color: #6366f1;
-        }
-
-        .link-pr-actions {
-          display: flex;
-          gap: 0.375rem;
-        }
-
-        .btn-sm {
-          padding: 0.25rem 0.5rem;
-          font-size: 0.75rem;
-        }
-
-        .btn-success {
-          background-color: #16a34a;
-          color: #fff;
-        }
-
-        .btn-success:hover {
-          background-color: #15803d;
-        }
-
-        .human-feedback-section {
-          margin-top: 0.5rem;
-          padding: 0.75rem;
-          background-color: #1e1e30;
-          border: 1px solid #3a3a5c;
-          border-radius: 0.375rem;
-        }
-
-        .feedback-textarea {
-          width: 100%;
-          padding: 0.5rem;
-          background-color: #2a2a40;
-          border: 1px solid #3a3a5c;
-          border-radius: 0.375rem;
-          color: #e0e0e0;
-          font-size: 0.875rem;
-          resize: vertical;
-          margin-top: 0.25rem;
-        }
-
-        .feedback-textarea:focus {
-          outline: none;
-          border-color: #6366f1;
-        }
-
-        .feedback-actions {
-          display: flex;
-          gap: 0.375rem;
-          margin-top: 0.5rem;
-        }
-
-        .feedback-reason {
-          font-size: 0.8125rem;
-          color: #f59e0b;
-          margin-top: 0.25rem;
-        }
-
-        .btn-danger {
-          background-color: #dc2626;
-          color: #fff;
-        }
-
-        .btn-danger:hover {
-          background-color: #b91c1c;
-        }
-
-        .btn-warning {
-          background-color: #d97706;
-          color: #fff;
-        }
-
-        .btn-warning:hover {
-          background-color: #b45309;
-        }
-      `}</style>
     </div>
   );
 }

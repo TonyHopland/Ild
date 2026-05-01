@@ -120,3 +120,60 @@ _Avoid_: draft, planned
 - PR lifecycle is explicit in the graph via **PR Node**, not implicit engine behavior
 - `WorkItem.Type` field is redundant — removed. Template assignment determines work type.
 - Backlog vs Work Queue landing is per-Repository, not global or per-WorkItem
+
+## API Versioning Policy
+
+API routes use a manual prefix (`/api/v1/...`) hard-coded in `[Route]` attributes. There is **no** `Asp.Versioning` package wiring; breaking changes require introducing a new prefix (`/api/v2/...`) and keeping `/api/v1/...` working until clients migrate. List endpoints accept `skip`/`take` (default 100, max 500); event-log queries cap `limit` server-side at 500.
+
+See the [Architecture](#architecture) section below for how the API layer composes with storage, auth, and realtime channels.
+
+## Architecture
+
+### API surface
+
+- All controllers live under `ILD.Api/Controllers` and inherit `[Route("api/v1/...")]`. There is no implicit versioning middleware — see [API Versioning Policy](#api-versioning-policy).
+- Auth is enforced by `ILD.Api/Middleware/AuthMiddleware.cs` via bearer-token session cookies/headers. Excluded paths: `/api/v1/auth/login`, `/api/v1/health`, `/api/v1/logging`, `/metrics`. The webhook endpoint (`/api/v1/webhooks/forgejo`) is **not** excluded; external callers must additionally pass HMAC verification (`WebhookSignatureVerifier`) on top of bearer auth.
+- `AuthService.LoginAsync` auto-seeds the `admin` user the first time it sees a login attempt with the username `admin` and a non-empty `ILD_PASSWORD` env var.
+- Webhook routes verify HMAC against `RemoteProvider.WebhookSecret` values; if no provider has a secret configured, all webhook calls are rejected with 401.
+- `EventLog` query routes live on `LoopRunsController` (`GET /api/v1/loopruns/{id}/events`, `GET /api/v1/loopruns/{id}/events/{seq}`) — there is no separate `EventLogController`.
+- `HttpClient` instances for AI providers and remote providers are obtained from `IHttpClientFactory` with named clients (`"openai"`, `"forgejo"`); failures surface as `AiProviderException` with cause-preserving inner exceptions.
+
+### Storage layout
+
+Storage paths come from configuration in this precedence order (highest first):
+
+1. `ILD_DATA_PATH` env var (overrides everything; integration tests clear it explicitly)
+2. `Storage:DataRoot` config value (default `./data`)
+3. Falls back to `Path.GetFullPath("data")` if neither is set
+
+Within `DataRoot`:
+
+- `Storage:DatabaseFile` (default `ild.db`) — SQLite file. EF Core migrations run on startup via `dbContext.Database.Migrate()`.
+- `Storage:WorktreesSubdir` (default `worktrees`) — root for per-WorkItem git worktrees. Each `Worktree` row's `Path` is rooted here.
+- Event log payloads >10KB spill to `events/{looprrun-id}/{seq}.json`; DB rows store the relative path.
+
+Tests must not share `DataRoot`. Integration tests use `ILD.Tests/Integration/ApiFactory.cs`, which generates a per-instance temp directory and an in-memory SQLite connection. Unit tests use `ILD.Tests/TestDb.cs`, whose XML doc comment describes the per-test isolation guarantees.
+
+### SignalR realtime channel
+
+Two hubs are mapped:
+
+- `/hubs/loop-run` — broadcasts run-level events
+- `/hubs/work-item` — broadcasts work-item-level events
+
+Both emit messages of shape `{ type: string; payload: T; timestamp: string }`. As of issue #035 the payload `T` is statically typed in the frontend by `frontend/src/types/signalr.ts`'s `SignalREventPayloads` map. The known event names are:
+
+- `NodeStateChanged`
+- `LoopRunStateChanged`
+- `WorkItemStateChanged`
+- `HumanFeedbackRequired`
+- `EventLogged`
+- `RunPaused`
+- `RunResumed`
+- `DependencyResolved`
+
+The frontend hook `useSignalR.on<E>(eventType, handler)` resolves the payload type from the map; unknown event names fall through to `unknown` so the call site is forced to narrow before use.
+
+### Frontend route loading
+
+Routes in `frontend/src/App.tsx` are registered with `React.lazy(() => import(...))` and wrapped in a top-level `ErrorBoundary` so a render failure in one route can't take down the shell. Page-level errors surface through the shared `ErrorBanner` component (issue #036).

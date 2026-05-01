@@ -4,7 +4,7 @@ using ILD.Data.Enums;
 
 namespace ILD.Data.Entities;
 
-public class Repository
+public class Repository : IHasUpdatedAt
 {
     [Key]
     public Guid Id { get; set; }

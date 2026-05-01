@@ -155,6 +155,8 @@ All configuration is via environment variables.
 
 AI providers, remote git providers, and repositories are configured at runtime through the API / UI rather than environment variables.
 
+> **Secrets policy.** No real credentials live in `appsettings.*.json` or any committed file. Auth is bootstrapped via `ILD_USERNAME` / `ILD_PASSWORD` at first run and then stored hashed. AI provider API keys live in `AiProvider.Config` (a JSON column on the `AiProvider` row) and are entered through the Settings UI; they must never be committed to source control.
+
 ---
 
 ## Domain Concepts

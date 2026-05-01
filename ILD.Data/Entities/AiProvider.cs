@@ -3,7 +3,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 
 namespace ILD.Data.Entities;
 
-public class AiProvider
+public class AiProvider : IHasUpdatedAt
 {
     [Key]
     public Guid Id { get; set; }

@@ -14,12 +14,12 @@ Multiple React hook issues cause stale state, memory leaks, and incorrect behavi
 
 ## Acceptance criteria
 
-- [ ] `useSignalR` hook reconnects when auth token changes (add token to dependency array or use auth state subscription)
-- [ ] `on()` calls deduplicate at the SignalR connection level (remove old handlers before adding new ones)
-- [ ] `accessTokenFactory` reads token dynamically from `authService.getToken()`
-- [ ] Settings log level revert uses functional state update or a ref for the previous value
-- [ ] Taskboard SignalR handlers are cleaned up on component unmount
-- [ ] `useEffect` in WorkItemModal depends on `workItem?.id` not the object reference
+- [x] `useSignalR` hook reconnects when auth token changes (add token to dependency array or use auth state subscription)
+- [x] `on()` calls deduplicate at the SignalR connection level (remove old handlers before adding new ones)
+- [x] `accessTokenFactory` reads token dynamically from `authService.getToken()`
+- [x] Settings log level revert uses functional state update or a ref for the previous value
+- [x] Taskboard SignalR handlers are cleaned up on component unmount
+- [x] `useEffect` in WorkItemModal depends on `workItem?.id` not the object reference
 
 ## Blocked by
 

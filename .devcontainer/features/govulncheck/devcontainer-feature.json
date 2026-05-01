@@ -1,0 +1,20 @@
+{
+  "id": "govulncheck",
+  "version": "1.0.0",
+  "name": "Go Vuln Check",
+  "documentationURL": "https://github.com/golang/vuln",
+  "description": "Installs govulncheck - Go vulnerability scanner.",
+  "options": {},
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "github.copilot.chat.codeGeneration.instructions": [
+          {
+            "text": "This dev container includes govulncheck, which is pre-installed and available on the PATH."
+          }
+        ]
+      }
+    }
+  },
+  "installsAfter": ["ghcr.io/devcontainers/features/go"]
+}

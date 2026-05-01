@@ -51,9 +51,13 @@ public class AIProviderService : IAIProviderService
                 .GetProperty("content")
                 .GetString() ?? "";
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
-            return $"[ai-error] {ex.Message}";
+            throw new AiProviderException($"AI provider call failed: {ex.Message}", ex);
         }
     }
 

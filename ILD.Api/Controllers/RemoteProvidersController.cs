@@ -18,8 +18,13 @@ public class RemoteProvidersController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<IActionResult> GetAll()
-        => Ok(await _db.RemoteProviders.AsNoTracking().ToListAsync());
+    public async Task<IActionResult> GetAll([FromQuery] int skip = 0, [FromQuery] int take = 100)
+    {
+        if (skip < 0) skip = 0;
+        if (take <= 0) take = 100;
+        if (take > 500) take = 500;
+        return Ok(await _db.RemoteProviders.AsNoTracking().OrderBy(p => p.Name).Skip(skip).Take(take).ToListAsync());
+    }
 
     [HttpGet("{id}")]
     public async Task<IActionResult> GetById(string id)

@@ -14,13 +14,13 @@ Several frontend features exist in the backend API but have no UI:
 
 ## Acceptance criteria
 
-- [ ] LoopRunMonitor has Pause and Resume buttons wired to `loopRunService`
-- [ ] WorkItemModal shows dependency list with clickable links to dependent WorkItems
-- [ ] WorkItemModal has UI to add/remove dependencies
-- [ ] WorkItemCard opens WorkItemModal on click (separate from drag)
-- [ ] WorkItemCard and WorkItemModal have a delete button with confirmation
-- [ ] Status changes use `POST /workitems/{id}/transition` instead of full PUT
-- [ ] `loopRunService` has `pause` and `resume` methods
+- [x] LoopRunMonitor has Pause and Resume buttons wired to `loopRunService`
+- [x] WorkItemModal shows dependency list with clickable links to dependent WorkItems
+- [x] WorkItemModal has UI to add/remove dependencies
+- [x] WorkItemCard opens WorkItemModal on click (separate from drag)
+- [x] WorkItemCard and WorkItemModal have a delete button with confirmation
+- [x] Status changes use `POST /workitems/{id}/transition` instead of full PUT
+- [x] `loopRunService` has `pause` and `resume` methods
 
 ## Blocked by
 

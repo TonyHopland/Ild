@@ -7,8 +7,9 @@ public interface IWorkItemStore
 {
     Task<WorkItem?> GetByIdAsync(Guid id);
     Task<IReadOnlyList<WorkItem>> GetByStatusAsync(WorkItemStatus status);
-    Task<WorkItem?> GetByRepositoryAsync(Guid repositoryId);
+    Task<IReadOnlyList<WorkItem>> GetByRepositoryAsync(Guid repositoryId);
     Task<IReadOnlyList<WorkItem>> GetByRepositoryIdsAsync(IReadOnlyList<Guid> repositoryIds);
+    Task<IReadOnlyList<WorkItem>> GetByIdsAsync(IReadOnlyList<Guid> ids);
     Task CreateAsync(WorkItem workItem);
     Task UpdateAsync(WorkItem workItem);
     Task<bool> AddDependencyAsync(Guid workItemId, Guid dependencyWorkItemId);

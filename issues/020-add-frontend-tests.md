@@ -12,12 +12,12 @@ The frontend test suite has only 2 tests. The PRD and README indicate the fronte
 
 ## Acceptance criteria
 
-- [ ] API service tests verify correct URL construction and error handling
-- [ ] Auth service tests verify token storage, retrieval, and expiration
-- [ ] `useSignalR` hook tests verify connection lifecycle and handler deduplication
-- [ ] Taskboard component tests verify column rendering and work item placement
-- [ ] Tests run via `vp test --run` and pass
-- [ ] Test count increased from 2 to at least 10
+- [x] API service tests verify correct URL construction and error handling
+- [x] Auth service tests verify token storage, retrieval, and expiration
+- [x] `useSignalR` hook tests verify connection lifecycle and handler deduplication
+- [x] Taskboard component tests verify column rendering and work item placement
+- [x] Tests run via `vp test --run` and pass
+- [x] Test count increased from 2 to at least 10
 
 ## Blocked by
 

@@ -10,7 +10,8 @@ public interface ILoopEngine
     Task PauseRunAsync(Guid runId);
     Task ResumeRunAsync(Guid runId);
     Task CancelRunAsync(Guid runId);
-    Task<LoopRunStatus> GetRunStatusAsync(Guid runId);
+    Task<LoopRunStatus?> GetRunStatusAsync(Guid runId);
     Task<IEnumerable<Guid>> GetActiveRunIdsAsync();
     Task SignalPrResultAsync(Guid runId, Guid prRunNodeId, bool merged);
+    Task ResumeRecoveredRunAsync(Guid runId);
 }

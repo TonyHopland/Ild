@@ -7,6 +7,7 @@ namespace ILD.Core.Services.Interfaces;
 public interface IWorkItemManager
 {
     Task<Guid> CreateWorkItemAsync(string title, string description, Guid? loopTemplateId, Guid? repositoryId);
+    Task<bool> UpdateAsync(Guid workItemId, string title, string description);
     Task<WorkItem?> GetWorkItemAsync(Guid workItemId);
     Task<IEnumerable<WorkItem>> GetWorkItemsByStatusAsync(WorkItemStatus status);
     Task<bool> TransitionToWorkQueueAsync(Guid workItemId);

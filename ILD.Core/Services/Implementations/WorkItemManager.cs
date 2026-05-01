@@ -11,13 +11,15 @@ public class WorkItemManager : IWorkItemManager
     private readonly IRepositoryManager _repoManager;
     private readonly IEventLogService _eventLog;
     private readonly ILoopRunStore _loopRunStore;
+    private readonly IWorkItemNotifier _notifier;
 
-    public WorkItemManager(IWorkItemStore store, IRepositoryManager repoManager, IEventLogService eventLog, ILoopRunStore loopRunStore)
+    public WorkItemManager(IWorkItemStore store, IRepositoryManager repoManager, IEventLogService eventLog, ILoopRunStore loopRunStore, IWorkItemNotifier? notifier = null)
     {
         _store = store;
         _repoManager = repoManager;
         _eventLog = eventLog;
         _loopRunStore = loopRunStore;
+        _notifier = notifier ?? new NoopWorkItemNotifier();
     }
 
     public async Task<Guid> CreateWorkItemAsync(string title, string description, Guid? loopTemplateId, Guid? repositoryId)
@@ -53,6 +55,17 @@ public class WorkItemManager : IWorkItemManager
     public async Task<WorkItem?> GetWorkItemAsync(Guid workItemId)
         => await _store.GetByIdAsync(workItemId);
 
+    public async Task<bool> UpdateAsync(Guid workItemId, string title, string description)
+    {
+        var wi = await _store.GetByIdAsync(workItemId);
+        if (wi == null) return false;
+        wi.Title = title;
+        wi.Description = description;
+        wi.UpdatedAt = DateTime.UtcNow;
+        await _store.UpdateAsync(wi);
+        return true;
+    }
+
     public async Task<IEnumerable<WorkItem>> GetWorkItemsByStatusAsync(WorkItemStatus status)
         => await _store.GetByStatusAsync(status);
 
@@ -82,10 +95,13 @@ public class WorkItemManager : IWorkItemManager
     {
         var wi = await _store.GetByIdAsync(workItemId);
         if (wi == null) return false;
+        var prev = wi.Status;
         wi.Status = WorkItemStatus.HumanFeedback;
         wi.HumanFeedbackReason = reason;
         wi.UpdatedAt = DateTime.UtcNow;
         await _store.UpdateAsync(wi);
+        await _notifier.WorkItemStateChangedAsync(workItemId, prev, WorkItemStatus.HumanFeedback);
+        await _notifier.HumanFeedbackRequiredAsync(workItemId, reason);
         return true;
     }
 
@@ -109,34 +125,13 @@ public class WorkItemManager : IWorkItemManager
     public async Task<IEnumerable<WorkItem>> GetDependenciesAsync(Guid workItemId)
     {
         var ids = await _store.GetDependencyIdsAsync(workItemId);
-        var idList = ids.ToList();
-        var all = await _store.GetByStatusAsync(WorkItemStatus.Backlog);
-        var result = new List<WorkItem>();
-        foreach (var status in Enum.GetValues<WorkItemStatus>())
-        {
-            foreach (var w in await _store.GetByStatusAsync(status))
-            {
-                if (idList.Contains(w.Id) && !result.Any(r => r.Id == w.Id))
-                    result.Add(w);
-            }
-        }
-        return result;
+        return await _store.GetByIdsAsync(ids.ToList());
     }
 
     public async Task<IEnumerable<WorkItem>> GetDependentsAsync(Guid workItemId)
     {
         var ids = await _store.GetDependentIdsAsync(workItemId);
-        var idList = ids.ToList();
-        var result = new List<WorkItem>();
-        foreach (var status in Enum.GetValues<WorkItemStatus>())
-        {
-            foreach (var w in await _store.GetByStatusAsync(status))
-            {
-                if (idList.Contains(w.Id) && !result.Any(r => r.Id == w.Id))
-                    result.Add(w);
-            }
-        }
-        return result;
+        return await _store.GetByIdsAsync(ids.ToList());
     }
 
     public async Task<bool> IsReadyAsync(Guid workItemId)
@@ -145,13 +140,11 @@ public class WorkItemManager : IWorkItemManager
         var depIdList = depIds.ToList();
         if (depIdList.Count == 0) return true;
 
-        foreach (var status in Enum.GetValues<WorkItemStatus>())
+        var deps = await _store.GetByIdsAsync(depIdList);
+        foreach (var w in deps)
         {
-            foreach (var w in await _store.GetByStatusAsync(status))
-            {
-                if (depIdList.Contains(w.Id) && !w.IsPrMerged && w.Status != WorkItemStatus.Done)
-                    return false;
-            }
+            if (!w.IsPrMerged && w.Status != WorkItemStatus.Done)
+                return false;
         }
         return true;
     }
@@ -192,9 +185,11 @@ public class WorkItemManager : IWorkItemManager
         var wi = await _store.GetByIdAsync(id);
         if (wi == null) return false;
         if (!isAllowedFrom(wi.Status)) return false;
+        var prev = wi.Status;
         wi.Status = next;
         wi.UpdatedAt = DateTime.UtcNow;
         await _store.UpdateAsync(wi);
+        await _notifier.WorkItemStateChangedAsync(id, prev, next);
         return true;
     }
 
@@ -258,7 +253,25 @@ public class WorkItemManager : IWorkItemManager
         if (wi == null) return false;
         if (wi.CurrentLoopRunId == null) return false;
 
-        await _eventLog.AppendAsync(wi.CurrentLoopRunId.Value, "HumanFeedbackReceived", input);
+        var runId = wi.CurrentLoopRunId.Value;
+        var run = await _loopRunStore.GetByIdAsync(runId);
+        if (run != null)
+        {
+            var nodes = await _loopRunStore.GetRunNodesAsync(runId);
+            var humanRunNode = nodes
+                .Where(n => n.LoopNode?.NodeType == NodeType.Human || n.LoopNodeId == run.CurrentNodeId)
+                .OrderByDescending(n => n.StartedAt ?? DateTime.MinValue)
+                .FirstOrDefault(n => n.Status == LoopRunNodeStatus.WaitingHuman);
+            if (humanRunNode != null)
+            {
+                humanRunNode.Status = LoopRunNodeStatus.Succeeded;
+                humanRunNode.Output = input;
+                humanRunNode.CompletedAt = DateTime.UtcNow;
+                await _loopRunStore.UpdateRunNodeAsync(humanRunNode);
+            }
+        }
+
+        await _eventLog.AppendAsync(runId, "HumanFeedbackReceived", input);
 
         wi.Status = WorkItemStatus.Running;
         wi.HumanFeedbackReason = null;

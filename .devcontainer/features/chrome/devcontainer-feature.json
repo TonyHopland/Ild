@@ -1,0 +1,20 @@
+{
+  "id": "chrome",
+  "version": "1.0.0",
+  "name": "Google Chrome",
+  "documentationURL": "https://www.google.com/chrome",
+  "description": "Installs Google Chrome browser.",
+  "options": {},
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "github.copilot.chat.codeGeneration.instructions": [
+          {
+            "text": "This dev container includes Google Chrome, which is pre-installed and available on the PATH."
+          }
+        ]
+      }
+    }
+  },
+  "installsAfter": []
+}

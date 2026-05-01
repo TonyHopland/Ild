@@ -10,11 +10,11 @@ The LoopRunMonitor page receives loop templates instead of loop runs, and cancel
 
 ## Acceptance criteria
 
-- [ ] `loopRunService.getAll()` calls `GET /loopruns`
-- [ ] `loopRunService.getById(id)` calls `GET /loopruns/${id}`
-- [ ] `loopRunService.cancel(id)` calls `POST /loopruns/${id}/cancel`
-- [ ] Verify LoopRunMonitor displays actual loop run data
-- [ ] Rename service file from `auth.ts` to a proper barrel or split services into their own files
+- [x] `loopRunService.getAll()` calls `GET /loopruns`
+- [x] `loopRunService.getById(id)` calls `GET /loopruns/${id}`
+- [x] `loopRunService.cancel(id)` calls `POST /loopruns/${id}/cancel`
+- [x] Verify LoopRunMonitor displays actual loop run data
+- [x] Rename service file from `auth.ts` to a proper barrel or split services into their own files
 
 ## Blocked by
 

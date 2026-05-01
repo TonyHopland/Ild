@@ -147,8 +147,24 @@ describe("WorkItemModal", () => {
     });
 
     const fetchMock = mockFetch(null);
-    // Initial fetches for repositories, templates, and runs
+    // Initial fetches for repositories, templates, runs, dependencies, allWorkItems
     fetchMock
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([])),
+          json: () => Promise.resolve([]),
+        }),
+      )
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([])),
+          json: () => Promise.resolve([]),
+        }),
+      )
       .mockReturnValueOnce(
         Promise.resolve({
           ok: true,
@@ -198,13 +214,15 @@ describe("WorkItemModal", () => {
     const onSave = vi.fn();
 
     render(
-      <WorkItemModal
-        workItem={workItem}
-        isOpen={true}
-        onClose={onClose}
-        onSave={onSave}
-        editMode={false}
-      />,
+      <MemoryRouter>
+        <WorkItemModal
+          workItem={workItem}
+          isOpen={true}
+          onClose={onClose}
+          onSave={onSave}
+          editMode={false}
+        />
+      </MemoryRouter>,
     );
 
     await waitFor(() => {
@@ -229,7 +247,54 @@ describe("WorkItemModal", () => {
       dependencyIds: ["dep-1", "dep-2"],
     });
 
-    const fetchMock = mockFetch([]);
+    const dep1 = makeWorkItem({ id: "dep-1", title: "dep-1" });
+    const dep2 = makeWorkItem({ id: "dep-2", title: "dep-2" });
+
+    const fetchMock = mockFetch(null);
+    // repos, templates, runs
+    fetchMock
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([])),
+          json: () => Promise.resolve([]),
+        }),
+      )
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([])),
+          json: () => Promise.resolve([]),
+        }),
+      )
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([])),
+          json: () => Promise.resolve([]),
+        }),
+      )
+      // getDependencies
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([dep1, dep2])),
+          json: () => Promise.resolve([dep1, dep2]),
+        }),
+      )
+      // getAll
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([])),
+          json: () => Promise.resolve([]),
+        }),
+      );
 
     vi.stubGlobal("fetch", fetchMock);
 
@@ -237,18 +302,22 @@ describe("WorkItemModal", () => {
     const onSave = vi.fn();
 
     render(
-      <WorkItemModal
-        workItem={workItem}
-        isOpen={true}
-        onClose={onClose}
-        onSave={onSave}
-        editMode={false}
-      />,
+      <MemoryRouter>
+        <WorkItemModal
+          workItem={workItem}
+          isOpen={true}
+          onClose={onClose}
+          onSave={onSave}
+          editMode={false}
+        />
+      </MemoryRouter>,
     );
 
     expect(screen.getByText("Dependencies")).toBeTruthy();
-    expect(screen.getByText("dep-1")).toBeTruthy();
-    expect(screen.getByText("dep-2")).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText("dep-1")).toBeTruthy();
+      expect(screen.getByText("dep-2")).toBeTruthy();
+    });
   });
 
   test("detail view shows loop run history with status and timing", async () => {

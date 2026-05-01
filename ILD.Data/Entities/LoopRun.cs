@@ -4,7 +4,7 @@ using ILD.Data.Enums;
 
 namespace ILD.Data.Entities;
 
-public class LoopRun
+public class LoopRun : IHasUpdatedAt
 {
     [Key]
     public Guid Id { get; set; }
@@ -21,7 +21,7 @@ public class LoopRun
 
     [Required]
     [MaxLength(128)]
-    public string RecoveryPolicy { get; set; } = string.Empty;
+    public RecoveryPolicy RecoveryPolicy { get; set; }
 
     public bool IsPaused { get; set; }
 

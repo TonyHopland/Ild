@@ -20,11 +20,16 @@ public class WorkItemStore : IWorkItemStore
     public async Task<IReadOnlyList<WorkItem>> GetByStatusAsync(WorkItemStatus status)
         => await _db.WorkItems.Where(w => w.Status == status).ToListAsync();
 
-    public async Task<WorkItem?> GetByRepositoryAsync(Guid repositoryId)
-        => await _db.WorkItems.FirstOrDefaultAsync(w => w.RepositoryId == repositoryId);
+    public async Task<IReadOnlyList<WorkItem>> GetByRepositoryAsync(Guid repositoryId)
+        => await _db.WorkItems.Where(w => w.RepositoryId == repositoryId).ToListAsync();
 
     public async Task<IReadOnlyList<WorkItem>> GetByRepositoryIdsAsync(IReadOnlyList<Guid> repositoryIds)
         => await _db.WorkItems.Where(w => repositoryIds.Contains(w.RepositoryId)).ToListAsync();
+
+    public async Task<IReadOnlyList<WorkItem>> GetByIdsAsync(IReadOnlyList<Guid> ids)
+        => ids.Count == 0
+            ? Array.Empty<WorkItem>()
+            : await _db.WorkItems.Where(w => ids.Contains(w.Id)).ToListAsync();
 
     public async Task CreateAsync(WorkItem workItem)
     {
@@ -34,6 +39,7 @@ public class WorkItemStore : IWorkItemStore
 
     public async Task UpdateAsync(WorkItem workItem)
     {
+        _db.WorkItems.Update(workItem);
         await _db.SaveChangesAsync();
     }
 

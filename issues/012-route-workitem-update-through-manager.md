@@ -6,11 +6,11 @@ Route the update through `IWorkItemManager.UpdateAsync`. Also route the fire-and
 
 ## Acceptance criteria
 
-- [ ] `WorkItemsController.Update` delegates to `IWorkItemManager` instead of directly using `DbContext`
-- [ ] `WorkItemsController.Start` and `Transition` track the LoopRun task (not fire-and-forget)
-- [ ] Unhandled exceptions from loop runs are logged (not swallowed)
-- [ ] SignalR notifications fire on work item updates
-- [ ] All existing tests still pass
+- [x] `WorkItemsController.Update` delegates to `IWorkItemManager` instead of directly using `DbContext`
+- [x] `WorkItemsController.Start` and `Transition` track the LoopRun task (not fire-and-forget)
+- [x] Unhandled exceptions from loop runs are logged (not swallowed)
+- [x] SignalR notifications fire on work item updates
+- [x] All existing tests still pass
 
 ## Blocked by
 

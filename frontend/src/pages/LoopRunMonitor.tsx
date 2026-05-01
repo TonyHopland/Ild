@@ -1,29 +1,59 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { LoopRun, LoopRunStatus, LoopRunNodeStatus } from "../types";
+import { LoopRun, LoopRunNodeStatus, LoopRunStatus } from "../types";
+import type { TypedSignalRMessage } from "../types/signalr";
 import { loopRunService } from "../services/auth";
 import { useSignalR } from "../hooks/useSignalR";
+import ErrorBanner from "../components/ErrorBanner";
+
+function errorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string") return error;
+  return fallback;
+}
 
 export default function LoopRunMonitor() {
   const [runs, setRuns] = useState<LoopRun[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const { on } = useSignalR("/hubs/loop-run");
+  const [errorText, setErrorText] = useState("");
+  const { on, off } = useSignalR("/hubs/loop-run");
 
   useEffect(() => {
     void loadRuns();
   }, []);
 
   useEffect(() => {
-    on("LoopRunStateChanged", async (message: any) => {
-      const updated = message.payload as LoopRun;
-      setRuns((prev) => prev.map((run) => (run.id === updated.id ? updated : run)));
-    });
+    const onLoopRunStateChanged = async (message: TypedSignalRMessage<"LoopRunStateChanged">) => {
+      const { runId, newStatus } = message.payload;
+      setRuns((prev) =>
+        prev.map((run) => (run.id === runId ? { ...run, status: newStatus } : run)),
+      );
+    };
 
-    on("NodeStateChanged", async (message: any) => {
-      const updated = message.payload as LoopRun;
-      setRuns((prev) => prev.map((run) => (run.id === updated.id ? updated : run)));
-    });
-  }, [on]);
+    const onNodeStateChanged = async (message: TypedSignalRMessage<"NodeStateChanged">) => {
+      const { runId, nodeId, newStatus } = message.payload;
+      setRuns((prev) =>
+        prev.map((run) =>
+          run.id === runId
+            ? {
+                ...run,
+                nodes: run.nodes.map((n) =>
+                  n.nodeId === nodeId ? { ...n, status: newStatus } : n,
+                ),
+              }
+            : run,
+        ),
+      );
+    };
+
+    on("LoopRunStateChanged", onLoopRunStateChanged);
+    on("NodeStateChanged", onNodeStateChanged);
+
+    return () => {
+      off("LoopRunStateChanged", onLoopRunStateChanged);
+      off("NodeStateChanged", onNodeStateChanged);
+    };
+  }, [on, off]);
 
   const loadRuns = async () => {
     try {
@@ -43,7 +73,25 @@ export default function LoopRunMonitor() {
         prev.map((run) => (run.id === id ? { ...run, status: LoopRunStatus.Cancelled } : run)),
       );
     } catch (error) {
-      console.error("Failed to cancel run:", error);
+      setErrorText(errorMessage(error, "Failed to cancel run."));
+    }
+  };
+
+  const handlePause = async (id: string) => {
+    try {
+      await loopRunService.pause(id);
+      setRuns((prev) => prev.map((run) => (run.id === id ? { ...run, isPaused: true } : run)));
+    } catch (error) {
+      setErrorText(errorMessage(error, "Failed to pause run."));
+    }
+  };
+
+  const handleResume = async (id: string) => {
+    try {
+      await loopRunService.resume(id);
+      setRuns((prev) => prev.map((run) => (run.id === id ? { ...run, isPaused: false } : run)));
+    } catch (error) {
+      setErrorText(errorMessage(error, "Failed to resume run."));
     }
   };
 
@@ -76,6 +124,7 @@ export default function LoopRunMonitor() {
       <div className="loop-runs-header">
         <h1 className="page-title">Loop Run Monitor</h1>
       </div>
+      <ErrorBanner message={errorText} onDismiss={() => setErrorText("")} />
       <div className="loop-runs-list">
         {runs.map((run) => (
           <div key={run.id} className="loop-run-item">
@@ -110,9 +159,26 @@ export default function LoopRunMonitor() {
               ))}
             </div>
             {run.status === LoopRunStatus.Running && (
-              <button className="btn btn-danger btn-small" onClick={() => handleCancel(run.id)}>
-                Cancel
-              </button>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                {run.isPaused ? (
+                  <button
+                    className="btn btn-primary btn-small"
+                    onClick={() => handleResume(run.id)}
+                  >
+                    Resume
+                  </button>
+                ) : (
+                  <button
+                    className="btn btn-secondary btn-small"
+                    onClick={() => handlePause(run.id)}
+                  >
+                    Pause
+                  </button>
+                )}
+                <button className="btn btn-danger btn-small" onClick={() => handleCancel(run.id)}>
+                  Cancel
+                </button>
+              </div>
             )}
           </div>
         ))}

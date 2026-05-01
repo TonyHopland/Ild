@@ -1,5 +1,6 @@
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
+using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ILD.Api.Controllers;
@@ -10,11 +11,49 @@ public class LoopRunsController : ControllerBase
 {
     private readonly ILoopEngine _loopEngine;
     private readonly IEventLogService _eventLogService;
+    private readonly ILoopRunStore _loopRunStore;
 
-    public LoopRunsController(ILoopEngine loopEngine, IEventLogService eventLogService)
+    public LoopRunsController(ILoopEngine loopEngine, IEventLogService eventLogService, ILoopRunStore loopRunStore)
     {
         _loopEngine = loopEngine;
         _eventLogService = eventLogService;
+        _loopRunStore = loopRunStore;
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> GetAll([FromQuery] int skip = 0, [FromQuery] int take = 100)
+    {
+        if (skip < 0) skip = 0;
+        if (take <= 0) take = 100;
+        if (take > 500) take = 500;
+        var runs = await _loopRunStore.GetAllAsync(skip, take);
+        var result = runs.Select(r => new
+        {
+            id = r.Id,
+            workItemId = r.WorkItemId,
+            loopTemplateId = r.LoopTemplateVersion?.LoopTemplateId,
+            templateVersion = r.LoopTemplateVersion?.VersionNumber ?? 0,
+            status = r.Status.ToString(),
+            currentNodeId = r.CurrentNodeId,
+            isPaused = r.IsPaused,
+            nodeExecutionCount = r.NodeExecutionCount,
+            startedAt = r.StartedAt,
+            completedAt = r.CompletedAt,
+            nodes = r.RunNodes.Select(rn => new
+            {
+                id = rn.Id,
+                nodeId = rn.LoopNodeId,
+                nodeLabel = rn.LoopNode?.Label ?? string.Empty,
+                status = rn.Status.ToString(),
+                output = rn.Output,
+                error = rn.Error,
+                startedAt = rn.StartedAt,
+                completedAt = rn.CompletedAt,
+                executionCount = rn.RetryCount,
+            }).ToList(),
+        }).ToList();
+
+        return Ok(result);
     }
 
     [HttpGet("{id}")]
@@ -24,6 +63,8 @@ public class LoopRunsController : ControllerBase
             return BadRequest(new { error = "Invalid GUID" });
 
         var status = await _loopEngine.GetRunStatusAsync(guid);
+        if (status is null)
+            return NotFound(new { error = "Run not found" });
         return Ok(new { status });
     }
 
@@ -62,6 +103,10 @@ public class LoopRunsController : ControllerBase
     {
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
+
+        if (limit <= 0) limit = 100;
+        if (limit > 500) limit = 500;
+        if (cursor < 0) cursor = 0;
 
         var page = await _eventLogService.GetByRunIdAfterCursorAsync(guid, cursor, limit);
         return Ok(new

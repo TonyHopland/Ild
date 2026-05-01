@@ -3,10 +3,18 @@ using ILD.Data.Enums;
 
 namespace ILD.Data.Stores.Interfaces;
 
+public record TemplateGraph(
+    LoopTemplate Template,
+    LoopTemplateVersion Version,
+    IReadOnlyList<LoopNode> Nodes,
+    IReadOnlyList<LoopNodeEdge> Edges);
+
 public interface ILoopTemplateStore
 {
     Task<LoopTemplate?> GetByIdAsync(Guid id);
-    Task<IReadOnlyList<LoopTemplate>> GetAllAsync();
+    Task<LoopTemplate?> GetByVersionIdAsync(Guid versionId);
+    Task<TemplateGraph?> GetTemplateGraphByVersionIdAsync(Guid versionId);
+    Task<IReadOnlyList<LoopTemplate>> GetAllAsync(int skip = 0, int take = 100);
     Task<LoopTemplateVersion?> GetLatestVersionAsync(Guid templateId);
     Task<LoopTemplateVersion?> GetVersionByIdAsync(Guid versionId);
     Task<LoopTemplateVersion?> GetVersionAsync(Guid templateId, int versionNumber);

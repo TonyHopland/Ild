@@ -218,4 +218,94 @@ public class LoopEngineTests
         var fixNodeId = h.NodesById["fix"].Id;
         h.ReloadRunNodes().Should().Contain(n => n.LoopNodeId == fixNodeId && n.Status == LoopRunNodeStatus.Succeeded);
     }
+
+    [Fact]
+    public async Task GetRunStatusAsync_returns_null_when_run_does_not_exist()
+    {
+        using var h = new EngineHarness();
+        var status = await h.Engine.GetRunStatusAsync(Guid.NewGuid());
+        status.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetRunStatusAsync_returns_status_when_run_exists()
+    {
+        using var h = new EngineHarness();
+        h.BuildSimpleGraph(("s", NodeType.Start), ("c", NodeType.Cleanup));
+        h.AddEdge("e1", "s", "c");
+        h.Save();
+
+        var status = await h.Engine.GetRunStatusAsync(h.RunId);
+        status.Should().Be(LoopRunStatus.Running);
+    }
+
+    [Fact]
+    public async Task Human_node_resume_with_succeeded_run_node_routes_on_success_and_passes_input_as_PreviousNode_Output()
+    {
+        using var h = new EngineHarness();
+        h.BuildSimpleGraph(
+            ("s", NodeType.Start),
+            ("ask", NodeType.Human),
+            ("after", NodeType.Cmd),
+            ("c", NodeType.Cleanup));
+        h.AddEdge("e1", "s", "ask");
+        h.AddEdge("e2", "ask", "after", EdgeType.OnSuccess);
+        h.AddEdge("e3", "after", "c");
+        h.Save();
+
+        // First run pauses at the human node.
+        await h.Engine.RunAsync(h.RunId);
+        var humanRunNode = h.ReloadRunNodes().First(n => n.LoopNodeId == h.NodesById["ask"].Id);
+        humanRunNode.Status.Should().Be(ILD.Data.Enums.LoopRunNodeStatus.WaitingHuman);
+
+        // Simulate the manager finalizing the run node with the human's input as output.
+        // Update through the tracked context so the singleton store sees it.
+        var trackedRn = h.Db.Context.LoopRunNodes.First(n => n.Id == humanRunNode.Id);
+        trackedRn.Status = LoopRunNodeStatus.Succeeded;
+        trackedRn.Output = "go ahead";
+        trackedRn.CompletedAt = DateTime.UtcNow;
+        h.Db.Context.SaveChanges();
+
+        string? observedPrevious = null;
+        h.Fakes[NodeType.Cmd].Behavior = ctx =>
+        {
+            observedPrevious = ctx.PreviousNodeOutput;
+            return NodeExecutionResult.Ok("done");
+        };
+
+        await h.Engine.RunAsync(h.RunId);
+
+        h.ReloadRun().Status.Should().Be(LoopRunStatus.Completed);
+        observedPrevious.Should().Be("go ahead");
+    }
+
+    [Fact]
+    public async Task Human_node_resume_with_failed_run_node_routes_on_failure()
+    {
+        using var h = new EngineHarness();
+        h.BuildSimpleGraph(
+            ("s", NodeType.Start),
+            ("ask", NodeType.Human),
+            ("fix", NodeType.Cmd),
+            ("c", NodeType.Cleanup));
+        h.AddEdge("e1", "s", "ask");
+        h.AddEdge("e2", "ask", "c", EdgeType.OnSuccess);
+        h.AddEdge("e3", "ask", "fix", EdgeType.OnFailure);
+        h.AddEdge("e4", "fix", "c");
+        h.Save();
+
+        await h.Engine.RunAsync(h.RunId);
+        var humanRunNode = h.ReloadRunNodes().First(n => n.LoopNodeId == h.NodesById["ask"].Id);
+
+        var trackedRn = h.Db.Context.LoopRunNodes.First(n => n.Id == humanRunNode.Id);
+        trackedRn.Status = LoopRunNodeStatus.Failed;
+        trackedRn.CompletedAt = DateTime.UtcNow;
+        h.Db.Context.SaveChanges();
+
+        await h.Engine.RunAsync(h.RunId);
+
+        h.ReloadRun().Status.Should().Be(LoopRunStatus.Completed);
+        var fixNodeId = h.NodesById["fix"].Id;
+        h.ReloadRunNodes().Should().Contain(n => n.LoopNodeId == fixNodeId && n.Status == LoopRunNodeStatus.Succeeded);
+    }
 }

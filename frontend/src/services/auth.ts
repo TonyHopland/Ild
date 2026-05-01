@@ -18,6 +18,25 @@ interface BackendLoginResponse {
   expiresAt: string;
 }
 
+function pageQuery(opts?: { skip?: number; take?: number }): string {
+  if (!opts) return "";
+  const params: string[] = [];
+  if (opts.skip !== undefined) params.push(`skip=${opts.skip}`);
+  if (opts.take !== undefined) params.push(`take=${opts.take}`);
+  return params.length ? `?${params.join("&")}` : "";
+}
+
+const tokenListeners = new Set<(token: string | null) => void>();
+function notifyTokenListeners(token: string | null) {
+  tokenListeners.forEach((cb) => {
+    try {
+      cb(token);
+    } catch {
+      /* never throw out of a listener */
+    }
+  });
+}
+
 export const authService = {
   login: async (username: string, password: string): Promise<{ user: User; token: string }> => {
     const response = await api.post<BackendLoginResponse>("/auth/login", {
@@ -45,6 +64,7 @@ export const authService = {
     }
     localStorage.removeItem("auth_token");
     localStorage.removeItem("auth_user");
+    notifyTokenListeners(null);
   },
 
   getMe: async (): Promise<User> => {
@@ -68,11 +88,24 @@ export const authService = {
   setAuth: (user: User, token: string): void => {
     localStorage.setItem("auth_token", token);
     localStorage.setItem("auth_user", JSON.stringify(user));
+    notifyTokenListeners(token);
   },
 
   clearAuth: (): void => {
     localStorage.removeItem("auth_token");
     localStorage.removeItem("auth_user");
+    notifyTokenListeners(null);
+  },
+
+  /**
+   * Subscribe to auth token changes (login/logout). Returns an unsubscribe
+   * function. Used by hooks that need to reconnect when the token changes.
+   */
+  onTokenChange: (cb: (token: string | null) => void): (() => void) => {
+    tokenListeners.add(cb);
+    return () => {
+      tokenListeners.delete(cb);
+    };
   },
 };
 
@@ -97,8 +130,8 @@ export const workItemService = {
     return api.delete<void>(`/workitems/${id}`);
   },
 
-  getRuns: async (id: string): Promise<LoopRun[]> => {
-    return api.get<LoopRun[]>(`/workitems/${id}/runs`);
+  getRuns: async (id: string, opts?: { skip?: number; take?: number }): Promise<LoopRun[]> => {
+    return api.get<LoopRun[]>(`/workitems/${id}/runs${pageQuery(opts)}`);
   },
 
   linkPr: async (id: string, prUrl: string): Promise<void> => {
@@ -124,11 +157,30 @@ export const workItemService = {
   cleanupToBacklog: async (id: string): Promise<void> => {
     return api.post<void>(`/workitems/${id}/cleanup-to-backlog`, {});
   },
+
+  transition: async (id: string, targetStatus: string): Promise<void> => {
+    return api.post<void>(`/workitems/${id}/transition`, { targetStatus });
+  },
+
+  getDependencies: async (
+    id: string,
+    opts?: { skip?: number; take?: number },
+  ): Promise<WorkItem[]> => {
+    return api.get<WorkItem[]>(`/workitems/${id}/dependencies${pageQuery(opts)}`);
+  },
+
+  addDependency: async (id: string, dependencyId: string): Promise<void> => {
+    return api.post<void>(`/workitems/${id}/dependencies`, { dependencyId });
+  },
+
+  removeDependency: async (id: string, dependencyId: string): Promise<void> => {
+    return api.delete<void>(`/workitems/${id}/dependencies/${dependencyId}`);
+  },
 };
 
 export const loopTemplateService = {
-  getAll: async (): Promise<LoopTemplate[]> => {
-    return api.get<LoopTemplate[]>("/looptemplates");
+  getAll: async (opts?: { skip?: number; take?: number }): Promise<LoopTemplate[]> => {
+    return api.get<LoopTemplate[]>(`/looptemplates${pageQuery(opts)}`);
   },
 
   getById: async (id: string): Promise<LoopTemplate> => {
@@ -164,12 +216,12 @@ export const loopTemplateService = {
 };
 
 export const loopRunService = {
-  getAll: async (): Promise<LoopRun[]> => {
-    return api.get<LoopRun[]>("/looptemplates");
+  getAll: async (opts?: { skip?: number; take?: number }): Promise<LoopRun[]> => {
+    return api.get<LoopRun[]>(`/loopruns${pageQuery(opts)}`);
   },
 
   getById: async (id: string): Promise<LoopRun> => {
-    return api.get<LoopRun>(`/looprun/${id}`);
+    return api.get<LoopRun>(`/loopruns/${id}`);
   },
 
   trigger: async (workItemId: string): Promise<LoopRun> => {
@@ -177,7 +229,15 @@ export const loopRunService = {
   },
 
   cancel: async (id: string): Promise<void> => {
-    return api.post<void>(`/looprun/${id}/cancel`, {});
+    return api.post<void>(`/loopruns/${id}/cancel`, {});
+  },
+
+  pause: async (id: string): Promise<void> => {
+    return api.post<void>(`/loopruns/${id}/pause`, {});
+  },
+
+  resume: async (id: string): Promise<void> => {
+    return api.post<void>(`/loopruns/${id}/resume`, {});
   },
 
   getEvents: async (runId: string, cursor = 0, limit = 100): Promise<EventLogPage> => {
@@ -190,8 +250,8 @@ export const loopRunService = {
 };
 
 export const repositoryService = {
-  getAll: async (): Promise<Repository[]> => {
-    return api.get<Repository[]>("/repositories");
+  getAll: async (opts?: { skip?: number; take?: number }): Promise<Repository[]> => {
+    return api.get<Repository[]>(`/repositories${pageQuery(opts)}`);
   },
 
   getById: async (id: string): Promise<Repository> => {
@@ -212,8 +272,8 @@ export const repositoryService = {
 };
 
 export const remoteProviderService = {
-  getAll: async (): Promise<RemoteProvider[]> => {
-    return api.get<RemoteProvider[]>("/remoteproviders");
+  getAll: async (opts?: { skip?: number; take?: number }): Promise<RemoteProvider[]> => {
+    return api.get<RemoteProvider[]>(`/remoteproviders${pageQuery(opts)}`);
   },
 
   getById: async (id: string): Promise<RemoteProvider> => {
@@ -234,8 +294,8 @@ export const remoteProviderService = {
 };
 
 export const aiProviderService = {
-  getAll: async (): Promise<AiProvider[]> => {
-    return api.get<AiProvider[]>("/aiproviders");
+  getAll: async (opts?: { skip?: number; take?: number }): Promise<AiProvider[]> => {
+    return api.get<AiProvider[]>(`/aiproviders${pageQuery(opts)}`);
   },
 
   getById: async (id: string): Promise<AiProvider> => {

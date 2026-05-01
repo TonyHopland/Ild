@@ -31,6 +31,7 @@ public class AuthStore : IAuthStore
 
     public async Task UpdateUserAsync(User user)
     {
+        _db.Users.Update(user);
         await _db.SaveChangesAsync();
     }
 }

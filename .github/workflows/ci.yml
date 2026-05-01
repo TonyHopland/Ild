@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          cache: true
+
+      - name: Frontend check (format + lint + types)
+        run: vp check
+        working-directory: frontend
+
+      - name: Frontend tests
+        run: vp test --run
+        working-directory: frontend
+
+      - name: Backend restore
+        run: dotnet restore
+
+      - name: Backend build
+        run: dotnet build --no-restore --configuration Release
+
+      - name: Backend tests
+        run: dotnet test ILD.Tests/ILD.Tests.csproj --no-build --configuration Release --nologo

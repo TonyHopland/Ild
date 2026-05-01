@@ -6,10 +6,10 @@ Replace inner `HashSet<string>` with a thread-safe alternative (e.g., `Concurren
 
 ## Acceptance criteria
 
-- [ ] Connection tracking per run group is thread-safe under concurrent access
-- [ ] Prefer SignalR's built-in `Groups.AddToGroupAsync` / `RemoveFromGroupAsync` over manual dictionary tracking
-- [ ] No `InvalidOperationException` under load with many concurrent connections
-- [ ] Existing hub functionality (joining/leaving run groups) works correctly
+- [x] Connection tracking per run group is thread-safe under concurrent access
+- [x] Prefer SignalR's built-in `Groups.AddToGroupAsync` / `RemoveFromGroupAsync` over manual dictionary tracking
+- [x] No `InvalidOperationException` under load with many concurrent connections
+- [x] Existing hub functionality (joining/leaving run groups) works correctly
 
 ## Blocked by
 

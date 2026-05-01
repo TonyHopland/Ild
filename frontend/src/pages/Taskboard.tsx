@@ -1,25 +1,34 @@
 import { useState, useEffect } from "react";
 import { WorkItem, WorkItemStatus } from "../types";
+import type { TypedSignalRMessage } from "../types/signalr";
 import { workItemService } from "../services/auth";
 import TaskboardColumn from "../components/TaskboardColumn";
 import WorkItemModal from "../components/WorkItemModal";
+import ErrorBanner from "../components/ErrorBanner";
 import { useSignalR } from "../hooks/useSignalR";
 import { WORK_ITEM_STATUSES } from "../utils/constants";
+
+function errorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string") return error;
+  return fallback;
+}
 
 export default function Taskboard() {
   const [workItems, setWorkItems] = useState<WorkItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<WorkItem | null>(null);
-  const { on } = useSignalR();
+  const [errorText, setErrorText] = useState("");
+  const { on, off } = useSignalR();
 
   useEffect(() => {
     void loadWorkItems();
   }, []);
 
   useEffect(() => {
-    on("HumanFeedbackRequired" as any, async (message: any) => {
-      const { workItemId, reason } = message.payload as { workItemId: string; reason: string };
+    const onHumanFeedback = async (message: TypedSignalRMessage<"HumanFeedbackRequired">) => {
+      const { workItemId, reason } = message.payload;
       setWorkItems((prev) =>
         prev.map((item) =>
           item.id === workItemId
@@ -38,23 +47,23 @@ export default function Taskboard() {
           body: reason,
         });
       }
-    });
+    };
 
-    on("work_item_updated" as any, async (message: any) => {
-      const updated = message.payload as WorkItem;
-      setWorkItems((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
-    });
+    const onWorkItemStateChanged = async (message: TypedSignalRMessage<"WorkItemStateChanged">) => {
+      const { workItemId, newStatus } = message.payload;
+      setWorkItems((prev) =>
+        prev.map((item) => (item.id === workItemId ? { ...item, status: newStatus } : item)),
+      );
+    };
 
-    on("work_item_created" as any, async (message: any) => {
-      const newItem = message.payload as WorkItem;
-      setWorkItems((prev) => [...prev, newItem]);
-    });
+    on("HumanFeedbackRequired", onHumanFeedback);
+    on("WorkItemStateChanged", onWorkItemStateChanged);
 
-    on("work_item_deleted" as any, async (message: any) => {
-      const deletedId = (message.payload as { id: string }).id;
-      setWorkItems((prev) => prev.filter((item) => item.id !== deletedId));
-    });
-  }, [on]);
+    return () => {
+      off("HumanFeedbackRequired", onHumanFeedback);
+      off("WorkItemStateChanged", onWorkItemStateChanged);
+    };
+  }, [on, off]);
 
   const loadWorkItems = async () => {
     try {
@@ -86,6 +95,34 @@ export default function Taskboard() {
     setModalOpen(true);
   };
 
+  const handleCardClick = (wi: WorkItem) => {
+    setEditingItem(wi);
+    setModalOpen(true);
+  };
+
+  const handleDeleted = (id: string) => {
+    setWorkItems((prev) => prev.filter((wi) => wi.id !== id));
+  };
+
+  const [announcement, setAnnouncement] = useState("");
+
+  const handleMoveWorkItem = async (workItem: WorkItem, direction: "prev" | "next") => {
+    const order = WORK_ITEM_STATUSES.map((s) => s.value);
+    const currentIndex = order.indexOf(workItem.status);
+    if (currentIndex < 0) return;
+    const nextIndex = direction === "next" ? currentIndex + 1 : currentIndex - 1;
+    if (nextIndex < 0 || nextIndex >= order.length) return;
+    const target = order[nextIndex] as WorkItemStatus;
+    try {
+      await workItemService.transition(workItem.id, target);
+      const updated = await workItemService.getById(workItem.id);
+      handleWorkItemUpdate(updated);
+      setAnnouncement(`${workItem.title} moved to ${target}`);
+    } catch (error) {
+      setErrorText(errorMessage(error, "Failed to move work item."));
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="page-container">
@@ -102,6 +139,10 @@ export default function Taskboard() {
           + New Item
         </button>
       </div>
+      <ErrorBanner message={errorText} onDismiss={() => setErrorText("")} />
+      <div role="status" aria-live="polite" className="taskboard-live-region">
+        {announcement}
+      </div>
       <div className="taskboard">
         {WORK_ITEM_STATUSES.map((status) => {
           const items = workItems.filter((wi) => wi.status === status.value);
@@ -112,6 +153,10 @@ export default function Taskboard() {
               label={status.label}
               workItems={items}
               onWorkItemUpdate={handleWorkItemUpdate}
+              onWorkItemClick={handleCardClick}
+              onWorkItemDeleted={handleDeleted}
+              onError={(msg) => setErrorText(msg)}
+              onMoveWorkItem={handleMoveWorkItem}
             />
           );
         })}
@@ -121,6 +166,7 @@ export default function Taskboard() {
         isOpen={modalOpen}
         onClose={() => setModalOpen(false)}
         onSave={handleSave}
+        onDelete={handleDeleted}
       />
       <style>{`
         .taskboard-header {
@@ -128,6 +174,18 @@ export default function Taskboard() {
           justify-content: space-between;
           align-items: center;
           margin-bottom: 1rem;
+        }
+
+        .taskboard-live-region {
+          position: absolute;
+          width: 1px;
+          height: 1px;
+          padding: 0;
+          margin: -1px;
+          overflow: hidden;
+          clip: rect(0, 0, 0, 0);
+          white-space: nowrap;
+          border: 0;
         }
 
         .taskboard {

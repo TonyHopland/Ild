@@ -42,6 +42,9 @@ public sealed class PRNodeExecutor : INodeExecutor
                 wi.Title,
                 wi.Description ?? "");
 
+            if (prResult == null)
+                return NodeExecutionResult.Fail("PR creation returned no result");
+
             if (!string.IsNullOrEmpty(prResult.Error))
                 return NodeExecutionResult.Fail($"PR creation failed: {prResult.Error}");
 

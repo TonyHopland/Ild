@@ -20,8 +20,13 @@ public class RepositoriesController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<IActionResult> GetAll()
-        => Ok(await _db.Repositories.AsNoTracking().ToListAsync());
+    public async Task<IActionResult> GetAll([FromQuery] int skip = 0, [FromQuery] int take = 100)
+    {
+        if (skip < 0) skip = 0;
+        if (take <= 0) take = 100;
+        if (take > 500) take = 500;
+        return Ok(await _db.Repositories.AsNoTracking().OrderBy(r => r.Name).Skip(skip).Take(take).ToListAsync());
+    }
 
     [HttpGet("{id}")]
     public async Task<IActionResult> GetById(string id)

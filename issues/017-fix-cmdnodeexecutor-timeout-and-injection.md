@@ -8,9 +8,9 @@ Add a `CancellationToken` to the stream reads tied to the same timeout as the pr
 
 ## Acceptance criteria
 
-- [ ] `ReadToEndAsync` on stdout/stderr uses a `CancellationToken` tied to the node timeout
-- [ ] Normal command execution is unaffected
-- [ ] Add test for stream read timeout behavior
+- [x] `ReadToEndAsync` on stdout/stderr uses a `CancellationToken` tied to the node timeout
+- [x] Normal command execution is unaffected
+- [x] Add test for stream read timeout behavior
 
 ## Blocked by
 

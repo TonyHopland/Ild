@@ -20,11 +20,15 @@ export default function Settings() {
 
   const handleLogLevelChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     const newLevel = e.target.value;
-    setLogLevel(newLevel);
+    let previousLevel = "";
+    setLogLevel((prev) => {
+      previousLevel = prev;
+      return newLevel;
+    });
     try {
       await loggingService.setLevel(newLevel);
     } catch {
-      setLogLevel(logLevel);
+      setLogLevel(previousLevel);
     }
   };
 

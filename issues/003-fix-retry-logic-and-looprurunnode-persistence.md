@@ -13,10 +13,10 @@ For Bug B: Update the existing `LoopRunNode` record on retry rather than creatin
 
 ## Acceptance criteria
 
-- [ ] `HasFailureEdge` check moved **before** retry loop — nodes with failure edge skip retry logic entirely
-- [ ] Each node execution updates a single `LoopRunNode` record in place, incrementing `RetryCount`
-- [ ] No duplicate `LoopRunNode` rows for the same node in a LoopRun
-- [ ] LoopEngine tests cover both paths (failure edge immediate route, auto-retry exhaustion)
+- [x] `HasFailureEdge` check moved **before** retry loop — nodes with failure edge skip retry logic entirely
+- [x] Each node execution updates a single `LoopRunNode` record in place, incrementing `RetryCount`
+- [x] No duplicate `LoopRunNode` rows for the same node in a LoopRun
+- [x] LoopEngine tests cover both paths (failure edge immediate route, auto-retry exhaustion)
 
 ## Blocked by
 

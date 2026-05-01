@@ -24,8 +24,4 @@ public interface IProviderStore
     Task CreateRepositoryAsync(Repository repository);
     Task UpdateRepositoryAsync(Repository repository);
     Task DeleteRepositoryAsync(Repository repository);
-    Task<LoopTemplate?> GetLoopTemplateByIdAsync(Guid id);
-    Task<LoopTemplate?> GetLoopTemplateByVersionIdAsync(Guid versionId);
-    Task CreateLoopTemplateAsync(LoopTemplate template);
-    Task UpdateLoopTemplateAsync(LoopTemplate template);
 }

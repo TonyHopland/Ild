@@ -74,11 +74,11 @@ public sealed class CmdNodeExecutor : INodeExecutor
         psi.ArgumentList.Add(command);
 
         using var proc = Process.Start(psi)!;
-        var stdoutTask = proc.StandardOutput.ReadToEndAsync();
-        var stderrTask = proc.StandardError.ReadToEndAsync();
         var timeout = TimeSpan.FromSeconds(ctx.Node.TimeoutSeconds > 0 ? ctx.Node.TimeoutSeconds : 300);
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ctx.CancellationToken);
         timeoutCts.CancelAfter(timeout);
+        var stdoutTask = proc.StandardOutput.ReadToEndAsync(timeoutCts.Token);
+        var stderrTask = proc.StandardError.ReadToEndAsync(timeoutCts.Token);
         try
         {
             await proc.WaitForExitAsync(timeoutCts.Token);
@@ -88,8 +88,17 @@ public sealed class CmdNodeExecutor : INodeExecutor
             try { proc.Kill(entireProcessTree: true); } catch { }
             return NodeExecutionResult.Fail($"command timed out after {timeout}");
         }
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
+        string stdout, stderr;
+        try
+        {
+            stdout = await stdoutTask;
+            stderr = await stderrTask;
+        }
+        catch (OperationCanceledException)
+        {
+            try { proc.Kill(entireProcessTree: true); } catch { }
+            return NodeExecutionResult.Fail($"command stream read timed out after {timeout}");
+        }
         return proc.ExitCode == 0
             ? NodeExecutionResult.Ok(stdout)
             : NodeExecutionResult.Fail($"exit={proc.ExitCode} stderr={stderr}", stdout);
@@ -168,13 +177,6 @@ public sealed class AINodeExecutor : INodeExecutor
     }
 }
 
-public sealed class HumanNodeExecutor : INodeExecutor
-{
-    public NodeType NodeType => NodeType.Human;
-    public Task<NodeExecutionResult> ExecuteAsync(NodeExecutionContext ctx)
-        => Task.FromResult(NodeExecutionResult.Ok("waiting human"));
-}
-
 public sealed class CleanupNodeExecutor : INodeExecutor
 {
     public NodeType NodeType => NodeType.Cleanup;
@@ -199,6 +201,7 @@ public sealed class CleanupNodeExecutor : INodeExecutor
         {
             try { await _repo.DestroyWorktreeAsync(wi.WorktreePath); } catch { }
         }
+        wi.WorktreePath = null;
         await workItemStore.UpdateAsync(wi);
         return NodeExecutionResult.Ok("cleanup complete");
     }

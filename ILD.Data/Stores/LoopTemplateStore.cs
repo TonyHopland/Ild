@@ -17,8 +17,26 @@ public class LoopTemplateStore : ILoopTemplateStore
     public async Task<LoopTemplate?> GetByIdAsync(Guid id)
         => await _db.LoopTemplates.FindAsync(id).AsTask();
 
-    public async Task<IReadOnlyList<LoopTemplate>> GetAllAsync()
-        => await _db.LoopTemplates.ToListAsync();
+    public async Task<LoopTemplate?> GetByVersionIdAsync(Guid versionId)
+        => await _db.LoopTemplates
+            .FirstOrDefaultAsync(t => t.Versions.Any(v => v.Id == versionId));
+
+    public async Task<TemplateGraph?> GetTemplateGraphByVersionIdAsync(Guid versionId)
+    {
+        var version = await _db.LoopTemplateVersions
+            .AsNoTracking()
+            .Include(v => v.LoopTemplate)
+            .Include(v => v.Nodes)
+                .ThenInclude(n => n.OutgoingEdges)
+            .FirstOrDefaultAsync(v => v.Id == versionId);
+        if (version == null) return null;
+        var nodes = version.Nodes.ToList();
+        var edges = nodes.SelectMany(n => n.OutgoingEdges).Distinct().ToList();
+        return new TemplateGraph(version.LoopTemplate, version, nodes, edges);
+    }
+
+    public async Task<IReadOnlyList<LoopTemplate>> GetAllAsync(int skip = 0, int take = 100)
+        => await _db.LoopTemplates.OrderBy(t => t.Name).Skip(skip).Take(take).ToListAsync();
 
     public async Task<LoopTemplateVersion?> GetVersionByIdAsync(Guid versionId)
         => await _db.LoopTemplateVersions.FindAsync(versionId).AsTask();
@@ -63,6 +81,7 @@ public class LoopTemplateStore : ILoopTemplateStore
 
     public async Task UpdateTemplateAsync(LoopTemplate template)
     {
+        _db.LoopTemplates.Update(template);
         await _db.SaveChangesAsync();
     }
 

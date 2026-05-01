@@ -12,11 +12,11 @@ Three security issues in the API layer:
 
 ## Acceptance criteria
 
-- [ ] CORS policy restricts to origins from `ILD_ALLOWED_ORIGINS` env var (defaults to localhost:3000, localhost:5173)
-- [ ] Webhook endpoint validates HMAC-SHA256 signature from `X-Forgejo-Signature` header against `RemoteProvider.WebhookSecret`
-- [ ] Webhook is matched to the correct RemoteProvider by the repository in the payload
-- [ ] `AiProvider` API responses redact the `Config` field (or return a DTO without it)
-- [ ] Existing webhook flow still works with correct secret configured
+- [x] CORS policy restricts to origins from `ILD_ALLOWED_ORIGINS` env var (defaults to localhost:3000, localhost:5173)
+- [x] Webhook endpoint validates HMAC-SHA256 signature from `X-Forgejo-Signature` header against `RemoteProvider.WebhookSecret`
+- [x] Webhook is matched to the correct RemoteProvider by the repository in the payload
+- [x] `AiProvider` API responses redact the `Config` field (or return a DTO without it)
+- [x] Existing webhook flow still works with correct secret configured
 
 ## Blocked by
 

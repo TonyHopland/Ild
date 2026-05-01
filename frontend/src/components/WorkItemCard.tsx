@@ -1,7 +1,11 @@
 import { WorkItem } from "../types";
+import { workItemService } from "../services/auth";
 
 interface WorkItemCardProps {
   workItem: WorkItem;
+  onClick?: (workItem: WorkItem) => void;
+  onDeleted?: (id: string) => void;
+  onMove?: (workItem: WorkItem, direction: "prev" | "next") => void;
 }
 
 const REASON_STYLES: Record<string, { bg: string; color: string; border: string }> = {
@@ -11,17 +15,47 @@ const REASON_STYLES: Record<string, { bg: string; color: string; border: string 
   "Human Input Needed": { bg: "#1a2d2a", color: "#34d399", border: "#059669" },
 };
 
-export default function WorkItemCard({ workItem }: WorkItemCardProps) {
+const PRIORITY_COLORS: Record<string, string> = {
+  Low: "#6b7280",
+  Medium: "#f59e0b",
+  High: "#ef4444",
+  Critical: "#dc2626",
+};
+
+export default function WorkItemCard({ workItem, onClick, onDeleted, onMove }: WorkItemCardProps) {
   const handleDragStart = (e: React.DragEvent) => {
     e.dataTransfer.setData("text/plain", workItem.id);
   };
 
-  const priorityColors: Record<string, string> = {
-    Low: "#6b7280",
-    Medium: "#f59e0b",
-    High: "#ef4444",
-    Critical: "#dc2626",
+  const handleClick = () => {
+    onClick?.(workItem);
   };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowRight") {
+      e.preventDefault();
+      onMove?.(workItem, "next");
+    } else if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      onMove?.(workItem, "prev");
+    } else if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onClick?.(workItem);
+    }
+  };
+
+  const handleDelete = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm(`Delete work item "${workItem.title}"?`)) return;
+    try {
+      await workItemService.delete(workItem.id);
+      onDeleted?.(workItem.id);
+    } catch (error) {
+      console.error("Failed to delete work item:", error);
+    }
+  };
+
+  const priorityColor = PRIORITY_COLORS[workItem.priority] ?? "#6b7280";
 
   const reasonStyle = workItem.humanFeedbackReason
     ? (REASON_STYLES[workItem.humanFeedbackReason] ?? {
@@ -32,12 +66,26 @@ export default function WorkItemCard({ workItem }: WorkItemCardProps) {
     : null;
 
   return (
-    <div className="work-item-card" draggable onDragStart={handleDragStart}>
+    <div
+      className="work-item-card"
+      draggable
+      onDragStart={handleDragStart}
+      onClick={handleClick}
+      onKeyDown={handleKeyDown}
+      role="button"
+      tabIndex={0}
+      aria-label={`${workItem.title}, status ${workItem.status}. Use left and right arrow keys to move between columns.`}
+    >
       <div className="work-item-card-header">
-        <span
-          className="work-item-priority-dot"
-          style={{ backgroundColor: priorityColors[workItem.priority] ?? "#6b7280" }}
-        />
+        <span className="work-item-priority-dot" style={{ backgroundColor: priorityColor }} />
+        <button
+          className="work-item-delete-btn"
+          onClick={handleDelete}
+          aria-label="Delete work item"
+          title="Delete"
+        >
+          ×
+        </button>
       </div>
       <h4 className="work-item-title">{workItem.title}</h4>
       {reasonStyle && workItem.humanFeedbackReason && (

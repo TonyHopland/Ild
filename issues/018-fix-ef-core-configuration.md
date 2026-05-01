@@ -14,12 +14,12 @@ Several EF Core configuration gaps in `AppDbContext`:
 
 ## Acceptance criteria
 
-- [ ] Cascade delete configured for parent→child relationships (LoopRun, LoopRunNode, EventLog, etc.)
-- [ ] Duplicate `ForeignKey` attributes removed (keep one per relationship)
-- [ ] `ILoopRunStore` has `GetAllByWorkItemAsync` and `GetCurrentByWorkItemAsync` methods
-- [ ] `IWorkItemStore.GetByRepositoryAsync` returns `IReadOnlyList<WorkItem>`
-- [ ] Dead `using` imports removed
-- [ ] All existing tests still pass
+- [x] Cascade delete configured for parent→child relationships (LoopRun, LoopRunNode, EventLog, etc.)
+- [x] Duplicate `ForeignKey` attributes removed (keep one per relationship)
+- [x] `ILoopRunStore` has `GetAllByWorkItemAsync` and `GetCurrentByWorkItemAsync` methods
+- [x] `IWorkItemStore.GetByRepositoryAsync` returns `IReadOnlyList<WorkItem>`
+- [x] Dead `using` imports removed
+- [x] All existing tests still pass
 
 ## Blocked by
 

@@ -8,11 +8,11 @@ Also fix `TransitionWorkItemAsync` silent no-op on null WorkItem — log a warni
 
 ## Acceptance criteria
 
-- [ ] "No Start node" failure path transitions WorkItem out of Running
-- [ ] Safety net exhaustion failure path transitions WorkItem out of Running
-- [ ] Cancellation failure path transitions WorkItem out of Running
-- [ ] `TransitionWorkItemAsync` logs a warning when WorkItem is not found (instead of silent return)
-- [ ] Add LoopEngine test for early failure WorkItem state transition
+- [x] "No Start node" failure path transitions WorkItem out of Running
+- [x] Safety net exhaustion failure path transitions WorkItem out of Running
+- [x] Cancellation failure path transitions WorkItem out of Running
+- [x] `TransitionWorkItemAsync` logs a warning when WorkItem is not found (instead of silent return)
+- [x] Add LoopEngine test for early failure WorkItem state transition
 
 ## Blocked by
 

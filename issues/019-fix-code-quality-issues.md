@@ -16,17 +16,17 @@ The frontend has significant code quality issues that affect maintainability and
 
 ## Acceptance criteria
 
-- [ ] Inline styles extracted to CSS module files (at minimum for LoopEditor)
-- [ ] API errors in WorkItemModal display a user-visible error message
-- [ ] Form submit buttons are disabled during pending requests
-- [ ] `AiProvidersController.Create` validates `ModelState` before creating entity
-- [ ] `HumanNodeExecutor` removed (dead code)
-- [ ] `SubmitHumanFeedbackInputAsync` sets Human LoopRunNode to Succeeded with input as Output
-- [ ] `RejectHumanFeedbackAsync` sets Human LoopRunNode to Failed (already done)
-- [ ] Engine resume path handles Human node status (Succeeded → on_success, Failed → on_failure)
-- [ ] Human node input available as `{{PreviousNode.Output}}` for downstream nodes
-- [ ] `PRNodeExecutor` handles null `prResult` gracefully
-- [ ] `GetRunStatusAsync` returns an optional or throws for non-existent runs (not ambiguous `Failed`)
+- [ ] Inline styles extracted to CSS module files (at minimum for LoopEditor) — _deferred, see #029_
+- [x] API errors in WorkItemModal display a user-visible error message
+- [x] Form submit buttons are disabled during pending requests
+- [x] `AiProvidersController.Create` validates `ModelState` before creating entity
+- [x] `HumanNodeExecutor` removed (dead code) — _done in #030_
+- [x] `SubmitHumanFeedbackInputAsync` sets Human LoopRunNode to Succeeded with input as Output — _done in #030_
+- [x] `RejectHumanFeedbackAsync` sets Human LoopRunNode to Failed (already done)
+- [x] Engine resume path handles Human node status (Succeeded → on*success, Failed → on_failure) — \_done in #030*
+- [x] Human node input available as `{{PreviousNode.Output}}` for downstream nodes — _done in #030_
+- [x] `PRNodeExecutor` handles null `prResult` gracefully
+- [x] `GetRunStatusAsync` returns an optional or throws for non-existent runs (not ambiguous `Failed`) — _done in #031_
 
 ## Blocked by
 

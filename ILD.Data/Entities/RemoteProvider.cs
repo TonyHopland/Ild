@@ -3,7 +3,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 
 namespace ILD.Data.Entities;
 
-public class RemoteProvider
+public class RemoteProvider : IHasUpdatedAt
 {
     [Key]
     public Guid Id { get; set; }

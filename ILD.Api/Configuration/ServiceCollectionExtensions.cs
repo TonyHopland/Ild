@@ -16,21 +16,21 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ILoopTemplateManager, LoopTemplateManager>();
         services.AddSingleton<IRepositoryManager, RepositoryManager>();
         services.AddScoped<IRemoteProvider, RemoteProviderService>();
-        services.AddScoped<IAIProviderService, AIProviderService>();
+        services.AddHttpClient<IAIProviderService, AIProviderService>();
         services.AddScoped<IEventLogService, EventLogService>();
         services.AddScoped<IRecoveryManager, RecoveryManager>();
         services.AddScoped<IPrSyncService, PrSyncService>();
 
         services.AddSingleton<IRunNotifier, SignalRRunNotifier>();
+        services.AddSingleton<IWorkItemNotifier, SignalRWorkItemNotifier>();
         services.AddSingleton<INodeExecutor, StartNodeExecutor>();
         services.AddSingleton<INodeExecutor, CmdNodeExecutor>();
         services.AddSingleton<INodeExecutor, AINodeExecutor>();
-        services.AddSingleton<INodeExecutor, HumanNodeExecutor>();
         services.AddSingleton<INodeExecutor, PRNodeExecutor>();
         services.AddSingleton<INodeExecutor, CleanupNodeExecutor>();
         services.AddSingleton<INodeExecutorRegistry, NodeExecutorRegistry>();
         services.AddSingleton<ILoopEngine, LoopEngine>();
-        services.AddSingleton<IMetricsCollector, MetricsCollector>();
+        services.AddScoped<IMetricsCollector, MetricsCollector>();
 
         services.AddHttpClient();
 

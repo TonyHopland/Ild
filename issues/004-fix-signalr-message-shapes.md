@@ -13,14 +13,14 @@ Align the event contracts end-to-end. Create a `SignalRWorkItemNotifier` (mirror
 
 ## Acceptance criteria
 
-- [ ] Define shared SignalR event DTOs (one per event type: NodeStateChanged, EventLogged, LoopRunStateChanged, WorkItemStateChanged, HumanFeedbackRequired, etc.)
-- [ ] Backend wraps each event in a single DTO payload (not positional args)
-- [ ] `LoopRunHub` broadcasts use `IHubContext` from the service layer (already done via `SignalRRunNotifier`)
-- [ ] Create `SignalRWorkItemNotifier` with `IHubContext<WorkItemHub>` for server-initiated broadcasts
-- [ ] Frontend SignalR handlers accept typed DTO arguments (no `message.payload` mis-casts)
-- [ ] Remove all `as any` casts from `on()` calls in Taskboard and LoopRunMonitor
-- [ ] Taskboard receives and displays work item state changes in real time
-- [ ] LoopRunMonitor receives and displays node state changes in real time
+- [x] Define shared SignalR event DTOs (one per event type: NodeStateChanged, EventLogged, LoopRunStateChanged, WorkItemStateChanged, HumanFeedbackRequired, etc.)
+- [x] Backend wraps each event in a single DTO payload (not positional args)
+- [x] `LoopRunHub` broadcasts use `IHubContext` from the service layer (already done via `SignalRRunNotifier`)
+- [x] Create `SignalRWorkItemNotifier` with `IHubContext<WorkItemHub>` for server-initiated broadcasts
+- [x] Frontend SignalR handlers accept typed DTO arguments (no `message.payload` mis-casts)
+- [x] Remove all `as any` casts from `on()` calls in Taskboard and LoopRunMonitor
+- [x] Taskboard receives and displays work item state changes in real time
+- [x] LoopRunMonitor receives and displays node state changes in real time
 
 ## Blocked by
 

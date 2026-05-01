@@ -31,6 +31,19 @@ public class AppDbContext : DbContext
         ConfigureIndexes(modelBuilder);
         ConfigureTimestamps(modelBuilder);
         ConfigureConstraints(modelBuilder);
+        ConfigureEnumConversions(modelBuilder);
+    }
+
+    private void ConfigureEnumConversions(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<LoopTemplate>()
+            .Property(t => t.RecoveryPolicy)
+            .HasConversion<string>()
+            .HasMaxLength(128);
+        modelBuilder.Entity<LoopRun>()
+            .Property(r => r.RecoveryPolicy)
+            .HasConversion<string>()
+            .HasMaxLength(128);
     }
 
     private void ConfigureIndexes(ModelBuilder modelBuilder)
@@ -209,5 +222,45 @@ public class AppDbContext : DbContext
             .WithMany(w => w.DependentDependencies)
             .HasForeignKey(wd => wd.DependencyWorkItemId)
             .OnDelete(DeleteBehavior.Restrict);
+
+        modelBuilder.Entity<LoopRun>()
+            .HasOne(r => r.WorkItem)
+            .WithMany(w => w.LoopRuns)
+            .HasForeignKey(r => r.WorkItemId)
+            .OnDelete(DeleteBehavior.Cascade);
+    }
+
+    private void TouchUpdatedAt()
+    {
+        var now = DateTime.UtcNow;
+        foreach (var entry in ChangeTracker.Entries<IHasUpdatedAt>())
+        {
+            if (entry.State == EntityState.Modified)
+                entry.Entity.UpdatedAt = now;
+        }
+    }
+
+    public override int SaveChanges()
+    {
+        TouchUpdatedAt();
+        return base.SaveChanges();
+    }
+
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        TouchUpdatedAt();
+        return base.SaveChanges(acceptAllChangesOnSuccess);
+    }
+
+    public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+    {
+        TouchUpdatedAt();
+        return base.SaveChangesAsync(cancellationToken);
+    }
+
+    public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+    {
+        TouchUpdatedAt();
+        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
     }
 }

@@ -6,12 +6,12 @@ Add tests that verify each policy path, worktree health validation on recovery, 
 
 ## Acceptance criteria
 
-- [ ] Test: AutoResume policy re-executes the in-flight node
-- [ ] Test: NeedsReview policy transitions WorkItem to HumanFeedback
-- [ ] Test: Cancel policy cancels the LoopRun and transitions WorkItem appropriately
-- [ ] Test: Worktree health validation on recovery (corrupted worktree detected)
-- [ ] Test: Human node partial input preserved across recovery
-- [ ] Tests use mocked dependencies (no real DB or filesystem)
+- [x] Test: AutoResume policy re-executes the in-flight node
+- [x] Test: NeedsReview policy transitions WorkItem to HumanFeedback
+- [x] Test: Cancel policy cancels the LoopRun and transitions WorkItem appropriately
+- [x] Test: Worktree health validation on recovery (corrupted worktree detected)
+- [x] Test: Human node partial input preserved across recovery
+- [x] Tests use mocked dependencies (no real DB or filesystem)
 
 ## Blocked by
 

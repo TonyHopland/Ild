@@ -1,9 +1,10 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
+using ILD.Data.Enums;
 
 namespace ILD.Data.Entities;
 
-public class LoopTemplate
+public class LoopTemplate : IHasUpdatedAt
 {
     [Key]
     public Guid Id { get; set; }
@@ -19,7 +20,7 @@ public class LoopTemplate
 
     [Required]
     [MaxLength(128)]
-    public string RecoveryPolicy { get; set; } = string.Empty;
+    public RecoveryPolicy RecoveryPolicy { get; set; }
 
     public int MaxNodeExecutions { get; set; }
 

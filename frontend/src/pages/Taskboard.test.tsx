@@ -167,3 +167,42 @@ describe("Taskboard SignalR", () => {
     expect(notificationCalls).toHaveLength(0);
   });
 });
+
+describe("Taskboard keyboard navigation", () => {
+  test("ArrowRight on a focused card transitions to the next column", async () => {
+    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+      on: vi.fn(),
+      off: vi.fn(),
+      connectionState: "connected",
+    });
+    const transitionSpy = vi
+      .spyOn(authServices.workItemService, "transition")
+      .mockResolvedValue(undefined as unknown as void);
+    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([
+      makeItem({ status: WorkItemStatus.Ready }),
+    ]);
+    vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(
+      makeItem({ status: WorkItemStatus.Running }),
+    );
+
+    const { default: Taskboard } = await import("./Taskboard");
+    render(
+      <MemoryRouter>
+        <Taskboard />
+      </MemoryRouter>,
+    );
+
+    const card = await screen.findByRole("button", { name: /Test Item/i });
+    card.focus();
+    const { fireEvent } = await import("@testing-library/react");
+    fireEvent.keyDown(card, { key: "ArrowRight" });
+
+    await waitFor(() => {
+      expect(transitionSpy).toHaveBeenCalledWith("wi-1", WorkItemStatus.Running);
+    });
+
+    // aria-live region should announce the move
+    const live = await screen.findByRole("status");
+    expect(live.textContent).toContain("Running");
+  });
+});

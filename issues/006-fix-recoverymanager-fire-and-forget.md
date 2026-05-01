@@ -6,10 +6,10 @@ Track recovered run tasks properly. Either await them with proper error handling
 
 ## Acceptance criteria
 
-- [ ] Recovered loop runs are tracked and their exceptions are logged (not swallowed)
-- [ ] Recovered runs use the `RunControl.Cts` token for cancellation
-- [ ] `RunControl.Task` is set so callers can observe completion
-- [ ] Add unit tests for RecoveryManager covering all three RecoveryPolicy paths (AutoResume, NeedsReview, Cancel)
+- [x] Recovered loop runs are tracked and their exceptions are logged (not swallowed)
+- [x] Recovered runs use the `RunControl.Cts` token for cancellation
+- [x] `RunControl.Task` is set so callers can observe completion
+- [x] Add unit tests for RecoveryManager covering all three RecoveryPolicy paths (AutoResume, NeedsReview, Cancel)
 
 ## Blocked by
 

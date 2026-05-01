@@ -14,21 +14,43 @@ public class WorkItemsController : ControllerBase
     private readonly IWorkItemManager _workItemManager;
     private readonly ILoopEngine _engine;
     private readonly AppDbContext _db;
+    private readonly ILogger<WorkItemsController> _logger;
 
-    public WorkItemsController(IWorkItemManager workItemManager, ILoopEngine engine, AppDbContext db)
+    public WorkItemsController(IWorkItemManager workItemManager, ILoopEngine engine, AppDbContext db, ILogger<WorkItemsController> logger)
     {
         _workItemManager = workItemManager;
         _engine = engine;
         _db = db;
+        _logger = logger;
+    }
+
+    private void RunInBackground(Guid runId)
+    {
+        if (_engine is not ILD.Core.Services.Implementations.LoopEngine le) return;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await le.RunAsync(runId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Background LoopRun {RunId} failed", runId);
+            }
+        });
     }
 
     [HttpGet]
-    public async Task<IActionResult> GetAll([FromQuery] string? status = null)
+    public async Task<IActionResult> GetAll([FromQuery] string? status = null, [FromQuery] int skip = 0, [FromQuery] int take = 100)
     {
+        if (skip < 0) skip = 0;
+        if (take <= 0) take = 100;
+        if (take > 500) take = 500;
+
         IQueryable<WorkItem> q = _db.WorkItems.AsNoTracking();
         if (!string.IsNullOrEmpty(status) && Enum.TryParse<WorkItemStatus>(status, true, out var s))
             q = q.Where(w => w.Status == s);
-        var items = await q.OrderByDescending(w => w.CreatedAt).ToListAsync();
+        var items = await q.OrderByDescending(w => w.CreatedAt).Skip(skip).Take(take).ToListAsync();
         return Ok(items);
     }
 
@@ -65,12 +87,9 @@ public class WorkItemsController : ControllerBase
     {
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
-        var wi = await _db.WorkItems.FindAsync(guid);
-        if (wi == null) return NotFound();
-        wi.Title = request.Title;
-        wi.Description = request.Description;
-        wi.UpdatedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync();
+        var ok = await _workItemManager.UpdateAsync(guid, request.Title, request.Description);
+        if (!ok) return NotFound();
+        var wi = await _workItemManager.GetWorkItemAsync(guid);
         return Ok(wi);
     }
 
@@ -105,13 +124,17 @@ public class WorkItemsController : ControllerBase
     }
 
     [HttpGet("{id}/dependencies")]
-    public async Task<IActionResult> GetDependencies(string id)
+    public async Task<IActionResult> GetDependencies(string id, [FromQuery] int skip = 0, [FromQuery] int take = 100)
     {
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
 
+        if (skip < 0) skip = 0;
+        if (take <= 0) take = 100;
+        if (take > 500) take = 500;
+
         var dependencies = await _workItemManager.GetDependenciesAsync(guid);
-        return Ok(dependencies);
+        return Ok(dependencies.Skip(skip).Take(take));
     }
 
     [HttpPost("{id}/dependencies")]
@@ -141,11 +164,18 @@ public class WorkItemsController : ControllerBase
     }
 
     [HttpGet("{id}/runs")]
-    public async Task<IActionResult> GetRuns(string id)
+    public async Task<IActionResult> GetRuns(string id, [FromQuery] int skip = 0, [FromQuery] int take = 100)
     {
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
-        var runs = await _db.LoopRuns.AsNoTracking().Where(r => r.WorkItemId == guid).OrderByDescending(r => r.StartedAt).ToListAsync();
+        if (skip < 0) skip = 0;
+        if (take <= 0) take = 100;
+        if (take > 500) take = 500;
+        var runs = await _db.LoopRuns.AsNoTracking()
+            .Where(r => r.WorkItemId == guid)
+            .OrderByDescending(r => r.StartedAt)
+            .Skip(skip).Take(take)
+            .ToListAsync();
         return Ok(runs);
     }
 
@@ -188,8 +218,7 @@ public class WorkItemsController : ControllerBase
                 await _engine.SignalPrResultAsync(activeRun.Id, prRunNode.Id, true);
 
                 // Resume the engine to route through Cleanup node
-                if (_engine is ILD.Core.Services.Implementations.LoopEngine le)
-                    _ = Task.Run(() => le.RunAsync(activeRun.Id));
+                RunInBackground(activeRun.Id);
             }
         }
 
@@ -210,8 +239,8 @@ public class WorkItemsController : ControllerBase
 
         // Resume the engine
         var wi = await _workItemManager.GetWorkItemAsync(guid);
-        if (wi?.CurrentLoopRunId != null && _engine is ILD.Core.Services.Implementations.LoopEngine le)
-            _ = Task.Run(() => le.RunAsync(wi.CurrentLoopRunId.Value));
+        if (wi?.CurrentLoopRunId != null)
+            RunInBackground(wi.CurrentLoopRunId.Value);
 
         return Ok();
     }
@@ -227,8 +256,8 @@ public class WorkItemsController : ControllerBase
 
         // Resume the engine to route failure edge
         var wi = await _workItemManager.GetWorkItemAsync(guid);
-        if (wi?.CurrentLoopRunId != null && _engine is ILD.Core.Services.Implementations.LoopEngine le)
-            _ = Task.Run(() => le.RunAsync(wi.CurrentLoopRunId.Value));
+        if (wi?.CurrentLoopRunId != null)
+            RunInBackground(wi.CurrentLoopRunId.Value);
 
         return Ok();
     }
@@ -256,10 +285,13 @@ public class WorkItemsController : ControllerBase
 
 public class AddDependencyRequest
 {
+    [System.ComponentModel.DataAnnotations.Required]
     public string DependencyId { get; set; } = string.Empty;
 }
 
 public class HumanFeedbackInputRequest
 {
+    [System.ComponentModel.DataAnnotations.Required]
+    [System.ComponentModel.DataAnnotations.StringLength(8192, MinimumLength = 1)]
     public string Input { get; set; } = string.Empty;
 }

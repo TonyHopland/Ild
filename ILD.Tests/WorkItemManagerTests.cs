@@ -57,6 +57,34 @@ public class WorkItemManagerTests
     }
 
     [Fact]
+    public async Task UpdateAsync_persists_title_and_description_and_touches_UpdatedAt()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("orig", "origdesc", null, repoId);
+        var before = (await mgr.GetWorkItemAsync(id))!.UpdatedAt;
+        await Task.Delay(5);
+
+        var ok = await mgr.UpdateAsync(id, "new title", "new desc");
+        ok.Should().BeTrue();
+
+        var reloaded = await mgr.GetWorkItemAsync(id);
+        reloaded!.Title.Should().Be("new title");
+        reloaded.Description.Should().Be("new desc");
+        reloaded.UpdatedAt.Should().NotBe(before);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_returns_false_for_unknown_id()
+    {
+        var (mgr, db, _, _, _) = Setup();
+        using var _ = db;
+
+        (await mgr.UpdateAsync(Guid.NewGuid(), "t", "d")).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task IsReady_true_for_workitem_with_no_dependencies()
     {
         var (mgr, db, repoId, _, _) = Setup();
@@ -330,6 +358,66 @@ public class WorkItemManagerTests
         after.HumanFeedbackReason.Should().BeNullOrEmpty();
         after.CurrentLoopRunId.Should().BeNull();
         after.BranchName.Should().BeNullOrEmpty();
+    }
+
+    [Fact]
+    public async Task SubmitHumanFeedbackInput_finalizes_latest_Human_run_node_with_input_as_output()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
+        db.Context.LoopTemplates.Add(lt);
+        var ltv = new LoopTemplateVersion
+        {
+            Id = Guid.NewGuid(),
+            LoopTemplateId = lt.Id,
+            VersionNumber = 1,
+            CreatedAt = DateTime.UtcNow,
+        };
+        db.Context.LoopTemplateVersions.Add(ltv);
+        await db.Context.SaveChangesAsync();
+
+        var id = await mgr.CreateWorkItemAsync("a", "", lt.Id, repoId);
+        var runId = Guid.NewGuid();
+        var humanNodeId = Guid.NewGuid();
+        var run = new LoopRun
+        {
+            Id = runId,
+            WorkItemId = id,
+            LoopTemplateVersionId = ltv.Id,
+            Status = LoopRunStatus.Running,
+            StartedAt = DateTime.UtcNow,
+            CurrentNodeId = humanNodeId,
+        };
+        db.Context.LoopRuns.Add(run);
+        db.Context.LoopNodes.Add(new LoopNode
+        {
+            Id = humanNodeId,
+            LoopTemplateVersionId = ltv.Id,
+            NodeType = NodeType.Human,
+            Label = "ask-human",
+        });
+        var runNodeId = Guid.NewGuid();
+        db.Context.LoopRunNodes.Add(new LoopRunNode
+        {
+            Id = runNodeId,
+            LoopRunId = runId,
+            LoopNodeId = humanNodeId,
+            Status = LoopRunNodeStatus.WaitingHuman,
+        });
+
+        var wi = await db.Context.WorkItems.FindAsync(id);
+        wi!.Status = WorkItemStatus.HumanFeedback;
+        wi.CurrentLoopRunId = runId;
+        await db.Context.SaveChangesAsync();
+
+        await mgr.SubmitHumanFeedbackInputAsync(id, "ship it");
+
+        var finalized = await db.Fresh().LoopRunNodes.FindAsync(runNodeId);
+        finalized!.Status.Should().Be(LoopRunNodeStatus.Succeeded);
+        finalized.Output.Should().Be("ship it");
+        finalized.CompletedAt.Should().NotBeNull();
     }
 
     [Fact]

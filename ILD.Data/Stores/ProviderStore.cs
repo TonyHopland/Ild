@@ -40,6 +40,7 @@ public class ProviderStore : IProviderStore
 
     public async Task UpdateAiProviderAsync(AiProvider provider)
     {
+        _db.AiProviders.Update(provider);
         await _db.SaveChangesAsync();
     }
 
@@ -63,6 +64,7 @@ public class ProviderStore : IProviderStore
 
     public async Task UpdateRemoteProviderAsync(RemoteProvider provider)
     {
+        _db.RemoteProviders.Update(provider);
         await _db.SaveChangesAsync();
     }
 
@@ -86,30 +88,13 @@ public class ProviderStore : IProviderStore
 
     public async Task UpdateRepositoryAsync(Repository repository)
     {
+        _db.Repositories.Update(repository);
         await _db.SaveChangesAsync();
     }
 
     public async Task DeleteRepositoryAsync(Repository repository)
     {
         _db.Repositories.Remove(repository);
-        await _db.SaveChangesAsync();
-    }
-
-    public async Task<LoopTemplate?> GetLoopTemplateByIdAsync(Guid id)
-        => await _db.LoopTemplates.FindAsync(id).AsTask();
-
-    public async Task<LoopTemplate?> GetLoopTemplateByVersionIdAsync(Guid versionId)
-        => await _db.LoopTemplates
-            .FirstOrDefaultAsync(t => t.Versions.Any(v => v.Id == versionId));
-
-    public async Task CreateLoopTemplateAsync(LoopTemplate template)
-    {
-        _db.LoopTemplates.Add(template);
-        await _db.SaveChangesAsync();
-    }
-
-    public async Task UpdateLoopTemplateAsync(LoopTemplate template)
-    {
         await _db.SaveChangesAsync();
     }
 }

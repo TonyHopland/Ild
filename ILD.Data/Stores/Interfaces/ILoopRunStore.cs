@@ -7,6 +7,9 @@ public interface ILoopRunStore
 {
     Task<LoopRun?> GetByIdAsync(Guid id);
     Task<LoopRun?> GetByWorkItemAsync(Guid workItemId);
+    Task<IReadOnlyList<LoopRun>> GetAllByWorkItemAsync(Guid workItemId);
+    Task<LoopRun?> GetCurrentByWorkItemAsync(Guid workItemId);
+    Task<IReadOnlyList<LoopRun>> GetAllAsync(int skip = 0, int take = 100);
     Task<IReadOnlyList<LoopRun>> GetRunningRunsAsync();
     Task<IReadOnlyList<LoopRunNode>> GetRunNodesAsync(Guid runId);
     Task<LoopRunNode?> GetRunNodeAsync(Guid runId, Guid nodeId);

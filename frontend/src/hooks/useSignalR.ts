@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import * as signalR from "@microsoft/signalr";
-import { SignalRMessage } from "../types";
+import type { TypedSignalRMessage } from "../types/signalr";
 import { authService } from "../services/auth";
 
-type MessageHandler = (message: SignalRMessage) => void;
+type MessageHandler<E extends string = string> = (message: TypedSignalRMessage<E>) => void;
 
 export function useSignalR(hubUrl = "/hubs/work-item") {
   const [connectionState, setConnectionState] = useState<
@@ -11,40 +11,60 @@ export function useSignalR(hubUrl = "/hubs/work-item") {
   >("disconnected");
   const connectionRef = useRef<signalR.HubConnection | null>(null);
   const handlersRef = useRef<Map<string, Set<MessageHandler>>>(new Map());
+  // Track which event types have a connection-level dispatcher so we register at most one.
+  const dispatchersRef = useRef<Set<string>>(new Set());
+  const [token, setToken] = useState<string | null>(() => authService.getToken());
 
-  const on = useCallback((eventType: string, handler: MessageHandler) => {
-    const handlers = handlersRef.current.get(eventType) || new Set();
-    handlers.add(handler);
-    handlersRef.current.set(eventType, handlers);
-
-    if (connectionRef.current?.state === signalR.HubConnectionState.Connected) {
-      connectionRef.current.on(eventType, (payload: unknown) => {
-        handler({
-          type: eventType,
-          payload,
-          timestamp: new Date().toISOString(),
-        });
-      });
-    }
+  // Subscribe to auth token changes so the hook can reconnect on login/logout.
+  useEffect(() => {
+    return authService.onTokenChange((next) => setToken(next));
   }, []);
 
-  const off = useCallback((eventType: string, handler: MessageHandler) => {
+  const ensureDispatcher = useCallback((connection: signalR.HubConnection, eventType: string) => {
+    if (dispatchersRef.current.has(eventType)) return;
+    connection.on(eventType, (payload: unknown) => {
+      const message: TypedSignalRMessage = {
+        type: eventType,
+        payload,
+        timestamp: new Date().toISOString(),
+      };
+      handlersRef.current.get(eventType)?.forEach((h) => h(message));
+    });
+    dispatchersRef.current.add(eventType);
+  }, []);
+
+  const on = useCallback(
+    <E extends string>(eventType: E, handler: MessageHandler<E>) => {
+      const handlers = handlersRef.current.get(eventType) ?? new Set<MessageHandler>();
+      handlers.add(handler as MessageHandler);
+      handlersRef.current.set(eventType, handlers);
+
+      const connection = connectionRef.current;
+      if (connection?.state === signalR.HubConnectionState.Connected) {
+        ensureDispatcher(connection, eventType);
+      }
+    },
+    [ensureDispatcher],
+  );
+
+  const off = useCallback(<E extends string>(eventType: E, handler: MessageHandler<E>) => {
     const handlers = handlersRef.current.get(eventType);
-    handlers?.delete(handler);
+    handlers?.delete(handler as MessageHandler);
   }, []);
 
   useEffect(() => {
-    const token = authService.getToken();
     if (!token) return;
 
     const connection = new signalR.HubConnectionBuilder()
       .withUrl(hubUrl, {
-        accessTokenFactory: () => token,
+        // Read the token dynamically so reconnects use the latest value.
+        accessTokenFactory: () => authService.getToken() ?? "",
       })
       .withAutomaticReconnect()
       .build();
 
     connectionRef.current = connection;
+    dispatchersRef.current = new Set();
 
     const updateState = (state: signalR.HubConnectionState) => {
       setConnectionState(
@@ -64,24 +84,15 @@ export function useSignalR(hubUrl = "/hubs/work-item") {
 
     void connection.start().then(() => {
       updateState(signalR.HubConnectionState.Connected);
-
-      handlersRef.current.forEach((handlers, eventType) => {
-        connection.on(eventType, (payload: unknown) => {
-          const message: SignalRMessage = {
-            type: eventType,
-            payload,
-            timestamp: new Date().toISOString(),
-          };
-          handlers.forEach((handler) => handler(message));
-        });
-      });
+      handlersRef.current.forEach((_, eventType) => ensureDispatcher(connection, eventType));
     });
 
     return () => {
       void connection.stop();
       connectionRef.current = null;
+      dispatchersRef.current = new Set();
     };
-  }, [hubUrl]);
+  }, [hubUrl, token, ensureDispatcher]);
 
   return { connectionState, on, off };
 }

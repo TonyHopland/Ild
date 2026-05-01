@@ -22,17 +22,20 @@ public class WorkItemHub : Hub
 
     public async Task NotifyWorkItemStateChanged(Guid workItemId, WorkItemStatus oldStatus, WorkItemStatus newStatus)
     {
-        await Clients.Group(WorkItemGroup).SendAsync("WorkItemStateChanged", workItemId, oldStatus, newStatus);
+        await Clients.Group(WorkItemGroup).SendAsync("WorkItemStateChanged",
+            new ILD.Data.DTOs.SignalRPayloads.WorkItemStateChangedPayload(workItemId, oldStatus, newStatus));
     }
 
     public async Task NotifyDependencyResolved(Guid workItemId)
     {
-        await Clients.Group(WorkItemGroup).SendAsync("DependencyResolved", workItemId);
+        await Clients.Group(WorkItemGroup).SendAsync("DependencyResolved",
+            new ILD.Data.DTOs.SignalRPayloads.DependencyResolvedPayload(workItemId));
     }
 
     public async Task NotifyHumanFeedbackRequired(Guid workItemId, string reason)
     {
-        await Clients.Group(WorkItemGroup).SendAsync("HumanFeedbackRequired", workItemId, reason);
+        await Clients.Group(WorkItemGroup).SendAsync("HumanFeedbackRequired",
+            new ILD.Data.DTOs.SignalRPayloads.HumanFeedbackRequiredPayload(workItemId, reason));
     }
 
     public override async Task OnConnectedAsync()

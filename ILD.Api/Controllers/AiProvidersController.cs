@@ -19,21 +19,44 @@ public class AiProvidersController : ControllerBase
         _db = db;
     }
 
+    private static object ToResponse(AiProvider p) => new
+    {
+        id = p.Id,
+        name = p.Name,
+        type = p.Type,
+        baseUrl = p.BaseUrl,
+        model = p.Model,
+        isDefault = p.IsDefault,
+        hasApiKey = !string.IsNullOrEmpty(p.ApiKey),
+        hasConfig = !string.IsNullOrEmpty(p.Config),
+        createdAt = p.CreatedAt,
+        updatedAt = p.UpdatedAt,
+    };
+
     [HttpGet]
-    public async Task<IActionResult> GetAll()
-        => Ok(await _db.AiProviders.AsNoTracking().ToListAsync());
+    public async Task<IActionResult> GetAll([FromQuery] int skip = 0, [FromQuery] int take = 100)
+    {
+        if (skip < 0) skip = 0;
+        if (take <= 0) take = 100;
+        if (take > 500) take = 500;
+        var items = await _db.AiProviders.AsNoTracking().OrderBy(p => p.Name).Skip(skip).Take(take).ToListAsync();
+        return Ok(items.Select(ToResponse));
+    }
 
     [HttpGet("{id}")]
     public async Task<IActionResult> GetById(string id)
     {
         if (!Guid.TryParse(id, out var guid)) return BadRequest();
         var p = await _db.AiProviders.FindAsync(guid);
-        return p == null ? NotFound() : Ok(p);
+        return p == null ? NotFound() : Ok(ToResponse(p));
     }
 
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] AiProviderDto request)
     {
+        if (!ModelState.IsValid)
+            return BadRequest(ModelState);
+
         var p = new AiProvider
         {
             Id = Guid.NewGuid(),
@@ -47,7 +70,7 @@ public class AiProvidersController : ControllerBase
         };
         _db.AiProviders.Add(p);
         await _db.SaveChangesAsync();
-        return CreatedAtAction(nameof(GetById), new { id = p.Id }, p);
+        return CreatedAtAction(nameof(GetById), new { id = p.Id }, ToResponse(p));
     }
 
     [HttpPut("{id}")]
@@ -64,6 +87,6 @@ public class AiProvidersController : ControllerBase
         p.Config = request.Config;
         p.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
-        return Ok(p);
+        return Ok(ToResponse(p));
     }
 }
