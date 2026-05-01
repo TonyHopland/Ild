@@ -61,6 +61,7 @@ export function useSignalR(hubUrl = "/hubs/work-item") {
         accessTokenFactory: () => authService.getToken() ?? "",
       })
       .withAutomaticReconnect()
+      .configureLogging({ log: () => {} })
       .build();
 
     connectionRef.current = connection;
@@ -82,12 +83,22 @@ export function useSignalR(hubUrl = "/hubs/work-item") {
     connection.onreconnected(() => updateState(signalR.HubConnectionState.Connected));
     connection.onclose(() => updateState(signalR.HubConnectionState.Disconnected));
 
-    void connection.start().then(() => {
-      updateState(signalR.HubConnectionState.Connected);
-      handlersRef.current.forEach((_, eventType) => ensureDispatcher(connection, eventType));
-    });
+    let stopped = false;
+
+    void connection
+      .start()
+      .then(() => {
+        if (stopped) return;
+        updateState(signalR.HubConnectionState.Connected);
+        handlersRef.current.forEach((_, eventType) => ensureDispatcher(connection, eventType));
+      })
+      .catch((err) => {
+        if (stopped) return; // expected during teardown
+        console.error(err);
+      });
 
     return () => {
+      stopped = true;
       void connection.stop();
       connectionRef.current = null;
       dispatchersRef.current = new Set();

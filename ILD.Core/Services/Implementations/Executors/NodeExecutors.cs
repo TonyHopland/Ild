@@ -33,7 +33,31 @@ public sealed class StartNodeExecutor : INodeExecutor
         if (string.IsNullOrEmpty(wi.WorktreePath) || !Directory.Exists(wi.WorktreePath))
         {
             var branch = wi.BranchName ?? $"ild/wi-{wi.Id:N}";
-            var path = await _repo.CreateWorktreeAsync(repo.WorktreesPath ?? Path.GetDirectoryName(repo.CloneUrl) ?? ".", branch);
+            var basePath = repo.WorktreesPath;
+            if (string.IsNullOrWhiteSpace(basePath) || !Directory.Exists(Path.Combine(basePath, ".git")))
+            {
+                basePath = Path.GetFullPath(Path.Combine("data", "repos", repo.Id.ToString("N")));
+                Directory.CreateDirectory(Path.GetDirectoryName(basePath)!);
+                if (!Directory.Exists(Path.Combine(basePath, ".git")))
+                {
+                    var psi = new ProcessStartInfo("git")
+                    {
+                        WorkingDirectory = Path.GetDirectoryName(basePath)!,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                    };
+                    psi.ArgumentList.Add("clone");
+                    psi.ArgumentList.Add(repo.CloneUrl);
+                    psi.ArgumentList.Add(basePath);
+                    using var p = Process.Start(psi)!;
+                    var stderr = await p.StandardError.ReadToEndAsync();
+                    await p.WaitForExitAsync();
+                    if (p.ExitCode != 0)
+                        return NodeExecutionResult.Fail($"git clone failed: {stderr}");
+                }
+            }
+            var path = await _repo.CreateWorktreeAsync(basePath, branch);
             wi.WorktreePath = path;
             wi.BranchName = branch;
             await workItemStore.UpdateAsync(wi);

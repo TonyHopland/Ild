@@ -94,7 +94,13 @@ export default function WorkItemModal({
       setDescription(workItem.description);
       setStatus(workItem.status);
       setPriority(workItem.priority);
-      setTags(workItem.labels.join(", "));
+      setTags(
+        Array.isArray(workItem.labels)
+          ? workItem.labels.join(", ")
+          : typeof workItem.labels === "string"
+            ? workItem.labels
+            : "",
+      );
       setRepositoryId(workItem.repositoryId);
       setLoopTemplateId(workItem.loopTemplateId);
       setShowLinkPr(false);

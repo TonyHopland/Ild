@@ -30,6 +30,9 @@ vi.mock("@microsoft/signalr", () => {
       withAutomaticReconnect() {
         return this;
       }
+      configureLogging() {
+        return this;
+      }
       build() {
         return fakeConnection;
       }

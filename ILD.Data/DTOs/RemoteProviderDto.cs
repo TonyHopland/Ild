@@ -12,7 +12,7 @@ public class RemoteProviderDto
 
     [Required]
     [StringLength(64)]
-    public string ProviderType { get; set; } = string.Empty;
+    public string Type { get; set; } = string.Empty;
 
     [Required]
     [Url]
@@ -20,7 +20,12 @@ public class RemoteProviderDto
     public string BaseUrl { get; set; } = string.Empty;
 
     [StringLength(4096)]
-    public string Token { get; set; } = string.Empty;
+    public string? ApiKey { get; set; }
+
+    [StringLength(512)]
+    public string? WebhookSecret { get; set; }
+
+    public bool IsDefault { get; set; }
 
     public DateTime CreatedAt { get; set; }
 }

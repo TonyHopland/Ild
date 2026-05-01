@@ -1,5 +1,6 @@
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
+using ILD.Data.Entities;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ILD.Api.Controllers;
@@ -15,6 +16,28 @@ public class LoopTemplatesController : ControllerBase
         _loopTemplateManager = loopTemplateManager;
     }
 
+    private async Task<object> ToFlatAsync(LoopTemplate t)
+    {
+        var graph = await _loopTemplateManager.GetLatestGraphAsync(t.Id);
+        var versions = await _loopTemplateManager.GetVersionsAsync(t.Id);
+        var versionNumber = versions.OrderByDescending(v => v.VersionNumber).FirstOrDefault()?.VersionNumber ?? 0;
+        return new
+        {
+            id = t.Id,
+            name = t.Name,
+            description = t.Description ?? string.Empty,
+            isDefault = t.IsDefault,
+            recoveryPolicy = t.RecoveryPolicy.ToString(),
+            maxNodeExecutions = t.MaxNodeExecutions,
+            maxWallClockHours = t.MaxWallClockHours,
+            version = versionNumber,
+            nodes = graph?.Nodes ?? new List<LoopNodeDto>(),
+            edges = graph?.Edges ?? new List<LoopNodeEdgeDto>(),
+            createdAt = t.CreatedAt,
+            updatedAt = t.UpdatedAt,
+        };
+    }
+
     [HttpGet]
     public async Task<IActionResult> GetAll([FromQuery] int skip = 0, [FromQuery] int take = 100)
     {
@@ -22,7 +45,10 @@ public class LoopTemplatesController : ControllerBase
         if (take <= 0) take = 100;
         if (take > 500) take = 500;
         var templates = await _loopTemplateManager.GetAllLoopTemplatesAsync(skip, take);
-        return Ok(templates);
+        var results = new List<object>();
+        foreach (var t in templates)
+            results.Add(await ToFlatAsync(t));
+        return Ok(results);
     }
 
     [HttpGet("{id}")]
@@ -35,7 +61,7 @@ public class LoopTemplatesController : ControllerBase
         if (template == null)
             return NotFound();
 
-        return Ok(template);
+        return Ok(await ToFlatAsync(template));
     }
 
     [HttpPost]

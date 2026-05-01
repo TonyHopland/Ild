@@ -12,7 +12,7 @@ public class AiProviderDto
 
     [Required]
     [StringLength(64, MinimumLength = 1)]
-    public string ProviderType { get; set; } = string.Empty;
+    public string Type { get; set; } = string.Empty;
 
     [Required]
     [Url]
@@ -21,7 +21,10 @@ public class AiProviderDto
 
     [Required]
     [StringLength(128, MinimumLength = 1)]
-    public string DefaultModel { get; set; } = string.Empty;
+    public string Model { get; set; } = string.Empty;
+
+    [StringLength(4096)]
+    public string? ApiKey { get; set; }
 
     public bool IsDefault { get; set; }
     public string? Config { get; set; }

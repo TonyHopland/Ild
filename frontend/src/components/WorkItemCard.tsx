@@ -101,7 +101,15 @@ export default function WorkItemCard({ workItem, onClick, onDeleted, onMove }: W
         </div>
       )}
       <div className="work-item-tags">
-        {workItem.labels.map((label) => (
+        {(Array.isArray(workItem.labels)
+          ? workItem.labels
+          : typeof workItem.labels === "string" && workItem.labels
+            ? (workItem.labels as string)
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean)
+            : []
+        ).map((label) => (
           <span key={label} className="work-item-tag">
             {label}
           </span>

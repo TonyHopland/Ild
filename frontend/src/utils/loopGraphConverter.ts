@@ -14,7 +14,11 @@ function layoutPosition(index: number): { x: number; y: number } {
 
 export function templateToNodes(template: LoopTemplate): Node[] {
   return template.nodes.map((node, index) => {
-    const pos = layoutPosition(index);
+    const saved = (node.config as { __pos?: { x: number; y: number } } | undefined)?.__pos;
+    const pos =
+      saved && typeof saved.x === "number" && typeof saved.y === "number"
+        ? { x: saved.x, y: saved.y }
+        : layoutPosition(index);
     return {
       id: node.id,
       type: "loopNode",
@@ -63,15 +67,18 @@ export function nodesToLoopNodes(nodes: Node[]): LoopNode[] {
       type: string;
       config?: Record<string, unknown>;
     };
-    const config = data.config || {};
+    const config = {
+      ...data.config,
+      __pos: { x: node.position.x, y: node.position.y },
+    };
     return {
       id: node.id,
       type: data.type as NodeType,
       label: data.label,
       config: config as Record<string, unknown>,
       maxTraversals: null,
-      retryCount: (config.maxRetries as number) ?? null,
-      timeoutSeconds: (config.timeout as number) ?? null,
+      retryCount: ((config as Record<string, unknown>).maxRetries as number) ?? null,
+      timeoutSeconds: ((config as Record<string, unknown>).timeout as number) ?? null,
     };
   });
 }

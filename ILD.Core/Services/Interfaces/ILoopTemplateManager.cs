@@ -14,6 +14,7 @@ public interface ILoopTemplateManager
     Task<Guid> CloneLoopTemplateAsync(Guid sourceTemplateId, string newName);
     Task<LoopTemplateVersion> GetVersionAsync(Guid templateId, int version);
     Task<IEnumerable<LoopTemplateVersion>> GetVersionsAsync(Guid templateId);
+    Task<LoopTemplateGraph?> GetLatestGraphAsync(Guid templateId);
     Task<bool> ValidateGraphAsync(LoopTemplateGraph graph);
     Task DeleteLoopTemplateAsync(Guid templateId);
 }

@@ -27,6 +27,7 @@ public class AiProvidersController : ControllerBase
         baseUrl = p.BaseUrl,
         model = p.Model,
         isDefault = p.IsDefault,
+        apiKey = string.IsNullOrEmpty(p.ApiKey) ? null : "***",
         hasApiKey = !string.IsNullOrEmpty(p.ApiKey),
         hasConfig = !string.IsNullOrEmpty(p.Config),
         createdAt = p.CreatedAt,
@@ -61,9 +62,10 @@ public class AiProvidersController : ControllerBase
         {
             Id = Guid.NewGuid(),
             Name = request.Name,
-            Type = request.ProviderType,
+            Type = request.Type,
             BaseUrl = request.BaseUrl,
-            Model = request.DefaultModel,
+            Model = request.Model,
+            ApiKey = string.IsNullOrEmpty(request.ApiKey) ? null : request.ApiKey,
             IsDefault = request.IsDefault,
             Config = request.Config,
             CreatedAt = DateTime.UtcNow,
@@ -80,9 +82,10 @@ public class AiProvidersController : ControllerBase
         var p = await _db.AiProviders.FindAsync(guid);
         if (p == null) return NotFound();
         p.Name = request.Name;
-        p.Type = request.ProviderType;
+        p.Type = request.Type;
         p.BaseUrl = request.BaseUrl;
-        p.Model = request.DefaultModel;
+        p.Model = request.Model;
+        if (!string.IsNullOrEmpty(request.ApiKey)) p.ApiKey = request.ApiKey;
         p.IsDefault = request.IsDefault;
         p.Config = request.Config;
         p.UpdatedAt = DateTime.UtcNow;

@@ -86,6 +86,13 @@ public class LoopTemplateManager : ILoopTemplateManager
     public async Task<IEnumerable<LoopTemplateVersion>> GetVersionsAsync(Guid templateId)
         => await _store.GetVersionsAsync(templateId);
 
+    public async Task<LoopTemplateGraph?> GetLatestGraphAsync(Guid templateId)
+    {
+        var latest = await _store.GetLatestVersionAsync(templateId);
+        if (latest == null) return null;
+        return await BuildGraphFromVersion(latest);
+    }
+
     public Task<bool> ValidateGraphAsync(LoopTemplateGraph graph)
         => Task.FromResult(LoopTemplateValidator.Validate(graph).Count == 0);
 
