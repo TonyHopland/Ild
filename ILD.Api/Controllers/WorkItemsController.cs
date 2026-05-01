@@ -15,13 +15,15 @@ public class WorkItemsController : ControllerBase
     private readonly ILoopEngine _engine;
     private readonly AppDbContext _db;
     private readonly ILogger<WorkItemsController> _logger;
+    private readonly IWorkItemNotifier _notifier;
 
-    public WorkItemsController(IWorkItemManager workItemManager, ILoopEngine engine, AppDbContext db, ILogger<WorkItemsController> logger)
+    public WorkItemsController(IWorkItemManager workItemManager, ILoopEngine engine, AppDbContext db, ILogger<WorkItemsController> logger, IWorkItemNotifier? notifier = null)
     {
         _workItemManager = workItemManager;
         _engine = engine;
         _db = db;
         _logger = logger;
+        _notifier = notifier ?? new NoopWorkItemNotifier();
     }
 
     private void RunInBackground(Guid runId)
@@ -78,6 +80,10 @@ public class WorkItemsController : ControllerBase
         var id = await _workItemManager.CreateWorkItemAsync(
             request.Title, request.Description,
             loopTemplateId, repositoryId);
+
+        var wi = await _workItemManager.GetWorkItemAsync(id);
+        if (wi != null)
+            await _notifier.WorkItemStateChangedAsync(id, wi.Status, wi.Status);
 
         return CreatedAtAction(nameof(GetById), new { id }, new { id });
     }
@@ -279,6 +285,16 @@ public class WorkItemsController : ControllerBase
             return BadRequest(new { error = "Invalid GUID" });
 
         var ok = await _workItemManager.CleanupToBacklogAsync(guid);
+        return ok ? Ok() : NotFound();
+    }
+
+    [HttpDelete("{id}")]
+    public async Task<IActionResult> Delete(string id)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+
+        var ok = await _workItemManager.DeleteAsync(guid);
         return ok ? Ok() : NotFound();
     }
 }

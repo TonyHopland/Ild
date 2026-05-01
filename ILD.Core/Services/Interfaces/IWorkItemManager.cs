@@ -26,4 +26,5 @@ public interface IWorkItemManager
     Task<bool> CleanupToBacklogAsync(Guid workItemId);
     Task<bool> SubmitHumanFeedbackInputAsync(Guid workItemId, string input);
     Task<bool> RejectHumanFeedbackAsync(Guid workItemId);
+    Task<bool> DeleteAsync(Guid workItemId);
 }

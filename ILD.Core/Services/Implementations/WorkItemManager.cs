@@ -24,12 +24,14 @@ public class WorkItemManager : IWorkItemManager
 
     public async Task<Guid> CreateWorkItemAsync(string title, string description, Guid? loopTemplateId, Guid? repositoryId)
     {
-        if (repositoryId == null)
-            throw new InvalidOperationException("RepositoryId is required");
-
-        var repo = await _store.GetRepositoryAsync(repositoryId.Value);
-        if (repo == null)
-            throw new InvalidOperationException("Repository not found");
+        WorkItemStatus intakeStatus = WorkItemStatus.Backlog;
+        if (repositoryId != null)
+        {
+            var repo = await _store.GetRepositoryAsync(repositoryId.Value);
+            if (repo == null)
+                throw new InvalidOperationException("Repository not found");
+            intakeStatus = repo.DefaultIntakeStatus;
+        }
 
         Guid? versionId = null;
         if (loopTemplateId.HasValue)
@@ -44,8 +46,8 @@ public class WorkItemManager : IWorkItemManager
             Title = title,
             Description = description,
             Priority = WorkItemPriority.Medium,
-            Status = repo.DefaultIntakeStatus,
-            RepositoryId = repositoryId.Value,
+            Status = intakeStatus,
+            RepositoryId = repositoryId ?? Guid.Empty,
             LoopTemplateVersionId = versionId,
         };
         await _store.CreateAsync(wi);
@@ -304,5 +306,10 @@ public class WorkItemManager : IWorkItemManager
         wi.UpdatedAt = DateTime.UtcNow;
         await _store.UpdateAsync(wi);
         return true;
+    }
+
+    public async Task<bool> DeleteAsync(Guid workItemId)
+    {
+        return await _store.DeleteAsync(workItemId);
     }
 }

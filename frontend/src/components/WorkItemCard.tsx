@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { WorkItem } from "../types";
 import { workItemService } from "../services/auth";
+import ConfirmModal from "./ConfirmModal";
 
 interface WorkItemCardProps {
   workItem: WorkItem;
@@ -23,6 +25,8 @@ const PRIORITY_COLORS: Record<string, string> = {
 };
 
 export default function WorkItemCard({ workItem, onClick, onDeleted, onMove }: WorkItemCardProps) {
+  const [showConfirm, setShowConfirm] = useState(false);
+
   const handleDragStart = (e: React.DragEvent) => {
     e.dataTransfer.setData("text/plain", workItem.id);
   };
@@ -44,9 +48,13 @@ export default function WorkItemCard({ workItem, onClick, onDeleted, onMove }: W
     }
   };
 
-  const handleDelete = async (e: React.MouseEvent) => {
+  const handleDeleteClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!confirm(`Delete work item "${workItem.title}"?`)) return;
+    setShowConfirm(true);
+  };
+
+  const handleDeleteConfirm = async () => {
+    setShowConfirm(false);
     try {
       await workItemService.delete(workItem.id);
       onDeleted?.(workItem.id);
@@ -80,7 +88,7 @@ export default function WorkItemCard({ workItem, onClick, onDeleted, onMove }: W
         <span className="work-item-priority-dot" style={{ backgroundColor: priorityColor }} />
         <button
           className="work-item-delete-btn"
-          onClick={handleDelete}
+          onClick={handleDeleteClick}
           aria-label="Delete work item"
           title="Delete"
         >
@@ -179,6 +187,13 @@ export default function WorkItemCard({ workItem, onClick, onDeleted, onMove }: W
           color: #a0a0b0;
         }
       `}</style>
+      <ConfirmModal
+        isOpen={showConfirm}
+        title="Delete Work Item"
+        message={`Are you sure you want to delete "${workItem.title}"?`}
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setShowConfirm(false)}
+      />
     </div>
   );
 }

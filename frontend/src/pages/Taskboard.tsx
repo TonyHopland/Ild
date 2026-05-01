@@ -51,9 +51,18 @@ export default function Taskboard() {
 
     const onWorkItemStateChanged = async (message: TypedSignalRMessage<"WorkItemStateChanged">) => {
       const { workItemId, newStatus } = message.payload;
-      setWorkItems((prev) =>
-        prev.map((item) => (item.id === workItemId ? { ...item, status: newStatus } : item)),
-      );
+      setWorkItems((prev) => {
+        const exists = prev.find((item) => item.id === workItemId);
+        if (!exists) {
+          // New work item — load it
+          void workItemService
+            .getById(workItemId)
+            .then((wi) => setWorkItems((items) => [...items, wi]))
+            .catch(() => {});
+          return prev;
+        }
+        return prev.map((item) => (item.id === workItemId ? { ...item, status: newStatus } : item));
+      });
     };
 
     on("HumanFeedbackRequired", onHumanFeedback);

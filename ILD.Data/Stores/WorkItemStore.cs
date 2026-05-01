@@ -92,4 +92,13 @@ public class WorkItemStore : IWorkItemStore
 
     public async Task<Repository?> GetRepositoryAsync(Guid id)
         => await _db.Repositories.FindAsync(id).AsTask();
+
+    public async Task<bool> DeleteAsync(Guid id)
+    {
+        var wi = await _db.WorkItems.FindAsync(id);
+        if (wi == null) return false;
+        _db.WorkItems.Remove(wi);
+        await _db.SaveChangesAsync();
+        return true;
+    }
 }

@@ -19,4 +19,5 @@ public interface IWorkItemStore
     Task<bool> HasRunningRunAsync(Guid workItemId);
     Task<LoopTemplateVersion?> GetLatestTemplateVersionAsync(Guid templateId);
     Task<Repository?> GetRepositoryAsync(Guid id);
+    Task<bool> DeleteAsync(Guid id);
 }

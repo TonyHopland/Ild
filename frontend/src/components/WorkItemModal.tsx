@@ -14,6 +14,7 @@ import {
   loopTemplateService,
   loopRunService,
 } from "../services/auth";
+import ConfirmModal from "./ConfirmModal";
 
 interface WorkItemModalProps {
   workItem: WorkItem | null;
@@ -51,6 +52,7 @@ export default function WorkItemModal({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [prUrlInput, setPrUrlInput] = useState("");
   const [feedbackInput, setFeedbackInput] = useState("");
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   useEffect(() => {
     repositoryService
@@ -200,7 +202,12 @@ export default function WorkItemModal({
 
   const handleDelete = async () => {
     if (!workItem) return;
-    if (!confirm(`Delete work item "${workItem.title}"?`)) return;
+    setShowDeleteConfirm(true);
+  };
+
+  const handleDeleteConfirm = async () => {
+    setShowDeleteConfirm(false);
+    if (!workItem) return;
     try {
       await workItemService.delete(workItem.id);
       onDelete?.(workItem.id);
@@ -635,6 +642,13 @@ export default function WorkItemModal({
           </div>
         </form>
       </div>
+      <ConfirmModal
+        isOpen={showDeleteConfirm}
+        title="Delete Work Item"
+        message={`Are you sure you want to delete "${workItem?.title}"?`}
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setShowDeleteConfirm(false)}
+      />
     </div>
   );
 }
