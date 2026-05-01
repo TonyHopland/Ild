@@ -15,10 +15,17 @@ public class WorkItemStore : IWorkItemStore
     }
 
     public async Task<WorkItem?> GetByIdAsync(Guid id)
-        => await _db.WorkItems.FindAsync(id).AsTask();
+        => await _db.WorkItems
+            .Include(w => w.LoopTemplateVersion!)
+                .ThenInclude(v => v.LoopTemplate)
+            .FirstOrDefaultAsync(w => w.Id == id);
 
     public async Task<IReadOnlyList<WorkItem>> GetByStatusAsync(WorkItemStatus status)
-        => await _db.WorkItems.Where(w => w.Status == status).ToListAsync();
+        => await _db.WorkItems
+            .Where(w => w.Status == status)
+            .Include(w => w.LoopTemplateVersion!)
+                .ThenInclude(v => v.LoopTemplate)
+            .ToListAsync();
 
     public async Task<IReadOnlyList<WorkItem>> GetByRepositoryAsync(Guid repositoryId)
         => await _db.WorkItems.Where(w => w.RepositoryId == repositoryId).ToListAsync();

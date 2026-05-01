@@ -62,10 +62,37 @@ public class LoopRunsController : ControllerBase
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
 
-        var status = await _loopEngine.GetRunStatusAsync(guid);
-        if (status is null)
+        var run = await _loopRunStore.GetByIdAsync(guid);
+        if (run == null)
             return NotFound(new { error = "Run not found" });
-        return Ok(new { status });
+
+        var runNodes = await _loopRunStore.GetRunNodesAsync(guid);
+
+        return Ok(new
+        {
+            id = run.Id,
+            workItemId = run.WorkItemId,
+            loopTemplateId = run.LoopTemplateVersion?.LoopTemplateId,
+            templateVersion = run.LoopTemplateVersion?.VersionNumber ?? 0,
+            status = run.Status.ToString(),
+            currentNodeId = run.CurrentNodeId,
+            isPaused = run.IsPaused,
+            nodeExecutionCount = run.NodeExecutionCount,
+            startedAt = run.StartedAt,
+            completedAt = run.CompletedAt,
+            nodes = runNodes.Select(rn => new
+            {
+                id = rn.Id,
+                nodeId = rn.LoopNodeId,
+                nodeLabel = rn.LoopNode?.Label ?? string.Empty,
+                status = rn.Status.ToString(),
+                output = rn.Output,
+                error = rn.Error,
+                startedAt = rn.StartedAt,
+                completedAt = rn.CompletedAt,
+                executionCount = rn.RetryCount,
+            }).ToList(),
+        });
     }
 
     [HttpPost("{id}/pause")]

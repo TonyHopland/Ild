@@ -104,7 +104,9 @@ export default function WorkItemModal({
             : "",
       );
       setRepositoryId(workItem.repositoryId);
-      setLoopTemplateId(workItem.loopTemplateId);
+      setLoopTemplateId(
+        workItem.loopTemplateId ?? (workItem as any).loopTemplateVersion?.loopTemplateId ?? "",
+      );
       setShowLinkPr(false);
       setPrUrlInput("");
       setFeedbackInput("");
@@ -476,19 +478,31 @@ export default function WorkItemModal({
     setSubmitting(true);
     setSubmitError(null);
 
-    const parsedLabels = tags
+    const domTitle = (document.getElementById("title") as HTMLInputElement)?.value ?? title;
+    const domDescription =
+      (document.getElementById("description") as HTMLTextAreaElement)?.value ?? description;
+    const domTags = (document.getElementById("tags") as HTMLInputElement)?.value ?? tags;
+    const domRepository =
+      (document.getElementById("repository") as HTMLSelectElement)?.value ?? repositoryId;
+    const domTemplate =
+      (document.getElementById("loopTemplate") as HTMLSelectElement)?.value ?? loopTemplateId;
+    const domStatus = (document.getElementById("status") as HTMLSelectElement)?.value ?? status;
+    const domPriority =
+      (document.getElementById("priority") as HTMLSelectElement)?.value ?? priority;
+
+    const parsedLabels = domTags
       .split(",")
       .map((t) => t.trim())
       .filter(Boolean);
 
     const data: Partial<WorkItem> = {
-      title,
-      description,
-      status,
-      priority,
+      title: domTitle,
+      description: domDescription,
+      status: domStatus as WorkItemStatus,
+      priority: domPriority as WorkItemPriority,
       labels: parsedLabels,
-      repositoryId,
-      loopTemplateId,
+      repositoryId: domRepository,
+      loopTemplateId: domTemplate,
     };
 
     try {

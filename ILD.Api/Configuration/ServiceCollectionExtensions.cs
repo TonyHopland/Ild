@@ -31,6 +31,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<INodeExecutorRegistry, NodeExecutorRegistry>();
         services.AddSingleton<ILoopEngine, LoopEngine>();
         services.AddScoped<IMetricsCollector, MetricsCollector>();
+        services.AddSingleton<IAgentAdapterRegistry, AgentAdapterRegistry>();
 
         services.AddHttpClient();
 
