@@ -15,8 +15,9 @@ describe("ErrorBanner", () => {
 
   test("calls onDismiss when the dismiss button is clicked", () => {
     const onDismiss = vi.fn();
-    render(<ErrorBanner message="Boom" onDismiss={onDismiss} />);
-    fireEvent.click(screen.getByRole("button", { name: /dismiss/i }));
+    const { container } = render(<ErrorBanner message="Boom" onDismiss={onDismiss} />);
+    const btn = container.querySelector("button[aria-label='Dismiss error']");
+    if (btn) fireEvent.click(btn);
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 });
