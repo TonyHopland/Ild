@@ -11,17 +11,18 @@ namespace ILD.Core.Services.Implementations;
 public class RepositoryManager : IRepositoryManager
 {
     private readonly ILogger<RepositoryManager>? _logger;
+    private readonly string _worktreesRoot;
 
-    public RepositoryManager(ILogger<RepositoryManager>? logger = null)
+    public RepositoryManager(ILogger<RepositoryManager>? logger = null, string? worktreesRoot = null)
     {
         _logger = logger;
+        _worktreesRoot = worktreesRoot ?? Path.Combine("/tmp", "ild-worktrees");
     }
 
     public async Task<string> CreateWorktreeAsync(string repoPath, string branchName)
     {
-        var worktreesRoot = Path.Combine(repoPath, "..", ".ild-worktrees");
-        Directory.CreateDirectory(worktreesRoot);
-        var worktreePath = Path.GetFullPath(Path.Combine(worktreesRoot, branchName));
+        Directory.CreateDirectory(_worktreesRoot);
+        var worktreePath = Path.GetFullPath(Path.Combine(_worktreesRoot, branchName));
 
         // Try add as new branch first; if branch already exists, attach to it.
         var (code, _, _) = await RunAsync(repoPath, "worktree", "add", "-b", branchName, worktreePath);
@@ -87,6 +88,12 @@ public class RepositoryManager : IRepositoryManager
     {
         var (code, stdout, _) = await RunAsync(worktreePath, "diff", "HEAD");
         return code == 0 ? stdout : null;
+    }
+
+    public async Task<int> GetCommitsAheadCountAsync(string worktreePath, string targetBranch)
+    {
+        var (code, stdout, _) = await RunAsync(worktreePath, "rev-list", "--count", $"{targetBranch}..HEAD");
+        return code == 0 && int.TryParse(stdout.Trim(), out var count) ? count : 0;
     }
 
     public async Task<string?> ReadFileAsync(string worktreePath, string relativePath)

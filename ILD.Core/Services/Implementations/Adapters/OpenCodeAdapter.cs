@@ -50,6 +50,11 @@ public class OpenCodeAdapter : IAgentAdapter
             psi.EnvironmentVariables["OPENCODE_CONFIG_CONTENT"] = opencodeConfigJson;
 
             psi.ArgumentList.Add("run");
+            psi.ArgumentList.Add("--dir");
+            psi.ArgumentList.Add(
+                string.IsNullOrEmpty(ctx.RunContext.WorktreePath)
+                    ? Directory.GetCurrentDirectory()
+                    : ctx.RunContext.WorktreePath);
             psi.ArgumentList.Add("--model");
             psi.ArgumentList.Add(opencodeModel);
             psi.ArgumentList.Add("--format");

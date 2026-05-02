@@ -91,6 +91,7 @@ public class PRNodeExecutorTests
         mockRepoManager.Setup(r => r.GetDiffAsync(worktreePath)).ReturnsAsync((string?)null);
         mockRepoManager.Setup(r => r.PushAsync(worktreePath, "ild/test", CancellationToken.None))
             .ReturnsAsync(true);
+        mockRepoManager.Setup(r => r.GetCommitsAheadCountAsync(worktreePath, "main")).ReturnsAsync(1);
 
         var services = new ServiceCollection();
         services.AddSingleton(mockRemote.Object);
@@ -149,6 +150,7 @@ public class PRNodeExecutorTests
         mockRepoManager.Setup(r => r.CommitAsync(worktreePath, "fix: do a thing")).ReturnsAsync(true);
         mockRepoManager.Setup(r => r.PushAsync(worktreePath, "ild/test", CancellationToken.None))
             .ReturnsAsync(true);
+        mockRepoManager.Setup(r => r.GetCommitsAheadCountAsync(worktreePath, "main")).ReturnsAsync(1);
 
         var services = new ServiceCollection();
         services.AddSingleton(mockRemote.Object);
@@ -167,6 +169,58 @@ public class PRNodeExecutorTests
         mockRepoManager.Verify(r => r.GetDiffAsync(worktreePath), Times.Once);
         mockRepoManager.Verify(r => r.CommitAsync(worktreePath, "fix: do a thing"), Times.Once);
         mockRepoManager.Verify(r => r.PushAsync(worktreePath, "ild/test", CancellationToken.None), Times.Once);
+
+        Directory.Delete(worktreePath, recursive: true);
+    }
+
+    [Fact]
+    public async Task fails_when_branch_has_no_commits_ahead_of_target()
+    {
+        using var db = new TestDb();
+
+        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://gitea.example" };
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://gitea.example/r.git", DefaultBranch = "main" };
+        var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume, MaxNodeExecutions = 200, MaxWallClockHours = 24 };
+        var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
+        var worktreePath = Path.Combine(Path.GetTempPath(), "ild-test-wt");
+        Directory.CreateDirectory(worktreePath);
+        var wi = new WorkItem { Id = Guid.NewGuid(), Title = "wi", RepositoryId = repo.Id, LoopTemplateVersionId = version.Id, Status = WorkItemStatus.Running, BranchName = "ild/test", WorktreePath = worktreePath };
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = wi.Id, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running };
+        var node = new LoopNode { Id = Guid.NewGuid(), LoopTemplateVersionId = version.Id, NodeType = NodeType.PR, Label = "pr" };
+
+        db.Context.RemoteProviders.Add(remote);
+        db.Context.Repositories.Add(repo);
+        db.Context.LoopTemplates.Add(template);
+        db.Context.LoopTemplateVersions.Add(version);
+        db.Context.WorkItems.Add(wi);
+        db.Context.LoopRuns.Add(run);
+        db.Context.LoopNodes.Add(node);
+        db.Context.SaveChanges();
+
+        var mockRemote = new Mock<IRemoteProvider>();
+
+        var mockRepoManager = new Mock<IRepositoryManager>();
+        mockRepoManager.Setup(r => r.GetDiffAsync(worktreePath)).ReturnsAsync((string?)null);
+        mockRepoManager.Setup(r => r.PushAsync(worktreePath, "ild/test", CancellationToken.None))
+            .ReturnsAsync(true);
+        mockRepoManager.Setup(r => r.GetCommitsAheadCountAsync(worktreePath, "main")).ReturnsAsync(0);
+
+        var services = new ServiceCollection();
+        services.AddSingleton(mockRemote.Object);
+        services.AddSingleton(mockRepoManager.Object);
+        services.AddSingleton(db.WorkItems);
+        var sp = services.BuildServiceProvider();
+
+        var executor = new PRNodeExecutor(sp);
+
+        var runNode = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = run.Id, LoopNodeId = node.Id };
+        var ctx = new NodeExecutionContext(run, runNode, node, wi, null, CancellationToken.None);
+
+        var result = await executor.ExecuteAsync(ctx);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("no commits ahead");
+        mockRemote.Verify(r => r.CreatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Never);
 
         Directory.Delete(worktreePath, recursive: true);
     }

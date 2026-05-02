@@ -33,7 +33,7 @@ public class RepositoryManagerTests : IDisposable
     [Fact]
     public async Task CreateWorktree_creates_a_new_branch_and_directory()
     {
-        var mgr = new RepositoryManager();
+        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
         var path = await mgr.CreateWorktreeAsync(_repo, "feature-x");
 
         Directory.Exists(path).Should().BeTrue();
@@ -45,7 +45,7 @@ public class RepositoryManagerTests : IDisposable
     [Fact]
     public async Task Commit_and_diff_round_trip()
     {
-        var mgr = new RepositoryManager();
+        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
         var path = await mgr.CreateWorktreeAsync(_repo, "feature-y");
         File.WriteAllText(Path.Combine(path, "new.txt"), "content\n");
 
@@ -58,7 +58,7 @@ public class RepositoryManagerTests : IDisposable
     [Fact]
     public async Task DestroyWorktree_removes_directory()
     {
-        var mgr = new RepositoryManager();
+        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
         var path = await mgr.CreateWorktreeAsync(_repo, "feature-z");
         Directory.Exists(path).Should().BeTrue();
 
@@ -69,7 +69,7 @@ public class RepositoryManagerTests : IDisposable
     [Fact]
     public async Task ReadFile_returns_content_and_blocks_path_traversal()
     {
-        var mgr = new RepositoryManager();
+        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
         var path = await mgr.CreateWorktreeAsync(_repo, "feature-r");
 
         (await mgr.ReadFileAsync(path, "README.md")).Should().Contain("hello");

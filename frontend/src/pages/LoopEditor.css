@@ -506,3 +506,127 @@
   opacity: 0.4;
   pointer-events: none;
 }
+
+/* ── Node Settings Modal ── */
+
+.node-settings-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 300;
+}
+
+.node-settings-modal {
+  background-color: #1e1e30;
+  border: 1px solid #2d2d44;
+  border-radius: 0.75rem;
+  width: 90%;
+  max-width: 720px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 0.5rem 2rem rgba(0, 0, 0, 0.45);
+}
+
+.node-settings-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid #2d2d44;
+  flex-shrink: 0;
+}
+
+.node-settings-modal-header h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: #e0e0e0;
+}
+
+.node-settings-modal-close {
+  background: none;
+  border: none;
+  color: #707090;
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.25rem;
+  transition: color 0.15s ease;
+}
+
+.node-settings-modal-close:hover {
+  color: #e0e0e0;
+}
+
+.node-settings-modal-body {
+  padding: 1.25rem 1.5rem;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.node-settings-modal-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 1.5rem;
+  border-top: 1px solid #2d2d44;
+  flex-shrink: 0;
+}
+
+.node-settings-footer-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.node-settings-btn-delete {
+  padding: 0.5rem 1rem;
+  background: #4c0519;
+  border: 1px solid #ef4444;
+  border-radius: 0.375rem;
+  color: #ef4444;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.node-settings-btn-delete:hover {
+  background: #6b0a1f;
+}
+
+.node-settings-btn-cancel {
+  padding: 0.5rem 1.25rem;
+  background: #2d2d44;
+  border: 1px solid #3a3a5c;
+  border-radius: 0.375rem;
+  color: #a0a0b0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.node-settings-btn-cancel:hover {
+  background: #3a3a5c;
+  color: #e0e0e0;
+}
+
+.node-settings-btn-save {
+  padding: 0.5rem 1.25rem;
+  background: #6366f1;
+  border: 1px solid #6366f1;
+  border-radius: 0.375rem;
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.node-settings-btn-save:hover {
+  background: #5558e6;
+}

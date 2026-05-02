@@ -15,5 +15,6 @@ public interface IRepositoryManager
     Task<bool> CommitAsync(string worktreePath, string message);
     Task<bool> PushAsync(string worktreePath, string branchName, CancellationToken cancellationToken = default);
     Task<string?> GetDiffAsync(string worktreePath);
+    Task<int> GetCommitsAheadCountAsync(string worktreePath, string targetBranch);
     Task<string?> ReadFileAsync(string worktreePath, string relativePath);
 }

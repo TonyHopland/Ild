@@ -46,6 +46,10 @@ public sealed class PRNodeExecutor : INodeExecutor
 
                 if (!await repoManager.PushAsync(wi.WorktreePath, branch, ctx.CancellationToken))
                     return NodeExecutionResult.Fail($"Failed to push branch '{branch}' to remote");
+
+                var ahead = await repoManager.GetCommitsAheadCountAsync(wi.WorktreePath, target);
+                if (ahead == 0)
+                    return NodeExecutionResult.Fail($"Branch '{branch}' has no commits ahead of '{target}'; no changes were made");
             }
 
             var remote = scope.ServiceProvider.GetRequiredService<IRemoteProvider>();
