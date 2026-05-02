@@ -91,7 +91,8 @@ public class PRNodeExecutorTests
         mockRepoManager.Setup(r => r.GetDiffAsync(worktreePath)).ReturnsAsync((string?)null);
         mockRepoManager.Setup(r => r.PushAsync(worktreePath, "ild/test", CancellationToken.None))
             .ReturnsAsync(true);
-        mockRepoManager.Setup(r => r.GetCommitsAheadCountAsync(worktreePath, "main")).ReturnsAsync(1);
+        mockRepoManager.Setup(r => r.FetchAsync(worktreePath, CancellationToken.None)).ReturnsAsync(true);
+        mockRepoManager.Setup(r => r.GetCommitsAheadCountAsync(worktreePath, "origin/main")).ReturnsAsync(1);
 
         var services = new ServiceCollection();
         services.AddSingleton(mockRemote.Object);
@@ -150,7 +151,8 @@ public class PRNodeExecutorTests
         mockRepoManager.Setup(r => r.CommitAsync(worktreePath, "fix: do a thing")).ReturnsAsync(true);
         mockRepoManager.Setup(r => r.PushAsync(worktreePath, "ild/test", CancellationToken.None))
             .ReturnsAsync(true);
-        mockRepoManager.Setup(r => r.GetCommitsAheadCountAsync(worktreePath, "main")).ReturnsAsync(1);
+        mockRepoManager.Setup(r => r.FetchAsync(worktreePath, CancellationToken.None)).ReturnsAsync(true);
+        mockRepoManager.Setup(r => r.GetCommitsAheadCountAsync(worktreePath, "origin/main")).ReturnsAsync(1);
 
         var services = new ServiceCollection();
         services.AddSingleton(mockRemote.Object);
@@ -203,7 +205,8 @@ public class PRNodeExecutorTests
         mockRepoManager.Setup(r => r.GetDiffAsync(worktreePath)).ReturnsAsync((string?)null);
         mockRepoManager.Setup(r => r.PushAsync(worktreePath, "ild/test", CancellationToken.None))
             .ReturnsAsync(true);
-        mockRepoManager.Setup(r => r.GetCommitsAheadCountAsync(worktreePath, "main")).ReturnsAsync(0);
+        mockRepoManager.Setup(r => r.FetchAsync(worktreePath, CancellationToken.None)).ReturnsAsync(true);
+        mockRepoManager.Setup(r => r.GetCommitsAheadCountAsync(worktreePath, "origin/main")).ReturnsAsync(0);
 
         var services = new ServiceCollection();
         services.AddSingleton(mockRemote.Object);

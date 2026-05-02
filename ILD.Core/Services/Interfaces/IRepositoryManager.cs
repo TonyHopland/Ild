@@ -10,6 +10,7 @@ public interface IRepositoryManager
     Task DestroyWorktreeAsync(string worktreePath);
     Task<bool> ValidateWorktreeHealthAsync(string worktreePath);
     Task<bool> CheckoutBranchAsync(string worktreePath, string branchName);
+    Task<bool> FetchAsync(string worktreePath, CancellationToken cancellationToken = default);
     Task<bool> PullAsync(string worktreePath, CancellationToken cancellationToken = default);
     Task<bool> RebaseAsync(string worktreePath, string upstreamBranch, CancellationToken cancellationToken = default);
     Task<bool> CommitAsync(string worktreePath, string message);

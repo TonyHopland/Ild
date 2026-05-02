@@ -32,6 +32,12 @@ public class RepositoryManager : IRepositoryManager
             if (code2 != 0)
                 throw new InvalidOperationException($"Failed to create worktree at {worktreePath}");
         }
+
+        // Pin project root so opencode --dir works and doesn't walk up to parent workspace.
+        var opencodeConfig = Path.Combine(worktreePath, "opencode.json");
+        if (!File.Exists(opencodeConfig))
+            File.WriteAllText(opencodeConfig, "{\"$schema\":\"https://opencode.ai/config.json\"}");
+
         return worktreePath;
     }
 
@@ -56,6 +62,12 @@ public class RepositoryManager : IRepositoryManager
     public async Task<bool> CheckoutBranchAsync(string worktreePath, string branchName)
     {
         var (code, _, _) = await RunAsync(worktreePath, "checkout", branchName);
+        return code == 0;
+    }
+
+    public async Task<bool> FetchAsync(string worktreePath, CancellationToken cancellationToken = default)
+    {
+        var (code, _, _) = await RunAsync(worktreePath, new[] { "fetch", "origin" }, cancellationToken);
         return code == 0;
     }
 
