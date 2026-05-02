@@ -119,7 +119,7 @@ export default function Settings() {
           display: flex;
           flex-direction: column;
           gap: 1.5rem;
-          max-width: 600px;
+          max-width: min(680px, 100%);
         }
 
         .settings-section {

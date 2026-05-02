@@ -121,8 +121,8 @@ public class LoopTemplatesController : ControllerBase
     [HttpPost("validate")]
     public async Task<IActionResult> ValidateGraph([FromBody] LoopTemplateGraph graph)
     {
-        var valid = await _loopTemplateManager.ValidateGraphAsync(graph);
-        return Ok(new { valid });
+        var (valid, errors) = await _loopTemplateManager.ValidateGraphAsync(graph);
+        return Ok(new { valid, errors });
     }
 
     [HttpDelete("{id}")]

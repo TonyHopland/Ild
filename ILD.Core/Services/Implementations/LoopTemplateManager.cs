@@ -93,8 +93,11 @@ public class LoopTemplateManager : ILoopTemplateManager
         return await BuildGraphFromVersion(latest);
     }
 
-    public Task<bool> ValidateGraphAsync(LoopTemplateGraph graph)
-        => Task.FromResult(LoopTemplateValidator.Validate(graph).Count == 0);
+    public Task<(bool Valid, IReadOnlyList<string> Errors)> ValidateGraphAsync(LoopTemplateGraph graph)
+    {
+        var errors = LoopTemplateValidator.Validate(graph);
+        return Task.FromResult((errors.Count == 0, errors));
+    }
 
     public async Task DeleteLoopTemplateAsync(Guid templateId)
     {

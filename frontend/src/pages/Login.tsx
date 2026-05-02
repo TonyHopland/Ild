@@ -17,7 +17,7 @@ export default function Login() {
 
     try {
       await login(username, password);
-      navigate("/taskboard", { replace: true });
+      await navigate("/taskboard", { replace: true });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Invalid credentials. Please try again.";
       setError(message || "Invalid credentials. Please try again.");

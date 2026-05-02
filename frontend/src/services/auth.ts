@@ -199,8 +199,8 @@ export const loopTemplateService = {
     return api.delete<void>(`/looptemplates/${id}`);
   },
 
-  validate: async (data: unknown): Promise<{ valid: boolean }> => {
-    return api.post<{ valid: boolean }>("/looptemplates/validate", data);
+  validate: async (data: unknown): Promise<{ valid: boolean; errors: string[] }> => {
+    return api.post<{ valid: boolean; errors: string[] }>("/looptemplates/validate", data);
   },
 
   clone: async (id: string, newName: string): Promise<{ id: string }> => {

@@ -45,8 +45,7 @@ export default function Header() {
           display: flex;
           align-items: center;
           justify-content: space-between;
-          max-width: 1200px;
-          margin: 0 auto;
+          width: 100%;
           padding: 0 1rem;
           height: 100%;
         }

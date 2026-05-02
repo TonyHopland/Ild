@@ -1,0 +1,66 @@
+.prompt-editor-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.prompt-editor-textarea {
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  background: #1a1a2e;
+  border: 1px solid #2d2d44;
+  border-radius: 0.25rem;
+  color: #e0e0e0;
+  font-size: 0.8rem;
+  outline: none;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.prompt-editor-textarea:focus {
+  border-color: #6366f1;
+}
+
+.prompt-suggestions-list {
+  position: absolute;
+  z-index: 1000;
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: #1e1e30;
+  border: 1px solid #6366f1;
+  border-radius: 0.25rem;
+  max-height: 180px;
+  overflow-y: auto;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.prompt-suggestion-item {
+  padding: 0.35rem 0.5rem;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  transition: background 0.1s ease;
+}
+
+.prompt-suggestion-item:hover {
+  background: #2d2d44;
+}
+
+.prompt-suggestion-item.selected {
+  background: #2d2d44;
+}
+
+.prompt-suggestion-key {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #a78bfa;
+  font-family: monospace;
+}
+
+.prompt-suggestion-desc {
+  font-size: 0.65rem;
+  color: #707090;
+}

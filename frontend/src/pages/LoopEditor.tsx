@@ -1,5 +1,6 @@
 import "./LoopEditor.css";
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useMediaQuery } from "../hooks/useMediaQuery";
 import {
   ReactFlow,
   Background,
@@ -25,6 +26,7 @@ import {
 } from "../utils/loopGraphConverter";
 import { checkEdgeConstraints, buildEdge } from "../utils/edgeUtils";
 import ErrorBanner from "../components/ErrorBanner";
+import PromptEditor from "../components/PromptEditor";
 
 function loadErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message) return error.message;
@@ -82,6 +84,8 @@ export default function LoopEditor() {
   >({});
   const [aiProviders, setAiProviders] = useState<AiProvider[]>([]);
   const [errorText, setErrorText] = useState("");
+  const [sidebarVisible, setSidebarVisible] = useState(true);
+  const isNarrow = useMediaQuery("(max-width: 900px)");
 
   useEffect(() => {
     void loadTemplates();
@@ -184,12 +188,12 @@ export default function LoopEditor() {
     const loopEdges = edgesToLoopNodeEdges(edges);
 
     // Server-side validation for placeholders
-    const isValid = await loopTemplateService.validate({
+    const validationResult = await loopTemplateService.validate({
       nodes: loopNodes,
       edges: loopEdges,
     });
-    if (!isValid.valid) {
-      setValidationErrors(["Graph contains unknown placeholders in node prompts."]);
+    if (!validationResult.valid) {
+      setValidationErrors(validationResult.errors);
       return;
     }
 
@@ -320,7 +324,7 @@ export default function LoopEditor() {
     const config = data.config || {};
     setCmdCommand((config.command as string) || "");
     setCmdTimeout((config.timeout as number) ?? 30);
-    setAiPrompt((config.promptTemplate as string) || "");
+    setAiPrompt((config.promptTemplate as string) || (config.prompt as string) || "");
     setAiProvider((config.aiProviderId as string) || "");
     setAiTools((config.toolAllowlist as string[]) || []);
     setStartCreateWorktree((config.createWorktree as boolean) ?? true);
@@ -506,6 +510,15 @@ export default function LoopEditor() {
           </div>
         )}{" "}
         <div className="header-actions">
+          {!isNarrow && (
+            <button
+              className="sidebar-toggle-btn"
+              onClick={() => setSidebarVisible((v) => !v)}
+              aria-label="Toggle sidebar"
+            >
+              {sidebarVisible ? "◀" : "▶"}
+            </button>
+          )}
           {isNewTemplate && (
             <input
               type="text"
@@ -528,113 +541,118 @@ export default function LoopEditor() {
       </div>
 
       <div className="loop-editor-layout">
-        <div className={`node-palette ${readOnlyVersion !== null ? "palette-disabled" : ""}`}>
-          <div className="palette-header">Drag & Drop</div>
-          {paletteItems.map((item) => (
-            <div
-              key={item.type}
-              className="palette-item"
-              draggable={readOnlyVersion === null}
-              onDragStart={(e) => {
-                e.dataTransfer.setData("application/loop-node-type", item.type);
-              }}
-            >
-              {item.label}
-            </div>
-          ))}
-        </div>
-
-        <div className="loop-list">
-          {!showVersionHistory ? (
-            <>
-              {templates.map((template) => (
+        {(sidebarVisible || isNarrow) && (
+          <>
+            <div className={`node-palette ${readOnlyVersion !== null ? "palette-disabled" : ""}`}>
+              <div className="palette-header">Drag & Drop</div>
+              {paletteItems.map((item) => (
                 <div
-                  key={template.id}
-                  className={`loop-list-item ${selectedTemplate?.id === template.id ? "active" : ""}`}
-                  onClick={() => selectTemplate(template)}
-                >
-                  <div className="loop-list-item-name">{template.name}</div>
-                  <div className="loop-list-item-meta">
-                    v{template.version} &middot; {template.nodes.length} nodes
-                  </div>
-                  {cloningTemplateId === template.id ? (
-                    <div className="clone-input-row">
-                      <input
-                        type="text"
-                        className="clone-name-input"
-                        placeholder="Clone name"
-                        value={cloneName}
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={(e) => setCloneName(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") void handleClone(template);
-                        }}
-                      />
-                      <button
-                        className="clone-confirm-btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void handleClone(template);
-                        }}
-                      >
-                        Clone
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="loop-list-item-actions">
-                      <button
-                        className="clone-btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setCloningTemplateId(template.id);
-                          setCloneName(`Copy of ${template.name}`);
-                        }}
-                      >
-                        Clone
-                      </button>
-                      <button
-                        className="versions-btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void handleShowVersionHistory(template);
-                        }}
-                      >
-                        Versions
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </>
-          ) : (
-            <div className="version-history-list">
-              <div className="version-history-header">
-                <span>Version History</span>
-                <button
-                  className="back-to-templates-btn"
-                  onClick={() => setShowVersionHistory(false)}
-                >
-                  ← Back
-                </button>
-              </div>
-              {versionHistory.map((v) => (
-                <div
-                  key={v.id}
-                  className="version-history-item"
-                  onClick={() => {
-                    const template = templates.find((t) => t.id === v.loopTemplateId);
-                    if (template) void handleSelectVersion(template, v.versionNumber);
+                  key={item.type}
+                  className="palette-item"
+                  draggable={readOnlyVersion === null}
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData("application/loop-node-type", item.type);
                   }}
                 >
-                  <div className="version-number">v{v.versionNumber}</div>
-                  <div className="version-meta">
-                    {new Date(v.createdAt).toLocaleDateString()} &middot; {v.nodeCount ?? "—"} nodes
-                  </div>
+                  {item.label}
                 </div>
               ))}
             </div>
-          )}
-        </div>
+
+            <div className="loop-list">
+              {!showVersionHistory ? (
+                <>
+                  {templates.map((template) => (
+                    <div
+                      key={template.id}
+                      className={`loop-list-item ${selectedTemplate?.id === template.id ? "active" : ""}`}
+                      onClick={() => selectTemplate(template)}
+                    >
+                      <div className="loop-list-item-name">{template.name}</div>
+                      <div className="loop-list-item-meta">
+                        v{template.version} &middot; {template.nodes.length} nodes
+                      </div>
+                      {cloningTemplateId === template.id ? (
+                        <div className="clone-input-row">
+                          <input
+                            type="text"
+                            className="clone-name-input"
+                            placeholder="Clone name"
+                            value={cloneName}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => setCloneName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") void handleClone(template);
+                            }}
+                          />
+                          <button
+                            className="clone-confirm-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleClone(template);
+                            }}
+                          >
+                            Clone
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="loop-list-item-actions">
+                          <button
+                            className="clone-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setCloningTemplateId(template.id);
+                              setCloneName(`Copy of ${template.name}`);
+                            }}
+                          >
+                            Clone
+                          </button>
+                          <button
+                            className="versions-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleShowVersionHistory(template);
+                            }}
+                          >
+                            Versions
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </>
+              ) : (
+                <div className="version-history-list">
+                  <div className="version-history-header">
+                    <span>Version History</span>
+                    <button
+                      className="back-to-templates-btn"
+                      onClick={() => setShowVersionHistory(false)}
+                    >
+                      ← Back
+                    </button>
+                  </div>
+                  {versionHistory.map((v) => (
+                    <div
+                      key={v.id}
+                      className="version-history-item"
+                      onClick={() => {
+                        const template = templates.find((t) => t.id === v.loopTemplateId);
+                        if (template) void handleSelectVersion(template, v.versionNumber);
+                      }}
+                    >
+                      <div className="version-number">v{v.versionNumber}</div>
+                      <div className="version-meta">
+                        {new Date(v.createdAt).toLocaleDateString()} &middot; {v.nodeCount ?? "—"}{" "}
+                        nodes
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
+        )}
 
         <div
           className="loop-canvas-container"
@@ -733,13 +751,13 @@ export default function LoopEditor() {
                     <>
                       <div className="config-field">
                         <label htmlFor="ai-prompt">Prompt Template</label>
-                        <textarea
+                        <PromptEditor
                           id="ai-prompt"
                           rows={3}
                           value={aiPrompt}
-                          onChange={(e) => {
-                            setAiPrompt(e.target.value);
-                            updateNodeConfig({ promptTemplate: e.target.value });
+                          onChange={(v) => {
+                            setAiPrompt(v);
+                            updateNodeConfig({ prompt: v });
                           }}
                         />
                       </div>

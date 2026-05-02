@@ -71,9 +71,8 @@ public static class LoopTemplateValidator
         // Unknown placeholders in AI/Human prompt templates
         foreach (var node in nodes)
         {
-            if (!node.Config.TryGetValue("promptTemplate", out var promptObj))
-                continue;
-            var prompt = promptObj?.ToString();
+            var prompt = (node.Config.GetValueOrDefault("promptTemplate")
+                ?? node.Config.GetValueOrDefault("prompt"))?.ToString();
             if (string.IsNullOrEmpty(prompt)) continue;
 
             foreach (Match m in PlaceholderPattern.Matches(prompt))

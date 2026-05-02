@@ -743,3 +743,69 @@ describe("Loop Editor read-only version inspection", () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe("Loop Editor responsive sidebar", () => {
+  test("clicking sidebar toggle hides the sidebar panels", async () => {
+    const fetchMock = mockFetch(null);
+    fetchMock.mockReturnValueOnce(
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify([sampleTemplate])),
+      }),
+    );
+
+    renderPage(fetchMock);
+
+    await waitFor(() => {
+      expect(screen.getByText("Dev Loop")).toBeTruthy();
+    });
+
+    // Sidebar panels should be visible initially
+    expect(document.querySelector(".node-palette")).toBeTruthy();
+    expect(document.querySelector(".loop-list")).toBeTruthy();
+
+    // Click the sidebar toggle button
+    const toggle = screen.getByRole("button", { name: /toggle sidebar/i });
+    fireEvent.click(toggle);
+
+    // Sidebar panels should be hidden
+    await waitFor(() => {
+      expect(document.querySelector(".node-palette")).toBeFalsy();
+      expect(document.querySelector(".loop-list")).toBeFalsy();
+    });
+  });
+
+  test("clicking sidebar toggle again shows the sidebar panels", async () => {
+    const fetchMock = mockFetch(null);
+    fetchMock.mockReturnValueOnce(
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify([sampleTemplate])),
+      }),
+    );
+
+    renderPage(fetchMock);
+
+    await waitFor(() => {
+      expect(screen.getByText("Dev Loop")).toBeTruthy();
+    });
+
+    // Hide sidebar
+    const toggle = screen.getByRole("button", { name: /toggle sidebar/i });
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(document.querySelector(".node-palette")).toBeFalsy();
+    });
+
+    // Show sidebar again
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(document.querySelector(".node-palette")).toBeTruthy();
+      expect(document.querySelector(".loop-list")).toBeTruthy();
+    });
+  });
+});

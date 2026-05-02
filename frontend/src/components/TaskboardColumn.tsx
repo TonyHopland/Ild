@@ -83,8 +83,8 @@ export default function TaskboardColumn({
       </div>
       <style>{`
         .taskboard-column {
-          min-width: 280px;
-          max-width: 320px;
+          flex: 1 1 0;
+          min-width: 0;
           background-color: #1e1e30;
           border-radius: 0.5rem;
           display: flex;

@@ -145,7 +145,8 @@ public sealed class AINodeExecutor : INodeExecutor
             if (dict == null) return NodeExecutionResult.Fail("AI config missing");
             var providerKey = dict.GetValueOrDefault("provider")?.ToString();
             var initialPrompt = dict.GetValueOrDefault("initialPrompt")?.ToString()
-                ?? dict.GetValueOrDefault("prompt")?.ToString() ?? "";
+                ?? dict.GetValueOrDefault("prompt")?.ToString()
+                ?? dict.GetValueOrDefault("promptTemplate")?.ToString() ?? "";
             var loopPrompt = dict.GetValueOrDefault("loopPrompt")?.ToString() ?? initialPrompt;
 
             using var scope = _sp.CreateScope();
@@ -158,6 +159,12 @@ public sealed class AINodeExecutor : INodeExecutor
 
             var executionCount = await CountNodeVisitsAsync(scope.ServiceProvider, ctx.Run.Id, ctx.Node.Id);
 
+            var eventLogService = scope.ServiceProvider.GetRequiredService<IEventLogService>();
+            var eventEntries = await eventLogService.GetByRunIdAsync(ctx.Run.Id);
+            var eventLogSummary = eventEntries
+                .Select(e => $"{e.EventType}: {e.Data}")
+                .ToList();
+
             var runContext = new ILD.Data.DTOs.LoopRunContext(
                 ctx.Run.Id,
                 ctx.WorkItem.Id,
@@ -165,7 +172,7 @@ public sealed class AINodeExecutor : INodeExecutor
                 ctx.WorkItem.Description ?? "",
                 ctx.WorkItem.WorktreePath ?? "",
                 ctx.WorkItem.BranchName ?? "",
-                new List<string>(),
+                eventLogSummary,
                 ctx.PreviousNodeOutput);
 
             var agentCtx = new ILD.Data.DTOs.AgentExecutionContext(

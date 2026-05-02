@@ -205,6 +205,17 @@ export default function Taskboard() {
           padding-bottom: 1rem;
         }
 
+        @media (max-width: 640px) {
+          .taskboard {
+            flex-direction: column;
+          }
+
+          .taskboard-column {
+            max-height: none;
+            min-height: 200px;
+          }
+        }
+
         .btn-primary {
           background-color: #6366f1;
           color: #fff;

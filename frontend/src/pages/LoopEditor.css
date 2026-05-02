@@ -3,6 +3,24 @@
   justify-content: space-between;
   align-items: center;
   margin-bottom: 1rem;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.sidebar-toggle-btn {
+  padding: 0.25rem 0.5rem;
+  background: #1a1a2e;
+  border: 1px solid #2d2d44;
+  border-radius: 0.25rem;
+  color: #a0a0b0;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sidebar-toggle-btn:hover {
+  border-color: #6366f1;
+  color: #e0e0e0;
 }
 
 .header-actions {

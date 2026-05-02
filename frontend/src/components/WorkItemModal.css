@@ -11,9 +11,10 @@
 .modal-content {
   background-color: #1e1e30;
   border-radius: 0.5rem;
-  width: 100%;
-  max-width: 500px;
+  width: 90%;
+  max-width: 540px;
   border: 1px solid #2d2d44;
+  margin: 1rem auto;
 }
 
 .modal-header {
