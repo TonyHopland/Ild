@@ -33,6 +33,7 @@ public class LoopTemplateManager : ILoopTemplateManager
         await _store.CreateTemplateAsync(template);
 
         await AddVersionFromGraph(template.Id, 1, graph);
+        await _store.SaveChangesAsync();
 
         return template.Id;
     }
@@ -62,6 +63,7 @@ public class LoopTemplateManager : ILoopTemplateManager
 
         var nextVersion = await _store.GetNextVersionNumberAsync(templateId);
         await AddVersionFromGraph(templateId, nextVersion, graph);
+        await _store.SaveChangesAsync();
 
         return templateId;
     }

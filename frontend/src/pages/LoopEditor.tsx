@@ -84,6 +84,7 @@ export default function LoopEditor() {
   >({});
   const [aiProviders, setAiProviders] = useState<AiProvider[]>([]);
   const [errorText, setErrorText] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [showNodeSettingsModal, setShowNodeSettingsModal] = useState(false);
   const [originalNodeConfig, setOriginalNodeConfig] = useState<{
@@ -102,6 +103,12 @@ export default function LoopEditor() {
   useEffect(() => {
     void loadTemplates();
     void loadAiProviders();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
   }, []);
 
   const loadTemplates = async () => {
@@ -142,7 +149,11 @@ export default function LoopEditor() {
     setNewTemplateName("");
   };
 
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const handleSave = async () => {
+    if (isSaving) return;
+
     // Validate nodes exist
     if (nodes.length === 0) {
       setValidationErrors(["Graph must contain at least one node."]);
@@ -160,17 +171,23 @@ export default function LoopEditor() {
       errors.push("Graph must contain a Cleanup node.");
     }
 
-    // Reachability: BFS from Start
+    // Reachability: BFS from Start using adjacency list
     const startNode = nodes.find((n) => (n.data as { type?: string }).type === NodeType.Start);
     if (startNode) {
+      const adjacency = new Map<string, string[]>();
+      for (const e of edges) {
+        const targets = adjacency.get(e.source) ?? [];
+        targets.push(e.target);
+        adjacency.set(e.source, targets);
+      }
       const reachable = new Set<string>();
       const queue: string[] = [startNode.id];
       reachable.add(startNode.id);
       while (queue.length > 0) {
         const cur = queue.shift()!;
-        for (const e of edges) {
-          if (e.source === cur && reachable.add(e.target)) {
-            queue.push(e.target);
+        for (const target of adjacency.get(cur) ?? []) {
+          if (reachable.add(target)) {
+            queue.push(target);
           }
         }
       }
@@ -196,20 +213,23 @@ export default function LoopEditor() {
       return;
     }
 
-    const loopNodes = nodesToLoopNodes(nodes);
-    const loopEdges = edgesToLoopNodeEdges(edges);
-
-    // Server-side validation for placeholders
-    const validationResult = await loopTemplateService.validate({
-      nodes: loopNodes,
-      edges: loopEdges,
-    });
-    if (!validationResult.valid) {
-      setValidationErrors(validationResult.errors);
-      return;
-    }
+    setIsSaving(true);
+    setValidationErrors([]);
 
     try {
+      const loopNodes = nodesToLoopNodes(nodes);
+      const loopEdges = edgesToLoopNodeEdges(edges);
+
+      // Server-side validation for placeholders
+      const validationResult = await loopTemplateService.validate({
+        nodes: loopNodes,
+        edges: loopEdges,
+      });
+      if (!validationResult.valid) {
+        setValidationErrors(validationResult.errors);
+        return;
+      }
+
       if (isNewTemplate) {
         await loopTemplateService.create({
           name: newTemplateName,
@@ -226,15 +246,20 @@ export default function LoopEditor() {
         });
       }
       setSaveSuccess(true);
-      setTimeout(() => {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = setTimeout(() => {
         setSaveSuccess(false);
         setIsNewTemplate(false);
       }, 3000);
-      void loadTemplates();
+      await loadTemplates();
     } catch (error) {
       if (error && typeof error === "object" && "message" in error) {
         setValidationErrors([String((error as { message: string }).message)]);
+      } else {
+        setValidationErrors(["Failed to save template."]);
       }
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -575,8 +600,8 @@ export default function LoopEditor() {
           )}
           {saveSuccess && <span className="save-success">Saved!</span>}
           {(selectedTemplate || isNewTemplate) && readOnlyVersion === null && (
-            <button className="save-btn" onClick={handleSave}>
-              Save
+            <button className="save-btn" onClick={handleSave} disabled={isSaving}>
+              {isSaving ? "Saving…" : "Save"}
             </button>
           )}
           <button className="new-template-btn" onClick={handleNewTemplate}>

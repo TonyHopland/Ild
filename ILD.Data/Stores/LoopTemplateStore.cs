@@ -73,16 +73,16 @@ public class LoopTemplateStore : ILoopTemplateStore
         return (max ?? 0) + 1;
     }
 
-    public async Task CreateTemplateAsync(LoopTemplate template)
+    public Task CreateTemplateAsync(LoopTemplate template)
     {
         _db.LoopTemplates.Add(template);
-        await _db.SaveChangesAsync();
+        return Task.CompletedTask;
     }
 
-    public async Task UpdateTemplateAsync(LoopTemplate template)
+    public Task UpdateTemplateAsync(LoopTemplate template)
     {
         _db.LoopTemplates.Update(template);
-        await _db.SaveChangesAsync();
+        return Task.CompletedTask;
     }
 
     public async Task DeleteTemplateAsync(LoopTemplate template)
@@ -91,22 +91,22 @@ public class LoopTemplateStore : ILoopTemplateStore
         await _db.SaveChangesAsync();
     }
 
-    public async Task CreateVersionAsync(LoopTemplateVersion version)
+    public Task CreateVersionAsync(LoopTemplateVersion version)
     {
         _db.LoopTemplateVersions.Add(version);
-        await _db.SaveChangesAsync();
+        return Task.CompletedTask;
     }
 
-    public async Task CreateNodesAsync(IReadOnlyList<LoopNode> nodes)
+    public Task CreateNodesAsync(IReadOnlyList<LoopNode> nodes)
     {
         _db.LoopNodes.AddRange(nodes);
-        await _db.SaveChangesAsync();
+        return Task.CompletedTask;
     }
 
-    public async Task CreateEdgesAsync(IReadOnlyList<LoopNodeEdge> edges)
+    public Task CreateEdgesAsync(IReadOnlyList<LoopNodeEdge> edges)
     {
         _db.LoopNodeEdges.AddRange(edges);
-        await _db.SaveChangesAsync();
+        return Task.CompletedTask;
     }
 
     public async Task DeleteNodesForVersionAsync(Guid versionId)
@@ -131,6 +131,11 @@ public class LoopTemplateStore : ILoopTemplateStore
             .Where(v => v.LoopTemplateId == templateId)
             .ToListAsync();
         _db.LoopTemplateVersions.RemoveRange(versions);
+        await _db.SaveChangesAsync();
+    }
+
+    public async Task SaveChangesAsync()
+    {
         await _db.SaveChangesAsync();
     }
 }

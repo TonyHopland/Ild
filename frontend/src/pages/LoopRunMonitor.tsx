@@ -6,6 +6,36 @@ import { loopRunService } from "../services/auth";
 import { useSignalR } from "../hooks/useSignalR";
 import ErrorBanner from "../components/ErrorBanner";
 
+function normalizeLoopRunStatus(value: unknown): LoopRunStatus {
+  if (typeof value === "string") return value as LoopRunStatus;
+  if (typeof value === "number") {
+    const map: Record<number, LoopRunStatus> = {
+      0: LoopRunStatus.Running,
+      1: LoopRunStatus.Completed,
+      2: LoopRunStatus.Failed,
+      3: LoopRunStatus.Cancelled,
+    };
+    return map[value] ?? LoopRunStatus.Running;
+  }
+  return LoopRunStatus.Running;
+}
+
+function normalizeNodeStatus(value: unknown): LoopRunNodeStatus {
+  if (typeof value === "string") return value as LoopRunNodeStatus;
+  if (typeof value === "number") {
+    const map: Record<number, LoopRunNodeStatus> = {
+      0: LoopRunNodeStatus.Pending,
+      1: LoopRunNodeStatus.Running,
+      2: LoopRunNodeStatus.Succeeded,
+      3: LoopRunNodeStatus.Failed,
+      4: LoopRunNodeStatus.Skipped,
+      5: LoopRunNodeStatus.WaitingHuman,
+    };
+    return map[value] ?? LoopRunNodeStatus.Pending;
+  }
+  return LoopRunNodeStatus.Pending;
+}
+
 function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message) return error.message;
   if (typeof error === "string") return error;
@@ -36,7 +66,9 @@ export default function LoopRunMonitor() {
     const onLoopRunStateChanged = async (message: TypedSignalRMessage<"LoopRunStateChanged">) => {
       const { runId, newStatus } = message.payload;
       setRuns((prev) =>
-        prev.map((run) => (run.id === runId ? { ...run, status: newStatus } : run)),
+        prev.map((run) =>
+          run.id === runId ? { ...run, status: normalizeLoopRunStatus(newStatus) } : run,
+        ),
       );
     };
 
@@ -48,7 +80,7 @@ export default function LoopRunMonitor() {
             ? {
                 ...run,
                 nodes: run.nodes.map((n) =>
-                  n.nodeId === nodeId ? { ...n, status: newStatus } : n,
+                  n.nodeId === nodeId ? { ...n, status: normalizeNodeStatus(newStatus) } : n,
                 ),
               }
             : run,
@@ -103,7 +135,13 @@ export default function LoopRunMonitor() {
   const loadRuns = async () => {
     try {
       const data = await loopRunService.getAll();
-      setRuns(data);
+      setRuns(
+        data.map((run) => ({
+          ...run,
+          status: normalizeLoopRunStatus(run.status),
+          nodes: run.nodes.map((n) => ({ ...n, status: normalizeNodeStatus(n.status) })),
+        })),
+      );
     } catch (error) {
       console.error("Failed to load loop runs:", error);
     } finally {
@@ -176,7 +214,7 @@ export default function LoopRunMonitor() {
             <div className="loop-run-main">
               <div
                 className="loop-run-status-dot"
-                style={{ backgroundColor: statusColors[run.status] }}
+                style={{ backgroundColor: statusColors[run.status] ?? "#6b7280" }}
               />
               <div className="loop-run-info">
                 <Link to={`/loop-runs/${run.id}/events`} className="loop-run-name">
@@ -188,17 +226,21 @@ export default function LoopRunMonitor() {
                   {run.isPaused && " &middot; Paused"}
                 </div>
               </div>
-              <span className={`loop-run-status ${run.status.toLowerCase()}`}>{run.status}</span>
+              <span
+                className={`loop-run-status ${typeof run.status === "string" ? run.status.toLowerCase() : "unknown"}`}
+              >
+                {run.status}
+              </span>
             </div>
             <div className="loop-run-nodes">
               {run.nodes.map((node) => (
                 <div key={node.id} className="loop-run-node">
                   <span className="loop-run-node-label">{node.nodeLabel}</span>
                   <span
-                    className={`loop-run-node-status ${node.status.toLowerCase()}`}
-                    style={{ color: nodeStatusColors[node.status] }}
+                    className={`loop-run-node-status ${typeof node.status === "string" ? node.status.toLowerCase() : "unknown"}`}
+                    style={{ color: nodeStatusColors[node.status] ?? "#6b7280" }}
                   >
-                    {node.status}
+                    {node.status ?? "Unknown"}
                   </span>
                 </div>
               ))}

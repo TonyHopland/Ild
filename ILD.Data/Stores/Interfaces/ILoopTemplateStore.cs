@@ -31,4 +31,5 @@ public interface ILoopTemplateStore
     Task DeleteNodesForVersionAsync(Guid versionId);
     Task DeleteEdgesForVersionAsync(Guid versionId);
     Task DeleteVersionsForTemplateAsync(Guid templateId);
+    Task SaveChangesAsync();
 }
