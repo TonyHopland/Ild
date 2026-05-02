@@ -6,5 +6,6 @@ public record AgentExecutionContext(
     string LoopPrompt,
     LoopRunContext RunContext,
     int ExecutionCount,
-    CancellationToken Cancel
+    CancellationToken Cancel,
+    Func<string, Task>? ProgressCallback = null
 );

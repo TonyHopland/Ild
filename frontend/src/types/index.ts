@@ -242,6 +242,12 @@ export interface HumanFeedbackRequiredPayload {
   reason: string;
 }
 
+export interface NodeProgressPayload {
+  runId: string;
+  nodeId: string;
+  line: string;
+}
+
 export interface LoopTemplateVersion {
   id: string;
   loopTemplateId: string;

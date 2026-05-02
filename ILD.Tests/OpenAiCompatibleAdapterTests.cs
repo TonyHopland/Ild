@@ -14,8 +14,7 @@ public class OpenAiCompatibleAdapterTests
     [Fact]
     public async Task ExecuteAsync_on_first_execution_renders_initial_prompt_and_succeeds()
     {
-        var handler = new TestHttpHandler(
-            responseJson: """{"choices":[{"message":{"content":"hello My Task"}}]}""");
+        var handler = new TestHttpHandler(responseContent: "hello My Task");
         var factory = BuildFactory(handler);
         var adapter = new OpenAiCompatibleAdapter(factory);
 
@@ -38,8 +37,7 @@ public class OpenAiCompatibleAdapterTests
     [Fact]
     public async Task ExecuteAsync_on_loopback_uses_loop_prompt()
     {
-        var handler = new TestHttpHandler(
-            responseJson: """{"choices":[{"message":{"content":"continued"}}]}""");
+        var handler = new TestHttpHandler(responseContent: "continued");
         var factory = BuildFactory(handler);
         var adapter = new OpenAiCompatibleAdapter(factory);
 
@@ -62,8 +60,7 @@ public class OpenAiCompatibleAdapterTests
     [Fact]
     public async Task ExecuteAsync_reads_config_from_json_and_falls_back_to_typed_fields()
     {
-        var handler = new TestHttpHandler(
-            responseJson: """{"choices":[{"message":{"content":"done"}}]}""");
+        var handler = new TestHttpHandler(responseContent: "done");
         var factory = BuildFactory(handler);
         var adapter = new OpenAiCompatibleAdapter(factory);
 
@@ -94,8 +91,7 @@ public class OpenAiCompatibleAdapterTests
     [Fact]
     public async Task ExecuteAsync_uses_typed_fields_when_config_is_empty()
     {
-        var handler = new TestHttpHandler(
-            responseJson: """{"choices":[{"message":{"content":"fallback"}}]}""");
+        var handler = new TestHttpHandler(responseContent: "fallback");
         var factory = BuildFactory(handler);
         var adapter = new OpenAiCompatibleAdapter(factory);
 
@@ -144,6 +140,37 @@ public class OpenAiCompatibleAdapterTests
         result.Error.Should().NotBeNull();
     }
 
+    [Fact]
+    public async Task ExecuteAsync_streams_sse_chunks_to_progress_callback()
+    {
+        var chunks = new[] { "Hello", " ", "world", "!" };
+        var handler = new SseStreamHttpHandler(chunks);
+        var factory = BuildFactory(handler);
+        var adapter = new OpenAiCompatibleAdapter(factory);
+
+        var progressChunks = new System.Collections.Concurrent.ConcurrentBag<string>();
+
+        var ctx = new AgentExecutionContext(
+            Provider: new AiProvider { Name = "test", Type = "openai", BaseUrl = "https://api.test", Model = "gpt-4" },
+            InitialPrompt: "test",
+            LoopPrompt: "",
+            RunContext: new LoopRunContext(
+                Guid.NewGuid(), Guid.NewGuid(), "Title", "desc", "/tmp", "main", new List<string>(), null),
+            ExecutionCount: 1,
+            Cancel: CancellationToken.None,
+            ProgressCallback: (line) =>
+            {
+                progressChunks.Add(line);
+                return Task.CompletedTask;
+            });
+
+        var result = await adapter.ExecuteAsync(ctx);
+
+        result.Success.Should().BeTrue();
+        result.Output.Should().Be("Hello world!");
+        progressChunks.Should().HaveCountGreaterThanOrEqualTo(4);
+    }
+
     private static TestHttpClientFactory BuildFactory(HttpMessageHandler handler)
     {
         return new TestHttpClientFactory(handler);
@@ -166,23 +193,57 @@ public class OpenAiCompatibleAdapterTests
 
     private sealed class TestHttpHandler : HttpMessageHandler
     {
-        private readonly string _responseJson;
+        private readonly string _responseContent;
         private readonly HttpStatusCode _statusCode;
         public List<string> RequestBodies { get; } = new();
 
-        public TestHttpHandler(string responseJson = """{"choices":[{"message":{"content":"ok"}}]}""", int statusCode = 200)
+        public TestHttpHandler(string responseContent = "ok", int statusCode = 200)
         {
-            _responseJson = responseJson;
+            _responseContent = responseContent;
             _statusCode = (HttpStatusCode)statusCode;
         }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             RequestBodies.Add(await request.Content!.ReadAsStringAsync());
-            return new HttpResponseMessage(_statusCode)
+            if ((int)_statusCode != 200)
+                return new HttpResponseMessage(_statusCode);
+
+            var sseData = $"data: {JsonSerializer.Serialize(new { choices = new[] { new { delta = new { content = _responseContent } } } })}\n\ndata: [done]\n\n";
+            var ms = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(sseData));
+            var response = new HttpResponseMessage(HttpStatusCode.OK);
+            response.Content = new StreamContent(ms);
+            response.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/event-stream");
+            return response;
+        }
+    }
+
+    private sealed class SseStreamHttpHandler : HttpMessageHandler
+    {
+        private readonly string[] _chunks;
+
+        public SseStreamHttpHandler(string[] chunks)
+        {
+            _chunks = chunks;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var ms = new MemoryStream();
+            var writer = new StreamWriter(ms);
+            foreach (var chunk in _chunks)
             {
-                Content = new StringContent(_responseJson)
-            };
+                var sseLine = $"data: {JsonSerializer.Serialize(new { choices = new[] { new { delta = new { content = chunk } } } })}\n\n";
+                writer.Write(sseLine);
+            }
+            writer.Write("data: [done]\n\n");
+            writer.Flush();
+            ms.Position = 0;
+
+            var response = new HttpResponseMessage(HttpStatusCode.OK);
+            response.Content = new StreamContent(ms);
+            response.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/event-stream");
+            return Task.FromResult(response);
         }
     }
 }

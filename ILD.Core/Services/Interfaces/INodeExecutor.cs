@@ -15,7 +15,8 @@ public sealed record NodeExecutionContext(
     LoopNode Node,
     WorkItem WorkItem,
     string? PreviousNodeOutput,
-    CancellationToken CancellationToken);
+    CancellationToken CancellationToken,
+    Func<string, Task>? ProgressCallback = null);
 
 public interface INodeExecutor
 {

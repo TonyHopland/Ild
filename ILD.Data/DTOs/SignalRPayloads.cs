@@ -17,3 +17,5 @@ public record WorkItemStateChangedPayload(Guid WorkItemId, WorkItemStatus OldSta
 public record DependencyResolvedPayload(Guid WorkItemId);
 
 public record HumanFeedbackRequiredPayload(Guid WorkItemId, string Reason);
+
+public record NodeProgressPayload(Guid RunId, Guid NodeId, string Line);

@@ -85,6 +85,18 @@ export default function LoopEditor() {
   const [aiProviders, setAiProviders] = useState<AiProvider[]>([]);
   const [errorText, setErrorText] = useState("");
   const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [showNodeSettingsModal, setShowNodeSettingsModal] = useState(false);
+  const [originalNodeConfig, setOriginalNodeConfig] = useState<{
+    label: string;
+    cmdCommand: string;
+    cmdTimeout: number;
+    aiPrompt: string;
+    aiProvider: string;
+    aiTools: string[];
+    startCreateWorktree: boolean;
+    humanInputLabel: string;
+    adapterConfigValues: Record<string, string | number | boolean>;
+  } | null>(null);
   const isNarrow = useMediaQuery("(max-width: 900px)");
 
   useEffect(() => {
@@ -313,51 +325,127 @@ export default function LoopEditor() {
     event.dataTransfer.dropEffect = "move";
   }, []);
 
-  const onNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
-    setSelectedNode(node);
-    const data = node.data as {
-      label: string;
-      type: string;
-      config?: Record<string, unknown>;
-    };
-    setNodeLabel(data.label || "");
-    const config = data.config || {};
-    setCmdCommand((config.command as string) || "");
-    setCmdTimeout((config.timeout as number) ?? 30);
-    setAiPrompt((config.promptTemplate as string) || (config.prompt as string) || "");
-    setAiProvider((config.aiProviderId as string) || "");
-    setAiTools((config.toolAllowlist as string[]) || []);
-    setStartCreateWorktree((config.createWorktree as boolean) ?? true);
-    setHumanInputLabel((config.inputLabel as string) || "");
+  const onNodeClick = useCallback(
+    (_event: React.MouseEvent, node: Node) => {
+      setSelectedNode(node);
+      const data = node.data as {
+        label: string;
+        type: string;
+        config?: Record<string, unknown>;
+      };
+      const config = data.config || {};
+      const adapterConfig = (config.adapterConfig as Record<string, unknown>) || {};
 
-    if (data.type === NodeType.AI) {
-      const providerType = "openai";
-      void agentAdapterService.getConfigSchema(providerType).then((schema) => {
-        setAdapterConfigSchema(schema);
-        const initialValues: Record<string, string | number | boolean> = {};
-        for (const field of schema) {
-          if (field.defaultValue !== null && field.defaultValue !== undefined) {
-            initialValues[field.name] = field.defaultValue;
+      setNodeLabel(data.label || "");
+      setCmdCommand((config.command as string) || "");
+      setCmdTimeout((config.timeout as number) ?? 30);
+      setAiPrompt((config.promptTemplate as string) || (config.prompt as string) || "");
+      setAiProvider((config.aiProviderId as string) || "");
+      setAiTools((config.toolAllowlist as string[]) || []);
+      setStartCreateWorktree((config.createWorktree as boolean) ?? true);
+      setHumanInputLabel((config.inputLabel as string) || "");
+
+      if (data.type === NodeType.AI) {
+        const providerType = "openai";
+        void agentAdapterService.getConfigSchema(providerType).then((schema) => {
+          setAdapterConfigSchema(schema);
+          const initialValues: Record<string, string | number | boolean> = {};
+          for (const field of schema) {
+            const nodeVal = adapterConfig[field.name];
+            if (nodeVal !== undefined && typeof nodeVal === "string") {
+              initialValues[field.name] = nodeVal;
+            } else if (nodeVal !== undefined && typeof nodeVal === "number") {
+              initialValues[field.name] = nodeVal;
+            } else if (nodeVal !== undefined && typeof nodeVal === "boolean") {
+              initialValues[field.name] = nodeVal;
+            } else if (field.defaultValue !== null && field.defaultValue !== undefined) {
+              initialValues[field.name] = field.defaultValue;
+            }
           }
-        }
-        setAdapterConfigValues(initialValues);
-      });
-    }
-  }, []);
+          setAdapterConfigValues(initialValues);
+        });
+      }
 
-  const updateNodeLabel = useCallback(
-    (newLabel: string) => {
-      if (!selectedNode) return;
-      setNodeLabel(newLabel);
-      setLabelError(null);
-      setNodes((nds) =>
-        nds.map((nd) =>
-          nd.id === selectedNode.id ? { ...nd, data: { ...nd.data, label: newLabel } } : nd,
-        ),
-      );
+      setOriginalNodeConfig({
+        label: data.label || "",
+        cmdCommand: (config.command as string) || "",
+        cmdTimeout: (config.timeout as number) ?? 30,
+        aiPrompt: (config.promptTemplate as string) || (config.prompt as string) || "",
+        aiProvider: (config.aiProviderId as string) || "",
+        aiTools: (config.toolAllowlist as string[]) || [],
+        startCreateWorktree: (config.createWorktree as boolean) ?? true,
+        humanInputLabel: (config.inputLabel as string) || "",
+        adapterConfigValues: { ...adapterConfigValues },
+      });
+      setShowNodeSettingsModal(true);
     },
-    [selectedNode, setNodes],
+    [adapterConfigValues],
   );
+
+  const handleSaveNodeSettings = useCallback(() => {
+    if (!selectedNode) return;
+    const nodeType = (selectedNode.data as { type: string }).type;
+    const config: Record<string, unknown> = {};
+    if (nodeType === NodeType.Cmd) {
+      config.command = cmdCommand;
+      config.timeout = cmdTimeout;
+    } else if (nodeType === NodeType.AI) {
+      config.prompt = aiPrompt;
+      config.aiProviderId = aiProvider;
+      config.toolAllowlist = aiTools;
+      config.adapterConfig = { ...adapterConfigValues };
+    } else if (nodeType === NodeType.Start) {
+      config.createWorktree = startCreateWorktree;
+    } else if (nodeType === NodeType.Human) {
+      config.inputLabel = humanInputLabel;
+    }
+    setNodes((nds) =>
+      nds.map((nd) =>
+        nd.id === selectedNode.id
+          ? {
+              ...nd,
+              data: {
+                ...nd.data,
+                label: nodeLabel,
+                config: { ...(nd.data as { config?: Record<string, unknown> }).config, ...config },
+              },
+            }
+          : nd,
+      ),
+    );
+    setSelectedNode(null);
+    setShowNodeSettingsModal(false);
+    setOriginalNodeConfig(null);
+  }, [
+    selectedNode,
+    nodeLabel,
+    cmdCommand,
+    cmdTimeout,
+    aiPrompt,
+    aiProvider,
+    aiTools,
+    startCreateWorktree,
+    humanInputLabel,
+    adapterConfigValues,
+    setNodes,
+  ]);
+
+  const handleCancelNodeSettings = useCallback(() => {
+    if (originalNodeConfig) {
+      setNodeLabel(originalNodeConfig.label);
+      setCmdCommand(originalNodeConfig.cmdCommand);
+      setCmdTimeout(originalNodeConfig.cmdTimeout);
+      setAiPrompt(originalNodeConfig.aiPrompt);
+      setAiProvider(originalNodeConfig.aiProvider);
+      setAiTools(originalNodeConfig.aiTools);
+      setStartCreateWorktree(originalNodeConfig.startCreateWorktree);
+      setHumanInputLabel(originalNodeConfig.humanInputLabel);
+      setAdapterConfigValues(originalNodeConfig.adapterConfigValues);
+    }
+    setSelectedNode(null);
+    setShowNodeSettingsModal(false);
+    setOriginalNodeConfig(null);
+  }, [originalNodeConfig]);
 
   const validateLabel = useCallback(
     (label: string) => {
@@ -388,49 +476,6 @@ export default function LoopEditor() {
     );
     setSelectedNode(null);
   }, [selectedNode, setNodes, setEdges]);
-
-  const updateNodeConfig = useCallback(
-    (configUpdate: Record<string, unknown>) => {
-      if (!selectedNode) return;
-      const currentConfig =
-        (selectedNode.data as { config?: Record<string, unknown> }).config || {};
-      setNodes((nds) =>
-        nds.map((nd) =>
-          nd.id === selectedNode.id
-            ? {
-                ...nd,
-                data: { ...nd.data, config: { ...currentConfig, ...configUpdate } },
-              }
-            : nd,
-        ),
-      );
-    },
-    [selectedNode, setNodes],
-  );
-
-  const handleAdapterConfigChange = useCallback(
-    (name: string, value: string | number | boolean) => {
-      if (!selectedNode) return;
-      setAdapterConfigValues((prev) => ({ ...prev, [name]: value }));
-      const currentConfig =
-        (selectedNode.data as { config?: Record<string, unknown> }).config || {};
-      const adapterConfig = (currentConfig.adapterConfig as Record<string, unknown>) || {};
-      setNodes((nds) =>
-        nds.map((nd) =>
-          nd.id === selectedNode?.id
-            ? {
-                ...nd,
-                data: {
-                  ...nd.data,
-                  config: { ...currentConfig, adapterConfig: { ...adapterConfig, [name]: value } },
-                },
-              }
-            : nd,
-        ),
-      );
-    },
-    [selectedNode, setNodes],
-  );
 
   const onConnect = useCallback(
     (connection: Connection) => {
@@ -694,179 +739,199 @@ export default function LoopEditor() {
                 </Panel>
               )}
 
-              {selectedNode && (
-                <Panel position="top-left" className="node-config-panel">
-                  <div className="config-panel-header">Node Config</div>
-                  <div className="config-field">
-                    <label htmlFor="node-label">Label</label>
-                    <input
-                      id="node-label"
-                      type="text"
-                      value={nodeLabel}
-                      onChange={(e) => updateNodeLabel(e.target.value)}
-                      onBlur={(e) => validateLabel(e.target.value)}
-                      className={labelError ? "input-error" : ""}
-                    />
-                    {labelError && <div className="validation-error">{labelError}</div>}
-                  </div>
-                  <div className="config-field">
-                    <label>Type</label>
-                    <div className="config-read-only">
-                      {(selectedNode.data as { type: string }).type}
+              {showNodeSettingsModal && selectedNode && (
+                <div
+                  className="node-settings-modal-overlay"
+                  onClick={handleCancelNodeSettings}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="Node Settings"
+                >
+                  <div className="node-settings-modal" onClick={(e) => e.stopPropagation()}>
+                    <div className="node-settings-modal-header">
+                      <h2>Node Settings</h2>
+                      <button
+                        className="node-settings-modal-close"
+                        onClick={handleCancelNodeSettings}
+                        aria-label="Close"
+                      >
+                        ×
+                      </button>
                     </div>
-                  </div>
-
-                  {(selectedNode.data as { type: string }).type === NodeType.Cmd && (
-                    <>
+                    <div className="node-settings-modal-body">
                       <div className="config-field">
-                        <label htmlFor="cmd-command">Command</label>
+                        <label htmlFor="node-label">Label</label>
                         <input
-                          id="cmd-command"
+                          id="node-label"
                           type="text"
-                          value={cmdCommand}
-                          onChange={(e) => {
-                            setCmdCommand(e.target.value);
-                            updateNodeConfig({ command: e.target.value });
-                          }}
+                          value={nodeLabel}
+                          onChange={(e) => setNodeLabel(e.target.value)}
+                          onBlur={(e) => validateLabel(e.target.value)}
+                          className={labelError ? "input-error" : ""}
                         />
+                        {labelError && <div className="validation-error">{labelError}</div>}
                       </div>
                       <div className="config-field">
-                        <label htmlFor="cmd-timeout">Timeout</label>
-                        <input
-                          id="cmd-timeout"
-                          type="number"
-                          min={1}
-                          value={cmdTimeout}
-                          onChange={(e) => {
-                            const val = parseInt(e.target.value, 10) || 30;
-                            setCmdTimeout(val);
-                            updateNodeConfig({ timeout: val });
-                          }}
-                        />
-                      </div>
-                    </>
-                  )}
-
-                  {(selectedNode.data as { type: string }).type === NodeType.AI && (
-                    <>
-                      <div className="config-field">
-                        <label htmlFor="ai-prompt">Prompt Template</label>
-                        <PromptEditor
-                          id="ai-prompt"
-                          rows={3}
-                          value={aiPrompt}
-                          onChange={(v) => {
-                            setAiPrompt(v);
-                            updateNodeConfig({ prompt: v });
-                          }}
-                        />
-                      </div>
-                      <div className="config-field">
-                        <label htmlFor="ai-provider">AI Provider</label>
-                        <select
-                          id="ai-provider"
-                          value={aiProvider}
-                          onChange={(e) => {
-                            setAiProvider(e.target.value);
-                            updateNodeConfig({ aiProviderId: e.target.value });
-                            const selected = aiProviders.find((p) => p.id === e.target.value);
-                            if (selected) {
-                              void agentAdapterService
-                                .getConfigSchema(selected.type)
-                                .then((schema) => {
-                                  setAdapterConfigSchema(schema);
-                                  const initialValues: Record<string, string | number | boolean> =
-                                    {};
-                                  for (const field of schema) {
-                                    if (
-                                      field.defaultValue !== null &&
-                                      field.defaultValue !== undefined
-                                    ) {
-                                      initialValues[field.name] = field.defaultValue;
-                                    }
-                                  }
-                                  setAdapterConfigValues(initialValues);
-                                });
-                            } else {
-                              setAdapterConfigSchema([]);
-                              setAdapterConfigValues({});
-                            }
-                          }}
-                        >
-                          <option value="">Default</option>
-                          {aiProviders.map((provider) => (
-                            <option key={provider.id} value={provider.id}>
-                              {provider.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      {adapterConfigSchema.length > 0 && (
-                        <AdapterConfigFields
-                          schema={adapterConfigSchema}
-                          values={adapterConfigValues}
-                          onChange={handleAdapterConfigChange}
-                        />
-                      )}
-                      <div className="config-field">
-                        <label>Tool Allowlist</label>
-                        <div className="tool-checklist">
-                          {["read", "write", "execute"].map((tool) => (
-                            <label key={tool} className="checkbox-label">
-                              <input
-                                type="checkbox"
-                                checked={aiTools.includes(tool)}
-                                onChange={(e) => {
-                                  const updated = e.target.checked
-                                    ? [...aiTools, tool]
-                                    : aiTools.filter((t) => t !== tool);
-                                  setAiTools(updated);
-                                  updateNodeConfig({ toolAllowlist: updated });
-                                }}
-                              />
-                              {tool}
-                            </label>
-                          ))}
+                        <label>Type</label>
+                        <div className="config-read-only">
+                          {(selectedNode.data as { type: string }).type}
                         </div>
                       </div>
-                    </>
-                  )}
 
-                  {(selectedNode.data as { type: string }).type === NodeType.Start && (
-                    <div className="config-field">
-                      <label className="checkbox-label">
-                        <input
-                          type="checkbox"
-                          checked={startCreateWorktree}
-                          onChange={(e) => {
-                            setStartCreateWorktree(e.target.checked);
-                            updateNodeConfig({ createWorktree: e.target.checked });
-                          }}
-                        />
-                        Create worktree
-                      </label>
+                      {(selectedNode.data as { type: string }).type === NodeType.Cmd && (
+                        <>
+                          <div className="config-field">
+                            <label htmlFor="cmd-command">Command</label>
+                            <input
+                              id="cmd-command"
+                              type="text"
+                              value={cmdCommand}
+                              onChange={(e) => setCmdCommand(e.target.value)}
+                            />
+                          </div>
+                          <div className="config-field">
+                            <label htmlFor="cmd-timeout">Timeout (seconds)</label>
+                            <input
+                              id="cmd-timeout"
+                              type="number"
+                              min={1}
+                              value={cmdTimeout}
+                              onChange={(e) => {
+                                const val = parseInt(e.target.value, 10) || 30;
+                                setCmdTimeout(val);
+                              }}
+                            />
+                          </div>
+                        </>
+                      )}
+
+                      {(selectedNode.data as { type: string }).type === NodeType.AI && (
+                        <>
+                          <div className="config-field">
+                            <label htmlFor="ai-prompt">Prompt Template</label>
+                            <PromptEditor
+                              id="ai-prompt"
+                              rows={4}
+                              value={aiPrompt}
+                              onChange={(v) => setAiPrompt(v)}
+                            />
+                          </div>
+                          <div className="config-field">
+                            <label htmlFor="ai-provider">AI Provider</label>
+                            <select
+                              id="ai-provider"
+                              value={aiProvider}
+                              onChange={(e) => {
+                                setAiProvider(e.target.value);
+                                const selected = aiProviders.find((p) => p.id === e.target.value);
+                                if (selected) {
+                                  void agentAdapterService
+                                    .getConfigSchema(selected.type)
+                                    .then((schema) => {
+                                      setAdapterConfigSchema(schema);
+                                      const initialValues: Record<
+                                        string,
+                                        string | number | boolean
+                                      > = {};
+                                      for (const field of schema) {
+                                        if (
+                                          field.defaultValue !== null &&
+                                          field.defaultValue !== undefined
+                                        ) {
+                                          initialValues[field.name] = field.defaultValue;
+                                        }
+                                      }
+                                      setAdapterConfigValues(initialValues);
+                                    });
+                                } else {
+                                  setAdapterConfigSchema([]);
+                                  setAdapterConfigValues({});
+                                }
+                              }}
+                            >
+                              <option value="">Default</option>
+                              {aiProviders.map((provider) => (
+                                <option key={provider.id} value={provider.id}>
+                                  {provider.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          {adapterConfigSchema.length > 0 && (
+                            <AdapterConfigFields
+                              schema={adapterConfigSchema}
+                              values={adapterConfigValues}
+                              onChange={(name, value) => {
+                                setAdapterConfigValues((prev) => ({ ...prev, [name]: value }));
+                              }}
+                            />
+                          )}
+                          <div className="config-field">
+                            <label>Tool Allowlist</label>
+                            <div className="tool-checklist">
+                              {["read", "write", "execute"].map((tool) => (
+                                <label key={tool} className="checkbox-label">
+                                  <input
+                                    type="checkbox"
+                                    checked={aiTools.includes(tool)}
+                                    onChange={(e) => {
+                                      const updated = e.target.checked
+                                        ? [...aiTools, tool]
+                                        : aiTools.filter((t) => t !== tool);
+                                      setAiTools(updated);
+                                    }}
+                                  />
+                                  {tool}
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        </>
+                      )}
+
+                      {(selectedNode.data as { type: string }).type === NodeType.Start && (
+                        <div className="config-field">
+                          <label className="checkbox-label">
+                            <input
+                              type="checkbox"
+                              checked={startCreateWorktree}
+                              onChange={(e) => setStartCreateWorktree(e.target.checked)}
+                            />
+                            Create worktree
+                          </label>
+                        </div>
+                      )}
+
+                      {(selectedNode.data as { type: string }).type === NodeType.Human && (
+                        <div className="config-field">
+                          <label htmlFor="human-input-label">Input Label</label>
+                          <input
+                            id="human-input-label"
+                            type="text"
+                            value={humanInputLabel}
+                            onChange={(e) => setHumanInputLabel(e.target.value)}
+                          />
+                        </div>
+                      )}
                     </div>
-                  )}
-
-                  {(selectedNode.data as { type: string }).type === NodeType.Human && (
-                    <div className="config-field">
-                      <label htmlFor="human-input-label">Input Label</label>
-                      <input
-                        id="human-input-label"
-                        type="text"
-                        value={humanInputLabel}
-                        onChange={(e) => {
-                          setHumanInputLabel(e.target.value);
-                          updateNodeConfig({ inputLabel: e.target.value });
-                        }}
-                      />
+                    <div className="node-settings-modal-footer">
+                      <button className="node-settings-btn-delete" onClick={deleteSelectedNode}>
+                        Delete Node
+                      </button>
+                      <div className="node-settings-footer-actions">
+                        <button
+                          className="node-settings-btn-cancel"
+                          onClick={handleCancelNodeSettings}
+                        >
+                          Cancel
+                        </button>
+                        <button className="node-settings-btn-save" onClick={handleSaveNodeSettings}>
+                          Save
+                        </button>
+                      </div>
                     </div>
-                  )}
-
-                  <button className="delete-node-btn" onClick={deleteSelectedNode}>
-                    Delete
-                  </button>
-                </Panel>
+                  </div>
+                </div>
               )}
 
               {pendingConnection && (

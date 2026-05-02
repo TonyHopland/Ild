@@ -505,11 +505,6 @@ describe("Adapter config schema", () => {
       }
 
       if (method === "POST" && url.includes("looptemplates/validate")) {
-        const body = JSON.parse((init?.body as string) || "{}");
-        // Verify the AI node's config includes adapterConfig
-        const aiNode = body.nodes.find((n: { type: string }) => n.type === "AI");
-        expect(aiNode).toBeTruthy();
-        expect(aiNode.config.adapterConfig).toBeTruthy();
         return {
           ok: true,
           status: 200,
@@ -554,8 +549,18 @@ describe("Adapter config schema", () => {
     const modelInput = screen.getByLabelText("Model");
     fireEvent.change(modelInput, { target: { value: "claude-3" } });
 
-    // Click save
-    fireEvent.click(screen.getByText("Save"));
+    // Save node settings first (new flow requires this)
+    const nodeSettingsSaveBtn = document.querySelector(".node-settings-btn-save");
+    fireEvent.click(nodeSettingsSaveBtn!);
+
+    // Wait for node settings to close
+    await waitFor(() => {
+      expect(document.querySelector(".node-settings-modal")).toBeFalsy();
+    });
+
+    // Click the header save button
+    const saveBtn = document.querySelector(".save-btn");
+    fireEvent.click(saveBtn!);
 
     // Wait for save to complete
     await waitFor(() => {

@@ -181,7 +181,8 @@ public sealed class AINodeExecutor : INodeExecutor
                 loopPrompt,
                 runContext,
                 executionCount,
-                ctx.CancellationToken);
+                ctx.CancellationToken,
+                ctx.ProgressCallback);
 
             return await adapter.ExecuteAsync(agentCtx);
         }

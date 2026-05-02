@@ -33,6 +33,21 @@ public sealed class PRNodeExecutor : INodeExecutor
             var branch = wi.BranchName ?? $"ild/wi-{wi.Id:N}";
             var target = repo.DefaultBranch ?? "main";
 
+            if (!string.IsNullOrEmpty(wi.WorktreePath) && Directory.Exists(wi.WorktreePath))
+            {
+                var repoManager = scope.ServiceProvider.GetRequiredService<IRepositoryManager>();
+
+                var diff = await repoManager.GetDiffAsync(wi.WorktreePath);
+                if (!string.IsNullOrEmpty(diff))
+                {
+                    if (!await repoManager.CommitAsync(wi.WorktreePath, wi.Title))
+                        return NodeExecutionResult.Fail("Failed to commit uncommitted changes");
+                }
+
+                if (!await repoManager.PushAsync(wi.WorktreePath, branch, ctx.CancellationToken))
+                    return NodeExecutionResult.Fail($"Failed to push branch '{branch}' to remote");
+            }
+
             var remote = scope.ServiceProvider.GetRequiredService<IRemoteProvider>();
 
             var prResult = await remote.CreatePullRequestAsync(

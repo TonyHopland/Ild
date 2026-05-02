@@ -84,4 +84,27 @@ public class SignalRRunNotifierTests
         payload.RunId.Should().Be(runId);
         payload.Message.Should().Be("hello");
     }
+
+    [Fact]
+    public async Task NodeProgressAsync_sends_a_single_typed_payload()
+    {
+        var runId = Guid.NewGuid();
+        var nodeId = Guid.NewGuid();
+        var (ctx, proxy) = BuildHubContext(runId.ToString());
+
+        object?[]? capturedArgs = null;
+        proxy.Setup(p => p.SendCoreAsync("NodeProgress", It.IsAny<object?[]>(), It.IsAny<CancellationToken>()))
+            .Callback<string, object?[], CancellationToken>((_, args, _) => capturedArgs = args)
+            .Returns(Task.CompletedTask);
+
+        var notifier = new SignalRRunNotifier(ctx.Object);
+        await notifier.NodeProgressAsync(runId, nodeId, "thinking about the problem...");
+
+        capturedArgs.Should().NotBeNull();
+        capturedArgs!.Should().HaveCount(1, "SignalR should receive one typed payload, not positional args");
+        var payload = capturedArgs[0].Should().BeOfType<NodeProgressPayload>().Subject;
+        payload.RunId.Should().Be(runId);
+        payload.NodeId.Should().Be(nodeId);
+        payload.Line.Should().Be("thinking about the problem...");
+    }
 }

@@ -15,6 +15,7 @@ beforeEach(() => {
   vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
     on: vi.fn(),
     off: vi.fn(),
+    invoke: vi.fn(),
     connectionState: "connected",
   });
 });

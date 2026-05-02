@@ -105,5 +105,9 @@ export function useSignalR(hubUrl = "/hubs/work-item") {
     };
   }, [hubUrl, token, ensureDispatcher]);
 
-  return { connectionState, on, off };
+  const invoke = useCallback((method: string, ...args: unknown[]) => {
+    return connectionRef.current?.invoke(method, ...args);
+  }, []);
+
+  return { connectionState, on, off, invoke };
 }

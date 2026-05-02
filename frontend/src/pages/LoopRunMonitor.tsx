@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { LoopRun, LoopRunNodeStatus, LoopRunStatus } from "../types";
 import type { TypedSignalRMessage } from "../types/signalr";
@@ -16,11 +16,21 @@ export default function LoopRunMonitor() {
   const [runs, setRuns] = useState<LoopRun[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorText, setErrorText] = useState("");
-  const { on, off } = useSignalR("/hubs/loop-run");
+  const [progressLines, setProgressLines] = useState<Record<string, string[]>>({});
+  const [expandedRuns, setExpandedRuns] = useState<Set<string>>(new Set());
+  const logRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const { on, off, invoke, connectionState } = useSignalR("/hubs/loop-run");
 
   useEffect(() => {
     void loadRuns();
   }, []);
+
+  useEffect(() => {
+    if (connectionState !== "connected") return;
+    runs
+      .filter((r) => r.status === LoopRunStatus.Running)
+      .forEach((r) => invoke?.("SubscribeToRun", r.id));
+  }, [runs, invoke, connectionState]);
 
   useEffect(() => {
     const onLoopRunStateChanged = async (message: TypedSignalRMessage<"LoopRunStateChanged">) => {
@@ -46,14 +56,49 @@ export default function LoopRunMonitor() {
       );
     };
 
+    const onNodeProgress = async (message: TypedSignalRMessage<"NodeProgress">) => {
+      const { runId, line } = message.payload;
+      setProgressLines((prev) => ({
+        ...prev,
+        [runId]: [...(prev[runId] ?? []), line],
+      }));
+      // Auto-expand runs that have progress output
+      setExpandedRuns((prev) => {
+        const next = new Set(prev);
+        next.add(runId);
+        return next;
+      });
+    };
+
     on("LoopRunStateChanged", onLoopRunStateChanged);
     on("NodeStateChanged", onNodeStateChanged);
+    on("NodeProgress", onNodeProgress);
 
     return () => {
       off("LoopRunStateChanged", onLoopRunStateChanged);
       off("NodeStateChanged", onNodeStateChanged);
+      off("NodeProgress", onNodeProgress);
     };
   }, [on, off]);
+
+  // Auto-scroll live output when new lines arrive
+  useEffect(() => {
+    Object.entries(progressLines).forEach(([runId]) => {
+      const el = logRefs.current[runId];
+      if (el) {
+        el.scrollTop = el.scrollHeight;
+      }
+    });
+  }, [progressLines]);
+
+  const toggleExpand = (id: string) => {
+    setExpandedRuns((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const loadRuns = async () => {
     try {
@@ -158,6 +203,31 @@ export default function LoopRunMonitor() {
                 </div>
               ))}
             </div>
+            {(progressLines[run.id]?.length ?? 0) > 0 && (
+              <>
+                <button
+                  className="btn btn-secondary btn-small btn-toggle-log"
+                  onClick={() => toggleExpand(run.id)}
+                >
+                  {expandedRuns.has(run.id) ? "▼ Hide" : "▶ Show"} Live Output (
+                  {progressLines[run.id]?.length ?? 0} lines)
+                </button>
+                {expandedRuns.has(run.id) && (
+                  <div
+                    className="live-output-panel"
+                    ref={(el) => {
+                      logRefs.current[run.id] = el;
+                    }}
+                  >
+                    {progressLines[run.id]?.map((line, i) => (
+                      <div key={i} className="live-output-line">
+                        {line}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
             {run.status === LoopRunStatus.Running && (
               <div style={{ display: "flex", gap: "0.5rem" }}>
                 {run.isPaused ? (
@@ -280,6 +350,41 @@ export default function LoopRunMonitor() {
 
         .loop-run-node-label {
           color: #c0c0d0;
+        }
+
+        .btn-toggle-log {
+          margin-top: 0.5rem;
+          background-color: #1e3a5f;
+          color: #60a5fa;
+          padding: 0.25rem 0.5rem;
+          border: none;
+          border-radius: 0.25rem;
+          cursor: pointer;
+          font-size: 0.7rem;
+          width: 100%;
+        }
+
+        .btn-toggle-log:hover {
+          background-color: #2a4a7f;
+        }
+
+        .live-output-panel {
+          margin-top: 0.5rem;
+          background-color: #0d0d1a;
+          border-radius: 0.25rem;
+          padding: 0.5rem;
+          max-height: 200px;
+          overflow-y: auto;
+          font-family: monospace;
+          font-size: 0.7rem;
+          line-height: 1.4;
+          border: 1px solid #2d2d44;
+        }
+
+        .live-output-line {
+          color: #a0a0c0;
+          white-space: pre-wrap;
+          word-break: break-all;
         }
 
         .btn-danger {

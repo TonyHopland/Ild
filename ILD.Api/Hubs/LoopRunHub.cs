@@ -48,6 +48,12 @@ public class LoopRunHub : Hub
             new ILD.Data.DTOs.SignalRPayloads.RunResumedPayload(runId));
     }
 
+    public async Task NotifyNodeProgress(Guid runId, Guid nodeId, string line)
+    {
+        await Clients.Group(runId.ToString()).SendAsync("NodeProgress",
+            new ILD.Data.DTOs.SignalRPayloads.NodeProgressPayload(runId, nodeId, line));
+    }
+
     public override async Task OnConnectedAsync()
     {
         await base.OnConnectedAsync();

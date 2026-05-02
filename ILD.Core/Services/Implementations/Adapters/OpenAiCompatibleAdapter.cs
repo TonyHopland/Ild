@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using ILD.Core.Services.Interfaces;
@@ -43,6 +44,7 @@ public class OpenAiCompatibleAdapter : IAgentAdapter
         {
             model,
             messages = new[] { new { role = "user", content = rendered } },
+            stream = true,
         };
         using var req = new HttpRequestMessage(HttpMethod.Post, requestUri) { Content = JsonContent.Create(body) };
         if (!string.IsNullOrEmpty(apiKey))
@@ -54,12 +56,7 @@ public class OpenAiCompatibleAdapter : IAgentAdapter
             using var resp = await client.SendAsync(req, ctx.Cancel);
             resp.EnsureSuccessStatusCode();
             var stream = await resp.Content.ReadAsStreamAsync(ctx.Cancel);
-            using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ctx.Cancel);
-            var content = doc.RootElement
-                .GetProperty("choices")[0]
-                .GetProperty("message")
-                .GetProperty("content")
-                .GetString() ?? "";
+            var (content, _) = await ReadSseStreamAsync(stream, ctx.ProgressCallback, ctx.Cancel);
             return NodeExecutionResult.Ok(content);
         }
         catch (Exception ex)
@@ -112,5 +109,45 @@ public class OpenAiCompatibleAdapter : IAgentAdapter
             return m.Value;
         });
         return Task.FromResult(rendered);
+    }
+
+    private static async Task<(string Content, int ChunkCount)> ReadSseStreamAsync(
+        Stream stream,
+        Func<string, Task>? progressCallback,
+        CancellationToken ct)
+    {
+        var sb = new StringBuilder();
+        int chunkCount = 0;
+        using var reader = new System.IO.StreamReader(stream);
+
+        while (await reader.ReadLineAsync(ct).ConfigureAwait(false) is { } line)
+        {
+            if (!line.StartsWith("data:")) continue;
+            var data = line["data:".Length..].Trim();
+            if (data == "[done]") break;
+
+            try
+            {
+                using var doc = JsonDocument.Parse(data);
+                var choices = doc.RootElement.GetProperty("choices");
+                if (choices.GetArrayLength() > 0)
+                {
+                    var delta = choices[0].GetProperty("delta");
+                    if (delta.TryGetProperty("content", out var contentProp) && contentProp.ValueKind == JsonValueKind.String)
+                    {
+                        var text = contentProp.GetString() ?? "";
+                        sb.Append(text);
+                        if (progressCallback != null && !string.IsNullOrEmpty(text))
+                        {
+                            chunkCount++;
+                            await progressCallback(text).ConfigureAwait(false);
+                        }
+                    }
+                }
+            }
+            catch { /* skip malformed SSE chunks */ }
+        }
+
+        return (sb.ToString(), chunkCount);
     }
 }

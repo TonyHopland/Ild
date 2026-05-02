@@ -229,6 +229,41 @@ public class OpenCodeAdapterTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_streams_stdout_lines_to_progress_callback()
+    {
+        var scriptPath = Path.Combine(Path.GetTempPath(), $"ild-stream-test-{Guid.NewGuid():N}.sh");
+        File.WriteAllText(scriptPath, "#!/bin/sh\necho 'line one'\necho 'line two'\necho 'line three'\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var adapter = new OpenCodeAdapter();
+            var progressLines = new System.Collections.Concurrent.ConcurrentBag<string>();
+
+            var ctx = BuildContext(
+                binaryPath: scriptPath,
+                initialPrompt: "ignored",
+                executionCount: 1,
+                progressCallback: (line) =>
+                {
+                    progressLines.Add(line);
+                    return Task.CompletedTask;
+                });
+
+            var result = await adapter.ExecuteAsync(ctx);
+
+            result.Success.Should().BeTrue();
+            progressLines.Should().Contain("line one");
+            progressLines.Should().Contain("line two");
+            progressLines.Should().Contain("line three");
+        }
+        finally
+        {
+            if (File.Exists(scriptPath)) File.Delete(scriptPath);
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_includes_api_key_in_opencode_config()
     {
         var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-test-{Guid.NewGuid():N}");
@@ -268,7 +303,8 @@ public class OpenCodeAdapterTests
         string? workItemDescription = null,
         string? worktreePath = null,
         string? apiKey = null,
-        int executionCount = 1)
+        int executionCount = 1,
+        Func<string, Task>? progressCallback = null)
     {
         var dict = System.Text.Json.JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, object>>(
             config ?? "{}") ?? new System.Collections.Generic.Dictionary<string, object>();
@@ -298,6 +334,7 @@ public class OpenCodeAdapterTests
                 new List<string>(),
                 null),
             ExecutionCount: executionCount,
-            Cancel: CancellationToken.None);
+            Cancel: CancellationToken.None,
+            ProgressCallback: progressCallback);
     }
 }

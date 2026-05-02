@@ -70,6 +70,14 @@ public class OpenCodeAdapter : IAgentAdapter
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ctx.Cancel);
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
 
+            var stdoutLines = new List<string>();
+            var stderrLines = new List<string>();
+            var stdoutLock = new object();
+            var stderrLock = new object();
+
+            var stdoutTask = ReadAndStreamLinesAsync(p.StandardOutput, stdoutLines, stdoutLock, ctx.ProgressCallback, timeoutCts.Token);
+            var stderrTask = ReadAndStreamLinesAsync(p.StandardError, stderrLines, stderrLock, ctx.ProgressCallback, timeoutCts.Token);
+
             try
             {
                 await p.WaitForExitAsync(timeoutCts.Token);
@@ -83,8 +91,8 @@ public class OpenCodeAdapter : IAgentAdapter
             string stdout, stderr;
             try
             {
-                stdout = await p.StandardOutput.ReadToEndAsync();
-                stderr = await p.StandardError.ReadToEndAsync();
+                stdout = await stdoutTask;
+                stderr = await stderrTask;
             }
             catch (OperationCanceledException)
             {
@@ -245,5 +253,21 @@ public class OpenCodeAdapter : IAgentAdapter
             return m.Value;
         });
         return Task.FromResult(rendered);
+    }
+
+    private static async Task<string> ReadAndStreamLinesAsync(
+        System.IO.StreamReader reader,
+        List<string> lines,
+        object lockObj,
+        Func<string, Task>? progressCallback,
+        CancellationToken ct)
+    {
+        while (await reader.ReadLineAsync(ct).ConfigureAwait(false) is { } line)
+        {
+            lock (lockObj) lines.Add(line);
+            if (progressCallback != null)
+                await progressCallback(line).ConfigureAwait(false);
+        }
+        lock (lockObj) return string.Join("\n", lines);
     }
 }

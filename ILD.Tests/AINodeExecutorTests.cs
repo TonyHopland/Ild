@@ -385,6 +385,12 @@ public class AINodeExecutorTests
             loopRunStore = defaultStore.Object;
         }
         services.AddSingleton(loopRunStore);
+
+        var eventLogService = new Mock<IEventLogService>();
+        eventLogService.Setup(s => s.GetByRunIdAsync(It.IsAny<Guid>(), null))
+            .ReturnsAsync(Array.Empty<EventLogEntry>());
+        services.AddSingleton(eventLogService.Object);
+
         return services.BuildServiceProvider();
     }
 

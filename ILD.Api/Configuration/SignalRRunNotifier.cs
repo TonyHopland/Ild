@@ -34,4 +34,8 @@ public class SignalRRunNotifier : IRunNotifier
     public Task ResumedAsync(Guid runId)
         => _runHub.Clients.Group(runId.ToString())
             .SendAsync("Resumed", new RunResumedPayload(runId));
+
+    public Task NodeProgressAsync(Guid runId, Guid nodeId, string line)
+        => _runHub.Clients.Group(runId.ToString())
+            .SendAsync("NodeProgress", new NodeProgressPayload(runId, nodeId, line));
 }

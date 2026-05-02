@@ -50,6 +50,7 @@ describe("Taskboard SignalR", () => {
     vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
       on: mockOn,
       off: vi.fn(),
+      invoke: vi.fn(),
       connectionState: "connected",
     });
 
@@ -97,6 +98,7 @@ describe("Taskboard SignalR", () => {
     vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
       on: mockOn,
       off: vi.fn(),
+      invoke: vi.fn(),
       connectionState: "connected",
     });
 
@@ -144,6 +146,7 @@ describe("Taskboard SignalR", () => {
     vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
       on: mockOn,
       off: vi.fn(),
+      invoke: vi.fn(),
       connectionState: "connected",
     });
 
@@ -173,6 +176,7 @@ describe("Taskboard keyboard navigation", () => {
     vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
       on: vi.fn(),
       off: vi.fn(),
+      invoke: vi.fn(),
       connectionState: "connected",
     });
     const transitionSpy = vi
