@@ -186,7 +186,8 @@ export default function LoopEditor() {
       while (queue.length > 0) {
         const cur = queue.shift()!;
         for (const target of adjacency.get(cur) ?? []) {
-          if (reachable.add(target)) {
+          if (!reachable.has(target)) {
+            reachable.add(target);
             queue.push(target);
           }
         }
