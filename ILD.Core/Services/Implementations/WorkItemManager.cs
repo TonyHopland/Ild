@@ -168,11 +168,13 @@ public class WorkItemManager : IWorkItemManager
         wi.IsPrMerged = true;
         wi.UpdatedAt = DateTime.UtcNow;
 
-        if (!await _store.HasRunningRunAsync(workItemId))
+        // Only check the current run, not stale ones from previous attempts
+        var currentRun = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
+        if (currentRun == null ||
+            (currentRun.Status != LoopRunStatus.Running &&
+             currentRun.Status != LoopRunStatus.Failed))
         {
-            var hasFailedRun = await _store.HasFailedRunAsync(workItemId);
-            if (!hasFailedRun)
-                wi.Status = WorkItemStatus.Done;
+            wi.Status = WorkItemStatus.Done;
         }
 
         await _store.UpdateAsync(wi);

@@ -207,27 +207,58 @@ public class WorkItemsController : ControllerBase
         var ok = await _workItemManager.ManuallyMarkMergedAsync(guid);
         if (!ok) return NotFound();
 
-        // If there's an active or failed LoopRun, signal the engine to resume via Cleanup
-        var activeRun = await _db.LoopRuns
-            .FirstOrDefaultAsync(r => r.WorkItemId == guid &&
-                (r.Status == ILD.Data.Enums.LoopRunStatus.Running ||
-                 r.Status == ILD.Data.Enums.LoopRunStatus.Failed));
-
-        if (activeRun != null)
+        // Only resume the workitem's current run, not stale ones.
+        var wi = await _db.WorkItems.FindAsync(guid);
+        if (wi?.CurrentLoopRunId != null)
         {
-            var prRunNode = await _db.LoopRunNodes
-                .FirstOrDefaultAsync(n =>
-                    n.LoopRunId == activeRun.Id &&
-                    n.LoopNode.NodeType == ILD.Data.Enums.NodeType.PR &&
-                    (n.Status == ILD.Data.Enums.LoopRunNodeStatus.WaitingHuman ||
-                     n.Status == ILD.Data.Enums.LoopRunNodeStatus.Failed));
+            var currentRun = await _db.LoopRuns
+                .FirstOrDefaultAsync(r =>
+                    r.Id == wi.CurrentLoopRunId &&
+                    r.WorkItemId == guid &&
+                    (r.Status == ILD.Data.Enums.LoopRunStatus.Running ||
+                     r.Status == ILD.Data.Enums.LoopRunStatus.Failed));
 
-            if (prRunNode != null)
+            if (currentRun != null)
             {
-                await _engine.SignalPrResultAsync(activeRun.Id, prRunNode.Id, true);
+                // Try to find the PR node first, then fall back to any waiting/failed node
+                // (the LoopNode may not exist if the template was updated since the run started)
+                var prRunNode = await _db.LoopRunNodes
+                    .FirstOrDefaultAsync(n =>
+                        n.LoopRunId == currentRun.Id &&
+                        n.LoopNode.NodeType == ILD.Data.Enums.NodeType.PR &&
+                        (n.Status == ILD.Data.Enums.LoopRunNodeStatus.WaitingHuman ||
+                         n.Status == ILD.Data.Enums.LoopRunNodeStatus.Failed));
 
-                // Resume the engine to route through Cleanup node
-                RunInBackground(activeRun.Id);
+                if (prRunNode == null)
+                {
+                    prRunNode = await _db.LoopRunNodes
+                        .FirstOrDefaultAsync(n =>
+                            n.LoopRunId == currentRun.Id &&
+                            (n.Status == ILD.Data.Enums.LoopRunNodeStatus.WaitingHuman ||
+                             n.Status == ILD.Data.Enums.LoopRunNodeStatus.Failed));
+                }
+
+                if (prRunNode != null)
+                {
+                    // If the node's LoopNode is gone (template was updated), the run is
+                    // unrecoverable — the engine can't route to the Cleanup node. Complete
+                    // the run and mark the workitem Done directly.
+                    if (prRunNode.LoopNode == null)
+                    {
+                        currentRun.Status = ILD.Data.Enums.LoopRunStatus.Completed;
+                        currentRun.CompletedAt = DateTime.UtcNow;
+                        wi.Status = WorkItemStatus.Done;
+                        wi.HumanFeedbackReason = null;
+                        await _db.SaveChangesAsync();
+                    }
+                    else
+                    {
+                        await _engine.SignalPrResultAsync(currentRun.Id, prRunNode.Id, true);
+
+                        // Resume the engine to route through Cleanup node
+                        RunInBackground(currentRun.Id);
+                    }
+                }
             }
         }
 

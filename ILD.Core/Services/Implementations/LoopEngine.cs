@@ -476,16 +476,22 @@ public class LoopEngine : ILoopEngine
 
     private async Task<LoopRunStatus> CompleteRunAsync(Guid runId)
     {
-        using var scope = _sp.CreateScope();
-        var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
-        var run = await loopRunStore.GetByIdAsync(runId);
-        if (run != null)
+        Guid? workItemId = null;
+        using (var scope = _sp.CreateScope())
         {
-            run.Status = LoopRunStatus.Completed;
-            run.CompletedAt = DateTime.UtcNow;
-            run.UpdatedAt = DateTime.UtcNow;
-            await loopRunStore.UpdateRunAsync(run);
+            var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+            var run = await loopRunStore.GetByIdAsync(runId);
+            if (run != null)
+            {
+                workItemId = run.WorkItemId;
+                run.Status = LoopRunStatus.Completed;
+                run.CompletedAt = DateTime.UtcNow;
+                run.UpdatedAt = DateTime.UtcNow;
+                await loopRunStore.UpdateRunAsync(run);
+            }
         }
+        if (workItemId.HasValue)
+            await TransitionWorkItemAsync(workItemId.Value, WorkItemStatus.Done, null);
         await NotifyAsync(() => _notifier.RunStateChangedAsync(runId, LoopRunStatus.Running, LoopRunStatus.Completed));
         await LogEventAsync(runId, "LoopRunCompleted", "Run completed successfully");
         ReleaseRunControl(runId);
