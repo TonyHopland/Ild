@@ -85,7 +85,7 @@ public class WorkItemsController : ControllerBase
         if (wi != null)
             await _notifier.WorkItemStateChangedAsync(id, wi.Status, wi.Status);
 
-        return CreatedAtAction(nameof(GetById), new { id }, new { id });
+        return CreatedAtAction(nameof(GetById), new { id }, wi);
     }
 
     [HttpPut("{id}")]
