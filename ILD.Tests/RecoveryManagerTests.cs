@@ -214,6 +214,40 @@ public class RecoveryManagerTests
     }
 
     [Fact]
+    public async Task RecoverRunAsync_with_AutoResume_and_WaitingHuman_node_does_not_resume()
+    {
+        var (mgr, wiStore, runStore, _, _, _, engine) = Build();
+        var runId = Guid.NewGuid();
+        var wiId = Guid.NewGuid();
+        var currentNodeId = Guid.NewGuid();
+        var prRunNodeId = Guid.NewGuid();
+
+        runStore.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(new LoopRun
+        {
+            Id = runId,
+            WorkItemId = wiId,
+            Status = LoopRunStatus.Running,
+            RecoveryPolicy = RecoveryPolicy.AutoResume,
+            CurrentNodeId = currentNodeId,
+        });
+        runStore.Setup(s => s.GetRunNodeAsync(runId, currentNodeId)).ReturnsAsync(new LoopRunNode
+        {
+            Id = prRunNodeId,
+            LoopRunId = runId,
+            LoopNodeId = currentNodeId,
+            Status = LoopRunNodeStatus.WaitingHuman,
+        });
+        var wi = new WorkItem { Id = wiId, Title = "t", Description = "d", Status = WorkItemStatus.HumanFeedback };
+        wiStore.Setup(s => s.GetByIdAsync(wiId)).ReturnsAsync(wi);
+
+        var ok = await mgr.RecoverRunAsync(runId);
+
+        ok.Should().BeTrue();
+        engine.Verify(e => e.ResumeRecoveredRunAsync(It.IsAny<Guid>()), Times.Never);
+        engine.Verify(e => e.CancelRunAsync(It.IsAny<Guid>()), Times.Never);
+    }
+
+    [Fact]
     public async Task SetRecoveryPolicyAsync_persists_policy_via_template_store()
     {
         var (mgr, _, _, _, tmpl, _, _) = Build();

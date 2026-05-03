@@ -27,7 +27,7 @@ function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",
     repositoryId: "repo-1",
-    pullRequestUrl: null,
+    prUrl: null,
     pullRequestBranch: null,
     humanFeedbackReason: null,
     createdAt: "2025-01-01T00:00:00Z",

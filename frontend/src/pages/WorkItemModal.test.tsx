@@ -45,7 +45,7 @@ function makeWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",
     repositoryId: "repo-1",
-    pullRequestUrl: null,
+    prUrl: null,
     pullRequestBranch: null,
     humanFeedbackReason: null,
     createdAt: "2025-01-01T00:00:00Z",
@@ -489,7 +489,7 @@ describe("WorkItemModal", () => {
     const prUrl = "https://forgejo.example.com/repo/pull/42";
     const workItem = makeWorkItem({
       status: WorkItemStatus.HumanFeedback,
-      pullRequestUrl: prUrl,
+      prUrl: prUrl,
     });
 
     const fetchMock = mockFetch([]);
@@ -518,7 +518,7 @@ describe("WorkItemModal", () => {
   test("detail view shows Link PR button and input form", async () => {
     const workItem = makeWorkItem({
       status: WorkItemStatus.Running,
-      pullRequestUrl: null,
+      prUrl: null,
     });
 
     const fetchMock = mockFetch([]);
@@ -552,7 +552,7 @@ describe("WorkItemModal", () => {
   test("detail view shows Mark Merged button only when PR URL is set", async () => {
     const workItem = makeWorkItem({
       status: WorkItemStatus.HumanFeedback,
-      pullRequestUrl: "https://forgejo.example.com/repo/pull/42",
+      prUrl: "https://forgejo.example.com/repo/pull/42",
     });
 
     const fetchMock = mockFetch([]);
@@ -578,7 +578,7 @@ describe("WorkItemModal", () => {
   test("detail view hides Mark Merged button when no PR URL", async () => {
     const workItem = makeWorkItem({
       status: WorkItemStatus.Running,
-      pullRequestUrl: null,
+      prUrl: null,
     });
 
     const fetchMock = mockFetch([]);

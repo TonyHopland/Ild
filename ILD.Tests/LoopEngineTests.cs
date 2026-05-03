@@ -240,6 +240,33 @@ public class LoopEngineTests
     }
 
     [Fact]
+    public async Task RunAsync_with_WaitingHuman_CurrentNodeId_returns_early_without_reexecuting_nodes()
+    {
+        using var h = new EngineHarness();
+        h.BuildSimpleGraph(
+            ("s", NodeType.Start),
+            ("review", NodeType.Human),
+            ("c", NodeType.Cleanup));
+        h.AddEdge("e1", "s", "review");
+        h.AddEdge("e2", "review", "c");
+        h.Save();
+
+        // First run pauses at the human node.
+        await h.Engine.RunAsync(h.RunId);
+        h.ReloadWorkItem().Status.Should().Be(WorkItemStatus.HumanFeedback);
+        var startInvocations = h.Fakes[NodeType.Start].InvocationCount;
+
+        // Simulate server restart: RunAsync is called again.
+        // The run's CurrentNodeId points to the Human node in WaitingHuman state.
+        await h.Engine.RunAsync(h.RunId);
+
+        // Should return early without re-executing any nodes.
+        h.Fakes[NodeType.Start].InvocationCount.Should().Be(startInvocations);
+        h.ReloadRun().Status.Should().Be(LoopRunStatus.Running);
+        h.ReloadWorkItem().Status.Should().Be(WorkItemStatus.HumanFeedback);
+    }
+
+    [Fact]
     public async Task Human_node_resume_with_succeeded_run_node_routes_on_success_and_passes_input_as_PreviousNode_Output()
     {
         using var h = new EngineHarness();

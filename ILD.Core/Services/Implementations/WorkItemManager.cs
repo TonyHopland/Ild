@@ -169,7 +169,11 @@ public class WorkItemManager : IWorkItemManager
         wi.UpdatedAt = DateTime.UtcNow;
 
         if (!await _store.HasRunningRunAsync(workItemId))
-            wi.Status = WorkItemStatus.Done;
+        {
+            var hasFailedRun = await _store.HasFailedRunAsync(workItemId);
+            if (!hasFailedRun)
+                wi.Status = WorkItemStatus.Done;
+        }
 
         await _store.UpdateAsync(wi);
 
@@ -222,10 +226,13 @@ public class WorkItemManager : IWorkItemManager
             wi.WorktreePath = null;
         }
 
+        var prev = wi.Status;
         wi.Status = WorkItemStatus.Done;
         wi.HumanFeedbackReason = null;
+        wi.CurrentLoopRunId = null;
         wi.UpdatedAt = DateTime.UtcNow;
         await _store.UpdateAsync(wi);
+        await _notifier.WorkItemStateChangedAsync(workItemId, prev, WorkItemStatus.Done);
         return true;
     }
 

@@ -207,9 +207,11 @@ public class WorkItemsController : ControllerBase
         var ok = await _workItemManager.ManuallyMarkMergedAsync(guid);
         if (!ok) return NotFound();
 
-        // If there's an active LoopRun, signal the engine to resume via Cleanup
+        // If there's an active or failed LoopRun, signal the engine to resume via Cleanup
         var activeRun = await _db.LoopRuns
-            .FirstOrDefaultAsync(r => r.WorkItemId == guid && r.Status == ILD.Data.Enums.LoopRunStatus.Running);
+            .FirstOrDefaultAsync(r => r.WorkItemId == guid &&
+                (r.Status == ILD.Data.Enums.LoopRunStatus.Running ||
+                 r.Status == ILD.Data.Enums.LoopRunStatus.Failed));
 
         if (activeRun != null)
         {
@@ -217,7 +219,8 @@ public class WorkItemsController : ControllerBase
                 .FirstOrDefaultAsync(n =>
                     n.LoopRunId == activeRun.Id &&
                     n.LoopNode.NodeType == ILD.Data.Enums.NodeType.PR &&
-                    n.Status == ILD.Data.Enums.LoopRunNodeStatus.WaitingHuman);
+                    (n.Status == ILD.Data.Enums.LoopRunNodeStatus.WaitingHuman ||
+                     n.Status == ILD.Data.Enums.LoopRunNodeStatus.Failed));
 
             if (prRunNode != null)
             {

@@ -19,7 +19,7 @@ function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
     loopTemplateId: "",
     loopTemplateVersion: "",
     repositoryId: "",
-    pullRequestUrl: null,
+    prUrl: null,
     pullRequestBranch: null,
     humanFeedbackReason: null,
     createdAt: new Date().toISOString(),

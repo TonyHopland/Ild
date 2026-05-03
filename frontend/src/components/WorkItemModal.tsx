@@ -338,15 +338,15 @@ export default function WorkItemModal({
               )}
               <div className="detail-section">
                 <span className="detail-label">Pull Request</span>
-                {workItem.pullRequestUrl ? (
+                {workItem.prUrl ? (
                   <div className="pr-section">
                     <a
-                      href={workItem.pullRequestUrl}
+                      href={workItem.prUrl}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="pr-link"
                     >
-                      {workItem.pullRequestUrl}
+                      {workItem.prUrl}
                     </a>
                   </div>
                 ) : (
@@ -530,7 +530,7 @@ export default function WorkItemModal({
                   Start
                 </button>
               )}
-              {workItem.pullRequestUrl && (
+              {workItem.prUrl && (
                 <button type="button" className="btn btn-success" onClick={handleMarkMerged}>
                   Mark Merged
                 </button>

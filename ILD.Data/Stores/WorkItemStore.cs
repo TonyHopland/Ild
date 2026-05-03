@@ -91,6 +91,9 @@ public class WorkItemStore : IWorkItemStore
     public Task<bool> HasRunningRunAsync(Guid workItemId)
         => _db.LoopRuns.AnyAsync(r => r.WorkItemId == workItemId && r.Status == LoopRunStatus.Running);
 
+    public Task<bool> HasFailedRunAsync(Guid workItemId)
+        => _db.LoopRuns.AnyAsync(r => r.WorkItemId == workItemId && r.Status == LoopRunStatus.Failed);
+
     public async Task<LoopTemplateVersion?> GetLatestTemplateVersionAsync(Guid templateId)
         => await _db.LoopTemplateVersions
             .Where(v => v.LoopTemplateId == templateId)

@@ -52,6 +52,23 @@ public class RecoveryManager : IRecoveryManager
             return true;
         }
 
+        // Don't auto-resume runs waiting for human input
+        if (run.CurrentNodeId.HasValue)
+        {
+            var runNode = await _loopRunStore.GetRunNodeAsync(runId, run.CurrentNodeId.Value);
+            if (runNode?.Status == LoopRunNodeStatus.WaitingHuman)
+            {
+                var wi = await _workItemStore.GetByIdAsync(run.WorkItemId);
+                if (wi != null && wi.Status != WorkItemStatus.HumanFeedback)
+                {
+                    wi.Status = WorkItemStatus.HumanFeedback;
+                    wi.UpdatedAt = DateTime.UtcNow;
+                    await _workItemStore.UpdateAsync(wi);
+                }
+                return true;
+            }
+        }
+
         await _engine.ResumeRecoveredRunAsync(runId);
         return true;
     }

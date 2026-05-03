@@ -204,6 +204,15 @@ public class LoopEngine : ILoopEngine
                             existingRunNode = await loopRunStore.GetRunNodeAsync(run.Id, run.CurrentNodeId.Value);
                         }
                         if (existingRunNode != null &&
+                            existingRunNode.Status == LoopRunNodeStatus.WaitingHuman)
+                        {
+                            await TransitionWorkItemAsync(workItem.Id, WorkItemStatus.HumanFeedback,
+                                currentLoopNode.NodeType == NodeType.PR
+                                    ? "PR awaiting merge"
+                                    : "Human node awaiting input");
+                            return LoopRunStatus.Running;
+                        }
+                        if (existingRunNode != null &&
                             (existingRunNode.Status == LoopRunNodeStatus.Succeeded ||
                              existingRunNode.Status == LoopRunNodeStatus.Failed))
                         {

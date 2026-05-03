@@ -39,7 +39,7 @@ export interface WorkItem {
   loopTemplateId: string;
   loopTemplateVersion: string;
   repositoryId: string;
-  pullRequestUrl: string | null;
+  prUrl: string | null;
   pullRequestBranch: string | null;
   humanFeedbackReason: string | null;
   createdAt: string;

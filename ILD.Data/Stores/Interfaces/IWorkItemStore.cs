@@ -17,6 +17,7 @@ public interface IWorkItemStore
     Task<IReadOnlyList<Guid>> GetDependencyIdsAsync(Guid workItemId);
     Task<IReadOnlyList<Guid>> GetDependentIdsAsync(Guid workItemId);
     Task<bool> HasRunningRunAsync(Guid workItemId);
+    Task<bool> HasFailedRunAsync(Guid workItemId);
     Task<LoopTemplateVersion?> GetLatestTemplateVersionAsync(Guid templateId);
     Task<Repository?> GetRepositoryAsync(Guid id);
     Task<bool> DeleteAsync(Guid id);
