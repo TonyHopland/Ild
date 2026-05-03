@@ -361,7 +361,11 @@ export default function WorkItemModal({
                       className="pr-input"
                     />
                     <div className="link-pr-actions">
-                      <button type="button" className="btn btn-sm btn-primary" onClick={handleLinkPr}>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-primary"
+                        onClick={handleLinkPr}
+                      >
                         Link
                       </button>
                       <button
@@ -386,7 +390,9 @@ export default function WorkItemModal({
               <div className="detail-section">
                 <span className="detail-label">Dependencies</span>
                 <div className="dependency-list">
-                  {dependencies.length === 0 && <span className="detail-value">No dependencies</span>}
+                  {dependencies.length === 0 && (
+                    <span className="detail-value">No dependencies</span>
+                  )}
                   {dependencies.map((dep) => (
                     <span key={dep.id} className="dependency-tag">
                       <Link to={`/workitems/${dep.id}`} className="dependency-link">
@@ -482,7 +488,11 @@ export default function WorkItemModal({
                       >
                         Continue
                       </button>
-                      <button type="button" className="btn btn-sm btn-danger" onClick={handleReject}>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-danger"
+                        onClick={handleReject}
+                      >
                         Reject
                       </button>
                     </div>
@@ -633,7 +643,12 @@ export default function WorkItemModal({
                 </div>
                 <div className="form-group">
                   <label htmlFor="tags">Labels (comma separated)</label>
-                  <input id="tags" type="text" value={tags} onChange={(e) => setTags(e.target.value)} />
+                  <input
+                    id="tags"
+                    type="text"
+                    value={tags}
+                    onChange={(e) => setTags(e.target.value)}
+                  />
                 </div>
                 {submitError && (
                   <div role="alert" className="form-error">
