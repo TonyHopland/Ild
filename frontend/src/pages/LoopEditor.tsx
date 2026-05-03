@@ -59,6 +59,7 @@ export default function LoopEditor() {
   const [cmdCommand, setCmdCommand] = useState("");
   const [cmdTimeout, setCmdTimeout] = useState(30);
   const [aiPrompt, setAiPrompt] = useState("");
+  const [aiLoopPrompt, setAiLoopPrompt] = useState("");
   const [aiProvider, setAiProvider] = useState("");
   const [aiTimeout, setAiTimeout] = useState(300);
   const [aiTools, setAiTools] = useState<string[]>([]);
@@ -93,6 +94,7 @@ export default function LoopEditor() {
     cmdCommand: string;
     cmdTimeout: number;
     aiPrompt: string;
+    aiLoopPrompt: string;
     aiProvider: string;
     aiTimeout: number;
     aiTools: string[];
@@ -368,6 +370,7 @@ export default function LoopEditor() {
       setCmdCommand((config.command as string) || "");
       setCmdTimeout((config.timeout as number) ?? 30);
       setAiPrompt((config.promptTemplate as string) || (config.prompt as string) || "");
+      setAiLoopPrompt((config.loopPrompt as string) || "");
       setAiProvider((config.aiProviderId as string) || "");
       setAiTimeout((config.timeout as number) ?? 300);
       setAiTools((config.toolAllowlist as string[]) || []);
@@ -405,6 +408,7 @@ export default function LoopEditor() {
         cmdCommand: (config.command as string) || "",
         cmdTimeout: (config.timeout as number) ?? 30,
         aiPrompt: (config.promptTemplate as string) || (config.prompt as string) || "",
+        aiLoopPrompt: (config.loopPrompt as string) || "",
         aiProvider: (config.aiProviderId as string) || "",
         aiTimeout: (config.timeout as number) ?? 300,
         aiTools: (config.toolAllowlist as string[]) || [],
@@ -426,6 +430,7 @@ export default function LoopEditor() {
       config.timeout = cmdTimeout;
     } else if (nodeType === NodeType.AI) {
       config.prompt = aiPrompt;
+      if (aiLoopPrompt) config.loopPrompt = aiLoopPrompt;
       config.aiProviderId = aiProvider;
       config.timeout = aiTimeout;
       config.toolAllowlist = aiTools;
@@ -458,6 +463,7 @@ export default function LoopEditor() {
     cmdCommand,
     cmdTimeout,
     aiPrompt,
+    aiLoopPrompt,
     aiProvider,
     aiTimeout,
     aiTools,
@@ -473,6 +479,7 @@ export default function LoopEditor() {
       setCmdCommand(originalNodeConfig.cmdCommand);
       setCmdTimeout(originalNodeConfig.cmdTimeout);
       setAiPrompt(originalNodeConfig.aiPrompt);
+      setAiLoopPrompt(originalNodeConfig.aiLoopPrompt);
       setAiProvider(originalNodeConfig.aiProvider);
       setAiTimeout(originalNodeConfig.aiTimeout);
       setAiTools(originalNodeConfig.aiTools);
@@ -853,6 +860,20 @@ export default function LoopEditor() {
                               value={aiPrompt}
                               onChange={(v) => setAiPrompt(v)}
                             />
+                          </div>
+                          <div className="config-field">
+                            <label htmlFor="ai-loop-prompt">Loop Prompt (optional)</label>
+                            <PromptEditor
+                              id="ai-loop-prompt"
+                              rows={3}
+                              value={aiLoopPrompt}
+                              onChange={(v) => setAiLoopPrompt(v)}
+                            />
+                            <small
+                              style={{ color: "#94a3b8", marginTop: "0.25rem", display: "block" }}
+                            >
+                              Used for loopback executions. Falls back to initial prompt if empty.
+                            </small>
                           </div>
                           <div className="config-field">
                             <label htmlFor="ai-timeout">Timeout (seconds)</label>

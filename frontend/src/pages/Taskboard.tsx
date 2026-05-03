@@ -176,7 +176,6 @@ export default function Taskboard() {
         onClose={() => setModalOpen(false)}
         onSave={handleSave}
         onDelete={handleDeleted}
-        editMode={false}
       />
       <style>{`
         .taskboard-header {

@@ -124,15 +124,7 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(
-      <WorkItemModal
-        workItem={workItem}
-        isOpen={true}
-        onClose={onClose}
-        onSave={onSave}
-        editMode={false}
-      />,
-    );
+    render(<WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />);
 
     expect(screen.getByText(workItem.title)).toBeTruthy();
     expect(screen.getByText("Ready")).toBeTruthy();
@@ -215,13 +207,7 @@ describe("WorkItemModal", () => {
 
     render(
       <MemoryRouter>
-        <WorkItemModal
-          workItem={workItem}
-          isOpen={true}
-          onClose={onClose}
-          onSave={onSave}
-          editMode={false}
-        />
+        <WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />
       </MemoryRouter>,
     );
 
@@ -303,13 +289,7 @@ describe("WorkItemModal", () => {
 
     render(
       <MemoryRouter>
-        <WorkItemModal
-          workItem={workItem}
-          isOpen={true}
-          onClose={onClose}
-          onSave={onSave}
-          editMode={false}
-        />
+        <WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />
       </MemoryRouter>,
     );
 
@@ -389,13 +369,7 @@ describe("WorkItemModal", () => {
 
     render(
       <MemoryRouter>
-        <WorkItemModal
-          workItem={workItem}
-          isOpen={true}
-          onClose={onClose}
-          onSave={onSave}
-          editMode={false}
-        />
+        <WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />
       </MemoryRouter>,
     );
 
@@ -462,13 +436,7 @@ describe("WorkItemModal", () => {
 
     render(
       <MemoryRouter>
-        <WorkItemModal
-          workItem={workItem}
-          isOpen={true}
-          onClose={onClose}
-          onSave={onSave}
-          editMode={false}
-        />
+        <WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />
       </MemoryRouter>,
     );
 
@@ -499,15 +467,7 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(
-      <WorkItemModal
-        workItem={workItem}
-        isOpen={true}
-        onClose={onClose}
-        onSave={onSave}
-        editMode={false}
-      />,
-    );
+    render(<WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />);
 
     expect(screen.getByText("Pull Request")).toBeTruthy();
     const prLink = screen.getByText(prUrl);
@@ -528,15 +488,7 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(
-      <WorkItemModal
-        workItem={workItem}
-        isOpen={true}
-        onClose={onClose}
-        onSave={onSave}
-        editMode={false}
-      />,
-    );
+    render(<WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />);
 
     expect(screen.getByText("Pull Request")).toBeTruthy();
     expect(screen.getByText("No PR linked")).toBeTruthy();
@@ -562,15 +514,7 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(
-      <WorkItemModal
-        workItem={workItem}
-        isOpen={true}
-        onClose={onClose}
-        onSave={onSave}
-        editMode={false}
-      />,
-    );
+    render(<WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />);
 
     expect(screen.getByText("Mark Merged")).toBeTruthy();
   });
@@ -588,15 +532,7 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(
-      <WorkItemModal
-        workItem={workItem}
-        isOpen={true}
-        onClose={onClose}
-        onSave={onSave}
-        editMode={false}
-      />,
-    );
+    render(<WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />);
 
     expect(screen.queryByText("Mark Merged")).toBeFalsy();
   });
@@ -614,15 +550,7 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(
-      <WorkItemModal
-        workItem={workItem}
-        isOpen={true}
-        onClose={onClose}
-        onSave={onSave}
-        editMode={false}
-      />,
-    );
+    render(<WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />);
 
     await waitFor(() => {
       expect(screen.getByText("Human Feedback")).toBeTruthy();
@@ -671,15 +599,7 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(
-      <WorkItemModal
-        workItem={workItem}
-        isOpen={true}
-        onClose={onClose}
-        onSave={onSave}
-        editMode={false}
-      />,
-    );
+    render(<WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />);
 
     await waitFor(() => {
       expect(screen.getByText("Continue")).toBeTruthy();
@@ -739,15 +659,7 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(
-      <WorkItemModal
-        workItem={workItem}
-        isOpen={true}
-        onClose={onClose}
-        onSave={onSave}
-        editMode={false}
-      />,
-    );
+    render(<WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />);
 
     await waitFor(() => {
       expect(screen.getByText("Reject")).toBeTruthy();
@@ -776,15 +688,7 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(
-      <WorkItemModal
-        workItem={workItem}
-        isOpen={true}
-        onClose={onClose}
-        onSave={onSave}
-        editMode={false}
-      />,
-    );
+    render(<WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />);
 
     await waitFor(() => {
       expect(screen.getByText("Human Feedback")).toBeTruthy();
@@ -833,15 +737,7 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(
-      <WorkItemModal
-        workItem={workItem}
-        isOpen={true}
-        onClose={onClose}
-        onSave={onSave}
-        editMode={false}
-      />,
-    );
+    render(<WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />);
 
     await waitFor(() => {
       expect(screen.getByText("Cleanup -> Done")).toBeTruthy();
@@ -896,15 +792,7 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(
-      <WorkItemModal
-        workItem={workItem}
-        isOpen={true}
-        onClose={onClose}
-        onSave={onSave}
-        editMode={false}
-      />,
-    );
+    render(<WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />);
 
     await waitFor(() => {
       expect(screen.getByText("Cleanup -> Backlog")).toBeTruthy();

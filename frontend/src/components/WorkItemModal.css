@@ -126,6 +126,15 @@
   background-color: #5558e6;
 }
 
+.btn-edit {
+  background-color: #f59e0b;
+  color: #fff;
+}
+
+.btn-edit:hover {
+  background-color: #d97706;
+}
+
 .modal-content-detail {
   max-width: 550px;
 }

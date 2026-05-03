@@ -20,7 +20,6 @@ import ConfirmModal from "./ConfirmModal";
 interface WorkItemModalProps {
   workItem: WorkItem | null;
   isOpen: boolean;
-  editMode?: boolean;
   onClose: () => void;
   onSave: (workItem: WorkItem) => void;
   onDelete?: (id: string) => void;
@@ -32,8 +31,8 @@ export default function WorkItemModal({
   onClose,
   onSave,
   onDelete,
-  editMode = true,
 }: WorkItemModalProps) {
+  const [editMode, setEditMode] = useState(workItem === null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [status, setStatus] = useState<WorkItemStatus>(WorkItemStatus.Backlog);
@@ -112,6 +111,7 @@ export default function WorkItemModal({
       setPrUrlInput("");
       setFeedbackInput("");
       setShowDeleteConfirm(false);
+      setEditMode(false);
     } else {
       setTitle("");
       setDescription("");
@@ -121,6 +121,7 @@ export default function WorkItemModal({
       setRepositoryId("");
       setLoopTemplateId("");
       setShowDeleteConfirm(false);
+      setEditMode(true);
     }
   }, [workItem?.id]);
 
@@ -251,31 +252,19 @@ export default function WorkItemModal({
     setSubmitting(true);
     setSubmitError(null);
 
-    const domTitle = (document.getElementById("title") as HTMLInputElement)?.value ?? title;
-    const domDescription =
-      (document.getElementById("description") as HTMLTextAreaElement)?.value ?? description;
-    const domTags = (document.getElementById("tags") as HTMLInputElement)?.value ?? tags;
-    const domRepository =
-      (document.getElementById("repository") as HTMLSelectElement)?.value ?? repositoryId;
-    const domTemplate =
-      (document.getElementById("loopTemplate") as HTMLSelectElement)?.value ?? loopTemplateId;
-    const domStatus = (document.getElementById("status") as HTMLSelectElement)?.value ?? status;
-    const domPriority =
-      (document.getElementById("priority") as HTMLSelectElement)?.value ?? priority;
-
-    const parsedLabels = domTags
+    const parsedLabels = tags
       .split(",")
       .map((t) => t.trim())
       .filter(Boolean);
 
     const data: Partial<WorkItem> = {
-      title: domTitle,
-      description: domDescription,
-      status: domStatus as WorkItemStatus,
-      priority: domPriority as WorkItemPriority,
+      title,
+      description,
+      status,
+      priority,
       labels: parsedLabels,
-      repositoryId: domRepository,
-      loopTemplateId: domTemplate,
+      repositoryId,
+      loopTemplateId,
     };
 
     try {
@@ -297,7 +286,11 @@ export default function WorkItemModal({
         saved = await workItemService.create(data);
       }
       onSave(saved);
-      onClose();
+      if (workItem) {
+        setEditMode(false);
+      } else {
+        onClose();
+      }
     } catch (error) {
       console.error("Failed to save work item:", error);
       setSubmitError(`Failed to save: ${error instanceof Error ? error.message : "Unknown error"}`);
@@ -535,6 +528,9 @@ export default function WorkItemModal({
                   Mark Merged
                 </button>
               )}
+              <button type="button" className="btn btn-edit" onClick={() => setEditMode(true)}>
+                Edit
+              </button>
               <button type="button" className="btn btn-danger" onClick={handleDelete}>
                 Delete
               </button>

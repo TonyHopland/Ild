@@ -1,7 +1,5 @@
 export const APP_NAME = "ILD";
 
-export const API_BASE_URL = "/api";
-
 export const WORK_ITEM_STATUSES = [
   { value: "Backlog", label: "Backlog" },
   { value: "WorkQueue", label: "Work Queue" },
@@ -41,5 +39,3 @@ export const NAV_ITEMS = [
 ] as const;
 
 export const DEFAULT_PAGE_SIZE = 20;
-
-export const SIGNALR_HUB_URL = "/api/signalr-hub";

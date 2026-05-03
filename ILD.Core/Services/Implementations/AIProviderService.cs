@@ -15,13 +15,15 @@ namespace ILD.Core.Services.Implementations;
 public class AIProviderService : IAIProviderService
 {
     private readonly IProviderStore _providerStore;
+    private readonly IWorkItemManager _workItemManager;
     private readonly HttpClient _http;
 
     private static readonly Regex Placeholder = new(@"\{\{\s*([A-Za-z][A-Za-z0-9_.:/\\-]*)\s*\}\}", RegexOptions.Compiled);
 
-    public AIProviderService(IProviderStore providerStore, HttpClient http)
+    public AIProviderService(IProviderStore providerStore, IWorkItemManager workItemManager, HttpClient http)
     {
         _providerStore = providerStore;
+        _workItemManager = workItemManager;
         _http = http;
     }
 
@@ -142,6 +144,8 @@ public class AIProviderService : IAIProviderService
                 }
                 case "git.diff":
                     return await RunShellAsync("git diff HEAD", worktreePath);
+                case "ild.create_workitem":
+                    return await CreateWorkItemAsync(arguments);
                 default:
                     return new ToolExecutionResult(false, "", $"unknown tool {toolName}", -1);
             }
@@ -183,5 +187,30 @@ public class AIProviderService : IAIProviderService
         var stderr = await proc.StandardError.ReadToEndAsync();
         await proc.WaitForExitAsync();
         return new ToolExecutionResult(proc.ExitCode == 0, stdout, proc.ExitCode == 0 ? null : stderr, proc.ExitCode);
+    }
+
+    private async Task<ToolExecutionResult> CreateWorkItemAsync(string arguments)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(arguments);
+            var root = doc.RootElement;
+            var title = root.TryGetProperty("title", out var titleProp) ? titleProp.GetString() : null;
+            if (string.IsNullOrEmpty(title))
+                return new ToolExecutionResult(false, "", "missing required field: title", -1);
+            var description = root.TryGetProperty("description", out var descProp) ? descProp.GetString() : "";
+            Guid? templateId = null;
+            if (root.TryGetProperty("loopTemplateId", out var tplProp) && Guid.TryParse(tplProp.GetString(), out var tplId))
+                templateId = tplId;
+            Guid? repositoryId = null;
+            if (root.TryGetProperty("repositoryId", out var repoProp) && Guid.TryParse(repoProp.GetString(), out var repoId))
+                repositoryId = repoId;
+            var id = await _workItemManager.CreateWorkItemAsync(title!, description ?? "", templateId, repositoryId);
+            return new ToolExecutionResult(true, id.ToString(), null);
+        }
+        catch (Exception ex)
+        {
+            return new ToolExecutionResult(false, "", ex.Message, -1);
+        }
     }
 }

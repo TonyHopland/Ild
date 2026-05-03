@@ -134,12 +134,6 @@ export interface LoopRun {
   nodes: LoopRunNode[];
 }
 
-export enum RecoveryPolicy {
-  AutoResume = "AutoResume",
-  NeedsReview = "NeedsReview",
-  Cancel = "Cancel",
-}
-
 export interface EventLogEntry {
   sequence: number;
   runId: string;

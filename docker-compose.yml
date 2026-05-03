@@ -10,7 +10,7 @@ services:
       - "8080:8080"
     environment:
       - ILD_USERNAME=${ILD_USERNAME:-admin}
-      - ILD_PASSWORD=${ILD_PASSWORD:-changeme}
+      - ILD_PASSWORD=${ILD_PASSWORD}
       - ILD_DATA_PATH=/data
       - ILD_WORKTREES_PATH=/worktrees
       - ILD_LOG_LEVEL=${ILD_LOG_LEVEL:-Information}

@@ -6,8 +6,6 @@ const LOG_LEVELS = ["Debug", "Information", "Warning", "Error"] as const;
 
 export default function Settings() {
   const { user } = useAuth();
-  const [backendUrl, setBackendUrl] = useState("http://localhost:5000");
-  const [signalrEnabled, setSignalrEnabled] = useState(true);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [logLevel, setLogLevel] = useState("Information");
 
@@ -48,25 +46,6 @@ export default function Settings() {
 
         <div className="settings-section">
           <h2 className="settings-section-title">Connection</h2>
-          <div className="form-group">
-            <label htmlFor="backendUrl">Backend URL</label>
-            <input
-              id="backendUrl"
-              type="text"
-              value={backendUrl}
-              onChange={(e) => setBackendUrl(e.target.value)}
-            />
-          </div>
-          <div className="form-group">
-            <label>
-              <input
-                type="checkbox"
-                checked={signalrEnabled}
-                onChange={(e) => setSignalrEnabled(e.target.checked)}
-              />{" "}
-              Enable SignalR real-time updates
-            </label>
-          </div>
           <div className="form-group">
             <label>
               <input
