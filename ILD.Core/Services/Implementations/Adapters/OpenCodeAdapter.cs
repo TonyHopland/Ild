@@ -33,11 +33,14 @@ public class OpenCodeAdapter : IAgentAdapter
             if (string.IsNullOrEmpty(binaryPath))
                 return NodeExecutionResult.Fail("[opencode-error] binaryPath is not configured");
 
+            var worktreePath = ctx.RunContext.WorktreePath;
+            if (string.IsNullOrEmpty(worktreePath) || !Directory.Exists(worktreePath))
+                return NodeExecutionResult.Fail(
+                    "[opencode-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
+
             var psi = new ProcessStartInfo(binaryPath)
             {
-                WorkingDirectory = string.IsNullOrEmpty(ctx.RunContext.WorktreePath)
-                    ? Directory.GetCurrentDirectory()
-                    : ctx.RunContext.WorktreePath,
+                WorkingDirectory = worktreePath,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 RedirectStandardInput = false,
@@ -51,10 +54,7 @@ public class OpenCodeAdapter : IAgentAdapter
 
             psi.ArgumentList.Add("run");
             psi.ArgumentList.Add("--dir");
-            psi.ArgumentList.Add(
-                string.IsNullOrEmpty(ctx.RunContext.WorktreePath)
-                    ? Directory.GetCurrentDirectory()
-                    : ctx.RunContext.WorktreePath);
+            psi.ArgumentList.Add(worktreePath);
             psi.ArgumentList.Add("--model");
             psi.ArgumentList.Add(opencodeModel);
             psi.ArgumentList.Add("--format");

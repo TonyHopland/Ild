@@ -28,7 +28,9 @@ public sealed class StartNodeExecutor : INodeExecutor
         var wi = await workItemStore.GetByIdAsync(ctx.WorkItem.Id);
         if (wi == null) return NodeExecutionResult.Fail("WorkItem not found");
         var repo = await providerStore.GetRepositoryByIdAsync(wi.RepositoryId);
-        if (repo == null) return NodeExecutionResult.Ok("no repository attached; skipping worktree");
+        if (repo == null)
+            return NodeExecutionResult.Fail(
+                "WorkItem has no repository attached; refusing to run loop without an isolated worktree.");
 
         if (string.IsNullOrEmpty(wi.WorktreePath) || !Directory.Exists(wi.WorktreePath))
         {
@@ -62,6 +64,9 @@ public sealed class StartNodeExecutor : INodeExecutor
             wi.BranchName = branch;
             await workItemStore.UpdateAsync(wi);
         }
+        if (string.IsNullOrEmpty(wi.WorktreePath) || !Directory.Exists(wi.WorktreePath))
+            return NodeExecutionResult.Fail(
+                $"Failed to materialize worktree for WorkItem {wi.Id}; refusing to continue.");
         return NodeExecutionResult.Ok($"worktree={wi.WorktreePath}");
     }
 }
@@ -83,8 +88,10 @@ public sealed class CmdNodeExecutor : INodeExecutor
         }
         catch (Exception ex) { return NodeExecutionResult.Fail($"invalid Cmd config: {ex.Message}"); }
 
-        var cwd = ctx.WorkItem.WorktreePath ?? Directory.GetCurrentDirectory();
-        if (!Directory.Exists(cwd)) cwd = Directory.GetCurrentDirectory();
+        var cwd = ctx.WorkItem.WorktreePath;
+        if (string.IsNullOrEmpty(cwd) || !Directory.Exists(cwd))
+            return NodeExecutionResult.Fail(
+                "Cmd node requires a valid WorkItem.WorktreePath; refusing to run outside the loop's worktree.");
 
         var psi = new ProcessStartInfo("/bin/sh")
         {

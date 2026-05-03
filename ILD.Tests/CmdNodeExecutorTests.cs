@@ -18,7 +18,13 @@ public class CmdNodeExecutorTests
             Config = $"{{\"command\":\"{command}\"}}",
             TimeoutSeconds = timeoutSeconds,
         };
-        var wi = new WorkItem { Id = Guid.NewGuid(), Title = "t", Description = "d" };
+        var wi = new WorkItem
+        {
+            Id = Guid.NewGuid(),
+            Title = "t",
+            Description = "d",
+            WorktreePath = Path.GetTempPath(),
+        };
         var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = wi.Id };
         var rn = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = run.Id, LoopNodeId = node.Id };
         return new NodeExecutionContext(run, rn, node, wi, null, CancellationToken.None);

@@ -351,6 +351,16 @@ public class LoopEngine : ILoopEngine
             await LogEventAsync(run.Id, "NodeStarted", $"{node.Label} started");
 
             Func<string, Task> safeProgress = line => NotifyAsync(() => _notifier.NodeProgressAsync(run.Id, node.Id, line));
+
+            // Refresh the WorkItem from the store so executors see fields (e.g. WorktreePath, BranchName)
+            // mutated by previous nodes in this run via their own scoped DbContexts.
+            using (var scope = _sp.CreateScope())
+            {
+                var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
+                var refreshed = await workItemStore.GetByIdAsync(wi.Id);
+                if (refreshed != null) wi = refreshed;
+            }
+
             var ctx = new NodeExecutionContext(run, runNode, node, wi, prevOutput, ct, safeProgress);
 
             if (node.NodeType == NodeType.Human)
