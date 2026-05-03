@@ -110,6 +110,7 @@ export default function WorkItemModal({
       setShowLinkPr(false);
       setPrUrlInput("");
       setFeedbackInput("");
+      setShowDeleteConfirm(false);
     } else {
       setTitle("");
       setDescription("");
@@ -118,6 +119,7 @@ export default function WorkItemModal({
       setTags("");
       setRepositoryId("");
       setLoopTemplateId("");
+      setShowDeleteConfirm(false);
     }
   }, [workItem?.id]);
 
@@ -468,6 +470,13 @@ export default function WorkItemModal({
             </button>
           </div>
         </div>
+        <ConfirmModal
+          isOpen={showDeleteConfirm}
+          title="Delete Work Item"
+          message={`Are you sure you want to delete "${workItem?.title}"?`}
+          onConfirm={handleDeleteConfirm}
+          onCancel={() => setShowDeleteConfirm(false)}
+        />
       </div>
     );
   }
