@@ -37,6 +37,7 @@ export function templateToEdges(template: LoopTemplate): Edge[] {
     id: edge.id,
     source: edge.sourceNodeId,
     target: edge.targetNodeId,
+    data: { edgeType: edge.edgeType },
     animated: edge.edgeType === EdgeType.OnSuccess,
     style: {
       stroke: edge.edgeType === EdgeType.OnSuccess ? "#10b981" : "#ef4444",

@@ -7,5 +7,6 @@ public record AgentExecutionContext(
     LoopRunContext RunContext,
     int ExecutionCount,
     CancellationToken Cancel,
-    Func<string, Task>? ProgressCallback = null
+    Func<string, Task>? ProgressCallback = null,
+    Dictionary<string, object?>? AdapterConfig = null
 );

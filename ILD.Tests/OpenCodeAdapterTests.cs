@@ -14,9 +14,8 @@ public class OpenCodeAdapterTests
 
         adapter.Name.Should().Be("OpenCode");
         adapter.SupportedProviderTypes.Should().Contain("opencode");
-        adapter.ConfigSchema.Should().HaveCount(2);
-        adapter.ConfigSchema[0].Name.Should().Be("binaryPath");
-        adapter.ConfigSchema[1].Name.Should().Be("timeoutSeconds");
+        adapter.ConfigSchema.Should().HaveCount(1);
+        adapter.ConfigSchema[0].Name.Should().Be("timeoutSeconds");
     }
 
     [Fact]

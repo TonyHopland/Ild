@@ -321,6 +321,84 @@ public class AINodeExecutorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_times_out_when_adapter_exceeds_node_timeout()
+    {
+        var provider = new AiProvider
+        {
+            Id = Guid.NewGuid(),
+            Name = "my-provider",
+            Type = "test",
+            BaseUrl = "https://test.api",
+            Model = "test-model"
+        };
+
+        var providerStore = new Mock<IProviderStore>();
+        providerStore.Setup(s => s.GetAiProviderByNameAsync(It.IsAny<string>()))
+            .ReturnsAsync(provider);
+
+        var registry = new Mock<IAgentAdapterRegistry>();
+        registry.Setup(r => r.ResolveForProvider(It.IsAny<AiProvider>()))
+            .Returns(() => new SlowAdapter());
+
+        var sp = BuildServiceProvider(providerStore.Object, registry.Object);
+
+        var executor = new AINodeExecutor(sp);
+
+        var config = "{\"provider\":\"my-provider\",\"prompt\":\"test prompt\"}";
+        var ctx = new NodeExecutionContext(
+            Run: new LoopRun { Id = Guid.NewGuid() },
+            RunNode: new LoopRunNode { RetryCount = 0 },
+            Node: new LoopNode { Config = config, TimeoutSeconds = 1 },
+            WorkItem: new WorkItem { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            PreviousNodeOutput: null,
+            CancellationToken: CancellationToken.None);
+
+        var result = await executor.ExecuteAsync(ctx);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("timed out");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_succeeds_when_adapter_finishes_within_timeout()
+    {
+        var provider = new AiProvider
+        {
+            Id = Guid.NewGuid(),
+            Name = "my-provider",
+            Type = "test",
+            BaseUrl = "https://test.api",
+            Model = "test-model"
+        };
+
+        var providerStore = new Mock<IProviderStore>();
+        providerStore.Setup(s => s.GetAiProviderByNameAsync(It.IsAny<string>()))
+            .ReturnsAsync(provider);
+
+        var registry = new Mock<IAgentAdapterRegistry>();
+        registry.Setup(r => r.ResolveForProvider(It.IsAny<AiProvider>()))
+            .Returns(() => new TestAdapter());
+
+        var sp = BuildServiceProvider(providerStore.Object, registry.Object);
+
+        var executor = new AINodeExecutor(sp);
+
+        var config = "{\"provider\":\"my-provider\",\"prompt\":\"test prompt\"}";
+        var ctx = new NodeExecutionContext(
+            Run: new LoopRun { Id = Guid.NewGuid() },
+            RunNode: new LoopRunNode { RetryCount = 0 },
+            Node: new LoopNode { Config = config, TimeoutSeconds = 300 },
+            WorkItem: new WorkItem { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            PreviousNodeOutput: null,
+            CancellationToken: CancellationToken.None);
+
+        var result = await executor.ExecuteAsync(ctx);
+
+        result.Success.Should().BeTrue();
+        result.Output.Should().Be("adapter-result");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_returns_fail_when_no_provider_found()
     {
         var providerStore = new Mock<IProviderStore>();
@@ -341,11 +419,61 @@ public class AINodeExecutorTests
         result.Error.Should().Contain("No AI provider found");
     }
 
+    [Fact]
+    public async Task ExecuteAsync_passes_adapter_config_to_adapter()
+    {
+        var nodeId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var provider = new AiProvider
+        {
+            Id = Guid.NewGuid(),
+            Name = "my-provider",
+            Type = "test",
+            BaseUrl = "https://test.api",
+            Model = "test-model"
+        };
+
+        var testAdapter = new CapturingAdapter();
+
+        var providerStore = new Mock<IProviderStore>();
+        providerStore.Setup(s => s.GetAiProviderByNameAsync(It.IsAny<string>()))
+            .ReturnsAsync(provider);
+
+        var registry = new Mock<IAgentAdapterRegistry>();
+        registry.Setup(r => r.ResolveForProvider(It.IsAny<AiProvider>()))
+            .Returns(() => testAdapter);
+
+        var loopRunStore = new Mock<ILoopRunStore>();
+        loopRunStore.Setup(s => s.GetRunNodesAsync(runId))
+            .ReturnsAsync(Array.Empty<LoopRunNode>());
+
+        var sp = BuildServiceProvider(providerStore.Object, registry.Object, loopRunStore.Object);
+
+        var executor = new AINodeExecutor(sp);
+
+        var config = """{"provider":"my-provider","prompt":"test prompt","adapterConfig":{"temperature":0.5,"maxTokens":8192}}""";
+        var ctx = new NodeExecutionContext(
+            Run: new LoopRun { Id = runId },
+            RunNode: new LoopRunNode { RetryCount = 0 },
+            Node: new LoopNode { Id = nodeId, Config = config },
+            WorkItem: new WorkItem { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            PreviousNodeOutput: null,
+            CancellationToken: CancellationToken.None);
+
+        var result = await executor.ExecuteAsync(ctx);
+
+        result.Success.Should().BeTrue();
+        testAdapter.CapturedAdapterConfig.Should().NotBeNull();
+        testAdapter.CapturedAdapterConfig!["temperature"].Should().Be(0.5);
+        testAdapter.CapturedAdapterConfig!["maxTokens"].Should().Be(8192);
+    }
+
     private sealed class CapturingAdapter : IAgentAdapter
     {
         public int CapturedCount;
         public string? CapturedInitialPrompt;
         public string? CapturedLoopPrompt;
+        public Dictionary<string, object?>? CapturedAdapterConfig;
 
         public string Name => "Capturing";
         public string[] SupportedProviderTypes => ["test"];
@@ -356,6 +484,7 @@ public class AINodeExecutorTests
             CapturedCount = ctx.ExecutionCount;
             CapturedInitialPrompt = ctx.InitialPrompt;
             CapturedLoopPrompt = ctx.LoopPrompt;
+            CapturedAdapterConfig = ctx.AdapterConfig;
             return Task.FromResult(NodeExecutionResult.Ok("ok"));
         }
     }
@@ -367,6 +496,18 @@ public class AINodeExecutorTests
         public ConfigFieldDescriptor[] ConfigSchema => [];
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
             => Task.FromResult(NodeExecutionResult.Fail("something went wrong"));
+    }
+
+    private sealed class SlowAdapter : IAgentAdapter
+    {
+        public string Name => "Slow";
+        public string[] SupportedProviderTypes => ["test"];
+        public ConfigFieldDescriptor[] ConfigSchema => [];
+        public async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(30), ctx.Cancel);
+            return NodeExecutionResult.Ok("should-not-reach");
+        }
     }
 
     private static IServiceProvider BuildServiceProvider(

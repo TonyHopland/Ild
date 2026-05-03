@@ -20,9 +20,6 @@ public class OpenAiCompatibleAdapter : IAgentAdapter
     public string[] SupportedProviderTypes => ["openai"];
     public ConfigFieldDescriptor[] ConfigSchema => new ConfigFieldDescriptor[]
     {
-        new("model", ConfigFieldType.Text, "Model", true, "gpt-4o", "Model identifier for the provider"),
-        new("baseUrl", ConfigFieldType.Text, "Base URL", true, "https://api.openai.com", "Base URL for the API endpoint"),
-        new("apiKey", ConfigFieldType.Text, "API Key", true, null, "Authentication key for the provider"),
         new("temperature", ConfigFieldType.Number, "Temperature", false, 0.7, "Controls randomness in output"),
         new("maxTokens", ConfigFieldType.Number, "Max Tokens", false, 4096, "Maximum tokens in the response"),
     };
@@ -37,14 +34,19 @@ public class OpenAiCompatibleAdapter : IAgentAdapter
         var prompt = ctx.ExecutionCount == 1 ? ctx.InitialPrompt : ctx.LoopPrompt;
         var rendered = await RenderPromptAsync(prompt, ctx.RunContext);
 
-        var (baseUrl, apiKey, model) = ResolveProviderSettings(ctx.Provider);
+        var (baseUrl, apiKey, model, providerTemp, providerMaxTokens) = ResolveProviderSettings(ctx.Provider);
+
+        var temperature = ResolveDouble(ctx.AdapterConfig, "temperature", providerTemp);
+        var maxTokens = ResolveInt(ctx.AdapterConfig, "maxTokens", providerMaxTokens);
 
         var requestUri = baseUrl.TrimEnd('/') + "/chat/completions";
-        var body = new
+        var body = new Dictionary<string, object?>
         {
-            model,
-            messages = new[] { new { role = "user", content = rendered } },
-            stream = true,
+            ["model"] = model,
+            ["messages"] = new[] { new { role = "user", content = rendered } },
+            ["stream"] = true,
+            ["temperature"] = temperature,
+            ["maxTokens"] = maxTokens,
         };
         using var req = new HttpRequestMessage(HttpMethod.Post, requestUri) { Content = JsonContent.Create(body) };
         if (!string.IsNullOrEmpty(apiKey))
@@ -65,22 +67,34 @@ public class OpenAiCompatibleAdapter : IAgentAdapter
         }
     }
 
-    private static (string BaseUrl, string? ApiKey, string Model) ResolveProviderSettings(ILD.Data.Entities.AiProvider provider)
+    private static (string BaseUrl, string? ApiKey, string Model, double Temperature, int MaxTokens) ResolveProviderSettings(ILD.Data.Entities.AiProvider provider)
     {
+        var temperature = 0.7;
+        var maxTokens = 4096;
+        var baseUrl = provider.BaseUrl;
+        var apiKey = provider.ApiKey;
+        var model = provider.Model;
+
         if (!string.IsNullOrEmpty(provider.Config))
         {
             try
             {
                 using var doc = JsonDocument.Parse(provider.Config);
                 var root = doc.RootElement;
-                var baseUrl = root.GetProperty("baseUrl").GetString() ?? provider.BaseUrl;
-                var apiKey = root.TryGetProperty("apiKey", out var ak) ? ak.GetString() : provider.ApiKey;
-                var model = root.GetProperty("model").GetString() ?? provider.Model;
-                return (baseUrl, apiKey, model);
+                if (root.TryGetProperty("baseUrl", out var bu) && bu.ValueKind == JsonValueKind.String)
+                    baseUrl = bu.GetString() ?? baseUrl;
+                if (root.TryGetProperty("apiKey", out var ak))
+                    apiKey = ak.GetString();
+                if (root.TryGetProperty("model", out var ml) && ml.ValueKind == JsonValueKind.String)
+                    model = ml.GetString() ?? model;
+                if (root.TryGetProperty("temperature", out var temp) && temp.ValueKind == JsonValueKind.Number)
+                    temperature = temp.GetDouble();
+                if (root.TryGetProperty("maxTokens", out var mt) && mt.ValueKind == JsonValueKind.Number)
+                    maxTokens = (int)mt.GetDouble();
             }
             catch { }
         }
-        return (provider.BaseUrl, provider.ApiKey, provider.Model);
+        return (baseUrl, apiKey, model, temperature, maxTokens);
     }
 
     private static Task<string> RenderPromptAsync(string template, LoopRunContext context)
@@ -149,5 +163,20 @@ public class OpenAiCompatibleAdapter : IAgentAdapter
         }
 
         return (sb.ToString(), chunkCount);
+    }
+
+    static double ResolveDouble(Dictionary<string, object?>? config, string key, double @default)
+    {
+        if (config != null && config.TryGetValue(key, out var v) && v is double d) return d;
+        if (config != null && config.TryGetValue(key, out var v2) && v2 is float f) return f;
+        if (config != null && config.TryGetValue(key, out var v3) && v3 is int i) return i;
+        return @default;
+    }
+
+    static int ResolveInt(Dictionary<string, object?>? config, string key, int @default)
+    {
+        if (config != null && config.TryGetValue(key, out var v) && v is int i) return i;
+        if (config != null && config.TryGetValue(key, out var v2) && v2 is double d) return (int)d;
+        return @default;
     }
 }

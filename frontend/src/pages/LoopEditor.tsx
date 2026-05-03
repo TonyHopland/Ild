@@ -60,6 +60,7 @@ export default function LoopEditor() {
   const [cmdTimeout, setCmdTimeout] = useState(30);
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiProvider, setAiProvider] = useState("");
+  const [aiTimeout, setAiTimeout] = useState(300);
   const [aiTools, setAiTools] = useState<string[]>([]);
   const [startCreateWorktree, setStartCreateWorktree] = useState(true);
   const [humanInputLabel, setHumanInputLabel] = useState("");
@@ -93,6 +94,7 @@ export default function LoopEditor() {
     cmdTimeout: number;
     aiPrompt: string;
     aiProvider: string;
+    aiTimeout: number;
     aiTools: string[];
     startCreateWorktree: boolean;
     humanInputLabel: string;
@@ -367,29 +369,35 @@ export default function LoopEditor() {
       setCmdTimeout((config.timeout as number) ?? 30);
       setAiPrompt((config.promptTemplate as string) || (config.prompt as string) || "");
       setAiProvider((config.aiProviderId as string) || "");
+      setAiTimeout((config.timeout as number) ?? 300);
       setAiTools((config.toolAllowlist as string[]) || []);
       setStartCreateWorktree((config.createWorktree as boolean) ?? true);
       setHumanInputLabel((config.inputLabel as string) || "");
 
       if (data.type === NodeType.AI) {
-        const providerType = "openai";
-        void agentAdapterService.getConfigSchema(providerType).then((schema) => {
-          setAdapterConfigSchema(schema);
-          const initialValues: Record<string, string | number | boolean> = {};
-          for (const field of schema) {
-            const nodeVal = adapterConfig[field.name];
-            if (nodeVal !== undefined && typeof nodeVal === "string") {
-              initialValues[field.name] = nodeVal;
-            } else if (nodeVal !== undefined && typeof nodeVal === "number") {
-              initialValues[field.name] = nodeVal;
-            } else if (nodeVal !== undefined && typeof nodeVal === "boolean") {
-              initialValues[field.name] = nodeVal;
-            } else if (field.defaultValue !== null && field.defaultValue !== undefined) {
-              initialValues[field.name] = field.defaultValue;
+        const selectedProvider = aiProviders.find((p) => p.id === (config.aiProviderId as string));
+        if (selectedProvider) {
+          void agentAdapterService.getConfigSchema(selectedProvider.type).then((schema) => {
+            setAdapterConfigSchema(schema);
+            const initialValues: Record<string, string | number | boolean> = {};
+            for (const field of schema) {
+              const nodeVal = adapterConfig[field.name];
+              if (nodeVal !== undefined && typeof nodeVal === "string") {
+                initialValues[field.name] = nodeVal;
+              } else if (nodeVal !== undefined && typeof nodeVal === "number") {
+                initialValues[field.name] = nodeVal;
+              } else if (nodeVal !== undefined && typeof nodeVal === "boolean") {
+                initialValues[field.name] = nodeVal;
+              } else if (field.defaultValue !== null && field.defaultValue !== undefined) {
+                initialValues[field.name] = field.defaultValue;
+              }
             }
-          }
-          setAdapterConfigValues(initialValues);
-        });
+            setAdapterConfigValues(initialValues);
+          });
+        } else {
+          setAdapterConfigSchema([]);
+          setAdapterConfigValues({});
+        }
       }
 
       setOriginalNodeConfig({
@@ -398,6 +406,7 @@ export default function LoopEditor() {
         cmdTimeout: (config.timeout as number) ?? 30,
         aiPrompt: (config.promptTemplate as string) || (config.prompt as string) || "",
         aiProvider: (config.aiProviderId as string) || "",
+        aiTimeout: (config.timeout as number) ?? 300,
         aiTools: (config.toolAllowlist as string[]) || [],
         startCreateWorktree: (config.createWorktree as boolean) ?? true,
         humanInputLabel: (config.inputLabel as string) || "",
@@ -405,7 +414,7 @@ export default function LoopEditor() {
       });
       setShowNodeSettingsModal(true);
     },
-    [adapterConfigValues],
+    [adapterConfigValues, aiProviders],
   );
 
   const handleSaveNodeSettings = useCallback(() => {
@@ -418,6 +427,7 @@ export default function LoopEditor() {
     } else if (nodeType === NodeType.AI) {
       config.prompt = aiPrompt;
       config.aiProviderId = aiProvider;
+      config.timeout = aiTimeout;
       config.toolAllowlist = aiTools;
       config.adapterConfig = { ...adapterConfigValues };
     } else if (nodeType === NodeType.Start) {
@@ -449,6 +459,7 @@ export default function LoopEditor() {
     cmdTimeout,
     aiPrompt,
     aiProvider,
+    aiTimeout,
     aiTools,
     startCreateWorktree,
     humanInputLabel,
@@ -463,6 +474,7 @@ export default function LoopEditor() {
       setCmdTimeout(originalNodeConfig.cmdTimeout);
       setAiPrompt(originalNodeConfig.aiPrompt);
       setAiProvider(originalNodeConfig.aiProvider);
+      setAiTimeout(originalNodeConfig.aiTimeout);
       setAiTools(originalNodeConfig.aiTools);
       setStartCreateWorktree(originalNodeConfig.startCreateWorktree);
       setHumanInputLabel(originalNodeConfig.humanInputLabel);
@@ -840,6 +852,19 @@ export default function LoopEditor() {
                               rows={4}
                               value={aiPrompt}
                               onChange={(v) => setAiPrompt(v)}
+                            />
+                          </div>
+                          <div className="config-field">
+                            <label htmlFor="ai-timeout">Timeout (seconds)</label>
+                            <input
+                              id="ai-timeout"
+                              type="number"
+                              min={1}
+                              value={aiTimeout}
+                              onChange={(e) => {
+                                const val = parseInt(e.target.value, 10) || 300;
+                                setAiTimeout(val);
+                              }}
                             />
                           </div>
                           <div className="config-field">

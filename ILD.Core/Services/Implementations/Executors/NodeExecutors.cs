@@ -182,17 +182,23 @@ public sealed class AINodeExecutor : INodeExecutor
                 eventLogSummary,
                 ctx.PreviousNodeOutput);
 
+            var timeout = TimeSpan.FromSeconds(ctx.Node.TimeoutSeconds > 0 ? ctx.Node.TimeoutSeconds : 300);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ctx.CancellationToken);
+            timeoutCts.CancelAfter(timeout);
+
             var agentCtx = new ILD.Data.DTOs.AgentExecutionContext(
                 provider,
                 initialPrompt,
                 loopPrompt,
                 runContext,
                 executionCount,
-                ctx.CancellationToken,
-                ctx.ProgressCallback);
+                timeoutCts.Token,
+                ctx.ProgressCallback,
+                ExtractAdapterConfig(dict));
 
             return await adapter.ExecuteAsync(agentCtx);
         }
+        catch (OperationCanceledException) { return NodeExecutionResult.Fail($"AI node timed out"); }
         catch (Exception ex) { return NodeExecutionResult.Fail(ex.Message); }
     }
 
@@ -213,6 +219,27 @@ public sealed class AINodeExecutor : INodeExecutor
             return await store.GetAiProviderByIdAsync(id);
 
         return await store.GetAiProviderByNameAsync(providerKey);
+    }
+
+    static Dictionary<string, object?>? ExtractAdapterConfig(Dictionary<string, object>? dict)
+    {
+        if (dict == null) return null;
+        if (dict.TryGetValue("adapterConfig", out var ac) && ac is System.Text.Json.JsonElement element)
+        {
+            var result = new Dictionary<string, object?>();
+            foreach (var prop in element.EnumerateObject())
+            {
+                result[prop.Name] = prop.Value.ValueKind switch
+                {
+                    System.Text.Json.JsonValueKind.Number => prop.Value.GetDouble(),
+                    System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False => prop.Value.GetBoolean(),
+                    System.Text.Json.JsonValueKind.String => prop.Value.GetString(),
+                    _ => prop.Value.GetRawText()
+                };
+            }
+            return result;
+        }
+        return null;
     }
 }
 

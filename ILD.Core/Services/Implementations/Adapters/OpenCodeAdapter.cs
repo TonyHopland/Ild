@@ -17,7 +17,6 @@ public class OpenCodeAdapter : IAgentAdapter
     public string[] SupportedProviderTypes => ["opencode"];
     public ConfigFieldDescriptor[] ConfigSchema => new ConfigFieldDescriptor[]
     {
-        new("binaryPath", ConfigFieldType.Text, "Binary Path", false, "opencode", "Path to the opencode binary"),
         new("timeoutSeconds", ConfigFieldType.Number, "Timeout (seconds)", false, 300, "Maximum execution time"),
     };
 

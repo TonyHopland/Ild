@@ -106,27 +106,40 @@ const sampleTemplate = {
 
 const sampleSchema = [
   {
-    name: "model",
-    type: ConfigFieldType.Text,
-    label: "Model",
-    required: true,
-    defaultValue: "gpt-4o",
-    description: "Model identifier",
-    options: null,
-  },
-  {
     name: "temperature",
     type: ConfigFieldType.Number,
     label: "Temperature",
     required: false,
     defaultValue: 0.7,
-    description: "Controls randomness",
+    description: "Controls randomness in output",
+    options: null,
+  },
+  {
+    name: "maxTokens",
+    type: ConfigFieldType.Number,
+    label: "Max Tokens",
+    required: false,
+    defaultValue: 4096,
+    description: "Maximum tokens in the response",
     options: null,
   },
 ];
 
+const sampleProviders = [
+  {
+    id: "prov-1",
+    name: "My OpenAI",
+    type: "openai",
+    baseUrl: "https://api.openai.com",
+    apiKey: "",
+    model: "gpt-4o",
+    isDefault: true,
+    createdAt: "2025-01-01T00:00:00Z",
+  },
+];
+
 describe("Adapter config schema", () => {
-  test("clicking an AI node fetches the adapter config schema", async () => {
+  test("clicking an AI node with a provider fetches the adapter config schema", async () => {
     const fetchCalls: Array<{ url: string; method: string }> = [];
 
     const trackingFetch = vi.fn(async (url: string, init?: RequestInit) => {
@@ -141,54 +154,11 @@ describe("Adapter config schema", () => {
         };
       }
 
-      if (method === "GET" && url.includes("AgentAdapters")) {
+      if (method === "GET" && url.includes("aiproviders")) {
         return {
           ok: true,
           status: 200,
-          text: () => Promise.resolve(JSON.stringify(sampleSchema)),
-        };
-      }
-
-      return { ok: false, status: 500, text: () => Promise.resolve("") };
-    });
-
-    renderPage(trackingFetch);
-
-    await waitFor(() => {
-      expect(screen.getByText("Dev Loop")).toBeTruthy();
-    });
-
-    // Click the template to load the graph
-    fireEvent.click(screen.getByText("Dev Loop"));
-
-    await waitFor(() => {
-      expect(screen.getByText("Initialize")).toBeTruthy();
-    });
-
-    // Click the AI node to trigger schema fetch
-    fireEvent.click(screen.getByText("Code"));
-
-    // The schema endpoint should have been called
-    await waitFor(() => {
-      const schemaCall = fetchCalls.find(
-        (c) => c.method === "GET" && c.url.includes("AgentAdapters"),
-      );
-      expect(schemaCall).toBeTruthy();
-    });
-  });
-
-  test("adapter config fields render in AI node config panel after schema fetch", async () => {
-    const fetchCalls: Array<{ url: string; method: string }> = [];
-
-    const trackingFetch = vi.fn(async (url: string, init?: RequestInit) => {
-      const method = (init?.method as string) ?? "GET";
-      fetchCalls.push({ url: String(url), method });
-
-      if (method === "GET" && url.includes("looptemplates")) {
-        return {
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify([sampleTemplate])),
+          text: () => Promise.resolve(JSON.stringify(sampleProviders)),
         };
       }
 
@@ -219,17 +189,130 @@ describe("Adapter config schema", () => {
     // Click the AI node
     fireEvent.click(screen.getByText("Code"));
 
-    // Wait for schema to be fetched and adapter config fields to render
+    // Select a provider to trigger schema fetch
+    const select = screen.getByLabelText("AI Provider");
+    fireEvent.change(select, { target: { value: "prov-1" } });
+
+    // The schema endpoint should have been called
     await waitFor(() => {
-      expect(screen.getByText("Model")).toBeTruthy();
+      const schemaCall = fetchCalls.find(
+        (c) => c.method === "GET" && c.url.includes("AgentAdapters"),
+      );
+      expect(schemaCall).toBeTruthy();
+    });
+  });
+
+  test("adapter config fields render after selecting a provider", async () => {
+    const trackingFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      const method = (init?.method as string) ?? "GET";
+
+      if (method === "GET" && url.includes("looptemplates")) {
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([sampleTemplate])),
+        };
+      }
+
+      if (method === "GET" && url.includes("aiproviders")) {
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify(sampleProviders)),
+        };
+      }
+
+      if (method === "GET" && url.includes("AgentAdapters")) {
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify(sampleSchema)),
+        };
+      }
+
+      return { ok: false, status: 500, text: () => Promise.resolve("") };
     });
 
-    // Temperature field should also be visible
-    expect(screen.getByText("Temperature")).toBeTruthy();
+    renderPage(trackingFetch);
+
+    await waitFor(() => {
+      expect(screen.getByText("Dev Loop")).toBeTruthy();
+    });
+
+    // Click the template to load the graph
+    fireEvent.click(screen.getByText("Dev Loop"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Initialize")).toBeTruthy();
+    });
+
+    // Click the AI node
+    fireEvent.click(screen.getByText("Code"));
+
+    // Select a provider
+    const select = screen.getByLabelText("AI Provider");
+    fireEvent.change(select, { target: { value: "prov-1" } });
+
+    // Wait for schema to be fetched and adapter config fields to render
+    await waitFor(() => {
+      expect(screen.getByText("Temperature")).toBeTruthy();
+    });
+
+    // Max Tokens field should also be visible
+    expect(screen.getByText("Max Tokens")).toBeTruthy();
+  });
+
+  test("no adapter config fields shown when default provider selected", async () => {
+    const trackingFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      const method = (init?.method as string) ?? "GET";
+
+      if (method === "GET" && url.includes("looptemplates")) {
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([sampleTemplate])),
+        };
+      }
+
+      if (method === "GET" && url.includes("aiproviders")) {
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify(sampleProviders)),
+        };
+      }
+
+      return { ok: false, status: 500, text: () => Promise.resolve("") };
+    });
+
+    renderPage(trackingFetch);
+
+    await waitFor(() => {
+      expect(screen.getByText("Dev Loop")).toBeTruthy();
+    });
+
+    // Click the template to load the graph
+    fireEvent.click(screen.getByText("Dev Loop"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Initialize")).toBeTruthy();
+    });
+
+    // Click the AI node
+    fireEvent.click(screen.getByText("Code"));
+
+    // With default provider (no selection), adapter config fields should NOT appear
+    // but timeout field should be visible
+    await waitFor(() => {
+      expect(screen.getByText("Timeout (seconds)")).toBeTruthy();
+    });
+
+    // Temperature should not be visible since no provider is selected
+    expect(screen.queryByText("Temperature")).toBeFalsy();
   });
 
   test("changing AI provider re-fetches schema for new provider type", async () => {
-    const sampleProviders = [
+    const sampleProvidersMulti = [
       {
         id: "prov-1",
         name: "My OpenAI",
@@ -254,12 +337,12 @@ describe("Adapter config schema", () => {
 
     const anthropicSchema = [
       {
-        name: "model",
-        type: ConfigFieldType.Text,
-        label: "Model",
-        required: true,
-        defaultValue: "claude-3",
-        description: "Model identifier",
+        name: "temperature",
+        type: ConfigFieldType.Number,
+        label: "Temperature",
+        required: false,
+        defaultValue: 0.5,
+        description: "Controls randomness",
         options: null,
       },
     ];
@@ -281,7 +364,7 @@ describe("Adapter config schema", () => {
         return {
           ok: true,
           status: 200,
-          text: () => Promise.resolve(JSON.stringify(sampleProviders)),
+          text: () => Promise.resolve(JSON.stringify(sampleProvidersMulti)),
         };
       }
 
@@ -320,11 +403,6 @@ describe("Adapter config schema", () => {
     // Click the AI node
     fireEvent.click(screen.getByText("Code"));
 
-    // Wait for initial schema to load
-    await waitFor(() => {
-      expect(screen.getByText("Model")).toBeTruthy();
-    });
-
     // Change provider to Anthropic
     const select = screen.getByLabelText("AI Provider");
     fireEvent.change(select, { target: { value: "prov-2" } });
@@ -337,19 +415,55 @@ describe("Adapter config schema", () => {
   });
 
   test("AI provider dropdown populates from API", async () => {
-    const sampleProviders = [
-      {
-        id: "prov-1",
-        name: "My OpenAI",
-        type: "openai",
-        baseUrl: "https://api.openai.com",
-        apiKey: "",
-        model: "gpt-4o",
-        isDefault: true,
-        createdAt: "2025-01-01T00:00:00Z",
-      },
-    ];
+    const trackingFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      const method = (init?.method as string) ?? "GET";
 
+      if (method === "GET" && url.includes("looptemplates")) {
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([sampleTemplate])),
+        };
+      }
+
+      if (method === "GET" && url.includes("aiproviders")) {
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify(sampleProviders)),
+        };
+      }
+
+      return { ok: false, status: 500, text: () => Promise.resolve("") };
+    });
+
+    renderPage(trackingFetch);
+
+    await waitFor(() => {
+      expect(screen.getByText("Dev Loop")).toBeTruthy();
+    });
+
+    // Click the template to load the graph
+    fireEvent.click(screen.getByText("Dev Loop"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Initialize")).toBeTruthy();
+    });
+
+    // Click the AI node
+    fireEvent.click(screen.getByText("Code"));
+
+    // The AI provider dropdown should show "My OpenAI"
+    await waitFor(() => {
+      const select = screen.getByLabelText("AI Provider");
+      expect(select).toBeTruthy();
+      const options = (select as HTMLSelectElement).options;
+      const providerLabels = Array.from(options).map((o) => o.label);
+      expect(providerLabels).toContain("My OpenAI");
+    });
+  });
+
+  test("changing an adapter config field updates the value", async () => {
     const trackingFetch = vi.fn(async (url: string, init?: RequestInit) => {
       const method = (init?.method as string) ?? "GET";
 
@@ -396,85 +510,24 @@ describe("Adapter config schema", () => {
     // Click the AI node
     fireEvent.click(screen.getByText("Code"));
 
-    // The AI provider dropdown should show "My OpenAI"
-    await waitFor(() => {
-      const select = screen.getByLabelText("AI Provider");
-      expect(select).toBeTruthy();
-      const options = (select as HTMLSelectElement).options;
-      const providerLabels = Array.from(options).map((o) => o.label);
-      expect(providerLabels).toContain("My OpenAI");
-    });
-  });
-
-  test("changing an adapter config field updates the node config", async () => {
-    const fetchCalls: Array<{ url: string; method: string }> = [];
-
-    const trackingFetch = vi.fn(async (url: string, init?: RequestInit) => {
-      const method = (init?.method as string) ?? "GET";
-      fetchCalls.push({ url: String(url), method });
-
-      if (method === "GET" && url.includes("looptemplates")) {
-        return {
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify([sampleTemplate])),
-        };
-      }
-
-      if (method === "GET" && url.includes("AgentAdapters")) {
-        return {
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(sampleSchema)),
-        };
-      }
-
-      return { ok: false, status: 500, text: () => Promise.resolve("") };
-    });
-
-    renderPage(trackingFetch);
-
-    await waitFor(() => {
-      expect(screen.getByText("Dev Loop")).toBeTruthy();
-    });
-
-    // Click the template to load the graph
-    fireEvent.click(screen.getByText("Dev Loop"));
-
-    await waitFor(() => {
-      expect(screen.getByText("Initialize")).toBeTruthy();
-    });
-
-    // Click the AI node
-    fireEvent.click(screen.getByText("Code"));
+    // Select a provider to show adapter config fields
+    const select = screen.getByLabelText("AI Provider");
+    fireEvent.change(select, { target: { value: "prov-1" } });
 
     // Wait for schema fields to render
     await waitFor(() => {
-      expect(screen.getByText("Model")).toBeTruthy();
+      expect(screen.getByText("Temperature")).toBeTruthy();
     });
 
-    // Change the model field
-    const modelInput = screen.getByLabelText("Model");
-    fireEvent.change(modelInput, { target: { value: "claude-3" } });
+    // Change the temperature field
+    const tempInput = screen.getByLabelText("Temperature");
+    fireEvent.change(tempInput, { target: { value: "0.1" } });
 
     // Verify the value changed
-    expect((modelInput as HTMLInputElement).value).toBe("claude-3");
+    expect((tempInput as HTMLInputElement).value).toBe("0.1");
   });
 
   test("adapter config values serialize to JSON blob on save", async () => {
-    const sampleProviders = [
-      {
-        id: "prov-1",
-        name: "My OpenAI",
-        type: "openai",
-        baseUrl: "https://api.openai.com",
-        apiKey: "",
-        model: "gpt-4o",
-        isDefault: true,
-        createdAt: "2025-01-01T00:00:00Z",
-      },
-    ];
-
     let savedPayload: unknown = null;
 
     const trackingFetch = vi.fn(async (url: string, init?: RequestInit) => {
@@ -540,16 +593,20 @@ describe("Adapter config schema", () => {
     // Click the AI node
     fireEvent.click(screen.getByText("Code"));
 
+    // Select a provider
+    const select = screen.getByLabelText("AI Provider");
+    fireEvent.change(select, { target: { value: "prov-1" } });
+
     // Wait for schema fields to render
     await waitFor(() => {
-      expect(screen.getByText("Model")).toBeTruthy();
+      expect(screen.getByText("Temperature")).toBeTruthy();
     });
 
-    // Change the model field
-    const modelInput = screen.getByLabelText("Model");
-    fireEvent.change(modelInput, { target: { value: "claude-3" } });
+    // Change the temperature field
+    const tempInput = screen.getByLabelText("Temperature");
+    fireEvent.change(tempInput, { target: { value: "0.1" } });
 
-    // Save node settings first (new flow requires this)
+    // Save node settings first
     const nodeSettingsSaveBtn = document.querySelector(".node-settings-btn-save");
     fireEvent.click(nodeSettingsSaveBtn!);
 
@@ -574,6 +631,101 @@ describe("Adapter config schema", () => {
     const aiNode = savedNodes.find((n) => n.type === "AI");
     expect(aiNode).toBeTruthy();
     expect(aiNode!.config.adapterConfig).toBeTruthy();
-    expect((aiNode!.config.adapterConfig as Record<string, unknown>).model).toBe("claude-3");
+    expect((aiNode!.config.adapterConfig as Record<string, unknown>).temperature).toBe(0.1);
+  });
+
+  test("AI node timeout is saved to config", async () => {
+    let savedPayload: unknown = null;
+
+    const trackingFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      const method = (init?.method as string) ?? "GET";
+
+      if (method === "GET" && url.includes("looptemplates")) {
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([sampleTemplate])),
+        };
+      }
+
+      if (method === "GET" && url.includes("aiproviders")) {
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([])),
+        };
+      }
+
+      if (method === "POST" && url.includes("looptemplates/validate")) {
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify({ valid: true })),
+        };
+      }
+
+      if (method === "PUT" && url.includes("looptemplates")) {
+        savedPayload = JSON.parse((init?.body as string) || "{}");
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify(sampleTemplate)),
+        };
+      }
+
+      return { ok: false, status: 500, text: () => Promise.resolve("") };
+    });
+
+    renderPage(trackingFetch);
+
+    await waitFor(() => {
+      expect(screen.getByText("Dev Loop")).toBeTruthy();
+    });
+
+    // Click the template to load the graph
+    fireEvent.click(screen.getByText("Dev Loop"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Initialize")).toBeTruthy();
+    });
+
+    // Click the AI node
+    fireEvent.click(screen.getByText("Code"));
+
+    // Change the timeout field
+    const timeoutInput = screen.getByLabelText("Timeout (seconds)");
+    fireEvent.change(timeoutInput, { target: { value: "600" } });
+
+    // Save node settings
+    const nodeSettingsSaveBtn = document.querySelector(".node-settings-btn-save");
+    fireEvent.click(nodeSettingsSaveBtn!);
+
+    // Wait for node settings to close
+    await waitFor(() => {
+      expect(document.querySelector(".node-settings-modal")).toBeFalsy();
+    });
+
+    // Click the header save button
+    const saveBtn = document.querySelector(".save-btn");
+    fireEvent.click(saveBtn!);
+
+    // Wait for save to complete
+    await waitFor(() => {
+      expect(savedPayload).not.toBeNull();
+    });
+
+    // Verify the saved payload contains timeout
+    const savedNodes = (
+      savedPayload as {
+        nodes: Array<{
+          type: string;
+          config: Record<string, unknown>;
+          timeoutSeconds: number | null;
+        }>;
+      }
+    ).nodes;
+    const aiNode = savedNodes.find((n) => n.type === "AI");
+    expect(aiNode).toBeTruthy();
+    expect(aiNode!.timeoutSeconds).toBe(600);
   });
 });
