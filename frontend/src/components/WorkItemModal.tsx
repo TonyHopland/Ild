@@ -665,13 +665,6 @@ export default function WorkItemModal({
           </div>
         </form>
       </div>
-      <ConfirmModal
-        isOpen={showDeleteConfirm}
-        title="Delete Work Item"
-        message={`Are you sure you want to delete "${workItem?.title}"?`}
-        onConfirm={handleDeleteConfirm}
-        onCancel={() => setShowDeleteConfirm(false)}
-      />
     </div>
   );
 }
