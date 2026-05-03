@@ -186,6 +186,20 @@ export default function WorkItemCard({ workItem, onClick, onDeleted, onMove }: W
           border-radius: 0.25rem;
           color: #a0a0b0;
         }
+
+        .work-item-delete-btn {
+          background: none;
+          border: none;
+          color: #808090;
+          font-size: 1.25rem;
+          cursor: pointer;
+          line-height: 1;
+          padding: 0.125rem 0.375rem;
+        }
+
+        .work-item-delete-btn:hover {
+          color: #ef4444;
+        }
       `}</style>
       <ConfirmModal
         isOpen={showConfirm}
