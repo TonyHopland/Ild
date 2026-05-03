@@ -420,6 +420,141 @@ public class AINodeExecutorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_rejects_when_output_matches_rejectPattern()
+    {
+        var nodeId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var provider = new AiProvider
+        {
+            Id = Guid.NewGuid(),
+            Name = "my-provider",
+            Type = "test",
+            BaseUrl = "https://test.api",
+            Model = "test-model"
+        };
+
+        var providerStore = new Mock<IProviderStore>();
+        providerStore.Setup(s => s.GetAiProviderByNameAsync(It.IsAny<string>()))
+            .ReturnsAsync(provider);
+
+        var registry = new Mock<IAgentAdapterRegistry>();
+        registry.Setup(r => r.ResolveForProvider(It.IsAny<AiProvider>()))
+            .Returns(() => new RejectingAdapter());
+
+        var loopRunStore = new Mock<ILoopRunStore>();
+        loopRunStore.Setup(s => s.GetRunNodesAsync(runId))
+            .ReturnsAsync(Array.Empty<LoopRunNode>());
+
+        var sp = BuildServiceProvider(providerStore.Object, registry.Object, loopRunStore.Object);
+
+        var executor = new AINodeExecutor(sp);
+
+        var config = "{\"provider\":\"my-provider\",\"prompt\":\"test\",\"rejectPattern\":\"I cannot|I'm unable\"}";
+        var ctx = new NodeExecutionContext(
+            Run: new LoopRun { Id = runId },
+            RunNode: new LoopRunNode { RetryCount = 0 },
+            Node: new LoopNode { Id = nodeId, Config = config },
+            WorkItem: new WorkItem { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            PreviousNodeOutput: null,
+            CancellationToken: CancellationToken.None);
+
+        var result = await executor.ExecuteAsync(ctx);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("AI rejected");
+        result.Output.Should().Be("I cannot complete this task");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_succeeds_when_output_does_not_match_rejectPattern()
+    {
+        var nodeId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var provider = new AiProvider
+        {
+            Id = Guid.NewGuid(),
+            Name = "my-provider",
+            Type = "test",
+            BaseUrl = "https://test.api",
+            Model = "test-model"
+        };
+
+        var providerStore = new Mock<IProviderStore>();
+        providerStore.Setup(s => s.GetAiProviderByNameAsync(It.IsAny<string>()))
+            .ReturnsAsync(provider);
+
+        var registry = new Mock<IAgentAdapterRegistry>();
+        registry.Setup(r => r.ResolveForProvider(It.IsAny<AiProvider>()))
+            .Returns(() => new TestAdapter());
+
+        var loopRunStore = new Mock<ILoopRunStore>();
+        loopRunStore.Setup(s => s.GetRunNodesAsync(runId))
+            .ReturnsAsync(Array.Empty<LoopRunNode>());
+
+        var sp = BuildServiceProvider(providerStore.Object, registry.Object, loopRunStore.Object);
+
+        var executor = new AINodeExecutor(sp);
+
+        var config = "{\"provider\":\"my-provider\",\"prompt\":\"test\",\"rejectPattern\":\"REJECT\"}";
+        var ctx = new NodeExecutionContext(
+            Run: new LoopRun { Id = runId },
+            RunNode: new LoopRunNode { RetryCount = 0 },
+            Node: new LoopNode { Id = nodeId, Config = config },
+            WorkItem: new WorkItem { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            PreviousNodeOutput: null,
+            CancellationToken: CancellationToken.None);
+
+        var result = await executor.ExecuteAsync(ctx);
+
+        result.Success.Should().BeTrue();
+        result.Output.Should().Be("adapter-result");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_rejectPattern_is_case_insensitive()
+    {
+        var nodeId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var provider = new AiProvider
+        {
+            Id = Guid.NewGuid(),
+            Name = "my-provider",
+            Type = "test",
+            BaseUrl = "https://test.api",
+            Model = "test-model"
+        };
+
+        var providerStore = new Mock<IProviderStore>();
+        providerStore.Setup(s => s.GetAiProviderByNameAsync(It.IsAny<string>()))
+            .ReturnsAsync(provider);
+
+        var registry = new Mock<IAgentAdapterRegistry>();
+        registry.Setup(r => r.ResolveForProvider(It.IsAny<AiProvider>()))
+            .Returns(() => new TestAdapter());
+
+        var loopRunStore = new Mock<ILoopRunStore>();
+        loopRunStore.Setup(s => s.GetRunNodesAsync(runId))
+            .ReturnsAsync(Array.Empty<LoopRunNode>());
+
+        var sp = BuildServiceProvider(providerStore.Object, registry.Object, loopRunStore.Object);
+
+        var executor = new AINodeExecutor(sp);
+
+        var config = "{\"provider\":\"my-provider\",\"prompt\":\"test\",\"rejectPattern\":\"cannot\"}";
+        var ctx = new NodeExecutionContext(
+            Run: new LoopRun { Id = runId },
+            RunNode: new LoopRunNode { RetryCount = 0 },
+            Node: new LoopNode { Id = nodeId, Config = config },
+            WorkItem: new WorkItem { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            PreviousNodeOutput: null,
+            CancellationToken: CancellationToken.None);
+
+        var result = await executor.ExecuteAsync(ctx);
+
+        result.Success.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task ExecuteAsync_passes_adapter_config_to_adapter()
     {
         var nodeId = Guid.NewGuid();
@@ -487,6 +622,15 @@ public class AINodeExecutorTests
             CapturedAdapterConfig = ctx.AdapterConfig;
             return Task.FromResult(NodeExecutionResult.Ok("ok"));
         }
+    }
+
+    private sealed class RejectingAdapter : IAgentAdapter
+    {
+        public string Name => "Rejecting";
+        public string[] SupportedProviderTypes => ["test"];
+        public ConfigFieldDescriptor[] ConfigSchema => [];
+        public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
+            => Task.FromResult(NodeExecutionResult.Ok("I cannot complete this task"));
     }
 
     private sealed class FailingAdapter : IAgentAdapter

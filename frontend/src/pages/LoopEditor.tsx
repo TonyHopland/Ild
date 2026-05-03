@@ -84,6 +84,7 @@ export default function LoopEditor() {
   const [aiProvider, setAiProvider] = useState("");
   const [aiTimeout, setAiTimeout] = useState(300);
   const [aiTools, setAiTools] = useState<string[]>([]);
+  const [aiRejectPattern, setAiRejectPattern] = useState("");
   const [startCreateWorktree, setStartCreateWorktree] = useState(true);
   const [humanInputLabel, setHumanInputLabel] = useState("");
   const [labelError, setLabelError] = useState<string | null>(null);
@@ -119,6 +120,7 @@ export default function LoopEditor() {
     aiProvider: string;
     aiTimeout: number;
     aiTools: string[];
+    aiRejectPattern: string;
     startCreateWorktree: boolean;
     humanInputLabel: string;
     adapterConfigValues: Record<string, string | number | boolean>;
@@ -395,6 +397,7 @@ export default function LoopEditor() {
       setAiProvider((config.aiProviderId as string) || "");
       setAiTimeout((config.timeout as number) ?? 300);
       setAiTools((config.toolAllowlist as string[]) || []);
+      setAiRejectPattern((config.rejectPattern as string) || "");
       setStartCreateWorktree((config.createWorktree as boolean) ?? true);
       setHumanInputLabel((config.inputLabel as string) || "");
 
@@ -433,6 +436,7 @@ export default function LoopEditor() {
         aiProvider: (config.aiProviderId as string) || "",
         aiTimeout: (config.timeout as number) ?? 300,
         aiTools: (config.toolAllowlist as string[]) || [],
+        aiRejectPattern: (config.rejectPattern as string) || "",
         startCreateWorktree: (config.createWorktree as boolean) ?? true,
         humanInputLabel: (config.inputLabel as string) || "",
         adapterConfigValues: { ...adapterConfigValues },
@@ -456,6 +460,7 @@ export default function LoopEditor() {
       config.timeout = aiTimeout;
       config.toolAllowlist = aiTools;
       config.adapterConfig = { ...adapterConfigValues };
+      if (aiRejectPattern) config.rejectPattern = aiRejectPattern;
     } else if (nodeType === NodeType.Start) {
       config.createWorktree = startCreateWorktree;
     } else if (nodeType === NodeType.Human) {
@@ -488,6 +493,7 @@ export default function LoopEditor() {
     aiProvider,
     aiTimeout,
     aiTools,
+    aiRejectPattern,
     startCreateWorktree,
     humanInputLabel,
     adapterConfigValues,
@@ -504,6 +510,7 @@ export default function LoopEditor() {
       setAiProvider(originalNodeConfig.aiProvider);
       setAiTimeout(originalNodeConfig.aiTimeout);
       setAiTools(originalNodeConfig.aiTools);
+      setAiRejectPattern(originalNodeConfig.aiRejectPattern);
       setStartCreateWorktree(originalNodeConfig.startCreateWorktree);
       setHumanInputLabel(originalNodeConfig.humanInputLabel);
       setAdapterConfigValues(originalNodeConfig.adapterConfigValues);
@@ -978,6 +985,26 @@ export default function LoopEditor() {
                                 </label>
                               ))}
                             </div>
+                          </div>
+                          <div className="config-field">
+                            <label htmlFor="ai-reject-pattern">Reject Pattern (regex)</label>
+                            <input
+                              id="ai-reject-pattern"
+                              type="text"
+                              value={aiRejectPattern}
+                              onChange={(e) => setAiRejectPattern(e.target.value)}
+                              placeholder="e.g. I cannot|I'm unable|REJECT"
+                            />
+                            <small
+                              style={{
+                                color: "#94a3b8",
+                                marginTop: "0.25rem",
+                                display: "block",
+                              }}
+                            >
+                              If the AI output matches this pattern (case-insensitive), the node
+                              fails and routes to the onFailure edge.
+                            </small>
                           </div>
                         </>
                       )}

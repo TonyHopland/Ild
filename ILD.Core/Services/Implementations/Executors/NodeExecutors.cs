@@ -196,7 +196,20 @@ public sealed class AINodeExecutor : INodeExecutor
                 ctx.ProgressCallback,
                 ExtractAdapterConfig(dict));
 
-            return await adapter.ExecuteAsync(agentCtx);
+            var result = await adapter.ExecuteAsync(agentCtx);
+
+            if (result.Success && result.Output != null)
+            {
+                var rejectPattern = dict.GetValueOrDefault("rejectPattern")?.ToString();
+                if (!string.IsNullOrEmpty(rejectPattern) &&
+                    System.Text.RegularExpressions.Regex.IsMatch(result.Output, rejectPattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                {
+                    return NodeExecutionResult.Fail(
+                        $"AI rejected: output matched rejectPattern", result.Output);
+                }
+            }
+
+            return result;
         }
         catch (OperationCanceledException) { return NodeExecutionResult.Fail($"AI node timed out"); }
         catch (Exception ex) { return NodeExecutionResult.Fail(ex.Message); }
