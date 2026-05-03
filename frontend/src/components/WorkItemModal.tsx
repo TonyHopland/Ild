@@ -244,243 +244,6 @@ export default function WorkItemModal({
     }
   };
 
-  if (workItem && !editMode) {
-    return (
-      <div className="modal-overlay" onClick={onClose}>
-        <div
-          className="modal-content modal-content-detail"
-          onClick={(e) => e.stopPropagation()}
-          role="dialog"
-          aria-modal="true"
-          aria-label="Work item details"
-        >
-          <div className="modal-header">
-            <h2>{workItem.title}</h2>
-            <button className="modal-close" onClick={onClose}>
-              &times;
-            </button>
-          </div>
-          <div className="modal-body">
-            <div className="detail-row">
-              <span className="detail-label">Status</span>
-              <span className={`status-badge status-${workItem.status.toLowerCase()}`}>
-                {workItem.status}
-              </span>
-            </div>
-            {workItem.description && (
-              <div className="detail-row">
-                <span className="detail-label">Description</span>
-                <span className="detail-value">{workItem.description}</span>
-              </div>
-            )}
-            <div className="detail-section">
-              <span className="detail-label">Pull Request</span>
-              {workItem.pullRequestUrl ? (
-                <div className="pr-section">
-                  <a
-                    href={workItem.pullRequestUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="pr-link"
-                  >
-                    {workItem.pullRequestUrl}
-                  </a>
-                </div>
-              ) : (
-                <span className="detail-value pr-none">No PR linked</span>
-              )}
-              {showLinkPr ? (
-                <div className="link-pr-form">
-                  <input
-                    type="url"
-                    value={prUrlInput}
-                    onChange={(e) => setPrUrlInput(e.target.value)}
-                    placeholder="https://forgejo/pr/..."
-                    className="pr-input"
-                  />
-                  <div className="link-pr-actions">
-                    <button type="button" className="btn btn-sm btn-primary" onClick={handleLinkPr}>
-                      Link
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-secondary"
-                      onClick={() => setShowLinkPr(false)}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  className="btn btn-sm btn-secondary"
-                  onClick={() => setShowLinkPr(true)}
-                >
-                  Link PR
-                </button>
-              )}
-            </div>
-            <div className="detail-section">
-              <span className="detail-label">Dependencies</span>
-              <div className="dependency-list">
-                {dependencies.length === 0 && <span className="detail-value">No dependencies</span>}
-                {dependencies.map((dep) => (
-                  <span key={dep.id} className="dependency-tag">
-                    <Link to={`/workitems/${dep.id}`} className="dependency-link">
-                      {dep.title}
-                    </Link>
-                    <button
-                      type="button"
-                      className="dependency-remove-btn"
-                      onClick={() => handleRemoveDependency(dep.id)}
-                      aria-label={`Remove dependency ${dep.title}`}
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
-              </div>
-              {showAddDep ? (
-                <div className="link-pr-form">
-                  <select
-                    value={selectedDepId}
-                    onChange={(e) => setSelectedDepId(e.target.value)}
-                    className="pr-input"
-                  >
-                    <option value="">Select work item...</option>
-                    {allWorkItems
-                      .filter(
-                        (w) => w.id !== workItem.id && !dependencies.some((d) => d.id === w.id),
-                      )
-                      .map((w) => (
-                        <option key={w.id} value={w.id}>
-                          {w.title}
-                        </option>
-                      ))}
-                  </select>
-                  <div className="link-pr-actions">
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-primary"
-                      onClick={handleAddDependency}
-                    >
-                      Add
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-secondary"
-                      onClick={() => setShowAddDep(false)}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  className="btn btn-sm btn-secondary"
-                  onClick={() => setShowAddDep(true)}
-                >
-                  Add Dependency
-                </button>
-              )}
-            </div>
-            {runs.length > 0 && (
-              <div className="detail-section">
-                <span className="detail-label">Run History</span>
-                <div className="run-history">
-                  {runs.map((run) => (
-                    <Link key={run.id} to={`/loop-runs/${run.id}`} className="run-history-item">
-                      <span className={`status-badge status-${run.status.toLowerCase()}`}>
-                        {run.status}
-                      </span>
-                      <span className="run-time">{new Date(run.startedAt).toLocaleString()}</span>
-                    </Link>
-                  ))}
-                </div>
-              </div>
-            )}
-            {workItem.status === WorkItemStatus.HumanFeedback &&
-              workItem.humanFeedbackReason === "Human Input Needed" && (
-                <div className="detail-section human-feedback-section">
-                  <span className="detail-label">Human Feedback</span>
-                  <textarea
-                    className="feedback-textarea"
-                    value={feedbackInput}
-                    onChange={(e) => setFeedbackInput(e.target.value)}
-                    placeholder="Provide input or context..."
-                    rows={3}
-                  />
-                  <div className="feedback-actions">
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-primary"
-                      onClick={handleContinue}
-                    >
-                      Continue
-                    </button>
-                    <button type="button" className="btn btn-sm btn-danger" onClick={handleReject}>
-                      Reject
-                    </button>
-                  </div>
-                </div>
-              )}
-            {workItem.status === WorkItemStatus.HumanFeedback &&
-              workItem.humanFeedbackReason &&
-              workItem.humanFeedbackReason !== "Human Input Needed" && (
-                <div className="detail-section human-feedback-section">
-                  <span className="detail-label">Human Feedback</span>
-                  <div className="feedback-reason">{workItem.humanFeedbackReason}</div>
-                  <div className="feedback-actions">
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-warning"
-                      onClick={handleCleanupDone}
-                    >
-                      Cleanup -&gt; Done
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-secondary"
-                      onClick={handleCleanupBacklog}
-                    >
-                      Cleanup -&gt; Backlog
-                    </button>
-                  </div>
-                </div>
-              )}
-          </div>
-          <div className="modal-footer">
-            {workItem.status === WorkItemStatus.Ready && (
-              <button type="button" className="btn btn-primary" onClick={handleStart}>
-                Start
-              </button>
-            )}
-            {workItem.pullRequestUrl && (
-              <button type="button" className="btn btn-success" onClick={handleMarkMerged}>
-                Mark Merged
-              </button>
-            )}
-            <button type="button" className="btn btn-danger" onClick={handleDelete}>
-              Delete
-            </button>
-            <button type="button" className="btn btn-secondary" onClick={onClose}>
-              Close
-            </button>
-          </div>
-        </div>
-        <ConfirmModal
-          isOpen={showDeleteConfirm}
-          title="Delete Work Item"
-          message={`Are you sure you want to delete "${workItem?.title}"?`}
-          onConfirm={handleDeleteConfirm}
-          onCancel={() => setShowDeleteConfirm(false)}
-        />
-      </div>
-    );
-  }
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (submitting) return;
@@ -543,128 +306,365 @@ export default function WorkItemModal({
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div
-        className="modal-content"
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-label={workItem ? "Edit work item" : "New work item"}
-      >
-        <div className="modal-header">
-          <h2>{workItem ? "Edit Work Item" : "New Work Item"}</h2>
-          <button className="modal-close" onClick={onClose}>
-            &times;
-          </button>
+    <>
+      {workItem && !editMode ? (
+        <div className="modal-overlay" onClick={onClose}>
+          <div
+            className="modal-content modal-content-detail"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Work item details"
+          >
+            <div className="modal-header">
+              <h2>{workItem.title}</h2>
+              <button className="modal-close" onClick={onClose}>
+                &times;
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="detail-row">
+                <span className="detail-label">Status</span>
+                <span className={`status-badge status-${workItem.status.toLowerCase()}`}>
+                  {workItem.status}
+                </span>
+              </div>
+              {workItem.description && (
+                <div className="detail-row">
+                  <span className="detail-label">Description</span>
+                  <span className="detail-value">{workItem.description}</span>
+                </div>
+              )}
+              <div className="detail-section">
+                <span className="detail-label">Pull Request</span>
+                {workItem.pullRequestUrl ? (
+                  <div className="pr-section">
+                    <a
+                      href={workItem.pullRequestUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="pr-link"
+                    >
+                      {workItem.pullRequestUrl}
+                    </a>
+                  </div>
+                ) : (
+                  <span className="detail-value pr-none">No PR linked</span>
+                )}
+                {showLinkPr ? (
+                  <div className="link-pr-form">
+                    <input
+                      type="url"
+                      value={prUrlInput}
+                      onChange={(e) => setPrUrlInput(e.target.value)}
+                      placeholder="https://forgejo/pr/..."
+                      className="pr-input"
+                    />
+                    <div className="link-pr-actions">
+                      <button type="button" className="btn btn-sm btn-primary" onClick={handleLinkPr}>
+                        Link
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => setShowLinkPr(false)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-secondary"
+                    onClick={() => setShowLinkPr(true)}
+                  >
+                    Link PR
+                  </button>
+                )}
+              </div>
+              <div className="detail-section">
+                <span className="detail-label">Dependencies</span>
+                <div className="dependency-list">
+                  {dependencies.length === 0 && <span className="detail-value">No dependencies</span>}
+                  {dependencies.map((dep) => (
+                    <span key={dep.id} className="dependency-tag">
+                      <Link to={`/workitems/${dep.id}`} className="dependency-link">
+                        {dep.title}
+                      </Link>
+                      <button
+                        type="button"
+                        className="dependency-remove-btn"
+                        onClick={() => handleRemoveDependency(dep.id)}
+                        aria-label={`Remove dependency ${dep.title}`}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+                {showAddDep ? (
+                  <div className="link-pr-form">
+                    <select
+                      value={selectedDepId}
+                      onChange={(e) => setSelectedDepId(e.target.value)}
+                      className="pr-input"
+                    >
+                      <option value="">Select work item...</option>
+                      {allWorkItems
+                        .filter(
+                          (w) => w.id !== workItem.id && !dependencies.some((d) => d.id === w.id),
+                        )
+                        .map((w) => (
+                          <option key={w.id} value={w.id}>
+                            {w.title}
+                          </option>
+                        ))}
+                    </select>
+                    <div className="link-pr-actions">
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-primary"
+                        onClick={handleAddDependency}
+                      >
+                        Add
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => setShowAddDep(false)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-secondary"
+                    onClick={() => setShowAddDep(true)}
+                  >
+                    Add Dependency
+                  </button>
+                )}
+              </div>
+              {runs.length > 0 && (
+                <div className="detail-section">
+                  <span className="detail-label">Run History</span>
+                  <div className="run-history">
+                    {runs.map((run) => (
+                      <Link key={run.id} to={`/loop-runs/${run.id}`} className="run-history-item">
+                        <span className={`status-badge status-${run.status.toLowerCase()}`}>
+                          {run.status}
+                        </span>
+                        <span className="run-time">{new Date(run.startedAt).toLocaleString()}</span>
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {workItem.status === WorkItemStatus.HumanFeedback &&
+                workItem.humanFeedbackReason === "Human Input Needed" && (
+                  <div className="detail-section human-feedback-section">
+                    <span className="detail-label">Human Feedback</span>
+                    <textarea
+                      className="feedback-textarea"
+                      value={feedbackInput}
+                      onChange={(e) => setFeedbackInput(e.target.value)}
+                      placeholder="Provide input or context..."
+                      rows={3}
+                    />
+                    <div className="feedback-actions">
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-primary"
+                        onClick={handleContinue}
+                      >
+                        Continue
+                      </button>
+                      <button type="button" className="btn btn-sm btn-danger" onClick={handleReject}>
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                )}
+              {workItem.status === WorkItemStatus.HumanFeedback &&
+                workItem.humanFeedbackReason &&
+                workItem.humanFeedbackReason !== "Human Input Needed" && (
+                  <div className="detail-section human-feedback-section">
+                    <span className="detail-label">Human Feedback</span>
+                    <div className="feedback-reason">{workItem.humanFeedbackReason}</div>
+                    <div className="feedback-actions">
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-warning"
+                        onClick={handleCleanupDone}
+                      >
+                        Cleanup -&gt; Done
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-secondary"
+                        onClick={handleCleanupBacklog}
+                      >
+                        Cleanup -&gt; Backlog
+                      </button>
+                    </div>
+                  </div>
+                )}
+            </div>
+            <div className="modal-footer">
+              {workItem.status === WorkItemStatus.Ready && (
+                <button type="button" className="btn btn-primary" onClick={handleStart}>
+                  Start
+                </button>
+              )}
+              {workItem.pullRequestUrl && (
+                <button type="button" className="btn btn-success" onClick={handleMarkMerged}>
+                  Mark Merged
+                </button>
+              )}
+              <button type="button" className="btn btn-danger" onClick={handleDelete}>
+                Delete
+              </button>
+              <button type="button" className="btn btn-secondary" onClick={onClose}>
+                Close
+              </button>
+            </div>
+          </div>
         </div>
-        <form onSubmit={handleSubmit}>
-          <div className="modal-body">
-            <div className="form-group">
-              <label htmlFor="title">Title</label>
-              <input
-                id="title"
-                type="text"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                required
-              />
+      ) : (
+        <div className="modal-overlay" onClick={onClose}>
+          <div
+            className="modal-content"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label={workItem ? "Edit work item" : "New work item"}
+          >
+            <div className="modal-header">
+              <h2>{workItem ? "Edit Work Item" : "New Work Item"}</h2>
+              <button className="modal-close" onClick={onClose}>
+                &times;
+              </button>
             </div>
-            <div className="form-group">
-              <label htmlFor="description">Description</label>
-              <textarea
-                id="description"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                rows={3}
-              />
-            </div>
-            <div className="form-row">
-              <div className="form-group">
-                <label htmlFor="repository">Repository</label>
-                <select
-                  id="repository"
-                  value={repositoryId}
-                  onChange={(e) => setRepositoryId(e.target.value)}
+            <form onSubmit={handleSubmit}>
+              <div className="modal-body">
+                <div className="form-group">
+                  <label htmlFor="title">Title</label>
+                  <input
+                    id="title"
+                    type="text"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="description">Description</label>
+                  <textarea
+                    id="description"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    rows={3}
+                  />
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label htmlFor="repository">Repository</label>
+                    <select
+                      id="repository"
+                      value={repositoryId}
+                      onChange={(e) => setRepositoryId(e.target.value)}
+                    >
+                      <option value="">Select repository...</option>
+                      {repositories.map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {r.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="loopTemplate">Loop Template</label>
+                    <select
+                      id="loopTemplate"
+                      value={loopTemplateId}
+                      onChange={(e) => setLoopTemplateId(e.target.value)}
+                    >
+                      <option value="">Select template...</option>
+                      {templates.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div className="form-row">
+                  <div className="form-group">
+                    <label htmlFor="status">Status</label>
+                    <select
+                      id="status"
+                      value={status}
+                      onChange={(e) => setStatus(e.target.value as WorkItemStatus)}
+                    >
+                      <option value={WorkItemStatus.Backlog}>Backlog</option>
+                      <option value={WorkItemStatus.WorkQueue}>Work Queue</option>
+                      <option value={WorkItemStatus.Ready}>Ready</option>
+                      <option value={WorkItemStatus.Running}>Running</option>
+                      <option value={WorkItemStatus.HumanFeedback}>Human Feedback</option>
+                      <option value={WorkItemStatus.Done}>Done</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="priority">Priority</label>
+                    <select
+                      id="priority"
+                      value={priority}
+                      onChange={(e) => setPriority(e.target.value as WorkItemPriority)}
+                    >
+                      <option value={WorkItemPriority.Low}>Low</option>
+                      <option value={WorkItemPriority.Medium}>Medium</option>
+                      <option value={WorkItemPriority.High}>High</option>
+                      <option value={WorkItemPriority.Critical}>Critical</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="tags">Labels (comma separated)</label>
+                  <input id="tags" type="text" value={tags} onChange={(e) => setTags(e.target.value)} />
+                </div>
+                {submitError && (
+                  <div role="alert" className="form-error">
+                    {submitError}
+                  </div>
+                )}
+              </div>
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={onClose}
+                  disabled={submitting}
                 >
-                  <option value="">Select repository...</option>
-                  {repositories.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.name}
-                    </option>
-                  ))}
-                </select>
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary" disabled={submitting}>
+                  {submitting ? "Saving..." : workItem ? "Update" : "Create"}
+                </button>
               </div>
-              <div className="form-group">
-                <label htmlFor="loopTemplate">Loop Template</label>
-                <select
-                  id="loopTemplate"
-                  value={loopTemplateId}
-                  onChange={(e) => setLoopTemplateId(e.target.value)}
-                >
-                  <option value="">Select template...</option>
-                  {templates.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            <div className="form-row">
-              <div className="form-group">
-                <label htmlFor="status">Status</label>
-                <select
-                  id="status"
-                  value={status}
-                  onChange={(e) => setStatus(e.target.value as WorkItemStatus)}
-                >
-                  <option value={WorkItemStatus.Backlog}>Backlog</option>
-                  <option value={WorkItemStatus.WorkQueue}>Work Queue</option>
-                  <option value={WorkItemStatus.Ready}>Ready</option>
-                  <option value={WorkItemStatus.Running}>Running</option>
-                  <option value={WorkItemStatus.HumanFeedback}>Human Feedback</option>
-                  <option value={WorkItemStatus.Done}>Done</option>
-                </select>
-              </div>
-              <div className="form-group">
-                <label htmlFor="priority">Priority</label>
-                <select
-                  id="priority"
-                  value={priority}
-                  onChange={(e) => setPriority(e.target.value as WorkItemPriority)}
-                >
-                  <option value={WorkItemPriority.Low}>Low</option>
-                  <option value={WorkItemPriority.Medium}>Medium</option>
-                  <option value={WorkItemPriority.High}>High</option>
-                  <option value={WorkItemPriority.Critical}>Critical</option>
-                </select>
-              </div>
-            </div>
-            <div className="form-group">
-              <label htmlFor="tags">Labels (comma separated)</label>
-              <input id="tags" type="text" value={tags} onChange={(e) => setTags(e.target.value)} />
-            </div>
-            {submitError && (
-              <div role="alert" className="form-error">
-                {submitError}
-              </div>
-            )}
+            </form>
           </div>
-          <div className="modal-footer">
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={onClose}
-              disabled={submitting}
-            >
-              Cancel
-            </button>
-            <button type="submit" className="btn btn-primary" disabled={submitting}>
-              {submitting ? "Saving..." : workItem ? "Update" : "Create"}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+        </div>
+      )}
+      <ConfirmModal
+        isOpen={showDeleteConfirm && !!workItem}
+        title="Delete Work Item"
+        message={`Are you sure you want to delete "${workItem?.title}"?`}
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setShowDeleteConfirm(false)}
+      />
+    </>
   );
 }
