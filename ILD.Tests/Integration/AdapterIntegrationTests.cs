@@ -76,7 +76,7 @@ public class AdapterIntegrationTests
             BaseUrl = baseUrl,
             ApiKey = apiKey,
             Model = model,
-            Config = JsonSerializer.Serialize(new { binaryPath = binary, timeoutSeconds = 120 })
+            Config = JsonSerializer.Serialize(new { binaryPath = binary })
         };
 
         var ctx = BuildContext(provider, "Reply with exactly the word hello and nothing else.");
@@ -118,7 +118,7 @@ public class AdapterIntegrationTests
             BaseUrl = baseUrl,
             ApiKey = apiKey,
             Model = model,
-            Config = JsonSerializer.Serialize(new { binaryPath = binary, timeoutSeconds = 120 })
+            Config = JsonSerializer.Serialize(new { binaryPath = binary })
         };
 
         var ctx = BuildContext(provider, "{{WorkItem.Title}}");

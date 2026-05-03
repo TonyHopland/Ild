@@ -37,14 +37,14 @@ public class AdapterConfigSchemaTests
 
         var names = adapter.ConfigSchema.Select(f => f.Name).ToList();
         names.Should().NotContain("binaryPath", "binaryPath is a provider-level setting");
+        names.Should().NotContain("timeoutSeconds", "timeout is set on the AI node, not the adapter");
     }
 
     [Fact]
-    public void OpenCodeAdapter_schema_only_has_timeout_field()
+    public void OpenCodeAdapter_schema_is_empty()
     {
         var adapter = new OpenCodeAdapter();
 
-        var names = adapter.ConfigSchema.Select(f => f.Name).ToList();
-        names.Should().BeEquivalentTo("timeoutSeconds");
+        adapter.ConfigSchema.Should().BeEmpty();
     }
 }

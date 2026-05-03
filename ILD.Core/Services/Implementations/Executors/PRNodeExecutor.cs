@@ -44,8 +44,9 @@ public sealed class PRNodeExecutor : INodeExecutor
                         return NodeExecutionResult.Fail("Failed to commit uncommitted changes");
                 }
 
-                if (!await repoManager.PushAsync(wi.WorktreePath, branch, ctx.CancellationToken))
-                    return NodeExecutionResult.Fail($"Failed to push branch '{branch}' to remote");
+                var pushResult = await repoManager.PushAsync(wi.WorktreePath, branch, ctx.CancellationToken);
+                if (!pushResult.Success)
+                    return NodeExecutionResult.Fail($"Failed to push branch '{branch}' to remote: {pushResult.Error ?? "unknown error"}");
 
                 _ = await repoManager.FetchAsync(wi.WorktreePath, ctx.CancellationToken);
                 var ahead = await repoManager.GetCommitsAheadCountAsync(wi.WorktreePath, $"origin/{target}");

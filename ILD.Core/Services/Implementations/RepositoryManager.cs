@@ -90,10 +90,10 @@ public class RepositoryManager : IRepositoryManager
         return code == 0;
     }
 
-    public async Task<bool> PushAsync(string worktreePath, string branchName, CancellationToken cancellationToken = default)
+    public async Task<(bool Success, string? Error)> PushAsync(string worktreePath, string branchName, CancellationToken cancellationToken = default)
     {
-        var (code, _, _) = await RunAsync(worktreePath, new[] { "push", "-u", "origin", branchName }, cancellationToken);
-        return code == 0;
+        var (code, _, stderr) = await RunAsync(worktreePath, new[] { "push", "-u", "origin", branchName }, cancellationToken);
+        return code == 0 ? (true, null) : (false, stderr);
     }
 
     public async Task<string?> GetDiffAsync(string worktreePath)

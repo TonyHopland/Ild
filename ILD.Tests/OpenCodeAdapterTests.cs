@@ -14,8 +14,7 @@ public class OpenCodeAdapterTests
 
         adapter.Name.Should().Be("OpenCode");
         adapter.SupportedProviderTypes.Should().Contain("opencode");
-        adapter.ConfigSchema.Should().HaveCount(1);
-        adapter.ConfigSchema[0].Name.Should().Be("timeoutSeconds");
+        adapter.ConfigSchema.Should().BeEmpty();
     }
 
     [Fact]
@@ -210,11 +209,12 @@ public class OpenCodeAdapterTests
         try
         {
             var adapter = new OpenCodeAdapter();
+            using var cts = new System.Threading.CancellationTokenSource(1000);
 
             var ctx = BuildContext(
                 binaryPath: scriptPath,
-                config: "{\"timeoutSeconds\":1}",
-                executionCount: 1);
+                executionCount: 1,
+                cancel: cts.Token);
 
             var result = await adapter.ExecuteAsync(ctx);
 
@@ -303,6 +303,7 @@ public class OpenCodeAdapterTests
         string? worktreePath = null,
         string? apiKey = null,
         int executionCount = 1,
+        CancellationToken? cancel = null,
         Func<string, Task>? progressCallback = null)
     {
         var dict = System.Text.Json.JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, object>>(
@@ -333,7 +334,7 @@ public class OpenCodeAdapterTests
                 new List<string>(),
                 null),
             ExecutionCount: executionCount,
-            Cancel: CancellationToken.None,
+            Cancel: cancel ?? CancellationToken.None,
             ProgressCallback: progressCallback);
     }
 }

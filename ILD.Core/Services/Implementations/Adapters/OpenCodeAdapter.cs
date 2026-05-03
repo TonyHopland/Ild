@@ -15,10 +15,7 @@ public class OpenCodeAdapter : IAgentAdapter
 
     public string Name => "OpenCode";
     public string[] SupportedProviderTypes => ["opencode"];
-    public ConfigFieldDescriptor[] ConfigSchema => new ConfigFieldDescriptor[]
-    {
-        new("timeoutSeconds", ConfigFieldType.Number, "Timeout (seconds)", false, 300, "Maximum execution time"),
-    };
+    public ConfigFieldDescriptor[] ConfigSchema => Array.Empty<ConfigFieldDescriptor>();
 
     public async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
@@ -27,7 +24,7 @@ public class OpenCodeAdapter : IAgentAdapter
             var prompt = ctx.ExecutionCount == 1 ? ctx.InitialPrompt : ctx.LoopPrompt;
             var rendered = await RenderPromptAsync(prompt, ctx.RunContext);
 
-            var (binaryPath, timeoutSeconds) = ResolveConfig(ctx.Provider);
+            var binaryPath = ResolveBinaryPath(ctx.Provider);
 
             if (string.IsNullOrEmpty(binaryPath))
                 return NodeExecutionResult.Fail("[opencode-error] binaryPath is not configured");
@@ -71,25 +68,23 @@ public class OpenCodeAdapter : IAgentAdapter
                 return NodeExecutionResult.Fail($"[opencode-error] cannot start '{binaryPath}' — make sure the opencode binary is installed and on PATH. Details: {ex.Message}");
             }
             using var p = proc ?? throw new InvalidOperationException("Process.Start returned null");
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ctx.Cancel);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
 
             var stdoutLines = new List<string>();
             var stderrLines = new List<string>();
             var stdoutLock = new object();
             var stderrLock = new object();
 
-            var stdoutTask = ReadAndStreamLinesAsync(p.StandardOutput, stdoutLines, stdoutLock, ctx.ProgressCallback, timeoutCts.Token);
-            var stderrTask = ReadAndStreamLinesAsync(p.StandardError, stderrLines, stderrLock, ctx.ProgressCallback, timeoutCts.Token);
+            var stdoutTask = ReadAndStreamLinesAsync(p.StandardOutput, stdoutLines, stdoutLock, ctx.ProgressCallback, ctx.Cancel);
+            var stderrTask = ReadAndStreamLinesAsync(p.StandardError, stderrLines, stderrLock, ctx.ProgressCallback, ctx.Cancel);
 
             try
             {
-                await p.WaitForExitAsync(timeoutCts.Token);
+                await p.WaitForExitAsync(ctx.Cancel);
             }
             catch (OperationCanceledException)
             {
                 try { p.Kill(entireProcessTree: true); } catch { }
-                return NodeExecutionResult.Fail($"opencode timed out after {timeoutSeconds}s");
+                return NodeExecutionResult.Fail("opencode timed out");
             }
 
             string stdout, stderr;
@@ -101,7 +96,7 @@ public class OpenCodeAdapter : IAgentAdapter
             catch (OperationCanceledException)
             {
                 try { p.Kill(entireProcessTree: true); } catch { }
-                return NodeExecutionResult.Fail($"opencode stream read timed out after {timeoutSeconds}s");
+                return NodeExecutionResult.Fail("opencode stream read timed out");
             }
             var response = ExtractTextFromJsonEvents(stdout);
             if (string.IsNullOrEmpty(response))
@@ -163,10 +158,9 @@ public class OpenCodeAdapter : IAgentAdapter
         }
     }
 
-    private static (string BinaryPath, int TimeoutSeconds) ResolveConfig(AiProvider provider)
+    private static string ResolveBinaryPath(AiProvider provider)
     {
         var binaryPath = "opencode";
-        var timeoutSeconds = 300;
 
         if (!string.IsNullOrEmpty(provider.Config))
         {
@@ -176,13 +170,11 @@ public class OpenCodeAdapter : IAgentAdapter
                 var root = doc.RootElement;
                 if (root.TryGetProperty("binaryPath", out var bp) && bp.ValueKind == System.Text.Json.JsonValueKind.String)
                     binaryPath = bp.GetString() ?? binaryPath;
-                if (root.TryGetProperty("timeoutSeconds", out var ts) && ts.ValueKind == System.Text.Json.JsonValueKind.Number)
-                    timeoutSeconds = ts.GetInt32();
             }
             catch { }
         }
 
-        return (binaryPath, timeoutSeconds);
+        return binaryPath;
     }
 
     private static (string ModelRef, string ConfigJson) BuildOpenCodeConfig(AiProvider provider)
