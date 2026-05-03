@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
+import "./WorkItemModal.css";
 import {
   WorkItem,
   WorkItemStatus,
