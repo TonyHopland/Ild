@@ -87,10 +87,11 @@ export function useSignalR(hubUrl = "/hubs/work-item") {
 
     void connection
       .start()
-      .then(() => {
+      .then(async () => {
         if (stopped) return;
         updateState(signalR.HubConnectionState.Connected);
         handlersRef.current.forEach((_, eventType) => ensureDispatcher(connection, eventType));
+        await connection.invoke("SubscribeToWorkItems");
       })
       .catch((err) => {
         if (stopped) return; // expected during teardown
