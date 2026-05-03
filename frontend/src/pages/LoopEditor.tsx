@@ -11,6 +11,8 @@ import {
   type Node,
   type Edge,
   type Connection,
+  type OnEdgesChange,
+  applyEdgeChanges,
   addEdge,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -51,7 +53,26 @@ export default function LoopEditor() {
   const [templates, setTemplates] = useState<LoopTemplate[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<LoopTemplate | null>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const [edges, setEdges] = useEdgesState<Edge>([]);
+
+  // Custom onEdgesChange that preserves edge.data (edgeType) across all React Flow change events.
+  // The default handler from useEdgesState can strip edge.data on certain operations.
+  const onEdgesChangeCustom: OnEdgesChange = useCallback(
+    (changes) => {
+      setEdges((prev) => {
+        const next = applyEdgeChanges(changes, prev);
+        // Restore edge.data from previous edges for any edge that lost it
+        return next.map((edge) => {
+          const prevEdge = prev.find((e) => e.id === edge.id);
+          if (prevEdge?.data && !edge.data) {
+            return { ...edge, data: prevEdge.data };
+          }
+          return edge;
+        });
+      });
+    },
+    [setEdges],
+  );
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const reactFlowInstance = useRef<any>(null);
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
@@ -755,7 +776,7 @@ export default function LoopEditor() {
               nodes={nodes}
               edges={edges}
               onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
+              onEdgesChange={onEdgesChangeCustom}
               nodeTypes={nodeTypes}
               onInit={onInit}
               onNodeClick={onNodeClick}

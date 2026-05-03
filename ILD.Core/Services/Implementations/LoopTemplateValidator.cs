@@ -68,6 +68,17 @@ public static class LoopTemplateValidator
                 errors.Add($"Node {src.Key} has duplicate {d} edges.");
         }
 
+        // Every edge must have a valid EdgeType
+        foreach (var e in edges)
+        {
+            if (string.IsNullOrEmpty(e.EdgeType) ||
+                (!string.Equals(e.EdgeType, "OnSuccess", StringComparison.OrdinalIgnoreCase) &&
+                 !string.Equals(e.EdgeType, "OnFailure", StringComparison.OrdinalIgnoreCase)))
+            {
+                errors.Add($"Edge {e.Id} has an invalid or missing EdgeType ('{e.EdgeType}'). Must be 'OnSuccess' or 'OnFailure'.");
+            }
+        }
+
         // Unknown placeholders in AI/Human prompt templates
         foreach (var node in nodes)
         {

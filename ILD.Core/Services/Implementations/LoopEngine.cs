@@ -228,6 +228,9 @@ public class LoopEngine : ILoopEngine
 
                             if (prEdge == null && !prSuccess)
                             {
+                                await LogEventAsync(runId, "RoutingError",
+                                    $"Node {current.Label} ({current.Id}) failed but has no on_failure edge. " +
+                                    $"All edges from this node: {string.Join(", ", edges.Where(e => e.SourceNodeId == current.Id).Select(e => $"edge={e.Id} type={e.EdgeType}"))}");
                                 await TransitionWorkItemAsync(workItem.Id, WorkItemStatus.HumanFeedback, "PR rejected; no on_failure edge");
                                 return await FailRunAsync(runId, "PR rejected with no on_failure edge");
                             }
@@ -292,6 +295,9 @@ public class LoopEngine : ILoopEngine
 
                 if (edge == null && !success)
                 {
+                    await LogEventAsync(runId, "RoutingError",
+                        $"Node {current.Label} ({current.Id}) failed but has no on_failure edge. " +
+                        $"All edges from this node: {string.Join(", ", edges.Where(e => e.SourceNodeId == current.Id).Select(e => $"edge={e.Id} type={e.EdgeType}"))}");
                     await TransitionWorkItemAsync(workItem.Id, WorkItemStatus.HumanFeedback, "Node failed; no on_failure edge and retries exhausted");
                     return await FailRunAsync(runId, "Retries exhausted with no on_failure edge");
                 }

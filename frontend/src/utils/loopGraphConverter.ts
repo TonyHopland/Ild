@@ -52,13 +52,21 @@ export function templateToEdges(template: LoopTemplate): Edge[] {
 }
 
 export function edgesToLoopNodeEdges(edges: Edge[]): LoopNodeEdge[] {
-  return edges.map((edge) => ({
-    id: edge.id,
-    sourceNodeId: edge.source,
-    targetNodeId: edge.target,
-    edgeType: (edge.data as { edgeType?: EdgeType })?.edgeType ?? EdgeType.OnSuccess,
-    maxTraversals: (edge.data as { maxTraversals?: number | null })?.maxTraversals ?? null,
-  }));
+  return edges.map((edge) => {
+    const edgeType = (edge.data as { edgeType?: EdgeType })?.edgeType;
+    if (!edgeType) {
+      throw new Error(
+        `Edge "${edge.id}" is missing edgeType in data. This usually means edge.data was lost during React Flow state management.`,
+      );
+    }
+    return {
+      id: edge.id,
+      sourceNodeId: edge.source,
+      targetNodeId: edge.target,
+      edgeType,
+      maxTraversals: (edge.data as { maxTraversals?: number | null })?.maxTraversals ?? null,
+    };
+  });
 }
 
 export function nodesToLoopNodes(nodes: Node[]): LoopNode[] {
