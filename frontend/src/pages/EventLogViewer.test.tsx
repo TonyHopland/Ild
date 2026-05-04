@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, waitFor } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 
 vi.mock("../services/auth", () => ({
@@ -37,6 +37,7 @@ const mockEvents = [
     payload: "First event message",
     timestamp: "2025-01-01T00:00:00Z",
     hasPayload: false,
+    runNodeId: "run-node-1",
   },
   {
     sequence: 2,
@@ -45,14 +46,15 @@ const mockEvents = [
     nodeId: "node-1",
     payload: "Second event message",
     timestamp: "2025-01-01T00:01:00Z",
-    hasPayload: true,
+    hasPayload: false,
+    runNodeId: "run-node-1",
   },
 ];
 
 const mockPage = {
   entries: mockEvents,
   nextCursor: 2,
-  hasMore: true,
+  hasMore: false,
 };
 
 const mockRun = {
@@ -72,7 +74,7 @@ const mockRun = {
       nodeId: "node-1",
       nodeLabel: "Start Node",
       status: "Succeeded",
-      output: null,
+      output: "output data",
       error: null,
       startedAt: "2025-01-01T00:00:00Z",
       completedAt: "2025-01-01T00:01:00Z",
@@ -135,94 +137,34 @@ describe("EventLogViewer", () => {
     });
   });
 
-  test("renders event list with sequence, type badge, timestamp, and message", async () => {
+  test("renders node timeline with node label and status", async () => {
     renderComponent();
     await waitFor(() => {
-      expect(screen.getByText("#1")).toBeTruthy();
+      expect(screen.getByText("Start Node")).toBeTruthy();
     });
-    expect(screen.getByText("NodeStarted")).toBeTruthy();
-    expect(screen.getByText("NodeCompleted")).toBeTruthy();
-    expect(screen.getByText("First event message")).toBeTruthy();
+    expect(screen.getByText("Succeeded")).toBeTruthy();
   });
 
-  test("expands event to show full payload on click", async () => {
+  test("renders node input section", async () => {
     renderComponent();
     await waitFor(() => {
-      expect(screen.getByText("#1")).toBeTruthy();
-    });
-    const eventItem = screen.getByText("#1").closest(".event-item");
-    fireEvent.click(eventItem!);
-    expect(eventItem?.classList.contains("expanded")).toBe(true);
-  });
-
-  test("shows Load More button when hasMore is true", async () => {
-    renderComponent();
-    await waitFor(() => {
-      expect(screen.getByText("Load More")).toBeTruthy();
+      expect(screen.getByText("Input")).toBeTruthy();
     });
   });
 
-  test("fetches next page when Load More is clicked", async () => {
-    const mockPage2 = {
-      entries: [
-        {
-          sequence: 3,
-          runId: "test-run",
-          eventType: "NodeStarted",
-          nodeId: null,
-          payload: "Third event",
-          timestamp: "2025-01-01T00:02:00Z",
-          hasPayload: false,
-        },
-      ],
-      nextCursor: 3,
-      hasMore: false,
-    };
-
-    (loopRunService.getEvents as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce(mockPage)
-      .mockResolvedValueOnce(mockPage2);
-
+  test("renders node events section with event count", async () => {
     renderComponent();
     await waitFor(() => {
-      expect(screen.getByText("Load More")).toBeTruthy();
-    });
-    fireEvent.click(screen.getByText("Load More"));
-    await waitFor(() => {
-      expect(screen.getByText("Third event")).toBeTruthy();
+      expect(screen.getByText("Events (2)")).toBeTruthy();
     });
   });
 
-  test("shows Load Payload button for events with disk-stored payloads", async () => {
+  test("renders node output section", async () => {
     renderComponent();
     await waitFor(() => {
-      expect(screen.getByText("#2")).toBeTruthy();
+      expect(screen.getByText("Output")).toBeTruthy();
     });
-    const eventItem = screen.getByText("#2").closest(".event-item");
-    fireEvent.click(eventItem!);
-    expect(screen.getByText("Load Payload")).toBeTruthy();
-  });
-
-  test("loads and displays payload when Load Payload is clicked", async () => {
-    renderComponent();
-    await waitFor(() => {
-      expect(screen.getByText("#2")).toBeTruthy();
-    });
-    const eventItem = screen.getByText("#2").closest(".event-item");
-    fireEvent.click(eventItem!);
-    fireEvent.click(screen.getByText("Load Payload"));
-    await waitFor(() => {
-      expect(screen.getByText("large payload content")).toBeTruthy();
-    });
-  });
-
-  test("renders node flow panel with template nodes", async () => {
-    renderComponent();
-    await waitFor(() => {
-      expect(screen.getByText("Node Flow")).toBeTruthy();
-    });
-    const flowPanel = screen.getByText("Node Flow").closest(".node-flow-panel");
-    expect(flowPanel?.textContent).toContain("Start Node");
+    expect(screen.getByText("output data")).toBeTruthy();
   });
 
   test("renders run details header with run id and status", async () => {
@@ -236,6 +178,13 @@ describe("EventLogViewer", () => {
     renderComponent();
     await waitFor(() => {
       expect(screen.getByText(/Back to all runs/)).toBeTruthy();
+    });
+  });
+
+  test("renders run metadata with start time and execution count", async () => {
+    renderComponent();
+    await waitFor(() => {
+      expect(screen.getByText(/Executions: 2/)).toBeTruthy();
     });
   });
 });

@@ -6,7 +6,7 @@ public record NodeStateChangedPayload(Guid RunId, Guid NodeId, LoopRunNodeStatus
 
 public record LoopRunStateChangedPayload(Guid RunId, LoopRunStatus OldStatus, LoopRunStatus NewStatus);
 
-public record EventLoggedPayload(Guid RunId, string Message);
+public record EventLoggedPayload(Guid RunId, string Message, string EventType, Guid? NodeId);
 
 public record RunPausedPayload(Guid RunId);
 

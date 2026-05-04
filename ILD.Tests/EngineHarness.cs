@@ -41,6 +41,7 @@ internal sealed class EngineHarness : IDisposable
         services.AddSingleton<ILoopTemplateStore>(Db.LoopTemplates);
         services.AddSingleton<IProviderStore>(Db.Providers);
         services.AddSingleton<IEventLogStore>(Db.EventLogs);
+        services.AddSingleton<IEventLogService>(new EventLogService(Db.EventLogs, Db.LoopRuns));
         services.AddSingleton<IAuthStore>(Db.Auth);
 
         ServiceProvider = services.BuildServiceProvider();

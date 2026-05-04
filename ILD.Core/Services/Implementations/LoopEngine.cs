@@ -5,6 +5,7 @@ using ILD.Core.Services.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
+using System.Text.Json;
 
 namespace ILD.Core.Services.Implementations;
 
@@ -39,19 +40,21 @@ public class LoopEngine : ILoopEngine
         _workItemNotifier = workItemNotifier ?? new NoopWorkItemNotifier();
     }
 
-    private async Task LogEventAsync(Guid runId, string eventType, string message, Guid? nodeId = null, string? output = null)
+    private async Task LogEventAsync(Guid runId, string eventType, string message, Guid? nodeId = null, string? output = null, Guid? runNodeId = null)
     {
+        var data = string.IsNullOrEmpty(output) ? message : $"{message}\n{output}";
         try
         {
             using var scope = _sp.CreateScope();
             var eventLog = scope.ServiceProvider.GetRequiredService<IEventLogService>();
-            var data = string.IsNullOrEmpty(output) ? message : $"{message}\n{output}";
-            await eventLog.AppendAsync(runId, eventType, data, nodeId);
+            await eventLog.AppendAsync(runId, eventType, data, nodeId, runNodeId: runNodeId);
         }
         catch
         {
             // event log is best-effort observability, never fail execution
         }
+        // Broadcast to SignalR clients (best-effort, wrapped by NotifyAsync)
+        await NotifyAsync(() => _notifier.EventLoggedAsync(runId, data, eventType, nodeId));
     }
 
     private async Task NotifyAsync(Func<Task> notify)
@@ -129,7 +132,7 @@ public class LoopEngine : ILoopEngine
             catch (OperationCanceledException) { /* expected on cancel */ }
             catch (Exception ex)
             {
-                await NotifyAsync(() => _notifier.EventLoggedAsync(runId, $"Recovery failed: {ex.Message}"));
+                await NotifyAsync(() => _notifier.EventLoggedAsync(runId, $"Recovery failed: {ex.Message}", "Error", null));
             }
         }, control.Cts.Token);
         return Task.CompletedTask;
@@ -326,6 +329,77 @@ public class LoopEngine : ILoopEngine
 
     private sealed record RunNodeOutcome(LoopRunNodeStatus Status, string? Output);
 
+    private static string BuildEffectiveInputJson(LoopNode node, WorkItem wi, string? previousNodeOutput, IReadOnlyList<string>? priorEventLogSummary)
+    {
+        var options = new JsonSerializerOptions { WriteIndented = false };
+        Dictionary<string, object?> payload = new();
+        payload["nodeType"] = node.NodeType.ToString();
+
+        try
+        {
+            var cfg = string.IsNullOrEmpty(node.Config)
+                ? (Dictionary<string, object>?)null
+                : JsonSerializer.Deserialize<Dictionary<string, object>>(node.Config);
+
+            switch (node.NodeType)
+            {
+                case NodeType.Cmd:
+                    payload["command"] = cfg?.GetValueOrDefault("command")?.ToString() ?? "(no command)";
+                    break;
+
+                case NodeType.AI:
+                {
+                    var initialPrompt = cfg?.GetValueOrDefault("initialPrompt")?.ToString()
+                        ?? cfg?.GetValueOrDefault("prompt")?.ToString()
+                        ?? cfg?.GetValueOrDefault("promptTemplate")?.ToString()
+                        ?? "";
+                    var loopPrompt = cfg?.GetValueOrDefault("loopPrompt")?.ToString() ?? initialPrompt;
+                    payload["prompt"] = initialPrompt;
+                    payload["loopPrompt"] = loopPrompt;
+
+                    var ctx = new Dictionary<string, object?>
+                    {
+                        ["workItemTitle"] = wi.Title,
+                        ["workItemDescription"] = wi.Description,
+                        ["previousNodeOutput"] = previousNodeOutput,
+                    };
+                    if (priorEventLogSummary != null && priorEventLogSummary.Count > 0)
+                    {
+                        ctx["priorEventLog"] = priorEventLogSummary;
+                    }
+                    payload["context"] = ctx;
+                    break;
+                }
+
+                case NodeType.Human:
+                    payload["prompt"] = cfg?.GetValueOrDefault("prompt")?.ToString() ?? "(no prompt)";
+                    break;
+
+                case NodeType.PR:
+                    payload["prompt"] = cfg?.GetValueOrDefault("prompt")?.ToString() ?? "(no prompt)";
+                    break;
+
+                case NodeType.Start:
+                    payload["message"] = "initialized";
+                    break;
+
+                case NodeType.Cleanup:
+                    payload["message"] = "cleanup";
+                    break;
+
+                default:
+                    payload["message"] = node.NodeType.ToString();
+                    break;
+            }
+        }
+        catch
+        {
+            payload["message"] = $"node-type={node.NodeType}";
+        }
+
+        return JsonSerializer.Serialize(payload, options);
+    }
+
     private async Task<RunNodeOutcome> ExecuteNodeWithRetryAsync(LoopRun run, WorkItem wi, LoopNode node, string? prevOutput, CancellationToken ct)
     {
         // PRD: error edge → follow immediately on failure; no error edge → auto-retry N times.
@@ -339,8 +413,8 @@ public class LoopEngine : ILoopEngine
         var maxRetries = hasFailureEdge ? 0 : node.MaxRetries;
         var attempt = 0;
 
-        // Single LoopRunNode per node per loop pass; updated in place across retries.
-        LoopRunNode runNode = await CreateOrLoadRunNodeAsync(run.Id, node.Id);
+        // One LoopRunNode per execution; each visit to a template node creates a new row.
+        LoopRunNode runNode = await CreateRunNodeAsync(run.Id, node.Id);
 
         while (true)
         {
@@ -364,8 +438,26 @@ public class LoopEngine : ILoopEngine
                 runEntity.CurrentNodeId = node.Id;
                 await loopRunStore.UpdateRunAsync(runEntity);
             }
+
+            // Build effective input for observability (command/prompt/context the node will execute with)
+            IReadOnlyList<string>? priorEventLogSummary = null;
+            if (node.NodeType == NodeType.AI)
+            {
+                try
+                {
+                    using (var scope = _sp.CreateScope())
+                    {
+                        var eventLogSvc = scope.ServiceProvider.GetRequiredService<IEventLogService>();
+                        var entries = await eventLogSvc.GetByRunIdAsync(run.Id);
+                        priorEventLogSummary = entries.Select(e => $"{e.EventType}: {e.Data}").ToList();
+                    }
+                }
+                catch { /* best-effort */ }
+            }
+            var effectiveInput = BuildEffectiveInputJson(node, wi, prevOutput, priorEventLogSummary);
+
             await NotifyAsync(() => _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Pending, LoopRunNodeStatus.Running));
-            await LogEventAsync(run.Id, "NodeStarted", $"{node.Label} started", node.Id);
+            await LogEventAsync(run.Id, "NodeStarted", $"{node.Label} started", node.Id, effectiveInput, runNode.Id);
 
             Func<string, Task> safeProgress = line => NotifyAsync(() => _notifier.NodeProgressAsync(run.Id, node.Id, line));
 
@@ -390,7 +482,7 @@ public class LoopEngine : ILoopEngine
                     await loopRunStore.UpdateRunNodeAsync(runNode);
                 }
                 await NotifyAsync(() => _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.WaitingHuman));
-                await LogEventAsync(run.Id, "HumanFeedbackRequested", $"{node.Label} waiting for human input", node.Id);
+                await LogEventAsync(run.Id, "HumanFeedbackRequested", $"{node.Label} waiting for human input", node.Id, runNodeId: runNode.Id);
                 return new RunNodeOutcome(LoopRunNodeStatus.WaitingHuman, null);
             }
 
@@ -417,7 +509,7 @@ public class LoopEngine : ILoopEngine
                     await loopRunStore.UpdateRunNodeAsync(runNode);
                 }
                 await NotifyAsync(() => _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.WaitingHuman));
-                await LogEventAsync(run.Id, "HumanFeedbackRequested", $"{node.Label} PR created, awaiting merge", node.Id);
+                await LogEventAsync(run.Id, "HumanFeedbackRequested", $"{node.Label} PR created, awaiting merge", node.Id, runNodeId: runNode.Id);
                 return new RunNodeOutcome(LoopRunNodeStatus.WaitingHuman, execResult.Output);
             }
 
@@ -432,7 +524,7 @@ public class LoopEngine : ILoopEngine
                     await loopRunStore.UpdateRunNodeAsync(runNode);
                 }
                 await NotifyAsync(() => _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Succeeded));
-                await LogEventAsync(run.Id, "NodeCompleted", $"{node.Label} succeeded", node.Id, execResult.Output ?? null);
+                await LogEventAsync(run.Id, "NodeCompleted", $"{node.Label} succeeded", node.Id, execResult.Output ?? null, runNode.Id);
                 return new RunNodeOutcome(LoopRunNodeStatus.Succeeded, execResult.Output);
             }
 
@@ -446,7 +538,7 @@ public class LoopEngine : ILoopEngine
                 await loopRunStore.UpdateRunNodeAsync(runNode);
             }
             await NotifyAsync(() => _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Failed));
-            await LogEventAsync(run.Id, "NodeFailed", $"{node.Label} failed: {execResult.Error}", node.Id, execResult.Output);
+            await LogEventAsync(run.Id, "NodeFailed", $"{node.Label} failed: {execResult.Error}", node.Id, execResult.Output, runNode.Id);
 
             if (hasFailureEdge)
                 return new RunNodeOutcome(LoopRunNodeStatus.Failed, execResult.Output);
@@ -456,12 +548,10 @@ public class LoopEngine : ILoopEngine
         }
     }
 
-    private async Task<LoopRunNode> CreateOrLoadRunNodeAsync(Guid runId, Guid nodeId)
+    private async Task<LoopRunNode> CreateRunNodeAsync(Guid runId, Guid nodeId)
     {
         using var scope = _sp.CreateScope();
         var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
-        var existing = await loopRunStore.GetRunNodeAsync(runId, nodeId);
-        if (existing != null) return existing;
 
         var runNode = new LoopRunNode
         {
@@ -524,7 +614,7 @@ public class LoopEngine : ILoopEngine
         }
         if (workItemId.HasValue)
             await TransitionWorkItemAsync(workItemId.Value, WorkItemStatus.HumanFeedback, reason);
-        await NotifyAsync(() => _notifier.EventLoggedAsync(runId, $"Run failed: {reason}"));
+        await NotifyAsync(() => _notifier.EventLoggedAsync(runId, $"Run failed: {reason}", "Error", null));
         await NotifyAsync(() => _notifier.RunStateChangedAsync(runId, LoopRunStatus.Running, LoopRunStatus.Failed));
         ReleaseRunControl(runId);
         return LoopRunStatus.Failed;

@@ -220,6 +220,98 @@ public class LoopEngineTests
     }
 
     [Fact]
+    public async Task NodeStarted_event_contains_structured_effective_input()
+    {
+        using var h = new EngineHarness();
+        h.BuildSimpleGraph(("s", NodeType.Start), ("a", NodeType.Cmd), ("c", NodeType.Cleanup));
+        h.AddEdge("e1", "s", "a");
+        h.AddEdge("e2", "a", "c");
+        h.NodesById["a"].Config = "{\"command\": \"echo hello\"}";
+        h.Save();
+
+        await h.Engine.RunAsync(h.RunId);
+
+        var eventLogs = h.Db.Fresh().EventLogs.Where(e => e.LoopRunId == h.RunId).ToList();
+        var cmdStarted = eventLogs.FirstOrDefault(e => e.EventType == EventType.NodeStarted && e.NodeId == h.NodesById["a"].Id);
+        cmdStarted.Should().NotBeNull("Cmd node should have NodeStarted event");
+        cmdStarted!.Data.Should().Contain("nodeType");
+        cmdStarted.Data.Should().Contain("Cmd");
+        cmdStarted.Data.Should().Contain("echo hello");
+    }
+
+    [Fact]
+    public async Task Multiple_visits_to_same_template_node_create_separate_LoopRunNode_rows()
+    {
+        using var h = new EngineHarness();
+        // Graph: Start → A → B → A → B (edge limit) → fail
+        // A has only one OnSuccess edge (→B), B has only one OnSuccess edge (→A, bounded)
+        // A executes 2 times, B executes 2 times
+        h.BuildSimpleGraph(
+            ("s", NodeType.Start),
+            ("a", NodeType.Cmd),
+            ("b", NodeType.Cmd));
+        h.AddEdge("e1", "s", "a");
+        h.AddEdge("e2", "a", "b");
+        h.AddEdge("e3", "b", "a", EdgeType.OnSuccess, maxTraversals: 2); // loop back twice
+        h.Save();
+
+        await h.Engine.RunAsync(h.RunId);
+
+        h.ReloadRun().Status.Should().Be(LoopRunStatus.Failed); // edge exceeded max traversals
+        var aId = h.NodesById["a"].Id;
+        var runNodesForA = h.ReloadRunNodes().Where(rn => rn.LoopNodeId == aId).ToList();
+
+        // Each visit to node A creates its own LoopRunNode row (at least 2, proving per-execution model)
+        runNodesForA.Count.Should().BeGreaterThanOrEqualTo(2);
+        runNodesForA.Should().AllSatisfy(n => n.Status.Should().Be(LoopRunNodeStatus.Succeeded));
+    }
+
+    [Fact]
+    public async Task EventLog_entries_reference_specific_execution_via_RunNodeId()
+    {
+        using var h = new EngineHarness();
+        h.BuildSimpleGraph(("s", NodeType.Start), ("a", NodeType.Cmd), ("c", NodeType.Cleanup));
+        h.AddEdge("e1", "s", "a");
+        h.AddEdge("e2", "a", "c");
+        h.Save();
+
+        await h.Engine.RunAsync(h.RunId);
+
+        var runNodes = h.ReloadRunNodes();
+        runNodes.Should().HaveCount(3); // Start, Cmd, Cleanup
+
+        // Event log entries for node executions should reference the specific LoopRunNode
+        var eventLogs = h.Db.Fresh().EventLogs.Where(e => e.LoopRunId == h.RunId).ToList();
+        var nodeEvents = eventLogs.Where(e => e.EventType is EventType.NodeStarted or EventType.NodeCompleted).ToList();
+        nodeEvents.Should().NotBeEmpty();
+        nodeEvents.Should().AllSatisfy(e =>
+        {
+            e.RunNodeId.Should().NotBeNull("event should reference a specific execution");
+            runNodes.Should().Contain(rn => rn.Id == e.RunNodeId);
+        });
+    }
+
+    [Fact]
+    public async Task GetRunNodeAsync_returns_latest_execution_for_node()
+    {
+        using var h = new EngineHarness();
+        h.BuildSimpleGraph(("s", NodeType.Start), ("a", NodeType.Cmd), ("c", NodeType.Cleanup));
+        h.AddEdge("e1", "s", "a");
+        h.AddEdge("e2", "a", "a", EdgeType.OnSuccess, maxTraversals: 1); // A visited 2x then fails on edge limit
+        h.Save();
+
+        await h.Engine.RunAsync(h.RunId);
+
+        // GetRunNodeAsync should return the latest execution, not the first
+        var latest = await h.Db.LoopRuns.GetRunNodeAsync(h.RunId, h.NodesById["a"].Id);
+        latest.Should().NotBeNull();
+        // There are 2 rows for node A; GetRunNodeAsync returns the most recent one
+        var allForA = h.ReloadRunNodes().Where(rn => rn.LoopNodeId == h.NodesById["a"].Id).ToList();
+        allForA.Should().HaveCount(2);
+        latest.Id.Should().Be(allForA[1].Id); // latest is the second one
+    }
+
+    [Fact]
     public async Task GetRunStatusAsync_returns_null_when_run_does_not_exist()
     {
         using var h = new EngineHarness();

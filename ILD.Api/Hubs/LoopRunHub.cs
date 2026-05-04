@@ -24,10 +24,10 @@ public class LoopRunHub : Hub
             new ILD.Data.DTOs.SignalRPayloads.NodeStateChangedPayload(runId, nodeId, oldStatus, newStatus));
     }
 
-    public async Task NotifyEventLogged(Guid runId, string eventMessage)
+    public async Task NotifyEventLogged(Guid runId, string eventMessage, string eventType, Guid? nodeId)
     {
         await Clients.Group(runId.ToString()).SendAsync("EventLogged",
-            new ILD.Data.DTOs.SignalRPayloads.EventLoggedPayload(runId, eventMessage));
+            new ILD.Data.DTOs.SignalRPayloads.EventLoggedPayload(runId, eventMessage, eventType, nodeId));
     }
 
     public async Task NotifyLoopRunStateChanged(Guid runId, LoopRunStatus oldStatus, LoopRunStatus newStatus)

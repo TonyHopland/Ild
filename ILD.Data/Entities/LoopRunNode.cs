@@ -29,6 +29,8 @@ public class LoopRunNode
 
     public DateTime? CompletedAt { get; set; }
 
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
     [ForeignKey(nameof(LoopRunId))]
     public LoopRun LoopRun { get; set; } = null!;
 

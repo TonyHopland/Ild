@@ -143,6 +143,7 @@ export interface EventLogEntry {
   timestamp: string;
   hasPayload: boolean;
   nodeLabel?: string;
+  runNodeId: string | null;
 }
 
 export interface EventLogPage {
@@ -212,6 +213,8 @@ export interface LoopRunStateChangedPayload {
 export interface EventLoggedPayload {
   runId: string;
   message: string;
+  eventType: string;
+  nodeId: string | null;
 }
 
 export interface RunPausedPayload {

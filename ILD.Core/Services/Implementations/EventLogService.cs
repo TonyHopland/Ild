@@ -25,7 +25,7 @@ public class EventLogService : IEventLogService
     {
     }
 
-    public async Task<long> AppendAsync(Guid runId, string eventType, string message, Guid? nodeId = null, string? payloadPath = null)
+    public async Task<long> AppendAsync(Guid runId, string eventType, string message, Guid? nodeId = null, string? payloadPath = null, Guid? runNodeId = null)
     {
         if (!Enum.TryParse<EventType>(eventType, ignoreCase: true, out var parsed))
             parsed = EventType.Error;
@@ -56,6 +56,7 @@ public class EventLogService : IEventLogService
                 Sequence = nextSequence,
                 EventType = parsed,
                 NodeId = nodeId,
+                RunNodeId = runNodeId,
                 Timestamp = DateTime.UtcNow,
                 PayloadPath = finalPayloadPath,
                 Data = data
@@ -83,13 +84,14 @@ public class EventLogService : IEventLogService
             e.LoopRunId,
             e.EventType.ToString(),
             e.Data ?? string.Empty,
-            e.PayloadPath));
+            e.PayloadPath,
+            e.RunNodeId));
     }
 
     public async Task<EventLogEntry?> GetBySequenceAsync(Guid runId, long sequence)
     {
         var entry = await _eventLogStore.GetBySequenceAsync(runId, (int)sequence);
-        return entry == null ? null : new EventLogEntry(entry.LoopRunId, entry.EventType.ToString(), entry.Data ?? string.Empty, entry.PayloadPath);
+        return entry == null ? null : new EventLogEntry(entry.LoopRunId, entry.EventType.ToString(), entry.Data ?? string.Empty, entry.PayloadPath, entry.RunNodeId);
     }
 
     public async Task<int> EnforceRetentionPolicyAsync(DateTimeOffset before)

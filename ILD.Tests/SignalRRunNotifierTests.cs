@@ -79,12 +79,15 @@ public class SignalRRunNotifierTests
             .Returns(Task.CompletedTask);
 
         var notifier = new SignalRRunNotifier(ctx.Object, logger.Object);
-        await notifier.EventLoggedAsync(runId, "hello");
+        var nodeId = Guid.NewGuid();
+        await notifier.EventLoggedAsync(runId, "hello", "NodeStarted", nodeId);
 
         capturedArgs!.Should().HaveCount(1);
         var payload = capturedArgs[0].Should().BeOfType<EventLoggedPayload>().Subject;
         payload.RunId.Should().Be(runId);
         payload.Message.Should().Be("hello");
+        payload.EventType.Should().Be("NodeStarted");
+        payload.NodeId.Should().Be(nodeId);
     }
 
     [Fact]
