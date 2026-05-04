@@ -57,13 +57,18 @@ public class WorkItemManager : IWorkItemManager
     public async Task<WorkItem?> GetWorkItemAsync(Guid workItemId)
         => await _store.GetByIdAsync(workItemId);
 
-    public async Task<bool> UpdateAsync(Guid workItemId, string title, string description)
+    public async Task<bool> UpdateAsync(Guid workItemId, string title, string description, Guid? loopTemplateId = null)
     {
         var wi = await _store.GetByIdAsync(workItemId);
         if (wi == null) return false;
         wi.Title = title;
         wi.Description = description;
         wi.UpdatedAt = DateTime.UtcNow;
+        if (loopTemplateId.HasValue)
+        {
+            var latest = await _store.GetLatestTemplateVersionAsync(loopTemplateId.Value);
+            wi.LoopTemplateVersionId = latest?.Id;
+        }
         await _store.UpdateAsync(wi);
         return true;
     }

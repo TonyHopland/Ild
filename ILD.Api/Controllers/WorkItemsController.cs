@@ -93,7 +93,8 @@ public class WorkItemsController : ControllerBase
     {
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
-        var ok = await _workItemManager.UpdateAsync(guid, request.Title, request.Description);
+        var loopTemplateId = Guid.TryParse(request.LoopTemplateId, out var ltGuid) ? (Guid?)ltGuid : null;
+        var ok = await _workItemManager.UpdateAsync(guid, request.Title, request.Description, loopTemplateId);
         if (!ok) return NotFound();
         var wi = await _workItemManager.GetWorkItemAsync(guid);
         return Ok(wi);

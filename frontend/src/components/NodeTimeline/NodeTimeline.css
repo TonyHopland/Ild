@@ -41,6 +41,9 @@
   font-size: 0.875rem;
   text-align: left;
   transition: background-color 0.15s;
+  margin: 0;
+  font-family: inherit;
+  line-height: normal;
 }
 
 .node-item-header:hover {
@@ -54,7 +57,17 @@
 
 .node-item-label {
   font-weight: 600;
-  flex: 1;
+}
+
+.node-item-type {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.25rem;
+  background: #374151;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
 }
 
 .node-item-status {
@@ -72,6 +85,11 @@
   font-size: 0.75rem;
   color: #9ca3af;
   flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+
+.node-item-chevron.expanded {
+  transform: rotate(180deg);
 }
 
 .node-item-body {
@@ -280,24 +298,84 @@
   background: #2563eb;
 }
 
+/* ---- Page-level layout ---- */
+
 .run-details-page {
   display: flex;
   flex-direction: column;
-  height: 100vh;
-  overflow: hidden;
+  min-height: 100%;
 }
+
+/* ---- Header ---- */
+
+.run-details-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.run-details-header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.run-details-header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.back-link {
+  font-size: 0.875rem;
+  color: #9ca3af;
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+.back-link:hover {
+  color: #e5e7eb;
+}
+
+.run-status-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  border: 2px solid #6b7280;
+  background: transparent;
+  color: #e5e7eb;
+}
+
+.run-controls {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* ---- Meta ---- */
+
+.run-details-meta {
+  display: flex;
+  gap: 1.5rem;
+  font-size: 0.8rem;
+  color: #9ca3af;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+/* ---- Timeline ---- */
 
 .run-details-timeline-container {
   flex: 1;
   overflow-y: auto;
-  padding: 1rem;
+  padding: 0.5rem 0;
   scroll-behavior: smooth;
 }
 
 .node-execution-block {
-  margin-bottom: 1.5rem;
-}
-
-.node-item-header {
-  cursor: default;
+  margin-bottom: 0;
 }

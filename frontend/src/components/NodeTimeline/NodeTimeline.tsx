@@ -1,6 +1,7 @@
-import { useRef, useEffect, useCallback } from "react";
+import { useRef, useEffect, useCallback, useState } from "react";
 import { LoopRunNode, LoopRunNodeStatus, NodeType, LoopNode, EdgeType } from "../../types";
 import NodeItem from "./NodeItem";
+import EdgeArrow from "./EdgeArrow";
 
 interface NodeTimelineProps {
   runNodes: LoopRunNode[];
@@ -17,6 +18,7 @@ function mapNodeType(templateNodes: LoopNode[], nodeId: string): NodeType {
 export default function NodeTimeline({ runNodes, templateNodes }: NodeTimelineProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = useRef(true);
+  const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
 
   const runningNode = runNodes.find((n) => n.status === LoopRunNodeStatus.Running);
   const runningNodeId = runningNode?.id ?? null;
@@ -35,6 +37,16 @@ export default function NodeTimeline({ runNodes, templateNodes }: NodeTimelinePr
     }
   }, [runNodes.length, runningNodeId]);
 
+  const handleToggleNode = useCallback((nodeId: string) => {
+    setExpandedNodeId((prev) => (prev === nodeId ? null : nodeId));
+  }, []);
+
+  useEffect(() => {
+    if (runningNode && expandedNodeId !== runningNode.id) {
+      setExpandedNodeId(runningNode.id);
+    }
+  }, [runNodes, expandedNodeId, runningNode]);
+
   let newNodesCount = 0;
   const showIndicator = !isAtBottomRef.current && runNodes.length > 0;
 
@@ -45,6 +57,7 @@ export default function NodeTimeline({ runNodes, templateNodes }: NodeTimelinePr
 
         {runNodes.map((runNode, index) => {
           const templateNodeType = mapNodeType(templateNodes, runNode.nodeId);
+          const templateNode = templateNodes.find((n) => n.id === runNode.nodeId);
           const isRunning = runNode.status === LoopRunNodeStatus.Running;
 
           let edgeType: EdgeType | undefined;
@@ -57,13 +70,17 @@ export default function NodeTimeline({ runNodes, templateNodes }: NodeTimelinePr
           }
 
           return (
-            <NodeItem
-              key={runNode.id}
-              runNode={runNode}
-              templateNodeType={templateNodeType}
-              isRunning={isRunning}
-              edgeType={edgeType}
-            />
+            <div key={runNode.id}>
+              {edgeType !== undefined && <EdgeArrow edgeType={edgeType} />}
+              <NodeItem
+                runNode={runNode}
+                templateNodeType={templateNodeType}
+                templateNodeLabel={templateNode?.label}
+                isRunning={isRunning}
+                isExpanded={expandedNodeId === runNode.id}
+                onToggle={() => handleToggleNode(runNode.id)}
+              />
+            </div>
           );
         })}
       </div>

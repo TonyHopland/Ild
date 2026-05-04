@@ -39,11 +39,11 @@ public class LoopRunsController : ControllerBase
             nodeExecutionCount = r.NodeExecutionCount,
             startedAt = r.StartedAt,
             completedAt = r.CompletedAt,
-            nodes = r.RunNodes.Select(rn => new
+            nodes = r.RunNodes.OrderBy(rn => rn.CreatedAt).Select(rn => new
             {
                 id = rn.Id,
                 nodeId = rn.LoopNodeId,
-                nodeLabel = rn.LoopNode?.Label ?? string.Empty,
+                nodeLabel = rn.NodeLabel ?? rn.LoopNode?.Label ?? string.Empty,
                 status = rn.Status.ToString(),
                 output = rn.Output,
                 error = rn.Error,
@@ -84,7 +84,7 @@ public class LoopRunsController : ControllerBase
             {
                 id = rn.Id,
                 nodeId = rn.LoopNodeId,
-                nodeLabel = rn.LoopNode?.Label ?? string.Empty,
+                nodeLabel = rn.NodeLabel ?? rn.LoopNode?.Label ?? string.Empty,
                 status = rn.Status.ToString(),
                 output = rn.Output,
                 error = rn.Error,

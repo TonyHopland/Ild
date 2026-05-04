@@ -17,6 +17,8 @@ public class LoopRunNode
     [ForeignKey("LoopNode")]
     public Guid LoopNodeId { get; set; }
 
+    public string? NodeLabel { get; set; }
+
     public LoopRunNodeStatus Status { get; set; }
 
     public string? Output { get; set; }

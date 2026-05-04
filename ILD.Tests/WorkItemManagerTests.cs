@@ -465,6 +465,71 @@ public class WorkItemManagerTests
     }
 
     [Fact]
+    public async Task UpdateAsync_changes_loop_template_when_template_id_provided()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var ltA = new LoopTemplate { Id = Guid.NewGuid(), Name = "templateA" };
+        db.Context.LoopTemplates.Add(ltA);
+        var ltvA = new LoopTemplateVersion
+        {
+            Id = Guid.NewGuid(),
+            LoopTemplateId = ltA.Id,
+            VersionNumber = 1,
+            CreatedAt = DateTime.UtcNow,
+        };
+        db.Context.LoopTemplateVersions.Add(ltvA);
+
+        var ltB = new LoopTemplate { Id = Guid.NewGuid(), Name = "templateB" };
+        db.Context.LoopTemplates.Add(ltB);
+        var ltvB = new LoopTemplateVersion
+        {
+            Id = Guid.NewGuid(),
+            LoopTemplateId = ltB.Id,
+            VersionNumber = 1,
+            CreatedAt = DateTime.UtcNow,
+        };
+        db.Context.LoopTemplateVersions.Add(ltvB);
+        await db.Context.SaveChangesAsync();
+
+        var id = await mgr.CreateWorkItemAsync("a", "", ltA.Id, repoId);
+
+        var ok = await mgr.UpdateAsync(id, "a", "", ltB.Id);
+        ok.Should().BeTrue();
+
+        var reloaded = await mgr.GetWorkItemAsync(id);
+        reloaded!.LoopTemplateVersionId.Should().Be(ltvB.Id);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_keeps_existing_template_when_null_provided()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var ltA = new LoopTemplate { Id = Guid.NewGuid(), Name = "templateA" };
+        db.Context.LoopTemplates.Add(ltA);
+        var ltvA = new LoopTemplateVersion
+        {
+            Id = Guid.NewGuid(),
+            LoopTemplateId = ltA.Id,
+            VersionNumber = 1,
+            CreatedAt = DateTime.UtcNow,
+        };
+        db.Context.LoopTemplateVersions.Add(ltvA);
+        await db.Context.SaveChangesAsync();
+
+        var id = await mgr.CreateWorkItemAsync("a", "", ltA.Id, repoId);
+
+        var ok = await mgr.UpdateAsync(id, "a", "", null);
+        ok.Should().BeTrue();
+
+        var reloaded = await mgr.GetWorkItemAsync(id);
+        reloaded!.LoopTemplateVersionId.Should().Be(ltvA.Id);
+    }
+
+    [Fact]
     public async Task RejectHumanFeedback_fails_current_node_and_resumes_run()
     {
         var (mgr, db, repoId, _, eventLog) = Setup();

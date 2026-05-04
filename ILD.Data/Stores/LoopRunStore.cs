@@ -15,7 +15,10 @@ public class LoopRunStore : ILoopRunStore
     }
 
     public async Task<LoopRun?> GetByIdAsync(Guid id)
-        => await _db.LoopRuns.FindAsync(id).AsTask();
+        => await _db.LoopRuns
+            .Include(r => r.LoopTemplateVersion)
+                .ThenInclude(v => v!.LoopTemplate)
+            .FirstOrDefaultAsync(r => r.Id == id);
 
     public async Task<LoopRun?> GetByWorkItemAsync(Guid workItemId)
         => await _db.LoopRuns.FirstOrDefaultAsync(r => r.WorkItemId == workItemId);
@@ -44,7 +47,10 @@ public class LoopRunStore : ILoopRunStore
         => await _db.LoopRuns.Where(r => r.Status == LoopRunStatus.Running).ToListAsync();
 
     public async Task<IReadOnlyList<LoopRunNode>> GetRunNodesAsync(Guid runId)
-        => await _db.LoopRunNodes.Where(rn => rn.LoopRunId == runId).ToListAsync();
+        => await _db.LoopRunNodes
+            .Where(rn => rn.LoopRunId == runId)
+            .OrderBy(rn => rn.CreatedAt)
+            .ToListAsync();
 
     public async Task<LoopRunNode?> GetRunNodeAsync(Guid runId, Guid nodeId)
         => await _db.LoopRunNodes

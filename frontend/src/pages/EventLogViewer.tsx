@@ -21,6 +21,7 @@ import {
   NodeOutputSection,
   LiveStream,
 } from "../components/NodeTimeline";
+import EdgeArrow from "../components/NodeTimeline/EdgeArrow";
 import "../components/NodeTimeline/NodeTimeline.css";
 
 interface EffectiveInput {
@@ -71,6 +72,7 @@ export default function EventLogViewer() {
   const [errorText, setErrorText] = useState("");
   const [progressLines, setProgressLines] = useState<string[]>([]);
   const [effectiveInputs, setEffectiveInputs] = useState<Record<string, EffectiveInput>>({});
+  const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
   const { on, off, invoke, connectionState } = useSignalR("/hubs/loop-run");
 
   const loadRun = useCallback(async () => {
@@ -113,6 +115,17 @@ export default function EventLogViewer() {
       console.error("Failed to load events:", error);
     }
   }, [runId]);
+
+  const handleToggleNode = useCallback((nodeId: string) => {
+    setExpandedNodeId((prev) => (prev === nodeId ? null : nodeId));
+  }, []);
+
+  useEffect(() => {
+    const runningNode = runNodes.find((n) => n.status === LoopRunNodeStatus.Running);
+    if (runningNode && expandedNodeId !== runningNode.id) {
+      setExpandedNodeId(runningNode.id);
+    }
+  }, [runNodes, expandedNodeId]);
 
   useEffect(() => {
     void loadRun();
@@ -214,9 +227,12 @@ export default function EventLogViewer() {
     }
   };
 
+  const getTemplateNode = (nodeId: string): LoopNode | undefined => {
+    return templateNodes.find((n) => n.id === nodeId);
+  };
+
   const getTemplateNodeType = (nodeId: string): NodeType => {
-    const tn = templateNodes.find((n) => n.id === nodeId);
-    return tn?.type ?? NodeType.Cmd;
+    return getTemplateNode(nodeId)?.type ?? NodeType.Cmd;
   };
 
   const getEventsForRunNode = (runNodeId: string): EventLogEntry[] => {
@@ -313,24 +329,28 @@ export default function EventLogViewer() {
                 : EdgeType.OnFailure;
           }
 
+          const templateNode = getTemplateNode(rn.nodeId);
+
           return (
             <div key={rn.id} className="node-execution-block">
+              {edgeType !== undefined && <EdgeArrow edgeType={edgeType} />}
               <NodeItem
                 runNode={rn}
                 templateNodeType={templateNodeType}
+                templateNodeLabel={templateNode?.label}
                 isRunning={isRunning}
-                edgeType={edgeType}
-              />
-
-              {isRunning && <LiveStream lines={progressLines} />}
-
-              {!isRunning && (
-                <>
-                  <NodeInputSection nodeType={templateNodeType} effectiveInput={effectiveInput} />
-                  <NodeEventsSection events={nodeEvents} />
-                  <NodeOutputSection output={rn.output} error={rn.error} />
-                </>
-              )}
+                isExpanded={expandedNodeId === rn.id}
+                onToggle={() => handleToggleNode(rn.id)}
+              >
+                {isRunning && <LiveStream lines={progressLines} />}
+                {!isRunning && (
+                  <>
+                    <NodeInputSection nodeType={templateNodeType} effectiveInput={effectiveInput} />
+                    <NodeEventsSection events={nodeEvents} />
+                    <NodeOutputSection output={rn.output} error={rn.error} />
+                  </>
+                )}
+              </NodeItem>
             </div>
           );
         })}

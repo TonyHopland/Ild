@@ -414,7 +414,7 @@ public class LoopEngine : ILoopEngine
         var attempt = 0;
 
         // One LoopRunNode per execution; each visit to a template node creates a new row.
-        LoopRunNode runNode = await CreateRunNodeAsync(run.Id, node.Id);
+        LoopRunNode runNode = await CreateRunNodeAsync(run.Id, node.Id, node.Label);
 
         while (true)
         {
@@ -548,7 +548,7 @@ public class LoopEngine : ILoopEngine
         }
     }
 
-    private async Task<LoopRunNode> CreateRunNodeAsync(Guid runId, Guid nodeId)
+    private async Task<LoopRunNode> CreateRunNodeAsync(Guid runId, Guid nodeId, string label)
     {
         using var scope = _sp.CreateScope();
         var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
@@ -558,6 +558,7 @@ public class LoopEngine : ILoopEngine
             Id = Guid.NewGuid(),
             LoopRunId = runId,
             LoopNodeId = nodeId,
+            NodeLabel = label,
             Status = LoopRunNodeStatus.Pending,
             RetryCount = 0,
         };
