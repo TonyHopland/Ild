@@ -29,15 +29,15 @@ _Avoid_: workspace, checkout
 ### Node Types
 
 **Start Node**:
-The entry point of a loop graph. Optionally creates a worktree and branch.
+The entry point of a loop graph. Optionally creates a worktree and branch. If the base git repository is missing at `repo.WorktreesPath` (or fallback `data/repos/{repo-id}`), it is cloned on demand. If the base repository already exists, `git pull --ff-only` runs before worktree creation to ensure the latest state (best-effort; pull failure does not fail the node).
 _Avoid_: init, setup
 
 **Cmd Node**:
-Executes a shell command in the worktree with a configurable timeout. Succeeds on exit code 0.
+Executes a shell command in the worktree with a configurable timeout. Succeeds on exit code 0. Default timeout is 300 seconds.
 _Avoid_: shell, command
 
 **AI Node**:
-Delegates execution to an `IAgentAdapter` resolved by `AiProvider.Type`. The adapter controls the full execution lifecycle including multi-turn loops, tool use, and internal state. Has two prompt fields: `initialPrompt` (first execution) and `loopPrompt` (subsequent loopback executions).
+Delegates execution to an `IAgentAdapter` resolved by `AiProvider.Type`. The adapter controls the full execution lifecycle including multi-turn loops, tool use, and internal state. Has two prompt fields: `initialPrompt` (first execution) and `loopPrompt` (subsequent loopback executions; falls back to `initialPrompt` if unset). `initialPrompt` and `loopPrompt` are the only valid prompt config keys — legacy `prompt`/`promptTemplate` are not supported. If `provider` config specifies a provider that doesn't exist, the node fails (no fallback to default or first provider). Supports `rejectPattern` — a regex that, when matched against the AI output, causes the node to fail and route to the `on_failure` edge. Default timeout is 300 seconds.
 _Avoid_: LLM node, model node
 
 **Human Node**:
@@ -45,7 +45,7 @@ A pause point that awaits human input. The input becomes `{{PreviousNode.Output}
 _Avoid_: approval gate, review step
 
 **PR Node**:
-Creates a pull request (or reuses existing one via `WorkItem.PrUrl`). Waits for webhook events: merge routes to `on_success`, rejection routes to `on_failure`. Makes the PR lifecycle explicit in the graph.
+Creates a pull request (or reuses existing one via `WorkItem.PrUrl`). Before PR creation, automatically commits any uncommitted changes, pushes the branch, fetches the remote, and verifies the branch has commits ahead of the target branch — if the branch has 0 commits ahead, the node fails (no-changes guard). Waits for webhook events: merge routes to `on_success`, rejection routes to `on_failure`. Supports `prDescriptionTemplate` config field with placeholder resolution (`{{WorkItem.Title}}`, `{{WorkItem.Description}}`, `{{PreviousNode.Output}}`); falls back to `WorkItem.Description` if unset. Makes the PR lifecycle explicit in the graph.
 _Avoid_: repository node, git node
 
 **Cleanup Node**:
@@ -63,17 +63,23 @@ Adapters have full autonomy over tool execution. Tools are declared by the adapt
 _Avoid_: tool sandbox, tool permissions
 
 **Event Log**:
-Append-only audit stream per LoopRun. Serves as AI context and observability. Large payloads (>10KB) stored on disk; DB stores path reference. Retained for 7 days after successful completion; failed runs preserved until manually closed.
+Append-only audit stream per LoopRun. Serves as AI context and observability. Large payloads (>10KB) stored on disk; DB stores path reference. Retained for 7 days after successful completion; failed runs preserved until manually closed. Edge traversal counts are persisted to `LoopRunEdgeTraversal` rows.
 _Avoid_: audit trail, log
 
 **Recovery Policy**:
-Per-LoopTemplate setting controlling crash recovery behavior: AutoResume, NeedsReview, or Cancel. On recovery, in-flight nodes are re-executed.
+Per-LoopTemplate setting controlling crash recovery behavior: AutoResume, NeedsReview, or Cancel. On recovery, in-flight nodes are re-executed. AutoResume does not resume runs at Human or PR nodes in `WaitingHuman` state — those require explicit human action.
 _Avoid_: restart policy, failover
+
+**Best-Effort Guarantees**:
+Event log writes and SignalR notifications are best-effort — failures in these side effects never cause node execution to fail.
+
+**Node Refresh**:
+The engine refreshes the WorkItem from the store before each node execution, ensuring the latest state is used.
 
 ### Work Item Lifecycle
 
 **Human Feedback**:
-A single WorkItem status for all cases requiring human attention: PR awaiting merge, node failure exhaustion, rebase conflicts, Human node input. Distinguished by `HumanFeedbackReason` string.
+A single WorkItem status for all cases requiring human attention: PR awaiting merge, node failure exhaustion, rebase conflicts, Human node input. Distinguished by `HumanFeedbackReason` string. When a Human node receives input, the input is appended to the event log. When a Human node receives a reject, the current node is marked as Failed.
 _Avoid_: paused, blocked, stalled
 
 **Ready**:
@@ -171,6 +177,7 @@ Both emit messages of shape `{ type: string; payload: T; timestamp: string }`. A
 - `RunPaused`
 - `RunResumed`
 - `DependencyResolved`
+- `NodeProgress` — real-time progress lines during node execution, consumed by the LiveStream component
 
 The frontend hook `useSignalR.on<E>(eventType, handler)` resolves the payload type from the map; unknown event names fall through to `unknown` so the call site is forced to narrow before use.
 

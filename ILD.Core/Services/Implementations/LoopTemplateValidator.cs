@@ -1,4 +1,5 @@
 using ILD.Data.DTOs;
+using System.Linq;
 using System.Text.RegularExpressions;
 
 namespace ILD.Core.Services.Implementations;
@@ -79,22 +80,24 @@ public static class LoopTemplateValidator
             }
         }
 
-        // Unknown placeholders in AI/Human prompt templates
+        // Unknown placeholders in AI/Human prompt templates and PR description template
         foreach (var node in nodes)
         {
-            var prompt = (node.Config.GetValueOrDefault("promptTemplate")
-                ?? node.Config.GetValueOrDefault("prompt"))?.ToString();
-            if (string.IsNullOrEmpty(prompt)) continue;
+            var prompt = (node.Config.GetValueOrDefault("initialPrompt")
+                ?? node.Config.GetValueOrDefault("loopPrompt"))?.ToString();
+            var prTemplate = node.Config.GetValueOrDefault("prDescriptionTemplate")?.ToString();
+            if (string.IsNullOrEmpty(prompt) && string.IsNullOrEmpty(prTemplate)) continue;
 
-            foreach (Match m in PlaceholderPattern.Matches(prompt))
+            var templates = new[] { prompt, prTemplate }.Where(t => !string.IsNullOrEmpty(t)).ToList();
+            foreach (var template in templates)
             {
-                var key = m.Groups[1].Value;
-
-                // {{WorkTree.File:relative/path}} style: known prefix
-                if (key.StartsWith("WorkTree.File:", StringComparison.OrdinalIgnoreCase)) continue;
-
-                if (!KnownPlaceholders.Contains(key))
-                    errors.Add($"Unknown placeholder '{{{{{key}}}}}' in node {node.Id}.");
+                foreach (Match m in PlaceholderPattern.Matches(template!))
+                {
+                    var key = m.Groups[1].Value;
+                    if (key.StartsWith("WorkTree.File:", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!KnownPlaceholders.Contains(key))
+                        errors.Add($"Unknown placeholder '{{{{{key}}}}}' in node {node.Id}.");
+                }
             }
         }
 

@@ -271,6 +271,111 @@ public class PRNodeExecutorTests
     }
 
     [Fact]
+    public async Task resolves_prDescriptionTemplate_placeholders_before_creating_PR()
+    {
+        using var db = new TestDb();
+
+        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://gitea.example" };
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://gitea.example/r.git", DefaultBranch = "main" };
+        var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume, MaxNodeExecutions = 200, MaxWallClockHours = 24 };
+        var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
+        var wi = new WorkItem { Id = Guid.NewGuid(), Title = "Fix login bug", RepositoryId = repo.Id, LoopTemplateVersionId = version.Id, Status = WorkItemStatus.Running, BranchName = "ild/test", Description = "Original description" };
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = wi.Id, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running };
+        var node = new LoopNode
+        {
+            Id = Guid.NewGuid(),
+            LoopTemplateVersionId = version.Id,
+            NodeType = NodeType.PR,
+            Label = "pr",
+            Config = "{\"prDescriptionTemplate\":\"## {{WorkItem.Title}}\\n\\n{{WorkItem.Description}}\\n\\nPrevious output: {{PreviousNode.Output}}\"}",
+        };
+
+        db.Context.RemoteProviders.Add(remote);
+        db.Context.Repositories.Add(repo);
+        db.Context.LoopTemplates.Add(template);
+        db.Context.LoopTemplateVersions.Add(version);
+        db.Context.WorkItems.Add(wi);
+        db.Context.LoopRuns.Add(run);
+        db.Context.LoopNodes.Add(node);
+        db.Context.SaveChanges();
+
+        var prUrl = "https://gitea.example/r/pull/1";
+        string? capturedBody = null;
+        var mockRemote = new Mock<IRemoteProvider>();
+        mockRemote.Setup(r => r.CreatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync((string _, string __, string ___, string ____, string body) =>
+            {
+                capturedBody = body;
+                return new RemotePrResult(prUrl, prUrl, RemotePrStatus.Open, null);
+            });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(mockRemote.Object);
+        services.AddSingleton(db.WorkItems);
+        var sp = services.BuildServiceProvider();
+
+        var executor = new PRNodeExecutor(sp);
+
+        var runNode = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = run.Id, LoopNodeId = node.Id };
+        var ctx = new NodeExecutionContext(run, runNode, node, wi, "AI output here", CancellationToken.None);
+
+        var result = await executor.ExecuteAsync(ctx);
+
+        result.Success.Should().BeTrue();
+        capturedBody.Should().Contain("## Fix login bug");
+        capturedBody.Should().Contain("Original description");
+        capturedBody.Should().Contain("AI output here");
+    }
+
+    [Fact]
+    public async Task falls_back_to_workItem_description_when_no_prDescriptionTemplate()
+    {
+        using var db = new TestDb();
+
+        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://gitea.example" };
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://gitea.example/r.git", DefaultBranch = "main" };
+        var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume, MaxNodeExecutions = 200, MaxWallClockHours = 24 };
+        var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
+        var wi = new WorkItem { Id = Guid.NewGuid(), Title = "wi", RepositoryId = repo.Id, LoopTemplateVersionId = version.Id, Status = WorkItemStatus.Running, BranchName = "ild/test", Description = "fallback description" };
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = wi.Id, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running };
+        var node = new LoopNode { Id = Guid.NewGuid(), LoopTemplateVersionId = version.Id, NodeType = NodeType.PR, Label = "pr" };
+
+        db.Context.RemoteProviders.Add(remote);
+        db.Context.Repositories.Add(repo);
+        db.Context.LoopTemplates.Add(template);
+        db.Context.LoopTemplateVersions.Add(version);
+        db.Context.WorkItems.Add(wi);
+        db.Context.LoopRuns.Add(run);
+        db.Context.LoopNodes.Add(node);
+        db.Context.SaveChanges();
+
+        var prUrl = "https://gitea.example/r/pull/1";
+        string? capturedBody = null;
+        var mockRemote = new Mock<IRemoteProvider>();
+        mockRemote.Setup(r => r.CreatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync((string _, string __, string ___, string ____, string body) =>
+            {
+                capturedBody = body;
+                return new RemotePrResult(prUrl, prUrl, RemotePrStatus.Open, null);
+            });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(mockRemote.Object);
+        services.AddSingleton(db.WorkItems);
+        var sp = services.BuildServiceProvider();
+
+        var executor = new PRNodeExecutor(sp);
+
+        var runNode = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = run.Id, LoopNodeId = node.Id };
+        var ctx = new NodeExecutionContext(run, runNode, node, wi, null, CancellationToken.None);
+
+        var result = await executor.ExecuteAsync(ctx);
+
+        result.Success.Should().BeTrue();
+        capturedBody.Should().Be("fallback description");
+    }
+
+    [Fact]
     public async Task push_failure_includes_git_stderr()
     {
         using var db = new TestDb();

@@ -36,6 +36,7 @@ public sealed class StartNodeExecutor : INodeExecutor
         {
             var branch = wi.BranchName ?? $"ild/wi-{wi.Id:N}";
             var basePath = repo.WorktreesPath;
+            var cloned = false;
             if (string.IsNullOrWhiteSpace(basePath) || !Directory.Exists(Path.Combine(basePath, ".git")))
             {
                 basePath = Path.GetFullPath(Path.Combine("data", "repos", repo.Id.ToString("N")));
@@ -57,7 +58,13 @@ public sealed class StartNodeExecutor : INodeExecutor
                     await p.WaitForExitAsync();
                     if (p.ExitCode != 0)
                         return NodeExecutionResult.Fail($"git clone failed: {stderr}");
+                    cloned = true;
                 }
+            }
+            // Pull existing base repo to ensure it's up to date (best-effort, skip if just cloned)
+            if (!cloned)
+            {
+                try { await _repo.PullAsync(basePath, ctx.CancellationToken); } catch { }
             }
             var path = await _repo.CreateWorktreeAsync(basePath, branch);
             wi.WorktreePath = path;
@@ -151,9 +158,7 @@ public sealed class AINodeExecutor : INodeExecutor
             var dict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(cfg);
             if (dict == null) return NodeExecutionResult.Fail("AI config missing");
             var providerKey = dict.GetValueOrDefault("provider")?.ToString();
-            var initialPrompt = dict.GetValueOrDefault("initialPrompt")?.ToString()
-                ?? dict.GetValueOrDefault("prompt")?.ToString()
-                ?? dict.GetValueOrDefault("promptTemplate")?.ToString() ?? "";
+            var initialPrompt = dict.GetValueOrDefault("initialPrompt")?.ToString() ?? "";
             var loopPrompt = dict.GetValueOrDefault("loopPrompt")?.ToString() ?? initialPrompt;
 
             using var scope = _sp.CreateScope();
@@ -225,8 +230,7 @@ public sealed class AINodeExecutor : INodeExecutor
     private static async Task<AiProvider?> ResolveProviderAsync(IProviderStore store, string? providerKey)
     {
         if (string.IsNullOrEmpty(providerKey))
-            return await store.GetDefaultAiProviderAsync()
-                ?? await store.GetFirstAiProviderAsync();
+            return null;
 
         if (Guid.TryParse(providerKey, out var id))
             return await store.GetAiProviderByIdAsync(id);

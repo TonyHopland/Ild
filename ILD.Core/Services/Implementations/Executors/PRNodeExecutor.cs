@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
@@ -8,6 +9,8 @@ namespace ILD.Core.Services.Implementations.Executors;
 
 public sealed class PRNodeExecutor : INodeExecutor
 {
+    private static readonly Regex Placeholder = new(@"\{\{\s*([A-Za-z][A-Za-z0-9_.:/\\-]*)\s*\}\}", RegexOptions.Compiled);
+
     public NodeType NodeType => NodeType.PR;
     private readonly IServiceProvider _sp;
 
@@ -56,12 +59,14 @@ public sealed class PRNodeExecutor : INodeExecutor
 
             var remote = scope.ServiceProvider.GetRequiredService<IRemoteProvider>();
 
+            var prBody = ResolvePrDescription(ctx.Node.Config, wi, ctx.PreviousNodeOutput);
+
             var prResult = await remote.CreatePullRequestAsync(
                 repo.CloneUrl,
                 branch,
                 target,
                 wi.Title,
-                wi.Description ?? "");
+                prBody);
 
             if (prResult == null)
                 return NodeExecutionResult.Fail("PR creation returned no result");
@@ -74,5 +79,30 @@ public sealed class PRNodeExecutor : INodeExecutor
         }
 
         return NodeExecutionResult.Ok(wi.PrUrl);
+    }
+
+    static string ResolvePrDescription(string? nodeConfig, WorkItem wi, string? previousNodeOutput)
+    {
+        var cfg = string.IsNullOrEmpty(nodeConfig)
+            ? (Dictionary<string, object>?)null
+            : System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(nodeConfig);
+        var template = cfg?.GetValueOrDefault("prDescriptionTemplate")?.ToString();
+
+        if (string.IsNullOrEmpty(template))
+            return wi.Description ?? "";
+
+        var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["WorkItem.Title"] = wi.Title,
+            ["WorkItem.Description"] = wi.Description ?? "",
+            ["PreviousNode.Output"] = previousNodeOutput ?? "",
+            ["Node.Input"] = previousNodeOutput ?? "",
+        };
+
+        return Placeholder.Replace(template, m =>
+        {
+            var key = m.Groups[1].Value;
+            return values.TryGetValue(key, out var v) ? v ?? "" : m.Value;
+        });
     }
 }

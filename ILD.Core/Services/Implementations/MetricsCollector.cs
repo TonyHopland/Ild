@@ -22,8 +22,6 @@ public class MetricsCollector : IMetricsCollector
 
         sb.Append(LoopRunsTotalMetrics());
         sb.Append(NodeExecutionDurationMetrics());
-        sb.Append(LlmApiLatencyMetrics());
-        sb.Append(LlmTokensMetrics());
         sb.Append(WorkItemsTotalMetrics());
         sb.Append(DbConnectionHealthyMetrics());
         sb.Append(DiskSpaceBytesMetrics());
@@ -66,22 +64,6 @@ public class MetricsCollector : IMetricsCollector
         }
 
         return string.Join("\n", lines) + "\n";
-    }
-
-    private string LlmApiLatencyMetrics()
-    {
-        return "# HELP ild_llm_api_latency_seconds LLM API call latency\n" +
-               "# TYPE ild_llm_api_latency_seconds histogram\n" +
-               "ild_llm_api_latency_seconds_sum 0\n" +
-               "ild_llm_api_latency_seconds_count 0\n";
-    }
-
-    private string LlmTokensMetrics()
-    {
-        return "# HELP ild_llm_tokens_total Total LLM tokens by type\n" +
-               "# TYPE ild_llm_tokens_total counter\n" +
-               "ild_llm_tokens_total{type=\"prompt\"} 0\n" +
-               "ild_llm_tokens_total{type=\"completion\"} 0\n";
     }
 
     private string WorkItemsTotalMetrics()

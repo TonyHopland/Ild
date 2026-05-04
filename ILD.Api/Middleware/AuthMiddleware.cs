@@ -105,9 +105,6 @@ public class AuthMiddleware
             return authHeader.Trim();
         }
 
-        var queryToken = context.Request.Query["token"].FirstOrDefault()
-            ?? context.Request.Query["access_token"].FirstOrDefault();
-
-        return string.IsNullOrWhiteSpace(queryToken) ? null : queryToken;
+        return null;
     }
 }

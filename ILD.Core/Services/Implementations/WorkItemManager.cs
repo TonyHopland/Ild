@@ -150,7 +150,7 @@ public class WorkItemManager : IWorkItemManager
         var deps = await _store.GetByIdsAsync(depIdList);
         foreach (var w in deps)
         {
-            if (!w.IsPrMerged && w.Status != WorkItemStatus.Done)
+            if (w.Status != WorkItemStatus.Done)
                 return false;
         }
         return true;
@@ -173,23 +173,14 @@ public class WorkItemManager : IWorkItemManager
         wi.IsPrMerged = true;
         wi.UpdatedAt = DateTime.UtcNow;
 
-        // Only check the current run, not stale ones from previous attempts
+        // Only block Done transition when current run is actively Running
         var currentRun = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
-        if (currentRun == null ||
-            (currentRun.Status != LoopRunStatus.Running &&
-             currentRun.Status != LoopRunStatus.Failed))
+        if (currentRun == null || currentRun.Status != LoopRunStatus.Running)
         {
             wi.Status = WorkItemStatus.Done;
         }
 
         await _store.UpdateAsync(wi);
-
-        var dependents = await GetDependentsAsync(workItemId);
-        foreach (var d in dependents)
-        {
-            if (d.Status == WorkItemStatus.WorkQueue && await IsReadyAsync(d.Id))
-                await TransitionToReadyAsync(d.Id);
-        }
         return true;
     }
 

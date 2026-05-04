@@ -349,10 +349,7 @@ public class LoopEngine : ILoopEngine
 
                 case NodeType.AI:
                 {
-                    var initialPrompt = cfg?.GetValueOrDefault("initialPrompt")?.ToString()
-                        ?? cfg?.GetValueOrDefault("prompt")?.ToString()
-                        ?? cfg?.GetValueOrDefault("promptTemplate")?.ToString()
-                        ?? "";
+                    var initialPrompt = cfg?.GetValueOrDefault("initialPrompt")?.ToString() ?? "";
                     var loopPrompt = cfg?.GetValueOrDefault("loopPrompt")?.ToString() ?? initialPrompt;
                     payload["prompt"] = initialPrompt;
                     payload["loopPrompt"] = loopPrompt;

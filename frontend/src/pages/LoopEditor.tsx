@@ -87,6 +87,7 @@ export default function LoopEditor() {
   const [aiRejectPattern, setAiRejectPattern] = useState("");
   const [startCreateWorktree, setStartCreateWorktree] = useState(true);
   const [humanInputLabel, setHumanInputLabel] = useState("");
+  const [prDescriptionTemplate, setPrDescriptionTemplate] = useState("");
   const [labelError, setLabelError] = useState<string | null>(null);
   const [pendingConnection, setPendingConnection] = useState<Connection | null>(null);
   const [edgeType, setEdgeType] = useState<EdgeType>(EdgeType.OnSuccess);
@@ -392,7 +393,7 @@ export default function LoopEditor() {
       setNodeLabel(data.label || "");
       setCmdCommand((config.command as string) || "");
       setCmdTimeout((config.timeout as number) ?? 30);
-      setAiPrompt((config.promptTemplate as string) || (config.prompt as string) || "");
+      setAiPrompt((config.initialPrompt as string) || "");
       setAiLoopPrompt((config.loopPrompt as string) || "");
       setAiProvider((config.aiProviderId as string) || "");
       setAiTimeout((config.timeout as number) ?? 300);
@@ -400,6 +401,7 @@ export default function LoopEditor() {
       setAiRejectPattern((config.rejectPattern as string) || "");
       setStartCreateWorktree((config.createWorktree as boolean) ?? true);
       setHumanInputLabel((config.inputLabel as string) || "");
+      setPrDescriptionTemplate((config.prDescriptionTemplate as string) || "");
 
       if (data.type === NodeType.AI) {
         const selectedProvider = aiProviders.find((p) => p.id === (config.aiProviderId as string));
@@ -431,7 +433,7 @@ export default function LoopEditor() {
         label: data.label || "",
         cmdCommand: (config.command as string) || "",
         cmdTimeout: (config.timeout as number) ?? 30,
-        aiPrompt: (config.promptTemplate as string) || (config.prompt as string) || "",
+        aiPrompt: (config.initialPrompt as string) || "",
         aiLoopPrompt: (config.loopPrompt as string) || "",
         aiProvider: (config.aiProviderId as string) || "",
         aiTimeout: (config.timeout as number) ?? 300,
@@ -454,7 +456,7 @@ export default function LoopEditor() {
       config.command = cmdCommand;
       config.timeout = cmdTimeout;
     } else if (nodeType === NodeType.AI) {
-      config.prompt = aiPrompt;
+      config.initialPrompt = aiPrompt;
       if (aiLoopPrompt) config.loopPrompt = aiLoopPrompt;
       config.aiProviderId = aiProvider;
       config.timeout = aiTimeout;
@@ -465,6 +467,8 @@ export default function LoopEditor() {
       config.createWorktree = startCreateWorktree;
     } else if (nodeType === NodeType.Human) {
       config.inputLabel = humanInputLabel;
+    } else if (nodeType === NodeType.PR) {
+      if (prDescriptionTemplate) config.prDescriptionTemplate = prDescriptionTemplate;
     }
     setNodes((nds) =>
       nds.map((nd) =>
@@ -496,6 +500,7 @@ export default function LoopEditor() {
     aiRejectPattern,
     startCreateWorktree,
     humanInputLabel,
+    prDescriptionTemplate,
     adapterConfigValues,
     setNodes,
   ]);
@@ -1030,6 +1035,21 @@ export default function LoopEditor() {
                             type="text"
                             value={humanInputLabel}
                             onChange={(e) => setHumanInputLabel(e.target.value)}
+                          />
+                        </div>
+                      )}
+
+                      {(selectedNode.data as { type: string }).type === NodeType.PR && (
+                        <div className="config-field">
+                          <label htmlFor="pr-description-template">PR Description Template</label>
+                          <textarea
+                            id="pr-description-template"
+                            rows={4}
+                            value={prDescriptionTemplate}
+                            onChange={(e) => setPrDescriptionTemplate(e.target.value)}
+                            placeholder={
+                              "Uses WorkItem.Description if unset.\nSupports: {{WorkItem.Title}}, {{WorkItem.Description}}, {{PreviousNode.Output}}"
+                            }
                           />
                         </div>
                       )}

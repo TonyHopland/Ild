@@ -110,7 +110,7 @@ public class WorkItemManagerTests
     }
 
     [Fact]
-    public async Task IsReady_true_after_dependency_marked_merged()
+    public async Task IsReady_true_after_dependency_marked_done()
     {
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
@@ -123,6 +123,25 @@ public class WorkItemManagerTests
         await mgr.ManuallyMarkMergedAsync(dep);
 
         (await mgr.IsReadyAsync(child)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task IsReady_false_when_dependency_merged_but_not_done()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var dep = await mgr.CreateWorkItemAsync("dep", "", null, repoId);
+        var child = await mgr.CreateWorkItemAsync("child", "", null, repoId);
+        await mgr.AddDependencyAsync(child, dep);
+
+        await mgr.LinkPullRequestAsync(dep, "https://forgejo/pr/1");
+        var depWi = await db.Context.WorkItems.FindAsync(dep);
+        depWi!.IsPrMerged = true;
+        depWi.Status = WorkItemStatus.HumanFeedback;
+        await db.Context.SaveChangesAsync();
+
+        (await mgr.IsReadyAsync(child)).Should().BeFalse();
     }
 
     [Fact]
@@ -224,7 +243,7 @@ public class WorkItemManagerTests
     }
 
     [Fact]
-    public async Task ManuallyMarkMerged_does_not_set_Done_when_active_LoopRun_exists()
+    public async Task ManuallyMarkMerged_does_not_set_Done_when_running_LoopRun_exists()
     {
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
@@ -261,6 +280,46 @@ public class WorkItemManagerTests
         var after = await mgr.GetWorkItemAsync(id);
         after!.IsPrMerged.Should().BeTrue();
         after.Status.Should().NotBe(WorkItemStatus.Done);
+    }
+
+    [Fact]
+    public async Task ManuallyMarkMerged_sets_Done_when_LoopRun_is_Failed()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("a", "", null, repoId);
+        var wi = await db.Context.WorkItems.FindAsync(id);
+        wi!.Status = WorkItemStatus.Running;
+        await db.Context.SaveChangesAsync();
+
+        var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
+        db.Context.LoopTemplates.Add(lt);
+        var ltv = new LoopTemplateVersion
+        {
+            Id = Guid.NewGuid(),
+            LoopTemplateId = lt.Id,
+            VersionNumber = 1,
+            CreatedAt = DateTime.UtcNow,
+        };
+        db.Context.LoopTemplateVersions.Add(ltv);
+
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = id,
+            LoopTemplateVersionId = ltv.Id,
+            Status = LoopRunStatus.Failed,
+            StartedAt = DateTime.UtcNow,
+        };
+        db.Context.LoopRuns.Add(run);
+        await db.Context.SaveChangesAsync();
+
+        await mgr.ManuallyMarkMergedAsync(id);
+
+        var after = await mgr.GetWorkItemAsync(id);
+        after!.IsPrMerged.Should().BeTrue();
+        after.Status.Should().Be(WorkItemStatus.Done);
     }
 
     [Fact]

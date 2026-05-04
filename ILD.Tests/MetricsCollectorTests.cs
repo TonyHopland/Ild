@@ -49,8 +49,6 @@ public class MetricsCollectorTests
 
         body.Should().Contain("ild_loop_runs_total");
         body.Should().Contain("ild_node_execution_duration_seconds");
-        body.Should().Contain("ild_llm_api_latency_seconds");
-        body.Should().Contain("ild_llm_tokens_total");
         body.Should().Contain("ild_workitems_total");
         body.Should().Contain("ild_db_connection_healthy");
         body.Should().Contain("ild_disk_space_bytes");
@@ -158,16 +156,4 @@ public class MetricsCollectorTests
         diskLine.Should().NotBeNull();
     }
 
-    [Fact]
-    public void LlmMetrics_exist_as_placeholders_with_zero_values()
-    {
-        using var db = new TestDb();
-        var collector = new MetricsCollector(db.Context);
-
-        var snapshot = collector.Snapshot();
-
-        snapshot.Should().Contain("ild_llm_api_latency_seconds_count 0");
-        snapshot.Should().Contain("ild_llm_tokens_total{type=\"prompt\"} 0");
-        snapshot.Should().Contain("ild_llm_tokens_total{type=\"completion\"} 0");
-    }
 }
