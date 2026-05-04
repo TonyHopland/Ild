@@ -1042,14 +1042,11 @@ export default function LoopEditor() {
                       {(selectedNode.data as { type: string }).type === NodeType.PR && (
                         <div className="config-field">
                           <label htmlFor="pr-description-template">PR Description Template</label>
-                          <textarea
+                          <PromptEditor
                             id="pr-description-template"
                             rows={4}
                             value={prDescriptionTemplate}
-                            onChange={(e) => setPrDescriptionTemplate(e.target.value)}
-                            placeholder={
-                              "Uses WorkItem.Description if unset.\nSupports: {{WorkItem.Title}}, {{WorkItem.Description}}, {{PreviousNode.Output}}"
-                            }
+                            onChange={(v) => setPrDescriptionTemplate(v)}
                           />
                         </div>
                       )}
