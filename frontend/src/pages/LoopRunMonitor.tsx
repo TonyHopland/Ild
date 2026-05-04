@@ -72,16 +72,20 @@ export default function LoopRunMonitor() {
     const onNodeStateChanged = async (message: TypedSignalRMessage<"NodeStateChanged">) => {
       const { runId, nodeId, newStatus } = message.payload;
       setRuns((prev) =>
-        prev.map((run) =>
-          run.id === runId
-            ? {
-                ...run,
-                nodes: run.nodes.map((n) =>
-                  n.nodeId === nodeId ? { ...n, status: normalizeNodeStatus(newStatus) } : n,
-                ),
-              }
-            : run,
-        ),
+        prev.map((run) => {
+          if (run.id !== runId) return run;
+          const existing = run.nodes.find((n) => n.nodeId === nodeId);
+          if (existing) {
+            return {
+              ...run,
+              nodes: run.nodes.map((n) =>
+                n.nodeId === nodeId ? { ...n, status: normalizeNodeStatus(newStatus) } : n,
+              ),
+            };
+          }
+          void loadRuns();
+          return run;
+        }),
       );
     };
 

@@ -427,4 +427,28 @@ public class LoopEngineTests
         var fixNodeId = h.NodesById["fix"].Id;
         h.ReloadRunNodes().Should().Contain(n => n.LoopNodeId == fixNodeId && n.Status == LoopRunNodeStatus.Succeeded);
     }
+
+    [Fact]
+    public async Task Cleanup_node_emits_CleanupStarted_and_CleanupCompleted_events_before_run_completion()
+    {
+        using var h = new EngineHarness();
+        h.BuildSimpleGraph(("s", NodeType.Start), ("a", NodeType.Cmd), ("c", NodeType.Cleanup));
+        h.AddEdge("e1", "s", "a");
+        h.AddEdge("e2", "a", "c");
+        h.Save();
+
+        await h.Engine.RunAsync(h.RunId);
+
+        var logs = h.ReloadEventLogs();
+        var cleanupStarted = logs.FirstOrDefault(e => e.EventType == EventType.CleanupStarted);
+        var cleanupCompleted = logs.FirstOrDefault(e => e.EventType == EventType.CleanupCompleted);
+        var runCompleted = logs.FirstOrDefault(e => e.EventType == EventType.LoopRunCompleted);
+
+        cleanupStarted.Should().NotBeNull("CleanupStarted event should be logged");
+        cleanupCompleted.Should().NotBeNull("CleanupCompleted event should be logged");
+        runCompleted.Should().NotBeNull("LoopRunCompleted event should be logged");
+
+        cleanupStarted!.Sequence.Should().BeLessThan(cleanupCompleted!.Sequence, "CleanupStarted should precede CleanupCompleted");
+        cleanupCompleted.Sequence.Should().BeLessThan(runCompleted!.Sequence, "CleanupCompleted should precede LoopRunCompleted");
+    }
 }

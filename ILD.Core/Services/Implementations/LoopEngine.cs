@@ -293,7 +293,7 @@ public class LoopEngine : ILoopEngine
                 var success = outcome.Status == LoopRunNodeStatus.Succeeded;
 
                 if (success && current.NodeType == NodeType.Cleanup)
-                    return await CompleteRunAsync(runId);
+                    return await CompleteRunAsync(runId, previousOutput);
 
                 var wantedType = success ? EdgeType.OnSuccess : EdgeType.OnFailure;
                 var edge = edges.FirstOrDefault(e => e.SourceNodeId == current.Id && e.EdgeType == wantedType);
@@ -585,8 +585,12 @@ public class LoopEngine : ILoopEngine
         await loopRunStore.PersistEdgeTraversalAsync(runId, edgeId, count);
     }
 
-    private async Task<LoopRunStatus> CompleteRunAsync(Guid runId)
+    private async Task<LoopRunStatus> CompleteRunAsync(Guid runId, string? cleanupOutput = null)
     {
+        await LogEventAsync(runId, "CleanupStarted", "Cleanup phase started");
+        if (!string.IsNullOrEmpty(cleanupOutput))
+            await LogEventAsync(runId, "CleanupCompleted", $"Cleanup finished: {cleanupOutput}");
+
         Guid? workItemId = null;
         using (var scope = _sp.CreateScope())
         {

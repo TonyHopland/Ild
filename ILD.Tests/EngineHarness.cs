@@ -99,6 +99,9 @@ internal sealed class EngineHarness : IDisposable
 
     public WorkItem ReloadWorkItem() => Db.Fresh().WorkItems.AsNoTracking().First(w => w.Id == WorkItemId);
 
+    public IReadOnlyList<EventLog> ReloadEventLogs()
+        => Db.Fresh().EventLogs.AsNoTracking().Where(e => e.LoopRunId == RunId).OrderBy(e => e.Sequence).ToList();
+
     public void Dispose() => Db.Dispose();
 }
 

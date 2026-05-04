@@ -176,7 +176,11 @@ export default function EventLogViewer() {
     const onLoopRunStateChanged = async (message: TypedSignalRMessage<"LoopRunStateChanged">) => {
       const { runId: msgRunId, newStatus } = message.payload;
       if (msgRunId !== runId) return;
-      setRun((prev) => (prev ? { ...prev, status: normalizeLoopRunStatus(newStatus) } : null));
+      const status = normalizeLoopRunStatus(newStatus);
+      setRun((prev) => (prev ? { ...prev, status } : null));
+      if (status === LoopRunStatus.Completed) {
+        void loadRun();
+      }
     };
 
     const onNodeStateChanged = async (message: TypedSignalRMessage<"NodeStateChanged">) => {

@@ -86,6 +86,8 @@ public class AINodeExecutorTests
     public async Task ExecuteAsync_fails_when_no_provider_key_set()
     {
         var providerStore = new Mock<IProviderStore>();
+        providerStore.Setup(s => s.GetDefaultAiProviderAsync())
+            .ReturnsAsync((AiProvider?)null);
 
         var registry = new Mock<IAgentAdapterRegistry>();
 
@@ -97,6 +99,36 @@ public class AINodeExecutorTests
 
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("No AI provider found");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_uses_default_provider_when_no_provider_key_set()
+    {
+        var provider = new AiProvider
+        {
+            Id = Guid.NewGuid(),
+            Name = "default-provider",
+            Type = "test",
+            BaseUrl = "https://test.api",
+            Model = "test-model"
+        };
+
+        var providerStore = new Mock<IProviderStore>();
+        providerStore.Setup(s => s.GetDefaultAiProviderAsync())
+            .ReturnsAsync(provider);
+
+        var registry = new Mock<IAgentAdapterRegistry>();
+        registry.Setup(r => r.ResolveForProvider(It.IsAny<AiProvider>()))
+            .Returns(() => new TestAdapter());
+
+        var sp = BuildServiceProvider(providerStore.Object, registry.Object);
+
+        var executor = new AINodeExecutor(sp);
+
+        var result = await executor.ExecuteAsync(BuildNodeExecutionContext(null));
+
+        result.Success.Should().BeTrue();
+        result.Output.Should().Be("adapter-result");
     }
 
     [Fact]
@@ -154,7 +186,7 @@ public class AINodeExecutorTests
         var executor = new AINodeExecutor(sp);
 
         // Config has initialPrompt but no loopPrompt
-        var config = $"{{\"provider\":\"my-provider\",\"initialPrompt\":\"first prompt here\"}}";
+        var config = $"{{\"aiProviderId\":\"my-provider\",\"initialPrompt\":\"first prompt here\"}}";
         var ctx = new NodeExecutionContext(
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
@@ -318,7 +350,7 @@ public class AINodeExecutorTests
 
         var executor = new AINodeExecutor(sp);
 
-        var config = "{\"provider\":\"my-provider\",\"initialPrompt\":\"test prompt\"}";
+        var config = "{\"aiProviderId\":\"my-provider\",\"initialPrompt\":\"test prompt\"}";
         var ctx = new NodeExecutionContext(
             Run: new LoopRun { Id = Guid.NewGuid() },
             RunNode: new LoopRunNode { RetryCount = 0 },
@@ -357,7 +389,7 @@ public class AINodeExecutorTests
 
         var executor = new AINodeExecutor(sp);
 
-        var config = "{\"provider\":\"my-provider\",\"initialPrompt\":\"test prompt\"}";
+        var config = "{\"aiProviderId\":\"my-provider\",\"initialPrompt\":\"test prompt\"}";
         var ctx = new NodeExecutionContext(
             Run: new LoopRun { Id = Guid.NewGuid() },
             RunNode: new LoopRunNode { RetryCount = 0 },
@@ -423,7 +455,7 @@ public class AINodeExecutorTests
 
         var executor = new AINodeExecutor(sp);
 
-        var config = "{\"provider\":\"my-provider\",\"initialPrompt\":\"test\",\"rejectPattern\":\"I cannot|I'm unable\"}";
+        var config = "{\"aiProviderId\":\"my-provider\",\"initialPrompt\":\"test\",\"rejectPattern\":\"I cannot|I'm unable\"}";
         var ctx = new NodeExecutionContext(
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
@@ -469,7 +501,7 @@ public class AINodeExecutorTests
 
         var executor = new AINodeExecutor(sp);
 
-        var config = "{\"provider\":\"my-provider\",\"initialPrompt\":\"test\",\"rejectPattern\":\"REJECT\"}";
+        var config = "{\"aiProviderId\":\"my-provider\",\"initialPrompt\":\"test\",\"rejectPattern\":\"REJECT\"}";
         var ctx = new NodeExecutionContext(
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
@@ -514,7 +546,7 @@ public class AINodeExecutorTests
 
         var executor = new AINodeExecutor(sp);
 
-        var config = "{\"provider\":\"my-provider\",\"initialPrompt\":\"test\",\"rejectPattern\":\"cannot\"}";
+        var config = "{\"aiProviderId\":\"my-provider\",\"initialPrompt\":\"test\",\"rejectPattern\":\"cannot\"}";
         var ctx = new NodeExecutionContext(
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
@@ -560,7 +592,7 @@ public class AINodeExecutorTests
 
         var executor = new AINodeExecutor(sp);
 
-        var config = """{"provider":"my-provider","initialPrompt":"test prompt","adapterConfig":{"temperature":0.5,"maxTokens":8192}}""";
+        var config = """{"aiProviderId":"my-provider","initialPrompt":"test prompt","adapterConfig":{"temperature":0.5,"maxTokens":8192}}""";
         var ctx = new NodeExecutionContext(
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
@@ -659,7 +691,7 @@ public class AINodeExecutorTests
     private static NodeExecutionContext BuildNodeExecutionContextWithRetry(string? providerName, int retryCount)
     {
         var config = providerName != null
-            ? $"{{\"provider\":\"{providerName}\",\"initialPrompt\":\"test prompt\"}}"
+            ? $"{{\"aiProviderId\":\"{providerName}\",\"initialPrompt\":\"test prompt\"}}"
             : "{\"initialPrompt\":\"test prompt\"}";
 
         return new NodeExecutionContext(
@@ -677,7 +709,7 @@ public class AINodeExecutorTests
     private static NodeExecutionContext BuildNodeExecutionContextWithIdsAndRetry(string? providerName, Guid runId, Guid nodeId, int retryCount)
     {
         var config = providerName != null
-            ? $"{{\"provider\":\"{providerName}\",\"initialPrompt\":\"test prompt\"}}"
+            ? $"{{\"aiProviderId\":\"{providerName}\",\"initialPrompt\":\"test prompt\"}}"
             : "{\"initialPrompt\":\"test prompt\"}";
 
         return new NodeExecutionContext(

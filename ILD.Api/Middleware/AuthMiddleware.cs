@@ -105,6 +105,11 @@ public class AuthMiddleware
             return authHeader.Trim();
         }
 
+        if (context.Request.Query.TryGetValue("access_token", out var queryToken))
+        {
+            return queryToken;
+        }
+
         return null;
     }
 }

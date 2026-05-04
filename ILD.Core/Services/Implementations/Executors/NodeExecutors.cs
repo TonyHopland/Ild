@@ -157,7 +157,7 @@ public sealed class AINodeExecutor : INodeExecutor
         {
             var dict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(cfg);
             if (dict == null) return NodeExecutionResult.Fail("AI config missing");
-            var providerKey = dict.GetValueOrDefault("provider")?.ToString();
+            var providerKey = dict.GetValueOrDefault("aiProviderId")?.ToString();
             var initialPrompt = dict.GetValueOrDefault("initialPrompt")?.ToString() ?? "";
             var loopPrompt = dict.GetValueOrDefault("loopPrompt")?.ToString() ?? initialPrompt;
 
@@ -230,7 +230,7 @@ public sealed class AINodeExecutor : INodeExecutor
     private static async Task<AiProvider?> ResolveProviderAsync(IProviderStore store, string? providerKey)
     {
         if (string.IsNullOrEmpty(providerKey))
-            return null;
+            return await store.GetDefaultAiProviderAsync();
 
         if (Guid.TryParse(providerKey, out var id))
             return await store.GetAiProviderByIdAsync(id);
@@ -280,12 +280,26 @@ public sealed class CleanupNodeExecutor : INodeExecutor
         var wi = await workItemStore.GetByIdAsync(ctx.WorkItem.Id);
         if (wi == null) return NodeExecutionResult.Fail("WorkItem not found");
 
-        if (!string.IsNullOrEmpty(wi.WorktreePath) && Directory.Exists(wi.WorktreePath))
+        string? worktreePath = wi.WorktreePath;
+        if (!string.IsNullOrEmpty(worktreePath) && Directory.Exists(worktreePath))
         {
-            try { await _repo.DestroyWorktreeAsync(wi.WorktreePath); } catch { }
+            try
+            {
+                await _repo.DestroyWorktreeAsync(worktreePath);
+            }
+            catch (Exception ex)
+            {
+                wi.WorktreePath = null;
+                await workItemStore.UpdateAsync(wi);
+                return NodeExecutionResult.Ok($"cleanup failed: {ex.Message} (path: {worktreePath})");
+            }
+            wi.WorktreePath = null;
+            await workItemStore.UpdateAsync(wi);
+            return NodeExecutionResult.Ok($"worktree destroyed: {worktreePath}");
         }
+
         wi.WorktreePath = null;
         await workItemStore.UpdateAsync(wi);
-        return NodeExecutionResult.Ok("cleanup complete");
+        return NodeExecutionResult.Ok("cleanup skipped: no worktree");
     }
 }

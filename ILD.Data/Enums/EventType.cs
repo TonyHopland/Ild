@@ -13,5 +13,7 @@ public enum EventType
     HumanFeedbackRequested = 8,
     HumanFeedbackReceived = 9,
     RecoveryTriggered = 10,
-    Error = 11
+    Error = 11,
+    CleanupStarted = 12,
+    CleanupCompleted = 13
 }
