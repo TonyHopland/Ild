@@ -329,6 +329,18 @@ public class WorkItemsController : ControllerBase
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
 
+        var dependents = await _workItemManager.GetDependentsAsync(guid);
+        var dependentList = dependents.ToList();
+        if (dependentList.Count > 0)
+        {
+            var titles = dependentList.Select(d => d.Title).ToList();
+            return Conflict(new
+            {
+                error = "Cannot delete work item that has dependents",
+                dependents = titles,
+            });
+        }
+
         var ok = await _workItemManager.DeleteAsync(guid);
         return ok ? Ok() : NotFound();
     }

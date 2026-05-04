@@ -26,6 +26,7 @@ const PRIORITY_COLORS: Record<string, string> = {
 
 export default function WorkItemCard({ workItem, onClick, onDeleted, onMove }: WorkItemCardProps) {
   const [showConfirm, setShowConfirm] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const handleDragStart = (e: React.DragEvent) => {
     e.dataTransfer.setData("text/plain", workItem.id);
@@ -54,12 +55,14 @@ export default function WorkItemCard({ workItem, onClick, onDeleted, onMove }: W
   };
 
   const handleDeleteConfirm = async () => {
-    setShowConfirm(false);
     try {
       await workItemService.delete(workItem.id);
       onDeleted?.(workItem.id);
     } catch (error) {
-      console.error("Failed to delete work item:", error);
+      const msg = error instanceof Error ? error.message : "Failed to delete work item";
+      setDeleteError(msg);
+    } finally {
+      setShowConfirm(false);
     }
   };
 
@@ -131,6 +134,7 @@ export default function WorkItemCard({ workItem, onClick, onDeleted, onMove }: W
           cursor: grab;
           transition: transform 0.1s ease, box-shadow 0.1s ease;
           border: 1px solid #3a3a5c;
+          position: relative;
         }
 
         .work-item-card:hover {
@@ -200,7 +204,41 @@ export default function WorkItemCard({ workItem, onClick, onDeleted, onMove }: W
         .work-item-delete-btn:hover {
           color: #ef4444;
         }
+
+        .work-item-delete-error {
+          position: absolute;
+          bottom: calc(100% + 0.5rem);
+          left: 0;
+          right: 0;
+          background-color: #2d1a1a;
+          border: 1px solid #dc2626;
+          border-radius: 0.375rem;
+          padding: 0.5rem 0.75rem;
+          color: #f87171;
+          font-size: 0.75rem;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          z-index: 10;
+        }
+
+        .work-item-delete-error-close {
+          background: none;
+          border: none;
+          color: #f87171;
+          cursor: pointer;
+          font-size: 1rem;
+          padding: 0 0.25rem;
+        }
       `}</style>
+      {deleteError && (
+        <div className="work-item-delete-error" role="alert">
+          {deleteError}
+          <button className="work-item-delete-error-close" onClick={() => setDeleteError(null)}>
+            ×
+          </button>
+        </div>
+      )}
       <ConfirmModal
         isOpen={showConfirm}
         title="Delete Work Item"

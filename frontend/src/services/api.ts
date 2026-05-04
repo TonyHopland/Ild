@@ -26,9 +26,16 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
       window.dispatchEvent(new CustomEvent(AUTH_UNAUTHORIZED_EVENT));
     }
     const errorBody = await response.text();
+    let message = errorBody || response.statusText;
+    try {
+      const parsed = JSON.parse(errorBody);
+      message = parsed.error || parsed.message || message;
+    } catch {
+      // not JSON, use raw body
+    }
     const error: ApiError = {
       status: response.status,
-      message: errorBody || response.statusText,
+      message,
     };
     throw error;
   }

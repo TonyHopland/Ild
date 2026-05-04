@@ -114,6 +114,24 @@ public class WorkItemStore : IWorkItemStore
             .ToListAsync();
         _db.WorkItemDependencies.RemoveRange(deps);
 
+        // Get all LoopRuns for this work item so we can clean up their EventLogs
+        var loopRuns = await _db.LoopRuns
+            .Where(r => r.WorkItemId == id)
+            .ToListAsync();
+        var loopRunIds = loopRuns.Select(r => r.Id).ToList();
+
+        // Delete EventLog entries for all LoopRuns (no cascade configured)
+        if (loopRunIds.Count > 0)
+        {
+            var eventLogs = await _db.EventLogs
+                .Where(e => loopRunIds.Contains(e.LoopRunId ?? Guid.Empty))
+                .ToListAsync();
+            _db.EventLogs.RemoveRange(eventLogs);
+        }
+
+        // Break the circular FK: WorkItem.CurrentLoopRunId -> LoopRun -> WorkItem
+        wi.CurrentLoopRunId = null;
+
         _db.WorkItems.Remove(wi);
         await _db.SaveChangesAsync();
         return true;
