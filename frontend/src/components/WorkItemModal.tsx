@@ -53,6 +53,7 @@ export default function WorkItemModal({
   const [prUrlInput, setPrUrlInput] = useState("");
   const [feedbackInput, setFeedbackInput] = useState("");
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
     repositoryService
@@ -111,6 +112,7 @@ export default function WorkItemModal({
       setPrUrlInput("");
       setFeedbackInput("");
       setShowDeleteConfirm(false);
+      setDeleteError(null);
       setEditMode(false);
     } else {
       setTitle("");
@@ -121,6 +123,7 @@ export default function WorkItemModal({
       setRepositoryId("");
       setLoopTemplateId("");
       setShowDeleteConfirm(false);
+      setDeleteError(null);
       setEditMode(true);
     }
   }, [workItem?.id]);
@@ -212,14 +215,16 @@ export default function WorkItemModal({
   };
 
   const handleDeleteConfirm = async () => {
-    setShowDeleteConfirm(false);
     if (!workItem) return;
     try {
       await workItemService.delete(workItem.id);
       onDelete?.(workItem.id);
       onClose();
     } catch (error) {
-      console.error("Failed to delete work item:", error);
+      const msg = error instanceof Error ? error.message : "Failed to delete work item";
+      setDeleteError(msg);
+    } finally {
+      setShowDeleteConfirm(false);
     }
   };
 
@@ -668,6 +673,14 @@ export default function WorkItemModal({
               </div>
             </form>
           </div>
+        </div>
+      )}
+      {deleteError && (
+        <div className="delete-error-banner" role="alert">
+          {deleteError}
+          <button type="button" className="delete-error-close" onClick={() => setDeleteError(null)}>
+            ×
+          </button>
         </div>
       )}
       <ConfirmModal

@@ -3,6 +3,7 @@ using ILD.Data.Enums;
 using ILD.Data.Entities;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
+using Microsoft.EntityFrameworkCore;
 using Moq;
 
 namespace ILD.Tests;
@@ -586,6 +587,65 @@ public class WorkItemManagerTests
 
         var reloaded = await mgr.GetWorkItemAsync(id);
         reloaded!.LoopTemplateVersionId.Should().Be(ltvA.Id);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_removes_workitem_with_no_dependencies()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("a", "", null, repoId);
+
+        var ok = await mgr.DeleteAsync(id);
+
+        ok.Should().BeTrue();
+        (await mgr.GetWorkItemAsync(id)).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task DeleteAsync_removes_workitem_and_all_dependencies()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var dep = await mgr.CreateWorkItemAsync("dep", "", null, repoId);
+        var child = await mgr.CreateWorkItemAsync("child", "", null, repoId);
+        await mgr.AddDependencyAsync(child, dep);
+
+        var ok = await mgr.DeleteAsync(child);
+
+        ok.Should().BeTrue();
+        (await mgr.GetWorkItemAsync(child)).Should().BeNull();
+        var remainingDeps = await db.Context.WorkItemDependencies.Where(d => d.WorkItemId == child || d.DependencyWorkItemId == child).ToListAsync();
+        remainingDeps.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DeleteAsync_removes_workitem_when_other_items_depend_on_it()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var dep = await mgr.CreateWorkItemAsync("dep", "", null, repoId);
+        var child = await mgr.CreateWorkItemAsync("child", "", null, repoId);
+        await mgr.AddDependencyAsync(child, dep);
+
+        var ok = await mgr.DeleteAsync(dep);
+
+        ok.Should().BeTrue();
+        (await mgr.GetWorkItemAsync(dep)).Should().BeNull();
+        var remainingDeps = await db.Context.WorkItemDependencies.Where(d => d.WorkItemId == dep || d.DependencyWorkItemId == dep).ToListAsync();
+        remainingDeps.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task DeleteAsync_returns_false_for_unknown_id()
+    {
+        var (mgr, db, _, _, _) = Setup();
+        using var _ = db;
+
+        (await mgr.DeleteAsync(Guid.NewGuid())).Should().BeFalse();
     }
 
     [Fact]
