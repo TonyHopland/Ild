@@ -451,4 +451,37 @@ public class LoopEngineTests
         cleanupStarted!.Sequence.Should().BeLessThan(cleanupCompleted!.Sequence, "CleanupStarted should precede CleanupCompleted");
         cleanupCompleted.Sequence.Should().BeLessThan(runCompleted!.Sequence, "CleanupCompleted should precede LoopRunCompleted");
     }
+
+    [Fact]
+    public async Task SignalPrResultAsync_resumes_run_and_executes_cleanup_node()
+    {
+        using var h = new EngineHarness();
+        h.BuildSimpleGraph(
+            ("s", NodeType.Start),
+            ("pr", NodeType.PR),
+            ("c", NodeType.Cleanup));
+        h.AddEdge("e1", "s", "pr");
+        h.AddEdge("e2", "pr", "c");
+        h.Save();
+
+        // Run until PR node enters WaitingHuman
+        await h.Engine.RunAsync(h.RunId);
+
+        h.ReloadRun().Status.Should().Be(LoopRunStatus.Running);
+        var prRunNode = h.ReloadRunNodes().First(n => n.LoopNodeId == h.NodesById["pr"].Id);
+        prRunNode.Status.Should().Be(LoopRunNodeStatus.WaitingHuman);
+
+        // Signal PR as merged (simulates mark-merged endpoint)
+        await h.Engine.SignalPrResultAsync(h.RunId, prRunNode.Id, true);
+
+        // Resume the engine
+        await h.Engine.RunAsync(h.RunId);
+
+        // Verify run completed with cleanup node
+        h.ReloadRun().Status.Should().Be(LoopRunStatus.Completed);
+        var nodes = h.ReloadRunNodes();
+        var cleanupNode = nodes.FirstOrDefault(n => n.LoopNodeId == h.NodesById["c"].Id);
+        cleanupNode.Should().NotBeNull("Cleanup node should have been executed after PR merge");
+        cleanupNode!.Status.Should().Be(LoopRunNodeStatus.Succeeded);
+    }
 }

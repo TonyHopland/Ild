@@ -224,6 +224,7 @@ public class WorkItemsController : ControllerBase
                 // Try to find the PR node first, then fall back to any waiting/failed node
                 // (the LoopNode may not exist if the template was updated since the run started)
                 var prRunNode = await _db.LoopRunNodes
+                    .Include(n => n.LoopNode)
                     .FirstOrDefaultAsync(n =>
                         n.LoopRunId == currentRun.Id &&
                         n.LoopNode.NodeType == ILD.Data.Enums.NodeType.PR &&
@@ -233,6 +234,7 @@ public class WorkItemsController : ControllerBase
                 if (prRunNode == null)
                 {
                     prRunNode = await _db.LoopRunNodes
+                        .Include(n => n.LoopNode)
                         .FirstOrDefaultAsync(n =>
                             n.LoopRunId == currentRun.Id &&
                             (n.Status == ILD.Data.Enums.LoopRunNodeStatus.WaitingHuman ||
