@@ -107,6 +107,13 @@ public class WorkItemStore : IWorkItemStore
     {
         var wi = await _db.WorkItems.FindAsync(id);
         if (wi == null) return false;
+
+        // Remove dependency records that reference this work item (both directions)
+        var deps = await _db.WorkItemDependencies
+            .Where(d => d.WorkItemId == id || d.DependencyWorkItemId == id)
+            .ToListAsync();
+        _db.WorkItemDependencies.RemoveRange(deps);
+
         _db.WorkItems.Remove(wi);
         await _db.SaveChangesAsync();
         return true;
