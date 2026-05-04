@@ -31,12 +31,12 @@ public class SignalRRunNotifier : IRunNotifier
         }
     }
 
-    public async Task EventLoggedAsync(Guid runId, string message, string eventType, Guid? nodeId)
+    public async Task EventLoggedAsync(Guid runId, string message, string eventType, Guid? nodeId, Guid? runNodeId)
     {
         try
         {
             await _runHub.Clients.Group(runId.ToString())
-                .SendAsync("EventLogged", new EventLoggedPayload(runId, message, eventType, nodeId));
+                .SendAsync("EventLogged", new EventLoggedPayload(runId, message, eventType, nodeId, runNodeId));
         }
         catch (Exception ex)
         {

@@ -215,6 +215,7 @@ export interface EventLoggedPayload {
   message: string;
   eventType: string;
   nodeId: string | null;
+  runNodeId: string | null;
 }
 
 export interface RunPausedPayload {

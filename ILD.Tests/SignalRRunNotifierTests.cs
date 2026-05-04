@@ -80,7 +80,7 @@ public class SignalRRunNotifierTests
 
         var notifier = new SignalRRunNotifier(ctx.Object, logger.Object);
         var nodeId = Guid.NewGuid();
-        await notifier.EventLoggedAsync(runId, "hello", "NodeStarted", nodeId);
+        await notifier.EventLoggedAsync(runId, "hello", "NodeStarted", nodeId, null);
 
         capturedArgs!.Should().HaveCount(1);
         var payload = capturedArgs[0].Should().BeOfType<EventLoggedPayload>().Subject;
@@ -88,6 +88,30 @@ public class SignalRRunNotifierTests
         payload.Message.Should().Be("hello");
         payload.EventType.Should().Be("NodeStarted");
         payload.NodeId.Should().Be(nodeId);
+        payload.RunNodeId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task EventLoggedAsync_includes_runNodeId_in_payload()
+    {
+        var runId = Guid.NewGuid();
+        var (ctx, proxy, logger) = BuildHubContext(runId.ToString());
+
+        object?[]? capturedArgs = null;
+        proxy.Setup(p => p.SendCoreAsync("EventLogged", It.IsAny<object?[]>(), It.IsAny<CancellationToken>()))
+            .Callback<string, object?[], CancellationToken>((_, args, _) => capturedArgs = args)
+            .Returns(Task.CompletedTask);
+
+        var notifier = new SignalRRunNotifier(ctx.Object, logger.Object);
+        var nodeId = Guid.NewGuid();
+        var runNodeId = Guid.NewGuid();
+        await notifier.EventLoggedAsync(runId, "AI Node started", "NodeStarted", nodeId, runNodeId);
+
+        capturedArgs!.Should().HaveCount(1);
+        var payload = capturedArgs[0].Should().BeOfType<EventLoggedPayload>().Subject;
+        payload.RunId.Should().Be(runId);
+        payload.NodeId.Should().Be(nodeId);
+        payload.RunNodeId.Should().Be(runNodeId);
     }
 
     [Fact]

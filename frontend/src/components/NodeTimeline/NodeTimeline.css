@@ -226,7 +226,6 @@
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
   font-family: "Courier New", Courier, monospace;
   font-size: 0.75rem;
 }
@@ -241,6 +240,21 @@
   color: #6b7280;
   font-style: italic;
   font-size: 0.8rem;
+}
+
+.node-event-toggle {
+  background: transparent;
+  border: none;
+  color: #6b7280;
+  font-size: 0.7rem;
+  cursor: pointer;
+  padding: 0.125rem 0;
+  margin-left: 0.25rem;
+  transition: color 0.15s;
+}
+
+.node-event-toggle:hover {
+  color: #d1d5db;
 }
 
 .node-output-toggle {

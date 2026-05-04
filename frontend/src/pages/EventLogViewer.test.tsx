@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 
 vi.mock("../services/auth", () => ({
@@ -51,6 +51,30 @@ const mockEvents = [
   },
 ];
 
+const mockEventsWithAIInput = [
+  {
+    sequence: 1,
+    runId: "test-run-ai",
+    eventType: "NodeStarted",
+    nodeId: "node-ai",
+    payload:
+      'AI Node started\n{"nodeType":"AI","prompt":"Analyze {{WorkItem.Title}}","context":{"workItemTitle":"Test WI"}}',
+    timestamp: "2025-01-01T00:00:00Z",
+    hasPayload: false,
+    runNodeId: "run-node-ai",
+  },
+  {
+    sequence: 2,
+    runId: "test-run-ai",
+    eventType: "NodeCompleted",
+    nodeId: "node-ai",
+    payload: 'AI Node succeeded\n{"output":"analysis result","resolvedPrompt":"Analyze Test WI"}',
+    timestamp: "2025-01-01T00:01:00Z",
+    hasPayload: false,
+    runNodeId: "run-node-ai",
+  },
+];
+
 const mockPage = {
   entries: mockEvents,
   nextCursor: 2,
@@ -89,6 +113,47 @@ const mockTemplateGraph = {
       id: "node-1",
       type: "Start",
       label: "Start Node",
+      config: {},
+      maxTraversals: null,
+      retryCount: null,
+      timeoutSeconds: null,
+    },
+  ],
+  edges: [],
+};
+
+const mockRunWithAI = {
+  id: "test-run-ai",
+  workItemId: "work-1",
+  loopTemplateId: "template-1",
+  templateVersion: 1,
+  status: "Completed",
+  currentNodeId: null,
+  isPaused: false,
+  nodeExecutionCount: 1,
+  startedAt: "2025-01-01T00:00:00Z",
+  completedAt: "2025-01-01T00:02:00Z",
+  nodes: [
+    {
+      id: "run-node-ai",
+      nodeId: "node-ai",
+      nodeLabel: "AI Node",
+      status: "Succeeded",
+      output: "analysis result",
+      error: null,
+      startedAt: "2025-01-01T00:00:00Z",
+      completedAt: "2025-01-01T00:01:00Z",
+      executionCount: 1,
+    },
+  ],
+};
+
+const mockTemplateGraphAI = {
+  nodes: [
+    {
+      id: "node-ai",
+      type: "AI",
+      label: "AI Node",
       config: {},
       maxTraversals: null,
       retryCount: null,
@@ -148,6 +213,10 @@ describe("EventLogViewer", () => {
   test("renders node input section", async () => {
     renderComponent();
     await waitFor(() => {
+      expect(screen.getByText("Start Node")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText("Start Node"));
+    await waitFor(() => {
       expect(screen.getByText("Input")).toBeTruthy();
     });
   });
@@ -155,12 +224,20 @@ describe("EventLogViewer", () => {
   test("renders node events section with event count", async () => {
     renderComponent();
     await waitFor(() => {
+      expect(screen.getByText("Start Node")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText("Start Node"));
+    await waitFor(() => {
       expect(screen.getByText("Events (2)")).toBeTruthy();
     });
   });
 
   test("renders node output section", async () => {
     renderComponent();
+    await waitFor(() => {
+      expect(screen.getByText("Start Node")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText("Start Node"));
     await waitFor(() => {
       expect(screen.getByText("Output")).toBeTruthy();
     });
@@ -185,6 +262,36 @@ describe("EventLogViewer", () => {
     renderComponent();
     await waitFor(() => {
       expect(screen.getByText(/Executions: 2/)).toBeTruthy();
+    });
+  });
+
+  test("extracts and displays AI prompt from NodeStarted event payload", async () => {
+    (loopRunService.getById as ReturnType<typeof vi.fn>).mockResolvedValue(mockRunWithAI);
+    (loopRunService.getEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      entries: mockEventsWithAIInput,
+      nextCursor: 1,
+      hasMore: false,
+    });
+    (loopTemplateService.getVersionGraph as ReturnType<typeof vi.fn>).mockResolvedValue(
+      mockTemplateGraphAI,
+    );
+
+    render(
+      <MemoryRouter initialEntries={["/loop-runs/test-run-ai/events"]}>
+        <Routes>
+          <Route path="/loop-runs/:runId/events" element={<EventLogViewer />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("AI Node")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("AI Node"));
+    await waitFor(() => {
+      const elements = screen.getAllByText((content) => content.includes("Analyze Test WI"));
+      expect(elements.length).toBeGreaterThanOrEqual(1);
     });
   });
 });

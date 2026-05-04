@@ -5,6 +5,7 @@ interface NodeInputSectionProps {
   effectiveInput?: {
     command?: string;
     prompt?: string;
+    resolvedPrompt?: string;
     context?: Record<string, unknown>;
     message?: string;
   };
@@ -16,6 +17,8 @@ export default function NodeInputSection({ nodeType, effectiveInput }: NodeInput
   if (effectiveInput) {
     if (effectiveInput.command) {
       content = `$ ${effectiveInput.command}`;
+    } else if (effectiveInput.resolvedPrompt) {
+      content = effectiveInput.resolvedPrompt;
     } else if (effectiveInput.prompt) {
       content = effectiveInput.prompt;
       if (effectiveInput.context) {

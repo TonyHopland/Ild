@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { EventLogEntry } from "../../types";
 
 const eventTypeColors: Record<string, string> = {
@@ -15,13 +16,10 @@ const eventTypeColors: Record<string, string> = {
   Error: "#ef4444",
 };
 
+const MAX_CHARS = 120;
+
 interface NodeEventsSectionProps {
   events: EventLogEntry[];
-}
-
-function truncate(text: string, maxLen: number): string {
-  if (text.length <= maxLen) return text;
-  return text.slice(0, maxLen) + "...";
 }
 
 export default function NodeEventsSection({ events }: NodeEventsSectionProps) {
@@ -40,19 +38,39 @@ export default function NodeEventsSection({ events }: NodeEventsSectionProps) {
       <div className="node-events-list">
         {events.map((event) => {
           const color = eventTypeColors[event.eventType] ?? "#6b7280";
-          return (
-            <div key={event.sequence} className="node-event-item">
-              <span className="node-event-badge" style={{ borderColor: color, color }}>
-                {event.eventType}
-              </span>
-              <span className="node-event-message">{truncate(event.payload, 120)}</span>
-              <span className="node-event-time">
-                {new Date(event.timestamp).toLocaleTimeString()}
-              </span>
-            </div>
-          );
+          const isLong = event.payload.length > MAX_CHARS;
+          return <EventItem key={event.sequence} event={event} color={color} isLong={isLong} />;
         })}
       </div>
     </div>
+  );
+}
+
+interface EventItemProps {
+  event: EventLogEntry;
+  color: string;
+  isLong: boolean;
+}
+
+function EventItem({ event, color, isLong }: EventItemProps) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <>
+      <div className="node-event-item">
+        <span className="node-event-badge" style={{ borderColor: color, color }}>
+          {event.eventType}
+        </span>
+        <span className="node-event-message">
+          {expanded ? event.payload : event.payload.slice(0, MAX_CHARS) + (isLong ? "..." : "")}
+        </span>
+        <span className="node-event-time">{new Date(event.timestamp).toLocaleTimeString()}</span>
+      </div>
+      {isLong && (
+        <button className="node-event-toggle" onClick={() => setExpanded(!expanded)}>
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
+    </>
   );
 }

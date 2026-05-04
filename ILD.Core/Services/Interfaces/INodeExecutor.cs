@@ -3,9 +3,9 @@ using ILD.Data.Entities;
 
 namespace ILD.Core.Services.Interfaces;
 
-public sealed record NodeExecutionResult(bool Success, string? Output = null, string? Error = null)
+public sealed record NodeExecutionResult(bool Success, string? Output = null, string? Error = null, string? ResolvedPrompt = null)
 {
-    public static NodeExecutionResult Ok(string? output = null) => new(true, output);
+    public static NodeExecutionResult Ok(string? output = null, string? resolvedPrompt = null) => new(true, output, null, resolvedPrompt);
     public static NodeExecutionResult Fail(string error, string? output = null) => new(false, output, error);
 }
 

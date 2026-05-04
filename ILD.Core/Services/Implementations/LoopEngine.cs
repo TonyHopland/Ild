@@ -54,7 +54,7 @@ public class LoopEngine : ILoopEngine
             // event log is best-effort observability, never fail execution
         }
         // Broadcast to SignalR clients (best-effort, wrapped by NotifyAsync)
-        await NotifyAsync(() => _notifier.EventLoggedAsync(runId, data, eventType, nodeId));
+        await NotifyAsync(() => _notifier.EventLoggedAsync(runId, data, eventType, nodeId, runNodeId));
     }
 
     private async Task NotifyAsync(Func<Task> notify)
@@ -132,7 +132,7 @@ public class LoopEngine : ILoopEngine
             catch (OperationCanceledException) { /* expected on cancel */ }
             catch (Exception ex)
             {
-                await NotifyAsync(() => _notifier.EventLoggedAsync(runId, $"Recovery failed: {ex.Message}", "Error", null));
+                await NotifyAsync(() => _notifier.EventLoggedAsync(runId, $"Recovery failed: {ex.Message}", "Error", null, null));
             }
         }, control.Cts.Token);
         return Task.CompletedTask;
@@ -400,6 +400,20 @@ public class LoopEngine : ILoopEngine
         return JsonSerializer.Serialize(payload, options);
     }
 
+    private static string? BuildNodeCompletedOutput(NodeExecutionResult result)
+    {
+        if (!string.IsNullOrEmpty(result.ResolvedPrompt))
+        {
+            var dict = new Dictionary<string, object?>
+            {
+                ["output"] = result.Output,
+                ["resolvedPrompt"] = result.ResolvedPrompt,
+            };
+            return JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = false });
+        }
+        return result.Output;
+    }
+
     private async Task<RunNodeOutcome> ExecuteNodeWithRetryAsync(LoopRun run, WorkItem wi, LoopNode node, string? prevOutput, CancellationToken ct)
     {
         // PRD: error edge → follow immediately on failure; no error edge → auto-retry N times.
@@ -524,7 +538,8 @@ public class LoopEngine : ILoopEngine
                     await loopRunStore.UpdateRunNodeAsync(runNode);
                 }
                 await NotifyAsync(() => _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Succeeded));
-                await LogEventAsync(run.Id, "NodeCompleted", $"{node.Label} succeeded", node.Id, execResult.Output ?? null, runNode.Id);
+                var completedOutput = BuildNodeCompletedOutput(execResult);
+                await LogEventAsync(run.Id, "NodeCompleted", $"{node.Label} succeeded", node.Id, completedOutput, runNode.Id);
                 return new RunNodeOutcome(LoopRunNodeStatus.Succeeded, execResult.Output);
             }
 
@@ -615,7 +630,7 @@ public class LoopEngine : ILoopEngine
         }
         if (workItemId.HasValue)
             await TransitionWorkItemAsync(workItemId.Value, WorkItemStatus.HumanFeedback, reason);
-        await NotifyAsync(() => _notifier.EventLoggedAsync(runId, $"Run failed: {reason}", "Error", null));
+        await NotifyAsync(() => _notifier.EventLoggedAsync(runId, $"Run failed: {reason}", "Error", null, null));
         await NotifyAsync(() => _notifier.RunStateChangedAsync(runId, LoopRunStatus.Running, LoopRunStatus.Failed));
         ReleaseRunControl(runId);
         return LoopRunStatus.Failed;

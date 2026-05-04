@@ -28,6 +28,7 @@ interface EffectiveInput {
   nodeType?: string;
   command?: string;
   prompt?: string;
+  resolvedPrompt?: string;
   context?: Record<string, unknown>;
   message?: string;
 }
@@ -111,6 +112,37 @@ export default function EventLogViewer() {
     try {
       const page = await loopRunService.getEvents(runId, 0, 200);
       setEvents(page.entries);
+
+      const inputs: Record<string, EffectiveInput> = {};
+      for (const entry of page.entries) {
+        if (entry.eventType === "NodeStarted" && entry.runNodeId) {
+          const jsonMatch = entry.payload.match(/\{[\s\S]*\}$/);
+          if (jsonMatch) {
+            try {
+              inputs[entry.runNodeId] = JSON.parse(jsonMatch[0]) as EffectiveInput;
+            } catch {
+              // ignore parse errors
+            }
+          }
+        }
+        if (entry.eventType === "NodeCompleted" && entry.runNodeId) {
+          const jsonMatch = entry.payload.match(/\{[\s\S]*\}$/);
+          if (jsonMatch) {
+            try {
+              const data = JSON.parse(jsonMatch[0]);
+              if (data.resolvedPrompt) {
+                inputs[entry.runNodeId] = {
+                  ...inputs[entry.runNodeId],
+                  resolvedPrompt: data.resolvedPrompt,
+                };
+              }
+            } catch {
+              // ignore parse errors
+            }
+          }
+        }
+      }
+      setEffectiveInputs(inputs);
     } catch (error) {
       console.error("Failed to load events:", error);
     }
@@ -169,14 +201,30 @@ export default function EventLogViewer() {
     };
 
     const onEventLogged = async (message: TypedSignalRMessage<"EventLogged">) => {
-      const { runId: msgRunId, eventType, nodeId, message: eventMessage } = message.payload;
+      const { runId: msgRunId, eventType, runNodeId, message: eventMessage } = message.payload;
       if (msgRunId !== runId) return;
-      if (eventType === "NodeStarted" && nodeId) {
+      if (eventType === "NodeStarted" && runNodeId) {
         const jsonMatch = eventMessage.match(/\{[\s\S]*\}$/);
         if (jsonMatch) {
           try {
             const input = JSON.parse(jsonMatch[0]) as EffectiveInput;
-            setEffectiveInputs((prev) => ({ ...prev, [nodeId]: input }));
+            setEffectiveInputs((prev) => ({ ...prev, [runNodeId]: input }));
+          } catch {
+            // ignore parse errors
+          }
+        }
+      }
+      if (eventType === "NodeCompleted" && runNodeId) {
+        const jsonMatch = eventMessage.match(/\{[\s\S]*\}$/);
+        if (jsonMatch) {
+          try {
+            const data = JSON.parse(jsonMatch[0]);
+            if (data.resolvedPrompt) {
+              setEffectiveInputs((prev) => ({
+                ...prev,
+                [runNodeId]: { ...prev[runNodeId], resolvedPrompt: data.resolvedPrompt },
+              }));
+            }
           } catch {
             // ignore parse errors
           }

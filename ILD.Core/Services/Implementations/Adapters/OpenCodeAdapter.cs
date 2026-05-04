@@ -103,7 +103,7 @@ public class OpenCodeAdapter : IAgentAdapter
                 response = stdout;
 
             return p.ExitCode == 0
-                ? NodeExecutionResult.Ok(response)
+                ? NodeExecutionResult.Ok(response, rendered)
                 : NodeExecutionResult.Fail($"exit={p.ExitCode} stderr={stderr}", response);
         }
         catch (Exception ex)
