@@ -57,7 +57,11 @@ export default function Taskboard() {
           // New work item — load it
           void workItemService
             .getById(workItemId)
-            .then((wi) => setWorkItems((items) => [...items, wi]))
+            .then((wi) =>
+              setWorkItems((items) =>
+                items.some((item) => item.id === wi.id) ? items : [...items, wi],
+              ),
+            )
             .catch(() => {});
           return prev;
         }
