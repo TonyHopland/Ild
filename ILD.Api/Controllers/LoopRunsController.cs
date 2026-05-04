@@ -143,6 +143,7 @@ public class LoopRunsController : ControllerBase
                 sequence = e.Sequence,
                 runId = e.LoopRunId,
                 eventType = e.EventType.ToString(),
+                nodeId = e.NodeId,
                 timestamp = e.Timestamp,
                 payload = e.Data ?? string.Empty,
                 hasPayload = !string.IsNullOrEmpty(e.PayloadPath)

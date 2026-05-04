@@ -142,6 +142,7 @@ export interface EventLogEntry {
   payload: string;
   timestamp: string;
   hasPayload: boolean;
+  nodeLabel?: string;
 }
 
 export interface EventLogPage {

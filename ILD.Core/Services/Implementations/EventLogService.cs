@@ -25,7 +25,7 @@ public class EventLogService : IEventLogService
     {
     }
 
-    public async Task<long> AppendAsync(Guid runId, string eventType, string message, string? payloadPath = null)
+    public async Task<long> AppendAsync(Guid runId, string eventType, string message, Guid? nodeId = null, string? payloadPath = null)
     {
         if (!Enum.TryParse<EventType>(eventType, ignoreCase: true, out var parsed))
             parsed = EventType.Error;
@@ -55,6 +55,7 @@ public class EventLogService : IEventLogService
                 LoopRunId = runId,
                 Sequence = nextSequence,
                 EventType = parsed,
+                NodeId = nodeId,
                 Timestamp = DateTime.UtcNow,
                 PayloadPath = finalPayloadPath,
                 Data = data

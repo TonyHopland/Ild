@@ -89,6 +89,14 @@ function AppRoutes() {
             }
           />
           <Route
+            path="/loop-runs/:runId"
+            element={
+              <ProtectedRoute>
+                <EventLogViewer />
+              </ProtectedRoute>
+            }
+          />
+          <Route
             path="/loop-runs/:runId/events"
             element={
               <ProtectedRoute>

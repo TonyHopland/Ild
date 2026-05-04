@@ -16,6 +16,8 @@ public class EventLog
 
     public EventType EventType { get; set; }
 
+    public Guid? NodeId { get; set; }
+
     public DateTime Timestamp { get; set; }
 
     [MaxLength(1024)]

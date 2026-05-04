@@ -10,6 +10,8 @@ import {
   LoopTemplateVersion,
   EventLogPage,
   ConfigFieldDescriptor,
+  LoopNode,
+  LoopNodeEdge,
 } from "../types";
 
 interface BackendLoginResponse {
@@ -212,6 +214,15 @@ export const loopTemplateService = {
 
   getVersions: async (id: string): Promise<LoopTemplateVersion[]> => {
     return api.get<LoopTemplateVersion[]>(`/looptemplates/${id}/versions`);
+  },
+
+  getVersionGraph: async (
+    id: string,
+    versionNumber: number,
+  ): Promise<{ nodes: LoopNode[]; edges: LoopNodeEdge[] }> => {
+    return api.get<{ nodes: LoopNode[]; edges: LoopNodeEdge[] }>(
+      `/looptemplates/${id}/versions/${versionNumber}`,
+    );
   },
 };
 

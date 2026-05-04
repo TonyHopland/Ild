@@ -37,14 +37,14 @@ public class LoopEngine : ILoopEngine
         _workItemNotifier = workItemNotifier ?? new NoopWorkItemNotifier();
     }
 
-    private async Task LogEventAsync(Guid runId, string eventType, string message, string? output = null)
+    private async Task LogEventAsync(Guid runId, string eventType, string message, Guid? nodeId = null, string? output = null)
     {
         try
         {
             using var scope = _sp.CreateScope();
             var eventLog = scope.ServiceProvider.GetRequiredService<IEventLogService>();
             var data = string.IsNullOrEmpty(output) ? message : $"{message}\n{output}";
-            await eventLog.AppendAsync(runId, eventType, data);
+            await eventLog.AppendAsync(runId, eventType, data, nodeId);
         }
         catch
         {
@@ -363,7 +363,7 @@ public class LoopEngine : ILoopEngine
                 await loopRunStore.UpdateRunAsync(runEntity);
             }
             await NotifyAsync(() => _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Pending, LoopRunNodeStatus.Running));
-            await LogEventAsync(run.Id, "NodeStarted", $"{node.Label} started");
+            await LogEventAsync(run.Id, "NodeStarted", $"{node.Label} started", node.Id);
 
             Func<string, Task> safeProgress = line => NotifyAsync(() => _notifier.NodeProgressAsync(run.Id, node.Id, line));
 
@@ -388,7 +388,7 @@ public class LoopEngine : ILoopEngine
                     await loopRunStore.UpdateRunNodeAsync(runNode);
                 }
                 await NotifyAsync(() => _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.WaitingHuman));
-                await LogEventAsync(run.Id, "HumanFeedbackRequested", $"{node.Label} waiting for human input");
+                await LogEventAsync(run.Id, "HumanFeedbackRequested", $"{node.Label} waiting for human input", node.Id);
                 return new RunNodeOutcome(LoopRunNodeStatus.WaitingHuman, null);
             }
 
@@ -415,7 +415,7 @@ public class LoopEngine : ILoopEngine
                     await loopRunStore.UpdateRunNodeAsync(runNode);
                 }
                 await NotifyAsync(() => _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.WaitingHuman));
-                await LogEventAsync(run.Id, "HumanFeedbackRequested", $"{node.Label} PR created, awaiting merge");
+                await LogEventAsync(run.Id, "HumanFeedbackRequested", $"{node.Label} PR created, awaiting merge", node.Id);
                 return new RunNodeOutcome(LoopRunNodeStatus.WaitingHuman, execResult.Output);
             }
 
@@ -430,7 +430,7 @@ public class LoopEngine : ILoopEngine
                     await loopRunStore.UpdateRunNodeAsync(runNode);
                 }
                 await NotifyAsync(() => _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Succeeded));
-                await LogEventAsync(run.Id, "NodeCompleted", $"{node.Label} succeeded", execResult.Output ?? null);
+                await LogEventAsync(run.Id, "NodeCompleted", $"{node.Label} succeeded", node.Id, execResult.Output ?? null);
                 return new RunNodeOutcome(LoopRunNodeStatus.Succeeded, execResult.Output);
             }
 
@@ -444,7 +444,7 @@ public class LoopEngine : ILoopEngine
                 await loopRunStore.UpdateRunNodeAsync(runNode);
             }
             await NotifyAsync(() => _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Failed));
-            await LogEventAsync(run.Id, "NodeFailed", $"{node.Label} failed: {execResult.Error}", execResult.Output);
+            await LogEventAsync(run.Id, "NodeFailed", $"{node.Label} failed: {execResult.Error}", node.Id, execResult.Output);
 
             if (hasFailureEdge)
                 return new RunNodeOutcome(LoopRunNodeStatus.Failed, execResult.Output);

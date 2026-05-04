@@ -19,7 +19,7 @@ public class WorkItemManagerTests
         db.Context.SaveChanges();
         var repoMgr = new Mock<IRepositoryManager>();
         var eventLog = new Mock<IEventLogService>();
-        eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+        eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<string>()))
             .ReturnsAsync(1L);
         return (new WorkItemManager(db.WorkItems, repoMgr.Object, eventLog.Object, db.LoopRuns), db, repo.Id, repoMgr, eventLog);
     }

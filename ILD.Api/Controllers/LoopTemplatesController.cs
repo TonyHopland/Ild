@@ -118,6 +118,23 @@ public class LoopTemplatesController : ControllerBase
         return Ok(versions);
     }
 
+    [HttpGet("{id}/versions/{versionNumber}")]
+    public async Task<IActionResult> GetVersionGraph(string id, int versionNumber)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+
+        var graph = await _loopTemplateManager.GetVersionGraphAsync(guid, versionNumber);
+        if (graph == null)
+            return NotFound(new { error = $"Version {versionNumber} not found" });
+
+        return Ok(new
+        {
+            nodes = graph.Nodes,
+            edges = graph.Edges,
+        });
+    }
+
     [HttpPost("validate")]
     public async Task<IActionResult> ValidateGraph([FromBody] LoopTemplateGraph graph)
     {

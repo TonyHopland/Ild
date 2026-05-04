@@ -6,7 +6,7 @@ namespace ILD.Core.Services.Interfaces;
 
 public interface IEventLogService
 {
-    Task<long> AppendAsync(Guid runId, string eventType, string message, string? payloadPath = null);
+    Task<long> AppendAsync(Guid runId, string eventType, string message, Guid? nodeId = null, string? payloadPath = null);
     Task<IEnumerable<EventLogEntry>> GetByRunIdAsync(Guid runId, int? limit = null);
     Task<EventLogEntry?> GetBySequenceAsync(Guid runId, long sequence);
     Task<int> EnforceRetentionPolicyAsync(DateTimeOffset before);
