@@ -3,39 +3,96 @@ using ILD.Data.DTOs.SignalRPayloads;
 using ILD.Data.Enums;
 using ILD.Core.Services.Interfaces;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Logging;
 
 namespace ILD.Api.Configuration;
 
 public class SignalRRunNotifier : IRunNotifier
 {
     private readonly IHubContext<LoopRunHub> _runHub;
+    private readonly ILogger<SignalRRunNotifier> _logger;
 
-    public SignalRRunNotifier(IHubContext<LoopRunHub> runHub)
+    public SignalRRunNotifier(IHubContext<LoopRunHub> runHub, ILogger<SignalRRunNotifier> logger)
     {
         _runHub = runHub;
+        _logger = logger;
     }
 
-    public Task NodeStateChangedAsync(Guid runId, Guid nodeId, LoopRunNodeStatus oldStatus, LoopRunNodeStatus newStatus)
-        => _runHub.Clients.Group(runId.ToString())
-            .SendAsync("NodeStateChanged", new NodeStateChangedPayload(runId, nodeId, oldStatus, newStatus));
+    public async Task NodeStateChangedAsync(Guid runId, Guid nodeId, LoopRunNodeStatus oldStatus, LoopRunNodeStatus newStatus)
+    {
+        try
+        {
+            await _runHub.Clients.Group(runId.ToString())
+                .SendAsync("NodeStateChanged", new NodeStateChangedPayload(runId, nodeId, oldStatus, newStatus));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send NodeStateChanged for run {RunId} node {NodeId}", runId, nodeId);
+        }
+    }
 
-    public Task EventLoggedAsync(Guid runId, string message)
-        => _runHub.Clients.Group(runId.ToString())
-            .SendAsync("EventLogged", new EventLoggedPayload(runId, message));
+    public async Task EventLoggedAsync(Guid runId, string message)
+    {
+        try
+        {
+            await _runHub.Clients.Group(runId.ToString())
+                .SendAsync("EventLogged", new EventLoggedPayload(runId, message));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send EventLogged for run {RunId}", runId);
+        }
+    }
 
-    public Task RunStateChangedAsync(Guid runId, LoopRunStatus oldStatus, LoopRunStatus newStatus)
-        => _runHub.Clients.Group(runId.ToString())
-            .SendAsync("LoopRunStateChanged", new LoopRunStateChangedPayload(runId, oldStatus, newStatus));
+    public async Task RunStateChangedAsync(Guid runId, LoopRunStatus oldStatus, LoopRunStatus newStatus)
+    {
+        try
+        {
+            await _runHub.Clients.Group(runId.ToString())
+                .SendAsync("LoopRunStateChanged", new LoopRunStateChangedPayload(runId, oldStatus, newStatus));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send RunStateChanged for run {RunId}", runId);
+        }
+    }
 
-    public Task PausedAsync(Guid runId)
-        => _runHub.Clients.Group(runId.ToString())
-            .SendAsync("Paused", new RunPausedPayload(runId));
+    public async Task PausedAsync(Guid runId)
+    {
+        try
+        {
+            await _runHub.Clients.Group(runId.ToString())
+                .SendAsync("Paused", new RunPausedPayload(runId));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send Paused for run {RunId}", runId);
+        }
+    }
 
-    public Task ResumedAsync(Guid runId)
-        => _runHub.Clients.Group(runId.ToString())
-            .SendAsync("Resumed", new RunResumedPayload(runId));
+    public async Task ResumedAsync(Guid runId)
+    {
+        try
+        {
+            await _runHub.Clients.Group(runId.ToString())
+                .SendAsync("Resumed", new RunResumedPayload(runId));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send Resumed for run {RunId}", runId);
+        }
+    }
 
-    public Task NodeProgressAsync(Guid runId, Guid nodeId, string line)
-        => _runHub.Clients.Group(runId.ToString())
-            .SendAsync("NodeProgress", new NodeProgressPayload(runId, nodeId, line));
+    public async Task NodeProgressAsync(Guid runId, Guid nodeId, string line)
+    {
+        try
+        {
+            await _runHub.Clients.Group(runId.ToString())
+                .SendAsync("NodeProgress", new NodeProgressPayload(runId, nodeId, line));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send NodeProgress for run {RunId} node {NodeId}", runId, nodeId);
+        }
+    }
 }

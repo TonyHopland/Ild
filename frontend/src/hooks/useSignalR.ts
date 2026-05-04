@@ -79,8 +79,14 @@ export function useSignalR(hubUrl = "/hubs/work-item") {
       );
     };
 
-    connection.onreconnecting(() => updateState(signalR.HubConnectionState.Reconnecting));
-    connection.onreconnected(() => updateState(signalR.HubConnectionState.Connected));
+    connection.onreconnecting(() => {
+      dispatchersRef.current.clear();
+      updateState(signalR.HubConnectionState.Reconnecting);
+    });
+    connection.onreconnected(() => {
+      handlersRef.current.forEach((_, eventType) => ensureDispatcher(connection, eventType));
+      updateState(signalR.HubConnectionState.Connected);
+    });
     connection.onclose(() => updateState(signalR.HubConnectionState.Disconnected));
 
     let stopped = false;

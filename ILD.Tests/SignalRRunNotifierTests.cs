@@ -4,20 +4,22 @@ using ILD.Api.Hubs;
 using ILD.Data.DTOs.SignalRPayloads;
 using ILD.Data.Enums;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Logging;
 using Moq;
 
 namespace ILD.Tests;
 
 public class SignalRRunNotifierTests
 {
-    private static (Mock<IHubContext<LoopRunHub>> ctx, Mock<IClientProxy> proxy) BuildHubContext(string expectedGroup)
+    private static (Mock<IHubContext<LoopRunHub>> ctx, Mock<IClientProxy> proxy, Mock<ILogger<SignalRRunNotifier>> logger) BuildHubContext(string expectedGroup)
     {
         var clients = new Mock<IHubClients>();
         var proxy = new Mock<IClientProxy>();
         clients.Setup(c => c.Group(expectedGroup)).Returns(proxy.Object);
         var ctx = new Mock<IHubContext<LoopRunHub>>();
         ctx.SetupGet(c => c.Clients).Returns(clients.Object);
-        return (ctx, proxy);
+        var logger = new Mock<ILogger<SignalRRunNotifier>>();
+        return (ctx, proxy, logger);
     }
 
     [Fact]
@@ -25,14 +27,14 @@ public class SignalRRunNotifierTests
     {
         var runId = Guid.NewGuid();
         var nodeId = Guid.NewGuid();
-        var (ctx, proxy) = BuildHubContext(runId.ToString());
+        var (ctx, proxy, logger) = BuildHubContext(runId.ToString());
 
         object?[]? capturedArgs = null;
         proxy.Setup(p => p.SendCoreAsync("NodeStateChanged", It.IsAny<object?[]>(), It.IsAny<CancellationToken>()))
             .Callback<string, object?[], CancellationToken>((_, args, _) => capturedArgs = args)
             .Returns(Task.CompletedTask);
 
-        var notifier = new SignalRRunNotifier(ctx.Object);
+        var notifier = new SignalRRunNotifier(ctx.Object, logger.Object);
         await notifier.NodeStateChangedAsync(runId, nodeId, LoopRunNodeStatus.Pending, LoopRunNodeStatus.Running);
 
         capturedArgs.Should().NotBeNull();
@@ -48,14 +50,14 @@ public class SignalRRunNotifierTests
     public async Task RunStateChangedAsync_sends_a_single_typed_payload()
     {
         var runId = Guid.NewGuid();
-        var (ctx, proxy) = BuildHubContext(runId.ToString());
+        var (ctx, proxy, logger) = BuildHubContext(runId.ToString());
 
         object?[]? capturedArgs = null;
         proxy.Setup(p => p.SendCoreAsync("LoopRunStateChanged", It.IsAny<object?[]>(), It.IsAny<CancellationToken>()))
             .Callback<string, object?[], CancellationToken>((_, args, _) => capturedArgs = args)
             .Returns(Task.CompletedTask);
 
-        var notifier = new SignalRRunNotifier(ctx.Object);
+        var notifier = new SignalRRunNotifier(ctx.Object, logger.Object);
         await notifier.RunStateChangedAsync(runId, LoopRunStatus.Running, LoopRunStatus.Completed);
 
         capturedArgs.Should().NotBeNull();
@@ -69,14 +71,14 @@ public class SignalRRunNotifierTests
     public async Task EventLoggedAsync_sends_a_single_typed_payload()
     {
         var runId = Guid.NewGuid();
-        var (ctx, proxy) = BuildHubContext(runId.ToString());
+        var (ctx, proxy, logger) = BuildHubContext(runId.ToString());
 
         object?[]? capturedArgs = null;
         proxy.Setup(p => p.SendCoreAsync("EventLogged", It.IsAny<object?[]>(), It.IsAny<CancellationToken>()))
             .Callback<string, object?[], CancellationToken>((_, args, _) => capturedArgs = args)
             .Returns(Task.CompletedTask);
 
-        var notifier = new SignalRRunNotifier(ctx.Object);
+        var notifier = new SignalRRunNotifier(ctx.Object, logger.Object);
         await notifier.EventLoggedAsync(runId, "hello");
 
         capturedArgs!.Should().HaveCount(1);
@@ -90,14 +92,14 @@ public class SignalRRunNotifierTests
     {
         var runId = Guid.NewGuid();
         var nodeId = Guid.NewGuid();
-        var (ctx, proxy) = BuildHubContext(runId.ToString());
+        var (ctx, proxy, logger) = BuildHubContext(runId.ToString());
 
         object?[]? capturedArgs = null;
         proxy.Setup(p => p.SendCoreAsync("NodeProgress", It.IsAny<object?[]>(), It.IsAny<CancellationToken>()))
             .Callback<string, object?[], CancellationToken>((_, args, _) => capturedArgs = args)
             .Returns(Task.CompletedTask);
 
-        var notifier = new SignalRRunNotifier(ctx.Object);
+        var notifier = new SignalRRunNotifier(ctx.Object, logger.Object);
         await notifier.NodeProgressAsync(runId, nodeId, "thinking about the problem...");
 
         capturedArgs.Should().NotBeNull();

@@ -7,6 +7,7 @@ using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace ILD.Tests;
 
@@ -31,6 +32,7 @@ internal sealed class EngineHarness : IDisposable
         var registry = new NodeExecutorRegistry(Fakes.Values);
 
         var services = new ServiceCollection();
+        services.AddLogging();
         services.AddSingleton<INodeExecutorRegistry>(registry);
         services.AddSingleton<IRunNotifier, NoopRunNotifier>();
         services.AddSingleton<LoopEngine>();

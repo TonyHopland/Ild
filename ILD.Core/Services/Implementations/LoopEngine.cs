@@ -14,6 +14,7 @@ public class LoopEngine : ILoopEngine
     private readonly INodeExecutorRegistry _registry;
     private readonly IRunNotifier _notifier;
     private readonly IWorkItemNotifier _workItemNotifier;
+    private readonly ILogger<LoopEngine> _logger;
     private readonly ConcurrentDictionary<Guid, RunControl> _runs = new();
 
     private sealed class RunControl : IDisposable
@@ -29,11 +30,12 @@ public class LoopEngine : ILoopEngine
         }
     }
 
-    public LoopEngine(IServiceProvider sp, INodeExecutorRegistry registry, IRunNotifier notifier, IWorkItemNotifier? workItemNotifier = null)
+    public LoopEngine(IServiceProvider sp, INodeExecutorRegistry registry, IRunNotifier notifier, ILogger<LoopEngine> logger, IWorkItemNotifier? workItemNotifier = null)
     {
         _sp = sp;
         _registry = registry;
         _notifier = notifier;
+        _logger = logger;
         _workItemNotifier = workItemNotifier ?? new NoopWorkItemNotifier();
     }
 
@@ -58,9 +60,9 @@ public class LoopEngine : ILoopEngine
         {
             await notify();
         }
-        catch
+        catch (Exception ex)
         {
-            // notifier is best-effort observability, never fail execution
+            _logger.LogWarning(ex, "SignalR notification failed (best-effort, not failing execution)");
         }
     }
 

@@ -196,6 +196,11 @@ export default function EventLogViewer() {
       if (msgRunId !== runId) return;
       setRun((prev) => {
         if (!prev) return null;
+        const existing = prev.nodes.find((n) => n.nodeId === nodeId);
+        if (!existing) {
+          void loadRun();
+          return prev;
+        }
         return {
           ...prev,
           nodes: prev.nodes.map((n) =>
@@ -604,7 +609,6 @@ export default function EventLogViewer() {
           display: grid;
           grid-template-columns: 320px 1fr;
           gap: 1rem;
-          min-height: 500px;
         }
 
         .node-flow-panel {
@@ -613,7 +617,6 @@ export default function EventLogViewer() {
           border: 1px solid #2d2d44;
           padding: 0.75rem;
           overflow-y: auto;
-          max-height: 70vh;
         }
 
         .node-flow-panel-title {
@@ -727,8 +730,6 @@ export default function EventLogViewer() {
           padding: 0.75rem;
           display: flex;
           flex-direction: column;
-          max-height: 70vh;
-          overflow: hidden;
         }
 
         .event-log-panel-header {
