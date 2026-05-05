@@ -1,7 +1,6 @@
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
@@ -11,8 +10,7 @@ namespace ILD.Core.Services.Implementations.Adapters;
 
 public class OpenAiCompatibleAdapter : IAgentAdapter
 {
-    private static readonly Regex Placeholder = new(
-        @"\{\{\s*([A-Za-z][A-Za-z0-9_.:/\\-]*)\s*\}\}", RegexOptions.Compiled);
+    private static readonly IPromptTemplateResolver Resolver = new PromptTemplateResolver();
 
     private readonly IHttpClientFactory _factory;
 
@@ -98,32 +96,12 @@ public class OpenAiCompatibleAdapter : IAgentAdapter
     }
 
     private static Task<string> RenderPromptAsync(string template, LoopRunContext context)
-    {
-        var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["WorkItem.Title"] = context.WorkItemTitle,
-            ["WorkItem.Description"] = context.WorkItemDescription,
-            ["WorkTree.Diff"] = "",
-            ["EventLog.Summary"] = string.Join("\n", context.EventLogSummary ?? new()),
-            ["EventLog.LastN"] = string.Join("\n", (context.EventLogSummary ?? new()).TakeLast(10)),
-            ["Node.Input"] = context.PreviousNodeOutput ?? "",
-            ["PreviousNode.Output"] = context.PreviousNodeOutput ?? "",
-        };
-
-        var rendered = Placeholder.Replace(template, m =>
-        {
-            var key = m.Groups[1].Value;
-            if (values.TryGetValue(key, out var v)) return v ?? "";
-            if (key.StartsWith("WorkTree.File:", StringComparison.OrdinalIgnoreCase))
-            {
-                var rel = key.Substring("WorkTree.File:".Length);
-                var full = string.IsNullOrEmpty(context.WorktreePath) ? null : Path.Combine(context.WorktreePath, rel);
-                return full != null && File.Exists(full) ? File.ReadAllText(full) : "";
-            }
-            return m.Value;
-        });
-        return Task.FromResult(rendered);
-    }
+        => Task.FromResult(Resolver.Render(template, new PromptContext(
+            WorkItemTitle: context.WorkItemTitle,
+            WorkItemDescription: context.WorkItemDescription,
+            PreviousNodeOutput: context.PreviousNodeOutput,
+            EventLogSummary: context.EventLogSummary,
+            WorktreePath: context.WorktreePath)));
 
     private static async Task<(string Content, int ChunkCount)> ReadSseStreamAsync(
         Stream stream,

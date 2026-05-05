@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
@@ -48,21 +47,8 @@ public sealed class StartNodeExecutor : INodeExecutor
                 Directory.CreateDirectory(Path.GetDirectoryName(basePath)!);
                 if (!Directory.Exists(Path.Combine(basePath, ".git")))
                 {
-                    var psi = new ProcessStartInfo("git")
-                    {
-                        WorkingDirectory = Path.GetDirectoryName(basePath)!,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        UseShellExecute = false,
-                    };
-                    psi.ArgumentList.Add("clone");
-                    psi.ArgumentList.Add(repo.CloneUrl);
-                    psi.ArgumentList.Add(basePath);
-                    using var p = Process.Start(psi)!;
-                    var stderr = await p.StandardError.ReadToEndAsync();
-                    await p.WaitForExitAsync();
-                    if (p.ExitCode != 0)
-                        return new NodeOutcome.Failed($"git clone failed: {stderr}");
+                    var (ok, err) = await _repo.CloneAsync(repo.CloneUrl, basePath, ctx.CancellationToken);
+                    if (!ok) return new NodeOutcome.Failed($"git clone failed: {err}");
                     cloned = true;
                 }
             }
@@ -87,6 +73,10 @@ public sealed class CmdNodeExecutor : INodeExecutor
 {
     public NodeType NodeType => NodeType.Cmd;
 
+    private readonly IProcessRunner _runner;
+
+    public CmdNodeExecutor(IProcessRunner runner) { _runner = runner; }
+
     public string DescribeInput(NodeExecutionContext ctx)
     {
         var cfg = NodeConfig.Parse<NodeConfig.Cmd>(ctx.Node.Config);
@@ -105,46 +95,21 @@ public sealed class CmdNodeExecutor : INodeExecutor
             return new NodeOutcome.Failed(
                 "Cmd node requires a valid WorkItem.WorktreePath; refusing to run outside the loop's worktree.");
 
-        var psi = new ProcessStartInfo("/bin/sh")
-        {
-            WorkingDirectory = cwd,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        psi.ArgumentList.Add("-c");
-        psi.ArgumentList.Add(command);
-
-        using var proc = Process.Start(psi)!;
         var timeout = TimeSpan.FromSeconds(ctx.Node.TimeoutSeconds > 0 ? ctx.Node.TimeoutSeconds : 300);
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ctx.CancellationToken);
         timeoutCts.CancelAfter(timeout);
-        var stdoutTask = proc.StandardOutput.ReadToEndAsync(timeoutCts.Token);
-        var stderrTask = proc.StandardError.ReadToEndAsync(timeoutCts.Token);
+
         try
         {
-            await proc.WaitForExitAsync(timeoutCts.Token);
+            var r = await _runner.RunAsync("/bin/sh", new[] { "-c", command }, cwd, timeoutCts.Token);
+            return r.Success
+                ? new NodeOutcome.Succeeded(r.StdOut)
+                : new NodeOutcome.Failed($"exit={r.ExitCode} stderr={r.StdErr}", r.StdOut);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ctx.CancellationToken.IsCancellationRequested)
         {
-            try { proc.Kill(entireProcessTree: true); } catch { }
             return new NodeOutcome.Failed($"command timed out after {timeout}");
         }
-        string stdout, stderr;
-        try
-        {
-            stdout = await stdoutTask;
-            stderr = await stderrTask;
-        }
-        catch (OperationCanceledException)
-        {
-            try { proc.Kill(entireProcessTree: true); } catch { }
-            return new NodeOutcome.Failed($"command stream read timed out after {timeout}");
-        }
-        return proc.ExitCode == 0
-            ? new NodeOutcome.Succeeded(stdout)
-            : new NodeOutcome.Failed($"exit={proc.ExitCode} stderr={stderr}", stdout);
     }
 }
 

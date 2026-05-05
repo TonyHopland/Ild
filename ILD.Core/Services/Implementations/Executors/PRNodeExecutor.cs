@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
@@ -10,8 +9,6 @@ namespace ILD.Core.Services.Implementations.Executors;
 
 public sealed class PRNodeExecutor : INodeExecutor
 {
-    private static readonly Regex Placeholder = new(@"\{\{\s*([A-Za-z][A-Za-z0-9_.:/\\-]*)\s*\}\}", RegexOptions.Compiled);
-
     public NodeType NodeType => NodeType.PR;
     private readonly IServiceProvider _sp;
 
@@ -67,7 +64,7 @@ public sealed class PRNodeExecutor : INodeExecutor
 
             var remote = scope.ServiceProvider.GetRequiredService<IRemoteProvider>();
 
-            var prBody = ResolvePrDescription(ctx.Node.Config, wi, ctx.PreviousNodeOutput);
+            var prBody = ResolvePrDescription(_sp, ctx.Node.Config, wi, ctx.PreviousNodeOutput);
 
             var prResult = await remote.CreatePullRequestAsync(
                 repo.CloneUrl,
@@ -94,7 +91,7 @@ public sealed class PRNodeExecutor : INodeExecutor
             prUrl);
     }
 
-    static string ResolvePrDescription(string? nodeConfig, WorkItem wi, string? previousNodeOutput)
+    static string ResolvePrDescription(IServiceProvider sp, string? nodeConfig, WorkItem wi, string? previousNodeOutput)
     {
         var cfg = NodeConfig.Parse<NodeConfig.Pr>(nodeConfig);
         var template = cfg.PrDescriptionTemplate;
@@ -102,18 +99,10 @@ public sealed class PRNodeExecutor : INodeExecutor
         if (string.IsNullOrEmpty(template))
             return wi.Description ?? "";
 
-        var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["WorkItem.Title"] = wi.Title,
-            ["WorkItem.Description"] = wi.Description ?? "",
-            ["PreviousNode.Output"] = previousNodeOutput ?? "",
-            ["Node.Input"] = previousNodeOutput ?? "",
-        };
-
-        return Placeholder.Replace(template, m =>
-        {
-            var key = m.Groups[1].Value;
-            return values.TryGetValue(key, out var v) ? v ?? "" : m.Value;
-        });
+        var resolver = sp.GetService<IPromptTemplateResolver>() ?? new PromptTemplateResolver();
+        return resolver.Render(template, new PromptContext(
+            WorkItemTitle: wi.Title,
+            WorkItemDescription: wi.Description,
+            PreviousNodeOutput: previousNodeOutput));
     }
 }

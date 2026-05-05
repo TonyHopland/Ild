@@ -16,6 +16,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWorkItemManager, WorkItemManager>();
         services.AddScoped<ILoopTemplateManager, LoopTemplateManager>();
         services.AddSingleton<IRepositoryManager, RepositoryManager>();
+        services.AddSingleton<IPromptTemplateResolver, PromptTemplateResolver>();
+        services.AddSingleton<IProcessRunner, ProcessRunner>();
         services.AddScoped<IRemoteProvider, RemoteProviderService>();
         services.AddHttpClient<IAIProviderService, AIProviderService>();
         services.AddScoped<IEventLogService, EventLogService>();
