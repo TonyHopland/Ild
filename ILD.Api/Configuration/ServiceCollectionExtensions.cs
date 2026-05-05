@@ -16,6 +16,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWorkItemManager, WorkItemManager>();
         services.AddScoped<ILoopTemplateManager, LoopTemplateManager>();
         services.AddSingleton<IRepositoryManager, RepositoryManager>();
+        services.AddSingleton<IPromptTemplateResolver, PromptTemplateResolver>();
+        services.AddSingleton<IProcessRunner, ProcessRunner>();
         services.AddScoped<IRemoteProvider, RemoteProviderService>();
         services.AddHttpClient<IAIProviderService, AIProviderService>();
         services.AddScoped<IEventLogService, EventLogService>();
@@ -27,6 +29,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<INodeExecutor, StartNodeExecutor>();
         services.AddSingleton<INodeExecutor, CmdNodeExecutor>();
         services.AddSingleton<INodeExecutor, AINodeExecutor>();
+        services.AddSingleton<INodeExecutor, HumanNodeExecutor>();
         services.AddSingleton<INodeExecutor, PRNodeExecutor>();
         services.AddSingleton<INodeExecutor, CleanupNodeExecutor>();
         services.AddSingleton<INodeExecutorRegistry, NodeExecutorRegistry>();

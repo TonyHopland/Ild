@@ -125,6 +125,25 @@ public class LoopRunsController : ControllerBase
         return Ok();
     }
 
+    [HttpPost("{id}/nodes/{runNodeId}/retry")]
+    public async Task<IActionResult> RetryFromNode(string id, string runNodeId)
+    {
+        if (!Guid.TryParse(id, out var runGuid))
+            return BadRequest(new { error = "Invalid run GUID" });
+        if (!Guid.TryParse(runNodeId, out var nodeGuid))
+            return BadRequest(new { error = "Invalid run node GUID" });
+
+        try
+        {
+            await _loopEngine.RetryFromNodeAsync(runGuid, nodeGuid);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        return Ok();
+    }
+
     [HttpGet("{id}/events")]
     public async Task<IActionResult> GetEvents(string id, [FromQuery] int cursor = 0, [FromQuery] int limit = 100)
     {

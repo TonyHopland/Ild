@@ -27,6 +27,13 @@ public class LoopRun : IHasUpdatedAt
 
     public int NodeExecutionCount { get; set; }
 
+    /// <summary>
+    /// Monotonic per-run sequence counter for <see cref="EventLog"/> writes.
+    /// Persisted on the run rather than computed via <c>MAX(Sequence)+1</c> so
+    /// event-log appends do one round-trip and don't need a global lock.
+    /// </summary>
+    public int NextEventSeq { get; set; }
+
     public DateTime? StartedAt { get; set; }
 
     public DateTime? CompletedAt { get; set; }

@@ -6,6 +6,12 @@ namespace ILD.Core.Services.Interfaces;
 
 public interface IRepositoryManager
 {
+    /// <summary>
+    /// Clone <paramref name="cloneUrl"/> into <paramref name="targetPath"/>.
+    /// Returns false on failure (caller decides whether to abort the run).
+    /// </summary>
+    Task<(bool Success, string? Error)> CloneAsync(string cloneUrl, string targetPath, CancellationToken cancellationToken = default);
+
     Task<string> CreateWorktreeAsync(string repoPath, string branchName);
     Task DestroyWorktreeAsync(string worktreePath);
     Task<bool> ValidateWorktreeHealthAsync(string worktreePath);

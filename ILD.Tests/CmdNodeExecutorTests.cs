@@ -1,4 +1,5 @@
 using FluentAssertions;
+using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
@@ -33,7 +34,7 @@ public class CmdNodeExecutorTests
     [Fact]
     public async Task ExecuteAsync_succeeds_for_normal_echo_command()
     {
-        var exec = new CmdNodeExecutor();
+        var exec = new CmdNodeExecutor(new ProcessRunner());
         var ctx = MakeContext("echo hello");
 
         var result = await exec.ExecuteAsync(ctx);
@@ -45,7 +46,7 @@ public class CmdNodeExecutorTests
     [Fact]
     public async Task ExecuteAsync_times_out_long_running_command()
     {
-        var exec = new CmdNodeExecutor();
+        var exec = new CmdNodeExecutor(new ProcessRunner());
         var ctx = MakeContext("sleep 5", timeoutSeconds: 1);
 
         var result = await exec.ExecuteAsync(ctx);
@@ -57,7 +58,7 @@ public class CmdNodeExecutorTests
     [Fact]
     public async Task ExecuteAsync_returns_failure_with_nonzero_exit_code()
     {
-        var exec = new CmdNodeExecutor();
+        var exec = new CmdNodeExecutor(new ProcessRunner());
         var ctx = MakeContext("false");
 
         var result = await exec.ExecuteAsync(ctx);

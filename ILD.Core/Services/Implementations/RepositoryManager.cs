@@ -1,22 +1,37 @@
-using System.Diagnostics;
 using ILD.Core.Services.Interfaces;
 using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations;
 
 /// <summary>
-/// Wraps git CLI via System.Diagnostics.Process to manage repository worktrees.
+/// Wraps git CLI via <see cref="IProcessRunner"/> to manage repository worktrees.
 /// All operations are best-effort; non-zero exit codes return false (or empty for queries).
 /// </summary>
 public class RepositoryManager : IRepositoryManager
 {
     private readonly ILogger<RepositoryManager>? _logger;
+    private readonly IProcessRunner _runner;
     private readonly string _worktreesRoot;
 
-    public RepositoryManager(ILogger<RepositoryManager>? logger = null, string? worktreesRoot = null)
+    public RepositoryManager(IProcessRunner runner, ILogger<RepositoryManager>? logger = null, string? worktreesRoot = null)
     {
+        _runner = runner;
         _logger = logger;
         _worktreesRoot = worktreesRoot ?? Path.Combine("/tmp", "ild-worktrees");
+    }
+
+    // Test/back-compat constructor: spins up a local ProcessRunner.
+    public RepositoryManager(ILogger<RepositoryManager>? logger = null, string? worktreesRoot = null)
+        : this(new ProcessRunner(), logger, worktreesRoot)
+    {
+    }
+
+    public async Task<(bool Success, string? Error)> CloneAsync(string cloneUrl, string targetPath, CancellationToken cancellationToken = default)
+    {
+        var parent = Path.GetDirectoryName(targetPath);
+        if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
+        var result = await _runner.RunAsync("git", new[] { "clone", cloneUrl, targetPath }, parent, cancellationToken);
+        return result.Success ? (true, null) : (false, result.StdErr);
     }
 
     public async Task<string> CreateWorktreeAsync(string repoPath, string branchName)
@@ -133,47 +148,9 @@ public class RepositoryManager : IRepositoryManager
 
     private async Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(string cwd, IReadOnlyList<string> args, CancellationToken ct)
     {
-        var psi = new ProcessStartInfo("git")
-        {
-            WorkingDirectory = cwd,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        foreach (var a in args) psi.ArgumentList.Add(a);
-
-        _logger?.LogDebug("Executing git {Args} in {Worktree}", string.Join(' ', args), cwd);
-
-        using var proc = Process.Start(psi)!;
-        var stdoutTask = proc.StandardOutput.ReadToEndAsync();
-        var stderrTask = proc.StandardError.ReadToEndAsync();
-        try
-        {
-            await proc.WaitForExitAsync(ct);
-        }
-        catch (OperationCanceledException)
-        {
-            _logger?.LogDebug("git {Args} in {Worktree} timed out, killing process", string.Join(' ', args), cwd);
-            try
-            {
-                proc.Kill(entireProcessTree: true);
-            }
-            catch (InvalidOperationException)
-            {
-                // Process has already exited; nothing to kill.
-            }
-            catch (Exception killEx)
-            {
-                _logger?.LogWarning(killEx, "Unexpected error killing git process");
-            }
-            throw;
-        }
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
-        _logger?.LogDebug("git {Args} in {Worktree} exited {Code}", string.Join(' ', args), cwd, proc.ExitCode);
-        if (proc.ExitCode != 0)
-            _logger?.LogDebug("git {Args} exited {Code}: {Err}", string.Join(' ', args), proc.ExitCode, stderr);
-        return (proc.ExitCode, stdout, stderr);
+        var r = await _runner.RunAsync("git", args, cwd, ct);
+        if (!r.Success)
+            _logger?.LogDebug("git {Args} in {Worktree} exited {Code}: {Err}", string.Join(' ', args), cwd, r.ExitCode, r.StdErr);
+        return (r.ExitCode, r.StdOut, r.StdErr);
     }
 }

@@ -97,6 +97,7 @@ export enum LoopRunStatus {
   Completed = "Completed",
   Failed = "Failed",
   Cancelled = "Cancelled",
+  WaitingHuman = "WaitingHuman",
 }
 
 export enum LoopRunNodeStatus {

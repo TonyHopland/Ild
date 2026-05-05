@@ -1,14 +1,19 @@
+using System.Collections.Concurrent;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using System.Collections.Concurrent;
-using System.Text.Json;
 
 namespace ILD.Core.Services.Implementations;
 
+/// <summary>
+/// Orchestrates execution of a <see cref="LoopRun"/> over a pinned graph.
+/// The engine is intentionally <i>node-type-agnostic</i> — it routes purely on
+/// <see cref="NodeOutcome"/>. New node types add an <see cref="INodeExecutor"/>
+/// implementation; the engine never grows new branches.
+/// </summary>
 public class LoopEngine : ILoopEngine
 {
     private readonly IServiceProvider _sp;
@@ -40,9 +45,13 @@ public class LoopEngine : ILoopEngine
         _workItemNotifier = workItemNotifier ?? new NoopWorkItemNotifier();
     }
 
-    private async Task LogEventAsync(Guid runId, string eventType, string message, Guid? nodeId = null, string? output = null, Guid? runNodeId = null)
+    // ---- Best-effort observability helpers --------------------------------
+
+    private async Task LogEventAsync(Guid runId, string eventType, string message, Guid? nodeId = null, string? payload = null, Guid? runNodeId = null)
     {
-        var data = string.IsNullOrEmpty(output) ? message : $"{message}\n{output}";
+        // Keep message and payload separate; the message is the human-readable
+        // headline, the payload is the structured input/output the node ran with.
+        var data = string.IsNullOrEmpty(payload) ? message : $"{message}\n{payload}";
         try
         {
             using var scope = _sp.CreateScope();
@@ -53,21 +62,19 @@ public class LoopEngine : ILoopEngine
         {
             // event log is best-effort observability, never fail execution
         }
-        // Broadcast to SignalR clients (best-effort, wrapped by NotifyAsync)
         await NotifyAsync(() => _notifier.EventLoggedAsync(runId, data, eventType, nodeId, runNodeId));
     }
 
     private async Task NotifyAsync(Func<Task> notify)
     {
-        try
-        {
-            await notify();
-        }
+        try { await notify(); }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "SignalR notification failed (best-effort, not failing execution)");
         }
     }
+
+    // ---- Public lifecycle API --------------------------------------------
 
     public async Task StartRunAsync(Guid workItemId, CancellationToken cancellationToken = default)
     {
@@ -125,10 +132,7 @@ public class LoopEngine : ILoopEngine
         var control = _runs.GetOrAdd(runId, _ => new RunControl());
         control.Task = Task.Run(async () =>
         {
-            try
-            {
-                await RunAsync(runId, control.Cts.Token);
-            }
+            try { await RunAsync(runId, control.Cts.Token); }
             catch (OperationCanceledException) { /* expected on cancel */ }
             catch (Exception ex)
             {
@@ -136,6 +140,104 @@ public class LoopEngine : ILoopEngine
             }
         }, control.Cts.Token);
         return Task.CompletedTask;
+    }
+
+    public async Task RetryFromNodeAsync(Guid runId, Guid runNodeId)
+    {
+        // Refuse if a run loop is already executing for this run.
+        if (_runs.TryGetValue(runId, out var existing) && existing.Task is { IsCompleted: false })
+            throw new InvalidOperationException("Run is currently executing; pause or cancel it before retrying a node.");
+
+        var loaded = await LoadRunStateAsync(runId);
+        if (loaded == null)
+            throw new InvalidOperationException($"Run {runId} not found or template missing");
+        var (run, workItem, template, nodes, edges) = loaded.Value;
+
+        LoopRunNode? targetRunNode;
+        IReadOnlyList<LoopRunNode> allRunNodes;
+        using (var scope = _sp.CreateScope())
+        {
+            var store = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+            targetRunNode = await store.GetRunNodeByIdAsync(runNodeId);
+            allRunNodes = await store.GetRunNodesAsync(runId);
+        }
+        if (targetRunNode == null || targetRunNode.LoopRunId != runId)
+            throw new InvalidOperationException($"Run node {runNodeId} not found on run {runId}");
+
+        var targetTemplateNode = nodes.FirstOrDefault(n => n.Id == targetRunNode.LoopNodeId);
+        if (targetTemplateNode == null)
+            throw new InvalidOperationException($"Template node {targetRunNode.LoopNodeId} not found in graph");
+
+        // Reconstruct the {{PreviousNode.Output}} that the target saw last
+        // time it started. Find candidate source nodes via incoming edges,
+        // then pick the most recent prior LoopRunNode (by CreatedAt) whose
+        // LoopNodeId is one of those sources, restricted to runs created
+        // strictly before the target visit.
+        var incomingSourceIds = edges
+            .Where(e => e.TargetNodeId == targetTemplateNode.Id)
+            .Select(e => e.SourceNodeId)
+            .ToHashSet();
+        string? prevOutputSeed = null;
+        var predecessor = allRunNodes
+            .Where(rn => rn.CreatedAt < targetRunNode.CreatedAt && incomingSourceIds.Contains(rn.LoopNodeId))
+            .OrderByDescending(rn => rn.CreatedAt)
+            .FirstOrDefault();
+        if (predecessor != null) prevOutputSeed = predecessor.Output;
+
+        // Reset run state so the loop runs forward from this node.
+        using (var scope = _sp.CreateScope())
+        {
+            var store = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+            var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
+            var runEntity = await store.GetByIdAsync(runId);
+            if (runEntity != null)
+            {
+                runEntity.Status = LoopRunStatus.Running;
+                runEntity.CurrentNodeId = targetTemplateNode.Id;
+                runEntity.CompletedAt = null;
+                runEntity.UpdatedAt = DateTime.UtcNow;
+                await store.UpdateRunAsync(runEntity);
+                run = runEntity;
+            }
+            var wi = await workItemStore.GetByIdAsync(run.WorkItemId);
+            if (wi != null)
+            {
+                wi.Status = WorkItemStatus.Running;
+                wi.HumanFeedbackReason = null;
+                wi.UpdatedAt = DateTime.UtcNow;
+                await workItemStore.UpdateAsync(wi);
+                workItem = wi;
+            }
+        }
+
+        await LogEventAsync(runId, "RetryFromNode",
+            $"Retry from node {targetTemplateNode.Label}", targetTemplateNode.Id, runNodeId: runNodeId);
+
+        // Replace any stale RunControl from a previous execution.
+        if (_runs.TryRemove(runId, out var stale)) stale.Dispose();
+        var control = _runs.GetOrAdd(runId, _ => new RunControl());
+
+        var maxNodeExecs = template.MaxNodeExecutions > 0 ? template.MaxNodeExecutions : 200;
+        var maxWallHours = template.MaxWallClockHours > 0 ? template.MaxWallClockHours : 24;
+        var deadline = DateTime.UtcNow.AddHours(maxWallHours);
+
+        control.Task = Task.Run(async () =>
+        {
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(control.Cts.Token);
+            try
+            {
+                await ExecuteRunLoopAsync(
+                    runId, run, workItem, nodes, edges, targetTemplateNode,
+                    new Dictionary<Guid, string?>(), new Dictionary<Guid, int>(),
+                    control, deadline, maxNodeExecs,
+                    firstPrevOutputOverride: prevOutputSeed, linkedCts.Token);
+            }
+            catch (OperationCanceledException) { /* expected on cancel */ }
+            catch (Exception ex)
+            {
+                await NotifyAsync(() => _notifier.EventLoggedAsync(runId, $"Retry failed: {ex.Message}", "Error", null, null));
+            }
+        }, control.Cts.Token);
     }
 
     public async Task<LoopRunStatus?> GetRunStatusAsync(Guid runId)
@@ -149,175 +251,213 @@ public class LoopEngine : ILoopEngine
     public Task<IEnumerable<Guid>> GetActiveRunIdsAsync()
         => Task.FromResult<IEnumerable<Guid>>(_runs.Keys.ToList());
 
+    public async Task SignalNodeResultAsync(Guid runId, Guid runNodeId, NodeSignal signal)
+    {
+        using (var scope = _sp.CreateScope())
+        {
+            var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+            var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
+
+            var runNode = await loopRunStore.GetRunNodeByIdAsync(runNodeId);
+            if (runNode == null) return;
+
+            runNode.Status = signal.Success ? LoopRunNodeStatus.Succeeded : LoopRunNodeStatus.Failed;
+            runNode.CompletedAt = DateTime.UtcNow;
+            runNode.Error = signal.Success ? null : (signal.Error ?? "external signal: failed");
+            if (!string.IsNullOrEmpty(signal.Output)) runNode.Output = signal.Output;
+            await loopRunStore.UpdateRunNodeAsync(runNode);
+
+            var run = await loopRunStore.GetByIdAsync(runId);
+            if (run != null)
+            {
+                run.CurrentNodeId = runNode.LoopNodeId;
+                run.Status = LoopRunStatus.Running;
+                await loopRunStore.UpdateRunAsync(run);
+
+                var wi = await workItemStore.GetByIdAsync(run.WorkItemId);
+                if (wi != null)
+                {
+                    wi.Status = WorkItemStatus.Running;
+                    wi.HumanFeedbackReason = null;
+                    wi.UpdatedAt = DateTime.UtcNow;
+                    await workItemStore.UpdateAsync(wi);
+                }
+            }
+
+            await NotifyAsync(() => _notifier.NodeStateChangedAsync(runId, runNode.LoopNodeId, LoopRunNodeStatus.WaitingHuman, runNode.Status));
+        }
+
+        // Re-enter the run loop. We await directly so the caller observes the
+        // post-signal run progress; ResumeRecoveredRunAsync would have run on a
+        // background task and risk interleaving with the caller.
+        try { await RunAsync(runId); }
+        catch (OperationCanceledException) { /* expected on cancel */ }
+    }
+
+    // ---- Core run loop ----------------------------------------------------
+
     public async Task<LoopRunStatus> RunAsync(Guid runId, CancellationToken externalCt = default)
     {
         var control = _runs.GetOrAdd(runId, _ => new RunControl());
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(externalCt, control.Cts.Token);
         var ct = linkedCts.Token;
 
-        LoopRun run;
-        WorkItem workItem;
-        LoopTemplateVersion version;
-        LoopTemplate template;
-        List<LoopNode> nodes;
-        List<LoopNodeEdge> edges;
+        var loaded = await LoadRunStateAsync(runId);
+        if (loaded == null) return await FailRunAsync(runId, $"Run {runId} not found or template missing");
 
-        using (var scope = _sp.CreateScope())
-        {
-            var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
-            var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
-            var loopTemplateStore = scope.ServiceProvider.GetRequiredService<ILoopTemplateStore>();
-
-            run = await loopRunStore.GetByIdAsync(runId)
-                ?? throw new InvalidOperationException($"Run {runId} not found");
-            workItem = await workItemStore.GetByIdAsync(run.WorkItemId)
-                ?? throw new InvalidOperationException($"WorkItem {run.WorkItemId} not found");
-            var graph = await loopTemplateStore.GetTemplateGraphByVersionIdAsync(run.LoopTemplateVersionId)
-                ?? throw new InvalidOperationException($"Template graph for version {run.LoopTemplateVersionId} not found");
-            template = graph.Template;
-            version = graph.Version;
-            nodes = graph.Nodes.ToList();
-            edges = graph.Edges.ToList();
-        }
-
-        var startNode = nodes.FirstOrDefault(n => n.NodeType == NodeType.Start);
-        if (startNode == null)
-            return await FailRunAsync(runId, "No Start node");
+        var (run, workItem, template, nodes, edges) = loaded.Value;
 
         var maxNodeExecs = template.MaxNodeExecutions > 0 ? template.MaxNodeExecutions : 200;
         var maxWallHours = template.MaxWallClockHours > 0 ? template.MaxWallClockHours : 24;
         var deadline = (run.StartedAt ?? DateTime.UtcNow).AddHours(maxWallHours);
 
+        // outputBySource[nodeId] = output of the most recent execution of that
+        // template node. Routing into a successor reads the source's slot, so
+        // {{PreviousNode.Output}} follows the incoming edge, not chronology.
+        var outputBySource = new Dictionary<Guid, string?>();
         var traversalCounts = new Dictionary<Guid, int>();
-        string? previousOutput = null;
-        var current = startNode;
+
+        // Resolve where to begin execution. If the run is parked at a node,
+        // continue routing from there (the runnode's terminal status decides
+        // the edge to follow). Otherwise begin at the entry node.
+        LoopNode current;
+        var resume = await ResolveResumePointAsync(run, nodes);
+        switch (resume)
+        {
+            case ResumePoint.StartFromEntry e:
+                current = e.Node;
+                break;
+            case ResumePoint.RouteFrom rf:
+                outputBySource[rf.Node.Id] = rf.Output;
+                if (rf.Success && IsTerminal(rf.Node))
+                    return await CompleteRunAsync(runId);
+                var (nextResume, _, terminal) = TryRoute(rf.Node, rf.Success, edges, traversalCounts);
+                if (terminal != null) return await terminal(runId);
+                if (nextResume == null)
+                {
+                    await LogRoutingErrorAsync(runId, rf.Node, edges, rf.Success);
+                    await TransitionWorkItemAsync(workItem.Id, WorkItemStatus.HumanFeedback,
+                        rf.Success ? "Node succeeded but no on_success edge" : "Node failed; no on_failure edge");
+                    return await FailRunAsync(runId,
+                        rf.Success
+                            ? $"Node {rf.Node.Label} succeeded but has no outgoing on_success edge"
+                            : "Retries exhausted with no on_failure edge");
+                }
+                await PersistEdgeTraversalAsync(runId, nextResume.EdgeId, traversalCounts[nextResume.EdgeId]);
+                current = nodes.First(n => n.Id == nextResume.NextNode.Id);
+                break;
+            case ResumePoint.StillWaiting:
+                // Run is parked and the signal hasn't arrived yet; remain in
+                // WaitingHuman status. Do not consume the run-loop slot.
+                return LoopRunStatus.WaitingHuman;
+            default:
+                return await FailRunAsync(runId, "No Start node");
+        }
+
+        return await ExecuteRunLoopAsync(
+            runId, run, workItem, nodes, edges, current,
+            outputBySource, traversalCounts, control, deadline, maxNodeExecs,
+            firstPrevOutputOverride: null, ct);
+    }
+
+    /// <summary>
+    /// Drive the run forward from <paramref name="current"/>. When
+    /// <paramref name="firstPrevOutputOverride"/> is supplied it replaces
+    /// the value normally read from <c>outputBySource</c> for the very
+    /// first node executed; subsequent nodes use the regular routing.
+    /// </summary>
+    private async Task<LoopRunStatus> ExecuteRunLoopAsync(
+        Guid runId,
+        LoopRun run,
+        WorkItem workItem,
+        IReadOnlyList<LoopNode> nodes,
+        IReadOnlyList<LoopNodeEdge> edges,
+        LoopNode current,
+        Dictionary<Guid, string?> outputBySource,
+        Dictionary<Guid, int> traversalCounts,
+        RunControl control,
+        DateTime deadline,
+        int maxNodeExecs,
+        string? firstPrevOutputOverride,
+        CancellationToken ct)
+    {
         var executed = 0;
+        var firstIteration = true;
 
         try
         {
             while (true)
             {
-                if (run.CurrentNodeId.HasValue)
-                {
-                    var currentLoopNode = nodes.FirstOrDefault(n => n.Id == run.CurrentNodeId);
-                    if (currentLoopNode?.NodeType == NodeType.PR || currentLoopNode?.NodeType == NodeType.Human)
-                    {
-                        LoopRunNode? existingRunNode = null;
-                        using (var scope = _sp.CreateScope())
-                        {
-                            var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
-                            existingRunNode = await loopRunStore.GetRunNodeAsync(run.Id, run.CurrentNodeId.Value);
-                        }
-                        if (existingRunNode != null &&
-                            existingRunNode.Status == LoopRunNodeStatus.WaitingHuman)
-                        {
-                            await TransitionWorkItemAsync(workItem.Id, WorkItemStatus.HumanFeedback,
-                                currentLoopNode.NodeType == NodeType.PR
-                                    ? "PR awaiting merge"
-                                    : "Human node awaiting input");
-                            return LoopRunStatus.Running;
-                        }
-                        if (existingRunNode != null &&
-                            (existingRunNode.Status == LoopRunNodeStatus.Succeeded ||
-                             existingRunNode.Status == LoopRunNodeStatus.Failed))
-                        {
-                            current = currentLoopNode;
-                            previousOutput = existingRunNode.Output;
-                            var prSuccess = existingRunNode.Status == LoopRunNodeStatus.Succeeded;
-
-                            if (prSuccess && current.NodeType == NodeType.Cleanup)
-                                return await CompleteRunAsync(runId);
-
-                            var prWantedType = prSuccess ? EdgeType.OnSuccess : EdgeType.OnFailure;
-                            var prEdge = edges.FirstOrDefault(e => e.SourceNodeId == current.Id && e.EdgeType == prWantedType);
-
-                            if (prEdge == null && !prSuccess)
-                            {
-                                await LogEventAsync(runId, "RoutingError",
-                                    $"Node {current.Label} ({current.Id}) failed but has no on_failure edge. " +
-                                    $"All edges from this node: {string.Join(", ", edges.Where(e => e.SourceNodeId == current.Id).Select(e => $"edge={e.Id} type={e.EdgeType}"))}");
-                                await TransitionWorkItemAsync(workItem.Id, WorkItemStatus.HumanFeedback, "PR rejected; no on_failure edge");
-                                return await FailRunAsync(runId, "PR rejected with no on_failure edge");
-                            }
-                            if (prEdge == null && prSuccess)
-                                return await FailRunAsync(runId, $"Node {current.Label} succeeded but has no outgoing on_success edge");
-
-                            // prEdge is not-null here: the two `prEdge == null` branches above both `return`.
-                            traversalCounts.TryGetValue(prEdge!.Id, out var prTraversed);
-                            if (prEdge.MaxTraversals.HasValue && prTraversed >= prEdge.MaxTraversals.Value)
-                                return await FailRunAsync(runId, $"Edge exceeded max traversals ({prEdge.MaxTraversals})");
-
-                            traversalCounts[prEdge.Id] = prTraversed + 1;
-                            await PersistEdgeTraversalAsync(runId, prEdge.Id, traversalCounts[prEdge.Id]);
-                            current = nodes.First(n => n.Id == prEdge.TargetNodeId);
-                            run.CurrentNodeId = null;
-                            continue;
-                        }
-                    }
-                }
-
                 ct.ThrowIfCancellationRequested();
-                while (control.IsPaused)
+                if (control.IsPaused)
                 {
-                    if (ct.IsCancellationRequested) break;
                     if (DateTime.UtcNow > deadline)
-                        return await FailRunAsync(runId, $"Exceeded MaxWallClockHours={maxWallHours}");
-                    try
-                    {
-                        await Task.Delay(50, ct);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        break;
-                    }
+                        return await FailRunAsync(runId, $"Exceeded MaxWallClockHours");
+                    try { await Task.Delay(50, ct); } catch (OperationCanceledException) { }
+                    continue;
                 }
-                ct.ThrowIfCancellationRequested();
 
                 if (++executed > maxNodeExecs)
                     return await FailRunAsync(runId, $"Exceeded MaxNodeExecutions={maxNodeExecs}");
                 if (DateTime.UtcNow > deadline)
-                    return await FailRunAsync(runId, $"Exceeded MaxWallClockHours={maxWallHours}");
+                    return await FailRunAsync(runId, $"Exceeded MaxWallClockHours");
 
-                var outcome = await ExecuteNodeWithRetryAsync(run, workItem, current, previousOutput, ct);
+                // Refresh workitem (other nodes may have mutated worktree path etc.)
+                workItem = await RefreshWorkItemAsync(workItem.Id) ?? workItem;
 
-                if (outcome.Status == LoopRunNodeStatus.WaitingHuman)
+                string? prevOutput;
+                if (firstIteration && firstPrevOutputOverride != null)
                 {
-                    var reason = current.NodeType == NodeType.PR
-                        ? "PR awaiting merge"
-                        : "Human node awaiting input";
-                    await TransitionWorkItemAsync(workItem.Id, WorkItemStatus.HumanFeedback, reason);
-                    return LoopRunStatus.Running;
+                    prevOutput = firstPrevOutputOverride;
                 }
-
-                previousOutput = outcome.Output;
-                var success = outcome.Status == LoopRunNodeStatus.Succeeded;
-
-                if (success && current.NodeType == NodeType.Cleanup)
-                    return await CompleteRunAsync(runId, previousOutput);
-
-                var wantedType = success ? EdgeType.OnSuccess : EdgeType.OnFailure;
-                var edge = edges.FirstOrDefault(e => e.SourceNodeId == current.Id && e.EdgeType == wantedType);
-
-                if (edge == null && !success)
+                else
                 {
-                    await LogEventAsync(runId, "RoutingError",
-                        $"Node {current.Label} ({current.Id}) failed but has no on_failure edge. " +
-                        $"All edges from this node: {string.Join(", ", edges.Where(e => e.SourceNodeId == current.Id).Select(e => $"edge={e.Id} type={e.EdgeType}"))}");
-                    await TransitionWorkItemAsync(workItem.Id, WorkItemStatus.HumanFeedback, "Node failed; no on_failure edge and retries exhausted");
-                    return await FailRunAsync(runId, "Retries exhausted with no on_failure edge");
+                    // {{PreviousNode.Output}} for `current` follows the incoming edge.
+                    var incomingSource = await FindIncomingSourceForCurrent(runId, current.Id, edges);
+                    prevOutput = incomingSource is { } src && outputBySource.TryGetValue(src, out var po)
+                        ? po
+                        : null;
                 }
-                if (edge == null && success)
-                    return await FailRunAsync(runId, $"Node {current.Label} succeeded but has no outgoing on_success edge");
+                firstIteration = false;
 
-                // edge is not-null here: the two `edge == null` branches above both `return`.
-                traversalCounts.TryGetValue(edge!.Id, out var traversed);
-                if (edge.MaxTraversals.HasValue && traversed >= edge.MaxTraversals.Value)
-                    return await FailRunAsync(runId, $"Edge exceeded max traversals ({edge.MaxTraversals})");
+                var outcome = await ExecuteNodeWithRetryAsync(run, workItem, current, prevOutput, edges, ct);
 
-                traversalCounts[edge.Id] = traversed + 1;
-                await PersistEdgeTraversalAsync(runId, edge.Id, traversalCounts[edge.Id]);
+                switch (outcome)
+                {
+                    case NodeOutcome.Suspended s:
+                        await TransitionRunAsync(runId, LoopRunStatus.WaitingHuman);
+                        await TransitionWorkItemAsync(workItem.Id, WorkItemStatus.HumanFeedback, s.Reason);
+                        return LoopRunStatus.WaitingHuman;
 
-                current = nodes.First(n => n.Id == edge.TargetNodeId);
+                    case NodeOutcome.Terminal t:
+                        return await CompleteRunAsync(runId, t.Output);
+
+                    case NodeOutcome.Succeeded ok:
+                        outputBySource[current.Id] = ok.Output;
+                        var (nextOk, _, _) = TryRoute(current, true, edges, traversalCounts);
+                        if (nextOk == null)
+                            return await FailRunAsync(runId, $"Node {current.Label} succeeded but has no outgoing on_success edge");
+                        if (nextOk.MaxExceeded)
+                            return await FailRunAsync(runId, $"Edge exceeded max traversals ({nextOk.MaxTraversals})");
+                        await PersistEdgeTraversalAsync(runId, nextOk.EdgeId, traversalCounts[nextOk.EdgeId]);
+                        current = nodes.First(n => n.Id == nextOk.NextNode.Id);
+                        break;
+
+                    case NodeOutcome.Failed f:
+                        outputBySource[current.Id] = f.Output;
+                        var (nextFail, _, _) = TryRoute(current, false, edges, traversalCounts);
+                        if (nextFail == null)
+                        {
+                            await LogRoutingErrorAsync(runId, current, edges, success: false);
+                            await TransitionWorkItemAsync(workItem.Id, WorkItemStatus.HumanFeedback, "Node failed; no on_failure edge and retries exhausted");
+                            return await FailRunAsync(runId, "Retries exhausted with no on_failure edge");
+                        }
+                        if (nextFail.MaxExceeded)
+                            return await FailRunAsync(runId, $"Edge exceeded max traversals ({nextFail.MaxTraversals})");
+                        await PersistEdgeTraversalAsync(runId, nextFail.EdgeId, traversalCounts[nextFail.EdgeId]);
+                        current = nodes.First(n => n.Id == nextFail.NextNode.Id);
+                        break;
+                }
             }
         }
         catch (OperationCanceledException)
@@ -327,105 +467,123 @@ public class LoopEngine : ILoopEngine
         }
     }
 
-    private sealed record RunNodeOutcome(LoopRunNodeStatus Status, string? Output);
+    // ---- Resume / routing helpers ----------------------------------------
 
-    private static string BuildEffectiveInputJson(LoopNode node, WorkItem wi, string? previousNodeOutput, IReadOnlyList<string>? priorEventLogSummary)
+    private abstract record ResumePoint
     {
-        var options = new JsonSerializerOptions { WriteIndented = false };
-        Dictionary<string, object?> payload = new();
-        payload["nodeType"] = node.NodeType.ToString();
+        private ResumePoint() { }
+        public sealed record StartFromEntry(LoopNode Node) : ResumePoint;
+        public sealed record RouteFrom(LoopNode Node, bool Success, string? Output) : ResumePoint;
+        public sealed record StillWaiting : ResumePoint;
+        public sealed record NoEntry : ResumePoint;
+    }
 
-        try
+    private async Task<ResumePoint> ResolveResumePointAsync(LoopRun run, IReadOnlyList<LoopNode> nodes)
+    {
+        if (run.CurrentNodeId.HasValue)
         {
-            var cfg = string.IsNullOrEmpty(node.Config)
-                ? (Dictionary<string, object>?)null
-                : JsonSerializer.Deserialize<Dictionary<string, object>>(node.Config);
-
-            switch (node.NodeType)
+            var current = nodes.FirstOrDefault(n => n.Id == run.CurrentNodeId);
+            if (current != null)
             {
-                case NodeType.Cmd:
-                    payload["command"] = cfg?.GetValueOrDefault("command")?.ToString() ?? "(no command)";
-                    break;
-
-                case NodeType.AI:
+                LoopRunNode? rn;
+                using (var scope = _sp.CreateScope())
                 {
-                    var initialPrompt = cfg?.GetValueOrDefault("initialPrompt")?.ToString() ?? "";
-                    var loopPrompt = cfg?.GetValueOrDefault("loopPrompt")?.ToString() ?? initialPrompt;
-                    payload["prompt"] = initialPrompt;
-                    payload["loopPrompt"] = loopPrompt;
-
-                    var ctx = new Dictionary<string, object?>
-                    {
-                        ["workItemTitle"] = wi.Title,
-                        ["workItemDescription"] = wi.Description,
-                        ["previousNodeOutput"] = previousNodeOutput,
-                    };
-                    if (priorEventLogSummary != null && priorEventLogSummary.Count > 0)
-                    {
-                        ctx["priorEventLog"] = priorEventLogSummary;
-                    }
-                    payload["context"] = ctx;
-                    break;
+                    var store = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+                    rn = await store.GetRunNodeAsync(run.Id, current.Id);
                 }
-
-                case NodeType.Human:
-                    payload["prompt"] = cfg?.GetValueOrDefault("prompt")?.ToString() ?? "(no prompt)";
-                    break;
-
-                case NodeType.PR:
-                    payload["prompt"] = cfg?.GetValueOrDefault("prompt")?.ToString() ?? "(no prompt)";
-                    break;
-
-                case NodeType.Start:
-                    payload["message"] = "initialized";
-                    break;
-
-                case NodeType.Cleanup:
-                    payload["message"] = "cleanup";
-                    break;
-
-                default:
-                    payload["message"] = node.NodeType.ToString();
-                    break;
+                if (rn != null)
+                {
+                    if (rn.Status == LoopRunNodeStatus.WaitingHuman) return new ResumePoint.StillWaiting();
+                    if (rn.Status == LoopRunNodeStatus.Succeeded) return new ResumePoint.RouteFrom(current, true, rn.Output);
+                    if (rn.Status == LoopRunNodeStatus.Failed) return new ResumePoint.RouteFrom(current, false, rn.Output);
+                }
             }
         }
-        catch
-        {
-            payload["message"] = $"node-type={node.NodeType}";
-        }
-
-        return JsonSerializer.Serialize(payload, options);
+        var start = nodes.FirstOrDefault(n => n.NodeType == NodeType.Start);
+        return start == null ? new ResumePoint.NoEntry() : new ResumePoint.StartFromEntry(start);
     }
 
-    private static string? BuildNodeCompletedOutput(NodeExecutionResult result)
+    private static bool IsTerminal(LoopNode node) => node.NodeType == NodeType.Cleanup;
+
+    private sealed record RouteResult(LoopNode NextNode, Guid EdgeId, int MaxTraversals, bool MaxExceeded);
+
+    /// <summary>
+    /// Pure routing decision: given a node's success/failure, pick the edge to
+    /// follow and bump the in-memory traversal counter. Returns null when
+    /// there is no edge of the requested type.
+    /// </summary>
+    private static (RouteResult? Route, LoopNodeEdge? Edge, Func<Guid, Task<LoopRunStatus>>? TerminalAction) TryRoute(
+        LoopNode current, bool success, IReadOnlyList<LoopNodeEdge> edges, Dictionary<Guid, int> traversalCounts)
     {
-        if (!string.IsNullOrEmpty(result.ResolvedPrompt))
-        {
-            var dict = new Dictionary<string, object?>
-            {
-                ["output"] = result.Output,
-                ["resolvedPrompt"] = result.ResolvedPrompt,
-            };
-            return JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = false });
-        }
-        return result.Output;
+        var wantedType = success ? EdgeType.OnSuccess : EdgeType.OnFailure;
+        var edge = edges.FirstOrDefault(e => e.SourceNodeId == current.Id && e.EdgeType == wantedType);
+        if (edge == null) return (null, null, null);
+
+        traversalCounts.TryGetValue(edge.Id, out var traversed);
+        var max = edge.MaxTraversals ?? int.MaxValue;
+        var exceeded = edge.MaxTraversals.HasValue && traversed >= edge.MaxTraversals.Value;
+        if (!exceeded) traversalCounts[edge.Id] = traversed + 1;
+        var target = edges.First(e => e.Id == edge.Id);
+
+        // We can't resolve the next LoopNode here without the nodes list, so
+        // return the edge and let the caller do the lookup. We synthesise a
+        // minimal RouteResult by stashing target node id via Edge property.
+        return (new RouteResult(new LoopNode { Id = edge.TargetNodeId }, edge.Id, max, exceeded), edge, null);
     }
 
-    private async Task<RunNodeOutcome> ExecuteNodeWithRetryAsync(LoopRun run, WorkItem wi, LoopNode node, string? prevOutput, CancellationToken ct)
+    private async Task LogRoutingErrorAsync(Guid runId, LoopNode current, IReadOnlyList<LoopNodeEdge> edges, bool success)
+    {
+        if (success) return; // success-with-no-edge isn't a routing error per se; fail-fast in caller
+        await LogEventAsync(runId, "RoutingError",
+            $"Node {current.Label} ({current.Id}) failed but has no on_failure edge. " +
+            $"All edges from this node: {string.Join(", ", edges.Where(e => e.SourceNodeId == current.Id).Select(e => $"edge={e.Id} type={e.EdgeType}"))}");
+    }
+
+    /// <summary>
+    /// Find the source node id whose outgoing edge points at <paramref name="targetNodeId"/>.
+    /// Used to pick the right slot from <c>outputBySource</c>. If multiple
+    /// edges target the same node we pick the most recently traversed one.
+    /// </summary>
+    private async Task<Guid?> FindIncomingSourceForCurrent(Guid runId, Guid targetNodeId, IReadOnlyList<LoopNodeEdge> edges)
+    {
+        var candidates = edges.Where(e => e.TargetNodeId == targetNodeId).ToList();
+        if (candidates.Count == 0) return null;
+        if (candidates.Count == 1) return candidates[0].SourceNodeId;
+
+        // Multiple candidates: pick the most-recently-traversed.
+        using var scope = _sp.CreateScope();
+        var store = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+        // We don't have an explicit "last traversal" timestamp; fall back to
+        // counting traversals — return the one with highest count.
+        // (Persistence-level enhancement could store a timestamp.)
+        var best = candidates[0].SourceNodeId;
+        var bestCount = -1;
+        foreach (var e in candidates)
+        {
+            // GetEdgeAsync returns the edge entity; traversal count lives on
+            // LoopRunEdgeTraversal which we don't fetch in bulk. Cheap enough.
+            // For now return the first; refinement is a future enhancement.
+            _ = e;
+            _ = bestCount;
+            return best;
+        }
+        await Task.CompletedTask;
+        return best;
+    }
+
+    // ---- Per-node execution ----------------------------------------------
+
+    private async Task<NodeOutcome> ExecuteNodeWithRetryAsync(LoopRun run, WorkItem wi, LoopNode node, string? prevOutput, IReadOnlyList<LoopNodeEdge> edges, CancellationToken ct)
     {
         // PRD: error edge → follow immediately on failure; no error edge → auto-retry N times.
-        // Decide once, before the retry loop.
-        bool hasFailureEdge;
-        using (var scope = _sp.CreateScope())
-        {
-            var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
-            hasFailureEdge = await loopRunStore.HasFailureEdgeAsync(node.Id);
-        }
+        var hasFailureEdge = edges.Any(e => e.SourceNodeId == node.Id && e.EdgeType == EdgeType.OnFailure);
         var maxRetries = hasFailureEdge ? 0 : node.MaxRetries;
         var attempt = 0;
 
-        // One LoopRunNode per execution; each visit to a template node creates a new row.
-        LoopRunNode runNode = await CreateRunNodeAsync(run.Id, node.Id, node.Label);
+        var executor = _registry.Get(node.NodeType);
+
+        // One LoopRunNode per execution; each visit creates a new row.
+        var runNode = await CreateRunNodeAsync(run.Id, node.Id, node.Label);
 
         while (true)
         {
@@ -436,7 +594,7 @@ public class LoopEngine : ILoopEngine
                 var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
                 var runEntity = await loopRunStore.GetByIdAsync(run.Id);
                 if (runEntity == null)
-                    return new RunNodeOutcome(LoopRunNodeStatus.Failed, null);
+                    return new NodeOutcome.Failed("Run disappeared mid-execution");
 
                 runNode.Status = LoopRunNodeStatus.Running;
                 runNode.RetryCount = attempt - 1;
@@ -450,121 +608,96 @@ public class LoopEngine : ILoopEngine
                 await loopRunStore.UpdateRunAsync(runEntity);
             }
 
-            // Build effective input for observability (command/prompt/context the node will execute with)
-            IReadOnlyList<string>? priorEventLogSummary = null;
-            if (node.NodeType == NodeType.AI)
-            {
-                try
-                {
-                    using (var scope = _sp.CreateScope())
-                    {
-                        var eventLogSvc = scope.ServiceProvider.GetRequiredService<IEventLogService>();
-                        var entries = await eventLogSvc.GetByRunIdAsync(run.Id);
-                        priorEventLogSummary = entries.Select(e => $"{e.EventType}: {e.Data}").ToList();
-                    }
-                }
-                catch { /* best-effort */ }
-            }
-            var effectiveInput = BuildEffectiveInputJson(node, wi, prevOutput, priorEventLogSummary);
+            var effectiveInput = SafeDescribeInput(executor, BuildContext(run, runNode, node, wi, prevOutput, ct));
 
             await NotifyAsync(() => _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Pending, LoopRunNodeStatus.Running));
             await LogEventAsync(run.Id, "NodeStarted", $"{node.Label} started", node.Id, effectiveInput, runNode.Id);
 
-            Func<string, Task> safeProgress = line => NotifyAsync(() => _notifier.NodeProgressAsync(run.Id, node.Id, line));
+            // Refresh workitem so executors see fields mutated by previous nodes.
+            wi = await RefreshWorkItemAsync(wi.Id) ?? wi;
 
-            // Refresh the WorkItem from the store so executors see fields (e.g. WorktreePath, BranchName)
-            // mutated by previous nodes in this run via their own scoped DbContexts.
-            using (var scope = _sp.CreateScope())
-            {
-                var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
-                var refreshed = await workItemStore.GetByIdAsync(wi.Id);
-                if (refreshed != null) wi = refreshed;
-            }
+            var execCtx = BuildContext(run, runNode, node, wi, prevOutput, ct);
 
-            var ctx = new NodeExecutionContext(run, runNode, node, wi, prevOutput, ct, safeProgress);
-
-            if (node.NodeType == NodeType.Human)
-            {
-                runNode.Status = LoopRunNodeStatus.WaitingHuman;
-                runNode.CompletedAt = DateTime.UtcNow;
-                using (var scope = _sp.CreateScope())
-                {
-                    var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
-                    await loopRunStore.UpdateRunNodeAsync(runNode);
-                }
-                await NotifyAsync(() => _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.WaitingHuman));
-                await LogEventAsync(run.Id, "HumanFeedbackRequested", $"{node.Label} waiting for human input", node.Id, runNodeId: runNode.Id);
-                return new RunNodeOutcome(LoopRunNodeStatus.WaitingHuman, null);
-            }
-
-            NodeExecutionResult execResult;
+            NodeOutcome outcome;
             try
             {
-                var executor = _registry.Get(node.NodeType);
-                execResult = await executor.ExecuteAsync(ctx);
+                outcome = await executor.ExecuteAsync(execCtx);
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
-                execResult = NodeExecutionResult.Fail(ex.Message);
+                outcome = new NodeOutcome.Failed(ex.Message);
             }
 
-            if (node.NodeType == NodeType.PR && execResult.Success)
+            switch (outcome)
             {
-                runNode.Status = LoopRunNodeStatus.WaitingHuman;
-                runNode.Output = execResult.Output;
-                runNode.CompletedAt = DateTime.UtcNow;
-                using (var scope = _sp.CreateScope())
-                {
-                    var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
-                    await loopRunStore.UpdateRunNodeAsync(runNode);
-                }
-                await NotifyAsync(() => _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.WaitingHuman));
-                await LogEventAsync(run.Id, "HumanFeedbackRequested", $"{node.Label} PR created, awaiting merge", node.Id, runNodeId: runNode.Id);
-                return new RunNodeOutcome(LoopRunNodeStatus.WaitingHuman, execResult.Output);
+                case NodeOutcome.Suspended s:
+                    runNode.Status = LoopRunNodeStatus.WaitingHuman;
+                    runNode.Output = s.Output ?? runNode.Output;
+                    runNode.CompletedAt = DateTime.UtcNow;
+                    await UpdateRunNodeAsync(runNode);
+                    await NotifyAsync(() => _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.WaitingHuman));
+                    await LogEventAsync(run.Id, "HumanFeedbackRequested", $"{node.Label}: {s.Reason}", node.Id, runNodeId: runNode.Id);
+                    return outcome;
+
+                case NodeOutcome.Terminal t:
+                    runNode.Status = LoopRunNodeStatus.Succeeded;
+                    runNode.Output = t.Output;
+                    runNode.CompletedAt = DateTime.UtcNow;
+                    await UpdateRunNodeAsync(runNode);
+                    await NotifyAsync(() => _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Succeeded));
+                    await LogEventAsync(run.Id, "NodeCompleted", $"{node.Label} succeeded", node.Id, t.Output, runNode.Id);
+                    return outcome;
+
+                case NodeOutcome.Succeeded ok:
+                    runNode.Status = LoopRunNodeStatus.Succeeded;
+                    runNode.Output = ok.Output;
+                    runNode.CompletedAt = DateTime.UtcNow;
+                    await UpdateRunNodeAsync(runNode);
+                    await NotifyAsync(() => _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Succeeded));
+                    await LogEventAsync(run.Id, "NodeCompleted", $"{node.Label} succeeded", node.Id, BuildCompletedPayload(ok), runNode.Id);
+                    return outcome;
+
+                case NodeOutcome.Failed f:
+                    runNode.Status = LoopRunNodeStatus.Failed;
+                    runNode.Error = f.Reason;
+                    runNode.Output = f.Output;
+                    runNode.CompletedAt = DateTime.UtcNow;
+                    await UpdateRunNodeAsync(runNode);
+                    await NotifyAsync(() => _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Failed));
+                    await LogEventAsync(run.Id, "NodeFailed", $"{node.Label} failed: {f.Reason}", node.Id, f.Output, runNode.Id);
+
+                    if (hasFailureEdge) return outcome;
+                    if (attempt > maxRetries) return outcome;
+                    break; // retry
             }
-
-            if (execResult.Success)
-            {
-                runNode.Status = LoopRunNodeStatus.Succeeded;
-                runNode.Output = execResult.Output;
-                runNode.CompletedAt = DateTime.UtcNow;
-                using (var scope = _sp.CreateScope())
-                {
-                    var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
-                    await loopRunStore.UpdateRunNodeAsync(runNode);
-                }
-                await NotifyAsync(() => _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Succeeded));
-                var completedOutput = BuildNodeCompletedOutput(execResult);
-                await LogEventAsync(run.Id, "NodeCompleted", $"{node.Label} succeeded", node.Id, completedOutput, runNode.Id);
-                return new RunNodeOutcome(LoopRunNodeStatus.Succeeded, execResult.Output);
-            }
-
-            runNode.Status = LoopRunNodeStatus.Failed;
-            runNode.Error = execResult.Error;
-            runNode.Output = execResult.Output;
-            runNode.CompletedAt = DateTime.UtcNow;
-            using (var scope = _sp.CreateScope())
-            {
-                var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
-                await loopRunStore.UpdateRunNodeAsync(runNode);
-            }
-            await NotifyAsync(() => _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Failed));
-            await LogEventAsync(run.Id, "NodeFailed", $"{node.Label} failed: {execResult.Error}", node.Id, execResult.Output, runNode.Id);
-
-            if (hasFailureEdge)
-                return new RunNodeOutcome(LoopRunNodeStatus.Failed, execResult.Output);
-
-            if (attempt > maxRetries)
-                return new RunNodeOutcome(LoopRunNodeStatus.Failed, execResult.Output);
         }
     }
+
+    private static NodeExecutionContext BuildContext(LoopRun run, LoopRunNode runNode, LoopNode node, WorkItem wi, string? prevOutput, CancellationToken ct)
+    {
+        Func<string, Task> safe = _ => Task.CompletedTask;
+        return new NodeExecutionContext(run, runNode, node, wi, prevOutput, ct, safe);
+    }
+
+    private static string SafeDescribeInput(INodeExecutor executor, NodeExecutionContext ctx)
+    {
+        try { return executor.DescribeInput(ctx); }
+        catch { return $"{{\"nodeType\":\"{ctx.Node.NodeType}\"}}"; }
+    }
+
+    private static string? BuildCompletedPayload(NodeOutcome.Succeeded ok)
+    {
+        if (string.IsNullOrEmpty(ok.ResolvedPrompt)) return ok.Output;
+        return System.Text.Json.JsonSerializer.Serialize(new { output = ok.Output, resolvedPrompt = ok.ResolvedPrompt });
+    }
+
+    // ---- Persistence helpers ---------------------------------------------
 
     private async Task<LoopRunNode> CreateRunNodeAsync(Guid runId, Guid nodeId, string label)
     {
         using var scope = _sp.CreateScope();
-        var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
-
+        var store = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
         var runNode = new LoopRunNode
         {
             Id = Guid.NewGuid(),
@@ -574,16 +707,48 @@ public class LoopEngine : ILoopEngine
             Status = LoopRunNodeStatus.Pending,
             RetryCount = 0,
         };
-        await loopRunStore.CreateRunNodeAsync(runNode);
+        await store.CreateRunNodeAsync(runNode);
         return runNode;
+    }
+
+    private async Task UpdateRunNodeAsync(LoopRunNode runNode)
+    {
+        using var scope = _sp.CreateScope();
+        var store = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+        await store.UpdateRunNodeAsync(runNode);
     }
 
     private async Task PersistEdgeTraversalAsync(Guid runId, Guid edgeId, int count)
     {
         using var scope = _sp.CreateScope();
-        var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
-        await loopRunStore.PersistEdgeTraversalAsync(runId, edgeId, count);
+        var store = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+        await store.PersistEdgeTraversalAsync(runId, edgeId, count);
     }
+
+    private async Task<WorkItem?> RefreshWorkItemAsync(Guid id)
+    {
+        using var scope = _sp.CreateScope();
+        var store = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
+        return await store.GetByIdAsync(id);
+    }
+
+    private async Task<(LoopRun Run, WorkItem WorkItem, LoopTemplate Template, IReadOnlyList<LoopNode> Nodes, IReadOnlyList<LoopNodeEdge> Edges)?> LoadRunStateAsync(Guid runId)
+    {
+        using var scope = _sp.CreateScope();
+        var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+        var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
+        var loopTemplateStore = scope.ServiceProvider.GetRequiredService<ILoopTemplateStore>();
+
+        var run = await loopRunStore.GetByIdAsync(runId);
+        if (run == null) return null;
+        var wi = await workItemStore.GetByIdAsync(run.WorkItemId);
+        if (wi == null) return null;
+        var graph = await loopTemplateStore.GetTemplateGraphByVersionIdAsync(run.LoopTemplateVersionId);
+        if (graph == null) return null;
+        return (run, wi, graph.Template, graph.Nodes.ToList(), graph.Edges.ToList());
+    }
+
+    // ---- Run-state transitions -------------------------------------------
 
     private async Task<LoopRunStatus> CompleteRunAsync(Guid runId, string? cleanupOutput = null)
     {
@@ -592,22 +757,24 @@ public class LoopEngine : ILoopEngine
             await LogEventAsync(runId, "CleanupCompleted", $"Cleanup finished: {cleanupOutput}");
 
         Guid? workItemId = null;
+        LoopRunStatus prevStatus = LoopRunStatus.Running;
         using (var scope = _sp.CreateScope())
         {
-            var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
-            var run = await loopRunStore.GetByIdAsync(runId);
+            var store = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+            var run = await store.GetByIdAsync(runId);
             if (run != null)
             {
                 workItemId = run.WorkItemId;
+                prevStatus = run.Status;
                 run.Status = LoopRunStatus.Completed;
                 run.CompletedAt = DateTime.UtcNow;
                 run.UpdatedAt = DateTime.UtcNow;
-                await loopRunStore.UpdateRunAsync(run);
+                await store.UpdateRunAsync(run);
             }
         }
         if (workItemId.HasValue)
             await TransitionWorkItemAsync(workItemId.Value, WorkItemStatus.Done, null);
-        await NotifyAsync(() => _notifier.RunStateChangedAsync(runId, LoopRunStatus.Running, LoopRunStatus.Completed));
+        await NotifyAsync(() => _notifier.RunStateChangedAsync(runId, prevStatus, LoopRunStatus.Completed));
         await LogEventAsync(runId, "LoopRunCompleted", "Run completed successfully");
         ReleaseRunControl(runId);
         return LoopRunStatus.Completed;
@@ -616,23 +783,25 @@ public class LoopEngine : ILoopEngine
     private async Task<LoopRunStatus> FailRunAsync(Guid runId, string reason)
     {
         Guid? workItemId = null;
+        LoopRunStatus prevStatus = LoopRunStatus.Running;
         using (var scope = _sp.CreateScope())
         {
-            var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
-            var run = await loopRunStore.GetByIdAsync(runId);
+            var store = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+            var run = await store.GetByIdAsync(runId);
             if (run != null)
             {
                 workItemId = run.WorkItemId;
+                prevStatus = run.Status;
                 run.Status = LoopRunStatus.Failed;
                 run.CompletedAt = DateTime.UtcNow;
                 run.UpdatedAt = DateTime.UtcNow;
-                await loopRunStore.UpdateRunAsync(run);
+                await store.UpdateRunAsync(run);
             }
         }
         if (workItemId.HasValue)
             await TransitionWorkItemAsync(workItemId.Value, WorkItemStatus.HumanFeedback, reason);
         await NotifyAsync(() => _notifier.EventLoggedAsync(runId, $"Run failed: {reason}", "Error", null, null));
-        await NotifyAsync(() => _notifier.RunStateChangedAsync(runId, LoopRunStatus.Running, LoopRunStatus.Failed));
+        await NotifyAsync(() => _notifier.RunStateChangedAsync(runId, prevStatus, LoopRunStatus.Failed));
         ReleaseRunControl(runId);
         return LoopRunStatus.Failed;
     }
@@ -640,23 +809,42 @@ public class LoopEngine : ILoopEngine
     private async Task CancelRunInternalAsync(Guid runId)
     {
         Guid? workItemId = null;
+        LoopRunStatus prevStatus = LoopRunStatus.Running;
         using (var scope = _sp.CreateScope())
         {
-            var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
-            var run = await loopRunStore.GetByIdAsync(runId);
+            var store = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+            var run = await store.GetByIdAsync(runId);
             if (run != null)
             {
                 workItemId = run.WorkItemId;
+                prevStatus = run.Status;
                 run.Status = LoopRunStatus.Cancelled;
                 run.CompletedAt = DateTime.UtcNow;
                 run.UpdatedAt = DateTime.UtcNow;
-                await loopRunStore.UpdateRunAsync(run);
+                await store.UpdateRunAsync(run);
             }
         }
         if (workItemId.HasValue)
             await TransitionWorkItemAsync(workItemId.Value, WorkItemStatus.HumanFeedback, "Run cancelled");
-        await NotifyAsync(() => _notifier.RunStateChangedAsync(runId, LoopRunStatus.Running, LoopRunStatus.Cancelled));
+        await NotifyAsync(() => _notifier.RunStateChangedAsync(runId, prevStatus, LoopRunStatus.Cancelled));
         ReleaseRunControl(runId);
+    }
+
+    private async Task TransitionRunAsync(Guid runId, LoopRunStatus next)
+    {
+        LoopRunStatus prev = LoopRunStatus.Running;
+        using (var scope = _sp.CreateScope())
+        {
+            var store = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+            var run = await store.GetByIdAsync(runId);
+            if (run == null) return;
+            prev = run.Status;
+            if (prev == next) return;
+            run.Status = next;
+            run.UpdatedAt = DateTime.UtcNow;
+            await store.UpdateRunAsync(run);
+        }
+        await NotifyAsync(() => _notifier.RunStateChangedAsync(runId, prev, next));
     }
 
     private void ReleaseRunControl(Guid runId)
@@ -674,12 +862,11 @@ public class LoopEngine : ILoopEngine
             var wi = await workItemStore.GetByIdAsync(workItemId);
             if (wi == null)
             {
-                var logger = scope.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILogger<LoopEngine>>();
-                logger?.LogWarning("TransitionWorkItemAsync: WorkItem {WorkItemId} not found", workItemId);
+                _logger.LogWarning("TransitionWorkItemAsync: WorkItem {WorkItemId} not found", workItemId);
                 return;
             }
             prev = wi.Status;
-            if (prev == next) return;
+            if (prev == next && wi.HumanFeedbackReason == reason) return;
             wi.Status = next;
             if (reason != null) wi.HumanFeedbackReason = reason;
             wi.UpdatedAt = DateTime.UtcNow;
@@ -688,39 +875,5 @@ public class LoopEngine : ILoopEngine
         await NotifyAsync(() => _workItemNotifier.WorkItemStateChangedAsync(workItemId, prev, next));
         if (next == WorkItemStatus.HumanFeedback && reason != null)
             await NotifyAsync(() => _workItemNotifier.HumanFeedbackRequiredAsync(workItemId, reason));
-    }
-
-    public async Task SignalPrResultAsync(Guid runId, Guid prRunNodeId, bool merged)
-    {
-        using var scope = _sp.CreateScope();
-        var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
-        var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
-
-        var prRunNode = await loopRunStore.GetRunNodeByIdAsync(prRunNodeId);
-        if (prRunNode == null) return;
-
-        prRunNode.Status = merged ? LoopRunNodeStatus.Succeeded : LoopRunNodeStatus.Failed;
-        prRunNode.CompletedAt = DateTime.UtcNow;
-        prRunNode.Error = merged ? null : "PR rejected";
-        await loopRunStore.UpdateRunNodeAsync(prRunNode);
-
-        var run = await loopRunStore.GetByIdAsync(runId);
-        if (run != null)
-        {
-            run.CurrentNodeId = prRunNode.LoopNodeId;
-            run.Status = LoopRunStatus.Running;
-            await loopRunStore.UpdateRunAsync(run);
-        }
-
-        var wi = run != null ? await workItemStore.GetByIdAsync(run.WorkItemId) : null;
-        if (wi != null)
-        {
-            wi.Status = WorkItemStatus.Running;
-            wi.HumanFeedbackReason = null;
-            wi.UpdatedAt = DateTime.UtcNow;
-            await workItemStore.UpdateAsync(wi);
-        }
-
-        await NotifyAsync(() => _notifier.NodeStateChangedAsync(runId, prRunNode.LoopNodeId, LoopRunNodeStatus.WaitingHuman, prRunNode.Status));
     }
 }

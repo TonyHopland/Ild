@@ -256,10 +256,10 @@ public class WorkItemsController : ControllerBase
                     }
                     else
                     {
-                        await _engine.SignalPrResultAsync(currentRun.Id, prRunNode.Id, true);
+                        await _engine.SignalNodeResultAsync(currentRun.Id, prRunNode.Id, NodeSignal.Succeeded());
 
-                        // Resume the engine to route through Cleanup node
-                        RunInBackground(currentRun.Id);
+                        // SignalNodeResultAsync re-enters the run loop itself;
+                        // calling RunInBackground here would race a second runner.
                     }
                 }
             }

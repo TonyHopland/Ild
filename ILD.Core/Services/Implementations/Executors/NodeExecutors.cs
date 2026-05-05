@@ -1,4 +1,5 @@
-using System.Diagnostics;
+using System.Text.Json;
+using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
@@ -19,17 +20,20 @@ public sealed class StartNodeExecutor : INodeExecutor
         _sp = sp;
     }
 
-    public async Task<NodeExecutionResult> ExecuteAsync(NodeExecutionContext ctx)
+    public string DescribeInput(NodeExecutionContext ctx)
+        => JsonSerializer.Serialize(new { nodeType = NodeType.ToString(), message = "initialized" });
+
+    public async Task<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
     {
         using var scope = _sp.CreateScope();
         var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
         var providerStore = scope.ServiceProvider.GetRequiredService<IProviderStore>();
 
         var wi = await workItemStore.GetByIdAsync(ctx.WorkItem.Id);
-        if (wi == null) return NodeExecutionResult.Fail("WorkItem not found");
+        if (wi == null) return new NodeOutcome.Failed("WorkItem not found");
         var repo = await providerStore.GetRepositoryByIdAsync(wi.RepositoryId);
         if (repo == null)
-            return NodeExecutionResult.Fail(
+            return new NodeOutcome.Failed(
                 "WorkItem has no repository attached; refusing to run loop without an isolated worktree.");
 
         if (string.IsNullOrEmpty(wi.WorktreePath) || !Directory.Exists(wi.WorktreePath))
@@ -43,21 +47,8 @@ public sealed class StartNodeExecutor : INodeExecutor
                 Directory.CreateDirectory(Path.GetDirectoryName(basePath)!);
                 if (!Directory.Exists(Path.Combine(basePath, ".git")))
                 {
-                    var psi = new ProcessStartInfo("git")
-                    {
-                        WorkingDirectory = Path.GetDirectoryName(basePath)!,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        UseShellExecute = false,
-                    };
-                    psi.ArgumentList.Add("clone");
-                    psi.ArgumentList.Add(repo.CloneUrl);
-                    psi.ArgumentList.Add(basePath);
-                    using var p = Process.Start(psi)!;
-                    var stderr = await p.StandardError.ReadToEndAsync();
-                    await p.WaitForExitAsync();
-                    if (p.ExitCode != 0)
-                        return NodeExecutionResult.Fail($"git clone failed: {stderr}");
+                    var (ok, err) = await _repo.CloneAsync(repo.CloneUrl, basePath, ctx.CancellationToken);
+                    if (!ok) return new NodeOutcome.Failed($"git clone failed: {err}");
                     cloned = true;
                 }
             }
@@ -72,9 +63,9 @@ public sealed class StartNodeExecutor : INodeExecutor
             await workItemStore.UpdateAsync(wi);
         }
         if (string.IsNullOrEmpty(wi.WorktreePath) || !Directory.Exists(wi.WorktreePath))
-            return NodeExecutionResult.Fail(
+            return new NodeOutcome.Failed(
                 $"Failed to materialize worktree for WorkItem {wi.Id}; refusing to continue.");
-        return NodeExecutionResult.Ok($"worktree={wi.WorktreePath}");
+        return new NodeOutcome.Succeeded($"worktree={wi.WorktreePath}");
     }
 }
 
@@ -82,64 +73,43 @@ public sealed class CmdNodeExecutor : INodeExecutor
 {
     public NodeType NodeType => NodeType.Cmd;
 
-    public async Task<NodeExecutionResult> ExecuteAsync(NodeExecutionContext ctx)
+    private readonly IProcessRunner _runner;
+
+    public CmdNodeExecutor(IProcessRunner runner) { _runner = runner; }
+
+    public string DescribeInput(NodeExecutionContext ctx)
     {
-        var cfg = ctx.Node.Config ?? "{}";
-        string command;
-        try
-        {
-            var dict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(cfg);
-            if (dict == null || !dict.TryGetValue("command", out var c) || c == null)
-                return NodeExecutionResult.Fail("Cmd node missing 'command' config");
-            command = c.ToString() ?? "";
-        }
-        catch (Exception ex) { return NodeExecutionResult.Fail($"invalid Cmd config: {ex.Message}"); }
+        var cfg = NodeConfig.Parse<NodeConfig.Cmd>(ctx.Node.Config);
+        return JsonSerializer.Serialize(new { nodeType = NodeType.ToString(), command = cfg.Command ?? "(no command)" });
+    }
+
+    public async Task<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
+    {
+        var cfg = NodeConfig.Parse<NodeConfig.Cmd>(ctx.Node.Config);
+        if (string.IsNullOrEmpty(cfg.Command))
+            return new NodeOutcome.Failed("Cmd node missing 'command' config");
+        var command = cfg.Command;
 
         var cwd = ctx.WorkItem.WorktreePath;
         if (string.IsNullOrEmpty(cwd) || !Directory.Exists(cwd))
-            return NodeExecutionResult.Fail(
+            return new NodeOutcome.Failed(
                 "Cmd node requires a valid WorkItem.WorktreePath; refusing to run outside the loop's worktree.");
 
-        var psi = new ProcessStartInfo("/bin/sh")
-        {
-            WorkingDirectory = cwd,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        psi.ArgumentList.Add("-c");
-        psi.ArgumentList.Add(command);
-
-        using var proc = Process.Start(psi)!;
         var timeout = TimeSpan.FromSeconds(ctx.Node.TimeoutSeconds > 0 ? ctx.Node.TimeoutSeconds : 300);
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ctx.CancellationToken);
         timeoutCts.CancelAfter(timeout);
-        var stdoutTask = proc.StandardOutput.ReadToEndAsync(timeoutCts.Token);
-        var stderrTask = proc.StandardError.ReadToEndAsync(timeoutCts.Token);
+
         try
         {
-            await proc.WaitForExitAsync(timeoutCts.Token);
+            var r = await _runner.RunAsync("/bin/sh", new[] { "-c", command }, cwd, timeoutCts.Token);
+            return r.Success
+                ? new NodeOutcome.Succeeded(r.StdOut)
+                : new NodeOutcome.Failed($"exit={r.ExitCode} stderr={r.StdErr}", r.StdOut);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ctx.CancellationToken.IsCancellationRequested)
         {
-            try { proc.Kill(entireProcessTree: true); } catch { }
-            return NodeExecutionResult.Fail($"command timed out after {timeout}");
+            return new NodeOutcome.Failed($"command timed out after {timeout}");
         }
-        string stdout, stderr;
-        try
-        {
-            stdout = await stdoutTask;
-            stderr = await stderrTask;
-        }
-        catch (OperationCanceledException)
-        {
-            try { proc.Kill(entireProcessTree: true); } catch { }
-            return NodeExecutionResult.Fail($"command stream read timed out after {timeout}");
-        }
-        return proc.ExitCode == 0
-            ? NodeExecutionResult.Ok(stdout)
-            : NodeExecutionResult.Fail($"exit={proc.ExitCode} stderr={stderr}", stdout);
     }
 }
 
@@ -150,21 +120,35 @@ public sealed class AINodeExecutor : INodeExecutor
 
     public AINodeExecutor(IServiceProvider sp) { _sp = sp; }
 
-    public async Task<NodeExecutionResult> ExecuteAsync(NodeExecutionContext ctx)
+    public string DescribeInput(NodeExecutionContext ctx)
     {
-        var cfg = ctx.Node.Config ?? "{}";
+        var cfg = NodeConfig.Parse<NodeConfig.Ai>(ctx.Node.Config);
+        var initial = cfg.InitialPrompt ?? "";
+        var loopPrompt = cfg.LoopPrompt ?? initial;
+        var payload = new
+        {
+            nodeType = NodeType.ToString(),
+            prompt = initial,
+            loopPrompt,
+            context = new
+            {
+                workItemTitle = ctx.WorkItem.Title,
+                workItemDescription = ctx.WorkItem.Description,
+                previousNodeOutput = ctx.PreviousNodeOutput,
+            },
+        };
+        return JsonSerializer.Serialize(payload);
+    }
+
+    public async Task<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
+    {
+        var cfg = NodeConfig.Parse<NodeConfig.Ai>(ctx.Node.Config);
         try
         {
-            var dict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(cfg);
-            if (dict == null) return NodeExecutionResult.Fail("AI config missing");
-            var providerKey = dict.GetValueOrDefault("aiProviderId")?.ToString();
-            var initialPrompt = dict.GetValueOrDefault("initialPrompt")?.ToString() ?? "";
-            var loopPrompt = dict.GetValueOrDefault("loopPrompt")?.ToString() ?? initialPrompt;
-
             using var scope = _sp.CreateScope();
             var providerStore = scope.ServiceProvider.GetRequiredService<IProviderStore>();
-            var provider = await ResolveProviderAsync(providerStore, providerKey);
-            if (provider == null) return NodeExecutionResult.Fail("No AI provider found");
+            var provider = await ResolveProviderAsync(providerStore, cfg.AiProviderId);
+            if (provider == null) return new NodeOutcome.Failed("No AI provider found");
 
             var registry = scope.ServiceProvider.GetRequiredService<IAgentAdapterRegistry>();
             var adapter = registry.ResolveForProvider(provider)();
@@ -177,7 +161,7 @@ public sealed class AINodeExecutor : INodeExecutor
                 .Select(e => $"{e.EventType}: {e.Data}")
                 .ToList();
 
-            var runContext = new ILD.Data.DTOs.LoopRunContext(
+            var runContext = new LoopRunContext(
                 ctx.Run.Id,
                 ctx.WorkItem.Id,
                 ctx.WorkItem.Title,
@@ -191,7 +175,10 @@ public sealed class AINodeExecutor : INodeExecutor
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ctx.CancellationToken);
             timeoutCts.CancelAfter(timeout);
 
-            var agentCtx = new ILD.Data.DTOs.AgentExecutionContext(
+            var initialPrompt = cfg.InitialPrompt ?? "";
+            var loopPrompt = cfg.LoopPrompt ?? initialPrompt;
+
+            var agentCtx = new AgentExecutionContext(
                 provider,
                 initialPrompt,
                 loopPrompt,
@@ -199,25 +186,24 @@ public sealed class AINodeExecutor : INodeExecutor
                 executionCount,
                 timeoutCts.Token,
                 ctx.ProgressCallback,
-                ExtractAdapterConfig(dict));
+                ExtractAdapterConfig(cfg.AdapterConfig));
 
             var result = await adapter.ExecuteAsync(agentCtx);
 
-            if (result.Success && result.Output != null)
+            if (result.Success && result.Output != null && !string.IsNullOrEmpty(cfg.RejectPattern))
             {
-                var rejectPattern = dict.GetValueOrDefault("rejectPattern")?.ToString();
-                if (!string.IsNullOrEmpty(rejectPattern) &&
-                    System.Text.RegularExpressions.Regex.IsMatch(result.Output, rejectPattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                if (System.Text.RegularExpressions.Regex.IsMatch(result.Output, cfg.RejectPattern,
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase))
                 {
-                    return NodeExecutionResult.Fail(
-                        $"AI rejected: output matched rejectPattern", result.Output);
+                    return new NodeOutcome.Failed(
+                        "AI rejected: output matched rejectPattern", result.Output);
                 }
             }
 
-            return result;
+            return NodeOutcome.FromResult(result);
         }
-        catch (OperationCanceledException) { return NodeExecutionResult.Fail($"AI node timed out"); }
-        catch (Exception ex) { return NodeExecutionResult.Fail(ex.Message); }
+        catch (OperationCanceledException) { return new NodeOutcome.Failed("AI node timed out"); }
+        catch (Exception ex) { return new NodeOutcome.Failed(ex.Message); }
     }
 
     private static async Task<int> CountNodeVisitsAsync(IServiceProvider sp, Guid runId, Guid nodeId)
@@ -238,26 +224,38 @@ public sealed class AINodeExecutor : INodeExecutor
         return await store.GetAiProviderByNameAsync(providerKey);
     }
 
-    static Dictionary<string, object?>? ExtractAdapterConfig(Dictionary<string, object>? dict)
+    private static Dictionary<string, object?>? ExtractAdapterConfig(JsonElement? element)
     {
-        if (dict == null) return null;
-        if (dict.TryGetValue("adapterConfig", out var ac) && ac is System.Text.Json.JsonElement element)
+        if (element is not { ValueKind: JsonValueKind.Object } el) return null;
+        var result = new Dictionary<string, object?>();
+        foreach (var prop in el.EnumerateObject())
         {
-            var result = new Dictionary<string, object?>();
-            foreach (var prop in element.EnumerateObject())
+            result[prop.Name] = prop.Value.ValueKind switch
             {
-                result[prop.Name] = prop.Value.ValueKind switch
-                {
-                    System.Text.Json.JsonValueKind.Number => prop.Value.GetDouble(),
-                    System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False => prop.Value.GetBoolean(),
-                    System.Text.Json.JsonValueKind.String => prop.Value.GetString(),
-                    _ => prop.Value.GetRawText()
-                };
-            }
-            return result;
+                JsonValueKind.Number => prop.Value.GetDouble(),
+                JsonValueKind.True or JsonValueKind.False => prop.Value.GetBoolean(),
+                JsonValueKind.String => prop.Value.GetString(),
+                _ => prop.Value.GetRawText()
+            };
         }
-        return null;
+        return result;
     }
+}
+
+public sealed class HumanNodeExecutor : INodeExecutor
+{
+    public NodeType NodeType => NodeType.Human;
+
+    public string DescribeInput(NodeExecutionContext ctx)
+    {
+        var cfg = NodeConfig.Parse<NodeConfig.Human>(ctx.Node.Config);
+        return JsonSerializer.Serialize(new { nodeType = NodeType.ToString(), prompt = cfg.Prompt ?? "(no prompt)" });
+    }
+
+    public Task<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
+        => Task.FromResult<NodeOutcome>(new NodeOutcome.Suspended(
+            "Human node awaiting input",
+            SuspendKind.HumanInput));
 }
 
 public sealed class CleanupNodeExecutor : INodeExecutor
@@ -272,13 +270,16 @@ public sealed class CleanupNodeExecutor : INodeExecutor
         _sp = sp;
     }
 
-    public async Task<NodeExecutionResult> ExecuteAsync(NodeExecutionContext ctx)
+    public string DescribeInput(NodeExecutionContext ctx)
+        => JsonSerializer.Serialize(new { nodeType = NodeType.ToString(), message = "cleanup" });
+
+    public async Task<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
     {
         using var scope = _sp.CreateScope();
         var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
 
         var wi = await workItemStore.GetByIdAsync(ctx.WorkItem.Id);
-        if (wi == null) return NodeExecutionResult.Fail("WorkItem not found");
+        if (wi == null) return new NodeOutcome.Failed("WorkItem not found");
 
         string? worktreePath = wi.WorktreePath;
         if (!string.IsNullOrEmpty(worktreePath) && Directory.Exists(worktreePath))
@@ -291,15 +292,15 @@ public sealed class CleanupNodeExecutor : INodeExecutor
             {
                 wi.WorktreePath = null;
                 await workItemStore.UpdateAsync(wi);
-                return NodeExecutionResult.Ok($"cleanup failed: {ex.Message} (path: {worktreePath})");
+                return new NodeOutcome.Terminal($"cleanup failed: {ex.Message} (path: {worktreePath})");
             }
             wi.WorktreePath = null;
             await workItemStore.UpdateAsync(wi);
-            return NodeExecutionResult.Ok($"worktree destroyed: {worktreePath}");
+            return new NodeOutcome.Terminal($"worktree destroyed: {worktreePath}");
         }
 
         wi.WorktreePath = null;
         await workItemStore.UpdateAsync(wi);
-        return NodeExecutionResult.Ok("cleanup skipped: no worktree");
+        return new NodeOutcome.Terminal("cleanup skipped: no worktree");
     }
 }

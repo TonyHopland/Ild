@@ -25,4 +25,10 @@ public interface ILoopRunStore
     Task<bool> HasFailureEdgeAsync(Guid nodeId);
     Task<LoopNodeEdge?> GetEdgeAsync(Guid edgeId);
     Task<IReadOnlyList<Guid>> GetFailedRunIdsAsync();
+
+    /// <summary>
+    /// Atomically increments and returns the next per-run event log sequence
+    /// number. Replaces the previous global lock + MAX(Sequence) scan.
+    /// </summary>
+    Task<int> AllocateNextEventSequenceAsync(Guid runId);
 }

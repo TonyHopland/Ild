@@ -2,12 +2,14 @@ import { EdgeType } from "../../types";
 
 interface EdgeArrowProps {
   edgeType: EdgeType;
+  variant?: "retry";
 }
 
-export default function EdgeArrow({ edgeType }: EdgeArrowProps) {
+export default function EdgeArrow({ edgeType, variant }: EdgeArrowProps) {
+  const isRetry = variant === "retry";
   const isSuccess = edgeType === EdgeType.OnSuccess;
-  const color = isSuccess ? "#22c55e" : "#ef4444";
-  const label = isSuccess ? "success" : "failure";
+  const color = isRetry ? "#f59e0b" : isSuccess ? "#22c55e" : "#ef4444";
+  const label = isRetry ? "retry" : isSuccess ? "success" : "failure";
 
   return (
     <div className="edge-arrow">

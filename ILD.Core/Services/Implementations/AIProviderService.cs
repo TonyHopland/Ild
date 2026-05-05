@@ -17,14 +17,14 @@ public class AIProviderService : IAIProviderService
     private readonly IProviderStore _providerStore;
     private readonly IWorkItemManager _workItemManager;
     private readonly HttpClient _http;
+    private readonly IPromptTemplateResolver _resolver;
 
-    private static readonly Regex Placeholder = new(@"\{\{\s*([A-Za-z][A-Za-z0-9_.:/\\-]*)\s*\}\}", RegexOptions.Compiled);
-
-    public AIProviderService(IProviderStore providerStore, IWorkItemManager workItemManager, HttpClient http)
+    public AIProviderService(IProviderStore providerStore, IWorkItemManager workItemManager, HttpClient http, IPromptTemplateResolver? resolver = null)
     {
         _providerStore = providerStore;
         _workItemManager = workItemManager;
         _http = http;
+        _resolver = resolver ?? new PromptTemplateResolver();
     }
 
     public async Task<string> CompleteAsync(string prompt, string? providerId = null, CancellationToken cancellationToken = default)
@@ -65,29 +65,12 @@ public class AIProviderService : IAIProviderService
 
     public Task<string> RenderPromptAsync(string template, LoopRunContext context)
     {
-        var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["WorkItem.Title"] = context.WorkItemTitle,
-            ["WorkItem.Description"] = context.WorkItemDescription,
-            ["WorkTree.Diff"] = "",
-            ["EventLog.Summary"] = string.Join("\n", context.EventLogSummary ?? new()),
-            ["EventLog.LastN"] = string.Join("\n", (context.EventLogSummary ?? new()).TakeLast(10)),
-            ["Node.Input"] = context.PreviousNodeOutput ?? "",
-            ["PreviousNode.Output"] = context.PreviousNodeOutput ?? "",
-        };
-
-        var rendered = Placeholder.Replace(template, m =>
-        {
-            var key = m.Groups[1].Value;
-            if (values.TryGetValue(key, out var v)) return v ?? "";
-            if (key.StartsWith("WorkTree.File:", StringComparison.OrdinalIgnoreCase))
-            {
-                var rel = key.Substring("WorkTree.File:".Length);
-                var full = string.IsNullOrEmpty(context.WorktreePath) ? null : Path.Combine(context.WorktreePath, rel);
-                return full != null && File.Exists(full) ? File.ReadAllText(full) : "";
-            }
-            return m.Value;
-        });
+        var rendered = _resolver.Render(template, new PromptContext(
+            WorkItemTitle: context.WorkItemTitle,
+            WorkItemDescription: context.WorkItemDescription,
+            PreviousNodeOutput: context.PreviousNodeOutput,
+            EventLogSummary: context.EventLogSummary,
+            WorktreePath: context.WorktreePath));
         return Task.FromResult(rendered);
     }
 
@@ -98,7 +81,7 @@ public class AIProviderService : IAIProviderService
             "WorkItem.Title","WorkItem.Description","WorkTree.Diff",
             "EventLog.Summary","EventLog.LastN","Node.Input","PreviousNode.Output",
         };
-        foreach (Match m in Placeholder.Matches(template))
+        foreach (Match m in PlaceholderPattern.Matches(template))
         {
             var name = m.Groups[1].Value;
             if (!known.Contains(name) && !name.StartsWith("WorkTree.File:", StringComparison.OrdinalIgnoreCase))
@@ -106,6 +89,9 @@ public class AIProviderService : IAIProviderService
         }
         return Task.FromResult(true);
     }
+
+    private static readonly Regex PlaceholderPattern =
+        new(@"\{\{\s*([A-Za-z][A-Za-z0-9_.:/\\-]*)\s*\}\}", RegexOptions.Compiled);
 
     public async Task<IEnumerable<string>> GetAvailableProvidersAsync()
         => await _providerStore.GetAiProviderNamesAsync();
