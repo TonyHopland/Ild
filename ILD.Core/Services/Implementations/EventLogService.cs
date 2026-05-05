@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -11,7 +12,11 @@ public class EventLogService : IEventLogService
     private readonly IEventLogStore _eventLogStore;
     private readonly ILoopRunStore _loopRunStore;
     private readonly EventLogOptions _options;
-    private static readonly SemaphoreSlim _seqLock = new(1, 1);
+
+    // Per-run lock guards the sequence allocate -> file-write -> insert path so
+    // concurrent appends within a run cannot interleave payload-file writes
+    // ahead of their event row. Cross-run appends never block each other.
+    private static readonly ConcurrentDictionary<Guid, SemaphoreSlim> _runLocks = new();
 
     public EventLogService(IEventLogStore eventLogStore, ILoopRunStore loopRunStore, EventLogOptions? options = null)
     {
@@ -30,12 +35,11 @@ public class EventLogService : IEventLogService
         if (!Enum.TryParse<EventType>(eventType, ignoreCase: true, out var parsed))
             parsed = EventType.Error;
 
-        await _seqLock.WaitAsync();
+        var runLock = _runLocks.GetOrAdd(runId, _ => new SemaphoreSlim(1, 1));
+        await runLock.WaitAsync();
         try
         {
-            var existing = await _eventLogStore.GetByRunIdAsync(runId);
-            var lastSequence = existing.Any() ? existing.Max(e => e.Sequence) : 0;
-            var nextSequence = lastSequence + 1;
+            var nextSequence = await _loopRunStore.AllocateNextEventSequenceAsync(runId);
 
             string? finalPayloadPath = payloadPath;
             string? data = message;
@@ -68,7 +72,7 @@ public class EventLogService : IEventLogService
         }
         finally
         {
-            _seqLock.Release();
+            runLock.Release();
         }
     }
 

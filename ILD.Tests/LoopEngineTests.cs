@@ -183,7 +183,7 @@ public class LoopEngineTests
 
         var prNodeId = h.NodesById["pr"].Id;
         var prRunNode = h.ReloadRunNodes().First(n => n.LoopNodeId == prNodeId);
-        await h.Engine.SignalPrResultAsync(h.RunId, prRunNode.Id, true);
+        await h.Engine.SignalNodeResultAsync(h.RunId, prRunNode.Id, NodeSignal.Succeeded());
         await h.Engine.RunAsync(h.RunId);
 
         h.ReloadRun().Status.Should().Be(LoopRunStatus.Completed);
@@ -211,7 +211,7 @@ public class LoopEngineTests
 
         var prNodeId = h.NodesById["pr"].Id;
         var prRunNode = h.ReloadRunNodes().First(n => n.LoopNodeId == prNodeId);
-        await h.Engine.SignalPrResultAsync(h.RunId, prRunNode.Id, false);
+        await h.Engine.SignalNodeResultAsync(h.RunId, prRunNode.Id, NodeSignal.Failed("PR rejected"));
         await h.Engine.RunAsync(h.RunId);
 
         h.ReloadRun().Status.Should().Be(LoopRunStatus.Completed);
@@ -354,7 +354,7 @@ public class LoopEngineTests
 
         // Should return early without re-executing any nodes.
         h.Fakes[NodeType.Start].InvocationCount.Should().Be(startInvocations);
-        h.ReloadRun().Status.Should().Be(LoopRunStatus.Running);
+        h.ReloadRun().Status.Should().Be(LoopRunStatus.WaitingHuman);
         h.ReloadWorkItem().Status.Should().Be(WorkItemStatus.HumanFeedback);
     }
 
@@ -453,7 +453,7 @@ public class LoopEngineTests
     }
 
     [Fact]
-    public async Task SignalPrResultAsync_resumes_run_and_executes_cleanup_node()
+    public async Task SignalNodeResultAsync_resumes_run_and_executes_cleanup_node()
     {
         using var h = new EngineHarness();
         h.BuildSimpleGraph(
@@ -467,12 +467,12 @@ public class LoopEngineTests
         // Run until PR node enters WaitingHuman
         await h.Engine.RunAsync(h.RunId);
 
-        h.ReloadRun().Status.Should().Be(LoopRunStatus.Running);
+        h.ReloadRun().Status.Should().Be(LoopRunStatus.WaitingHuman);
         var prRunNode = h.ReloadRunNodes().First(n => n.LoopNodeId == h.NodesById["pr"].Id);
         prRunNode.Status.Should().Be(LoopRunNodeStatus.WaitingHuman);
 
         // Signal PR as merged (simulates mark-merged endpoint)
-        await h.Engine.SignalPrResultAsync(h.RunId, prRunNode.Id, true);
+        await h.Engine.SignalNodeResultAsync(h.RunId, prRunNode.Id, NodeSignal.Succeeded());
 
         // Resume the engine
         await h.Engine.RunAsync(h.RunId);

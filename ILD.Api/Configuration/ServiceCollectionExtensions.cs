@@ -27,6 +27,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<INodeExecutor, StartNodeExecutor>();
         services.AddSingleton<INodeExecutor, CmdNodeExecutor>();
         services.AddSingleton<INodeExecutor, AINodeExecutor>();
+        services.AddSingleton<INodeExecutor, HumanNodeExecutor>();
         services.AddSingleton<INodeExecutor, PRNodeExecutor>();
         services.AddSingleton<INodeExecutor, CleanupNodeExecutor>();
         services.AddSingleton<INodeExecutorRegistry, NodeExecutorRegistry>();

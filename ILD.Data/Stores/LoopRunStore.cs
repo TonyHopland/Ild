@@ -126,4 +126,16 @@ public class LoopRunStore : ILoopRunStore
             .Where(r => r.Status == LoopRunStatus.Failed)
             .Select(r => r.Id)
             .ToListAsync();
+
+    public async Task<int> AllocateNextEventSequenceAsync(Guid runId)
+    {
+        // Per-run sequence allocator. Callers are expected to serialize calls
+        // for the same runId via an in-memory lock (see EventLogService).
+        // Cross-run calls remain concurrent.
+        var run = await _db.LoopRuns.FirstOrDefaultAsync(r => r.Id == runId)
+            ?? throw new InvalidOperationException($"Run {runId} not found while allocating event sequence");
+        run.NextEventSeq += 1;
+        await _db.SaveChangesAsync();
+        return run.NextEventSeq;
+    }
 }

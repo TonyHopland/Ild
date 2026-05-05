@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -19,20 +20,27 @@ public sealed class PRNodeExecutor : INodeExecutor
         _sp = sp;
     }
 
-    public async Task<NodeExecutionResult> ExecuteAsync(NodeExecutionContext ctx)
+    public string DescribeInput(NodeExecutionContext ctx)
+    {
+        var cfg = NodeConfig.Parse<NodeConfig.Pr>(ctx.Node.Config);
+        return JsonSerializer.Serialize(new { nodeType = NodeType.ToString(), prompt = cfg.Prompt ?? "(no prompt)" });
+    }
+
+    public async Task<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
     {
         using var scope = _sp.CreateScope();
         var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
 
         var wi = await workItemStore.GetByIdAsync(ctx.WorkItem.Id);
         if (wi == null)
-            return NodeExecutionResult.Fail("WorkItem not found");
+            return new NodeOutcome.Failed("WorkItem not found");
 
-        if (string.IsNullOrEmpty(wi.PrUrl))
+        string? prUrl = wi.PrUrl;
+        if (string.IsNullOrEmpty(prUrl))
         {
             var repo = await workItemStore.GetRepositoryAsync(wi.RepositoryId);
             if (repo == null)
-                return NodeExecutionResult.Fail("Repository not found");
+                return new NodeOutcome.Failed("Repository not found");
             var branch = wi.BranchName ?? $"ild/wi-{wi.Id:N}";
             var target = repo.DefaultBranch ?? "main";
 
@@ -44,17 +52,17 @@ public sealed class PRNodeExecutor : INodeExecutor
                 if (!string.IsNullOrEmpty(diff))
                 {
                     if (!await repoManager.CommitAsync(wi.WorktreePath, wi.Title))
-                        return NodeExecutionResult.Fail("Failed to commit uncommitted changes");
+                        return new NodeOutcome.Failed("Failed to commit uncommitted changes");
                 }
 
                 var pushResult = await repoManager.PushAsync(wi.WorktreePath, branch, ctx.CancellationToken);
                 if (!pushResult.Success)
-                    return NodeExecutionResult.Fail($"Failed to push branch '{branch}' to remote: {pushResult.Error ?? "unknown error"}");
+                    return new NodeOutcome.Failed($"Failed to push branch '{branch}' to remote: {pushResult.Error ?? "unknown error"}");
 
                 _ = await repoManager.FetchAsync(wi.WorktreePath, ctx.CancellationToken);
                 var ahead = await repoManager.GetCommitsAheadCountAsync(wi.WorktreePath, $"origin/{target}");
                 if (ahead == 0)
-                    return NodeExecutionResult.Fail($"Branch '{branch}' has no commits ahead of 'origin/{target}'; no changes were made");
+                    return new NodeOutcome.Failed($"Branch '{branch}' has no commits ahead of 'origin/{target}'; no changes were made");
             }
 
             var remote = scope.ServiceProvider.GetRequiredService<IRemoteProvider>();
@@ -69,24 +77,27 @@ public sealed class PRNodeExecutor : INodeExecutor
                 prBody);
 
             if (prResult == null)
-                return NodeExecutionResult.Fail("PR creation returned no result");
+                return new NodeOutcome.Failed("PR creation returned no result");
 
             if (!string.IsNullOrEmpty(prResult.Error))
-                return NodeExecutionResult.Fail($"PR creation failed: {prResult.Error}");
+                return new NodeOutcome.Failed($"PR creation failed: {prResult.Error}");
 
             wi.PrUrl = prResult.HtmlUrl ?? prResult.Url;
             await workItemStore.UpdateAsync(wi);
+            prUrl = wi.PrUrl;
         }
 
-        return NodeExecutionResult.Ok(wi.PrUrl);
+        // PR exists; suspend until the webhook signals merge or rejection.
+        return new NodeOutcome.Suspended(
+            "PR awaiting merge",
+            SuspendKind.ExternalSignal,
+            prUrl);
     }
 
     static string ResolvePrDescription(string? nodeConfig, WorkItem wi, string? previousNodeOutput)
     {
-        var cfg = string.IsNullOrEmpty(nodeConfig)
-            ? (Dictionary<string, object>?)null
-            : System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(nodeConfig);
-        var template = cfg?.GetValueOrDefault("prDescriptionTemplate")?.ToString();
+        var cfg = NodeConfig.Parse<NodeConfig.Pr>(nodeConfig);
+        var template = cfg.PrDescriptionTemplate;
 
         if (string.IsNullOrEmpty(template))
             return wi.Description ?? "";

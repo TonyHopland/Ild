@@ -41,6 +41,7 @@ function normalizeLoopRunStatus(value: unknown): LoopRunStatus {
       1: LoopRunStatus.Completed,
       2: LoopRunStatus.Failed,
       3: LoopRunStatus.Cancelled,
+      4: LoopRunStatus.WaitingHuman,
     };
     return map[value] ?? LoopRunStatus.Running;
   }

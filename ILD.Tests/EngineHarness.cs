@@ -117,9 +117,23 @@ internal sealed class FakeExecutor : INodeExecutor
 
     public FakeExecutor(NodeType type) { NodeType = type; }
 
-    public async Task<NodeExecutionResult> ExecuteAsync(NodeExecutionContext ctx)
+    public string DescribeInput(NodeExecutionContext ctx)
+        => System.Text.Json.JsonSerializer.Serialize(new
+        {
+            nodeType = NodeType.ToString(),
+            config = ctx.Node.Config,
+        });
+
+    public async Task<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
     {
         InvocationCount++;
-        return await AsyncBehavior(ctx);
+        var result = await AsyncBehavior(ctx);
+        if (NodeType == NodeType.Human)
+            return new NodeOutcome.Suspended("Human node awaiting input", SuspendKind.HumanInput);
+        if (NodeType == NodeType.PR && result.Success)
+            return new NodeOutcome.Suspended("PR awaiting merge signal", SuspendKind.ExternalSignal, result.Output);
+        if (NodeType == NodeType.Cleanup && result.Success)
+            return new NodeOutcome.Terminal(result.Output);
+        return NodeOutcome.FromResult(result);
     }
 }
