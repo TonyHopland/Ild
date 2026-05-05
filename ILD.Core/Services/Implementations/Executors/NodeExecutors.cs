@@ -4,6 +4,7 @@ using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Implementations;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Core.Services.Implementations.Executors;
@@ -245,6 +246,9 @@ public sealed class AINodeExecutor : INodeExecutor
 public sealed class HumanNodeExecutor : INodeExecutor
 {
     public NodeType NodeType => NodeType.Human;
+    private readonly IServiceProvider _sp;
+
+    public HumanNodeExecutor(IServiceProvider sp) { _sp = sp; }
 
     public string DescribeInput(NodeExecutionContext ctx)
     {
@@ -252,10 +256,62 @@ public sealed class HumanNodeExecutor : INodeExecutor
         return JsonSerializer.Serialize(new { nodeType = NodeType.ToString(), prompt = cfg.Prompt ?? "(no prompt)" });
     }
 
-    public Task<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
-        => Task.FromResult<NodeOutcome>(new NodeOutcome.Suspended(
+    public async Task<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
+    {
+        var cfg = NodeConfig.Parse<NodeConfig.Human>(ctx.Node.Config);
+        var rendered = await RenderPromptAsync(_sp, cfg.Prompt, ctx);
+        if (!string.IsNullOrEmpty(rendered))
+        {
+            // Surface the resolved prompt via the event log so the UI can
+            // display exactly what the human is being asked. We deliberately
+            // do NOT stash it on the run-node Output: that slot belongs to
+            // the human's eventual answer.
+            using var scope = _sp.CreateScope();
+            var eventLog = scope.ServiceProvider.GetService<IEventLogService>();
+            if (eventLog != null)
+            {
+                try
+                {
+                    await eventLog.AppendAsync(
+                        ctx.Run.Id,
+                        HumanPromptRenderedEvent,
+                        rendered,
+                        ctx.Node.Id,
+                        runNodeId: ctx.RunNode.Id);
+                }
+                catch { /* best-effort observability */ }
+            }
+        }
+        return new NodeOutcome.Suspended(
             "Human node awaiting input",
-            SuspendKind.HumanInput));
+            SuspendKind.HumanInput);
+    }
+
+    public const string HumanPromptRenderedEvent = "HumanPromptRendered";
+
+    private static async Task<string?> RenderPromptAsync(IServiceProvider sp, string? template, NodeExecutionContext ctx)
+    {
+        if (string.IsNullOrEmpty(template)) return null;
+        using var scope = sp.CreateScope();
+        var resolver = scope.ServiceProvider.GetService<IPromptTemplateResolver>() ?? new PromptTemplateResolver();
+        var eventLogService = scope.ServiceProvider.GetService<IEventLogService>();
+        IReadOnlyList<string>? summary = null;
+        if (eventLogService != null)
+        {
+            try
+            {
+                var entries = await eventLogService.GetByRunIdAsync(ctx.Run.Id);
+                summary = entries.Select(e => $"{e.EventType}: {e.Data}").ToList();
+            }
+            catch { /* event log is best-effort */ }
+        }
+        return resolver.Render(template, new PromptContext(
+            WorkItemTitle: ctx.WorkItem.Title,
+            WorkItemDescription: ctx.WorkItem.Description,
+            PreviousNodeOutput: ctx.PreviousNodeOutput,
+            EventLogSummary: summary,
+            WorktreePath: ctx.WorkItem.WorktreePath));
+    }
 }
 
 public sealed class CleanupNodeExecutor : INodeExecutor

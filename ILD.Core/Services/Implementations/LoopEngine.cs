@@ -226,11 +226,18 @@ public class LoopEngine : ILoopEngine
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(control.Cts.Token);
             try
             {
+                var seedOutputs = new Dictionary<Guid, string?>();
+                Guid? seedIncomingSource = null;
+                if (predecessor != null)
+                {
+                    seedOutputs[predecessor.LoopNodeId] = prevOutputSeed;
+                    seedIncomingSource = predecessor.LoopNodeId;
+                }
                 await ExecuteRunLoopAsync(
                     runId, run, workItem, nodes, edges, targetTemplateNode,
-                    new Dictionary<Guid, string?>(), new Dictionary<Guid, int>(),
+                    seedOutputs, new Dictionary<Guid, int>(),
                     control, deadline, maxNodeExecs,
-                    firstPrevOutputOverride: prevOutputSeed, linkedCts.Token);
+                    initialIncomingSource: seedIncomingSource, linkedCts.Token);
             }
             catch (OperationCanceledException) { /* expected on cancel */ }
             catch (Exception ex)
@@ -321,6 +328,7 @@ public class LoopEngine : ILoopEngine
         // continue routing from there (the runnode's terminal status decides
         // the edge to follow). Otherwise begin at the entry node.
         LoopNode current;
+        Guid? incomingSource = null;
         var resume = await ResolveResumePointAsync(run, nodes);
         switch (resume)
         {
@@ -337,7 +345,7 @@ public class LoopEngine : ILoopEngine
                 {
                     await LogRoutingErrorAsync(runId, rf.Node, edges, rf.Success);
                     await TransitionWorkItemAsync(workItem.Id, WorkItemStatus.HumanFeedback,
-                        rf.Success ? "Node succeeded but no on_success edge" : "Node failed; no on_failure edge");
+                        rf.Success ? "Node succeeded but no on_success edge" : HumanFeedbackReasons.NodeFailed);
                     return await FailRunAsync(runId,
                         rf.Success
                             ? $"Node {rf.Node.Label} succeeded but has no outgoing on_success edge"
@@ -345,6 +353,7 @@ public class LoopEngine : ILoopEngine
                 }
                 await PersistEdgeTraversalAsync(runId, nextResume.EdgeId, traversalCounts[nextResume.EdgeId]);
                 current = nodes.First(n => n.Id == nextResume.NextNode.Id);
+                incomingSource = rf.Node.Id;
                 break;
             case ResumePoint.StillWaiting:
                 // Run is parked and the signal hasn't arrived yet; remain in
@@ -357,14 +366,17 @@ public class LoopEngine : ILoopEngine
         return await ExecuteRunLoopAsync(
             runId, run, workItem, nodes, edges, current,
             outputBySource, traversalCounts, control, deadline, maxNodeExecs,
-            firstPrevOutputOverride: null, ct);
+            initialIncomingSource: incomingSource, ct);
     }
 
     /// <summary>
-    /// Drive the run forward from <paramref name="current"/>. When
-    /// <paramref name="firstPrevOutputOverride"/> is supplied it replaces
-    /// the value normally read from <c>outputBySource</c> for the very
-    /// first node executed; subsequent nodes use the regular routing.
+    /// Drive the run forward from <paramref name="current"/>. The
+    /// <paramref name="initialIncomingSource"/> identifies the template node
+    /// whose output slot in <paramref name="outputBySource"/> should seed
+    /// <c>{{PreviousNode.Output}}</c> for the very first iteration. As we
+    /// route forward we track the incoming-edge source explicitly so the
+    /// rendered prompt always reflects the edge actually traversed (matters
+    /// when a node has multiple inbound edges, e.g. a loop-back).
     /// </summary>
     private async Task<LoopRunStatus> ExecuteRunLoopAsync(
         Guid runId,
@@ -378,11 +390,11 @@ public class LoopEngine : ILoopEngine
         RunControl control,
         DateTime deadline,
         int maxNodeExecs,
-        string? firstPrevOutputOverride,
+        Guid? initialIncomingSource,
         CancellationToken ct)
     {
         var executed = 0;
-        var firstIteration = true;
+        var incomingSource = initialIncomingSource;
 
         try
         {
@@ -405,20 +417,11 @@ public class LoopEngine : ILoopEngine
                 // Refresh workitem (other nodes may have mutated worktree path etc.)
                 workItem = await RefreshWorkItemAsync(workItem.Id) ?? workItem;
 
-                string? prevOutput;
-                if (firstIteration && firstPrevOutputOverride != null)
-                {
-                    prevOutput = firstPrevOutputOverride;
-                }
-                else
-                {
-                    // {{PreviousNode.Output}} for `current` follows the incoming edge.
-                    var incomingSource = await FindIncomingSourceForCurrent(runId, current.Id, edges);
-                    prevOutput = incomingSource is { } src && outputBySource.TryGetValue(src, out var po)
-                        ? po
-                        : null;
-                }
-                firstIteration = false;
+                // {{PreviousNode.Output}} for `current` is the output of the
+                // node whose outgoing edge we just traversed.
+                string? prevOutput = incomingSource is { } src && outputBySource.TryGetValue(src, out var po)
+                    ? po
+                    : null;
 
                 var outcome = await ExecuteNodeWithRetryAsync(run, workItem, current, prevOutput, edges, ct);
 
@@ -426,7 +429,7 @@ public class LoopEngine : ILoopEngine
                 {
                     case NodeOutcome.Suspended s:
                         await TransitionRunAsync(runId, LoopRunStatus.WaitingHuman);
-                        await TransitionWorkItemAsync(workItem.Id, WorkItemStatus.HumanFeedback, s.Reason);
+                        await TransitionWorkItemAsync(workItem.Id, WorkItemStatus.HumanFeedback, ReasonForSuspend(s.Kind));
                         return LoopRunStatus.WaitingHuman;
 
                     case NodeOutcome.Terminal t:
@@ -440,6 +443,7 @@ public class LoopEngine : ILoopEngine
                         if (nextOk.MaxExceeded)
                             return await FailRunAsync(runId, $"Edge exceeded max traversals ({nextOk.MaxTraversals})");
                         await PersistEdgeTraversalAsync(runId, nextOk.EdgeId, traversalCounts[nextOk.EdgeId]);
+                        incomingSource = current.Id;
                         current = nodes.First(n => n.Id == nextOk.NextNode.Id);
                         break;
 
@@ -449,12 +453,13 @@ public class LoopEngine : ILoopEngine
                         if (nextFail == null)
                         {
                             await LogRoutingErrorAsync(runId, current, edges, success: false);
-                            await TransitionWorkItemAsync(workItem.Id, WorkItemStatus.HumanFeedback, "Node failed; no on_failure edge and retries exhausted");
+                            await TransitionWorkItemAsync(workItem.Id, WorkItemStatus.HumanFeedback, HumanFeedbackReasons.NodeFailed);
                             return await FailRunAsync(runId, "Retries exhausted with no on_failure edge");
                         }
                         if (nextFail.MaxExceeded)
                             return await FailRunAsync(runId, $"Edge exceeded max traversals ({nextFail.MaxTraversals})");
                         await PersistEdgeTraversalAsync(runId, nextFail.EdgeId, traversalCounts[nextFail.EdgeId]);
+                        incomingSource = current.Id;
                         current = nodes.First(n => n.Id == nextFail.NextNode.Id);
                         break;
                 }
@@ -505,6 +510,19 @@ public class LoopEngine : ILoopEngine
 
     private static bool IsTerminal(LoopNode node) => node.NodeType == NodeType.Cleanup;
 
+    /// <summary>
+    /// Map a <see cref="SuspendKind"/> to the canonical
+    /// <see cref="WorkItem.HumanFeedbackReason"/> string that the frontend
+    /// keys its UI affordances off. The executor's own <c>Reason</c> stays
+    /// in the event log for diagnostics.
+    /// </summary>
+    private static string ReasonForSuspend(SuspendKind kind) => kind switch
+    {
+        SuspendKind.HumanInput => HumanFeedbackReasons.HumanInputNeeded,
+        SuspendKind.ExternalSignal => HumanFeedbackReasons.PrAwaitingMerge,
+        _ => HumanFeedbackReasons.HumanInputNeeded,
+    };
+
     private sealed record RouteResult(LoopNode NextNode, Guid EdgeId, int MaxTraversals, bool MaxExceeded);
 
     /// <summary>
@@ -537,38 +555,6 @@ public class LoopEngine : ILoopEngine
         await LogEventAsync(runId, "RoutingError",
             $"Node {current.Label} ({current.Id}) failed but has no on_failure edge. " +
             $"All edges from this node: {string.Join(", ", edges.Where(e => e.SourceNodeId == current.Id).Select(e => $"edge={e.Id} type={e.EdgeType}"))}");
-    }
-
-    /// <summary>
-    /// Find the source node id whose outgoing edge points at <paramref name="targetNodeId"/>.
-    /// Used to pick the right slot from <c>outputBySource</c>. If multiple
-    /// edges target the same node we pick the most recently traversed one.
-    /// </summary>
-    private async Task<Guid?> FindIncomingSourceForCurrent(Guid runId, Guid targetNodeId, IReadOnlyList<LoopNodeEdge> edges)
-    {
-        var candidates = edges.Where(e => e.TargetNodeId == targetNodeId).ToList();
-        if (candidates.Count == 0) return null;
-        if (candidates.Count == 1) return candidates[0].SourceNodeId;
-
-        // Multiple candidates: pick the most-recently-traversed.
-        using var scope = _sp.CreateScope();
-        var store = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
-        // We don't have an explicit "last traversal" timestamp; fall back to
-        // counting traversals — return the one with highest count.
-        // (Persistence-level enhancement could store a timestamp.)
-        var best = candidates[0].SourceNodeId;
-        var bestCount = -1;
-        foreach (var e in candidates)
-        {
-            // GetEdgeAsync returns the edge entity; traversal count lives on
-            // LoopRunEdgeTraversal which we don't fetch in bulk. Cheap enough.
-            // For now return the first; refinement is a future enhancement.
-            _ = e;
-            _ = bestCount;
-            return best;
-        }
-        await Task.CompletedTask;
-        return best;
     }
 
     // ---- Per-node execution ----------------------------------------------

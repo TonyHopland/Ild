@@ -148,8 +148,8 @@ export const workItemService = {
     return api.post<void>(`/workitems/${id}/human-feedback/input`, { input });
   },
 
-  humanFeedbackReject: async (id: string): Promise<void> => {
-    return api.post<void>(`/workitems/${id}/human-feedback/reject`, {});
+  humanFeedbackReject: async (id: string, input?: string): Promise<void> => {
+    return api.post<void>(`/workitems/${id}/human-feedback/reject`, input ? { input } : {});
   },
 
   cleanupToDone: async (id: string): Promise<void> => {

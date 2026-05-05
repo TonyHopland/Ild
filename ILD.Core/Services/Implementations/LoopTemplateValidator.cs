@@ -86,9 +86,12 @@ public static class LoopTemplateValidator
             var prompt = (node.Config.GetValueOrDefault("initialPrompt")
                 ?? node.Config.GetValueOrDefault("loopPrompt"))?.ToString();
             var prTemplate = node.Config.GetValueOrDefault("prDescriptionTemplate")?.ToString();
-            if (string.IsNullOrEmpty(prompt) && string.IsNullOrEmpty(prTemplate)) continue;
+            var humanPrompt = string.Equals(node.NodeType, "Human", StringComparison.OrdinalIgnoreCase)
+                ? node.Config.GetValueOrDefault("prompt")?.ToString()
+                : null;
+            if (string.IsNullOrEmpty(prompt) && string.IsNullOrEmpty(prTemplate) && string.IsNullOrEmpty(humanPrompt)) continue;
 
-            var templates = new[] { prompt, prTemplate }.Where(t => !string.IsNullOrEmpty(t)).ToList();
+            var templates = new[] { prompt, prTemplate, humanPrompt }.Where(t => !string.IsNullOrEmpty(t)).ToList();
             foreach (var template in templates)
             {
                 foreach (Match m in PlaceholderPattern.Matches(template!))

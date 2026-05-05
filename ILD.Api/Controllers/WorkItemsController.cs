@@ -277,7 +277,7 @@ public class WorkItemsController : ControllerBase
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
 
-        var ok = await _workItemManager.SubmitHumanFeedbackInputAsync(guid, request.Input);
+        var ok = await _workItemManager.SubmitHumanFeedbackInputAsync(guid, request.Input ?? string.Empty);
         if (!ok) return NotFound();
 
         // Resume the engine
@@ -289,12 +289,16 @@ public class WorkItemsController : ControllerBase
     }
 
     [HttpPost("{id}/human-feedback/reject")]
-    public async Task<IActionResult> HumanFeedbackReject(string id)
+    public async Task<IActionResult> HumanFeedbackReject(string id, [FromBody] HumanFeedbackRejectRequest? request = null)
     {
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
 
-        var ok = await _workItemManager.RejectHumanFeedbackAsync(guid);
+        // Validate length only when text is supplied; reject without text is valid.
+        if (request?.Input is { Length: > 8192 })
+            return BadRequest(new { error = "Input exceeds 8192 characters" });
+
+        var ok = await _workItemManager.RejectHumanFeedbackAsync(guid, request?.Input);
         if (!ok) return NotFound();
 
         // Resume the engine to route failure edge
@@ -356,7 +360,22 @@ public class AddDependencyRequest
 
 public class HumanFeedbackInputRequest
 {
-    [System.ComponentModel.DataAnnotations.Required]
-    [System.ComponentModel.DataAnnotations.StringLength(8192, MinimumLength = 1)]
-    public string Input { get; set; } = string.Empty;
+    /// <summary>
+    /// Optional human acknowledgement / additional context. Empty input is
+    /// allowed: the human may simply approve the suspended node. When supplied
+    /// the text becomes <c>{{PreviousNode.Output}}</c> for the OnSuccess
+    /// successor.
+    /// </summary>
+    [System.ComponentModel.DataAnnotations.StringLength(8192)]
+    public string? Input { get; set; }
+}
+
+public class HumanFeedbackRejectRequest
+{
+    /// <summary>
+    /// Optional rejection rationale. When supplied it is stored on the
+    /// suspended run node's <c>Output</c> so the OnFailure successor can
+    /// read it via <c>{{PreviousNode.Output}}</c>.
+    /// </summary>
+    public string? Input { get; set; }
 }

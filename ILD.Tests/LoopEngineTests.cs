@@ -145,6 +145,7 @@ public class LoopEngineTests
         await h.Engine.RunAsync(h.RunId);
 
         h.ReloadWorkItem().Status.Should().Be(WorkItemStatus.HumanFeedback);
+        h.ReloadWorkItem().HumanFeedbackReason.Should().Be(ILD.Data.Enums.HumanFeedbackReasons.HumanInputNeeded);
         h.ReloadRunNodes().Should().Contain(n => n.Status == LoopRunNodeStatus.WaitingHuman);
     }
 
@@ -163,7 +164,7 @@ public class LoopEngineTests
         await h.Engine.RunAsync(h.RunId);
 
         h.ReloadWorkItem().Status.Should().Be(WorkItemStatus.HumanFeedback);
-        h.ReloadWorkItem().HumanFeedbackReason.Should().Contain("PR");
+        h.ReloadWorkItem().HumanFeedbackReason.Should().Be(ILD.Data.Enums.HumanFeedbackReasons.PrAwaitingMerge);
     }
 
     [Fact]

@@ -87,6 +87,7 @@ export default function LoopEditor() {
   const [aiRejectPattern, setAiRejectPattern] = useState("");
   const [startCreateWorktree, setStartCreateWorktree] = useState(true);
   const [humanInputLabel, setHumanInputLabel] = useState("");
+  const [humanPrompt, setHumanPrompt] = useState("");
   const [prDescriptionTemplate, setPrDescriptionTemplate] = useState("");
   const [labelError, setLabelError] = useState<string | null>(null);
   const [pendingConnection, setPendingConnection] = useState<Connection | null>(null);
@@ -124,6 +125,7 @@ export default function LoopEditor() {
     aiRejectPattern: string;
     startCreateWorktree: boolean;
     humanInputLabel: string;
+    humanPrompt: string;
     adapterConfigValues: Record<string, string | number | boolean>;
   } | null>(null);
   const isNarrow = useMediaQuery("(max-width: 900px)");
@@ -401,6 +403,7 @@ export default function LoopEditor() {
       setAiRejectPattern((config.rejectPattern as string) || "");
       setStartCreateWorktree((config.createWorktree as boolean) ?? true);
       setHumanInputLabel((config.inputLabel as string) || "");
+      setHumanPrompt((config.prompt as string) || "");
       setPrDescriptionTemplate((config.prDescriptionTemplate as string) || "");
 
       if (data.type === NodeType.AI) {
@@ -441,6 +444,7 @@ export default function LoopEditor() {
         aiRejectPattern: (config.rejectPattern as string) || "",
         startCreateWorktree: (config.createWorktree as boolean) ?? true,
         humanInputLabel: (config.inputLabel as string) || "",
+        humanPrompt: (config.prompt as string) || "",
         adapterConfigValues: { ...adapterConfigValues },
       });
       setShowNodeSettingsModal(true);
@@ -467,6 +471,7 @@ export default function LoopEditor() {
       config.createWorktree = startCreateWorktree;
     } else if (nodeType === NodeType.Human) {
       config.inputLabel = humanInputLabel;
+      if (humanPrompt) config.prompt = humanPrompt;
     } else if (nodeType === NodeType.PR) {
       if (prDescriptionTemplate) config.prDescriptionTemplate = prDescriptionTemplate;
     }
@@ -500,6 +505,7 @@ export default function LoopEditor() {
     aiRejectPattern,
     startCreateWorktree,
     humanInputLabel,
+    humanPrompt,
     prDescriptionTemplate,
     adapterConfigValues,
     setNodes,
@@ -518,6 +524,7 @@ export default function LoopEditor() {
       setAiRejectPattern(originalNodeConfig.aiRejectPattern);
       setStartCreateWorktree(originalNodeConfig.startCreateWorktree);
       setHumanInputLabel(originalNodeConfig.humanInputLabel);
+      setHumanPrompt(originalNodeConfig.humanPrompt);
       setAdapterConfigValues(originalNodeConfig.adapterConfigValues);
     }
     setSelectedNode(null);
@@ -1028,15 +1035,26 @@ export default function LoopEditor() {
                       )}
 
                       {(selectedNode.data as { type: string }).type === NodeType.Human && (
-                        <div className="config-field">
-                          <label htmlFor="human-input-label">Input Label</label>
-                          <input
-                            id="human-input-label"
-                            type="text"
-                            value={humanInputLabel}
-                            onChange={(e) => setHumanInputLabel(e.target.value)}
-                          />
-                        </div>
+                        <>
+                          <div className="config-field">
+                            <label htmlFor="human-input-label">Input Label</label>
+                            <input
+                              id="human-input-label"
+                              type="text"
+                              value={humanInputLabel}
+                              onChange={(e) => setHumanInputLabel(e.target.value)}
+                            />
+                          </div>
+                          <div className="config-field">
+                            <label htmlFor="human-prompt">Human Prompt</label>
+                            <PromptEditor
+                              id="human-prompt"
+                              rows={6}
+                              value={humanPrompt}
+                              onChange={(v) => setHumanPrompt(v)}
+                            />
+                          </div>
+                        </>
                       )}
 
                       {(selectedNode.data as { type: string }).type === NodeType.PR && (

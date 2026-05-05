@@ -52,6 +52,7 @@ export default function WorkItemModal({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [prUrlInput, setPrUrlInput] = useState("");
   const [feedbackInput, setFeedbackInput] = useState("");
+  const [humanPrompt, setHumanPrompt] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -90,6 +91,41 @@ export default function WorkItemModal({
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  useEffect(() => {
+    if (
+      !workItem ||
+      workItem.status !== WorkItemStatus.HumanFeedback ||
+      workItem.humanFeedbackReason !== "Human Input Needed"
+    ) {
+      setHumanPrompt(null);
+      return;
+    }
+    const runId = (workItem as { currentLoopRunId?: string }).currentLoopRunId;
+    if (!runId) {
+      setHumanPrompt(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        // Walk the event log backwards to find the prompt rendered for the
+        // currently-suspended Human node. Use a generous page size; humans
+        // pause infrequently relative to total events.
+        const page = await loopRunService.getEvents(runId, 0, 500);
+        if (cancelled) return;
+        const rendered = [...(page.entries || [])]
+          .reverse()
+          .find((e) => e.eventType === "HumanPromptRendered");
+        setHumanPrompt(rendered?.payload ?? null);
+      } catch {
+        if (!cancelled) setHumanPrompt(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [workItem?.id, workItem?.status, workItem?.humanFeedbackReason]);
 
   useEffect(() => {
     if (workItem) {
@@ -168,7 +204,7 @@ export default function WorkItemModal({
   const handleContinue = async () => {
     if (!workItem) return;
     try {
-      await workItemService.humanFeedbackInput(workItem.id, feedbackInput);
+      await workItemService.humanFeedbackInput(workItem.id, feedbackInput || "");
       const updated = await workItemService.getById(workItem.id);
       onSave(updated);
     } catch (error) {
@@ -179,7 +215,9 @@ export default function WorkItemModal({
   const handleReject = async () => {
     if (!workItem) return;
     try {
-      await workItemService.humanFeedbackReject(workItem.id);
+      // Pass any typed feedback through to the OnFailure successor as
+      // {{PreviousNode.Output}}.
+      await workItemService.humanFeedbackReject(workItem.id, feedbackInput || undefined);
       const updated = await workItemService.getById(workItem.id);
       onSave(updated);
     } catch (error) {
@@ -472,11 +510,12 @@ export default function WorkItemModal({
                 workItem.humanFeedbackReason === "Human Input Needed" && (
                   <div className="detail-section human-feedback-section">
                     <span className="detail-label">Human Feedback</span>
+                    {humanPrompt && <pre className="feedback-prompt">{humanPrompt}</pre>}
                     <textarea
                       className="feedback-textarea"
                       value={feedbackInput}
                       onChange={(e) => setFeedbackInput(e.target.value)}
-                      placeholder="Provide input or context..."
+                      placeholder="Optional input or context..."
                       rows={3}
                     />
                     <div className="feedback-actions">

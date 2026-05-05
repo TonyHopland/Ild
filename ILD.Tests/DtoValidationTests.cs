@@ -68,9 +68,16 @@ public class DtoValidationTests
     }
 
     [Fact]
-    public void HumanFeedbackInputRequest_empty_input_produces_error()
+    public void HumanFeedbackInputRequest_empty_input_is_valid()
     {
         var dto = new HumanFeedbackInputRequest();
+        Validate(dto).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void HumanFeedbackInputRequest_overlong_input_produces_error()
+    {
+        var dto = new HumanFeedbackInputRequest { Input = new string('x', 8193) };
         Validate(dto).Should().NotBeEmpty();
     }
 

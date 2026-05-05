@@ -264,17 +264,34 @@ public class WorkItemManager : IWorkItemManager
         var run = await _loopRunStore.GetByIdAsync(runId);
         if (run != null)
         {
+            // Find the suspended Human run node. Prefer matching on the
+            // run's CurrentNodeId since the LoopNode navigation isn't
+            // eagerly loaded by GetRunNodesAsync.
             var nodes = await _loopRunStore.GetRunNodesAsync(runId);
             var humanRunNode = nodes
-                .Where(n => n.LoopNode?.NodeType == NodeType.Human || n.LoopNodeId == run.CurrentNodeId)
+                .Where(n => n.Status == LoopRunNodeStatus.WaitingHuman
+                            && n.LoopNodeId == run.CurrentNodeId)
                 .OrderByDescending(n => n.StartedAt ?? DateTime.MinValue)
-                .FirstOrDefault(n => n.Status == LoopRunNodeStatus.WaitingHuman);
+                .FirstOrDefault()
+                ?? nodes
+                    .Where(n => n.Status == LoopRunNodeStatus.WaitingHuman)
+                    .OrderByDescending(n => n.StartedAt ?? DateTime.MinValue)
+                    .FirstOrDefault();
             if (humanRunNode != null)
             {
                 humanRunNode.Status = LoopRunNodeStatus.Succeeded;
                 humanRunNode.Output = input;
                 humanRunNode.CompletedAt = DateTime.UtcNow;
                 await _loopRunStore.UpdateRunNodeAsync(humanRunNode);
+            }
+
+            // Resume the run itself so the engine doesn't stay parked at
+            // WaitingHuman if the next node finishes synchronously.
+            if (run.Status == LoopRunStatus.WaitingHuman)
+            {
+                run.Status = LoopRunStatus.Running;
+                run.UpdatedAt = DateTime.UtcNow;
+                await _loopRunStore.UpdateRunAsync(run);
             }
         }
 
@@ -287,7 +304,7 @@ public class WorkItemManager : IWorkItemManager
         return true;
     }
 
-    public async Task<bool> RejectHumanFeedbackAsync(Guid workItemId)
+    public async Task<bool> RejectHumanFeedbackAsync(Guid workItemId, string? input = null)
     {
         var wi = await _store.GetByIdAsync(workItemId);
         if (wi == null) return false;
@@ -296,15 +313,41 @@ public class WorkItemManager : IWorkItemManager
         var run = await _loopRunStore.GetByIdAsync(wi.CurrentLoopRunId.Value);
         if (run == null) return false;
 
+        // Pick the most recent WaitingHuman run node parked at the run's
+        // current node. The LoopNode navigation isn't eagerly loaded by
+        // GetRunNodesAsync, so match on CurrentNodeId rather than NodeType.
         var nodes = await _loopRunStore.GetRunNodesAsync(run.Id);
-        var currentRunNode = nodes.FirstOrDefault(n => n.LoopNodeId == run.CurrentNodeId);
+        var currentRunNode = nodes
+            .Where(n => n.Status == LoopRunNodeStatus.WaitingHuman
+                        && n.LoopNodeId == run.CurrentNodeId)
+            .OrderByDescending(n => n.StartedAt ?? DateTime.MinValue)
+            .FirstOrDefault()
+            ?? nodes
+                .Where(n => n.Status == LoopRunNodeStatus.WaitingHuman)
+                .OrderByDescending(n => n.StartedAt ?? DateTime.MinValue)
+                .FirstOrDefault();
+
         if (currentRunNode != null)
         {
             currentRunNode.Status = LoopRunNodeStatus.Failed;
+            // Carry the rejection text through to the OnFailure successor as
+            // {{PreviousNode.Output}}. When the human gave no rationale we
+            // leave Output as-is rather than overwriting any prior value.
+            if (!string.IsNullOrEmpty(input))
+                currentRunNode.Output = input;
+            currentRunNode.CompletedAt = DateTime.UtcNow;
             await _loopRunStore.UpdateRunNodeAsync(currentRunNode);
         }
 
-        await _eventLog.AppendAsync(run.Id, "HumanFeedbackReceived", "rejected by user");
+        var logMessage = string.IsNullOrEmpty(input) ? "rejected by user" : $"rejected by user: {input}";
+        await _eventLog.AppendAsync(run.Id, "HumanFeedbackReceived", logMessage);
+
+        if (run.Status == LoopRunStatus.WaitingHuman)
+        {
+            run.Status = LoopRunStatus.Running;
+            run.UpdatedAt = DateTime.UtcNow;
+            await _loopRunStore.UpdateRunAsync(run);
+        }
 
         wi.Status = WorkItemStatus.Running;
         wi.HumanFeedbackReason = null;
