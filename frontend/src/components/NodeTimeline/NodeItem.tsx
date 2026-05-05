@@ -25,6 +25,8 @@ interface NodeItemProps {
   isRunning: boolean;
   isExpanded: boolean;
   onToggle: () => void;
+  onRetry?: (runNodeId: string) => void;
+  retryDisabled?: boolean;
 }
 
 function formatDuration(startedAt: string | null, completedAt: string | null): string {
@@ -44,6 +46,8 @@ export default function NodeItem({
   isRunning,
   isExpanded,
   onToggle,
+  onRetry,
+  retryDisabled,
   children,
 }: NodeItemProps & { children?: React.ReactNode }) {
   const statusColor = nodeStatusColors[runNode.status] ?? "#6b7280";
@@ -53,21 +57,39 @@ export default function NodeItem({
 
   return (
     <div className={`node-item ${isRunning ? "node-running" : ""}`}>
-      <button
-        className="node-item-header"
-        style={{ borderLeftColor: statusColor }}
-        onClick={onToggle}
-        aria-expanded={isExpanded}
-      >
-        <span className="node-item-icon">{icon}</span>
-        <span className="node-item-label">{displayLabel}</span>
-        <span className="node-item-type">{templateNodeType}</span>
-        <span className="node-item-status" style={{ color: statusColor }}>
-          {runNode.status}
-        </span>
-        {duration && <span className="node-item-duration">{duration}</span>}
-        <span className={`node-item-chevron ${isExpanded ? "expanded" : ""}`}>▼</span>
-      </button>
+      <div className="node-item-header-row">
+        <button
+          type="button"
+          className="node-item-header"
+          style={{ borderLeftColor: statusColor }}
+          onClick={onToggle}
+          aria-expanded={isExpanded}
+        >
+          <span className="node-item-icon">{icon}</span>
+          <span className="node-item-label">{displayLabel}</span>
+          <span className="node-item-type">{templateNodeType}</span>
+          <span className="node-item-status" style={{ color: statusColor }}>
+            {runNode.status}
+          </span>
+          {duration && <span className="node-item-duration">{duration}</span>}
+          <span className={`node-item-chevron ${isExpanded ? "expanded" : ""}`}>▼</span>
+        </button>
+        {onRetry && !isRunning && (
+          <button
+            type="button"
+            className="node-item-retry"
+            disabled={retryDisabled}
+            title="Retry from this node with the same input as last time"
+            aria-label="Retry from this node"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRetry(runNode.id);
+            }}
+          >
+            ↻ Retry
+          </button>
+        )}
+      </div>
       {isExpanded && children && <div className="node-item-body">{children}</div>}
     </div>
   );

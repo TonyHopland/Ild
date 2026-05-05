@@ -142,6 +142,104 @@ public class LoopEngine : ILoopEngine
         return Task.CompletedTask;
     }
 
+    public async Task RetryFromNodeAsync(Guid runId, Guid runNodeId)
+    {
+        // Refuse if a run loop is already executing for this run.
+        if (_runs.TryGetValue(runId, out var existing) && existing.Task is { IsCompleted: false })
+            throw new InvalidOperationException("Run is currently executing; pause or cancel it before retrying a node.");
+
+        var loaded = await LoadRunStateAsync(runId);
+        if (loaded == null)
+            throw new InvalidOperationException($"Run {runId} not found or template missing");
+        var (run, workItem, template, nodes, edges) = loaded.Value;
+
+        LoopRunNode? targetRunNode;
+        IReadOnlyList<LoopRunNode> allRunNodes;
+        using (var scope = _sp.CreateScope())
+        {
+            var store = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+            targetRunNode = await store.GetRunNodeByIdAsync(runNodeId);
+            allRunNodes = await store.GetRunNodesAsync(runId);
+        }
+        if (targetRunNode == null || targetRunNode.LoopRunId != runId)
+            throw new InvalidOperationException($"Run node {runNodeId} not found on run {runId}");
+
+        var targetTemplateNode = nodes.FirstOrDefault(n => n.Id == targetRunNode.LoopNodeId);
+        if (targetTemplateNode == null)
+            throw new InvalidOperationException($"Template node {targetRunNode.LoopNodeId} not found in graph");
+
+        // Reconstruct the {{PreviousNode.Output}} that the target saw last
+        // time it started. Find candidate source nodes via incoming edges,
+        // then pick the most recent prior LoopRunNode (by CreatedAt) whose
+        // LoopNodeId is one of those sources, restricted to runs created
+        // strictly before the target visit.
+        var incomingSourceIds = edges
+            .Where(e => e.TargetNodeId == targetTemplateNode.Id)
+            .Select(e => e.SourceNodeId)
+            .ToHashSet();
+        string? prevOutputSeed = null;
+        var predecessor = allRunNodes
+            .Where(rn => rn.CreatedAt < targetRunNode.CreatedAt && incomingSourceIds.Contains(rn.LoopNodeId))
+            .OrderByDescending(rn => rn.CreatedAt)
+            .FirstOrDefault();
+        if (predecessor != null) prevOutputSeed = predecessor.Output;
+
+        // Reset run state so the loop runs forward from this node.
+        using (var scope = _sp.CreateScope())
+        {
+            var store = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+            var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
+            var runEntity = await store.GetByIdAsync(runId);
+            if (runEntity != null)
+            {
+                runEntity.Status = LoopRunStatus.Running;
+                runEntity.CurrentNodeId = targetTemplateNode.Id;
+                runEntity.CompletedAt = null;
+                runEntity.UpdatedAt = DateTime.UtcNow;
+                await store.UpdateRunAsync(runEntity);
+                run = runEntity;
+            }
+            var wi = await workItemStore.GetByIdAsync(run.WorkItemId);
+            if (wi != null)
+            {
+                wi.Status = WorkItemStatus.Running;
+                wi.HumanFeedbackReason = null;
+                wi.UpdatedAt = DateTime.UtcNow;
+                await workItemStore.UpdateAsync(wi);
+                workItem = wi;
+            }
+        }
+
+        await LogEventAsync(runId, "RetryFromNode",
+            $"Retry from node {targetTemplateNode.Label}", targetTemplateNode.Id, runNodeId: runNodeId);
+
+        // Replace any stale RunControl from a previous execution.
+        if (_runs.TryRemove(runId, out var stale)) stale.Dispose();
+        var control = _runs.GetOrAdd(runId, _ => new RunControl());
+
+        var maxNodeExecs = template.MaxNodeExecutions > 0 ? template.MaxNodeExecutions : 200;
+        var maxWallHours = template.MaxWallClockHours > 0 ? template.MaxWallClockHours : 24;
+        var deadline = DateTime.UtcNow.AddHours(maxWallHours);
+
+        control.Task = Task.Run(async () =>
+        {
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(control.Cts.Token);
+            try
+            {
+                await ExecuteRunLoopAsync(
+                    runId, run, workItem, nodes, edges, targetTemplateNode,
+                    new Dictionary<Guid, string?>(), new Dictionary<Guid, int>(),
+                    control, deadline, maxNodeExecs,
+                    firstPrevOutputOverride: prevOutputSeed, linkedCts.Token);
+            }
+            catch (OperationCanceledException) { /* expected on cancel */ }
+            catch (Exception ex)
+            {
+                await NotifyAsync(() => _notifier.EventLoggedAsync(runId, $"Retry failed: {ex.Message}", "Error", null, null));
+            }
+        }, control.Cts.Token);
+    }
+
     public async Task<LoopRunStatus?> GetRunStatusAsync(Guid runId)
     {
         using var scope = _sp.CreateScope();
@@ -218,7 +316,6 @@ public class LoopEngine : ILoopEngine
         // {{PreviousNode.Output}} follows the incoming edge, not chronology.
         var outputBySource = new Dictionary<Guid, string?>();
         var traversalCounts = new Dictionary<Guid, int>();
-        var executed = 0;
 
         // Resolve where to begin execution. If the run is parked at a node,
         // continue routing from there (the runnode's terminal status decides
@@ -257,6 +354,36 @@ public class LoopEngine : ILoopEngine
                 return await FailRunAsync(runId, "No Start node");
         }
 
+        return await ExecuteRunLoopAsync(
+            runId, run, workItem, nodes, edges, current,
+            outputBySource, traversalCounts, control, deadline, maxNodeExecs,
+            firstPrevOutputOverride: null, ct);
+    }
+
+    /// <summary>
+    /// Drive the run forward from <paramref name="current"/>. When
+    /// <paramref name="firstPrevOutputOverride"/> is supplied it replaces
+    /// the value normally read from <c>outputBySource</c> for the very
+    /// first node executed; subsequent nodes use the regular routing.
+    /// </summary>
+    private async Task<LoopRunStatus> ExecuteRunLoopAsync(
+        Guid runId,
+        LoopRun run,
+        WorkItem workItem,
+        IReadOnlyList<LoopNode> nodes,
+        IReadOnlyList<LoopNodeEdge> edges,
+        LoopNode current,
+        Dictionary<Guid, string?> outputBySource,
+        Dictionary<Guid, int> traversalCounts,
+        RunControl control,
+        DateTime deadline,
+        int maxNodeExecs,
+        string? firstPrevOutputOverride,
+        CancellationToken ct)
+    {
+        var executed = 0;
+        var firstIteration = true;
+
         try
         {
             while (true)
@@ -265,7 +392,7 @@ public class LoopEngine : ILoopEngine
                 if (control.IsPaused)
                 {
                     if (DateTime.UtcNow > deadline)
-                        return await FailRunAsync(runId, $"Exceeded MaxWallClockHours={maxWallHours}");
+                        return await FailRunAsync(runId, $"Exceeded MaxWallClockHours");
                     try { await Task.Delay(50, ct); } catch (OperationCanceledException) { }
                     continue;
                 }
@@ -273,16 +400,25 @@ public class LoopEngine : ILoopEngine
                 if (++executed > maxNodeExecs)
                     return await FailRunAsync(runId, $"Exceeded MaxNodeExecutions={maxNodeExecs}");
                 if (DateTime.UtcNow > deadline)
-                    return await FailRunAsync(runId, $"Exceeded MaxWallClockHours={maxWallHours}");
+                    return await FailRunAsync(runId, $"Exceeded MaxWallClockHours");
 
                 // Refresh workitem (other nodes may have mutated worktree path etc.)
                 workItem = await RefreshWorkItemAsync(workItem.Id) ?? workItem;
 
-                // {{PreviousNode.Output}} for `current` follows the incoming edge.
-                var incomingSource = await FindIncomingSourceForCurrent(runId, current.Id, edges);
-                string? prevOutput = incomingSource is { } src && outputBySource.TryGetValue(src, out var po)
-                    ? po
-                    : null;
+                string? prevOutput;
+                if (firstIteration && firstPrevOutputOverride != null)
+                {
+                    prevOutput = firstPrevOutputOverride;
+                }
+                else
+                {
+                    // {{PreviousNode.Output}} for `current` follows the incoming edge.
+                    var incomingSource = await FindIncomingSourceForCurrent(runId, current.Id, edges);
+                    prevOutput = incomingSource is { } src && outputBySource.TryGetValue(src, out var po)
+                        ? po
+                        : null;
+                }
+                firstIteration = false;
 
                 var outcome = await ExecuteNodeWithRetryAsync(run, workItem, current, prevOutput, edges, ct);
 

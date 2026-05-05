@@ -280,6 +280,17 @@ export default function EventLogViewer() {
     }
   };
 
+  const handleRetryFromNode = async (runNodeId: string) => {
+    if (!runId) return;
+    try {
+      await loopRunService.retryFromNode(runId, runNodeId);
+      await loadRun();
+      await loadEvents();
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "Failed to retry from node.");
+    }
+  };
+
   const getTemplateNode = (nodeId: string): LoopNode | undefined => {
     return templateNodes.find((n) => n.id === nodeId);
   };
@@ -374,19 +385,30 @@ export default function EventLogViewer() {
           const effectiveInput = getEffectiveInputForRunNode(rn.id);
 
           let edgeType: EdgeType | undefined;
+          let edgeVariant: "retry" | undefined;
           if (index > 0) {
             const prevNode = runNodes[index - 1];
-            edgeType =
-              prevNode.status === LoopRunNodeStatus.Succeeded
-                ? EdgeType.OnSuccess
-                : EdgeType.OnFailure;
+            // A RetryFromNode event whose runNodeId matches the previous
+            // run node means the next entry was produced by a manual retry.
+            const isRetryBoundary = events.some(
+              (e) => e.eventType === "RetryFromNode" && e.runNodeId === prevNode.id,
+            );
+            if (isRetryBoundary) {
+              edgeType = EdgeType.OnSuccess;
+              edgeVariant = "retry";
+            } else {
+              edgeType =
+                prevNode.status === LoopRunNodeStatus.Succeeded
+                  ? EdgeType.OnSuccess
+                  : EdgeType.OnFailure;
+            }
           }
 
           const templateNode = getTemplateNode(rn.nodeId);
 
           return (
             <div key={rn.id} className="node-execution-block">
-              {edgeType !== undefined && <EdgeArrow edgeType={edgeType} />}
+              {edgeType !== undefined && <EdgeArrow edgeType={edgeType} variant={edgeVariant} />}
               <NodeItem
                 runNode={rn}
                 templateNodeType={templateNodeType}
@@ -394,6 +416,8 @@ export default function EventLogViewer() {
                 isRunning={isRunning}
                 isExpanded={expandedNodeId === rn.id}
                 onToggle={() => handleToggleNode(rn.id)}
+                onRetry={handleRetryFromNode}
+                retryDisabled={run.status === LoopRunStatus.Running && !run.isPaused}
               >
                 {isRunning && <LiveStream lines={progressLines} />}
                 {!isRunning && (

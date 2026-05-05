@@ -251,6 +251,10 @@ export const loopRunService = {
     return api.post<void>(`/loopruns/${id}/resume`, {});
   },
 
+  retryFromNode: async (id: string, runNodeId: string): Promise<void> => {
+    return api.post<void>(`/loopruns/${id}/nodes/${runNodeId}/retry`, {});
+  },
+
   getEvents: async (runId: string, cursor = 0, limit = 100): Promise<EventLogPage> => {
     return api.get<EventLogPage>(`/loopruns/${runId}/events?cursor=${cursor}&limit=${limit}`);
   },

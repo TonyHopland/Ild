@@ -29,5 +29,13 @@ public interface ILoopEngine
     Task SignalNodeResultAsync(Guid runId, Guid runNodeId, NodeSignal signal);
 
     Task ResumeRecoveredRunAsync(Guid runId);
+
+    /// <summary>
+    /// Re-enter the run at the template node corresponding to
+    /// <paramref name="runNodeId"/>, replaying with the same
+    /// <c>{{PreviousNode.Output}}</c> seed that the node saw the last
+    /// time it started. Fails if the run is currently executing.
+    /// </summary>
+    Task RetryFromNodeAsync(Guid runId, Guid runNodeId);
 }
 
