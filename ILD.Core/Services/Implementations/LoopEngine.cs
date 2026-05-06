@@ -660,10 +660,14 @@ public class LoopEngine : ILoopEngine
         }
     }
 
-    private static NodeExecutionContext BuildContext(LoopRun run, LoopRunNode runNode, LoopNode node, WorkItem wi, string? prevOutput, CancellationToken ct)
+    private NodeExecutionContext BuildContext(LoopRun run, LoopRunNode runNode, LoopNode node, WorkItem wi, string? prevOutput, CancellationToken ct)
     {
-        Func<string, Task> safe = _ => Task.CompletedTask;
-        return new NodeExecutionContext(run, runNode, node, wi, prevOutput, ct, safe);
+        Func<string, Task> progress = async (line) =>
+        {
+            if (!string.IsNullOrWhiteSpace(line))
+                await NotifyAsync(() => _notifier.NodeProgressAsync(run.Id, node.Id, line));
+        };
+        return new NodeExecutionContext(run, runNode, node, wi, prevOutput, ct, progress);
     }
 
     private static string SafeDescribeInput(INodeExecutor executor, NodeExecutionContext ctx)

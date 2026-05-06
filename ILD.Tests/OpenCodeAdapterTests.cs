@@ -228,6 +228,99 @@ public class OpenCodeAdapterTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_streams_extracted_text_from_json_lines_to_progress_callback()
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-json-stream-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
+        File.WriteAllText(scriptPath, "#!/bin/sh\necho '{\"text\":\"thinking...\"}'\necho '{\"text\":\"analyzing code...\"}'\necho '{\"text\":\"done\"}'\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var adapter = new OpenCodeAdapter();
+            var progressLines = new System.Collections.Concurrent.ConcurrentBag<string>();
+
+            var ctx = BuildContext(
+                binaryPath: scriptPath,
+                initialPrompt: "ignored",
+                worktreePath: worktreeDir,
+                executionCount: 1,
+                progressCallback: (line) =>
+                {
+                    progressLines.Add(line);
+                    return Task.CompletedTask;
+                });
+
+            var result = await adapter.ExecuteAsync(ctx);
+
+            result.Success.Should().BeTrue();
+            // Progress lines should be extracted text, not raw JSON
+            progressLines.Should().Contain("thinking...");
+            progressLines.Should().Contain("analyzing code...");
+            progressLines.Should().Contain("done");
+            // Verify no raw JSON leaked through
+            progressLines.Should().NotContain(l => l.Contains("{\"text\":"));
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_surfaces_event_type_for_non_text_json_lines()
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-event-type-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
+        // Simulate real opencode JSON events: text, step_start, tool_use, step_finish, empty text
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "echo '{\"type\":\"step_start\"}'\n" +
+            "echo '{\"type\":\"text\",\"text\":\"reading file...\"}'\n" +
+            "echo '{\"type\":\"tool_use\",\"tool\":\"read\"}'\n" +
+            "echo '{\"type\":\"text\",\"text\":\"\"}'\n" +
+            "echo '{\"type\":\"step_finish\"}'\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var adapter = new OpenCodeAdapter();
+            var progressLines = new System.Collections.Concurrent.ConcurrentBag<string>();
+
+            var ctx = BuildContext(
+                binaryPath: scriptPath,
+                initialPrompt: "ignored",
+                worktreePath: worktreeDir,
+                executionCount: 1,
+                progressCallback: (line) =>
+                {
+                    progressLines.Add(line);
+                    return Task.CompletedTask;
+                });
+
+            var result = await adapter.ExecuteAsync(ctx);
+
+            result.Success.Should().BeTrue();
+            // Text lines should appear normally
+            progressLines.Should().Contain("reading file...");
+            // Step events should show as [step_start] and [step_finish]
+            progressLines.Should().Contain("[step_start]");
+            progressLines.Should().Contain("[step_finish]");
+            // Tool use should show as [tool: read]
+            progressLines.Should().Contain("[tool: read]");
+            // Empty text lines should NOT appear as blank entries
+            progressLines.Should().NotContain(string.Empty);
+            progressLines.Should().NotContain(l => string.IsNullOrWhiteSpace(l));
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_streams_stdout_lines_to_progress_callback()
     {
         var scriptPath = Path.Combine(Path.GetTempPath(), $"ild-stream-test-{Guid.NewGuid():N}.sh");

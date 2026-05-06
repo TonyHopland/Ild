@@ -166,7 +166,11 @@ public class OpenCodeAdapter : IAgentAdapter
                 if (name is "text" or "content" or "delta" or "message" or "body")
                 {
                     if (prop.Value.ValueKind == JsonValueKind.String)
-                        sb.Append(prop.Value.GetString());
+                    {
+                        var val = prop.Value.GetString();
+                        if (!string.IsNullOrEmpty(val))
+                            sb.Append(val);
+                    }
                     else
                         ExtractTextFromElement(prop.Value, sb);
                 }
@@ -267,8 +271,54 @@ public class OpenCodeAdapter : IAgentAdapter
         {
             lock (lockObj) lines.Add(line);
             if (progressCallback != null)
-                await progressCallback(line).ConfigureAwait(false);
+            {
+                var text = ExtractTextFromJsonLine(line);
+                if (!string.IsNullOrEmpty(text))
+                    await progressCallback(text).ConfigureAwait(false);
+            }
         }
         lock (lockObj) return string.Join("\n", lines);
+    }
+
+    private static string? ExtractTextFromJsonLine(string line)
+    {
+        var trimmed = line.Trim();
+        if (string.IsNullOrEmpty(trimmed)) return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(trimmed);
+            var sb = new StringBuilder();
+            ExtractTextFromElement(doc.RootElement, sb);
+            if (sb.Length > 0) return sb.ToString();
+
+            // No text content; surface event metadata based on real opencode output
+            if (doc.RootElement.ValueKind == JsonValueKind.Object)
+            {
+                var type = TryGetString(doc.RootElement, "type");
+                if (type == "tool_use")
+                {
+                    var tool = TryGetString(doc.RootElement, "tool");
+                    return tool != null ? $"[tool: {tool}]" : "[tool call]";
+                }
+                if (type != null)
+                {
+                    return $"[{type}]";
+                }
+            }
+            return null;
+        }
+        catch
+        {
+            // Not valid JSON; pass through as-is for non-JSON output
+            return trimmed;
+        }
+    }
+
+    private static string? TryGetString(JsonElement element, string propertyName)
+    {
+        if (element.TryGetProperty(propertyName, out var prop) && prop.ValueKind == JsonValueKind.String)
+            return prop.GetString();
+        return null;
     }
 }
