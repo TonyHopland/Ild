@@ -30,6 +30,8 @@ internal static class NodeConfig
         public string? LoopPrompt { get; init; }
         public string? RejectPattern { get; init; }
         public JsonElement? AdapterConfig { get; init; }
+        public string? SessionInput { get; init; }
+        public string? SessionOutput { get; init; }
     }
 
     public sealed record Human

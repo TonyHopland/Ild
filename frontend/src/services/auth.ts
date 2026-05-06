@@ -12,6 +12,7 @@ import {
   ConfigFieldDescriptor,
   LoopNode,
   LoopNodeEdge,
+  PrComment,
 } from "../types";
 
 interface BackendLoginResponse {
@@ -150,6 +151,10 @@ export const workItemService = {
 
   humanFeedbackReject: async (id: string, input?: string): Promise<void> => {
     return api.post<void>(`/workitems/${id}/human-feedback/reject`, input ? { input } : {});
+  },
+
+  getPrComments: async (id: string): Promise<PrComment[]> => {
+    return api.get<PrComment[]>(`/workitems/${id}/pr-comments`);
   },
 
   cleanupToDone: async (id: string): Promise<void> => {

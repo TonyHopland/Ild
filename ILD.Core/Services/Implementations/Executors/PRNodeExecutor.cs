@@ -33,35 +33,43 @@ public sealed class PRNodeExecutor : INodeExecutor
             return new NodeOutcome.Failed("WorkItem not found");
 
         string? prUrl = wi.PrUrl;
-        if (string.IsNullOrEmpty(prUrl))
+        var repo = await workItemStore.GetRepositoryAsync(wi.RepositoryId);
+        if (repo == null)
+            return new NodeOutcome.Failed("Repository not found");
+        var branch = wi.BranchName ?? $"ild/wi-{wi.Id:N}";
+        var target = repo.DefaultBranch ?? "main";
+
+        // Commit + push on every visit so a re-entered PR node updates the
+        // existing PR with the latest worktree state. The no-commits-ahead
+        // guard only fires on initial PR creation; once a PR exists the
+        // branch is allowed to be at parity with target (e.g. all changes
+        // already merged or pushed previously).
+        if (!string.IsNullOrEmpty(wi.WorktreePath) && Directory.Exists(wi.WorktreePath))
         {
-            var repo = await workItemStore.GetRepositoryAsync(wi.RepositoryId);
-            if (repo == null)
-                return new NodeOutcome.Failed("Repository not found");
-            var branch = wi.BranchName ?? $"ild/wi-{wi.Id:N}";
-            var target = repo.DefaultBranch ?? "main";
+            var repoManager = scope.ServiceProvider.GetRequiredService<IRepositoryManager>();
 
-            if (!string.IsNullOrEmpty(wi.WorktreePath) && Directory.Exists(wi.WorktreePath))
+            var diff = await repoManager.GetDiffAsync(wi.WorktreePath);
+            if (!string.IsNullOrEmpty(diff))
             {
-                var repoManager = scope.ServiceProvider.GetRequiredService<IRepositoryManager>();
+                if (!await repoManager.CommitAsync(wi.WorktreePath, wi.Title))
+                    return new NodeOutcome.Failed("Failed to commit uncommitted changes");
+            }
 
-                var diff = await repoManager.GetDiffAsync(wi.WorktreePath);
-                if (!string.IsNullOrEmpty(diff))
-                {
-                    if (!await repoManager.CommitAsync(wi.WorktreePath, wi.Title))
-                        return new NodeOutcome.Failed("Failed to commit uncommitted changes");
-                }
+            var pushResult = await repoManager.PushAsync(wi.WorktreePath, branch, ctx.CancellationToken);
+            if (!pushResult.Success)
+                return new NodeOutcome.Failed($"Failed to push branch '{branch}' to remote: {pushResult.Error ?? "unknown error"}");
 
-                var pushResult = await repoManager.PushAsync(wi.WorktreePath, branch, ctx.CancellationToken);
-                if (!pushResult.Success)
-                    return new NodeOutcome.Failed($"Failed to push branch '{branch}' to remote: {pushResult.Error ?? "unknown error"}");
-
+            if (string.IsNullOrEmpty(prUrl))
+            {
                 _ = await repoManager.FetchAsync(wi.WorktreePath, ctx.CancellationToken);
                 var ahead = await repoManager.GetCommitsAheadCountAsync(wi.WorktreePath, $"origin/{target}");
                 if (ahead == 0)
                     return new NodeOutcome.Failed($"Branch '{branch}' has no commits ahead of 'origin/{target}'; no changes were made");
             }
+        }
 
+        if (string.IsNullOrEmpty(prUrl))
+        {
             var remote = scope.ServiceProvider.GetRequiredService<IRemoteProvider>();
 
             var prBody = ResolvePrDescription(_sp, ctx.Node.Config, wi, ctx.PreviousNodeOutput);

@@ -151,6 +151,18 @@ public sealed class AINodeExecutor : INodeExecutor
             var provider = await ResolveProviderAsync(providerStore, cfg.AiProviderId);
             if (provider == null) return new NodeOutcome.Failed("No AI provider found");
 
+            var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+            var run = await loopRunStore.GetByIdAsync(ctx.Run.Id);
+
+            string? sessionId = null;
+            string? incomingSessionId = null;
+            var sessionInput = cfg.SessionInput ?? "incoming";
+            if (sessionInput == "incoming" && run is not null)
+            {
+                incomingSessionId = ResolveSessionForProvider(run.SessionsJson, provider.Id);
+                sessionId = incomingSessionId;
+            }
+
             var registry = scope.ServiceProvider.GetRequiredService<IAgentAdapterRegistry>();
             var adapter = registry.ResolveForProvider(provider)();
 
@@ -187,7 +199,9 @@ public sealed class AINodeExecutor : INodeExecutor
                 executionCount,
                 timeoutCts.Token,
                 ctx.ProgressCallback,
-                ExtractAdapterConfig(cfg.AdapterConfig));
+                ExtractAdapterConfig(cfg.AdapterConfig),
+                sessionId,
+                incomingSessionId);
 
             var result = await adapter.ExecuteAsync(agentCtx);
 
@@ -199,6 +213,18 @@ public sealed class AINodeExecutor : INodeExecutor
                     return new NodeOutcome.Failed(
                         "AI rejected: output matched rejectPattern", result.Output);
                 }
+            }
+
+            if (run is not null)
+            {
+                var sessionOutput = cfg.SessionOutput ?? "current";
+                string? effectiveSessionId = sessionOutput switch
+                {
+                    "current" => result.SessionId,
+                    "incoming" => result.IncomingSessionId,
+                    _ => null
+                };
+                await UpdateRunSessionAsync(loopRunStore, run, provider.Id, effectiveSessionId);
             }
 
             return NodeOutcome.FromResult(result);
@@ -240,6 +266,59 @@ public sealed class AINodeExecutor : INodeExecutor
             };
         }
         return result;
+    }
+
+    private static string? ResolveSessionForProvider(string? sessionsJson, Guid providerId)
+    {
+        if (string.IsNullOrEmpty(sessionsJson)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(sessionsJson);
+            foreach (var entry in doc.RootElement.EnumerateArray())
+            {
+                if (entry.TryGetProperty("providerId", out var pid) && pid.GetGuid() == providerId)
+                    return entry.TryGetProperty("sessionId", out var sid) ? sid.GetString() : null;
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    private static async Task UpdateRunSessionAsync(ILoopRunStore store, LoopRun run, Guid providerId, string? sessionId)
+    {
+        var sessions = ParseSessions(run.SessionsJson);
+        if (sessionId is null)
+        {
+            sessions.RemoveAll(s => s.ProviderId == providerId.ToString());
+        }
+        else
+        {
+            var existing = sessions.Find(s => s.ProviderId == providerId.ToString());
+            if (existing is not null)
+                existing.SessionId = sessionId;
+            else
+                sessions.Add(new RunSessionEntry(providerId.ToString(), sessionId));
+        }
+        run.SessionsJson = JsonSerializer.Serialize(sessions);
+        await store.UpdateRunAsync(run);
+    }
+
+    private static List<RunSessionEntry> ParseSessions(string? json)
+    {
+        if (string.IsNullOrEmpty(json)) return new List<RunSessionEntry>();
+        try { return JsonSerializer.Deserialize<List<RunSessionEntry>>(json) ?? new List<RunSessionEntry>(); }
+        catch { return new List<RunSessionEntry>(); }
+    }
+
+    private sealed class RunSessionEntry
+    {
+        public string ProviderId { get; set; } = "";
+        public string SessionId { get; set; } = "";
+        public RunSessionEntry(string providerId, string sessionId)
+        {
+            ProviderId = providerId;
+            SessionId = sessionId;
+        }
     }
 }
 

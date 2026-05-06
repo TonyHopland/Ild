@@ -293,6 +293,99 @@ public class OpenCodeAdapterTests
         }
     }
 
+    [Fact]
+    public async Task ExecuteAsync_passes_session_flag_when_session_id_is_set()
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "args.sh");
+        File.WriteAllText(scriptPath, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var adapter = new OpenCodeAdapter();
+
+            var ctx = BuildContext(
+                binaryPath: scriptPath,
+                initialPrompt: "my prompt",
+                worktreePath: worktreeDir,
+                sessionId: "test-session-abc",
+                executionCount: 1);
+
+            var result = await adapter.ExecuteAsync(ctx);
+
+            result.Success.Should().BeTrue();
+            result.Output.Should().Contain("--session");
+            result.Output.Should().Contain("test-session-abc");
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_does_not_pass_session_flag_when_session_id_is_null()
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "args.sh");
+        File.WriteAllText(scriptPath, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var adapter = new OpenCodeAdapter();
+
+            var ctx = BuildContext(
+                binaryPath: scriptPath,
+                initialPrompt: "my prompt",
+                worktreePath: worktreeDir,
+                sessionId: null,
+                executionCount: 1);
+
+            var result = await adapter.ExecuteAsync(ctx);
+
+            result.Success.Should().BeTrue();
+            result.Output.Should().NotContain("--session");
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_returns_session_id_from_json_output()
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
+        File.WriteAllText(scriptPath, "#!/bin/sh\necho '{\"text\":\"hello\",\"sessionId\":\"session-from-output\"}'\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var adapter = new OpenCodeAdapter();
+
+            var ctx = BuildContext(
+                binaryPath: scriptPath,
+                initialPrompt: "ignored",
+                worktreePath: worktreeDir,
+                executionCount: 1);
+
+            var result = await adapter.ExecuteAsync(ctx);
+
+            result.Success.Should().BeTrue();
+            result.SessionId.Should().Be("session-from-output");
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
     private static AgentExecutionContext BuildContext(
         string binaryPath,
         string initialPrompt = "test prompt",
@@ -304,7 +397,8 @@ public class OpenCodeAdapterTests
         string? apiKey = null,
         int executionCount = 1,
         CancellationToken? cancel = null,
-        Func<string, Task>? progressCallback = null)
+        Func<string, Task>? progressCallback = null,
+        string? sessionId = null)
     {
         var dict = System.Text.Json.JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, object>>(
             config ?? "{}") ?? new System.Collections.Generic.Dictionary<string, object>();
@@ -335,6 +429,7 @@ public class OpenCodeAdapterTests
                 null),
             ExecutionCount: executionCount,
             Cancel: cancel ?? CancellationToken.None,
-            ProgressCallback: progressCallback);
+            ProgressCallback: progressCallback,
+            SessionId: sessionId);
     }
 }

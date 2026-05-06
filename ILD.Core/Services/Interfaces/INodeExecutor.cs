@@ -8,9 +8,9 @@ namespace ILD.Core.Services.Interfaces;
 /// outcome of an inner unit of work (e.g. an LLM call, a process). Executors
 /// translate this into the higher-level <see cref="NodeOutcome"/>.
 /// </summary>
-public sealed record NodeExecutionResult(bool Success, string? Output = null, string? Error = null, string? ResolvedPrompt = null)
+public sealed record NodeExecutionResult(bool Success, string? Output = null, string? Error = null, string? ResolvedPrompt = null, string? SessionId = null, string? IncomingSessionId = null)
 {
-    public static NodeExecutionResult Ok(string? output = null, string? resolvedPrompt = null) => new(true, output, null, resolvedPrompt);
+    public static NodeExecutionResult Ok(string? output = null, string? resolvedPrompt = null, string? sessionId = null, string? incomingSessionId = null) => new(true, output, null, resolvedPrompt, sessionId, incomingSessionId);
     public static NodeExecutionResult Fail(string error, string? output = null) => new(false, output, error);
 }
 
@@ -44,7 +44,7 @@ public enum SuspendKind
 public abstract record NodeOutcome(string? Output = null)
 {
     /// <summary>Node finished successfully; engine follows an <c>OnSuccess</c> edge.</summary>
-    public sealed record Succeeded(string? Output = null, string? ResolvedPrompt = null) : NodeOutcome(Output);
+    public sealed record Succeeded(string? Output = null, string? ResolvedPrompt = null, string? SessionId = null, string? IncomingSessionId = null) : NodeOutcome(Output);
 
     /// <summary>Node failed; engine retries (no failure edge) or follows <c>OnFailure</c>.</summary>
     public sealed record Failed(string Reason, string? Output = null) : NodeOutcome(Output);
@@ -63,7 +63,7 @@ public abstract record NodeOutcome(string? Output = null)
 
     public static NodeOutcome FromResult(NodeExecutionResult r)
         => r.Success
-            ? new Succeeded(r.Output, r.ResolvedPrompt)
+            ? new Succeeded(r.Output, r.ResolvedPrompt, r.SessionId, r.IncomingSessionId)
             : new Failed(r.Error ?? "node failed", r.Output);
 
     // ---- Convenience accessors (test ergonomics) -------------------------

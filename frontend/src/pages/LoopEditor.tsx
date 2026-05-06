@@ -85,6 +85,8 @@ export default function LoopEditor() {
   const [aiTimeout, setAiTimeout] = useState(300);
   const [aiTools, setAiTools] = useState<string[]>([]);
   const [aiRejectPattern, setAiRejectPattern] = useState("");
+  const [aiSessionInput, setAiSessionInput] = useState("incoming");
+  const [aiSessionOutput, setAiSessionOutput] = useState("current");
   const [startCreateWorktree, setStartCreateWorktree] = useState(true);
   const [humanInputLabel, setHumanInputLabel] = useState("");
   const [humanPrompt, setHumanPrompt] = useState("");
@@ -123,6 +125,8 @@ export default function LoopEditor() {
     aiTimeout: number;
     aiTools: string[];
     aiRejectPattern: string;
+    aiSessionInput: string;
+    aiSessionOutput: string;
     startCreateWorktree: boolean;
     humanInputLabel: string;
     humanPrompt: string;
@@ -401,6 +405,8 @@ export default function LoopEditor() {
       setAiTimeout((config.timeout as number) ?? 300);
       setAiTools((config.toolAllowlist as string[]) || []);
       setAiRejectPattern((config.rejectPattern as string) || "");
+      setAiSessionInput((config.sessionInput as string) || "incoming");
+      setAiSessionOutput((config.sessionOutput as string) || "current");
       setStartCreateWorktree((config.createWorktree as boolean) ?? true);
       setHumanInputLabel((config.inputLabel as string) || "");
       setHumanPrompt((config.prompt as string) || "");
@@ -442,6 +448,8 @@ export default function LoopEditor() {
         aiTimeout: (config.timeout as number) ?? 300,
         aiTools: (config.toolAllowlist as string[]) || [],
         aiRejectPattern: (config.rejectPattern as string) || "",
+        aiSessionInput: (config.sessionInput as string) || "incoming",
+        aiSessionOutput: (config.sessionOutput as string) || "current",
         startCreateWorktree: (config.createWorktree as boolean) ?? true,
         humanInputLabel: (config.inputLabel as string) || "",
         humanPrompt: (config.prompt as string) || "",
@@ -467,6 +475,8 @@ export default function LoopEditor() {
       config.toolAllowlist = aiTools;
       config.adapterConfig = { ...adapterConfigValues };
       if (aiRejectPattern) config.rejectPattern = aiRejectPattern;
+      config.sessionInput = aiSessionInput;
+      config.sessionOutput = aiSessionOutput;
     } else if (nodeType === NodeType.Start) {
       config.createWorktree = startCreateWorktree;
     } else if (nodeType === NodeType.Human) {
@@ -503,6 +513,8 @@ export default function LoopEditor() {
     aiTimeout,
     aiTools,
     aiRejectPattern,
+    aiSessionInput,
+    aiSessionOutput,
     startCreateWorktree,
     humanInputLabel,
     humanPrompt,
@@ -522,6 +534,8 @@ export default function LoopEditor() {
       setAiTimeout(originalNodeConfig.aiTimeout);
       setAiTools(originalNodeConfig.aiTools);
       setAiRejectPattern(originalNodeConfig.aiRejectPattern);
+      setAiSessionInput(originalNodeConfig.aiSessionInput);
+      setAiSessionOutput(originalNodeConfig.aiSessionOutput);
       setStartCreateWorktree(originalNodeConfig.startCreateWorktree);
       setHumanInputLabel(originalNodeConfig.humanInputLabel);
       setHumanPrompt(originalNodeConfig.humanPrompt);
@@ -1017,6 +1031,29 @@ export default function LoopEditor() {
                               If the AI output matches this pattern (case-insensitive), the node
                               fails and routes to the onFailure edge.
                             </small>
+                          </div>
+                          <div className="config-field">
+                            <label htmlFor="ai-session-input">Session Input</label>
+                            <select
+                              id="ai-session-input"
+                              value={aiSessionInput}
+                              onChange={(e) => setAiSessionInput(e.target.value)}
+                            >
+                              <option value="incoming">Use incoming session if exists</option>
+                              <option value="new">Always use new session</option>
+                            </select>
+                          </div>
+                          <div className="config-field">
+                            <label htmlFor="ai-session-output">Session Output</label>
+                            <select
+                              id="ai-session-output"
+                              value={aiSessionOutput}
+                              onChange={(e) => setAiSessionOutput(e.target.value)}
+                            >
+                              <option value="current">Return current session</option>
+                              <option value="incoming">Return incoming session</option>
+                              <option value="none">Don't return session</option>
+                            </select>
                           </div>
                         </>
                       )}

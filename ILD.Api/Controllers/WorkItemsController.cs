@@ -16,14 +16,16 @@ public class WorkItemsController : ControllerBase
     private readonly AppDbContext _db;
     private readonly ILogger<WorkItemsController> _logger;
     private readonly IWorkItemNotifier _notifier;
+    private readonly IRemoteProvider? _remoteProvider;
 
-    public WorkItemsController(IWorkItemManager workItemManager, ILoopEngine engine, AppDbContext db, ILogger<WorkItemsController> logger, IWorkItemNotifier? notifier = null)
+    public WorkItemsController(IWorkItemManager workItemManager, ILoopEngine engine, AppDbContext db, ILogger<WorkItemsController> logger, IWorkItemNotifier? notifier = null, IRemoteProvider? remoteProvider = null)
     {
         _workItemManager = workItemManager;
         _engine = engine;
         _db = db;
         _logger = logger;
         _notifier = notifier ?? new NoopWorkItemNotifier();
+        _remoteProvider = remoteProvider;
     }
 
     private void RunInBackground(Guid runId)
@@ -307,6 +309,47 @@ public class WorkItemsController : ControllerBase
             RunInBackground(wi.CurrentLoopRunId.Value);
 
         return Ok();
+    }
+
+    [HttpGet("{id}/pr-comments")]
+    public async Task<IActionResult> GetPrComments(string id)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+
+        var wi = await _workItemManager.GetWorkItemAsync(guid);
+        if (wi == null) return NotFound();
+        if (string.IsNullOrEmpty(wi.PrUrl)) return Ok(Array.Empty<RemotePrComment>());
+        if (_remoteProvider == null) return Ok(Array.Empty<RemotePrComment>());
+
+        var prNumber = ExtractPrNumber(wi.PrUrl);
+        if (prNumber == null) return Ok(Array.Empty<RemotePrComment>());
+
+        var repoUrl = wi.PrUrl[..wi.PrUrl.IndexOf("/pulls/", StringComparison.Ordinal)];
+
+        try
+        {
+            var comments = await _remoteProvider.GetPullRequestCommentsAsync(repoUrl, prNumber);
+            return Ok(comments);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to fetch PR comments for work item {WorkItemId}", guid);
+            return Ok(Array.Empty<RemotePrComment>());
+        }
+    }
+
+    private static string? ExtractPrNumber(string prUrl)
+    {
+        var marker = "/pulls/";
+        var idx = prUrl.IndexOf(marker, StringComparison.Ordinal);
+        if (idx < 0) return null;
+        var tail = prUrl[(idx + marker.Length)..].Trim('/');
+        if (tail.Length == 0) return null;
+        // Strip any trailing path or query.
+        var slash = tail.IndexOfAny(new[] { '/', '?', '#' });
+        if (slash >= 0) tail = tail[..slash];
+        return tail;
     }
 
     [HttpPost("{id}/cleanup-to-done")]

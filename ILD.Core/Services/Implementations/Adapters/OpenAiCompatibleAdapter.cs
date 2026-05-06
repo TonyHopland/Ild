@@ -57,7 +57,7 @@ public class OpenAiCompatibleAdapter : IAgentAdapter
             resp.EnsureSuccessStatusCode();
             var stream = await resp.Content.ReadAsStreamAsync(ctx.Cancel);
             var (content, _) = await ReadSseStreamAsync(stream, ctx.ProgressCallback, ctx.Cancel);
-            return NodeExecutionResult.Ok(content, rendered);
+            return NodeExecutionResult.Ok(content, rendered, sessionId: null, ctx.IncomingSessionId);
         }
         catch (Exception ex)
         {

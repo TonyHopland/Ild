@@ -53,6 +53,7 @@ export default function WorkItemModal({
   const [prUrlInput, setPrUrlInput] = useState("");
   const [feedbackInput, setFeedbackInput] = useState("");
   const [humanPrompt, setHumanPrompt] = useState<string | null>(null);
+  const [prCommentsLoading, setPrCommentsLoading] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -120,6 +121,41 @@ export default function WorkItemModal({
         setHumanPrompt(rendered?.payload ?? null);
       } catch {
         if (!cancelled) setHumanPrompt(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [workItem?.id, workItem?.status, workItem?.humanFeedbackReason]);
+
+  useEffect(() => {
+    // When parked at a PR node, prefill the feedback textarea with any
+    // unread PR comments so the human can edit them before approving or
+    // rejecting. Best-effort: failures leave the textarea empty.
+    if (
+      !workItem ||
+      workItem.status !== WorkItemStatus.HumanFeedback ||
+      workItem.humanFeedbackReason !== "PR Awaiting Merge"
+    ) {
+      return;
+    }
+    let cancelled = false;
+    setPrCommentsLoading(true);
+    void (async () => {
+      try {
+        const comments = await workItemService.getPrComments(workItem.id);
+        if (cancelled) return;
+        if (Array.isArray(comments) && comments.length > 0) {
+          const text = comments
+            .map((c) => `${c.author}: ${c.body}`.trim())
+            .filter(Boolean)
+            .join("\n\n");
+          setFeedbackInput((prev) => (prev.length === 0 ? text : prev));
+        }
+      } catch {
+        // Ignore — empty textarea is fine.
+      } finally {
+        if (!cancelled) setPrCommentsLoading(false);
       }
     })();
     return () => {
@@ -537,8 +573,52 @@ export default function WorkItemModal({
                   </div>
                 )}
               {workItem.status === WorkItemStatus.HumanFeedback &&
+                workItem.humanFeedbackReason === "PR Awaiting Merge" && (
+                  <div className="detail-section human-feedback-section">
+                    <span className="detail-label">PR Feedback</span>
+                    {workItem.prUrl && (
+                      <a
+                        className="feedback-pr-link"
+                        href={workItem.prUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Open PR
+                      </a>
+                    )}
+                    <textarea
+                      className="feedback-textarea"
+                      value={feedbackInput}
+                      onChange={(e) => setFeedbackInput(e.target.value)}
+                      placeholder={
+                        prCommentsLoading
+                          ? "Loading PR comments..."
+                          : "Optional feedback for the next node..."
+                      }
+                      rows={5}
+                    />
+                    <div className="feedback-actions">
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-primary"
+                        onClick={handleContinue}
+                      >
+                        Approve
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-danger"
+                        onClick={handleReject}
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                )}
+              {workItem.status === WorkItemStatus.HumanFeedback &&
                 workItem.humanFeedbackReason &&
-                workItem.humanFeedbackReason !== "Human Input Needed" && (
+                workItem.humanFeedbackReason !== "Human Input Needed" &&
+                workItem.humanFeedbackReason !== "PR Awaiting Merge" && (
                   <div className="detail-section human-feedback-section">
                     <span className="detail-label">Human Feedback</span>
                     <div className="feedback-reason">{workItem.humanFeedbackReason}</div>

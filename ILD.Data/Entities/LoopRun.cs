@@ -40,6 +40,8 @@ public class LoopRun : IHasUpdatedAt
 
     public Guid? CurrentNodeId { get; set; }
 
+    public string? SessionsJson { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     public DateTime? UpdatedAt { get; set; }

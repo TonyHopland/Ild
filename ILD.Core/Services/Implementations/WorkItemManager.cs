@@ -283,6 +283,15 @@ public class WorkItemManager : IWorkItemManager
                 humanRunNode.Output = input;
                 humanRunNode.CompletedAt = DateTime.UtcNow;
                 await _loopRunStore.UpdateRunNodeAsync(humanRunNode);
+
+                // If the parked node is a PR node, an "approve" here means
+                // the user is acknowledging the PR has been (or will be)
+                // merged externally — mirror the webhook merge path so the
+                // work item flag stays consistent for downstream observers.
+                if (await IsPrNodeAsync(run, humanRunNode.LoopNodeId))
+                {
+                    wi.IsPrMerged = true;
+                }
             }
 
             // Resume the run itself so the engine doesn't stay parked at
@@ -302,6 +311,14 @@ public class WorkItemManager : IWorkItemManager
         wi.UpdatedAt = DateTime.UtcNow;
         await _store.UpdateAsync(wi);
         return true;
+    }
+
+    private async Task<bool> IsPrNodeAsync(LoopRun run, Guid loopNodeId)
+    {
+        if (run.LoopTemplateVersionId == Guid.Empty) return false;
+        var nodes = await _loopRunStore.GetNodesForVersionAsync(run.LoopTemplateVersionId);
+        var node = nodes.FirstOrDefault(n => n.Id == loopNodeId);
+        return node?.NodeType == NodeType.PR;
     }
 
     public async Task<bool> RejectHumanFeedbackAsync(Guid workItemId, string? input = null)

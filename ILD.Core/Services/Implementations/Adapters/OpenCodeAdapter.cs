@@ -53,6 +53,11 @@ public class OpenCodeAdapter : IAgentAdapter
             psi.ArgumentList.Add(opencodeModel);
             psi.ArgumentList.Add("--format");
             psi.ArgumentList.Add("json");
+            if (!string.IsNullOrEmpty(ctx.SessionId))
+            {
+                psi.ArgumentList.Add("--session");
+                psi.ArgumentList.Add(ctx.SessionId);
+            }
             psi.ArgumentList.Add("--dangerously-skip-permissions");
             psi.ArgumentList.Add(rendered);
 
@@ -96,12 +101,12 @@ public class OpenCodeAdapter : IAgentAdapter
                 try { p.Kill(entireProcessTree: true); } catch { }
                 return NodeExecutionResult.Fail("opencode stream read timed out");
             }
-            var response = ExtractTextFromJsonEvents(stdout);
+            var (response, sessionId) = ExtractTextAndSessionIdFromJsonEvents(stdout);
             if (string.IsNullOrEmpty(response))
                 response = stdout;
 
             return p.ExitCode == 0
-                ? NodeExecutionResult.Ok(response, rendered)
+                ? NodeExecutionResult.Ok(response, rendered, sessionId, ctx.IncomingSessionId)
                 : NodeExecutionResult.Fail($"exit={p.ExitCode} stderr={stderr}", response);
         }
         catch (Exception ex)
@@ -127,6 +132,28 @@ public class OpenCodeAdapter : IAgentAdapter
             catch { }
         }
         return sb.ToString();
+    }
+
+    static (string Text, string? SessionId) ExtractTextAndSessionIdFromJsonEvents(string raw)
+    {
+        var sb = new StringBuilder();
+        string? lastSessionId = null;
+        foreach (var line in raw.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            if (string.IsNullOrEmpty(trimmed))
+                continue;
+
+            try
+            {
+                using var doc = JsonDocument.Parse(trimmed);
+                ExtractTextFromElement(doc.RootElement, sb);
+                if (doc.RootElement.TryGetProperty("sessionId", out var sid) && sid.ValueKind == JsonValueKind.String)
+                    lastSessionId = sid.GetString();
+            }
+            catch { }
+        }
+        return (sb.ToString(), lastSessionId);
     }
 
     static void ExtractTextFromElement(JsonElement element, StringBuilder sb)
