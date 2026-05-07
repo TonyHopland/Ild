@@ -22,7 +22,10 @@ public class WorkItemManager : IWorkItemManager
         _notifier = notifier ?? new NoopWorkItemNotifier();
     }
 
-    public async Task<Guid> CreateWorkItemAsync(string title, string description, Guid? loopTemplateId, Guid? repositoryId)
+    public Task<Guid> CreateWorkItemAsync(string title, string description, Guid? loopTemplateId, Guid? repositoryId)
+        => CreateWorkItemAsync(title, description, loopTemplateId, repositoryId, null, false);
+
+    public async Task<Guid> CreateWorkItemAsync(string title, string description, Guid? loopTemplateId, Guid? repositoryId, Guid? createdByLoopRunId, bool forceBacklog)
     {
         WorkItemStatus intakeStatus = WorkItemStatus.Backlog;
         if (repositoryId != null)
@@ -30,7 +33,7 @@ public class WorkItemManager : IWorkItemManager
             var repo = await _store.GetRepositoryAsync(repositoryId.Value);
             if (repo == null)
                 throw new InvalidOperationException("Repository not found");
-            intakeStatus = repo.DefaultIntakeStatus;
+            intakeStatus = forceBacklog ? WorkItemStatus.Backlog : repo.DefaultIntakeStatus;
         }
 
         Guid? versionId = null;
@@ -49,6 +52,7 @@ public class WorkItemManager : IWorkItemManager
             Status = intakeStatus,
             RepositoryId = repositoryId ?? Guid.Empty,
             LoopTemplateVersionId = versionId,
+            CreatedByLoopRunId = createdByLoopRunId,
         };
         await _store.CreateAsync(wi);
         return wi.Id;

@@ -27,6 +27,15 @@
   <ItemGroup>
     <ProjectReference Include="..\ILD.Core\ILD.Core.csproj" />
     <ProjectReference Include="..\ILD.Data\ILD.Data.csproj" />
+    <!--
+      Build the MCP server alongside the API so its DLL is on disk for the
+      OpenCode adapter to launch. We don't reference its types — only its
+      build output — so flip the assembly off.
+    -->
+    <ProjectReference Include="..\ILD.McpServer\ILD.McpServer.csproj"
+                     ReferenceOutputAssembly="false"
+                     SkipGetTargetFrameworkProperties="true"
+                     Private="false" />
   </ItemGroup>
 
 </Project>

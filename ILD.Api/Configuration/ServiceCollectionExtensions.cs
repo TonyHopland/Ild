@@ -11,6 +11,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddIldServices(this IServiceCollection services)
     {
         services.AddSingleton<AuthOptions>(_ => new AuthOptions());
+        services.AddSingleton<AgentAuthTokenProvider>();
 
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IWorkItemManager, WorkItemManager>();

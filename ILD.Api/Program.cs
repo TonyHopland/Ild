@@ -83,6 +83,11 @@ try
 
     var app = builder.Build();
 
+    // Force the agent auth token provider to materialize. Its constructor
+    // publishes the token into the process environment so the OpenCode adapter
+    // (and any spawned MCP child) can read it via ILD_API_TOKEN.
+    _ = app.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>();
+
     using (var scope = app.Services.CreateScope())
     {
         var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();

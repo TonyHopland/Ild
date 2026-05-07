@@ -45,7 +45,7 @@ public class WorkItemsController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<IActionResult> GetAll([FromQuery] string? status = null, [FromQuery] int skip = 0, [FromQuery] int take = 100)
+    public async Task<IActionResult> GetAll([FromQuery] string? status = null, [FromQuery] string? createdByLoopRunId = null, [FromQuery] string? repositoryId = null, [FromQuery] int skip = 0, [FromQuery] int take = 100)
     {
         if (skip < 0) skip = 0;
         if (take <= 0) take = 100;
@@ -54,6 +54,10 @@ public class WorkItemsController : ControllerBase
         IQueryable<WorkItem> q = _db.WorkItems.AsNoTracking();
         if (!string.IsNullOrEmpty(status) && Enum.TryParse<WorkItemStatus>(status, true, out var s))
             q = q.Where(w => w.Status == s);
+        if (!string.IsNullOrEmpty(createdByLoopRunId) && Guid.TryParse(createdByLoopRunId, out var runGuid))
+            q = q.Where(w => w.CreatedByLoopRunId == runGuid);
+        if (!string.IsNullOrEmpty(repositoryId) && Guid.TryParse(repositoryId, out var repoGuid))
+            q = q.Where(w => w.RepositoryId == repoGuid);
         var items = await q.OrderByDescending(w => w.CreatedAt).Skip(skip).Take(take).ToListAsync();
         return Ok(items);
     }

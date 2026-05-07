@@ -42,7 +42,7 @@ public class OpenCodeAdapter : IAgentAdapter
                 CreateNoWindow = true,
             };
 
-            var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider);
+            var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, ctx.RunContext);
 
             psi.EnvironmentVariables["OPENCODE_CONFIG_CONTENT"] = opencodeConfigJson;
 
@@ -248,7 +248,7 @@ public class OpenCodeAdapter : IAgentAdapter
         return binaryPath;
     }
 
-    private static (string ModelRef, string ConfigJson) BuildOpenCodeConfig(AiProvider provider)
+    private static (string ModelRef, string ConfigJson) BuildOpenCodeConfig(AiProvider provider, LoopRunContext? runContext = null)
     {
         var providerId = SanitizeProviderId(provider.Name);
         var modelId = provider.Model;
@@ -276,9 +276,98 @@ public class OpenCodeAdapter : IAgentAdapter
             },
         };
 
+        // Inject the ILD MCP server entry so agents can list/create work items
+        // through the agent-scoped API. The opencode child process inherits its
+        // *own* config via OPENCODE_CONFIG_CONTENT, which means the user's
+        // ~/.config/opencode/opencode.json (and any mcp entries it contains) is
+        // ignored — we have to add the entry here ourselves.
+        var ildMcp = BuildIldMcpEntry(runContext);
+        if (ildMcp != null)
+        {
+            config["mcp"] = new Dictionary<string, object?>
+            {
+                ["ild"] = ildMcp,
+            };
+        }
+
         var configJson = JsonSerializer.Serialize(config);
         var modelRef = $"{providerId}/{modelId}";
         return (modelRef, configJson);
+    }
+
+    /// <summary>
+    /// Build the opencode <c>mcp.ild</c> entry pointing at the ILD MCP server.
+    /// Returns <c>null</c> when no server DLL can be located, in which case
+    /// the entry is omitted (failing open rather than poisoning the config).
+    /// </summary>
+    public static Dictionary<string, object?>? BuildIldMcpEntry(LoopRunContext? runContext)
+    {
+        var dllPath = ResolveIldMcpServerDll();
+        if (dllPath == null) return null;
+
+        var apiUrl = Environment.GetEnvironmentVariable("ILD_API_URL")
+            ?? "http://localhost:5000";
+
+        var environment = new Dictionary<string, object?>
+        {
+            ["ILD_API_URL"] = apiUrl,
+        };
+
+        var apiToken = Environment.GetEnvironmentVariable("ILD_API_TOKEN");
+        if (!string.IsNullOrEmpty(apiToken))
+            environment["ILD_API_TOKEN"] = apiToken;
+
+        if (runContext != null)
+            environment["ILD_LOOP_RUN_ID"] = runContext.LoopRunId.ToString();
+
+        return new Dictionary<string, object?>
+        {
+            ["type"] = "local",
+            ["command"] = new[] { "dotnet", dllPath },
+            ["environment"] = environment,
+        };
+    }
+
+    /// <summary>
+    /// Locate the published <c>ild-mcp-server.dll</c>. Probes in order:
+    ///   1. <c>ILD_MCP_SERVER_DLL</c> env var (explicit override),
+    ///   2. next to the currently executing assembly,
+    ///   3. walk up from the executing assembly looking for a sibling
+    ///      <c>ILD.McpServer/bin/{Debug|Release}/net*</c> directory (dev case).
+    /// Returns <c>null</c> if nothing is found.
+    /// </summary>
+    public static string? ResolveIldMcpServerDll()
+    {
+        var envOverride = Environment.GetEnvironmentVariable("ILD_MCP_SERVER_DLL");
+        if (!string.IsNullOrEmpty(envOverride) && File.Exists(envOverride))
+            return Path.GetFullPath(envOverride);
+
+        const string DllName = "ild-mcp-server.dll";
+
+        var baseDir = AppContext.BaseDirectory;
+        var sibling = Path.Combine(baseDir, DllName);
+        if (File.Exists(sibling)) return Path.GetFullPath(sibling);
+
+        // Walk upwards (max 8 levels) looking for an ILD.McpServer build output.
+        var dir = new DirectoryInfo(baseDir);
+        for (var i = 0; i < 8 && dir != null; i++, dir = dir.Parent)
+        {
+            var candidateRoot = Path.Combine(dir.FullName, "ILD.McpServer", "bin");
+            if (!Directory.Exists(candidateRoot)) continue;
+
+            // Prefer Release over Debug if both exist.
+            foreach (var flavor in new[] { "Release", "Debug" })
+            {
+                var flavorDir = Path.Combine(candidateRoot, flavor);
+                if (!Directory.Exists(flavorDir)) continue;
+                var hit = Directory.GetFiles(flavorDir, DllName, SearchOption.AllDirectories)
+                    .OrderByDescending(File.GetLastWriteTimeUtc)
+                    .FirstOrDefault();
+                if (hit != null) return hit;
+            }
+        }
+
+        return null;
     }
 
     private static string SanitizeProviderId(string name)

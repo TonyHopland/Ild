@@ -1,6 +1,7 @@
 using ILD.Data.DTOs;
 using ILD.Data.Enums;
 using ILD.Data.Entities;
+using ILD.Api.Configuration;
 using System.Net;
 using System.Text.Json;
 using ILD.Core.Services.Interfaces;
@@ -18,7 +19,7 @@ public class AuthMiddleware
         _options = options;
     }
 
-    public async Task InvokeAsync(HttpContext context, IAuthService authService)
+    public async Task InvokeAsync(HttpContext context, IAuthService authService, AgentAuthTokenProvider agentTokens)
     {
         if (IsExcludedPath(context.Request.Path))
         {
@@ -34,6 +35,17 @@ public class AuthMiddleware
             context.Response.ContentType = "application/json";
             await context.Response.WriteAsync(
                 JsonSerializer.Serialize(new { error = "Unauthorized", message = "No authentication token provided" }));
+            return;
+        }
+
+        // Agent service token: lets the in-host MCP server (and other ILD-spawned
+        // agents) call /api/v1/agent/... without going through user login.
+        if (agentTokens.Matches(token))
+        {
+            context.Items["SessionId"] = token;
+            context.Items["Username"] = "agent";
+            context.Items["IsAgent"] = true;
+            await _next(context);
             return;
         }
 
