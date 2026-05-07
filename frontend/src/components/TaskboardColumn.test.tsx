@@ -22,6 +22,7 @@ function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
     prUrl: null,
     pullRequestBranch: null,
     humanFeedbackReason: null,
+    humanFeedbackActions: null,
     createdAt: new Date().toISOString(),
     startedAt: null,
     completedAt: null,

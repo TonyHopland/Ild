@@ -66,7 +66,9 @@ export default function NodeTimeline({ runNodes, templateNodes }: NodeTimelinePr
             edgeType =
               prevNode.status === LoopRunNodeStatus.Succeeded
                 ? EdgeType.OnSuccess
-                : EdgeType.OnFailure;
+                : prevNode.status === LoopRunNodeStatus.Responded
+                  ? EdgeType.OnRespond
+                  : EdgeType.OnFailure;
           }
 
           return (

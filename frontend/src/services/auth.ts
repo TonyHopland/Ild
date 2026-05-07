@@ -153,6 +153,10 @@ export const workItemService = {
     return api.post<void>(`/workitems/${id}/human-feedback/reject`, input ? { input } : {});
   },
 
+  humanFeedbackRespond: async (id: string, input: string): Promise<void> => {
+    return api.post<void>(`/workitems/${id}/human-feedback/respond`, { input });
+  },
+
   getPrComments: async (id: string): Promise<PrComment[]> => {
     return api.get<PrComment[]>(`/workitems/${id}/pr-comments`);
   },

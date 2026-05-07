@@ -1,5 +1,6 @@
 using FluentAssertions;
 using ILD.Data.DTOs;
+using ILD.Data.Enums;
 using ILD.Core.Services.Implementations;
 using Microsoft.EntityFrameworkCore;
 
@@ -77,5 +78,40 @@ public class LoopTemplateManagerTests
         var versions = await mgr.GetVersionsAsync(cloneId);
         versions.Should().HaveCount(1);
         versions.Single().VersionNumber.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task OnRespond_edge_round_trips_correctly_and_is_not_corrupted_to_OnSuccess()
+    {
+        using var db = new TestDb();
+        var mgr = new LoopTemplateManager(db.LoopTemplates);
+
+        var graph = new LoopTemplateGraph(Guid.Empty,
+            new() {
+                new LoopNodeDto { Id = "s", NodeType = "Start", Label = "Start" },
+                new LoopNodeDto { Id = "h", NodeType = "Human", Label = "Review", Config = new() { ["prompt"] = "ok?" } },
+                new LoopNodeDto { Id = "a", NodeType = "AI", Label = "Iterate" },
+                new LoopNodeDto { Id = "c", NodeType = "Cleanup", Label = "Cleanup" }
+            },
+            new() {
+                new LoopNodeEdgeDto { Id = "e1", SourceNodeId = "s", TargetNodeId = "h", EdgeType = "OnSuccess" },
+                new LoopNodeEdgeDto { Id = "e2", SourceNodeId = "h", TargetNodeId = "a", EdgeType = "OnRespond" },
+                new LoopNodeEdgeDto { Id = "e3", SourceNodeId = "h", TargetNodeId = "c", EdgeType = "OnSuccess" },
+                new LoopNodeEdgeDto { Id = "e4", SourceNodeId = "h", TargetNodeId = "c", EdgeType = "OnFailure" },
+                new LoopNodeEdgeDto { Id = "e5", SourceNodeId = "a", TargetNodeId = "c", EdgeType = "OnSuccess" }
+            });
+
+        var id = await mgr.CreateLoopTemplateAsync("on-respond-test", "", graph);
+
+        // Check that the OnRespond edge was stored as OnRespond in the DB, not corrupted to OnSuccess
+        var edges = await db.Context.LoopNodeEdges.ToListAsync();
+        var respondEdge = edges.FirstOrDefault(e => e.EdgeType == EdgeType.OnRespond);
+        respondEdge.Should().NotBeNull("OnRespond edge should be persisted as EdgeType.OnRespond");
+
+        // Verify round-trip through GetVersionGraph returns OnRespond
+        var versions = await mgr.GetVersionsAsync(id);
+        var loadedGraph = await mgr.GetVersionGraphAsync(id, versions.Max(v => v.VersionNumber));
+        var loadedRespondEdge = loadedGraph.Edges.FirstOrDefault(e => e.EdgeType == "OnRespond");
+        loadedRespondEdge.Should().NotBeNull("Loaded template should contain an OnRespond edge");
     }
 }

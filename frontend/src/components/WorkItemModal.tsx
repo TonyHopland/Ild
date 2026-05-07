@@ -261,6 +261,17 @@ export default function WorkItemModal({
     }
   };
 
+  const handleRespond = async () => {
+    if (!workItem) return;
+    try {
+      await workItemService.humanFeedbackRespond(workItem.id, feedbackInput || "");
+      const updated = await workItemService.getById(workItem.id);
+      onSave(updated);
+    } catch (error) {
+      console.error("Failed to respond:", error);
+    }
+  };
+
   const handleCleanupDone = async () => {
     if (!workItem) return;
     try {
@@ -554,22 +565,42 @@ export default function WorkItemModal({
                       placeholder="Optional input or context..."
                       rows={3}
                     />
-                    <div className="feedback-actions">
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-primary"
-                        onClick={handleContinue}
-                      >
-                        Continue
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-danger"
-                        onClick={handleReject}
-                      >
-                        Reject
-                      </button>
-                    </div>
+                    {(() => {
+                      const actions = workItem.humanFeedbackActions
+                        ? workItem.humanFeedbackActions.split(",").map((a) => a.trim())
+                        : ["OnSuccess", "OnFailure"];
+                      return (
+                        <div className="feedback-actions">
+                          {actions.includes("OnSuccess") && (
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-primary"
+                              onClick={handleContinue}
+                            >
+                              Approve
+                            </button>
+                          )}
+                          {actions.includes("OnRespond") && (
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-warning"
+                              onClick={handleRespond}
+                            >
+                              Respond
+                            </button>
+                          )}
+                          {actions.includes("OnFailure") && (
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-danger"
+                              onClick={handleReject}
+                            >
+                              Reject
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
               {workItem.status === WorkItemStatus.HumanFeedback &&

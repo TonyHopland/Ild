@@ -842,6 +842,127 @@ public class AINodeExecutorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_session_round_trips_so_second_execution_resolves_first_session()
+    {
+        // Regression: the writer once produced PascalCase JSON
+        // ({"ProviderId":...}) while the reader looked for camelCase keys
+        // (providerId/sessionId). Sessions written by the executor were
+        // therefore invisible on the next execution and the AI node would
+        // always start a fresh session.
+        var providerId = Guid.NewGuid();
+        var nodeId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var provider = new AiProvider
+        {
+            Id = providerId,
+            Name = "my-provider",
+            Type = "test",
+            BaseUrl = "https://test.api",
+            Model = "test-model"
+        };
+
+        var testAdapter = new CapturingAdapter();
+
+        var providerStore = new Mock<IProviderStore>();
+        providerStore.Setup(s => s.GetAiProviderByNameAsync(It.IsAny<string>()))
+            .ReturnsAsync(provider);
+
+        var registry = new Mock<IAgentAdapterRegistry>();
+        registry.Setup(r => r.ResolveForProvider(It.IsAny<AiProvider>()))
+            .Returns(() => testAdapter);
+
+        var run = new LoopRun { Id = runId };
+        var loopRunStore = new Mock<ILoopRunStore>();
+        loopRunStore.Setup(s => s.GetRunNodesAsync(runId))
+            .ReturnsAsync(Array.Empty<LoopRunNode>());
+        loopRunStore.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(run);
+        // Capture writes back into the local run instance so the second
+        // call observes the persisted SessionsJson.
+        loopRunStore.Setup(s => s.UpdateRunAsync(It.IsAny<LoopRun>()))
+            .Returns<LoopRun>(r => { run.SessionsJson = r.SessionsJson; return Task.CompletedTask; });
+
+        var sp = BuildServiceProvider(providerStore.Object, registry.Object, loopRunStore.Object);
+        var executor = new AINodeExecutor(sp);
+
+        var config = """{"aiProviderId":"my-provider","initialPrompt":"test","sessionInput":"incoming","sessionOutput":"current"}""";
+        NodeExecutionContext MakeCtx() => new(
+            Run: new LoopRun { Id = runId },
+            RunNode: new LoopRunNode { RetryCount = 0 },
+            Node: new LoopNode { Id = nodeId, Config = config },
+            WorkItem: new WorkItem { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            PreviousNodeOutput: null,
+            CancellationToken: CancellationToken.None);
+
+        // First run: no incoming session, adapter returns "new-session-from-adapter".
+        var first = await executor.ExecuteAsync(MakeCtx());
+        first.Success.Should().BeTrue();
+        testAdapter.CapturedSessionId.Should().BeNull("first run has no session yet");
+        run.SessionsJson.Should().Contain("new-session-from-adapter");
+
+        // Second run: must observe the session we just wrote.
+        var second = await executor.ExecuteAsync(MakeCtx());
+        second.Success.Should().BeTrue();
+        testAdapter.CapturedSessionId.Should().Be("new-session-from-adapter",
+            "the session written on the first execution must be readable on the next");
+        testAdapter.CapturedIncomingSessionId.Should().Be("new-session-from-adapter");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_resolves_legacy_pascal_case_sessions_json()
+    {
+        // Defensive: SessionsJson rows written before the case fix used
+        // PascalCase keys. The resolver must continue to read those so
+        // existing runs don't lose their session after upgrade.
+        var providerId = Guid.NewGuid();
+        var nodeId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var provider = new AiProvider
+        {
+            Id = providerId,
+            Name = "my-provider",
+            Type = "test",
+            BaseUrl = "https://test.api",
+            Model = "test-model"
+        };
+
+        var testAdapter = new CapturingAdapter();
+
+        var providerStore = new Mock<IProviderStore>();
+        providerStore.Setup(s => s.GetAiProviderByNameAsync(It.IsAny<string>()))
+            .ReturnsAsync(provider);
+
+        var registry = new Mock<IAgentAdapterRegistry>();
+        registry.Setup(r => r.ResolveForProvider(It.IsAny<AiProvider>()))
+            .Returns(() => testAdapter);
+
+        var run = new LoopRun
+        {
+            Id = runId,
+            SessionsJson = "[{\"ProviderId\":\"" + providerId + "\",\"SessionId\":\"legacy-session\"}]"
+        };
+        var loopRunStore = new Mock<ILoopRunStore>();
+        loopRunStore.Setup(s => s.GetRunNodesAsync(runId))
+            .ReturnsAsync(Array.Empty<LoopRunNode>());
+        loopRunStore.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(run);
+
+        var sp = BuildServiceProvider(providerStore.Object, registry.Object, loopRunStore.Object);
+        var executor = new AINodeExecutor(sp);
+
+        var config = """{"aiProviderId":"my-provider","initialPrompt":"test","sessionInput":"incoming"}""";
+        var ctx = new NodeExecutionContext(
+            Run: new LoopRun { Id = runId },
+            RunNode: new LoopRunNode { RetryCount = 0 },
+            Node: new LoopNode { Id = nodeId, Config = config },
+            WorkItem: new WorkItem { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            PreviousNodeOutput: null,
+            CancellationToken: CancellationToken.None);
+
+        var result = await executor.ExecuteAsync(ctx);
+        result.Success.Should().BeTrue();
+        testAdapter.CapturedSessionId.Should().Be("legacy-session");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_passes_adapter_config_to_adapter()
     {
         var nodeId = Guid.NewGuid();

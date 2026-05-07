@@ -337,19 +337,30 @@ public class LoopEngine : ILoopEngine
                 break;
             case ResumePoint.RouteFrom rf:
                 outputBySource[rf.Node.Id] = rf.Output;
-                if (rf.Success && IsTerminal(rf.Node))
+                if (rf.EdgeType == EdgeType.OnSuccess && IsTerminal(rf.Node))
                     return await CompleteRunAsync(runId);
-                var (nextResume, _, terminal) = TryRoute(rf.Node, rf.Success, edges, traversalCounts);
+                var (nextResume, _, terminal) = TryRoute(rf.Node, rf.EdgeType, edges, traversalCounts);
                 if (terminal != null) return await terminal(runId);
                 if (nextResume == null)
                 {
-                    await LogRoutingErrorAsync(runId, rf.Node, edges, rf.Success);
+                    await LogRoutingErrorAsync(runId, rf.Node, edges, rf.EdgeType);
+                    var edgeTypeName = rf.EdgeType switch
+                    {
+                        EdgeType.OnSuccess => "on_success",
+                        EdgeType.OnFailure => "on_failure",
+                        EdgeType.OnRespond => "on_respond",
+                        _ => rf.EdgeType.ToString().ToLowerInvariant(),
+                    };
+                    var failMsg = rf.EdgeType switch
+                    {
+                        EdgeType.OnSuccess => $"Node {rf.Node.Label} succeeded but has no outgoing on_success edge",
+                        EdgeType.OnFailure => "Retries exhausted with no on_failure edge",
+                        EdgeType.OnRespond => $"Node {rf.Node.Label} responded but has no outgoing on_respond edge",
+                        _ => $"Node {rf.Node.Label} has no outgoing {edgeTypeName} edge",
+                    };
                     await TransitionWorkItemAsync(workItem.Id, WorkItemStatus.HumanFeedback,
-                        rf.Success ? "Node succeeded but no on_success edge" : HumanFeedbackReasons.NodeFailed);
-                    return await FailRunAsync(runId,
-                        rf.Success
-                            ? $"Node {rf.Node.Label} succeeded but has no outgoing on_success edge"
-                            : "Retries exhausted with no on_failure edge");
+                        rf.EdgeType == EdgeType.OnFailure ? HumanFeedbackReasons.NodeFailed : $"No {edgeTypeName} edge");
+                    return await FailRunAsync(runId, failMsg);
                 }
                 await PersistEdgeTraversalAsync(runId, nextResume.EdgeId, traversalCounts[nextResume.EdgeId]);
                 current = nodes.First(n => n.Id == nextResume.NextNode.Id);
@@ -429,7 +440,9 @@ public class LoopEngine : ILoopEngine
                 {
                     case NodeOutcome.Suspended s:
                         await TransitionRunAsync(runId, LoopRunStatus.WaitingHuman);
-                        await TransitionWorkItemAsync(workItem.Id, WorkItemStatus.HumanFeedback, ReasonForSuspend(s.Kind));
+                        var availableActions = string.Join(",",
+                            edges.Where(e => e.SourceNodeId == current.Id).Select(e => e.EdgeType.ToString()).Distinct());
+                        await TransitionWorkItemAsync(workItem.Id, WorkItemStatus.HumanFeedback, ReasonForSuspend(s.Kind), availableActions);
                         return LoopRunStatus.WaitingHuman;
 
                     case NodeOutcome.Terminal t:
@@ -437,7 +450,7 @@ public class LoopEngine : ILoopEngine
 
                     case NodeOutcome.Succeeded ok:
                         outputBySource[current.Id] = ok.Output;
-                        var (nextOk, _, _) = TryRoute(current, true, edges, traversalCounts);
+                        var (nextOk, _, _) = TryRoute(current, EdgeType.OnSuccess, edges, traversalCounts);
                         if (nextOk == null)
                             return await FailRunAsync(runId, $"Node {current.Label} succeeded but has no outgoing on_success edge");
                         if (nextOk.MaxExceeded)
@@ -449,10 +462,10 @@ public class LoopEngine : ILoopEngine
 
                     case NodeOutcome.Failed f:
                         outputBySource[current.Id] = f.Output;
-                        var (nextFail, _, _) = TryRoute(current, false, edges, traversalCounts);
+                        var (nextFail, _, _) = TryRoute(current, EdgeType.OnFailure, edges, traversalCounts);
                         if (nextFail == null)
                         {
-                            await LogRoutingErrorAsync(runId, current, edges, success: false);
+                            await LogRoutingErrorAsync(runId, current, edges, EdgeType.OnFailure);
                             await TransitionWorkItemAsync(workItem.Id, WorkItemStatus.HumanFeedback, HumanFeedbackReasons.NodeFailed);
                             return await FailRunAsync(runId, "Retries exhausted with no on_failure edge");
                         }
@@ -478,7 +491,7 @@ public class LoopEngine : ILoopEngine
     {
         private ResumePoint() { }
         public sealed record StartFromEntry(LoopNode Node) : ResumePoint;
-        public sealed record RouteFrom(LoopNode Node, bool Success, string? Output) : ResumePoint;
+        public sealed record RouteFrom(LoopNode Node, EdgeType EdgeType, string? Output) : ResumePoint;
         public sealed record StillWaiting : ResumePoint;
         public sealed record NoEntry : ResumePoint;
     }
@@ -499,8 +512,9 @@ public class LoopEngine : ILoopEngine
                 if (rn != null)
                 {
                     if (rn.Status == LoopRunNodeStatus.WaitingHuman) return new ResumePoint.StillWaiting();
-                    if (rn.Status == LoopRunNodeStatus.Succeeded) return new ResumePoint.RouteFrom(current, true, rn.Output);
-                    if (rn.Status == LoopRunNodeStatus.Failed) return new ResumePoint.RouteFrom(current, false, rn.Output);
+                    if (rn.Status == LoopRunNodeStatus.Succeeded) return new ResumePoint.RouteFrom(current, EdgeType.OnSuccess, rn.Output);
+                    if (rn.Status == LoopRunNodeStatus.Failed) return new ResumePoint.RouteFrom(current, EdgeType.OnFailure, rn.Output);
+                    if (rn.Status == LoopRunNodeStatus.Responded) return new ResumePoint.RouteFrom(current, EdgeType.OnRespond, rn.Output);
                 }
             }
         }
@@ -526,14 +540,13 @@ public class LoopEngine : ILoopEngine
     private sealed record RouteResult(LoopNode NextNode, Guid EdgeId, int MaxTraversals, bool MaxExceeded);
 
     /// <summary>
-    /// Pure routing decision: given a node's success/failure, pick the edge to
+    /// Pure routing decision: given a node's outcome edge type, pick the edge to
     /// follow and bump the in-memory traversal counter. Returns null when
     /// there is no edge of the requested type.
     /// </summary>
     private static (RouteResult? Route, LoopNodeEdge? Edge, Func<Guid, Task<LoopRunStatus>>? TerminalAction) TryRoute(
-        LoopNode current, bool success, IReadOnlyList<LoopNodeEdge> edges, Dictionary<Guid, int> traversalCounts)
+        LoopNode current, EdgeType wantedType, IReadOnlyList<LoopNodeEdge> edges, Dictionary<Guid, int> traversalCounts)
     {
-        var wantedType = success ? EdgeType.OnSuccess : EdgeType.OnFailure;
         var edge = edges.FirstOrDefault(e => e.SourceNodeId == current.Id && e.EdgeType == wantedType);
         if (edge == null) return (null, null, null);
 
@@ -549,11 +562,18 @@ public class LoopEngine : ILoopEngine
         return (new RouteResult(new LoopNode { Id = edge.TargetNodeId }, edge.Id, max, exceeded), edge, null);
     }
 
-    private async Task LogRoutingErrorAsync(Guid runId, LoopNode current, IReadOnlyList<LoopNodeEdge> edges, bool success)
+    private async Task LogRoutingErrorAsync(Guid runId, LoopNode current, IReadOnlyList<LoopNodeEdge> edges, EdgeType wantedType)
     {
-        if (success) return; // success-with-no-edge isn't a routing error per se; fail-fast in caller
+        if (wantedType == EdgeType.OnSuccess) return; // success-with-no-edge isn't a routing error per se; fail-fast in caller
+        var edgeTypeName = wantedType switch
+        {
+            EdgeType.OnSuccess => "on_success",
+            EdgeType.OnFailure => "on_failure",
+            EdgeType.OnRespond => "on_respond",
+            _ => wantedType.ToString().ToLowerInvariant(),
+        };
         await LogEventAsync(runId, "RoutingError",
-            $"Node {current.Label} ({current.Id}) failed but has no on_failure edge. " +
+            $"Node {current.Label} ({current.Id}) has no {edgeTypeName} edge. " +
             $"All edges from this node: {string.Join(", ", edges.Where(e => e.SourceNodeId == current.Id).Select(e => $"edge={e.Id} type={e.EdgeType}"))}");
     }
 
@@ -843,7 +863,7 @@ public class LoopEngine : ILoopEngine
             control.Dispose();
     }
 
-    private async Task TransitionWorkItemAsync(Guid workItemId, WorkItemStatus next, string? reason)
+    private async Task TransitionWorkItemAsync(Guid workItemId, WorkItemStatus next, string? reason, string? actions = null)
     {
         WorkItemStatus prev;
         using (var scope = _sp.CreateScope())
@@ -859,6 +879,7 @@ public class LoopEngine : ILoopEngine
             if (prev == next && wi.HumanFeedbackReason == reason) return;
             wi.Status = next;
             if (reason != null) wi.HumanFeedbackReason = reason;
+            if (actions != null) wi.HumanFeedbackActions = actions;
             wi.UpdatedAt = DateTime.UtcNow;
             await workItemStore.UpdateAsync(wi);
         }

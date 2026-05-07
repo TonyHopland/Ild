@@ -581,7 +581,11 @@ export default function LoopEditor() {
       const sourceNode = nodes.find((n) => n.id === connection.source);
       if (!sourceNode) return;
 
-      const result = checkEdgeConstraints(connection.source, edges);
+      const result = checkEdgeConstraints(
+        connection.source,
+        sourceNode.data?.type as NodeType,
+        edges,
+      );
 
       if (!result.allowed) {
         setEdgeError(result.error ?? "Cannot create edge");
@@ -1126,54 +1130,69 @@ export default function LoopEditor() {
                 </div>
               )}
 
-              {pendingConnection && (
-                <Panel position="bottom-center" className="edge-config-panel">
-                  <div className="config-panel-header">Configure Edge</div>
-                  <div className="config-field">
-                    <label htmlFor="edge-type">Edge Type</label>
-                    <select
-                      id="edge-type"
-                      value={edgeType}
-                      onChange={(e) => setEdgeType(e.target.value as EdgeType)}
-                      disabled={
-                        edges.some(
-                          (ed) =>
-                            ed.source === pendingConnection.source &&
-                            ed.data?.edgeType === EdgeType.OnSuccess,
-                        ) &&
-                        edges.some(
-                          (ed) =>
-                            ed.source === pendingConnection.source &&
-                            ed.data?.edgeType === EdgeType.OnFailure,
-                        )
-                      }
-                    >
-                      <option value={EdgeType.OnSuccess}>OnSuccess</option>
-                      <option value={EdgeType.OnFailure}>OnFailure</option>
-                    </select>
-                  </div>
-                  <div className="config-field">
-                    <label htmlFor="edge-max-traversals">Max Traversals</label>
-                    <input
-                      id="edge-max-traversals"
-                      type="number"
-                      min={0}
-                      value={edgeMaxTraversals}
-                      onChange={(e) => setEdgeMaxTraversals(e.target.value)}
-                      placeholder="Unlimited"
-                    />
-                    {edgeError && <div className="validation-error">{edgeError}</div>}
-                  </div>
-                  <div className="edge-config-actions">
-                    <button className="connect-edge-btn" onClick={confirmEdge}>
-                      Connect
-                    </button>
-                    <button className="cancel-edge-btn" onClick={cancelEdge}>
-                      Cancel
-                    </button>
-                  </div>
-                </Panel>
-              )}
+              {pendingConnection &&
+                (() => {
+                  const srcNode = nodes.find((n) => n.id === pendingConnection.source);
+                  const srcNodeType = srcNode?.data?.type;
+                  const isHuman = srcNodeType === NodeType.Human;
+                  const hasOnSuccess = edges.some(
+                    (ed) =>
+                      ed.source === pendingConnection.source &&
+                      ed.data?.edgeType === EdgeType.OnSuccess,
+                  );
+                  const hasOnFailure = edges.some(
+                    (ed) =>
+                      ed.source === pendingConnection.source &&
+                      ed.data?.edgeType === EdgeType.OnFailure,
+                  );
+                  const hasOnRespond = edges.some(
+                    (ed) =>
+                      ed.source === pendingConnection.source &&
+                      ed.data?.edgeType === EdgeType.OnRespond,
+                  );
+                  const allTaken = isHuman
+                    ? hasOnSuccess && hasOnFailure && hasOnRespond
+                    : hasOnSuccess && hasOnFailure;
+
+                  return (
+                    <Panel position="bottom-center" className="edge-config-panel">
+                      <div className="config-panel-header">Configure Edge</div>
+                      <div className="config-field">
+                        <label htmlFor="edge-type">Edge Type</label>
+                        <select
+                          id="edge-type"
+                          value={edgeType}
+                          onChange={(e) => setEdgeType(e.target.value as EdgeType)}
+                          disabled={allTaken}
+                        >
+                          <option value={EdgeType.OnSuccess}>OnSuccess</option>
+                          <option value={EdgeType.OnFailure}>OnFailure</option>
+                          {isHuman && <option value={EdgeType.OnRespond}>OnRespond</option>}
+                        </select>
+                      </div>
+                      <div className="config-field">
+                        <label htmlFor="edge-max-traversals">Max Traversals</label>
+                        <input
+                          id="edge-max-traversals"
+                          type="number"
+                          min={0}
+                          value={edgeMaxTraversals}
+                          onChange={(e) => setEdgeMaxTraversals(e.target.value)}
+                          placeholder="Unlimited"
+                        />
+                        {edgeError && <div className="validation-error">{edgeError}</div>}
+                      </div>
+                      <div className="edge-config-actions">
+                        <button className="connect-edge-btn" onClick={confirmEdge}>
+                          Connect
+                        </button>
+                        <button className="cancel-edge-btn" onClick={cancelEdge}>
+                          Cancel
+                        </button>
+                      </div>
+                    </Panel>
+                  );
+                })()}
             </ReactFlow>
           ) : (
             <div className="loop-canvas-empty">Select a template to view its graph</div>

@@ -58,6 +58,7 @@ function normalizeNodeStatus(value: unknown): LoopRunNodeStatus {
       3: LoopRunNodeStatus.Failed,
       4: LoopRunNodeStatus.Skipped,
       5: LoopRunNodeStatus.WaitingHuman,
+      6: LoopRunNodeStatus.Responded,
     };
     return map[value] ?? LoopRunNodeStatus.Pending;
   }
@@ -184,19 +185,17 @@ export default function EventLogViewer() {
       }
     };
 
+    // NodeStateChanged carries only the LoopNode (template) id + new status.
+    // We can't reliably patch the timeline locally because: (a) the same
+    // template node can produce multiple LoopRunNode rows when a loop
+    // re-visits it, so matching by nodeId rewrites the wrong row, and
+    // (b) the message has no Output / CompletedAt / Error / RetryCount.
+    // Refetch from REST instead — it's the source of truth and the
+    // payloads are small.
     const onNodeStateChanged = async (message: TypedSignalRMessage<"NodeStateChanged">) => {
-      const { runId: msgRunId, nodeId, newStatus } = message.payload;
+      const { runId: msgRunId } = message.payload;
       if (msgRunId !== runId) return;
-      setRunNodes((prev) => {
-        const existing = prev.find((n) => n.nodeId === nodeId);
-        if (existing) {
-          return prev.map((n) =>
-            n.nodeId === nodeId ? { ...n, status: normalizeNodeStatus(newStatus) } : n,
-          );
-        }
-        void loadRun();
-        return prev;
-      });
+      void loadRun();
     };
 
     const onNodeProgress = async (message: TypedSignalRMessage<"NodeProgress">) => {
@@ -234,6 +233,10 @@ export default function EventLogViewer() {
             // ignore parse errors
           }
         }
+        // NodeCompleted is when Output / CompletedAt / Error get persisted.
+        // Refresh so the timeline reflects them without waiting for the
+        // user to refresh the page manually.
+        void loadRun();
       }
     };
 
@@ -396,11 +399,12 @@ export default function EventLogViewer() {
             if (isRetryBoundary) {
               edgeType = EdgeType.OnSuccess;
               edgeVariant = "retry";
+            } else if (prevNode.status === LoopRunNodeStatus.Succeeded) {
+              edgeType = EdgeType.OnSuccess;
+            } else if (prevNode.status === LoopRunNodeStatus.Responded) {
+              edgeType = EdgeType.OnRespond;
             } else {
-              edgeType =
-                prevNode.status === LoopRunNodeStatus.Succeeded
-                  ? EdgeType.OnSuccess
-                  : EdgeType.OnFailure;
+              edgeType = EdgeType.OnFailure;
             }
           }
 

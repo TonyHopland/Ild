@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { LoopRun, LoopRunNodeStatus, LoopRunStatus } from "../types";
 import type { TypedSignalRMessage } from "../types/signalr";
@@ -31,6 +31,7 @@ function normalizeNodeStatus(value: unknown): LoopRunNodeStatus {
       3: LoopRunNodeStatus.Failed,
       4: LoopRunNodeStatus.Skipped,
       5: LoopRunNodeStatus.WaitingHuman,
+      6: LoopRunNodeStatus.Responded,
     };
     return map[value] ?? LoopRunNodeStatus.Pending;
   }
@@ -48,6 +49,31 @@ export default function LoopRunMonitor() {
   const [isLoading, setIsLoading] = useState(true);
   const [errorText, setErrorText] = useState("");
   const { on, off, invoke, connectionState } = useSignalR("/hubs/loop-run");
+  const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Coalesce bursty SignalR events into one REST refetch. The
+  // NodeStateChanged payload doesn't carry per-run-node fields like
+  // Output / CompletedAt / RetryCount, and the same template node id
+  // can map to multiple LoopRunNode rows when a loop iterates, so
+  // patching state in place corrupted the timeline (the user reported
+  // having to refresh the page to see the correct state).
+  const scheduleReload = () => {
+    if (reloadTimerRef.current) return;
+    reloadTimerRef.current = setTimeout(() => {
+      reloadTimerRef.current = null;
+      void loadRuns();
+    }, 150);
+  };
+
+  useEffect(
+    () => () => {
+      if (reloadTimerRef.current) {
+        clearTimeout(reloadTimerRef.current);
+        reloadTimerRef.current = null;
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     void loadRuns();
@@ -63,31 +89,15 @@ export default function LoopRunMonitor() {
   useEffect(() => {
     const onLoopRunStateChanged = async (message: TypedSignalRMessage<"LoopRunStateChanged">) => {
       const { runId, newStatus } = message.payload;
-      setRuns((prev) =>
-        prev.map((run) =>
-          run.id === runId ? { ...run, status: normalizeLoopRunStatus(newStatus) } : run,
-        ),
-      );
+      const status = normalizeLoopRunStatus(newStatus);
+      setRuns((prev) => prev.map((run) => (run.id === runId ? { ...run, status } : run)));
+      if (status !== LoopRunStatus.Running) {
+        scheduleReload();
+      }
     };
 
-    const onNodeStateChanged = async (message: TypedSignalRMessage<"NodeStateChanged">) => {
-      const { runId, nodeId, newStatus } = message.payload;
-      setRuns((prev) =>
-        prev.map((run) => {
-          if (run.id !== runId) return run;
-          const existing = run.nodes.find((n) => n.nodeId === nodeId);
-          if (existing) {
-            return {
-              ...run,
-              nodes: run.nodes.map((n) =>
-                n.nodeId === nodeId ? { ...n, status: normalizeNodeStatus(newStatus) } : n,
-              ),
-            };
-          }
-          void loadRuns();
-          return run;
-        }),
-      );
+    const onNodeStateChanged = async (_message: TypedSignalRMessage<"NodeStateChanged">) => {
+      scheduleReload();
     };
 
     on("LoopRunStateChanged", onLoopRunStateChanged);
@@ -159,6 +169,7 @@ export default function LoopRunMonitor() {
     [LoopRunNodeStatus.Failed]: "#ef4444",
     [LoopRunNodeStatus.Skipped]: "#4b5563",
     [LoopRunNodeStatus.WaitingHuman]: "#f59e0b",
+    [LoopRunNodeStatus.Responded]: "#f59e0b",
   };
 
   const nodeTypeIcons: Record<string, string> = {

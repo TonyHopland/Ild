@@ -779,4 +779,70 @@ public class WorkItemManagerTests
         afterNode!.Status.Should().Be(LoopRunNodeStatus.Failed);
         afterNode.Output.Should().Be("looks wrong, try again with smaller scope");
     }
+
+    [Fact]
+    public async Task SubmitHumanFeedbackRespond_sets_responded_status_and_resumes_run()
+    {
+        var (mgr, db, repoId, _, eventLog) = Setup();
+        using var _ = db;
+
+        var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
+        db.Context.LoopTemplates.Add(lt);
+        var ltv = new LoopTemplateVersion
+        {
+            Id = Guid.NewGuid(),
+            LoopTemplateId = lt.Id,
+            VersionNumber = 1,
+            CreatedAt = DateTime.UtcNow,
+        };
+        db.Context.LoopTemplateVersions.Add(ltv);
+        await db.Context.SaveChangesAsync();
+
+        var id = await mgr.CreateWorkItemAsync("a", "", lt.Id, repoId);
+        var runId = Guid.NewGuid();
+        var nodeId = Guid.NewGuid();
+        var run = new LoopRun
+        {
+            Id = runId,
+            WorkItemId = id,
+            LoopTemplateVersionId = ltv.Id,
+            Status = LoopRunStatus.Running,
+            StartedAt = DateTime.UtcNow,
+            CurrentNodeId = nodeId,
+        };
+        db.Context.LoopRuns.Add(run);
+
+        db.Context.LoopNodes.Add(new LoopNode
+        {
+            Id = nodeId,
+            LoopTemplateVersionId = ltv.Id,
+            NodeType = NodeType.Human,
+            Label = "human-review",
+        });
+
+        var runNode = new LoopRunNode
+        {
+            Id = Guid.NewGuid(),
+            LoopRunId = runId,
+            LoopNodeId = nodeId,
+            Status = LoopRunNodeStatus.WaitingHuman,
+        };
+        db.Context.LoopRunNodes.Add(runNode);
+
+        var wi = await db.Context.WorkItems.FindAsync(id);
+        wi!.Status = WorkItemStatus.HumanFeedback;
+        wi.HumanFeedbackReason = "Human Input Needed";
+        wi.CurrentLoopRunId = runId;
+        await db.Context.SaveChangesAsync();
+
+        await mgr.SubmitHumanFeedbackRespondAsync(id, "please revise the approach");
+
+        eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "please revise the approach", null), Times.Once);
+        var afterNode = await db.Context.LoopRunNodes.FindAsync(runNode.Id);
+        afterNode!.Status.Should().Be(LoopRunNodeStatus.Responded);
+        afterNode.Output.Should().Be("please revise the approach");
+        var after = await mgr.GetWorkItemAsync(id);
+        after!.Status.Should().Be(WorkItemStatus.Running);
+        after.HumanFeedbackReason.Should().BeNullOrEmpty();
+    }
 }

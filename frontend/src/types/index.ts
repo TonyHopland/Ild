@@ -42,6 +42,7 @@ export interface WorkItem {
   prUrl: string | null;
   pullRequestBranch: string | null;
   humanFeedbackReason: string | null;
+  humanFeedbackActions: string | null;
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;
@@ -61,6 +62,7 @@ export enum NodeType {
 export enum EdgeType {
   OnSuccess = "OnSuccess",
   OnFailure = "OnFailure",
+  OnRespond = "OnRespond",
 }
 
 export interface LoopNode {
@@ -107,6 +109,7 @@ export enum LoopRunNodeStatus {
   Failed = "Failed",
   Skipped = "Skipped",
   WaitingHuman = "WaitingHuman",
+  Responded = "Responded",
 }
 
 export interface LoopRunNode {

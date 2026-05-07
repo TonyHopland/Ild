@@ -174,6 +174,19 @@ public sealed class AINodeExecutor : INodeExecutor
                 .Select(e => $"{e.EventType}: {e.Data}")
                 .ToList();
 
+            // Surface session resolution to the run's event log so the user
+            // can see in the UI whether the AI node is resuming or starting
+            // fresh on each visit. Without this it's invisible whether
+            // SessionsJson is round-tripping or not.
+            try
+            {
+                var resolvedMsg = string.IsNullOrEmpty(sessionId)
+                    ? $"sessionInput={sessionInput} provider={provider.Id} resolved=<none> (sessionsJson={(string.IsNullOrEmpty(run?.SessionsJson) ? "<null>" : run!.SessionsJson)})"
+                    : $"sessionInput={sessionInput} provider={provider.Id} resolved={sessionId}";
+                await eventLogService.AppendAsync(ctx.Run.Id, AiSessionResolvedEvent, resolvedMsg, ctx.Node.Id, runNodeId: ctx.RunNode.Id);
+            }
+            catch { /* best-effort observability */ }
+
             var runContext = new LoopRunContext(
                 ctx.Run.Id,
                 ctx.WorkItem.Id,
@@ -224,7 +237,25 @@ public sealed class AINodeExecutor : INodeExecutor
                     "incoming" => result.IncomingSessionId,
                     _ => null
                 };
-                await UpdateRunSessionAsync(loopRunStore, run, provider.Id, effectiveSessionId);
+
+                // Reload the run to avoid clobbering concurrent writes
+                // (status/currentNodeId/etc.) made by the engine while the
+                // AI was running. EF's `Update(run)` marks every column as
+                // Modified, so updating the stale local copy from the
+                // start of execution would silently roll back those
+                // mutations. Reloading also ensures we merge with the
+                // current SessionsJson value if anything else touched it.
+                var freshRun = await loopRunStore.GetByIdAsync(ctx.Run.Id) ?? run;
+                await UpdateRunSessionAsync(loopRunStore, freshRun, provider.Id, effectiveSessionId);
+
+                try
+                {
+                    var persistedMsg = effectiveSessionId is null
+                        ? $"sessionOutput={sessionOutput} provider={provider.Id} adapterReturned=<null> (sessionsJson cleared for this provider)"
+                        : $"sessionOutput={sessionOutput} provider={provider.Id} persisted={effectiveSessionId} sessionsJson={freshRun.SessionsJson}";
+                    await eventLogService.AppendAsync(ctx.Run.Id, AiSessionPersistedEvent, persistedMsg, ctx.Node.Id, runNodeId: ctx.RunNode.Id);
+                }
+                catch { /* best-effort observability */ }
             }
 
             return NodeOutcome.FromResult(result);
@@ -232,6 +263,9 @@ public sealed class AINodeExecutor : INodeExecutor
         catch (OperationCanceledException) { return new NodeOutcome.Failed("AI node timed out"); }
         catch (Exception ex) { return new NodeOutcome.Failed(ex.Message); }
     }
+
+    public const string AiSessionResolvedEvent = "AiSessionResolved";
+    public const string AiSessionPersistedEvent = "AiSessionPersisted";
 
     private static async Task<int> CountNodeVisitsAsync(IServiceProvider sp, Guid runId, Guid nodeId)
     {
@@ -274,15 +308,44 @@ public sealed class AINodeExecutor : INodeExecutor
         try
         {
             using var doc = JsonDocument.Parse(sessionsJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return null;
             foreach (var entry in doc.RootElement.EnumerateArray())
             {
-                if (entry.TryGetProperty("providerId", out var pid) && pid.GetGuid() == providerId)
-                    return entry.TryGetProperty("sessionId", out var sid) ? sid.GetString() : null;
+                // Tolerate both camelCase (current) and PascalCase (legacy
+                // pre-fix payloads in the DB) so existing runs continue to
+                // resolve their session after upgrade.
+                var pid = TryGetStringInsensitive(entry, "providerId");
+                if (pid == null || !Guid.TryParse(pid, out var parsedPid) || parsedPid != providerId)
+                    continue;
+                return TryGetStringInsensitive(entry, "sessionId");
             }
         }
         catch { }
         return null;
     }
+
+    private static string? TryGetStringInsensitive(JsonElement obj, string name)
+    {
+        if (obj.ValueKind != JsonValueKind.Object) return null;
+        foreach (var prop in obj.EnumerateObject())
+        {
+            if (string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase))
+                return prop.Value.ValueKind == JsonValueKind.String ? prop.Value.GetString() : null;
+        }
+        return null;
+    }
+
+    // SessionsJson is read via raw JsonDocument in ResolveSessionForProvider
+    // using camelCase property names (providerId/sessionId), so we must
+    // serialize the same shape here. Default System.Text.Json serialization
+    // is PascalCase and case-sensitive on read — without these options the
+    // reader would silently fail to find any sessions written by the writer
+    // and AI nodes would always start a fresh session.
+    private static readonly JsonSerializerOptions SessionJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+    };
 
     private static async Task UpdateRunSessionAsync(ILoopRunStore store, LoopRun run, Guid providerId, string? sessionId)
     {
@@ -299,14 +362,14 @@ public sealed class AINodeExecutor : INodeExecutor
             else
                 sessions.Add(new RunSessionEntry(providerId.ToString(), sessionId));
         }
-        run.SessionsJson = JsonSerializer.Serialize(sessions);
+        run.SessionsJson = JsonSerializer.Serialize(sessions, SessionJsonOptions);
         await store.UpdateRunAsync(run);
     }
 
     private static List<RunSessionEntry> ParseSessions(string? json)
     {
         if (string.IsNullOrEmpty(json)) return new List<RunSessionEntry>();
-        try { return JsonSerializer.Deserialize<List<RunSessionEntry>>(json) ?? new List<RunSessionEntry>(); }
+        try { return JsonSerializer.Deserialize<List<RunSessionEntry>>(json, SessionJsonOptions) ?? new List<RunSessionEntry>(); }
         catch { return new List<RunSessionEntry>(); }
     }
 

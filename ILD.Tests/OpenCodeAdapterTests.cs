@@ -479,6 +479,40 @@ public class OpenCodeAdapterTests
         }
     }
 
+    [Fact]
+    public async Task ExecuteAsync_returns_session_id_from_nested_session_object()
+    {
+        // opencode emits stream events whose payloads sometimes nest the
+        // session id (`{"session":{"id":"..."}}`) instead of placing it at
+        // the root. The extractor must walk the tree so the run can keep
+        // its session across executions regardless of the event shape.
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
+        File.WriteAllText(scriptPath, "#!/bin/sh\necho '{\"text\":\"hello\",\"session\":{\"id\":\"nested-session\"}}'\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var adapter = new OpenCodeAdapter();
+
+            var ctx = BuildContext(
+                binaryPath: scriptPath,
+                initialPrompt: "ignored",
+                worktreePath: worktreeDir,
+                executionCount: 1);
+
+            var result = await adapter.ExecuteAsync(ctx);
+
+            result.Success.Should().BeTrue();
+            result.SessionId.Should().Be("nested-session");
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
     private static AgentExecutionContext BuildContext(
         string binaryPath,
         string initialPrompt = "test prompt",

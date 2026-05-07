@@ -311,6 +311,26 @@ public class WorkItemsController : ControllerBase
         return Ok();
     }
 
+    [HttpPost("{id}/human-feedback/respond")]
+    public async Task<IActionResult> HumanFeedbackRespond(string id, [FromBody] HumanFeedbackInputRequest request)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+
+        if (!ModelState.IsValid)
+            return BadRequest(ModelState);
+
+        var ok = await _workItemManager.SubmitHumanFeedbackRespondAsync(guid, request.Input ?? string.Empty);
+        if (!ok) return NotFound();
+
+        // Resume the engine to route respond edge
+        var wi = await _workItemManager.GetWorkItemAsync(guid);
+        if (wi?.CurrentLoopRunId != null)
+            RunInBackground(wi.CurrentLoopRunId.Value);
+
+        return Ok();
+    }
+
     [HttpGet("{id}/pr-comments")]
     public async Task<IActionResult> GetPrComments(string id)
     {

@@ -308,6 +308,7 @@ public class WorkItemManager : IWorkItemManager
 
         wi.Status = WorkItemStatus.Running;
         wi.HumanFeedbackReason = null;
+        wi.HumanFeedbackActions = null;
         wi.UpdatedAt = DateTime.UtcNow;
         await _store.UpdateAsync(wi);
         return true;
@@ -368,6 +369,53 @@ public class WorkItemManager : IWorkItemManager
 
         wi.Status = WorkItemStatus.Running;
         wi.HumanFeedbackReason = null;
+        wi.HumanFeedbackActions = null;
+        wi.UpdatedAt = DateTime.UtcNow;
+        await _store.UpdateAsync(wi);
+        return true;
+    }
+
+    public async Task<bool> SubmitHumanFeedbackRespondAsync(Guid workItemId, string input)
+    {
+        var wi = await _store.GetByIdAsync(workItemId);
+        if (wi == null) return false;
+        if (wi.CurrentLoopRunId == null) return false;
+
+        var runId = wi.CurrentLoopRunId.Value;
+        var run = await _loopRunStore.GetByIdAsync(runId);
+        if (run != null)
+        {
+            var nodes = await _loopRunStore.GetRunNodesAsync(runId);
+            var humanRunNode = nodes
+                .Where(n => n.Status == LoopRunNodeStatus.WaitingHuman
+                            && n.LoopNodeId == run.CurrentNodeId)
+                .OrderByDescending(n => n.StartedAt ?? DateTime.MinValue)
+                .FirstOrDefault()
+                ?? nodes
+                    .Where(n => n.Status == LoopRunNodeStatus.WaitingHuman)
+                    .OrderByDescending(n => n.StartedAt ?? DateTime.MinValue)
+                    .FirstOrDefault();
+            if (humanRunNode != null)
+            {
+                humanRunNode.Status = LoopRunNodeStatus.Responded;
+                humanRunNode.Output = input;
+                humanRunNode.CompletedAt = DateTime.UtcNow;
+                await _loopRunStore.UpdateRunNodeAsync(humanRunNode);
+            }
+
+            if (run.Status == LoopRunStatus.WaitingHuman)
+            {
+                run.Status = LoopRunStatus.Running;
+                run.UpdatedAt = DateTime.UtcNow;
+                await _loopRunStore.UpdateRunAsync(run);
+            }
+        }
+
+        await _eventLog.AppendAsync(runId, "HumanFeedbackReceived", input);
+
+        wi.Status = WorkItemStatus.Running;
+        wi.HumanFeedbackReason = null;
+        wi.HumanFeedbackActions = null;
         wi.UpdatedAt = DateTime.UtcNow;
         await _store.UpdateAsync(wi);
         return true;

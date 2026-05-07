@@ -89,4 +89,35 @@ public class LoopTemplateValidatorTests
         var errs = LoopTemplateValidator.Validate(g);
         errs.Should().BeEmpty();
     }
+
+    [Fact]
+    public void OnRespond_edge_on_non_human_node_is_invalid()
+    {
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Node("s", "Start"), Node("a", "Cmd"), Node("c", "Cleanup") },
+            new() { Edge("s", "a"), Edge("a", "c", "OnRespond") });
+        var errs = LoopTemplateValidator.Validate(g);
+        errs.Should().Contain(e => e.Contains("OnRespond"));
+    }
+
+    [Fact]
+    public void OnRespond_edge_on_human_node_is_valid()
+    {
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() {
+                Node("s", "Start"),
+                Node("h", "Human", "Review this"),
+                Node("a", "AI"),
+                Node("c", "Cleanup")
+            },
+            new() {
+                Edge("s", "h"),
+                Edge("h", "a", "OnRespond"),
+                Edge("h", "a", "OnSuccess"),
+                Edge("h", "c", "OnFailure"),
+                Edge("a", "c")
+            });
+        var errs = LoopTemplateValidator.Validate(g);
+        errs.Should().BeEmpty();
+    }
 }

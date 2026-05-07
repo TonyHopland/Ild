@@ -15,10 +15,12 @@ public class LoopRunStore : ILoopRunStore
     }
 
     public async Task<LoopRun?> GetByIdAsync(Guid id)
-        => await _db.LoopRuns
+    {
+        return await _db.LoopRuns
             .Include(r => r.LoopTemplateVersion)
                 .ThenInclude(v => v!.LoopTemplate)
             .FirstOrDefaultAsync(r => r.Id == id);
+    }
 
     public async Task<LoopRun?> GetByWorkItemAsync(Guid workItemId)
         => await _db.LoopRuns.FirstOrDefaultAsync(r => r.WorkItemId == workItemId);
@@ -69,7 +71,20 @@ public class LoopRunStore : ILoopRunStore
 
     public async Task UpdateRunAsync(LoopRun run)
     {
-        _db.LoopRuns.Update(run);
+        // Use Entry(...).State = Modified instead of DbSet.Update to mark
+        // only the root entity Modified. DbSet.Update walks the entity
+        // graph, attaching reachable navigation entities (e.g.
+        // LoopTemplateVersion, RunNodes) as Modified too — and EF's
+        // relationship fixup also pulls in any navigation already linked
+        // via POCO references from prior scopes (see e.g. LoopRunNode.LoopRun
+        // populated by an earlier per-attempt scope), causing those stale
+        // entities to be saved back over fresh data (in particular wiping
+        // SessionsJson back to its loaded NULL value after the AI node
+        // had just persisted a session ID).
+        var entry = _db.Entry(run);
+        if (entry.State == EntityState.Detached)
+            _db.LoopRuns.Attach(run);
+        _db.Entry(run).State = EntityState.Modified;
         await _db.SaveChangesAsync();
     }
 
@@ -81,7 +96,14 @@ public class LoopRunStore : ILoopRunStore
 
     public async Task UpdateRunNodeAsync(LoopRunNode runNode)
     {
-        _db.LoopRunNodes.Update(runNode);
+        // Same rationale as UpdateRunAsync: avoid DbSet.Update graph
+        // traversal which would drag a navigation-linked LoopRun (with
+        // stale SessionsJson) into the new context as Modified and clobber
+        // it on save.
+        var entry = _db.Entry(runNode);
+        if (entry.State == EntityState.Detached)
+            _db.LoopRunNodes.Attach(runNode);
+        _db.Entry(runNode).State = EntityState.Modified;
         await _db.SaveChangesAsync();
     }
 

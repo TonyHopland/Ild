@@ -16,6 +16,22 @@ public static class LoopTemplateValidator
 
     private static readonly Regex PlaceholderPattern = new(@"\{\{\s*([A-Za-z][A-Za-z0-9_.:/\\-]*)\s*\}\}", RegexOptions.Compiled);
 
+    private static readonly Dictionary<string, HashSet<string>> AllowedEdgeTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        { "Human", new() { "OnSuccess", "OnFailure", "OnRespond" } },
+        { "Start", new() { "OnSuccess", "OnFailure" } },
+        { "Cmd", new() { "OnSuccess", "OnFailure" } },
+        { "AI", new() { "OnSuccess", "OnFailure" } },
+        { "PR", new() { "OnSuccess", "OnFailure" } },
+        { "Cleanup", new() { "OnSuccess", "OnFailure" } },
+    };
+
+    private static HashSet<string> GetAllowedEdgeTypes(string nodeType)
+    {
+        if (AllowedEdgeTypes.TryGetValue(nodeType, out var types)) return types;
+        return AllowedEdgeTypes["Cmd"];
+    }
+
     public static IReadOnlyList<string> Validate(LoopTemplateGraph graph)
     {
         var errors = new List<string>();
@@ -69,14 +85,15 @@ public static class LoopTemplateValidator
                 errors.Add($"Node {src.Key} has duplicate {d} edges.");
         }
 
-        // Every edge must have a valid EdgeType
+        // Every edge must have a valid EdgeType for its source node type
         foreach (var e in edges)
         {
-            if (string.IsNullOrEmpty(e.EdgeType) ||
-                (!string.Equals(e.EdgeType, "OnSuccess", StringComparison.OrdinalIgnoreCase) &&
-                 !string.Equals(e.EdgeType, "OnFailure", StringComparison.OrdinalIgnoreCase)))
+            var srcNode = nodes.FirstOrDefault(n => n.Id == e.SourceNodeId);
+            var allowed = srcNode != null ? GetAllowedEdgeTypes(srcNode.NodeType) : null;
+            if (string.IsNullOrEmpty(e.EdgeType) || allowed == null || !allowed.Contains(e.EdgeType, StringComparer.OrdinalIgnoreCase))
             {
-                errors.Add($"Edge {e.Id} has an invalid or missing EdgeType ('{e.EdgeType}'). Must be 'OnSuccess' or 'OnFailure'.");
+                var allowedList = allowed != null ? string.Join(", ", allowed) : "none";
+                errors.Add($"Edge {e.Id} has an invalid or missing EdgeType ('{e.EdgeType}'). Allowed for source node type: {allowedList}.");
             }
         }
 

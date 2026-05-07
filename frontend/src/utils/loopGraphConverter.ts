@@ -33,22 +33,35 @@ export function templateToNodes(template: LoopTemplate): Node[] {
 }
 
 export function templateToEdges(template: LoopTemplate): Edge[] {
-  return template.edges.map((edge) => ({
-    id: edge.id,
-    source: edge.sourceNodeId,
-    target: edge.targetNodeId,
-    data: { edgeType: edge.edgeType },
-    animated: edge.edgeType === EdgeType.OnSuccess,
-    style: {
-      stroke: edge.edgeType === EdgeType.OnSuccess ? "#10b981" : "#ef4444",
-      strokeDasharray: edge.edgeType === EdgeType.OnFailure ? "8 4" : undefined,
-    },
-    label: edge.edgeType === EdgeType.OnSuccess ? "success" : "failure",
-    labelStyle: { fill: "#a0a0b0", fontSize: "0.7rem" },
-    labelBgStyle: { fill: "#1e1e30" },
-    labelBgPadding: [4, 2] as [number, number],
-    labelBgBorderRadius: 4,
-  }));
+  return template.edges.map((edge) => {
+    const strokeStyle =
+      edge.edgeType === EdgeType.OnSuccess
+        ? { stroke: "#10b981" as const }
+        : edge.edgeType === EdgeType.OnFailure
+          ? { stroke: "#ef4444" as const, strokeDasharray: "8 4" as const }
+          : { stroke: "#f59e0b" as const, strokeDasharray: "4 4" as const };
+
+    const label =
+      edge.edgeType === EdgeType.OnSuccess
+        ? "success"
+        : edge.edgeType === EdgeType.OnFailure
+          ? "failure"
+          : "respond";
+
+    return {
+      id: edge.id,
+      source: edge.sourceNodeId,
+      target: edge.targetNodeId,
+      data: { edgeType: edge.edgeType },
+      animated: edge.edgeType === EdgeType.OnSuccess,
+      style: strokeStyle,
+      label,
+      labelStyle: { fill: "#a0a0b0", fontSize: "0.7rem" },
+      labelBgStyle: { fill: "#1e1e30" },
+      labelBgPadding: [4, 2] as [number, number],
+      labelBgBorderRadius: 4,
+    };
+  });
 }
 
 export function edgesToLoopNodeEdges(edges: Edge[]): LoopNodeEdge[] {

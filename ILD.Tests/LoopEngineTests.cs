@@ -454,6 +454,40 @@ public class LoopEngineTests
     }
 
     [Fact]
+    public async Task Human_node_resume_with_responded_run_node_routes_on_respond()
+    {
+        using var h = new EngineHarness();
+        h.BuildSimpleGraph(
+            ("s", NodeType.Start),
+            ("ask", NodeType.Human),
+            ("iterate", NodeType.AI),
+            ("c", NodeType.Cleanup));
+        h.AddEdge("e1", "s", "ask");
+        h.AddEdge("e2", "ask", "iterate", EdgeType.OnRespond);
+        h.AddEdge("e3", "ask", "c", EdgeType.OnSuccess);
+        h.AddEdge("e4", "iterate", "c");
+        h.Save();
+
+        // First run pauses at the human node.
+        await h.Engine.RunAsync(h.RunId);
+        var humanRunNode = h.ReloadRunNodes().First(n => n.LoopNodeId == h.NodesById["ask"].Id);
+        humanRunNode.Status.Should().Be(LoopRunNodeStatus.WaitingHuman);
+
+        // Simulate the manager finalizing the run node with Responded status.
+        var trackedRn = h.Db.Context.LoopRunNodes.First(n => n.Id == humanRunNode.Id);
+        trackedRn.Status = LoopRunNodeStatus.Responded;
+        trackedRn.Output = "please revise";
+        trackedRn.CompletedAt = DateTime.UtcNow;
+        h.Db.Context.SaveChanges();
+
+        await h.Engine.RunAsync(h.RunId);
+
+        h.ReloadRun().Status.Should().Be(LoopRunStatus.Completed);
+        var iterateNodeId = h.NodesById["iterate"].Id;
+        h.ReloadRunNodes().Should().Contain(n => n.LoopNodeId == iterateNodeId);
+    }
+
+    [Fact]
     public async Task SignalNodeResultAsync_resumes_run_and_executes_cleanup_node()
     {
         using var h = new EngineHarness();

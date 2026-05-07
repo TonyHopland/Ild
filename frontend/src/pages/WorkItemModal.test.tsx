@@ -48,6 +48,7 @@ function makeWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     prUrl: null,
     pullRequestBranch: null,
     humanFeedbackReason: null,
+    humanFeedbackActions: null,
     createdAt: "2025-01-01T00:00:00Z",
     startedAt: null,
     completedAt: null,
@@ -541,6 +542,7 @@ describe("WorkItemModal", () => {
     const workItem = makeWorkItem({
       status: WorkItemStatus.HumanFeedback,
       humanFeedbackReason: "Human Input Needed",
+      humanFeedbackActions: "OnSuccess,OnRespond,OnFailure",
     });
 
     const fetchMock = mockFetch([]);
@@ -556,14 +558,16 @@ describe("WorkItemModal", () => {
       expect(screen.getByText("Human Feedback")).toBeTruthy();
     });
 
-    expect(screen.getByText("Continue")).toBeTruthy();
+    expect(screen.getByText("Approve")).toBeTruthy();
+    expect(screen.getByText("Respond")).toBeTruthy();
     expect(screen.getByText("Reject")).toBeTruthy();
   });
 
-  test("clicking Continue calls the human-feedback/input API endpoint", async () => {
+  test("clicking Approve calls the human-feedback/input API endpoint", async () => {
     const workItem = makeWorkItem({
       status: WorkItemStatus.HumanFeedback,
       humanFeedbackReason: "Human Input Needed",
+      humanFeedbackActions: "OnSuccess,OnFailure",
     });
 
     const fetchMock = mockFetch([]);
@@ -602,7 +606,7 @@ describe("WorkItemModal", () => {
     render(<WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Continue")).toBeTruthy();
+      expect(screen.getByText("Approve")).toBeTruthy();
     });
 
     const textarea = document.querySelector("textarea") as HTMLTextAreaElement;
@@ -610,7 +614,7 @@ describe("WorkItemModal", () => {
       fireEvent.change(textarea, { target: { value: "proceed with the change" } });
     }
 
-    fireEvent.click(screen.getByText("Continue"));
+    fireEvent.click(screen.getByText("Approve"));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -624,6 +628,7 @@ describe("WorkItemModal", () => {
     const workItem = makeWorkItem({
       status: WorkItemStatus.HumanFeedback,
       humanFeedbackReason: "Human Input Needed",
+      humanFeedbackActions: "OnSuccess,OnFailure",
     });
 
     const fetchMock = mockFetch([]);

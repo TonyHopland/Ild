@@ -148,12 +148,54 @@ public class OpenCodeAdapter : IAgentAdapter
             {
                 using var doc = JsonDocument.Parse(trimmed);
                 ExtractTextFromElement(doc.RootElement, sb);
-                if (doc.RootElement.TryGetProperty("sessionId", out var sid) && sid.ValueKind == JsonValueKind.String)
-                    lastSessionId = sid.GetString();
+                // opencode's JSON output may carry the session id at the
+                // root (`{"sessionId": "..."}`) or nested under a `session`
+                // object (`{"session":{"id":"..."}}`). Walk the tree so we
+                // pick it up regardless of the event shape.
+                var found = ExtractSessionIdFromElement(doc.RootElement);
+                if (!string.IsNullOrEmpty(found)) lastSessionId = found;
             }
             catch { }
         }
         return (sb.ToString(), lastSessionId);
+    }
+
+    static string? ExtractSessionIdFromElement(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in element.EnumerateObject())
+            {
+                if (string.Equals(prop.Name, "sessionId", StringComparison.OrdinalIgnoreCase)
+                    && prop.Value.ValueKind == JsonValueKind.String)
+                {
+                    var v = prop.Value.GetString();
+                    if (!string.IsNullOrEmpty(v)) return v;
+                }
+                if (string.Equals(prop.Name, "session", StringComparison.OrdinalIgnoreCase)
+                    && prop.Value.ValueKind == JsonValueKind.Object
+                    && prop.Value.TryGetProperty("id", out var sid)
+                    && sid.ValueKind == JsonValueKind.String)
+                {
+                    var v = sid.GetString();
+                    if (!string.IsNullOrEmpty(v)) return v;
+                }
+                if (prop.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+                {
+                    var nested = ExtractSessionIdFromElement(prop.Value);
+                    if (!string.IsNullOrEmpty(nested)) return nested;
+                }
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                var nested = ExtractSessionIdFromElement(item);
+                if (!string.IsNullOrEmpty(nested)) return nested;
+            }
+        }
+        return null;
     }
 
     static void ExtractTextFromElement(JsonElement element, StringBuilder sb)

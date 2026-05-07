@@ -16,6 +16,7 @@ const nodeStatusColors: Record<string, string> = {
   [LoopRunNodeStatus.Failed]: "#ef4444",
   [LoopRunNodeStatus.Skipped]: "#4b5563",
   [LoopRunNodeStatus.WaitingHuman]: "#f59e0b",
+  [LoopRunNodeStatus.Responded]: "#f59e0b",
 };
 
 interface NodeItemProps {

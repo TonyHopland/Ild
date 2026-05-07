@@ -8,8 +8,9 @@ interface EdgeArrowProps {
 export default function EdgeArrow({ edgeType, variant }: EdgeArrowProps) {
   const isRetry = variant === "retry";
   const isSuccess = edgeType === EdgeType.OnSuccess;
-  const color = isRetry ? "#f59e0b" : isSuccess ? "#22c55e" : "#ef4444";
-  const label = isRetry ? "retry" : isSuccess ? "success" : "failure";
+  const isRespond = edgeType === EdgeType.OnRespond;
+  const color = isRetry ? "#f59e0b" : isSuccess ? "#22c55e" : isRespond ? "#f59e0b" : "#ef4444";
+  const label = isRetry ? "retry" : isSuccess ? "success" : isRespond ? "respond" : "failure";
 
   return (
     <div className="edge-arrow">

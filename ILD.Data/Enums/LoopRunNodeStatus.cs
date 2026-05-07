@@ -7,5 +7,6 @@ public enum LoopRunNodeStatus
     Succeeded = 2,
     Failed = 3,
     Skipped = 4,
-    WaitingHuman = 5
+    WaitingHuman = 5,
+    Responded = 6
 }

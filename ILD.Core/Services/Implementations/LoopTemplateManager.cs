@@ -154,7 +154,7 @@ public class LoopTemplateManager : ILoopTemplateManager
             if (!idMap.TryGetValue(e.SourceNodeId, out var srcId)) return null;
             if (!idMap.TryGetValue(e.TargetNodeId, out var tgtId)) return null;
 
-            var edgeType = string.Equals(e.EdgeType, "OnFailure", StringComparison.OrdinalIgnoreCase) ? EdgeType.OnFailure : EdgeType.OnSuccess;
+            var edgeType = Enum.TryParse<EdgeType>(e.EdgeType, ignoreCase: true, out var parsed) ? parsed : EdgeType.OnSuccess;
             var srcDto = graph.Nodes.First(n => n.Id == e.SourceNodeId);
 
             return new LoopNodeEdge
