@@ -14,7 +14,7 @@ public interface ILoopTemplateStore
     Task<LoopTemplate?> GetByIdAsync(Guid id);
     Task<LoopTemplate?> GetByVersionIdAsync(Guid versionId);
     Task<TemplateGraph?> GetTemplateGraphByVersionIdAsync(Guid versionId);
-    Task<IReadOnlyList<LoopTemplate>> GetAllAsync(int skip = 0, int take = 100);
+    Task<IReadOnlyList<LoopTemplate>> GetAllAsync(int skip = 0, int take = 100, bool includeArchived = false);
     Task<LoopTemplateVersion?> GetLatestVersionAsync(Guid templateId);
     Task<LoopTemplateVersion?> GetVersionByIdAsync(Guid versionId);
     Task<LoopTemplateVersion?> GetVersionAsync(Guid templateId, int versionNumber);
@@ -24,6 +24,7 @@ public interface ILoopTemplateStore
     Task<int> GetNextVersionNumberAsync(Guid templateId);
     Task CreateTemplateAsync(LoopTemplate template);
     Task UpdateTemplateAsync(LoopTemplate template);
+    Task SetArchivedAsync(Guid templateId, bool archived);
     Task DeleteTemplateAsync(LoopTemplate template);
     Task CreateVersionAsync(LoopTemplateVersion version);
     Task CreateNodesAsync(IReadOnlyList<LoopNode> nodes);

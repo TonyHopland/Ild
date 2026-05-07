@@ -114,6 +114,7 @@ export default function LoopEditor() {
   const [errorText, setErrorText] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(true);
+  const [showArchived, setShowArchived] = useState(false);
   const [showNodeSettingsModal, setShowNodeSettingsModal] = useState(false);
   const [originalNodeConfig, setOriginalNodeConfig] = useState<{
     label: string;
@@ -147,7 +148,7 @@ export default function LoopEditor() {
 
   const loadTemplates = async () => {
     try {
-      const data = await loopTemplateService.getAll();
+      const data = await loopTemplateService.getAll({ includeArchived: true });
       setTemplates(data);
     } catch (error) {
       setErrorText(loadErrorMessage(error, "Failed to load loop templates."));
@@ -307,6 +308,24 @@ export default function LoopEditor() {
       void loadTemplates();
     } catch (error) {
       setErrorText(loadErrorMessage(error, "Failed to clone template."));
+    }
+  };
+
+  const handleArchiveToggle = async (template: LoopTemplate) => {
+    try {
+      if (template.isArchived) {
+        await loopTemplateService.unarchive(template.id);
+      } else {
+        await loopTemplateService.archive(template.id);
+        if (selectedTemplate?.id === template.id) {
+          setSelectedTemplate(null);
+          setNodes([]);
+          setEdges([]);
+        }
+      }
+      void loadTemplates();
+    } catch (error) {
+      setErrorText(loadErrorMessage(error, "Failed to update template."));
     }
   };
 
@@ -710,64 +729,88 @@ export default function LoopEditor() {
             <div className="loop-list">
               {!showVersionHistory ? (
                 <>
-                  {templates.map((template) => (
-                    <div
-                      key={template.id}
-                      className={`loop-list-item ${selectedTemplate?.id === template.id ? "active" : ""}`}
-                      onClick={() => selectTemplate(template)}
-                    >
-                      <div className="loop-list-item-name">{template.name}</div>
-                      <div className="loop-list-item-meta">
-                        v{template.version} &middot; {template.nodes.length} nodes
+                  <div className="loop-list-controls">
+                    <label className="show-archived-toggle">
+                      <input
+                        type="checkbox"
+                        checked={showArchived}
+                        onChange={(e) => setShowArchived(e.target.checked)}
+                      />
+                      Show archived
+                    </label>
+                  </div>
+                  {templates
+                    .filter((t) => showArchived || !t.isArchived)
+                    .map((template) => (
+                      <div
+                        key={template.id}
+                        className={`loop-list-item ${selectedTemplate?.id === template.id ? "active" : ""} ${template.isArchived ? "archived" : ""}`}
+                        onClick={() => selectTemplate(template)}
+                      >
+                        <div className="loop-list-item-name">
+                          {template.name}{" "}
+                          {template.isArchived && <span className="archived-badge">Archived</span>}
+                        </div>
+                        <div className="loop-list-item-meta">
+                          v{template.version} &middot; {template.nodes.length} nodes
+                        </div>
+                        {cloningTemplateId === template.id ? (
+                          <div className="clone-input-row">
+                            <input
+                              type="text"
+                              className="clone-name-input"
+                              placeholder="Clone name"
+                              value={cloneName}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => setCloneName(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") void handleClone(template);
+                              }}
+                            />
+                            <button
+                              className="clone-confirm-btn"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleClone(template);
+                              }}
+                            >
+                              Clone
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="loop-list-item-actions">
+                            <button
+                              className="archive-btn"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleArchiveToggle(template);
+                              }}
+                            >
+                              {template.isArchived ? "Unarchive" : "Archive"}
+                            </button>
+                            <button
+                              className="clone-btn"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setCloningTemplateId(template.id);
+                                setCloneName(`Copy of ${template.name}`);
+                              }}
+                            >
+                              Clone
+                            </button>
+                            <button
+                              className="versions-btn"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleShowVersionHistory(template);
+                              }}
+                            >
+                              Versions
+                            </button>
+                          </div>
+                        )}
                       </div>
-                      {cloningTemplateId === template.id ? (
-                        <div className="clone-input-row">
-                          <input
-                            type="text"
-                            className="clone-name-input"
-                            placeholder="Clone name"
-                            value={cloneName}
-                            onClick={(e) => e.stopPropagation()}
-                            onChange={(e) => setCloneName(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") void handleClone(template);
-                            }}
-                          />
-                          <button
-                            className="clone-confirm-btn"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void handleClone(template);
-                            }}
-                          >
-                            Clone
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="loop-list-item-actions">
-                          <button
-                            className="clone-btn"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setCloningTemplateId(template.id);
-                              setCloneName(`Copy of ${template.name}`);
-                            }}
-                          >
-                            Clone
-                          </button>
-                          <button
-                            className="versions-btn"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void handleShowVersionHistory(template);
-                            }}
-                          >
-                            Versions
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                    ))}
                 </>
               ) : (
                 <div className="version-history-list">

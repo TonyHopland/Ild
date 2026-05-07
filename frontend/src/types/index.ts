@@ -93,6 +93,7 @@ export interface LoopTemplate {
   edges: LoopNodeEdge[];
   createdAt: string;
   updatedAt: string;
+  isArchived: boolean;
 }
 
 export enum LoopRunStatus {

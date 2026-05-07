@@ -661,3 +661,52 @@
 .node-settings-btn-save:hover {
   background: #5558e6;
 }
+
+.loop-list-controls {
+  padding: 0.5rem 0.25rem;
+  margin-bottom: 0.25rem;
+}
+
+.show-archived-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: #707090;
+  cursor: pointer;
+  user-select: none;
+}
+
+.show-archived-toggle input[type="checkbox"] {
+  accent-color: #6366f1;
+}
+
+.loop-list-item.archived {
+  opacity: 0.5;
+}
+
+.archived-badge {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.15);
+  padding: 0.05rem 0.35rem;
+  border-radius: 0.25rem;
+  margin-left: 0.375rem;
+}
+
+.archive-btn {
+  padding: 0.125rem 0.5rem;
+  background: #1a1a2e;
+  border: 1px solid #2d2d44;
+  border-radius: 0.25rem;
+  color: #f59e0b;
+  font-size: 0.65rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.archive-btn:hover {
+  background: #2d2d44;
+}

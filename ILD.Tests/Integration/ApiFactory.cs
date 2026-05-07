@@ -63,7 +63,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
                 services.Remove(d);
             }
 
-            services.AddDbContext<AppDbContext>(options => options.UseSqlite(_connection));
+            services.AddDbContext<AppDbContext>(options => options.UseSqlite(_connection,
+                sql => sql.MigrationsAssembly(typeof(AppDbContext).Assembly)));
         });
     }
 

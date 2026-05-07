@@ -35,16 +35,17 @@ public class LoopTemplatesController : ControllerBase
             edges = graph?.Edges ?? new List<LoopNodeEdgeDto>(),
             createdAt = t.CreatedAt,
             updatedAt = t.UpdatedAt,
+            isArchived = t.IsArchived,
         };
     }
 
     [HttpGet]
-    public async Task<IActionResult> GetAll([FromQuery] int skip = 0, [FromQuery] int take = 100)
+    public async Task<IActionResult> GetAll([FromQuery] int skip = 0, [FromQuery] int take = 100, [FromQuery] bool includeArchived = false)
     {
         if (skip < 0) skip = 0;
         if (take <= 0) take = 100;
         if (take > 500) take = 500;
-        var templates = await _loopTemplateManager.GetAllLoopTemplatesAsync(skip, take);
+        var templates = await _loopTemplateManager.GetAllLoopTemplatesAsync(skip, take, includeArchived);
         var results = new List<object>();
         foreach (var t in templates)
             results.Add(await ToFlatAsync(t));
@@ -140,6 +141,24 @@ public class LoopTemplatesController : ControllerBase
     {
         var (valid, errors) = await _loopTemplateManager.ValidateGraphAsync(graph);
         return Ok(new { valid, errors });
+    }
+
+    [HttpPost("{id}/archive")]
+    public async Task<IActionResult> Archive(string id)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+        await _loopTemplateManager.ArchiveLoopTemplateAsync(guid);
+        return NoContent();
+    }
+
+    [HttpPost("{id}/unarchive")]
+    public async Task<IActionResult> Unarchive(string id)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+        await _loopTemplateManager.UnarchiveLoopTemplateAsync(guid);
+        return NoContent();
     }
 
     [HttpDelete("{id}")]

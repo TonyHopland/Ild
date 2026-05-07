@@ -190,8 +190,17 @@ export const workItemService = {
 };
 
 export const loopTemplateService = {
-  getAll: async (opts?: { skip?: number; take?: number }): Promise<LoopTemplate[]> => {
-    return api.get<LoopTemplate[]>(`/looptemplates${pageQuery(opts)}`);
+  getAll: async (opts?: {
+    skip?: number;
+    take?: number;
+    includeArchived?: boolean;
+  }): Promise<LoopTemplate[]> => {
+    const params = new URLSearchParams();
+    if (opts?.skip !== undefined) params.set("skip", String(opts.skip));
+    if (opts?.take !== undefined) params.set("take", String(opts.take));
+    if (opts?.includeArchived) params.set("includeArchived", "true");
+    const qs = params.toString();
+    return api.get<LoopTemplate[]>(`/looptemplates${qs ? "?" + qs : ""}`);
   },
 
   getById: async (id: string): Promise<LoopTemplate> => {
@@ -232,6 +241,14 @@ export const loopTemplateService = {
     return api.get<{ nodes: LoopNode[]; edges: LoopNodeEdge[] }>(
       `/looptemplates/${id}/versions/${versionNumber}`,
     );
+  },
+
+  archive: async (id: string): Promise<void> => {
+    return api.post<void>(`/looptemplates/${id}/archive`, {});
+  },
+
+  unarchive: async (id: string): Promise<void> => {
+    return api.post<void>(`/looptemplates/${id}/unarchive`, {});
   },
 };
 

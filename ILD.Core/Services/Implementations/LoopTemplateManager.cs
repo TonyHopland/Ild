@@ -44,8 +44,8 @@ public class LoopTemplateManager : ILoopTemplateManager
     public async Task<LoopTemplate?> GetLatestVersionAsync(Guid templateId)
         => await _store.GetByIdAsync(templateId);
 
-    public async Task<IEnumerable<LoopTemplate>> GetAllLoopTemplatesAsync(int skip = 0, int take = 100)
-        => await _store.GetAllAsync(skip, take);
+    public async Task<IEnumerable<LoopTemplate>> GetAllLoopTemplatesAsync(int skip = 0, int take = 100, bool includeArchived = false)
+        => await _store.GetAllAsync(skip, take, includeArchived);
 
     public async Task<Guid> UpdateLoopTemplateAsync(Guid templateId, string name, string description, LoopTemplateGraph graph)
     {
@@ -113,6 +113,18 @@ public class LoopTemplateManager : ILoopTemplateManager
         var template = await _store.GetByIdAsync(templateId);
         if (template == null) return;
         await _store.DeleteTemplateAsync(template);
+    }
+
+    public async Task ArchiveLoopTemplateAsync(Guid templateId)
+    {
+        await _store.SetArchivedAsync(templateId, true);
+        await _store.SaveChangesAsync();
+    }
+
+    public async Task UnarchiveLoopTemplateAsync(Guid templateId)
+    {
+        await _store.SetArchivedAsync(templateId, false);
+        await _store.SaveChangesAsync();
     }
 
     private async Task AddVersionFromGraph(Guid templateId, int versionNumber, LoopTemplateGraph graph)

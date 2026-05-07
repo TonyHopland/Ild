@@ -35,8 +35,13 @@ public class LoopTemplateStore : ILoopTemplateStore
         return new TemplateGraph(version.LoopTemplate, version, nodes, edges);
     }
 
-    public async Task<IReadOnlyList<LoopTemplate>> GetAllAsync(int skip = 0, int take = 100)
-        => await _db.LoopTemplates.OrderBy(t => t.Name).Skip(skip).Take(take).ToListAsync();
+    public async Task<IReadOnlyList<LoopTemplate>> GetAllAsync(int skip = 0, int take = 100, bool includeArchived = false)
+    {
+        var query = _db.LoopTemplates.AsQueryable();
+        if (!includeArchived)
+            query = query.Where(t => !t.IsArchived);
+        return await query.OrderBy(t => t.Name).Skip(skip).Take(take).ToListAsync();
+    }
 
     public async Task<LoopTemplateVersion?> GetVersionByIdAsync(Guid versionId)
         => await _db.LoopTemplateVersions.FindAsync(versionId).AsTask();
@@ -83,6 +88,15 @@ public class LoopTemplateStore : ILoopTemplateStore
     {
         _db.LoopTemplates.Update(template);
         return Task.CompletedTask;
+    }
+
+    public async Task SetArchivedAsync(Guid templateId, bool archived)
+    {
+        var template = await _db.LoopTemplates.FindAsync(templateId);
+        if (template != null)
+        {
+            template.IsArchived = archived;
+        }
     }
 
     public async Task DeleteTemplateAsync(LoopTemplate template)

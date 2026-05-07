@@ -18,6 +18,8 @@ public class LoopTemplate : IHasUpdatedAt
 
     public bool IsDefault { get; set; }
 
+    public bool IsArchived { get; set; }
+
     [Required]
     [MaxLength(128)]
     public RecoveryPolicy RecoveryPolicy { get; set; }
