@@ -710,3 +710,103 @@
 .archive-btn:hover {
   background: #2d2d44;
 }
+
+.edge-delete-panel {
+  background: #1e1e30;
+  border: 1px solid #2d2d44;
+  border-radius: 0.375rem;
+  padding: 0.75rem;
+  min-width: 220px;
+}
+
+.edge-info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.25rem 0;
+  font-size: 0.8rem;
+}
+
+.edge-info-label {
+  color: #707090;
+  font-weight: 600;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}
+
+.edge-info-value {
+  color: #e0e0e0;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.edge-type-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0;
+  font-size: 0.8rem;
+  color: #e0e0e0;
+  font-weight: 500;
+}
+
+.edge-type-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.delete-edge-btn {
+  flex: 1;
+  padding: 0.375rem 0.5rem;
+  background: #4c0519;
+  border: 1px solid #ef4444;
+  border-radius: 0.25rem;
+  color: #ef4444;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.delete-edge-btn:hover {
+  background: #6b0a1f;
+}
+
+/* Handle labels */
+.handle-success::after {
+  content: "✓";
+  position: absolute;
+  top: -16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  color: #10b981;
+  pointer-events: none;
+}
+
+.handle-fail::after {
+  content: "✗";
+  position: absolute;
+  top: 50%;
+  left: -14px;
+  transform: translateY(-50%);
+  font-size: 9px;
+  color: #ef4444;
+  pointer-events: none;
+}
+
+.handle-respond::after {
+  content: "↗";
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px;
+  color: #f59e0b;
+  pointer-events: none;
+}

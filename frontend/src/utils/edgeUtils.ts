@@ -6,6 +6,8 @@ export interface EdgeConfig {
   target: string;
   edgeType: EdgeType;
   maxTraversals: number | null;
+  sourceHandle: string;
+  targetHandle: string;
 }
 
 export interface EdgeConstraintResult {
@@ -77,6 +79,8 @@ export function buildEdge(config: EdgeConfig): Edge {
     id: `e-${Date.now()}`,
     source: config.source,
     target: config.target,
+    sourceHandle: config.sourceHandle,
+    targetHandle: config.targetHandle,
     animated: config.edgeType === EdgeType.OnSuccess,
     data: { edgeType: config.edgeType },
     style: edgeStyle,

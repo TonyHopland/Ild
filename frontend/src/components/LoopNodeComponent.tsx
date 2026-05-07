@@ -34,9 +34,16 @@ const nodeStyles: Record<string, { bg: string; border: string; icon: string }> =
   },
 };
 
+const handleStyles = {
+  success: { background: "#10b981", borderColor: "#059669" },
+  fail: { background: "#ef4444", borderColor: "#dc2626" },
+  respond: { background: "#f59e0b", borderColor: "#d97706" },
+};
+
 export default function LoopNodeComponent({ data }: NodeProps) {
   const nodeData = data as { label: string; type: string };
   const style = nodeStyles[nodeData.type] || nodeStyles[NodeType.Cmd];
+  const isHuman = nodeData.type === NodeType.Human;
 
   return (
     <div
@@ -60,10 +67,29 @@ export default function LoopNodeComponent({ data }: NodeProps) {
       <Handle
         type="source"
         position={Position.Right}
-        id="source-handle"
-        data-testid="source-handle"
-        style={{ background: "#555", borderColor: "#777" }}
+        id="success"
+        data-testid="source-handle-success"
+        className="handle-success"
+        style={handleStyles.success}
       />
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        id="fail"
+        data-testid="source-handle-fail"
+        className="handle-fail"
+        style={handleStyles.fail}
+      />
+      {isHuman && (
+        <Handle
+          type="source"
+          position={Position.Top}
+          id="respond"
+          data-testid="source-handle-respond"
+          className="handle-respond"
+          style={handleStyles.respond}
+        />
+      )}
       <div
         className="loop-node-type"
         style={{

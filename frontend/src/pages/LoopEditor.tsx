@@ -55,19 +55,26 @@ export default function LoopEditor() {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges] = useEdgesState<Edge>([]);
 
-  // Custom onEdgesChange that preserves edge.data (edgeType) across all React Flow change events.
+  // Custom onEdgesChange that preserves edge.data (edgeType) and handle refs across all React Flow change events.
   // The default handler from useEdgesState can strip edge.data on certain operations.
   const onEdgesChangeCustom: OnEdgesChange = useCallback(
     (changes) => {
       setEdges((prev) => {
         const next = applyEdgeChanges(changes, prev);
-        // Restore edge.data from previous edges for any edge that lost it
         return next.map((edge) => {
           const prevEdge = prev.find((e) => e.id === edge.id);
+          if (!prevEdge) return edge;
+          let restored = edge;
           if (prevEdge?.data && !edge.data) {
-            return { ...edge, data: prevEdge.data };
+            restored = { ...restored, data: prevEdge.data };
           }
-          return edge;
+          if (prevEdge?.sourceHandle && !edge.sourceHandle) {
+            restored = { ...restored, sourceHandle: prevEdge.sourceHandle };
+          }
+          if (prevEdge?.targetHandle && !edge.targetHandle) {
+            restored = { ...restored, targetHandle: prevEdge.targetHandle };
+          }
+          return restored;
         });
       });
     },
@@ -97,6 +104,7 @@ export default function LoopEditor() {
   const [edgeMaxTraversals, setEdgeMaxTraversals] = useState("");
   const [edgeError, setEdgeError] = useState<string | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<Edge | null>(null);
+  const [showEdgeDeletePanel, setShowEdgeDeletePanel] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [isNewTemplate, setIsNewTemplate] = useState(false);
@@ -600,6 +608,13 @@ export default function LoopEditor() {
       const sourceNode = nodes.find((n) => n.id === connection.source);
       if (!sourceNode) return;
 
+      const handleId = connection.sourceHandle;
+      let edgeTypeFromHandle: EdgeType;
+      if (handleId === "success") edgeTypeFromHandle = EdgeType.OnSuccess;
+      else if (handleId === "fail") edgeTypeFromHandle = EdgeType.OnFailure;
+      else if (handleId === "respond") edgeTypeFromHandle = EdgeType.OnRespond;
+      else edgeTypeFromHandle = EdgeType.OnSuccess;
+
       const result = checkEdgeConstraints(
         connection.source,
         sourceNode.data?.type as NodeType,
@@ -611,7 +626,14 @@ export default function LoopEditor() {
         return;
       }
 
-      setEdgeType(result.suggestedType ?? EdgeType.OnSuccess);
+      if (
+        edges.some((e) => e.source === connection.source && e.data?.edgeType === edgeTypeFromHandle)
+      ) {
+        setEdgeError("This edge type is already connected from this node");
+        return;
+      }
+
+      setEdgeType(edgeTypeFromHandle);
       setEdgeMaxTraversals("");
       setEdgeError(null);
       setPendingConnection(connection);
@@ -635,6 +657,8 @@ export default function LoopEditor() {
       target: pendingConnection.target,
       edgeType,
       maxTraversals: edgeMaxTraversals !== "" ? Number(edgeMaxTraversals) : null,
+      sourceHandle: pendingConnection.sourceHandle ?? "success",
+      targetHandle: pendingConnection.targetHandle ?? "target-handle",
     });
 
     setEdges((eds) => addEdge(newEdge, eds));
@@ -652,19 +676,31 @@ export default function LoopEditor() {
   const onEdgeClick = useCallback((_event: React.MouseEvent, edge: Edge) => {
     setSelectedEdge(edge);
     setSelectedNode(null);
+    setShowEdgeDeletePanel(true);
+  }, []);
+
+  const deleteSelectedEdge = useCallback(() => {
+    if (!selectedEdge) return;
+    setEdges((eds) => eds.filter((ed) => ed.id !== selectedEdge.id));
+    setSelectedEdge(null);
+    setShowEdgeDeletePanel(false);
+  }, [selectedEdge, setEdges]);
+
+  const cancelEdgeDelete = useCallback(() => {
+    setSelectedEdge(null);
+    setShowEdgeDeletePanel(false);
   }, []);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.key === "Delete" || e.code === "Delete") && selectedEdge) {
-        setEdges((eds) => eds.filter((ed) => ed.id !== selectedEdge.id));
-        setSelectedEdge(null);
+        deleteSelectedEdge();
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedEdge, setEdges]);
+  }, [selectedEdge, deleteSelectedEdge]);
 
   return (
     <div className="page-container">
@@ -1173,69 +1209,106 @@ export default function LoopEditor() {
                 </div>
               )}
 
-              {pendingConnection &&
-                (() => {
-                  const srcNode = nodes.find((n) => n.id === pendingConnection.source);
-                  const srcNodeType = srcNode?.data?.type;
-                  const isHuman = srcNodeType === NodeType.Human;
-                  const hasOnSuccess = edges.some(
-                    (ed) =>
-                      ed.source === pendingConnection.source &&
-                      ed.data?.edgeType === EdgeType.OnSuccess,
-                  );
-                  const hasOnFailure = edges.some(
-                    (ed) =>
-                      ed.source === pendingConnection.source &&
-                      ed.data?.edgeType === EdgeType.OnFailure,
-                  );
-                  const hasOnRespond = edges.some(
-                    (ed) =>
-                      ed.source === pendingConnection.source &&
-                      ed.data?.edgeType === EdgeType.OnRespond,
-                  );
-                  const allTaken = isHuman
-                    ? hasOnSuccess && hasOnFailure && hasOnRespond
-                    : hasOnSuccess && hasOnFailure;
+              {pendingConnection && (
+                <Panel position="bottom-center" className="edge-config-panel">
+                  <div className="config-panel-header">Configure Edge</div>
+                  <div className="edge-type-indicator">
+                    <span
+                      className="edge-type-dot"
+                      style={{
+                        background:
+                          edgeType === EdgeType.OnSuccess
+                            ? "#10b981"
+                            : edgeType === EdgeType.OnFailure
+                              ? "#ef4444"
+                              : "#f59e0b",
+                      }}
+                    />
+                    <span>
+                      {edgeType === EdgeType.OnSuccess
+                        ? "success"
+                        : edgeType === EdgeType.OnFailure
+                          ? "failure"
+                          : "respond"}
+                    </span>
+                  </div>
+                  <div className="config-field">
+                    <label htmlFor="edge-max-traversals">Max Traversals</label>
+                    <input
+                      id="edge-max-traversals"
+                      type="number"
+                      min={0}
+                      value={edgeMaxTraversals}
+                      onChange={(e) => setEdgeMaxTraversals(e.target.value)}
+                      placeholder="Unlimited"
+                    />
+                    {edgeError && <div className="validation-error">{edgeError}</div>}
+                  </div>
+                  <div className="edge-config-actions">
+                    <button className="connect-edge-btn" onClick={confirmEdge}>
+                      Connect
+                    </button>
+                    <button className="cancel-edge-btn" onClick={cancelEdge}>
+                      Cancel
+                    </button>
+                  </div>
+                </Panel>
+              )}
 
-                  return (
-                    <Panel position="bottom-center" className="edge-config-panel">
-                      <div className="config-panel-header">Configure Edge</div>
-                      <div className="config-field">
-                        <label htmlFor="edge-type">Edge Type</label>
-                        <select
-                          id="edge-type"
-                          value={edgeType}
-                          onChange={(e) => setEdgeType(e.target.value as EdgeType)}
-                          disabled={allTaken}
-                        >
-                          <option value={EdgeType.OnSuccess}>OnSuccess</option>
-                          <option value={EdgeType.OnFailure}>OnFailure</option>
-                          {isHuman && <option value={EdgeType.OnRespond}>OnRespond</option>}
-                        </select>
-                      </div>
-                      <div className="config-field">
-                        <label htmlFor="edge-max-traversals">Max Traversals</label>
-                        <input
-                          id="edge-max-traversals"
-                          type="number"
-                          min={0}
-                          value={edgeMaxTraversals}
-                          onChange={(e) => setEdgeMaxTraversals(e.target.value)}
-                          placeholder="Unlimited"
-                        />
-                        {edgeError && <div className="validation-error">{edgeError}</div>}
-                      </div>
-                      <div className="edge-config-actions">
-                        <button className="connect-edge-btn" onClick={confirmEdge}>
-                          Connect
-                        </button>
-                        <button className="cancel-edge-btn" onClick={cancelEdge}>
-                          Cancel
-                        </button>
-                      </div>
-                    </Panel>
-                  );
-                })()}
+              {showEdgeDeletePanel && selectedEdge && (
+                <Panel position="bottom-center" className="edge-delete-panel">
+                  <div className="config-panel-header">Delete Edge</div>
+                  <div className="edge-info-row">
+                    <span className="edge-info-label">Type</span>
+                    <span className="edge-info-value">
+                      <span
+                        className="edge-type-dot"
+                        style={{
+                          background:
+                            selectedEdge.data?.edgeType === EdgeType.OnSuccess
+                              ? "#10b981"
+                              : selectedEdge.data?.edgeType === EdgeType.OnFailure
+                                ? "#ef4444"
+                                : "#f59e0b",
+                        }}
+                      />
+                      {selectedEdge.data?.edgeType === EdgeType.OnSuccess
+                        ? "success"
+                        : selectedEdge.data?.edgeType === EdgeType.OnFailure
+                          ? "failure"
+                          : "respond"}
+                    </span>
+                  </div>
+                  <div className="edge-info-row">
+                    <span className="edge-info-label">From</span>
+                    <span className="edge-info-value">
+                      {(
+                        nodes.find((n) => n.id === selectedEdge.source)?.data as {
+                          label?: string;
+                        }
+                      )?.label ?? selectedEdge.source}
+                    </span>
+                  </div>
+                  <div className="edge-info-row">
+                    <span className="edge-info-label">To</span>
+                    <span className="edge-info-value">
+                      {(
+                        nodes.find((n) => n.id === selectedEdge.target)?.data as {
+                          label?: string;
+                        }
+                      )?.label ?? selectedEdge.target}
+                    </span>
+                  </div>
+                  <div className="edge-config-actions">
+                    <button className="delete-edge-btn" onClick={deleteSelectedEdge}>
+                      Delete
+                    </button>
+                    <button className="cancel-edge-btn" onClick={cancelEdgeDelete}>
+                      Cancel
+                    </button>
+                  </div>
+                </Panel>
+              )}
             </ReactFlow>
           ) : (
             <div className="loop-canvas-empty">Select a template to view its graph</div>

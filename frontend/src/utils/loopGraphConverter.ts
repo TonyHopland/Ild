@@ -48,10 +48,19 @@ export function templateToEdges(template: LoopTemplate): Edge[] {
           ? "failure"
           : "respond";
 
+    const sourceHandle =
+      edge.edgeType === EdgeType.OnSuccess
+        ? "success"
+        : edge.edgeType === EdgeType.OnFailure
+          ? "fail"
+          : "respond";
+
     return {
       id: edge.id,
       source: edge.sourceNodeId,
       target: edge.targetNodeId,
+      sourceHandle,
+      targetHandle: "target-handle",
       data: { edgeType: edge.edgeType },
       animated: edge.edgeType === EdgeType.OnSuccess,
       style: strokeStyle,
