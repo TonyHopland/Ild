@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Link } from "react-router-dom";
 import "./WorkItemModal.css";
 import {
@@ -9,12 +9,15 @@ import {
   LoopTemplate,
   LoopRun,
 } from "../types";
+import type { TypedSignalRMessage } from "../types/signalr";
 import {
   workItemService,
   repositoryService,
   loopTemplateService,
   loopRunService,
 } from "../services/auth";
+import { useSignalR } from "../hooks/useSignalR";
+import LiveStream from "./NodeTimeline/LiveStream";
 import ConfirmModal from "./ConfirmModal";
 
 interface WorkItemModalProps {
@@ -56,6 +59,7 @@ export default function WorkItemModal({
   const [prCommentsLoading, setPrCommentsLoading] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [progressLines, setProgressLines] = useState<string[]>([]);
 
   useEffect(() => {
     repositoryService
@@ -198,7 +202,77 @@ export default function WorkItemModal({
       setDeleteError(null);
       setEditMode(true);
     }
-  }, [workItem?.id]);
+  }, [workItem?.id, workItem?.status]);
+
+  // Live stream for running work items
+  const shouldStream =
+    workItem &&
+    workItem.status === WorkItemStatus.Running &&
+    workItem.currentLoopRunId &&
+    !editMode;
+
+  const {
+    on: runOn,
+    off: runOff,
+    invoke: runInvoke,
+    connectionState: runConnectionState,
+  } = useSignalR("/hubs/loop-run");
+
+  const refetchWorkItem = useCallback(() => {
+    if (!workItem) return;
+    void workItemService
+      .getById(workItem.id)
+      .then((updated) => onSave(updated))
+      .catch(() => {});
+  }, [workItem?.id, onSave]);
+
+  useEffect(() => {
+    if (runConnectionState !== "connected" || !shouldStream || !workItem?.currentLoopRunId) return;
+    void runInvoke?.("SubscribeToRun", workItem.currentLoopRunId);
+  }, [shouldStream, runInvoke, runConnectionState, workItem?.currentLoopRunId]);
+
+  useEffect(() => {
+    if (!shouldStream) {
+      setProgressLines([]);
+      return;
+    }
+
+    const onNodeProgress = (message: TypedSignalRMessage<"NodeProgress">) => {
+      const { runId: msgRunId, line } = message.payload;
+      if (msgRunId !== workItem?.currentLoopRunId) return;
+      setProgressLines((prev) => [...prev, line]);
+    };
+
+    const onLoopRunStateChanged = (message: TypedSignalRMessage<"LoopRunStateChanged">) => {
+      const { runId: msgRunId } = message.payload;
+      if (msgRunId !== workItem?.currentLoopRunId) return;
+      refetchWorkItem();
+    };
+
+    const onNodeStateChanged = (message: TypedSignalRMessage<"NodeStateChanged">) => {
+      const { runId: msgRunId } = message.payload;
+      if (msgRunId !== workItem?.currentLoopRunId) return;
+      refetchWorkItem();
+    };
+
+    const onEventLogged = (message: TypedSignalRMessage<"EventLogged">) => {
+      const { runId: msgRunId } = message.payload;
+      if (msgRunId !== workItem?.currentLoopRunId) return;
+      refetchWorkItem();
+    };
+
+    runOn("NodeProgress", onNodeProgress);
+    runOn("LoopRunStateChanged", onLoopRunStateChanged);
+    runOn("NodeStateChanged", onNodeStateChanged);
+    runOn("EventLogged", onEventLogged);
+
+    return () => {
+      runOff("NodeProgress", onNodeProgress);
+      runOff("LoopRunStateChanged", onLoopRunStateChanged);
+      runOff("NodeStateChanged", onNodeStateChanged);
+      runOff("EventLogged", onEventLogged);
+    };
+  }, [shouldStream, runOn, runOff, workItem?.currentLoopRunId, refetchWorkItem]);
 
   if (!isOpen) return null;
 
@@ -553,6 +627,7 @@ export default function WorkItemModal({
                   </div>
                 </div>
               )}
+              {shouldStream && <LiveStream lines={progressLines} />}
               {workItem.status === WorkItemStatus.HumanFeedback &&
                 workItem.humanFeedbackReason === "Human Input Needed" && (
                   <div className="detail-section human-feedback-section">

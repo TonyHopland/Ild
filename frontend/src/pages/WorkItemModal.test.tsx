@@ -3,6 +3,8 @@ import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/re
 import { MemoryRouter } from "react-router-dom";
 import WorkItemModal from "../components/WorkItemModal";
 import { WorkItemStatus, WorkItemPriority, WorkItem, LoopRun, LoopRunStatus } from "../types";
+import * as signalRHook from "../hooks/useSignalR";
+import * as authServices from "../services/auth";
 
 afterEach(() => {
   cleanup();
@@ -52,6 +54,7 @@ function makeWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     createdAt: "2025-01-01T00:00:00Z",
     startedAt: null,
     completedAt: null,
+    currentLoopRunId: null,
     dependencyIds: [],
     dependentIds: [],
     ...overrides,
@@ -811,5 +814,234 @@ describe("WorkItemModal", () => {
         expect.objectContaining({ method: "POST" }),
       );
     });
+  });
+
+  test("shows live output section when work item is Running with a currentLoopRunId", async () => {
+    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+      on: vi.fn(),
+      off: vi.fn(),
+      invoke: vi.fn(),
+      connectionState: "connected",
+    });
+
+    const workItem = makeWorkItem({
+      status: WorkItemStatus.Running,
+      currentLoopRunId: "run-active-1",
+    });
+
+    const fetchMock = mockFetch([]);
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <MemoryRouter>
+        <WorkItemModal workItem={workItem} isOpen={true} onClose={vi.fn()} onSave={vi.fn()} />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Live Output")).toBeTruthy();
+    });
+  });
+
+  test("hides live output section when work item is Running without a currentLoopRunId", async () => {
+    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+      on: vi.fn(),
+      off: vi.fn(),
+      invoke: vi.fn(),
+      connectionState: "connected",
+    });
+
+    const workItem = makeWorkItem({
+      status: WorkItemStatus.Running,
+      currentLoopRunId: null,
+    });
+
+    const fetchMock = mockFetch([]);
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <MemoryRouter>
+        <WorkItemModal workItem={workItem} isOpen={true} onClose={vi.fn()} onSave={vi.fn()} />
+      </MemoryRouter>,
+    );
+
+    await new Promise((r) => setTimeout(r, 200));
+    expect(screen.queryByText("Live Output")).toBeFalsy();
+  });
+
+  test("auto-refetches work item when LoopRunStateChanged event fires", async () => {
+    const runHandlers: Record<string, ((msg: any) => void)[]> = {};
+    const mockRunOn = vi.fn((eventType: string, handler: (msg: any) => void) => {
+      runHandlers[eventType] = runHandlers[eventType] || [];
+      runHandlers[eventType].push(handler);
+    });
+
+    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+      on: mockRunOn,
+      off: vi.fn(),
+      invoke: vi.fn(),
+      connectionState: "connected",
+    });
+
+    const workItem = makeWorkItem({
+      status: WorkItemStatus.Running,
+      currentLoopRunId: "run-active-1",
+    });
+
+    const completedWorkItem = makeWorkItem({
+      status: WorkItemStatus.Done,
+      currentLoopRunId: null,
+      completedAt: "2025-06-01T00:00:00Z",
+    });
+
+    const fetchMock = mockFetch([]);
+
+    vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(completedWorkItem);
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const onSave = vi.fn();
+
+    render(
+      <MemoryRouter>
+        <WorkItemModal workItem={workItem} isOpen={true} onClose={vi.fn()} onSave={onSave} />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Live Output")).toBeTruthy();
+    });
+
+    runHandlers["LoopRunStateChanged"]![0]({
+      payload: { runId: "run-active-1", oldStatus: "Running", newStatus: "Completed" },
+    });
+
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith(completedWorkItem);
+    });
+  });
+
+  test("auto-refetches work item when NodeStateChanged event fires", async () => {
+    const runHandlers: Record<string, ((msg: any) => void)[]> = {};
+    const mockRunOn = vi.fn((eventType: string, handler: (msg: any) => void) => {
+      runHandlers[eventType] = runHandlers[eventType] || [];
+      runHandlers[eventType].push(handler);
+    });
+
+    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+      on: mockRunOn,
+      off: vi.fn(),
+      invoke: vi.fn(),
+      connectionState: "connected",
+    });
+
+    const workItem = makeWorkItem({
+      status: WorkItemStatus.Running,
+      currentLoopRunId: "run-active-1",
+    });
+
+    const updatedWorkItem = makeWorkItem({
+      status: WorkItemStatus.HumanFeedback,
+      currentLoopRunId: "run-active-1",
+      humanFeedbackReason: "Human Input Needed",
+    });
+
+    const fetchMock = mockFetch([]);
+
+    vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(updatedWorkItem);
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const onSave = vi.fn();
+
+    render(
+      <MemoryRouter>
+        <WorkItemModal workItem={workItem} isOpen={true} onClose={vi.fn()} onSave={onSave} />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Live Output")).toBeTruthy();
+    });
+
+    runHandlers["NodeStateChanged"]![0]({
+      payload: {
+        runId: "run-active-1",
+        nodeId: "node-1",
+        oldStatus: "Running",
+        newStatus: "Succeeded",
+      },
+    });
+
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith(updatedWorkItem);
+    });
+  });
+
+  test("hides live output when run completes and work item status changes", async () => {
+    const runHandlers: Record<string, ((msg: any) => void)[]> = {};
+    const mockRunOn = vi.fn((eventType: string, handler: (msg: any) => void) => {
+      runHandlers[eventType] = runHandlers[eventType] || [];
+      runHandlers[eventType].push(handler);
+    });
+
+    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+      on: mockRunOn,
+      off: vi.fn(),
+      invoke: vi.fn(),
+      connectionState: "connected",
+    });
+
+    const runningWorkItem = makeWorkItem({
+      status: WorkItemStatus.Running,
+      currentLoopRunId: "run-active-1",
+    });
+
+    const doneWorkItem = makeWorkItem({
+      status: WorkItemStatus.Done,
+      currentLoopRunId: null,
+      completedAt: "2025-06-01T00:00:00Z",
+    });
+
+    const fetchMock = mockFetch([]);
+
+    vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(doneWorkItem);
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    let currentWorkItem = runningWorkItem;
+    const onSave = vi.fn((wi: WorkItem) => {
+      currentWorkItem = wi;
+    });
+
+    const { rerender } = render(
+      <MemoryRouter>
+        <WorkItemModal workItem={currentWorkItem} isOpen={true} onClose={vi.fn()} onSave={onSave} />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Live Output")).toBeTruthy();
+    });
+
+    runHandlers["LoopRunStateChanged"]![0]({
+      payload: { runId: "run-active-1", oldStatus: "Running", newStatus: "Completed" },
+    });
+
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith(doneWorkItem);
+    });
+
+    rerender(
+      <MemoryRouter>
+        <WorkItemModal workItem={doneWorkItem} isOpen={true} onClose={vi.fn()} onSave={onSave} />
+      </MemoryRouter>,
+    );
+
+    await new Promise((r) => setTimeout(r, 200));
+    expect(screen.queryByText("Live Output")).toBeFalsy();
+    expect(screen.getByText("Done")).toBeTruthy();
   });
 });

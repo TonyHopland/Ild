@@ -26,6 +26,7 @@ function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
     createdAt: new Date().toISOString(),
     startedAt: null,
     completedAt: null,
+    currentLoopRunId: null,
     dependencyIds: [],
     dependentIds: [],
     ...overrides,

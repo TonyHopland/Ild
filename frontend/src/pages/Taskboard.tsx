@@ -36,6 +36,12 @@ export default function Taskboard() {
             : item,
         ),
       );
+      if (editingItem?.id === workItemId) {
+        void workItemService
+          .getById(workItemId)
+          .then((wi) => setEditingItem(wi))
+          .catch(() => {});
+      }
 
       const notificationsEnabled = localStorage.getItem("ild_notifications_enabled") !== "false";
       if (
@@ -67,6 +73,12 @@ export default function Taskboard() {
         }
         return prev.map((item) => (item.id === workItemId ? { ...item, status: newStatus } : item));
       });
+      if (editingItem?.id === workItemId) {
+        void workItemService
+          .getById(workItemId)
+          .then((wi) => setEditingItem(wi))
+          .catch(() => {});
+      }
     };
 
     on("HumanFeedbackRequired", onHumanFeedback);
@@ -101,6 +113,9 @@ export default function Taskboard() {
       }
       return [...prev, saved];
     });
+    if (editingItem?.id === saved.id) {
+      setEditingItem(saved);
+    }
   };
 
   const openCreateModal = () => {

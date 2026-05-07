@@ -46,6 +46,7 @@ export interface WorkItem {
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;
+  currentLoopRunId: string | null;
   dependencyIds: string[];
   dependentIds: string[];
 }

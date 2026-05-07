@@ -34,6 +34,7 @@ function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
     createdAt: "2025-01-01T00:00:00Z",
     startedAt: null,
     completedAt: null,
+    currentLoopRunId: null,
     dependencyIds: [],
     dependentIds: [],
     ...overrides,
