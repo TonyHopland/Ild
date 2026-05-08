@@ -39,6 +39,26 @@ public class WorkItem : IHasUpdatedAt
 
     public string? Labels { get; set; }
 
+    /// <summary>
+    /// Tags used by the WorkItemServer for loop-template matching and
+    /// user-defined categorisation. Stored as JSON.
+    /// </summary>
+    public string? TagsJson { get; set; }
+
+    /// <summary>
+    /// AI &lt;-&gt; Human dialogue history mirrored from the WorkItemServer.
+    /// Stored as JSON. Authoritative copy lives on the server; this is a
+    /// local cache for fast reads/restart reconciliation.
+    /// </summary>
+    public string? ConversationJson { get; set; }
+
+    /// <summary>
+    /// Identifier of the entity that created the work item (logged-in user
+    /// or "Agent-{LoopRunId}"). Mirrored from the server.
+    /// </summary>
+    [MaxLength(256)]
+    public string? CreatedBy { get; set; }
+
     [MaxLength(1024)]
     public string? WorktreePath { get; set; }
 
