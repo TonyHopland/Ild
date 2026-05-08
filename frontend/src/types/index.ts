@@ -19,6 +19,7 @@ export enum WorkItemStatus {
   Ready = "Ready",
   Running = "Running",
   HumanFeedback = "HumanFeedback",
+  WaitingForIld = "WaitingForIld",
   Done = "Done",
 }
 

@@ -34,4 +34,10 @@ public class AgentWorkItemCreateRequest
     /// header if not provided in the body.
     /// </summary>
     public string? CreatedByLoopRunId { get; set; }
+
+    /// <summary>
+    /// Optional list of tags. Tags determine which loop template executes the
+    /// work item — a tag must match a loop template name on the ILD instance.
+    /// </summary>
+    public List<string>? Tags { get; set; }
 }

@@ -6,6 +6,7 @@ export const WORK_ITEM_STATUSES = [
   { value: "Ready", label: "Ready" },
   { value: "Running", label: "Running" },
   { value: "HumanFeedback", label: "Human Feedback" },
+  { value: "WaitingForIld", label: "Waiting For Ild" },
   { value: "Done", label: "Done" },
 ] as const;
 

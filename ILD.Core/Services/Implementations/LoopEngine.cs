@@ -81,10 +81,10 @@ public class LoopEngine : ILoopEngine
         Guid runId;
         using (var scope = _sp.CreateScope())
         {
-            var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
+            var manager = scope.ServiceProvider.GetRequiredService<IWorkItemManager>();
             var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
 
-            var wi = await workItemStore.GetByIdAsync(workItemId)
+            var wi = await manager.GetWorkItemAsync(workItemId)
                 ?? throw new InvalidOperationException($"WorkItem {workItemId} not found");
             if (!wi.LoopTemplateVersionId.HasValue)
                 throw new InvalidOperationException($"WorkItem {workItemId} has no loop template");
@@ -99,9 +99,7 @@ public class LoopEngine : ILoopEngine
                 StartedAt = DateTime.UtcNow,
             };
             await loopRunStore.CreateRunAsync(run);
-            wi.CurrentLoopRunId = run.Id;
-            wi.Status = WorkItemStatus.Running;
-            await workItemStore.UpdateAsync(wi);
+            await manager.TransitionAsync(workItemId, WorkItemStatus.Running, currentLoopRunId: run.Id);
             runId = run.Id;
         }
 
@@ -188,7 +186,7 @@ public class LoopEngine : ILoopEngine
         using (var scope = _sp.CreateScope())
         {
             var store = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
-            var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
+            var manager = scope.ServiceProvider.GetRequiredService<IWorkItemManager>();
             var runEntity = await store.GetByIdAsync(runId);
             if (runEntity != null)
             {
@@ -199,15 +197,8 @@ public class LoopEngine : ILoopEngine
                 await store.UpdateRunAsync(runEntity);
                 run = runEntity;
             }
-            var wi = await workItemStore.GetByIdAsync(run.WorkItemId);
-            if (wi != null)
-            {
-                wi.Status = WorkItemStatus.Running;
-                wi.HumanFeedbackReason = null;
-                wi.UpdatedAt = DateTime.UtcNow;
-                await workItemStore.UpdateAsync(wi);
-                workItem = wi;
-            }
+            await manager.TransitionAsync(run.WorkItemId, WorkItemStatus.Running);
+            workItem = await manager.GetWorkItemAsync(run.WorkItemId) ?? workItem;
         }
 
         await LogEventAsync(runId, "RetryFromNode",
@@ -263,7 +254,7 @@ public class LoopEngine : ILoopEngine
         using (var scope = _sp.CreateScope())
         {
             var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
-            var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
+            var manager = scope.ServiceProvider.GetRequiredService<IWorkItemManager>();
 
             var runNode = await loopRunStore.GetRunNodeByIdAsync(runNodeId);
             if (runNode == null) return;
@@ -281,14 +272,7 @@ public class LoopEngine : ILoopEngine
                 run.Status = LoopRunStatus.Running;
                 await loopRunStore.UpdateRunAsync(run);
 
-                var wi = await workItemStore.GetByIdAsync(run.WorkItemId);
-                if (wi != null)
-                {
-                    wi.Status = WorkItemStatus.Running;
-                    wi.HumanFeedbackReason = null;
-                    wi.UpdatedAt = DateTime.UtcNow;
-                    await workItemStore.UpdateAsync(wi);
-                }
+                await manager.TransitionAsync(run.WorkItemId, WorkItemStatus.Running);
             }
 
             await NotifyAsync(() => _notifier.NodeStateChangedAsync(runId, runNode.LoopNodeId, LoopRunNodeStatus.WaitingHuman, runNode.Status));
@@ -738,20 +722,20 @@ public class LoopEngine : ILoopEngine
     private async Task<WorkItem?> RefreshWorkItemAsync(Guid id)
     {
         using var scope = _sp.CreateScope();
-        var store = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
-        return await store.GetByIdAsync(id);
+        var manager = scope.ServiceProvider.GetRequiredService<IWorkItemManager>();
+        return await manager.GetWorkItemAsync(id);
     }
 
     private async Task<(LoopRun Run, WorkItem WorkItem, LoopTemplate Template, IReadOnlyList<LoopNode> Nodes, IReadOnlyList<LoopNodeEdge> Edges)?> LoadRunStateAsync(Guid runId)
     {
         using var scope = _sp.CreateScope();
         var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
-        var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
+        var manager = scope.ServiceProvider.GetRequiredService<IWorkItemManager>();
         var loopTemplateStore = scope.ServiceProvider.GetRequiredService<ILoopTemplateStore>();
 
         var run = await loopRunStore.GetByIdAsync(runId);
         if (run == null) return null;
-        var wi = await workItemStore.GetByIdAsync(run.WorkItemId);
+        var wi = await manager.GetWorkItemAsync(run.WorkItemId);
         if (wi == null) return null;
         var graph = await loopTemplateStore.GetTemplateGraphByVersionIdAsync(run.LoopTemplateVersionId);
         if (graph == null) return null;

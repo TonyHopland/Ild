@@ -60,7 +60,8 @@ public class WorkItemManager : IWorkItemManager
         Guid? loopTemplateId,
         Guid? repositoryId,
         Guid? createdByLoopRunId,
-        bool forceBacklog)
+        bool forceBacklog,
+        IEnumerable<string>? tags = null)
     {
         var opts = await _options.ResolveForRepositoryAsync(repositoryId);
 
@@ -78,6 +79,7 @@ public class WorkItemManager : IWorkItemManager
             Description = description,
             CreatedBy = createdByLoopRunId.HasValue ? $"Agent-{createdByLoopRunId.Value}" : null,
             ForceStatus = forceStatus,
+            Tags = tags?.ToList() ?? (IReadOnlyList<string>)Array.Empty<string>(),
         });
 
         Guid? versionId = null;

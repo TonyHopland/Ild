@@ -1,7 +1,7 @@
 using FluentAssertions;
 using ILD.Core.Services.Remote;
 using ILD.WorkItemServer;
-using ILD.WorkItemServer.Data;
+
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
@@ -38,7 +38,7 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
                 services.AddDbContext<WorkItemServerDbContext>(o => o.UseSqlite(_conn));
                 using var sp = services.BuildServiceProvider();
                 using var scope = sp.CreateScope();
-                scope.ServiceProvider.GetRequiredService<WorkItemServerDbContext>().Database.EnsureCreated();
+                scope.ServiceProvider.GetRequiredService<WorkItemServerDbContext>().Database.Migrate();
             });
         });
 

@@ -245,7 +245,8 @@ public class AgentController : ControllerBase
                 loopTemplateId,
                 repositoryId,
                 createdByLoopRunId,
-                forceBacklog: true);
+                forceBacklog: true,
+                tags: request.Tags);
         }
         catch (InvalidOperationException ex)
         {

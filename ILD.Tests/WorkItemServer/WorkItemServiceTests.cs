@@ -1,5 +1,6 @@
 using FluentAssertions;
-using ILD.WorkItemServer.Data;
+
+using ILD.WorkItemServer;
 using ILD.WorkItemServer.Domain;
 using ILD.WorkItemServer.Dtos;
 using ILD.WorkItemServer.Services;

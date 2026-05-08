@@ -56,6 +56,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IRemoteWorkItemCoordinator, RemoteWorkItemCoordinator>();
         services.AddSingleton<IConfigureOptions<RemoteWorkItemPollerOptions>, RemoteWorkItemPollerOptionsConfigurator>();
         services.AddSingleton(TimeProvider.System);
+        services.AddHostedService<RemoteWorkItemStartupReconciler>();
         services.AddHostedService<RemoteWorkItemPoller>();
 
         return services;

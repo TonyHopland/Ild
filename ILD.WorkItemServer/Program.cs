@@ -1,5 +1,4 @@
 using ILD.WorkItemServer.Auth;
-using ILD.WorkItemServer.Data;
 using ILD.WorkItemServer.Hosting;
 using ILD.WorkItemServer.Services;
 using Microsoft.EntityFrameworkCore;
@@ -58,7 +57,7 @@ public sealed class WorkItemServerProgram
         using (var scope = app.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<WorkItemServerDbContext>();
-            db.Database.EnsureCreated();
+            db.Database.Migrate();
         }
 
         app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
