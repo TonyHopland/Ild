@@ -2,7 +2,10 @@ using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Implementations.Adapters;
+using ILD.Core.Services.Remote;
 using ILD.Api.Middleware;
+using ILD.Api.Services;
+using Microsoft.Extensions.Options;
 
 namespace ILD.Api.Configuration;
 
@@ -41,6 +44,18 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IAgentAdapter, OpenCodeAdapter>();
 
         services.AddHttpClient();
+
+        // Remote WorkItem server wiring. The poller is created
+        // unconditionally but stays disabled until a RemoteProvider with a
+        // WorkItemServerUrl exists, at which point its options snapshot
+        // refreshes the next time the host starts.
+        services.AddHttpClient<IWorkItemServerClient, WorkItemServerClient>();
+        services.AddSingleton<IActiveWorkItemTracker, InMemoryActiveWorkItemTracker>();
+        services.AddScoped<ILoopTemplateResolver, DbLoopTemplateResolver>();
+        services.AddScoped<IRemoteWorkItemCoordinator, RemoteWorkItemCoordinator>();
+        services.AddSingleton<IConfigureOptions<RemoteWorkItemPollerOptions>, RemoteWorkItemPollerOptionsConfigurator>();
+        services.AddSingleton(TimeProvider.System);
+        services.AddHostedService<RemoteWorkItemPoller>();
 
         return services;
     }
