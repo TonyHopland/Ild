@@ -19,6 +19,7 @@ import {
 import { useSignalR } from "../hooks/useSignalR";
 import LiveStream from "./NodeTimeline/LiveStream";
 import ConfirmModal from "./ConfirmModal";
+import { parseConversation, parseTags } from "../utils/workItemJson";
 
 interface WorkItemModalProps {
   workItem: WorkItem | null;
@@ -493,6 +494,69 @@ export default function WorkItemModal({
                   <span className="detail-value">{workItem.description}</span>
                 </div>
               )}
+              {(() => {
+                const tagList = parseTags(workItem);
+                if (tagList.length === 0) return null;
+                return (
+                  <div className="detail-row">
+                    <span className="detail-label">Tags</span>
+                    <span className="detail-value">
+                      {tagList.map((t) => (
+                        <span key={t} className="work-item-tag" style={{ marginRight: 4 }}>
+                          {t}
+                        </span>
+                      ))}
+                    </span>
+                  </div>
+                );
+              })()}
+              {(() => {
+                const messages = parseConversation(workItem);
+                if (messages.length === 0) return null;
+                return (
+                  <div className="detail-section">
+                    <span className="detail-label">Conversation</span>
+                    <div
+                      className="conversation-thread"
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 8,
+                        marginTop: 4,
+                        maxHeight: 320,
+                        overflowY: "auto",
+                      }}
+                    >
+                      {messages.map((m, i) => (
+                        <div
+                          key={i}
+                          className={`conversation-message conversation-${m.role.toLowerCase()}`}
+                          style={{
+                            border: "1px solid #2a2a3a",
+                            borderRadius: 4,
+                            padding: 8,
+                            background: "#1a1a24",
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              fontSize: "0.75rem",
+                              color: "#9ca3af",
+                              marginBottom: 4,
+                            }}
+                          >
+                            <strong style={{ color: "#e5e7eb" }}>{m.role}</strong>
+                            <span>{new Date(m.timestamp).toLocaleString()}</span>
+                          </div>
+                          <div style={{ whiteSpace: "pre-wrap" }}>{m.content}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
               <div className="detail-section">
                 <span className="detail-label">Pull Request</span>
                 {workItem.prUrl ? (

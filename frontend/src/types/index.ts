@@ -29,6 +29,12 @@ export enum WorkItemPriority {
   Critical = "Critical",
 }
 
+export interface ConversationMessage {
+  role: string;
+  content: string;
+  timestamp: string;
+}
+
 export interface WorkItem {
   id: string;
   title: string;
@@ -36,6 +42,16 @@ export interface WorkItem {
   status: WorkItemStatus;
   priority: WorkItemPriority;
   labels: string[];
+  /**
+   * JSON-encoded string[] of tags mirrored from the WorkItemServer.
+   * Use {@link parseTags} to decode into a string[] for display.
+   */
+  tagsJson?: string | null;
+  /**
+   * JSON-encoded array of {@link ConversationMessage} mirrored from the
+   * WorkItemServer. Use {@link parseConversation} to decode.
+   */
+  conversationJson?: string | null;
   loopTemplateId: string;
   loopTemplateVersion: string;
   repositoryId: string;

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { WorkItem } from "../types";
 import { workItemService } from "../services/auth";
+import { parseTags } from "../utils/workItemJson";
 import ConfirmModal from "./ConfirmModal";
 
 interface WorkItemCardProps {
@@ -112,19 +113,23 @@ export default function WorkItemCard({ workItem, onClick, onDeleted, onMove }: W
         </div>
       )}
       <div className="work-item-tags">
-        {(Array.isArray(workItem.labels)
-          ? workItem.labels
-          : typeof workItem.labels === "string" && workItem.labels
-            ? (workItem.labels as string)
-                .split(",")
-                .map((s) => s.trim())
-                .filter(Boolean)
-            : []
-        ).map((label) => (
-          <span key={label} className="work-item-tag">
-            {label}
-          </span>
-        ))}
+        {(() => {
+          const legacy = Array.isArray(workItem.labels)
+            ? workItem.labels
+            : typeof workItem.labels === "string" && workItem.labels
+              ? (workItem.labels as string)
+                  .split(",")
+                  .map((s) => s.trim())
+                  .filter(Boolean)
+              : [];
+          const remote = parseTags(workItem);
+          const merged = Array.from(new Set([...remote, ...legacy]));
+          return merged.map((label) => (
+            <span key={label} className="work-item-tag">
+              {label}
+            </span>
+          ));
+        })()}
       </div>
       <style>{`
         .work-item-card {
