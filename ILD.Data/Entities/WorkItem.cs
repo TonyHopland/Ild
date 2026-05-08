@@ -37,8 +37,6 @@ public class WorkItem : IHasUpdatedAt
     /// </summary>
     public Guid? CreatedByLoopRunId { get; set; }
 
-    public string? Labels { get; set; }
-
     /// <summary>
     /// Tags used by the WorkItemServer for loop-template matching and
     /// user-defined categorisation. Stored as JSON.

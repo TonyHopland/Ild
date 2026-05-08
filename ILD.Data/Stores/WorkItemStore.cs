@@ -27,12 +27,6 @@ public class WorkItemStore : IWorkItemStore
                 .ThenInclude(v => v.LoopTemplate)
             .ToListAsync();
 
-    public async Task<IReadOnlyList<WorkItem>> GetByRepositoryAsync(Guid repositoryId)
-        => await _db.WorkItems.Where(w => w.RepositoryId == repositoryId).ToListAsync();
-
-    public async Task<IReadOnlyList<WorkItem>> GetByRepositoryIdsAsync(IReadOnlyList<Guid> repositoryIds)
-        => await _db.WorkItems.Where(w => repositoryIds.Contains(w.RepositoryId)).ToListAsync();
-
     public async Task<IReadOnlyList<WorkItem>> GetByIdsAsync(IReadOnlyList<Guid> ids)
         => ids.Count == 0
             ? Array.Empty<WorkItem>()
@@ -49,12 +43,6 @@ public class WorkItemStore : IWorkItemStore
         _db.WorkItems.Update(workItem);
         await _db.SaveChangesAsync();
     }
-
-    public Task<bool> HasRunningRunAsync(Guid workItemId)
-        => _db.LoopRuns.AnyAsync(r => r.WorkItemId == workItemId && r.Status == LoopRunStatus.Running);
-
-    public Task<bool> HasFailedRunAsync(Guid workItemId)
-        => _db.LoopRuns.AnyAsync(r => r.WorkItemId == workItemId && r.Status == LoopRunStatus.Failed);
 
     public async Task<LoopTemplateVersion?> GetLatestTemplateVersionAsync(Guid templateId)
         => await _db.LoopTemplateVersions

@@ -10,7 +10,6 @@ public interface IWorkItemManager
     Task<Guid> CreateWorkItemAsync(string title, string description, Guid? loopTemplateId, Guid? repositoryId, Guid? createdByLoopRunId, bool forceBacklog, IEnumerable<string>? tags = null);
     Task<bool> UpdateAsync(Guid workItemId, string title, string description, Guid? loopTemplateId = null);
     Task<WorkItem?> GetWorkItemAsync(Guid workItemId);
-    Task<IEnumerable<WorkItem>> GetWorkItemsByStatusAsync(WorkItemStatus status);
 
     /// <summary>
     /// Server-authoritative listing for the work-item domain. Always

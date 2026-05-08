@@ -7,13 +7,9 @@ public interface IWorkItemStore
 {
     Task<WorkItem?> GetByIdAsync(Guid id);
     Task<IReadOnlyList<WorkItem>> GetByStatusAsync(WorkItemStatus status);
-    Task<IReadOnlyList<WorkItem>> GetByRepositoryAsync(Guid repositoryId);
-    Task<IReadOnlyList<WorkItem>> GetByRepositoryIdsAsync(IReadOnlyList<Guid> repositoryIds);
     Task<IReadOnlyList<WorkItem>> GetByIdsAsync(IReadOnlyList<Guid> ids);
     Task CreateAsync(WorkItem workItem);
     Task UpdateAsync(WorkItem workItem);
-    Task<bool> HasRunningRunAsync(Guid workItemId);
-    Task<bool> HasFailedRunAsync(Guid workItemId);
     Task<LoopTemplateVersion?> GetLatestTemplateVersionAsync(Guid templateId);
     Task<Repository?> GetRepositoryAsync(Guid id);
     Task<bool> DeleteAsync(Guid id);

@@ -113,23 +113,11 @@ export default function WorkItemCard({ workItem, onClick, onDeleted, onMove }: W
         </div>
       )}
       <div className="work-item-tags">
-        {(() => {
-          const legacy = Array.isArray(workItem.labels)
-            ? workItem.labels
-            : typeof workItem.labels === "string" && workItem.labels
-              ? (workItem.labels as string)
-                  .split(",")
-                  .map((s) => s.trim())
-                  .filter(Boolean)
-              : [];
-          const remote = parseTags(workItem);
-          const merged = Array.from(new Set([...remote, ...legacy]));
-          return merged.map((label) => (
-            <span key={label} className="work-item-tag">
-              {label}
-            </span>
-          ));
-        })()}
+        {parseTags(workItem).map((label) => (
+          <span key={label} className="work-item-tag">
+            {label}
+          </span>
+        ))}
       </div>
       <style>{`
         .work-item-card {

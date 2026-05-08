@@ -17,6 +17,4 @@ public class WorkItemCreateRequest
 
     [StringLength(32)]
     public string Priority { get; set; } = "Medium";
-
-    public List<string> Labels { get; set; } = new();
 }

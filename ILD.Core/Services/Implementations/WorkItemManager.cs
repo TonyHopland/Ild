@@ -201,9 +201,6 @@ public class WorkItemManager : IWorkItemManager
         return true;
     }
 
-    public async Task<IEnumerable<WorkItem>> GetWorkItemsByStatusAsync(WorkItemStatus status)
-        => await _store.GetByStatusAsync(status);
-
     // ──────────────────────────────────────────────────────────────────
     // Transitions
     // ──────────────────────────────────────────────────────────────────
