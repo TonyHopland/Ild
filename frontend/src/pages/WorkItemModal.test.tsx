@@ -62,7 +62,7 @@ function makeWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
 }
 
 describe("WorkItemModal", () => {
-  test("create form shows repository and loop template dropdowns", async () => {
+  test("create form shows repository dropdown and tag autocomplete from template names", async () => {
     const repos = [
       {
         id: "repo-1",
@@ -113,9 +113,15 @@ describe("WorkItemModal", () => {
     });
 
     expect(screen.getByLabelText("Repository")).toBeTruthy();
-    expect(screen.getByLabelText("Loop Template")).toBeTruthy();
+    // Tag input is now the user-facing way to pick a loop template; the
+    // datalist is populated from template names so users get autocomplete.
+    const tagInput = screen.getByLabelText(/Tags/i) as HTMLInputElement;
+    expect(tagInput.getAttribute("list")).toBe("loop-template-names");
     expect(screen.getByText("my-repo")).toBeTruthy();
-    expect(screen.getByText("Feature Dev")).toBeTruthy();
+    const datalistOption = document.querySelector(
+      'datalist#loop-template-names option[value="Feature Dev"]',
+    );
+    expect(datalistOption).toBeTruthy();
   });
 
   test("detail view shows Start button when WorkItem status is Ready", async () => {

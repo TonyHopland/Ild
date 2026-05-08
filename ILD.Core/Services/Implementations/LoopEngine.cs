@@ -83,17 +83,41 @@ public class LoopEngine : ILoopEngine
         {
             var manager = scope.ServiceProvider.GetRequiredService<IWorkItemManager>();
             var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+            var resolver = scope.ServiceProvider.GetRequiredService<Remote.ILoopTemplateResolver>();
+            var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
 
             var wi = await manager.GetWorkItemAsync(workItemId)
                 ?? throw new InvalidOperationException($"WorkItem {workItemId} not found");
-            if (!wi.LoopTemplateVersionId.HasValue)
-                throw new InvalidOperationException($"WorkItem {workItemId} has no loop template");
+
+            // Resolve the loop template from the work item's tags. This is the
+            // single source of truth per PRD §3.7 — users no longer pick a
+            // template explicitly. If the tags don't resolve to exactly one
+            // template, escalate to HumanFeedback and return without starting
+            // a run.
+            var tags = ParseLocalTags(wi.TagsJson);
+            var resolution = resolver.Resolve(tags);
+            if (resolution.Kind != Remote.LoopTemplateResolutionKind.Single || resolution.TemplateId is null)
+            {
+                var reason = resolution.Kind switch
+                {
+                    Remote.LoopTemplateResolutionKind.None => "No loop found for existing tags",
+                    Remote.LoopTemplateResolutionKind.Ambiguous =>
+                        $"Multiple loop templates match tags: {string.Join(", ", resolution.MatchingTemplateNames)}",
+                    _ => "Unable to resolve template",
+                };
+                await manager.TransitionAsync(workItemId, WorkItemStatus.HumanFeedback, reason);
+                return;
+            }
+
+            var version = await workItemStore.GetLatestTemplateVersionAsync(resolution.TemplateId.Value)
+                ?? throw new InvalidOperationException(
+                    $"Loop template {resolution.TemplateId} has no published version");
 
             var run = new LoopRun
             {
                 Id = Guid.NewGuid(),
                 WorkItemId = workItemId,
-                LoopTemplateVersionId = wi.LoopTemplateVersionId.Value,
+                LoopTemplateVersionId = version.Id,
                 RecoveryPolicy = RecoveryPolicy.AutoResume,
                 Status = LoopRunStatus.Running,
                 StartedAt = DateTime.UtcNow,
@@ -105,6 +129,20 @@ public class LoopEngine : ILoopEngine
 
         var control = _runs.GetOrAdd(runId, _ => new RunControl());
         control.Task = Task.Run(() => RunAsync(runId, control.Cts.Token), control.Cts.Token);
+    }
+
+    private static IReadOnlyList<string> ParseLocalTags(string? tagsJson)
+    {
+        if (string.IsNullOrWhiteSpace(tagsJson)) return Array.Empty<string>();
+        try
+        {
+            var arr = System.Text.Json.JsonSerializer.Deserialize<List<string>>(tagsJson);
+            return arr ?? (IReadOnlyList<string>)Array.Empty<string>();
+        }
+        catch
+        {
+            return Array.Empty<string>();
+        }
     }
 
     public async Task PauseRunAsync(Guid runId)

@@ -14,7 +14,7 @@ public class ILDCreateWorkItemToolTests
         var createdId = Guid.NewGuid();
         var workItemManager = new Mock<IWorkItemManager>();
         workItemManager
-            .Setup(m => m.CreateWorkItemAsync(It.IsAny<string>(), It.IsAny<string>(), null, null))
+            .Setup(m => m.CreateWorkItemAsync(It.IsAny<string>(), It.IsAny<string>(), (Guid?)null))
             .ReturnsAsync(createdId);
 
         using var db = new TestDb();
@@ -27,7 +27,7 @@ public class ILDCreateWorkItemToolTests
         // Assert
         result.Success.Should().BeTrue();
         result.Output.Should().Contain(createdId.ToString());
-        workItemManager.Verify(m => m.CreateWorkItemAsync("Test feature", "Implement it", null, null), Times.Once);
+        workItemManager.Verify(m => m.CreateWorkItemAsync("Test feature", "Implement it", (Guid?)null), Times.Once);
     }
 
     [Fact]

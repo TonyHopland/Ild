@@ -54,7 +54,7 @@ public class WorkItemManagerTests
         repo!.DefaultIntakeStatus = WorkItemStatus.WorkQueue;
         await db.Context.SaveChangesAsync();
 
-        var id = await mgr.CreateWorkItemAsync("title", "desc", null, repoId);
+        var id = await mgr.CreateWorkItemAsync("title", "desc", repoId);
 
         var wi = await mgr.GetWorkItemAsync(id);
         wi!.Status.Should().Be(WorkItemStatus.WorkQueue);
@@ -70,7 +70,7 @@ public class WorkItemManagerTests
         repo!.DefaultIntakeStatus = WorkItemStatus.Backlog;
         await db.Context.SaveChangesAsync();
 
-        var id = await mgr.CreateWorkItemAsync("title", "desc", null, repoId);
+        var id = await mgr.CreateWorkItemAsync("title", "desc", repoId);
 
         var wi = await mgr.GetWorkItemAsync(id);
         wi!.Status.Should().Be(WorkItemStatus.Backlog);
@@ -82,7 +82,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("orig", "origdesc", null, repoId);
+        var id = await mgr.CreateWorkItemAsync("orig", "origdesc", repoId);
         var before = (await mgr.GetWorkItemAsync(id))!.UpdatedAt;
         await Task.Delay(5);
 
@@ -110,7 +110,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", null, repoId);
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         await mgr.TransitionToWorkQueueAsync(id);
 
         (await mgr.IsReadyAsync(id)).Should().BeTrue();
@@ -122,8 +122,8 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var dep = await mgr.CreateWorkItemAsync("dep", "", null, repoId);
-        var child = await mgr.CreateWorkItemAsync("child", "", null, repoId);
+        var dep = await mgr.CreateWorkItemAsync("dep", "", repoId);
+        var child = await mgr.CreateWorkItemAsync("child", "", repoId);
         await mgr.AddDependencyAsync(child, dep);
 
         (await mgr.IsReadyAsync(child)).Should().BeFalse();
@@ -135,8 +135,8 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var dep = await mgr.CreateWorkItemAsync("dep", "", null, repoId);
-        var child = await mgr.CreateWorkItemAsync("child", "", null, repoId);
+        var dep = await mgr.CreateWorkItemAsync("dep", "", repoId);
+        var child = await mgr.CreateWorkItemAsync("child", "", repoId);
         await mgr.AddDependencyAsync(child, dep);
 
         await mgr.LinkPullRequestAsync(dep, "https://forgejo/pr/1");
@@ -151,8 +151,8 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var dep = await mgr.CreateWorkItemAsync("dep", "", null, repoId);
-        var child = await mgr.CreateWorkItemAsync("child", "", null, repoId);
+        var dep = await mgr.CreateWorkItemAsync("dep", "", repoId);
+        var child = await mgr.CreateWorkItemAsync("child", "", repoId);
         await mgr.AddDependencyAsync(child, dep);
 
         await mgr.LinkPullRequestAsync(dep, "https://forgejo/pr/1");
@@ -170,7 +170,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", null, repoId);
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
 
         var act = async () => await mgr.AddDependencyAsync(id, id);
         await act.Should().ThrowAsync<InvalidOperationException>();
@@ -182,9 +182,9 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var a = await mgr.CreateWorkItemAsync("a", "", null, repoId);
-        var b = await mgr.CreateWorkItemAsync("b", "", null, repoId);
-        var c = await mgr.CreateWorkItemAsync("c", "", null, repoId);
+        var a = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var b = await mgr.CreateWorkItemAsync("b", "", repoId);
+        var c = await mgr.CreateWorkItemAsync("c", "", repoId);
 
         await mgr.AddDependencyAsync(b, a);
         await mgr.AddDependencyAsync(c, b);
@@ -199,8 +199,8 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var dep = await mgr.CreateWorkItemAsync("dep", "", null, repoId);
-        var child = await mgr.CreateWorkItemAsync("child", "", null, repoId);
+        var dep = await mgr.CreateWorkItemAsync("dep", "", repoId);
+        var child = await mgr.CreateWorkItemAsync("child", "", repoId);
         await mgr.AddDependencyAsync(child, dep);
         await mgr.TransitionToWorkQueueAsync(child);
 
@@ -216,7 +216,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", null, repoId);
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
 
         var result = await mgr.LinkPullRequestAsync(id, "https://forgejo/pr/42");
 
@@ -231,7 +231,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", null, repoId);
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         var wi = await db.Context.WorkItems.FindAsync(id);
         wi!.Status = WorkItemStatus.Running;
         await db.Context.SaveChangesAsync();
@@ -250,7 +250,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", null, repoId);
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         await mgr.TransitionToReadyAsync(id);
         await mgr.TransitionToRunningAsync(id);
 
@@ -268,7 +268,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", null, repoId);
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         var wi = await db.Context.WorkItems.FindAsync(id);
         wi!.Status = WorkItemStatus.Running;
         await db.Context.SaveChangesAsync();
@@ -308,7 +308,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", null, repoId);
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         var wi = await db.Context.WorkItems.FindAsync(id);
         wi!.Status = WorkItemStatus.Running;
         await db.Context.SaveChangesAsync();
@@ -360,7 +360,7 @@ public class WorkItemManagerTests
         db.Context.LoopTemplateVersions.Add(ltv);
         await db.Context.SaveChangesAsync();
 
-        var id = await mgr.CreateWorkItemAsync("a", "", lt.Id, repoId);
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         var wi = await db.Context.WorkItems.FindAsync(id);
         wi!.WorktreePath = "/tmp/worktrees/test-wi";
         wi.Status = WorkItemStatus.HumanFeedback;
@@ -406,7 +406,7 @@ public class WorkItemManagerTests
         db.Context.LoopTemplateVersions.Add(ltv);
         await db.Context.SaveChangesAsync();
 
-        var id = await mgr.CreateWorkItemAsync("a", "", lt.Id, repoId);
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
 
         var runId = Guid.NewGuid();
         var run = new LoopRun
@@ -457,7 +457,7 @@ public class WorkItemManagerTests
         db.Context.LoopTemplateVersions.Add(ltv);
         await db.Context.SaveChangesAsync();
 
-        var id = await mgr.CreateWorkItemAsync("a", "", lt.Id, repoId);
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         var runId = Guid.NewGuid();
         var humanNodeId = Guid.NewGuid();
         var run = new LoopRun
@@ -517,7 +517,7 @@ public class WorkItemManagerTests
         db.Context.LoopTemplateVersions.Add(ltv);
         await db.Context.SaveChangesAsync();
 
-        var id = await mgr.CreateWorkItemAsync("a", "", lt.Id, repoId);
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         var runId = Guid.NewGuid();
         var run = new LoopRun
         {
@@ -544,77 +544,12 @@ public class WorkItemManagerTests
     }
 
     [Fact]
-    public async Task UpdateAsync_changes_loop_template_when_template_id_provided()
-    {
-        var (mgr, db, repoId, _, _) = Setup();
-        using var _ = db;
-
-        var ltA = new LoopTemplate { Id = Guid.NewGuid(), Name = "templateA" };
-        db.Context.LoopTemplates.Add(ltA);
-        var ltvA = new LoopTemplateVersion
-        {
-            Id = Guid.NewGuid(),
-            LoopTemplateId = ltA.Id,
-            VersionNumber = 1,
-            CreatedAt = DateTime.UtcNow,
-        };
-        db.Context.LoopTemplateVersions.Add(ltvA);
-
-        var ltB = new LoopTemplate { Id = Guid.NewGuid(), Name = "templateB" };
-        db.Context.LoopTemplates.Add(ltB);
-        var ltvB = new LoopTemplateVersion
-        {
-            Id = Guid.NewGuid(),
-            LoopTemplateId = ltB.Id,
-            VersionNumber = 1,
-            CreatedAt = DateTime.UtcNow,
-        };
-        db.Context.LoopTemplateVersions.Add(ltvB);
-        await db.Context.SaveChangesAsync();
-
-        var id = await mgr.CreateWorkItemAsync("a", "", ltA.Id, repoId);
-
-        var ok = await mgr.UpdateAsync(id, "a", "", ltB.Id);
-        ok.Should().BeTrue();
-
-        var reloaded = await mgr.GetWorkItemAsync(id);
-        reloaded!.LoopTemplateVersionId.Should().Be(ltvB.Id);
-    }
-
-    [Fact]
-    public async Task UpdateAsync_keeps_existing_template_when_null_provided()
-    {
-        var (mgr, db, repoId, _, _) = Setup();
-        using var _ = db;
-
-        var ltA = new LoopTemplate { Id = Guid.NewGuid(), Name = "templateA" };
-        db.Context.LoopTemplates.Add(ltA);
-        var ltvA = new LoopTemplateVersion
-        {
-            Id = Guid.NewGuid(),
-            LoopTemplateId = ltA.Id,
-            VersionNumber = 1,
-            CreatedAt = DateTime.UtcNow,
-        };
-        db.Context.LoopTemplateVersions.Add(ltvA);
-        await db.Context.SaveChangesAsync();
-
-        var id = await mgr.CreateWorkItemAsync("a", "", ltA.Id, repoId);
-
-        var ok = await mgr.UpdateAsync(id, "a", "", null);
-        ok.Should().BeTrue();
-
-        var reloaded = await mgr.GetWorkItemAsync(id);
-        reloaded!.LoopTemplateVersionId.Should().Be(ltvA.Id);
-    }
-
-    [Fact]
     public async Task DeleteAsync_removes_workitem_with_no_dependencies()
     {
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", null, repoId);
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
 
         var ok = await mgr.DeleteAsync(id);
 
@@ -628,8 +563,8 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var dep = await mgr.CreateWorkItemAsync("dep", "", null, repoId);
-        var child = await mgr.CreateWorkItemAsync("child", "", null, repoId);
+        var dep = await mgr.CreateWorkItemAsync("dep", "", repoId);
+        var child = await mgr.CreateWorkItemAsync("child", "", repoId);
         await mgr.AddDependencyAsync(child, dep);
 
         var ok = await mgr.DeleteAsync(child);
@@ -645,8 +580,8 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var dep = await mgr.CreateWorkItemAsync("dep", "", null, repoId);
-        var child = await mgr.CreateWorkItemAsync("child", "", null, repoId);
+        var dep = await mgr.CreateWorkItemAsync("dep", "", repoId);
+        var child = await mgr.CreateWorkItemAsync("child", "", repoId);
         await mgr.AddDependencyAsync(child, dep);
 
         var ok = await mgr.DeleteAsync(dep);
@@ -683,7 +618,7 @@ public class WorkItemManagerTests
         db.Context.LoopTemplateVersions.Add(ltv);
         await db.Context.SaveChangesAsync();
 
-        var id = await mgr.CreateWorkItemAsync("a", "", lt.Id, repoId);
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         var runId = Guid.NewGuid();
         var nodeId = Guid.NewGuid();
         var run = new LoopRun
@@ -749,7 +684,7 @@ public class WorkItemManagerTests
         db.Context.LoopTemplateVersions.Add(ltv);
         await db.Context.SaveChangesAsync();
 
-        var id = await mgr.CreateWorkItemAsync("a", "", lt.Id, repoId);
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         var runId = Guid.NewGuid();
         var nodeId = Guid.NewGuid();
         var run = new LoopRun
@@ -815,7 +750,7 @@ public class WorkItemManagerTests
         db.Context.LoopTemplateVersions.Add(ltv);
         await db.Context.SaveChangesAsync();
 
-        var id = await mgr.CreateWorkItemAsync("a", "", lt.Id, repoId);
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         var runId = Guid.NewGuid();
         var nodeId = Guid.NewGuid();
         var run = new LoopRun
@@ -880,7 +815,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("t", "", null, repoId);
+        var id = await mgr.CreateWorkItemAsync("t", "", repoId);
         await mgr.TransitionAsync(id, WorkItemStatus.HumanFeedback, "Need approval", "[\"approve\",\"reject\"]");
 
         var wi = await mgr.GetWorkItemAsync(id);
@@ -895,7 +830,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("t", "", null, repoId);
+        var id = await mgr.CreateWorkItemAsync("t", "", repoId);
         await mgr.TransitionAsync(id, WorkItemStatus.HumanFeedback, "reason", "actions");
         await mgr.TransitionAsync(id, WorkItemStatus.Running);
 
@@ -911,7 +846,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("t", "", null, repoId);
+        var id = await mgr.CreateWorkItemAsync("t", "", repoId);
         var existingRunId = SeedLoopRun(db, id);
         var wi = await db.Context.WorkItems.FindAsync(id);
         wi!.CurrentLoopRunId = existingRunId;
@@ -929,7 +864,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("t", "", null, repoId);
+        var id = await mgr.CreateWorkItemAsync("t", "", repoId);
         var runId = SeedLoopRun(db, id);
         var wi = await db.Context.WorkItems.FindAsync(id);
         wi!.CurrentLoopRunId = runId;
@@ -947,7 +882,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("t", "", null, repoId);
+        var id = await mgr.CreateWorkItemAsync("t", "", repoId);
         var newRunId = SeedLoopRun(db, id);
 
         await mgr.TransitionAsync(id, WorkItemStatus.Running, currentLoopRunId: newRunId);
@@ -973,7 +908,7 @@ public class WorkItemManagerTests
         var notifier = new Mock<IWorkItemNotifier>();
         var mgr = new WorkItemManager(db.WorkItems, repoMgr.Object, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, notifier.Object);
 
-        var id = await mgr.CreateWorkItemAsync("t", "", null, repo.Id);
+        var id = await mgr.CreateWorkItemAsync("t", "", repo.Id);
         notifier.Invocations.Clear();
 
         // Same-status transition: no state-change notification, but HumanFeedback

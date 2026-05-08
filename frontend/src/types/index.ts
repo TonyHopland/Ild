@@ -53,8 +53,12 @@ export interface WorkItem {
    * WorkItemServer. Use {@link parseConversation} to decode.
    */
   conversationJson?: string | null;
-  loopTemplateId: string;
-  loopTemplateVersion: string;
+  /**
+   * Deprecated: template is resolved from {@link tagsJson} at run start
+   * (PRD §3.7). The server may still return it for legacy reasons.
+   */
+  loopTemplateId?: string;
+  loopTemplateVersion?: string;
   repositoryId: string;
   prUrl: string | null;
   pullRequestBranch: string | null;

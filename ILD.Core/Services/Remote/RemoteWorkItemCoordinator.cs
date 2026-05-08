@@ -1,5 +1,8 @@
 namespace ILD.Core.Services.Remote;
 
+using ILD.Core.Services.Interfaces;
+using Microsoft.Extensions.Logging;
+
 /// <summary>
 /// One pass of the remote-server poll loop: heartbeat the active set, drain
 /// items the server has flipped to <see cref="RemoteWorkItemStatus.WaitingForIld"/>
@@ -25,15 +28,21 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
     private readonly IWorkItemServerClient _client;
     private readonly IActiveWorkItemTracker _tracker;
     private readonly ILoopTemplateResolver _resolver;
+    private readonly ILoopEngine _engine;
+    private readonly ILogger<RemoteWorkItemCoordinator>? _logger;
 
     public RemoteWorkItemCoordinator(
         IWorkItemServerClient client,
         IActiveWorkItemTracker tracker,
-        ILoopTemplateResolver resolver)
+        ILoopTemplateResolver resolver,
+        ILoopEngine engine,
+        ILogger<RemoteWorkItemCoordinator>? logger = null)
     {
         _client = client;
         _tracker = tracker;
         _resolver = resolver;
+        _engine = engine;
+        _logger = logger;
     }
 
     public async Task<PollCycleResult> RunPollCycleAsync(WorkItemServerOptions opts, int maxConcurrent, CancellationToken ct = default)
@@ -97,6 +106,22 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
             {
                 _tracker.Add(ready.Id);
                 claimed.Add(ready);
+
+                // Per PRD §3.2 step 4: a successful claim must "create a local
+                // LoopRun, kick off LoopEngine". The engine resolves the
+                // template from the work item's tags and creates the run; if
+                // that fails it transitions the item back to HumanFeedback so
+                // the server reflects reality. Failures here are logged but
+                // never abort the poll cycle — the next pass can retry.
+                try
+                {
+                    await _engine.StartRunAsync(ready.Id, ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex,
+                        "Engine failed to start run for claimed work item {WorkItemId}", ready.Id);
+                }
             }
             // Lost-claim race (another instance got there first) is silently
             // skipped — the next poll will simply not see the item again.

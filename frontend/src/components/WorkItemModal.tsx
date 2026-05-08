@@ -43,7 +43,6 @@ export default function WorkItemModal({
   const [priority, setPriority] = useState<WorkItemPriority>(WorkItemPriority.Medium);
   const [tags, setTags] = useState("");
   const [repositoryId, setRepositoryId] = useState("");
-  const [loopTemplateId, setLoopTemplateId] = useState("");
   const [repositories, setRepositories] = useState<Repository[]>([]);
   const [templates, setTemplates] = useState<LoopTemplate[]>([]);
   const [runs, setRuns] = useState<LoopRun[]>([]);
@@ -176,9 +175,6 @@ export default function WorkItemModal({
       setPriority(workItem.priority);
       setTags(parseTags(workItem).join(", "));
       setRepositoryId(workItem.repositoryId);
-      setLoopTemplateId(
-        workItem.loopTemplateId ?? (workItem as any).loopTemplateVersion?.loopTemplateId ?? "",
-      );
       setShowLinkPr(false);
       setPrUrlInput("");
       setFeedbackInput("");
@@ -192,7 +188,6 @@ export default function WorkItemModal({
       setPriority(WorkItemPriority.Medium);
       setTags("");
       setRepositoryId("");
-      setLoopTemplateId("");
       setShowDeleteConfirm(false);
       setDeleteError(null);
       setEditMode(true);
@@ -423,7 +418,6 @@ export default function WorkItemModal({
       priority,
       tags: parsedTags,
       repositoryId,
-      loopTemplateId,
     };
 
     try {
@@ -880,21 +874,6 @@ export default function WorkItemModal({
                       ))}
                     </select>
                   </div>
-                  <div className="form-group">
-                    <label htmlFor="loopTemplate">Loop Template</label>
-                    <select
-                      id="loopTemplate"
-                      value={loopTemplateId}
-                      onChange={(e) => setLoopTemplateId(e.target.value)}
-                    >
-                      <option value="">Select template...</option>
-                      {templates.map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
                 </div>
                 <div className="form-row">
                   <div className="form-group">
@@ -927,13 +906,22 @@ export default function WorkItemModal({
                   </div>
                 </div>
                 <div className="form-group">
-                  <label htmlFor="tags">Tags (comma separated)</label>
+                  <label htmlFor="tags">
+                    Tags (comma separated) — each tag must match a loop template name
+                  </label>
                   <input
                     id="tags"
                     type="text"
+                    list="loop-template-names"
                     value={tags}
                     onChange={(e) => setTags(e.target.value)}
+                    placeholder="e.g. build, deploy"
                   />
+                  <datalist id="loop-template-names">
+                    {templates.map((t) => (
+                      <option key={t.id} value={t.name} />
+                    ))}
+                  </datalist>
                 </div>
                 {submitError && (
                   <div role="alert" className="form-error">

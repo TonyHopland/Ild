@@ -51,13 +51,12 @@ public class WorkItemManager : IWorkItemManager
     // Create / Read / Update
     // ──────────────────────────────────────────────────────────────────
 
-    public Task<Guid> CreateWorkItemAsync(string title, string description, Guid? loopTemplateId, Guid? repositoryId)
-        => CreateWorkItemAsync(title, description, loopTemplateId, repositoryId, null, false);
+    public Task<Guid> CreateWorkItemAsync(string title, string description, Guid? repositoryId)
+        => CreateWorkItemAsync(title, description, repositoryId, null, false);
 
     public async Task<Guid> CreateWorkItemAsync(
         string title,
         string description,
-        Guid? loopTemplateId,
         Guid? repositoryId,
         Guid? createdByLoopRunId,
         bool forceBacklog,
@@ -82,13 +81,6 @@ public class WorkItemManager : IWorkItemManager
             Tags = tags?.ToList() ?? (IReadOnlyList<string>)Array.Empty<string>(),
         });
 
-        Guid? versionId = null;
-        if (loopTemplateId.HasValue)
-        {
-            var latest = await _store.GetLatestTemplateVersionAsync(loopTemplateId.Value);
-            versionId = latest?.Id;
-        }
-
         var local = new WorkItem
         {
             Id = serverWi.Id,
@@ -97,7 +89,9 @@ public class WorkItemManager : IWorkItemManager
             Priority = MapFromRemote(serverWi.Priority),
             Status = MapFromRemote(serverWi.Status),
             RepositoryId = repositoryId ?? Guid.Empty,
-            LoopTemplateVersionId = versionId,
+            // Template version is no longer chosen by the user — the engine
+            // resolves it from tags at run start (PRD §3.7).
+            LoopTemplateVersionId = null,
             CreatedByLoopRunId = createdByLoopRunId,
             CreatedBy = serverWi.CreatedBy,
             CreatedAt = serverWi.CreatedAt,
@@ -176,7 +170,7 @@ public class WorkItemManager : IWorkItemManager
         WriteCachedConversation(local, remote.Conversation);
     }
 
-    public async Task<bool> UpdateAsync(Guid workItemId, string title, string description, Guid? loopTemplateId = null, IEnumerable<string>? tags = null)
+    public async Task<bool> UpdateAsync(Guid workItemId, string title, string description, IEnumerable<string>? tags = null)
     {
         var wi = await _store.GetByIdAsync(workItemId);
         if (wi == null) return false;
@@ -192,11 +186,6 @@ public class WorkItemManager : IWorkItemManager
 
         wi.Title = updated.Title;
         wi.Description = updated.Description;
-        if (loopTemplateId.HasValue)
-        {
-            var latest = await _store.GetLatestTemplateVersionAsync(loopTemplateId.Value);
-            wi.LoopTemplateVersionId = latest?.Id;
-        }
         wi.UpdatedAt = DateTime.UtcNow;
         await _store.UpdateAsync(wi);
         return true;

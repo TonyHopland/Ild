@@ -185,13 +185,12 @@ public class AIProviderService : IAIProviderService
             if (string.IsNullOrEmpty(title))
                 return new ToolExecutionResult(false, "", "missing required field: title", -1);
             var description = root.TryGetProperty("description", out var descProp) ? descProp.GetString() : "";
-            Guid? templateId = null;
-            if (root.TryGetProperty("loopTemplateId", out var tplProp) && Guid.TryParse(tplProp.GetString(), out var tplId))
-                templateId = tplId;
+            // Legacy `loopTemplateId` is ignored — template is resolved from
+            // tags at run start (PRD §3.7).
             Guid? repositoryId = null;
             if (root.TryGetProperty("repositoryId", out var repoProp) && Guid.TryParse(repoProp.GetString(), out var repoId))
                 repositoryId = repoId;
-            var id = await _workItemManager.CreateWorkItemAsync(title!, description ?? "", templateId, repositoryId);
+            var id = await _workItemManager.CreateWorkItemAsync(title!, description ?? "", repositoryId);
             return new ToolExecutionResult(true, id.ToString(), null);
         }
         catch (Exception ex)

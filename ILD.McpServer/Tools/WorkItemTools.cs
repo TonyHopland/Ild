@@ -16,13 +16,11 @@ public sealed class WorkItemTools
     public WorkItemTools(IldClient ild) { _ild = ild; }
 
     [McpServerTool(Name = "create_workitem")]
-    [Description("Create a new work item in the Backlog column. The new item is stamped with the originating loop-run id (read from the ILD_LOOP_RUN_ID env var unless overridden) so a user can later batch-clean items if the agent goes rogue. You MUST call list_repositories first and pass a valid repositoryId — it is required. Optionally pass a loopTemplateId from list_loop_templates; the latest version is pinned at first run start. Dependencies must reference existing work item ids; cycles are rejected by the server. Tags determine which loop template executes the work item — each tag must match a loop template name.")]
+    [Description("Create a new work item in the Backlog column. The new item is stamped with the originating loop-run id (read from the ILD_LOOP_RUN_ID env var unless overridden) so a user can later batch-clean items if the agent goes rogue. You MUST call list_repositories first and pass a valid repositoryId — it is required. Dependencies must reference existing work item ids; cycles are rejected by the server. Tags determine which loop template executes the work item — each tag must match a loop template name.")]
     public Task<string> CreateWorkItem(
         [Description("Title (1..512 chars).")] string title,
         [Description("Required Repository GUID. Use list_repositories to discover ids.")] string repositoryId,
         [Description("Description (markdown, up to 4096 chars).")] string description = "",
-        [Description("Optional LoopTemplate GUID; the latest version is pinned at first run start.")]
-        string? loopTemplateId = null,
         [Description("Optional list of WorkItem GUIDs this item depends on.")]
         string[]? dependencies = null,
         [Description("Optional originating LoopRun GUID. Defaults to the ILD_LOOP_RUN_ID env var.")]
@@ -34,7 +32,6 @@ public sealed class WorkItemTools
         {
             title,
             description,
-            loopTemplateId,
             repositoryId,
             dependencies,
             createdByLoopRunId = createdByLoopRunId ?? _ild.LoopRunId,

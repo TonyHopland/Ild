@@ -17,7 +17,10 @@ public class AgentWorkItemCreateRequest
     [StringLength(4096)]
     public string Description { get; set; } = string.Empty;
 
-    /// <summary>Optional LoopTemplate id (the latest version is pinned at first run start).</summary>
+    /// <summary>
+    /// Deprecated: template is resolved from tags at run start (PRD §3.7).
+    /// Retained on the wire so older MCP clients don't 400; ignored.
+    /// </summary>
     public string? LoopTemplateId { get; set; }
 
     /// <summary>Optional Repository id.</summary>

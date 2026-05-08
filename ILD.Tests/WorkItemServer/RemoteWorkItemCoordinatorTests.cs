@@ -1,4 +1,5 @@
 using FluentAssertions;
+using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using Moq;
 
@@ -27,11 +28,12 @@ public sealed class RemoteWorkItemCoordinatorTests
               .ReturnsAsync(new RemoteTransitionResponse { Success = true, ActualStatus = RemoteWorkItemStatus.Running });
 
         var tracker = new InMemoryActiveWorkItemTracker();
+        var engine = new Mock<ILoopEngine>();
         var resolver = new Mock<ILoopTemplateResolver>();
         resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
                 .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Single, Guid.NewGuid(), Array.Empty<string>()));
 
-        var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object);
+        var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object, engine.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
         result.Claimed.Should().HaveCount(1);
@@ -51,11 +53,12 @@ public sealed class RemoteWorkItemCoordinatorTests
               .Callback<WorkItemServerOptions, Guid, RemoteTransitionRequest, CancellationToken>((_, _, r, _) => captured = r)
               .ReturnsAsync(new RemoteTransitionResponse { Success = true, ActualStatus = RemoteWorkItemStatus.HumanFeedback });
 
+        var engine = new Mock<ILoopEngine>();
         var resolver = new Mock<ILoopTemplateResolver>();
         resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
                 .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.None, null, Array.Empty<string>()));
 
-        var sut = new RemoteWorkItemCoordinator(client.Object, new InMemoryActiveWorkItemTracker(), resolver.Object);
+        var sut = new RemoteWorkItemCoordinator(client.Object, new InMemoryActiveWorkItemTracker(), resolver.Object, engine.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
         result.EscalatedToHumanFeedback.Should().HaveCount(1);
@@ -76,11 +79,12 @@ public sealed class RemoteWorkItemCoordinatorTests
               .Callback<WorkItemServerOptions, Guid, RemoteTransitionRequest, CancellationToken>((_, _, r, _) => captured = r)
               .ReturnsAsync(new RemoteTransitionResponse { Success = true, ActualStatus = RemoteWorkItemStatus.HumanFeedback });
 
+        var engine = new Mock<ILoopEngine>();
         var resolver = new Mock<ILoopTemplateResolver>();
         resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
                 .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Ambiguous, null, new[] { "build", "deploy" }));
 
-        var sut = new RemoteWorkItemCoordinator(client.Object, new InMemoryActiveWorkItemTracker(), resolver.Object);
+        var sut = new RemoteWorkItemCoordinator(client.Object, new InMemoryActiveWorkItemTracker(), resolver.Object, engine.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
         result.EscalatedToHumanFeedback.Should().HaveCount(1);
@@ -102,8 +106,9 @@ public sealed class RemoteWorkItemCoordinatorTests
                 It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemoteTransitionResponse { Success = true, ActualStatus = RemoteWorkItemStatus.Running });
 
+        var engine = new Mock<ILoopEngine>();
         var resolver = new Mock<ILoopTemplateResolver>();
-        var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object);
+        var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object, engine.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
         result.Resumed.Should().HaveCount(1);
@@ -121,12 +126,13 @@ public sealed class RemoteWorkItemCoordinatorTests
         client.Setup(c => c.TransitionAsync(Opts, It.IsAny<Guid>(), It.IsAny<RemoteTransitionRequest>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemoteTransitionResponse { Success = true, ActualStatus = RemoteWorkItemStatus.Running });
 
+        var engine = new Mock<ILoopEngine>();
         var resolver = new Mock<ILoopTemplateResolver>();
         resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
                 .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Single, Guid.NewGuid(), Array.Empty<string>()));
 
         var tracker = new InMemoryActiveWorkItemTracker();
-        var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object);
+        var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object, engine.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1);
 
         result.Claimed.Should().HaveCount(1);
@@ -144,12 +150,13 @@ public sealed class RemoteWorkItemCoordinatorTests
         client.Setup(c => c.TransitionAsync(Opts, ready.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemoteTransitionResponse { Success = false, ActualStatus = RemoteWorkItemStatus.Ready });
 
+        var engine = new Mock<ILoopEngine>();
         var resolver = new Mock<ILoopTemplateResolver>();
         resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
                 .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Single, Guid.NewGuid(), Array.Empty<string>()));
 
         var tracker = new InMemoryActiveWorkItemTracker();
-        var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object);
+        var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object, engine.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
         result.Claimed.Should().BeEmpty();
@@ -167,8 +174,9 @@ public sealed class RemoteWorkItemCoordinatorTests
         client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<Guid>>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemotePollResponse { ActiveItems = new[] { done } });
 
+        var engine = new Mock<ILoopEngine>();
         var resolver = new Mock<ILoopTemplateResolver>();
-        var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object);
+        var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object, engine.Object);
         await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
         tracker.Snapshot().Should().NotContain(done.Id);
@@ -183,8 +191,9 @@ public sealed class RemoteWorkItemCoordinatorTests
         client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<Guid>>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemotePollResponse { ActiveItems = new[] { hf } });
 
+        var engine = new Mock<ILoopEngine>();
         var resolver = new Mock<ILoopTemplateResolver>();
-        var sut = new RemoteWorkItemCoordinator(client.Object, new InMemoryActiveWorkItemTracker(), resolver.Object);
+        var sut = new RemoteWorkItemCoordinator(client.Object, new InMemoryActiveWorkItemTracker(), resolver.Object, engine.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
         result.HasActiveHumanFeedback.Should().BeTrue();

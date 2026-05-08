@@ -212,16 +212,8 @@ public class AgentController : ControllerBase
         if (!repoExists)
             return BadRequest(new { error = $"Repository not found: {repositoryId}" });
 
-        Guid? loopTemplateId = null;
-        if (!string.IsNullOrEmpty(request.LoopTemplateId))
-        {
-            if (!Guid.TryParse(request.LoopTemplateId, out var ltGuid))
-                return BadRequest(new { error = "Invalid loopTemplateId" });
-            var ltExists = await _db.LoopTemplates.AsNoTracking().AnyAsync(t => t.Id == ltGuid);
-            if (!ltExists)
-                return BadRequest(new { error = $"LoopTemplate not found: {ltGuid}" });
-            loopTemplateId = ltGuid;
-        }
+        // Legacy `loopTemplateId` (if any) is ignored — template is now
+        // resolved from tags at run start (PRD §3.7).
 
         // Resolve originating run id: prefer body, fall back to header.
         Guid? createdByLoopRunId = null;
@@ -251,7 +243,6 @@ public class AgentController : ControllerBase
             id = await _workItems.CreateWorkItemAsync(
                 request.Title,
                 request.Description ?? string.Empty,
-                loopTemplateId,
                 repositoryId,
                 createdByLoopRunId,
                 forceBacklog: true,

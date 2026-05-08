@@ -11,8 +11,6 @@ public class WorkItemCreateRequest
     [StringLength(4096)]
     public string Description { get; set; } = string.Empty;
 
-    public string LoopTemplateId { get; set; } = string.Empty;
-
     public string RepositoryId { get; set; } = string.Empty;
 
     [StringLength(32)]
