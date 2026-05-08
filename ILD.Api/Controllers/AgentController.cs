@@ -58,18 +58,20 @@ public class AgentController : ControllerBase
         if (take <= 0) take = 100;
         if (take > 500) take = 500;
 
-        IQueryable<WorkItem> q = _db.WorkItems.AsNoTracking();
+        WorkItemStatus? statusFilter = null;
         if (!string.IsNullOrEmpty(status) && Enum.TryParse<WorkItemStatus>(status, true, out var s))
-            q = q.Where(w => w.Status == s);
+            statusFilter = s;
+        Guid? repoFilter = null;
         if (!string.IsNullOrEmpty(repositoryId) && Guid.TryParse(repositoryId, out var repoGuid))
-            q = q.Where(w => w.RepositoryId == repoGuid);
+            repoFilter = repoGuid;
+        Guid? runFilter = null;
         if (!string.IsNullOrEmpty(createdByLoopRunId) && Guid.TryParse(createdByLoopRunId, out var runGuid))
-            q = q.Where(w => w.CreatedByLoopRunId == runGuid);
+            runFilter = runGuid;
 
-        var items = await q
-            .OrderByDescending(w => w.CreatedAt)
-            .Skip(skip).Take(take)
-            .Select(w => new
+        try
+        {
+            var items = await _workItems.ListAsync(statusFilter, runFilter, repoFilter, skip, take);
+            return Ok(items.Select(w => new
             {
                 id = w.Id,
                 title = w.Title,
@@ -80,9 +82,16 @@ public class AgentController : ControllerBase
                 createdByLoopRunId = w.CreatedByLoopRunId,
                 createdAt = w.CreatedAt,
                 updatedAt = w.UpdatedAt,
-            })
-            .ToListAsync();
-        return Ok(items);
+            }));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return StatusCode(503, new { error = ex.Message });
+        }
+        catch (HttpRequestException ex)
+        {
+            return StatusCode(503, new { error = "WorkItemServer unreachable", detail = ex.Message });
+        }
     }
 
     [HttpGet("workitems/{id}")]

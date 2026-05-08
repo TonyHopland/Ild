@@ -110,7 +110,71 @@ public class WorkItemManager : IWorkItemManager
         return local.Id;
     }
 
-    public Task<WorkItem?> GetWorkItemAsync(Guid workItemId) => _store.GetByIdAsync(workItemId);
+    public async Task<WorkItem?> GetWorkItemAsync(Guid workItemId)
+    {
+        // Server-authoritative read. Local row is a sidecar for engine-only
+        // fields. Title/Status/Priority/Tags/Conversation always come from
+        // the server so the UI cannot show stale data when the server is
+        // unreachable — the HTTP exception surfaces to the caller.
+        var local = await _store.GetByIdAsync(workItemId);
+        if (local == null) return null;
+
+        var opts = await _options.ResolveForRepositoryAsync(local.RepositoryId);
+        var remote = await _server.GetAsync(opts, workItemId);
+        if (remote == null) return null;
+
+        MergeRemoteOntoLocal(local, remote);
+        return local;
+    }
+
+    public async Task<IReadOnlyList<WorkItem>> ListAsync(
+        WorkItemStatus? status,
+        Guid? createdByLoopRunId,
+        Guid? repositoryId,
+        int skip,
+        int take)
+    {
+        if (skip < 0) skip = 0;
+        if (take <= 0) take = 100;
+
+        var opts = await _options.ResolveForRepositoryAsync(repositoryId);
+        var remoteStatus = status.HasValue ? MapToRemote(status.Value) : (RemoteWorkItemStatus?)null;
+        var remoteList = await _server.ListAsync(opts, remoteStatus, tags: null);
+        if (remoteList.Count == 0) return Array.Empty<WorkItem>();
+
+        var ids = remoteList.Select(r => r.Id).ToList();
+        var localById = (await _store.GetByIdsAsync(ids)).ToDictionary(w => w.Id);
+
+        var merged = new List<WorkItem>(remoteList.Count);
+        foreach (var r in remoteList)
+        {
+            // Items the server knows about but this ILD instance has no
+            // sidecar for belong to another ILD — skip them.
+            if (!localById.TryGetValue(r.Id, out var local)) continue;
+            if (createdByLoopRunId.HasValue && local.CreatedByLoopRunId != createdByLoopRunId) continue;
+            if (repositoryId.HasValue && local.RepositoryId != repositoryId) continue;
+            MergeRemoteOntoLocal(local, r);
+            merged.Add(local);
+        }
+
+        return merged
+            .OrderByDescending(w => w.CreatedAt)
+            .Skip(skip)
+            .Take(take)
+            .ToList();
+    }
+
+    private static void MergeRemoteOntoLocal(WorkItem local, RemoteWorkItem remote)
+    {
+        local.Title = remote.Title;
+        local.Description = remote.Description ?? string.Empty;
+        local.Status = MapFromRemote(remote.Status);
+        local.Priority = MapFromRemote(remote.Priority);
+        local.CreatedBy = remote.CreatedBy;
+        local.HumanFeedbackActions = remote.HumanFeedbackActions;
+        WriteCachedTags(local, remote.Tags);
+        WriteCachedConversation(local, remote.Conversation);
+    }
 
     public async Task<bool> UpdateAsync(Guid workItemId, string title, string description, Guid? loopTemplateId = null)
     {

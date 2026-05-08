@@ -86,6 +86,17 @@ public class LoopEngineProgressTests
         db.Context.WorkItems.Add(wi);
         db.Context.LoopRuns.Add(run);
         db.Context.SaveChanges();
+        // Mirror onto the WorkItemServer fake so the now server-first
+        // WorkItemManager can resolve the item.
+        serverHarness.ServerDb.WorkItems.Add(new ILD.WorkItemServer.Domain.WorkItem
+        {
+            Id = wi.Id,
+            Title = wi.Title,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+            Status = ILD.WorkItemServer.Domain.WorkItemStatus.Running,
+        });
+        serverHarness.ServerDb.SaveChanges();
 
         // The AI fake executor calls the progress callback with streaming text
         fakes[NodeType.AI].AsyncBehavior = async ctx =>

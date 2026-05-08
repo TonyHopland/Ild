@@ -11,6 +11,23 @@ public interface IWorkItemManager
     Task<bool> UpdateAsync(Guid workItemId, string title, string description, Guid? loopTemplateId = null);
     Task<WorkItem?> GetWorkItemAsync(Guid workItemId);
     Task<IEnumerable<WorkItem>> GetWorkItemsByStatusAsync(WorkItemStatus status);
+
+    /// <summary>
+    /// Server-authoritative listing for the work-item domain. Always
+    /// queries the WorkItemServer for the items it knows about and joins
+    /// them with this ILD instance's local sidecars (which carry engine-
+    /// only fields like RepositoryId / WorktreePath / CurrentLoopRunId).
+    /// Items that exist on the server but have no sidecar here are
+    /// skipped — they belong to another ILD instance. If the server is
+    /// unreachable the underlying HTTP exception is surfaced so the UI
+    /// fails loudly instead of showing stale cached rows.
+    /// </summary>
+    Task<IReadOnlyList<WorkItem>> ListAsync(
+        WorkItemStatus? status,
+        Guid? createdByLoopRunId,
+        Guid? repositoryId,
+        int skip,
+        int take);
     Task<bool> TransitionToWorkQueueAsync(Guid workItemId);
     Task<bool> TransitionToReadyAsync(Guid workItemId);
     Task<bool> TransitionToRunningAsync(Guid workItemId);

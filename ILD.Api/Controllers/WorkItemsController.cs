@@ -51,15 +51,34 @@ public class WorkItemsController : ControllerBase
         if (take <= 0) take = 100;
         if (take > 500) take = 500;
 
-        IQueryable<WorkItem> q = _db.WorkItems.AsNoTracking();
+        WorkItemStatus? statusFilter = null;
         if (!string.IsNullOrEmpty(status) && Enum.TryParse<WorkItemStatus>(status, true, out var s))
-            q = q.Where(w => w.Status == s);
+            statusFilter = s;
+        Guid? runFilter = null;
         if (!string.IsNullOrEmpty(createdByLoopRunId) && Guid.TryParse(createdByLoopRunId, out var runGuid))
-            q = q.Where(w => w.CreatedByLoopRunId == runGuid);
+            runFilter = runGuid;
+        Guid? repoFilter = null;
         if (!string.IsNullOrEmpty(repositoryId) && Guid.TryParse(repositoryId, out var repoGuid))
-            q = q.Where(w => w.RepositoryId == repoGuid);
-        var items = await q.OrderByDescending(w => w.CreatedAt).Skip(skip).Take(take).ToListAsync();
-        return Ok(items);
+            repoFilter = repoGuid;
+
+        try
+        {
+            var items = await _workItemManager.ListAsync(statusFilter, runFilter, repoFilter, skip, take);
+            return Ok(items);
+        }
+        catch (InvalidOperationException ex)
+        {
+            // No remote provider configured.
+            _logger.LogWarning(ex, "ListAsync rejected: {Message}", ex.Message);
+            return StatusCode(503, new { error = ex.Message });
+        }
+        catch (HttpRequestException ex)
+        {
+            // Remote unreachable. Hard cut: do not silently fall back to
+            // the local cache; the UI must reflect the outage.
+            _logger.LogWarning(ex, "WorkItemServer unreachable for ListAsync");
+            return StatusCode(503, new { error = "WorkItemServer unreachable", detail = ex.Message });
+        }
     }
 
     [HttpGet("{id}")]
