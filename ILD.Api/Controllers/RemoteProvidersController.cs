@@ -27,6 +27,12 @@ public class RemoteProvidersController : ControllerBase
         apiKey = string.IsNullOrEmpty(p.ApiKey) ? null : "***",
         hasApiKey = !string.IsNullOrEmpty(p.ApiKey),
         isDefault = p.IsDefault,
+        workItemServerUrl = p.WorkItemServerUrl,
+        workItemApiKey = string.IsNullOrEmpty(p.WorkItemApiKey) ? null : "***",
+        hasWorkItemApiKey = !string.IsNullOrEmpty(p.WorkItemApiKey),
+        pollIntervalSeconds = p.PollIntervalSeconds,
+        graceIntervalSeconds = p.GraceIntervalSeconds,
+        maxConcurrentWorkItems = p.MaxConcurrentWorkItems,
         createdAt = p.CreatedAt,
         updatedAt = p.UpdatedAt,
     };
@@ -64,6 +70,11 @@ public class RemoteProvidersController : ControllerBase
             ApiKey = string.IsNullOrEmpty(request.ApiKey) ? null : request.ApiKey,
             WebhookSecret = string.IsNullOrEmpty(request.WebhookSecret) ? null : request.WebhookSecret,
             IsDefault = request.IsDefault,
+            WorkItemServerUrl = string.IsNullOrEmpty(request.WorkItemServerUrl) ? null : request.WorkItemServerUrl,
+            WorkItemApiKey = string.IsNullOrEmpty(request.WorkItemApiKey) ? null : request.WorkItemApiKey,
+            PollIntervalSeconds = request.PollIntervalSeconds,
+            GraceIntervalSeconds = request.GraceIntervalSeconds,
+            MaxConcurrentWorkItems = request.MaxConcurrentWorkItems,
             CreatedAt = DateTime.UtcNow,
         };
         _db.RemoteProviders.Add(p);
@@ -83,6 +94,11 @@ public class RemoteProvidersController : ControllerBase
         if (!string.IsNullOrEmpty(request.ApiKey)) p.ApiKey = request.ApiKey;
         if (!string.IsNullOrEmpty(request.WebhookSecret)) p.WebhookSecret = request.WebhookSecret;
         p.IsDefault = request.IsDefault;
+        if (request.WorkItemServerUrl != null) p.WorkItemServerUrl = string.IsNullOrEmpty(request.WorkItemServerUrl) ? null : request.WorkItemServerUrl;
+        if (!string.IsNullOrEmpty(request.WorkItemApiKey)) p.WorkItemApiKey = request.WorkItemApiKey;
+        p.PollIntervalSeconds = request.PollIntervalSeconds;
+        p.GraceIntervalSeconds = request.GraceIntervalSeconds;
+        p.MaxConcurrentWorkItems = request.MaxConcurrentWorkItems;
         p.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
         return Ok(ToResponse(p));

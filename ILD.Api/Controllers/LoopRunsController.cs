@@ -125,6 +125,21 @@ public class LoopRunsController : ControllerBase
         return Ok();
     }
 
+    [HttpDelete("{id}")]
+    public async Task<IActionResult> Delete(string id)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+
+        var run = await _loopRunStore.GetByIdAsync(guid);
+        if (run == null) return NotFound();
+        if (run.Status == ILD.Data.Enums.LoopRunStatus.Running)
+            return BadRequest(new { error = "Cannot delete a running loop. Cancel it first." });
+
+        var deleted = await _loopRunStore.DeleteAsync(guid);
+        return deleted ? NoContent() : NotFound();
+    }
+
     [HttpPost("{id}/nodes/{runNodeId}/retry")]
     public async Task<IActionResult> RetryFromNode(string id, string runNodeId)
     {

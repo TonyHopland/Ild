@@ -31,4 +31,11 @@ public interface ILoopRunStore
     /// number. Replaces the previous global lock + MAX(Sequence) scan.
     /// </summary>
     Task<int> AllocateNextEventSequenceAsync(Guid runId);
+
+    /// <summary>
+    /// Hard-deletes a loop run and all of its dependent rows (run nodes,
+    /// edge traversals, event log entries). Returns false if the run does
+    /// not exist or is still Running.
+    /// </summary>
+    Task<bool> DeleteAsync(Guid runId);
 }

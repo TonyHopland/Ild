@@ -14,6 +14,11 @@ export default function RemoteProviders() {
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [webhookSecret, setWebhookSecret] = useState("");
+  const [workItemServerUrl, setWorkItemServerUrl] = useState("");
+  const [workItemApiKey, setWorkItemApiKey] = useState("");
+  const [pollIntervalSeconds, setPollIntervalSeconds] = useState(60);
+  const [graceIntervalSeconds, setGraceIntervalSeconds] = useState(5);
+  const [maxConcurrentWorkItems, setMaxConcurrentWorkItems] = useState(1);
 
   useEffect(() => {
     void loadData();
@@ -35,6 +40,11 @@ export default function RemoteProviders() {
     setName(provider.name);
     setType(provider.type);
     setBaseUrl(provider.baseUrl);
+    setWorkItemServerUrl(provider.workItemServerUrl ?? "");
+    setWorkItemApiKey("");
+    setPollIntervalSeconds(provider.pollIntervalSeconds ?? 60);
+    setGraceIntervalSeconds(provider.graceIntervalSeconds ?? 5);
+    setMaxConcurrentWorkItems(provider.maxConcurrentWorkItems ?? 1);
     setShowModal(true);
   };
 
@@ -46,6 +56,11 @@ export default function RemoteProviders() {
     setBaseUrl("");
     setApiKey("");
     setWebhookSecret("");
+    setWorkItemServerUrl("");
+    setWorkItemApiKey("");
+    setPollIntervalSeconds(60);
+    setGraceIntervalSeconds(5);
+    setMaxConcurrentWorkItems(1);
   };
 
   const handleSave = async () => {
@@ -53,6 +68,10 @@ export default function RemoteProviders() {
       name,
       type,
       baseUrl,
+      workItemServerUrl: workItemServerUrl || null,
+      pollIntervalSeconds,
+      graceIntervalSeconds,
+      maxConcurrentWorkItems,
     };
 
     if (editingProvider) {
@@ -62,10 +81,14 @@ export default function RemoteProviders() {
       if (webhookSecret) {
         data.webhookSecret = webhookSecret;
       }
+      if (workItemApiKey) {
+        data.workItemApiKey = workItemApiKey;
+      }
       await remoteProviderService.update(editingProvider.id, data);
     } else {
       data.apiKey = apiKey;
       data.webhookSecret = webhookSecret;
+      data.workItemApiKey = workItemApiKey || null;
       await remoteProviderService.create(data);
     }
 
@@ -193,6 +216,60 @@ export default function RemoteProviders() {
                   onChange={(e) => setWebhookSecret(e.target.value)}
                 />
               </div>
+              <h3 className="rp-section-heading">WorkItem Server</h3>
+              <div className="form-group">
+                <label htmlFor="rpWiUrl">WorkItem Server URL</label>
+                <input
+                  id="rpWiUrl"
+                  type="text"
+                  placeholder="http://localhost:5180"
+                  value={workItemServerUrl}
+                  onChange={(e) => setWorkItemServerUrl(e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label htmlFor="rpWiKey">WorkItem API Key</label>
+                <input
+                  id="rpWiKey"
+                  type="password"
+                  placeholder={editingProvider?.hasWorkItemApiKey ? "(unchanged)" : ""}
+                  value={workItemApiKey}
+                  onChange={(e) => setWorkItemApiKey(e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label htmlFor="rpPoll">Poll Interval (seconds)</label>
+                <input
+                  id="rpPoll"
+                  type="number"
+                  min={1}
+                  max={86400}
+                  value={pollIntervalSeconds}
+                  onChange={(e) => setPollIntervalSeconds(Number(e.target.value))}
+                />
+              </div>
+              <div className="form-group">
+                <label htmlFor="rpGrace">Grace Interval (seconds)</label>
+                <input
+                  id="rpGrace"
+                  type="number"
+                  min={1}
+                  max={3600}
+                  value={graceIntervalSeconds}
+                  onChange={(e) => setGraceIntervalSeconds(Number(e.target.value))}
+                />
+              </div>
+              <div className="form-group">
+                <label htmlFor="rpMax">Max Concurrent Work Items</label>
+                <input
+                  id="rpMax"
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={maxConcurrentWorkItems}
+                  onChange={(e) => setMaxConcurrentWorkItems(Number(e.target.value))}
+                />
+              </div>
             </div>
             <div className="modal-footer">
               <button
@@ -231,6 +308,15 @@ export default function RemoteProviders() {
           border-radius: 0.5rem;
           border: 1px solid #2d2d44;
           overflow: hidden;
+        }
+
+        .rp-section-heading {
+          margin: 1rem 0 0.5rem;
+          font-size: 0.85rem;
+          font-weight: 600;
+          color: #a0a0b0;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
         }
 
         .rp-card-header {

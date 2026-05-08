@@ -155,6 +155,16 @@ export default function LoopRunMonitor() {
     }
   };
 
+  const handleDelete = async (id: string) => {
+    if (!window.confirm("Delete this loop run and all its event history?")) return;
+    try {
+      await loopRunService.delete(id);
+      setRuns((prev) => prev.filter((run) => run.id !== id));
+    } catch (error) {
+      setErrorText(errorMessage(error, "Failed to delete run."));
+    }
+  };
+
   const statusColors: Record<string, string> = {
     [LoopRunStatus.Running]: "#3b82f6",
     [LoopRunStatus.Completed]: "#22c55e",
@@ -256,6 +266,17 @@ export default function LoopRunMonitor() {
                 )}
                 <button className="btn btn-danger btn-small" onClick={() => handleCancel(run.id)}>
                   Cancel
+                </button>
+              </div>
+            )}
+            {run.status !== LoopRunStatus.Running && (
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button
+                  className="btn btn-danger btn-small"
+                  onClick={() => handleDelete(run.id)}
+                  title="Delete this run and its event log"
+                >
+                  Delete
                 </button>
               </div>
             )}

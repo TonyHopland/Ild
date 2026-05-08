@@ -269,6 +269,10 @@ export const loopRunService = {
     return api.post<void>(`/loopruns/${id}/cancel`, {});
   },
 
+  delete: async (id: string): Promise<void> => {
+    return api.delete<void>(`/loopruns/${id}`);
+  },
+
   pause: async (id: string): Promise<void> => {
     return api.post<void>(`/loopruns/${id}/pause`, {});
   },

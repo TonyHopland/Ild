@@ -176,6 +176,12 @@ export interface RemoteProvider {
   baseUrl: string;
   apiKey: string;
   webhookSecret: string;
+  workItemServerUrl?: string | null;
+  workItemApiKey?: string | null;
+  hasWorkItemApiKey?: boolean;
+  pollIntervalSeconds?: number;
+  graceIntervalSeconds?: number;
+  maxConcurrentWorkItems?: number;
   createdAt: string;
 }
 
