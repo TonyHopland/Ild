@@ -8,6 +8,7 @@ using ILD.Core.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Moq;
 
 namespace ILD.Tests;
 
@@ -43,6 +44,12 @@ internal sealed class EngineHarness : IDisposable
         services.AddSingleton<IEventLogStore>(Db.EventLogs);
         services.AddSingleton<IEventLogService>(new EventLogService(Db.EventLogs, Db.LoopRuns));
         services.AddSingleton<IAuthStore>(Db.Auth);
+        services.AddSingleton<IRepositoryManager>(new Mock<IRepositoryManager>().Object);
+        services.AddSingleton<IWorkItemManager>(sp => new WorkItemManager(
+            sp.GetRequiredService<IWorkItemStore>(),
+            sp.GetRequiredService<IRepositoryManager>(),
+            sp.GetRequiredService<IEventLogService>(),
+            sp.GetRequiredService<ILoopRunStore>()));
 
         ServiceProvider = services.BuildServiceProvider();
         Engine = ServiceProvider.GetRequiredService<LoopEngine>();

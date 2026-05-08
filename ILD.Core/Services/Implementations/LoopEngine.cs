@@ -865,26 +865,8 @@ public class LoopEngine : ILoopEngine
 
     private async Task TransitionWorkItemAsync(Guid workItemId, WorkItemStatus next, string? reason, string? actions = null)
     {
-        WorkItemStatus prev;
-        using (var scope = _sp.CreateScope())
-        {
-            var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
-            var wi = await workItemStore.GetByIdAsync(workItemId);
-            if (wi == null)
-            {
-                _logger.LogWarning("TransitionWorkItemAsync: WorkItem {WorkItemId} not found", workItemId);
-                return;
-            }
-            prev = wi.Status;
-            if (prev == next && wi.HumanFeedbackReason == reason) return;
-            wi.Status = next;
-            if (reason != null) wi.HumanFeedbackReason = reason;
-            if (actions != null) wi.HumanFeedbackActions = actions;
-            wi.UpdatedAt = DateTime.UtcNow;
-            await workItemStore.UpdateAsync(wi);
-        }
-        await NotifyAsync(() => _workItemNotifier.WorkItemStateChangedAsync(workItemId, prev, next));
-        if (next == WorkItemStatus.HumanFeedback && reason != null)
-            await NotifyAsync(() => _workItemNotifier.HumanFeedbackRequiredAsync(workItemId, reason));
+        using var scope = _sp.CreateScope();
+        var manager = scope.ServiceProvider.GetRequiredService<IWorkItemManager>();
+        await manager.TransitionAsync(workItemId, next, reason, actions);
     }
 }

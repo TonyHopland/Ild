@@ -82,9 +82,12 @@ public class WorkItemManager : IWorkItemManager
 
     public async Task<bool> TransitionToWorkQueueAsync(Guid workItemId)
     {
-        var ok = await SetStatusAsync(workItemId, WorkItemStatus.WorkQueue,
-            from => from == WorkItemStatus.Backlog || from == WorkItemStatus.HumanFeedback);
-        if (!ok) return false;
+        var wi = await _store.GetByIdAsync(workItemId);
+        if (wi == null) return false;
+        if (wi.Status != WorkItemStatus.Backlog && wi.Status != WorkItemStatus.HumanFeedback)
+            return false;
+
+        await TransitionAsync(workItemId, WorkItemStatus.WorkQueue);
 
         if (await IsReadyAsync(workItemId))
             await TransitionToReadyAsync(workItemId);
@@ -93,31 +96,75 @@ public class WorkItemManager : IWorkItemManager
 
     public async Task<bool> TransitionToReadyAsync(Guid workItemId)
     {
+        var wi = await _store.GetByIdAsync(workItemId);
+        if (wi == null) return false;
         if (!await IsReadyAsync(workItemId)) return false;
-        return await SetStatusAsync(workItemId, WorkItemStatus.Ready,
-            from => from == WorkItemStatus.WorkQueue || from == WorkItemStatus.Backlog);
+        if (wi.Status != WorkItemStatus.WorkQueue && wi.Status != WorkItemStatus.Backlog)
+            return false;
+        return await TransitionAsync(workItemId, WorkItemStatus.Ready);
     }
 
     public async Task<bool> TransitionToRunningAsync(Guid workItemId)
-        => await SetStatusAsync(workItemId, WorkItemStatus.Running,
-            from => from == WorkItemStatus.Ready || from == WorkItemStatus.HumanFeedback);
-
-    public async Task<bool> TransitionToHumanFeedbackAsync(Guid workItemId, string reason)
     {
         var wi = await _store.GetByIdAsync(workItemId);
         if (wi == null) return false;
-        var prev = wi.Status;
-        wi.Status = WorkItemStatus.HumanFeedback;
-        wi.HumanFeedbackReason = reason;
-        wi.UpdatedAt = DateTime.UtcNow;
-        await _store.UpdateAsync(wi);
-        await _notifier.WorkItemStateChangedAsync(workItemId, prev, WorkItemStatus.HumanFeedback);
-        await _notifier.HumanFeedbackRequiredAsync(workItemId, reason);
-        return true;
+        if (wi.Status != WorkItemStatus.Ready && wi.Status != WorkItemStatus.HumanFeedback)
+            return false;
+        return await TransitionAsync(workItemId, WorkItemStatus.Running);
     }
 
-    public async Task<bool> TransitionToDoneAsync(Guid workItemId)
-        => await SetStatusAsync(workItemId, WorkItemStatus.Done, _ => true);
+    public Task<bool> TransitionToHumanFeedbackAsync(Guid workItemId, string reason)
+        => TransitionAsync(workItemId, WorkItemStatus.HumanFeedback, reason);
+
+    public Task<bool> TransitionToDoneAsync(Guid workItemId)
+        => TransitionAsync(workItemId, WorkItemStatus.Done);
+
+    public async Task<bool> TransitionAsync(
+        Guid workItemId,
+        WorkItemStatus targetStatus,
+        string? reason = null,
+        string? actions = null,
+        Guid? currentLoopRunId = null)
+    {
+        var wi = await _store.GetByIdAsync(workItemId);
+        if (wi == null) return false;
+
+        var prev = wi.Status;
+        wi.Status = targetStatus;
+
+        if (targetStatus == WorkItemStatus.HumanFeedback)
+        {
+            if (reason != null) wi.HumanFeedbackReason = reason;
+            if (actions != null) wi.HumanFeedbackActions = actions;
+        }
+        else
+        {
+            wi.HumanFeedbackReason = null;
+            wi.HumanFeedbackActions = null;
+        }
+
+        // Sentinel handling for CurrentLoopRunId:
+        //   null       -> leave existing value
+        //   Guid.Empty -> clear
+        //   other      -> set
+        if (currentLoopRunId.HasValue)
+        {
+            wi.CurrentLoopRunId = currentLoopRunId.Value == Guid.Empty
+                ? (Guid?)null
+                : currentLoopRunId.Value;
+        }
+
+        wi.UpdatedAt = DateTime.UtcNow;
+        await _store.UpdateAsync(wi);
+
+        if (prev != targetStatus)
+            await _notifier.WorkItemStateChangedAsync(workItemId, prev, targetStatus);
+
+        if (targetStatus == WorkItemStatus.HumanFeedback && wi.HumanFeedbackReason != null)
+            await _notifier.HumanFeedbackRequiredAsync(workItemId, wi.HumanFeedbackReason);
+
+        return true;
+    }
 
     public async Task<bool> AddDependencyAsync(Guid workItemId, Guid dependsOnWorkItemId)
     {
@@ -185,19 +232,6 @@ public class WorkItemManager : IWorkItemManager
         }
 
         await _store.UpdateAsync(wi);
-        return true;
-    }
-
-    private async Task<bool> SetStatusAsync(Guid id, WorkItemStatus next, Func<WorkItemStatus, bool> isAllowedFrom)
-    {
-        var wi = await _store.GetByIdAsync(id);
-        if (wi == null) return false;
-        if (!isAllowedFrom(wi.Status)) return false;
-        var prev = wi.Status;
-        wi.Status = next;
-        wi.UpdatedAt = DateTime.UtcNow;
-        await _store.UpdateAsync(wi);
-        await _notifier.WorkItemStateChangedAsync(id, prev, next);
         return true;
     }
 

@@ -10,6 +10,25 @@ namespace ILD.Tests;
 
 public class WorkItemManagerTests
 {
+    private static Guid SeedLoopRun(TestDb db, Guid workItemId)
+    {
+        var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume, MaxNodeExecutions = 100, MaxWallClockHours = 1 };
+        var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
+        db.Context.LoopTemplates.Add(template);
+        db.Context.LoopTemplateVersions.Add(version);
+        var runId = Guid.NewGuid();
+        db.Context.LoopRuns.Add(new LoopRun
+        {
+            Id = runId,
+            WorkItemId = workItemId,
+            LoopTemplateVersionId = version.Id,
+            RecoveryPolicy = RecoveryPolicy.AutoResume,
+            Status = LoopRunStatus.Running,
+        });
+        db.Context.SaveChanges();
+        return runId;
+    }
+
     private static (WorkItemManager mgr, TestDb db, Guid repoId, Mock<IRepositoryManager> repoMgr, Mock<IEventLogService> eventLog) Setup()
     {
         var db = new TestDb();
@@ -844,5 +863,128 @@ public class WorkItemManagerTests
         var after = await mgr.GetWorkItemAsync(id);
         after!.Status.Should().Be(WorkItemStatus.Running);
         after.HumanFeedbackReason.Should().BeNullOrEmpty();
+    }
+
+    // ---- TransitionAsync (canonical generic transition) ------------------
+
+    [Fact]
+    public async Task TransitionAsync_returns_false_for_unknown_workitem()
+    {
+        var (mgr, db, _, _, _) = Setup();
+        using var _ = db;
+
+        (await mgr.TransitionAsync(Guid.NewGuid(), WorkItemStatus.Done)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task TransitionAsync_to_HumanFeedback_stores_reason_and_actions()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("t", "", null, repoId);
+        await mgr.TransitionAsync(id, WorkItemStatus.HumanFeedback, "Need approval", "[\"approve\",\"reject\"]");
+
+        var wi = await mgr.GetWorkItemAsync(id);
+        wi!.Status.Should().Be(WorkItemStatus.HumanFeedback);
+        wi.HumanFeedbackReason.Should().Be("Need approval");
+        wi.HumanFeedbackActions.Should().Be("[\"approve\",\"reject\"]");
+    }
+
+    [Fact]
+    public async Task TransitionAsync_to_non_HumanFeedback_clears_feedback_fields()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("t", "", null, repoId);
+        await mgr.TransitionAsync(id, WorkItemStatus.HumanFeedback, "reason", "actions");
+        await mgr.TransitionAsync(id, WorkItemStatus.Running);
+
+        var wi = await mgr.GetWorkItemAsync(id);
+        wi!.Status.Should().Be(WorkItemStatus.Running);
+        wi.HumanFeedbackReason.Should().BeNull();
+        wi.HumanFeedbackActions.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task TransitionAsync_currentLoopRunId_null_leaves_existing_value()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("t", "", null, repoId);
+        var existingRunId = SeedLoopRun(db, id);
+        var wi = await db.Context.WorkItems.FindAsync(id);
+        wi!.CurrentLoopRunId = existingRunId;
+        await db.Context.SaveChangesAsync();
+
+        await mgr.TransitionAsync(id, WorkItemStatus.Running, currentLoopRunId: null);
+
+        var after = await mgr.GetWorkItemAsync(id);
+        after!.CurrentLoopRunId.Should().Be(existingRunId);
+    }
+
+    [Fact]
+    public async Task TransitionAsync_currentLoopRunId_GuidEmpty_clears_value()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("t", "", null, repoId);
+        var runId = SeedLoopRun(db, id);
+        var wi = await db.Context.WorkItems.FindAsync(id);
+        wi!.CurrentLoopRunId = runId;
+        await db.Context.SaveChangesAsync();
+
+        await mgr.TransitionAsync(id, WorkItemStatus.Done, currentLoopRunId: Guid.Empty);
+
+        var after = await mgr.GetWorkItemAsync(id);
+        after!.CurrentLoopRunId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task TransitionAsync_currentLoopRunId_value_sets_field()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("t", "", null, repoId);
+        var newRunId = SeedLoopRun(db, id);
+
+        await mgr.TransitionAsync(id, WorkItemStatus.Running, currentLoopRunId: newRunId);
+
+        var after = await mgr.GetWorkItemAsync(id);
+        after!.CurrentLoopRunId.Should().Be(newRunId);
+    }
+
+    [Fact]
+    public async Task TransitionAsync_notifies_state_change_only_when_status_actually_changes()
+    {
+        var db = new TestDb();
+        using var _ = db;
+        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/repo.git" };
+        db.Context.RemoteProviders.Add(remote);
+        db.Context.Repositories.Add(repo);
+        db.Context.SaveChanges();
+        var repoMgr = new Mock<IRepositoryManager>();
+        var eventLog = new Mock<IEventLogService>();
+        eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<string>()))
+            .ReturnsAsync(1L);
+        var notifier = new Mock<IWorkItemNotifier>();
+        var mgr = new WorkItemManager(db.WorkItems, repoMgr.Object, eventLog.Object, db.LoopRuns, notifier.Object);
+
+        var id = await mgr.CreateWorkItemAsync("t", "", null, repo.Id);
+        notifier.Invocations.Clear();
+
+        // Same-status transition: no state-change notification, but HumanFeedback
+        // notification still fires when transitioning to HumanFeedback with a reason.
+        await mgr.TransitionAsync(id, WorkItemStatus.HumanFeedback, "first");
+        await mgr.TransitionAsync(id, WorkItemStatus.HumanFeedback, "second");
+
+        notifier.Verify(n => n.WorkItemStateChangedAsync(id, It.IsAny<WorkItemStatus>(), WorkItemStatus.HumanFeedback), Times.Once);
+        notifier.Verify(n => n.HumanFeedbackRequiredAsync(id, "first"), Times.Once);
+        notifier.Verify(n => n.HumanFeedbackRequiredAsync(id, "second"), Times.Once);
     }
 }

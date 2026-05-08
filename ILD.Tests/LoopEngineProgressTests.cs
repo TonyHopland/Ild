@@ -43,6 +43,12 @@ public class LoopEngineProgressTests
         services.AddSingleton<IEventLogStore>(db.EventLogs);
         services.AddSingleton<IEventLogService>(new EventLogService(db.EventLogs, db.LoopRuns));
         services.AddSingleton<IAuthStore>(db.Auth);
+        services.AddSingleton<IRepositoryManager>(new Mock<IRepositoryManager>().Object);
+        services.AddSingleton<IWorkItemManager>(sp => new WorkItemManager(
+            sp.GetRequiredService<IWorkItemStore>(),
+            sp.GetRequiredService<IRepositoryManager>(),
+            sp.GetRequiredService<IEventLogService>(),
+            sp.GetRequiredService<ILoopRunStore>()));
 
         var sp = services.BuildServiceProvider();
         var engine = sp.GetRequiredService<LoopEngine>();
