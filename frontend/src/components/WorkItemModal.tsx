@@ -19,6 +19,7 @@ import {
 import { useSignalR } from "../hooks/useSignalR";
 import LiveStream from "./NodeTimeline/LiveStream";
 import ConfirmModal from "./ConfirmModal";
+import TagAutocomplete from "./TagAutocomplete";
 import { parseConversation, parseTags } from "../utils/workItemJson";
 
 interface WorkItemModalProps {
@@ -865,6 +866,7 @@ export default function WorkItemModal({
                       id="repository"
                       value={repositoryId}
                       onChange={(e) => setRepositoryId(e.target.value)}
+                      required
                     >
                       <option value="">Select repository...</option>
                       {repositories.map((r) => (
@@ -909,19 +911,13 @@ export default function WorkItemModal({
                   <label htmlFor="tags">
                     Tags (comma separated) — each tag must match a loop template name
                   </label>
-                  <input
+                  <TagAutocomplete
                     id="tags"
-                    type="text"
-                    list="loop-template-names"
                     value={tags}
-                    onChange={(e) => setTags(e.target.value)}
+                    onChange={setTags}
+                    options={templates.map((t) => t.name)}
                     placeholder="e.g. build, deploy"
                   />
-                  <datalist id="loop-template-names">
-                    {templates.map((t) => (
-                      <option key={t.id} value={t.name} />
-                    ))}
-                  </datalist>
                 </div>
                 {submitError && (
                   <div role="alert" className="form-error">

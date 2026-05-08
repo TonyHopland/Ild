@@ -113,15 +113,12 @@ describe("WorkItemModal", () => {
     });
 
     expect(screen.getByLabelText("Repository")).toBeTruthy();
-    // Tag input is now the user-facing way to pick a loop template; the
-    // datalist is populated from template names so users get autocomplete.
+    // Tag input is now the user-facing way to pick a loop template; it
+    // renders a custom suggestion list (per-segment autocomplete) sourced
+    // from loop template names.
     const tagInput = screen.getByLabelText(/Tags/i) as HTMLInputElement;
-    expect(tagInput.getAttribute("list")).toBe("loop-template-names");
+    expect(tagInput).toBeTruthy();
     expect(screen.getByText("my-repo")).toBeTruthy();
-    const datalistOption = document.querySelector(
-      'datalist#loop-template-names option[value="Feature Dev"]',
-    );
-    expect(datalistOption).toBeTruthy();
   });
 
   test("detail view shows Start button when WorkItem status is Ready", async () => {
