@@ -1,0 +1,50 @@
+using System.ComponentModel.DataAnnotations;
+
+namespace ILD.WorkItemServer.Domain;
+
+/// <summary>
+/// Server-side work item entity. Repository information is intentionally
+/// absent — clients infer the repository from their 1:1 provider mapping.
+/// </summary>
+public class WorkItem
+{
+    [Key]
+    public Guid Id { get; set; }
+
+    [Required]
+    [MaxLength(512)]
+    public string Title { get; set; } = string.Empty;
+
+    [MaxLength(8192)]
+    public string? Description { get; set; }
+
+    [MaxLength(256)]
+    public string? CreatedBy { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+
+    public DateTime UpdatedAt { get; set; }
+
+    public WorkItemPriority Priority { get; set; } = WorkItemPriority.Medium;
+
+    public WorkItemStatus Status { get; set; } = WorkItemStatus.Backlog;
+
+    /// <summary>JSON-serialized string[] of tags.</summary>
+    public string TagsJson { get; set; } = "[]";
+
+    /// <summary>JSON-serialized Guid[] of dependency work item IDs.</summary>
+    public string DependenciesJson { get; set; } = "[]";
+
+    /// <summary>JSON-serialized array of <see cref="ConversationMessage"/>.</summary>
+    public string ConversationJson { get; set; } = "[]";
+
+    [MaxLength(2048)]
+    public string? HumanFeedbackActions { get; set; }
+
+    /// <summary>
+    /// Set on every successful poll heartbeat that includes this item's ID.
+    /// Null means the item has never been seen by an ILD instance, which the
+    /// stale detector treats as not-yet-claimed (non-stale).
+    /// </summary>
+    public DateTime? LastHeartbeatAt { get; set; }
+}

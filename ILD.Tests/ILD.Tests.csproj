@@ -33,6 +33,7 @@
     <ProjectReference Include="..\ILD.Core\ILD.Core.csproj" />
     <ProjectReference Include="..\ILD.Api\ILD.Api.csproj" />
     <ProjectReference Include="..\ILD.Data\ILD.Data.csproj" />
+    <ProjectReference Include="..\ILD.WorkItemServer\ILD.WorkItemServer.csproj" />
   </ItemGroup>
 
 </Project>
