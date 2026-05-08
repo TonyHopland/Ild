@@ -7,5 +7,6 @@ public enum WorkItemStatus
     Ready = 2,
     Running = 3,
     HumanFeedback = 4,
-    Done = 5
+    Done = 5,
+    WaitingForIld = 6
 }

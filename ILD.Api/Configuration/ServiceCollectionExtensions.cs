@@ -52,6 +52,7 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient<IWorkItemServerClient, WorkItemServerClient>();
         services.AddSingleton<IActiveWorkItemTracker, InMemoryActiveWorkItemTracker>();
         services.AddScoped<ILoopTemplateResolver, DbLoopTemplateResolver>();
+        services.AddScoped<IWorkItemServerOptionsResolver, DbWorkItemServerOptionsResolver>();
         services.AddScoped<IRemoteWorkItemCoordinator, RemoteWorkItemCoordinator>();
         services.AddSingleton<IConfigureOptions<RemoteWorkItemPollerOptions>, RemoteWorkItemPollerOptionsConfigurator>();
         services.AddSingleton(TimeProvider.System);

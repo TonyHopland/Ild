@@ -1,3 +1,4 @@
+using ILD.Core.Services.Remote;
 using ILD.Data.Entities;
 using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
@@ -36,6 +37,15 @@ public sealed class TestDb : IDisposable
     public IAuthStore Auth { get; }
     public IProviderStore Providers { get; }
 
+    /// <summary>
+    /// Fake WorkItemServer harness backing the remote-backed
+    /// <c>WorkItemManager</c>. Tests that construct a manager pass
+    /// <see cref="ServerClient"/> + <see cref="ServerOptions"/> through.
+    /// </summary>
+    public FakeWorkItemServerHarness Server { get; }
+    public IWorkItemServerClient ServerClient => Server.Client;
+    public IWorkItemServerOptionsResolver ServerOptions => Server.Options;
+
     public TestDb()
     {
         _connection = new SqliteConnection("Filename=:memory:");
@@ -54,6 +64,7 @@ public sealed class TestDb : IDisposable
         EventLogs = new EventLogStore(Context);
         Auth = new AuthStore(Context);
         Providers = new ProviderStore(Context);
+        Server = new FakeWorkItemServerHarness();
     }
 
     public AppDbContext Fresh()
@@ -68,5 +79,6 @@ public sealed class TestDb : IDisposable
     {
         Context.Dispose();
         _connection.Dispose();
+        Server.Dispose();
     }
 }

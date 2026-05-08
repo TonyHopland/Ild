@@ -15,6 +15,7 @@ namespace ILD.Tests;
 internal sealed class EngineHarness : IDisposable
 {
     public TestDb Db { get; }
+    public FakeWorkItemServerHarness ServerHarness { get; }
     public IServiceProvider ServiceProvider { get; }
     public LoopEngine Engine { get; }
     public Dictionary<NodeType, FakeExecutor> Fakes { get; } = new();
@@ -26,6 +27,7 @@ internal sealed class EngineHarness : IDisposable
     public EngineHarness()
     {
         Db = new TestDb();
+        ServerHarness = Db.Server;
 
         foreach (var type in Enum.GetValues<NodeType>())
             Fakes[type] = new FakeExecutor(type);
@@ -45,11 +47,15 @@ internal sealed class EngineHarness : IDisposable
         services.AddSingleton<IEventLogService>(new EventLogService(Db.EventLogs, Db.LoopRuns));
         services.AddSingleton<IAuthStore>(Db.Auth);
         services.AddSingleton<IRepositoryManager>(new Mock<IRepositoryManager>().Object);
+        services.AddSingleton(ServerHarness.Client);
+        services.AddSingleton(ServerHarness.Options);
         services.AddSingleton<IWorkItemManager>(sp => new WorkItemManager(
             sp.GetRequiredService<IWorkItemStore>(),
             sp.GetRequiredService<IRepositoryManager>(),
             sp.GetRequiredService<IEventLogService>(),
-            sp.GetRequiredService<ILoopRunStore>()));
+            sp.GetRequiredService<ILoopRunStore>(),
+            sp.GetRequiredService<ILD.Core.Services.Remote.IWorkItemServerClient>(),
+            sp.GetRequiredService<ILD.Core.Services.Remote.IWorkItemServerOptionsResolver>()));
 
         ServiceProvider = services.BuildServiceProvider();
         Engine = ServiceProvider.GetRequiredService<LoopEngine>();
@@ -79,6 +85,16 @@ internal sealed class EngineHarness : IDisposable
         Db.Context.WorkItems.Add(wi);
         Db.Context.LoopRuns.Add(run);
         Db.Context.SaveChanges();
+        // Mirror onto the WorkItemServer fake so transition calls succeed.
+        ServerHarness.ServerDb.WorkItems.Add(new ILD.WorkItemServer.Domain.WorkItem
+        {
+            Id = wi.Id,
+            Title = wi.Title,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+            Status = ILD.WorkItemServer.Domain.WorkItemStatus.Running,
+        });
+        ServerHarness.ServerDb.SaveChanges();
         WorkItemId = wi.Id;
         RunId = run.Id;
     }
@@ -109,7 +125,7 @@ internal sealed class EngineHarness : IDisposable
     public IReadOnlyList<EventLog> ReloadEventLogs()
         => Db.Fresh().EventLogs.AsNoTracking().Where(e => e.LoopRunId == RunId).OrderBy(e => e.Sequence).ToList();
 
-    public void Dispose() => Db.Dispose();
+    public void Dispose() { Db.Dispose(); }
 }
 
 internal sealed class FakeExecutor : INodeExecutor

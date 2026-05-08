@@ -1,3 +1,4 @@
+using ILD.Core.Services.Remote;
 using ILD.Data;
 using ILD.Data.Entities;
 using Microsoft.AspNetCore.Hosting;
@@ -20,6 +21,7 @@ namespace ILD.Tests.Integration;
 public sealed class ApiFactory : WebApplicationFactory<Program>
 {
     private readonly SqliteConnection _connection;
+    private readonly FakeWorkItemServerHarness _serverHarness = new();
     private readonly string _dataRoot;
 
     public string AdminPassword { get; } = "ild-int-tests-admin-pw";
@@ -65,6 +67,16 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 
             services.AddDbContext<AppDbContext>(options => options.UseSqlite(_connection,
                 sql => sql.MigrationsAssembly(typeof(AppDbContext).Assembly)));
+
+            // Replace the production WorkItemServer client + options resolver
+            // with the in-process fake so tests don't need a real WorkItemServer.
+            var stubs = services
+                .Where(d => d.ServiceType == typeof(IWorkItemServerClient)
+                    || d.ServiceType == typeof(IWorkItemServerOptionsResolver))
+                .ToList();
+            foreach (var d in stubs) services.Remove(d);
+            services.AddSingleton<IWorkItemServerClient>(_serverHarness.Client);
+            services.AddSingleton<IWorkItemServerOptionsResolver>(_serverHarness.Options);
         });
     }
 
@@ -87,6 +99,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         if (disposing)
         {
             _connection.Dispose();
+            _serverHarness.Dispose();
             try { Directory.Delete(_dataRoot, recursive: true); } catch { /* best effort */ }
         }
         base.Dispose(disposing);

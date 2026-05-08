@@ -16,7 +16,6 @@ public class AppDbContext : DbContext
     public DbSet<LoopNode> LoopNodes => Set<LoopNode>();
     public DbSet<LoopNodeEdge> LoopNodeEdges => Set<LoopNodeEdge>();
     public DbSet<WorkItem> WorkItems => Set<WorkItem>();
-    public DbSet<WorkItemDependency> WorkItemDependencies => Set<WorkItemDependency>();
     public DbSet<LoopRun> LoopRuns => Set<LoopRun>();
     public DbSet<LoopRunNode> LoopRunNodes => Set<LoopRunNode>();
     public DbSet<LoopRunEdgeTraversal> LoopRunEdgeTraversals => Set<LoopRunEdgeTraversal>();
@@ -84,11 +83,6 @@ public class AppDbContext : DbContext
             e.HasIndex(w => w.RepositoryId);
             e.HasIndex(w => w.Status);
             e.HasIndex(w => w.CurrentLoopRunId);
-        });
-
-        modelBuilder.Entity<WorkItemDependency>(e =>
-        {
-            e.HasIndex(w => new { w.WorkItemId, w.DependencyWorkItemId }).IsUnique();
         });
 
         modelBuilder.Entity<LoopRun>(e =>
@@ -165,11 +159,6 @@ public class AppDbContext : DbContext
             e.Property(w => w.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
         });
 
-        modelBuilder.Entity<WorkItemDependency>(e =>
-        {
-            e.Property(w => w.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
-        });
-
         modelBuilder.Entity<LoopRun>(e =>
         {
             e.Property(l => l.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
@@ -210,18 +199,6 @@ public class AppDbContext : DbContext
             .WithMany(lr => lr.RunNodes)
             .HasForeignKey(rn => rn.LoopRunId)
             .OnDelete(DeleteBehavior.Cascade);
-
-        modelBuilder.Entity<WorkItemDependency>()
-            .HasOne(wd => wd.WorkItem)
-            .WithMany(w => w.Dependencies)
-            .HasForeignKey(wd => wd.WorkItemId)
-            .OnDelete(DeleteBehavior.Restrict);
-
-        modelBuilder.Entity<WorkItemDependency>()
-            .HasOne(wd => wd.DependentWorkItem)
-            .WithMany(w => w.DependentDependencies)
-            .HasForeignKey(wd => wd.DependencyWorkItemId)
-            .OnDelete(DeleteBehavior.Restrict);
 
         modelBuilder.Entity<LoopRun>()
             .HasOne(r => r.WorkItem)

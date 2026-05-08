@@ -12,7 +12,7 @@ public class RecoveryManagerTests
 {
     private static (
         RecoveryManager mgr,
-        Mock<IWorkItemStore> wiStore,
+        Mock<IWorkItemManager> wiMgr,
         Mock<ILoopRunStore> runStore,
         Mock<IProviderStore> provStore,
         Mock<ILoopTemplateStore> tmplStore,
@@ -20,7 +20,7 @@ public class RecoveryManagerTests
         Mock<ILoopEngine> engine
     ) Build()
     {
-        var wi = new Mock<IWorkItemStore>();
+        var wi = new Mock<IWorkItemManager>();
         var rn = new Mock<ILoopRunStore>();
         var pr = new Mock<IProviderStore>();
         var ts = new Mock<ILoopTemplateStore>();
@@ -50,7 +50,7 @@ public class RecoveryManagerTests
     [Fact]
     public async Task RecoverRunAsync_with_NeedsReview_marks_work_item_HumanFeedback()
     {
-        var (mgr, wiStore, runStore, _, _, _, engine) = Build();
+        var (mgr, wiMgr, runStore, _, _, _, engine) = Build();
         var runId = Guid.NewGuid();
         var wiId = Guid.NewGuid();
         runStore.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(new LoopRun
@@ -60,15 +60,13 @@ public class RecoveryManagerTests
             Status = LoopRunStatus.Running,
             RecoveryPolicy = RecoveryPolicy.NeedsReview,
         });
-        var wi = new WorkItem { Id = wiId, Title = "t", Description = "d", Status = WorkItemStatus.Running };
-        wiStore.Setup(s => s.GetByIdAsync(wiId)).ReturnsAsync(wi);
+        wiMgr.Setup(m => m.TransitionAsync(wiId, WorkItemStatus.HumanFeedback, It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>()))
+            .ReturnsAsync(true);
 
         var ok = await mgr.RecoverRunAsync(runId);
 
         ok.Should().BeTrue();
-        wi.Status.Should().Be(WorkItemStatus.HumanFeedback);
-        wi.HumanFeedbackReason.Should().Be("Recovery requires review");
-        wiStore.Verify(s => s.UpdateAsync(wi), Times.Once);
+        wiMgr.Verify(m => m.TransitionAsync(wiId, WorkItemStatus.HumanFeedback, It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>()), Times.Once);
         engine.Verify(e => e.CancelRunAsync(It.IsAny<Guid>()), Times.Never);
     }
 
@@ -119,7 +117,7 @@ public class RecoveryManagerTests
     [Fact]
     public async Task ValidateWorktreeHealthAsync_returns_true_when_repo_validates_path()
     {
-        var (mgr, wiStore, runStore, _, _, repo, _) = Build();
+        var (mgr, wiMgr, runStore, _, _, repo, _) = Build();
         var runId = Guid.NewGuid();
         var wiId = Guid.NewGuid();
         runStore.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(new LoopRun
@@ -128,7 +126,7 @@ public class RecoveryManagerTests
             WorkItemId = wiId,
             Status = LoopRunStatus.Running,
         });
-        wiStore.Setup(s => s.GetByIdAsync(wiId)).ReturnsAsync(new WorkItem
+        wiMgr.Setup(s => s.GetWorkItemAsync(wiId)).ReturnsAsync(new WorkItem
         {
             Id = wiId,
             Title = "t",
@@ -143,7 +141,7 @@ public class RecoveryManagerTests
     [Fact]
     public async Task ValidateWorktreeHealthAsync_returns_false_when_repo_reports_corrupted()
     {
-        var (mgr, wiStore, runStore, _, _, repo, _) = Build();
+        var (mgr, wiMgr, runStore, _, _, repo, _) = Build();
         var runId = Guid.NewGuid();
         var wiId = Guid.NewGuid();
         runStore.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(new LoopRun
@@ -152,7 +150,7 @@ public class RecoveryManagerTests
             WorkItemId = wiId,
             Status = LoopRunStatus.Running,
         });
-        wiStore.Setup(s => s.GetByIdAsync(wiId)).ReturnsAsync(new WorkItem
+        wiMgr.Setup(s => s.GetWorkItemAsync(wiId)).ReturnsAsync(new WorkItem
         {
             Id = wiId,
             Title = "t",
@@ -167,7 +165,7 @@ public class RecoveryManagerTests
     [Fact]
     public async Task ValidateWorktreeHealthAsync_returns_false_when_no_worktree_path()
     {
-        var (mgr, wiStore, runStore, _, _, _, _) = Build();
+        var (mgr, wiMgr, runStore, _, _, _, _) = Build();
         var runId = Guid.NewGuid();
         var wiId = Guid.NewGuid();
         runStore.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(new LoopRun
@@ -176,7 +174,7 @@ public class RecoveryManagerTests
             WorkItemId = wiId,
             Status = LoopRunStatus.Running,
         });
-        wiStore.Setup(s => s.GetByIdAsync(wiId)).ReturnsAsync(new WorkItem
+        wiMgr.Setup(s => s.GetWorkItemAsync(wiId)).ReturnsAsync(new WorkItem
         {
             Id = wiId,
             Title = "t",
@@ -216,7 +214,7 @@ public class RecoveryManagerTests
     [Fact]
     public async Task RecoverRunAsync_with_AutoResume_and_WaitingHuman_node_does_not_resume()
     {
-        var (mgr, wiStore, runStore, _, _, _, engine) = Build();
+        var (mgr, wiMgr, runStore, _, _, _, engine) = Build();
         var runId = Guid.NewGuid();
         var wiId = Guid.NewGuid();
         var currentNodeId = Guid.NewGuid();
@@ -237,8 +235,7 @@ public class RecoveryManagerTests
             LoopNodeId = currentNodeId,
             Status = LoopRunNodeStatus.WaitingHuman,
         });
-        var wi = new WorkItem { Id = wiId, Title = "t", Description = "d", Status = WorkItemStatus.HumanFeedback };
-        wiStore.Setup(s => s.GetByIdAsync(wiId)).ReturnsAsync(wi);
+        wiMgr.Setup(s => s.GetWorkItemAsync(wiId)).ReturnsAsync(new WorkItem { Id = wiId, Title = "t", Description = "d", Status = WorkItemStatus.HumanFeedback });
 
         var ok = await mgr.RecoverRunAsync(runId);
 

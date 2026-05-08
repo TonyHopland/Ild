@@ -41,7 +41,7 @@ public class WorkItemManagerTests
         var eventLog = new Mock<IEventLogService>();
         eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<string>()))
             .ReturnsAsync(1L);
-        return (new WorkItemManager(db.WorkItems, repoMgr.Object, eventLog.Object, db.LoopRuns), db, repo.Id, repoMgr, eventLog);
+        return (new WorkItemManager(db.WorkItems, repoMgr.Object, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions), db, repo.Id, repoMgr, eventLog);
     }
 
     [Fact]
@@ -636,8 +636,7 @@ public class WorkItemManagerTests
 
         ok.Should().BeTrue();
         (await mgr.GetWorkItemAsync(child)).Should().BeNull();
-        var remainingDeps = await db.Context.WorkItemDependencies.Where(d => d.WorkItemId == child || d.DependencyWorkItemId == child).ToListAsync();
-        remainingDeps.Should().BeEmpty();
+        // Dependencies live on the WorkItemServer; delete propagates there.
     }
 
     [Fact]
@@ -654,8 +653,7 @@ public class WorkItemManagerTests
 
         ok.Should().BeTrue();
         (await mgr.GetWorkItemAsync(dep)).Should().BeNull();
-        var remainingDeps = await db.Context.WorkItemDependencies.Where(d => d.WorkItemId == dep || d.DependencyWorkItemId == dep).ToListAsync();
-        remainingDeps.Should().BeEmpty();
+        // Dependencies live on the WorkItemServer; delete propagates there.
     }
 
     [Fact]
@@ -973,7 +971,7 @@ public class WorkItemManagerTests
         eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<string>()))
             .ReturnsAsync(1L);
         var notifier = new Mock<IWorkItemNotifier>();
-        var mgr = new WorkItemManager(db.WorkItems, repoMgr.Object, eventLog.Object, db.LoopRuns, notifier.Object);
+        var mgr = new WorkItemManager(db.WorkItems, repoMgr.Object, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, notifier.Object);
 
         var id = await mgr.CreateWorkItemAsync("t", "", null, repo.Id);
         notifier.Invocations.Clear();

@@ -7,15 +7,15 @@ namespace ILD.Core.Services.Implementations;
 
 public class RecoveryManager : IRecoveryManager
 {
-    private readonly IWorkItemStore _workItemStore;
+    private readonly IWorkItemManager _workItems;
     private readonly ILoopRunStore _loopRunStore;
     private readonly ILoopTemplateStore _templateStore;
     private readonly IRepositoryManager _repo;
     private readonly ILoopEngine _engine;
 
-    public RecoveryManager(IWorkItemStore workItemStore, ILoopRunStore loopRunStore, IProviderStore providerStore, ILoopTemplateStore templateStore, IRepositoryManager repo, ILoopEngine engine)
+    public RecoveryManager(IWorkItemManager workItems, ILoopRunStore loopRunStore, IProviderStore providerStore, ILoopTemplateStore templateStore, IRepositoryManager repo, ILoopEngine engine)
     {
-        _workItemStore = workItemStore;
+        _workItems = workItems;
         _loopRunStore = loopRunStore;
         _templateStore = templateStore;
         _repo = repo;
@@ -41,14 +41,10 @@ public class RecoveryManager : IRecoveryManager
         }
         if (policy == RecoveryPolicy.NeedsReview)
         {
-            var wi = await _workItemStore.GetByIdAsync(run.WorkItemId);
-            if (wi != null)
-            {
-                wi.Status = WorkItemStatus.HumanFeedback;
-                wi.HumanFeedbackReason = "Recovery requires review";
-                wi.UpdatedAt = DateTime.UtcNow;
-                await _workItemStore.UpdateAsync(wi);
-            }
+            await _workItems.TransitionAsync(
+                run.WorkItemId,
+                WorkItemStatus.HumanFeedback,
+                reason: "Recovery requires review");
             return true;
         }
 
@@ -58,12 +54,10 @@ public class RecoveryManager : IRecoveryManager
             var runNode = await _loopRunStore.GetRunNodeAsync(runId, run.CurrentNodeId.Value);
             if (runNode?.Status == LoopRunNodeStatus.WaitingHuman)
             {
-                var wi = await _workItemStore.GetByIdAsync(run.WorkItemId);
+                var wi = await _workItems.GetWorkItemAsync(run.WorkItemId);
                 if (wi != null && wi.Status != WorkItemStatus.HumanFeedback)
                 {
-                    wi.Status = WorkItemStatus.HumanFeedback;
-                    wi.UpdatedAt = DateTime.UtcNow;
-                    await _workItemStore.UpdateAsync(wi);
+                    await _workItems.TransitionAsync(run.WorkItemId, WorkItemStatus.HumanFeedback);
                 }
                 return true;
             }
@@ -77,7 +71,7 @@ public class RecoveryManager : IRecoveryManager
     {
         var run = await _loopRunStore.GetByIdAsync(runId);
         if (run == null) return false;
-        var wi = await _workItemStore.GetByIdAsync(run.WorkItemId);
+        var wi = await _workItems.GetWorkItemAsync(run.WorkItemId);
         if (wi == null || string.IsNullOrEmpty(wi.WorktreePath)) return false;
         return await _repo.ValidateWorktreeHealthAsync(wi.WorktreePath);
     }

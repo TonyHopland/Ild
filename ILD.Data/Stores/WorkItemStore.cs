@@ -50,44 +50,6 @@ public class WorkItemStore : IWorkItemStore
         await _db.SaveChangesAsync();
     }
 
-    public async Task<bool> AddDependencyAsync(Guid workItemId, Guid dependencyWorkItemId)
-    {
-        var exists = await _db.WorkItemDependencies
-            .AnyAsync(d => d.WorkItemId == workItemId && d.DependencyWorkItemId == dependencyWorkItemId);
-        if (exists) return false;
-
-        _db.WorkItemDependencies.Add(new WorkItemDependency
-        {
-            Id = Guid.NewGuid(),
-            WorkItemId = workItemId,
-            DependencyWorkItemId = dependencyWorkItemId,
-        });
-        await _db.SaveChangesAsync();
-        return true;
-    }
-
-    public async Task<bool> RemoveDependencyAsync(Guid workItemId, Guid dependencyWorkItemId)
-    {
-        var dep = await _db.WorkItemDependencies
-            .FirstOrDefaultAsync(d => d.WorkItemId == workItemId && d.DependencyWorkItemId == dependencyWorkItemId);
-        if (dep == null) return false;
-        _db.WorkItemDependencies.Remove(dep);
-        await _db.SaveChangesAsync();
-        return true;
-    }
-
-    public async Task<IReadOnlyList<Guid>> GetDependencyIdsAsync(Guid workItemId)
-        => await _db.WorkItemDependencies
-            .Where(d => d.WorkItemId == workItemId)
-            .Select(d => d.DependencyWorkItemId)
-            .ToListAsync();
-
-    public async Task<IReadOnlyList<Guid>> GetDependentIdsAsync(Guid workItemId)
-        => await _db.WorkItemDependencies
-            .Where(d => d.DependencyWorkItemId == workItemId)
-            .Select(d => d.WorkItemId)
-            .ToListAsync();
-
     public Task<bool> HasRunningRunAsync(Guid workItemId)
         => _db.LoopRuns.AnyAsync(r => r.WorkItemId == workItemId && r.Status == LoopRunStatus.Running);
 
@@ -107,12 +69,6 @@ public class WorkItemStore : IWorkItemStore
     {
         var wi = await _db.WorkItems.FindAsync(id);
         if (wi == null) return false;
-
-        // Remove dependency records that reference this work item (both directions)
-        var deps = await _db.WorkItemDependencies
-            .Where(d => d.WorkItemId == id || d.DependencyWorkItemId == id)
-            .ToListAsync();
-        _db.WorkItemDependencies.RemoveRange(deps);
 
         // Get all LoopRuns for this work item so we can clean up their EventLogs
         var loopRuns = await _db.LoopRuns

@@ -91,10 +91,4 @@ public class WorkItem : IHasUpdatedAt
 
     [InverseProperty("WorkItem")]
     public ICollection<LoopRun> LoopRuns { get; set; } = new List<LoopRun>();
-
-    [InverseProperty("WorkItem")]
-    public ICollection<WorkItemDependency> Dependencies { get; set; } = new List<WorkItemDependency>();
-
-    [InverseProperty("DependentWorkItem")]
-    public ICollection<WorkItemDependency> DependentDependencies { get; set; } = new List<WorkItemDependency>();
 }
