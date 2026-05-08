@@ -176,7 +176,7 @@ public class WorkItemManager : IWorkItemManager
         WriteCachedConversation(local, remote.Conversation);
     }
 
-    public async Task<bool> UpdateAsync(Guid workItemId, string title, string description, Guid? loopTemplateId = null)
+    public async Task<bool> UpdateAsync(Guid workItemId, string title, string description, Guid? loopTemplateId = null, IEnumerable<string>? tags = null)
     {
         var wi = await _store.GetByIdAsync(workItemId);
         if (wi == null) return false;
@@ -186,6 +186,7 @@ public class WorkItemManager : IWorkItemManager
         {
             Title = title,
             Description = description,
+            Tags = tags?.ToList(),
         });
         if (updated == null) return false;
 

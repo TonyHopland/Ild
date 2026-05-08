@@ -411,17 +411,17 @@ export default function WorkItemModal({
     setSubmitting(true);
     setSubmitError(null);
 
-    const parsedLabels = tags
+    const parsedTags = tags
       .split(",")
       .map((t) => t.trim())
       .filter(Boolean);
 
-    const data: Partial<WorkItem> = {
+    const data: Record<string, unknown> = {
       title,
       description,
       status,
       priority,
-      labels: parsedLabels,
+      tags: parsedTags,
       repositoryId,
       loopTemplateId,
     };
@@ -429,7 +429,7 @@ export default function WorkItemModal({
     try {
       let saved: WorkItem;
       if (workItem) {
-        saved = await workItemService.update(workItem.id, data);
+        saved = await workItemService.update(workItem.id, data as Partial<WorkItem>);
         if (workItem.status !== status) {
           try {
             await workItemService.transition(workItem.id, status);
@@ -442,7 +442,7 @@ export default function WorkItemModal({
           }
         }
       } else {
-        saved = await workItemService.create(data);
+        saved = await workItemService.create(data as Partial<WorkItem>);
       }
       onSave(saved);
       if (workItem) {
@@ -927,7 +927,7 @@ export default function WorkItemModal({
                   </div>
                 </div>
                 <div className="form-group">
-                  <label htmlFor="tags">Labels (comma separated)</label>
+                  <label htmlFor="tags">Tags (comma separated)</label>
                   <input
                     id="tags"
                     type="text"

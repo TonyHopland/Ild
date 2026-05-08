@@ -8,7 +8,7 @@ public interface IWorkItemManager
 {
     Task<Guid> CreateWorkItemAsync(string title, string description, Guid? loopTemplateId, Guid? repositoryId);
     Task<Guid> CreateWorkItemAsync(string title, string description, Guid? loopTemplateId, Guid? repositoryId, Guid? createdByLoopRunId, bool forceBacklog, IEnumerable<string>? tags = null);
-    Task<bool> UpdateAsync(Guid workItemId, string title, string description, Guid? loopTemplateId = null);
+    Task<bool> UpdateAsync(Guid workItemId, string title, string description, Guid? loopTemplateId = null, IEnumerable<string>? tags = null);
     Task<WorkItem?> GetWorkItemAsync(Guid workItemId);
 
     /// <summary>

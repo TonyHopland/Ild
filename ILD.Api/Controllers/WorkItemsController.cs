@@ -104,7 +104,10 @@ public class WorkItemsController : ControllerBase
         var repositoryId = Guid.TryParse(request.RepositoryId, out var rGuid) ? (Guid?)rGuid : null;
         var id = await _workItemManager.CreateWorkItemAsync(
             request.Title, request.Description,
-            loopTemplateId, repositoryId);
+            loopTemplateId, repositoryId,
+            createdByLoopRunId: null,
+            forceBacklog: false,
+            tags: request.Tags);
 
         var wi = await _workItemManager.GetWorkItemAsync(id);
         if (wi != null)
@@ -119,7 +122,7 @@ public class WorkItemsController : ControllerBase
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
         var loopTemplateId = Guid.TryParse(request.LoopTemplateId, out var ltGuid) ? (Guid?)ltGuid : null;
-        var ok = await _workItemManager.UpdateAsync(guid, request.Title, request.Description, loopTemplateId);
+        var ok = await _workItemManager.UpdateAsync(guid, request.Title, request.Description, loopTemplateId, request.Tags);
         if (!ok) return NotFound();
         var wi = await _workItemManager.GetWorkItemAsync(guid);
         return Ok(wi);
