@@ -73,6 +73,7 @@ public class WorkItemManager : IWorkItemManager
             ForceStatus = forceStatus,
             Tags = tags?.ToList() ?? (IReadOnlyList<string>)Array.Empty<string>(),
             CreatedByLoopRunId = createdByLoopRunId,
+            RepositoryId = repositoryId,
         });
 
         return serverWi.Id;
@@ -154,7 +155,7 @@ public class WorkItemManager : IWorkItemManager
             Tags = remote.Tags,
             Conversation = remote.Conversation,
             HumanFeedbackActions = remote.HumanFeedbackActions,
-            RepositoryId = run?.RepositoryId,
+            RepositoryId = run?.RepositoryId ?? remote.RepositoryId,
             CreatedByLoopRunId = run?.CreatedByLoopRunId ?? remote.CreatedByLoopRunId,
             WorktreePath = run?.WorktreePath,
             BranchName = run?.BranchName,

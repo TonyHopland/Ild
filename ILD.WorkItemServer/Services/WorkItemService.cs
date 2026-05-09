@@ -48,6 +48,7 @@ public sealed class WorkItemService : IWorkItemService
             Priority = req.Priority,
             Status = req.ForceStatus ?? WorkItemStatus.Backlog,
             CreatedByLoopRunId = req.CreatedByLoopRunId,
+            RepositoryId = req.RepositoryId,
         };
         WorkItemMapper.WriteTags(w, req.Tags ?? Array.Empty<string>());
         WorkItemMapper.WriteDependencies(w, req.Dependencies ?? Array.Empty<Guid>());

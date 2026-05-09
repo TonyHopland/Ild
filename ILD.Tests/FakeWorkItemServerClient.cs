@@ -39,6 +39,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             .ToList(),
         HumanFeedbackActions = dto.HumanFeedbackActions,
         CreatedByLoopRunId = dto.CreatedByLoopRunId,
+        RepositoryId = dto.RepositoryId,
     };
 
     public async Task<RemoteWorkItem> CreateAsync(WorkItemServerOptions opts, RemoteCreateWorkItemRequest req, CancellationToken ct = default)
@@ -53,6 +54,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             Dependencies = req.Dependencies?.ToList() ?? new List<Guid>(),
             ForceStatus = req.ForceStatus.HasValue ? Map(req.ForceStatus.Value) : null,
             CreatedByLoopRunId = req.CreatedByLoopRunId,
+            RepositoryId = req.RepositoryId,
         }, ct);
         return ToRemote(dto);
     }

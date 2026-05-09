@@ -3,8 +3,8 @@ using System.ComponentModel.DataAnnotations;
 namespace ILD.WorkItemServer.Domain;
 
 /// <summary>
-/// Server-side work item entity. Repository information is intentionally
-/// absent — clients infer the repository from their 1:1 provider mapping.
+/// Server-side work item entity. RepositoryId is stored so clients can
+/// retrieve it after the round-trip and attach it to LoopRun records.
 /// </summary>
 public class WorkItem
 {
@@ -54,4 +54,10 @@ public class WorkItem
     /// for the work item itself.
     /// </summary>
     public Guid? CreatedByLoopRunId { get; set; }
+
+    /// <summary>
+    /// The repository this work item is associated with. Stored on the server
+    /// so it round-trips and can be attached to LoopRun records on the client.
+    /// </summary>
+    public Guid? RepositoryId { get; set; }
 }

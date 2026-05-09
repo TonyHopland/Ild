@@ -41,6 +41,7 @@ public sealed class RemoteWorkItem
     public IReadOnlyList<RemoteConversationMessage> Conversation { get; set; } = Array.Empty<RemoteConversationMessage>();
     public string? HumanFeedbackActions { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
+    public Guid? RepositoryId { get; set; }
 }
 
 public sealed class RemoteCreateWorkItemRequest
@@ -53,6 +54,7 @@ public sealed class RemoteCreateWorkItemRequest
     public IReadOnlyList<Guid>? Dependencies { get; set; }
     public RemoteWorkItemStatus? ForceStatus { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
+    public Guid? RepositoryId { get; set; }
 }
 
 public sealed class RemoteUpdateWorkItemRequest

@@ -122,6 +122,8 @@ public class LoopEngine : ILoopEngine
                 RecoveryPolicy = RecoveryPolicy.AutoResume,
                 Status = LoopRunStatus.Running,
                 StartedAt = DateTime.UtcNow,
+                RepositoryId = wi.RepositoryId,
+                CreatedByLoopRunId = wi.CreatedByLoopRunId,
             };
             await loopRunStore.CreateRunAsync(run);
             await manager.TransitionAsync(workItemId, RemoteWorkItemStatus.Running, currentLoopRunId: run.Id);
