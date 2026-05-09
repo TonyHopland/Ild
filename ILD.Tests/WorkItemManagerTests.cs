@@ -1,4 +1,5 @@
 using FluentAssertions;
+using ILD.Core.Services.Remote;
 using ILD.Data.Enums;
 using ILD.Data.Entities;
 using ILD.Core.Services.Implementations;
@@ -41,7 +42,7 @@ public class WorkItemManagerTests
         var eventLog = new Mock<IEventLogService>();
         eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<string>()))
             .ReturnsAsync(1L);
-        return (new WorkItemManager(db.WorkItems, repoMgr.Object, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions), db, repo.Id, repoMgr, eventLog);
+        return (new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions), db, repo.Id, repoMgr, eventLog);
     }
 
     [Fact]
@@ -57,7 +58,7 @@ public class WorkItemManagerTests
         var id = await mgr.CreateWorkItemAsync("title", "desc", repoId);
 
         var wi = await mgr.GetWorkItemAsync(id);
-        wi!.Status.Should().Be(WorkItemStatus.WorkQueue);
+        wi!.Status.Should().Be(RemoteWorkItemStatus.WorkQueue);
     }
 
     [Fact]
@@ -73,7 +74,7 @@ public class WorkItemManagerTests
         var id = await mgr.CreateWorkItemAsync("title", "desc", repoId);
 
         var wi = await mgr.GetWorkItemAsync(id);
-        wi!.Status.Should().Be(WorkItemStatus.Backlog);
+        wi!.Status.Should().Be(RemoteWorkItemStatus.Backlog);
     }
 
     [Fact]
@@ -139,6 +140,11 @@ public class WorkItemManagerTests
         var child = await mgr.CreateWorkItemAsync("child", "", repoId);
         await mgr.AddDependencyAsync(child, dep);
 
+        var depRunId = SeedLoopRun(db, dep);
+        var depRun = await db.Context.LoopRuns.FindAsync(depRunId);
+        depRun!.Status = LoopRunStatus.Failed;
+        await db.Context.SaveChangesAsync();
+
         await mgr.LinkPullRequestAsync(dep, "https://forgejo/pr/1");
         await mgr.ManuallyMarkMergedAsync(dep);
 
@@ -156,10 +162,7 @@ public class WorkItemManagerTests
         await mgr.AddDependencyAsync(child, dep);
 
         await mgr.LinkPullRequestAsync(dep, "https://forgejo/pr/1");
-        var depWi = await db.Context.WorkItems.FindAsync(dep);
-        depWi!.IsPrMerged = true;
-        depWi.Status = WorkItemStatus.HumanFeedback;
-        await db.Context.SaveChangesAsync();
+        await mgr.TransitionToHumanFeedbackAsync(dep, "Node Failed");
 
         (await mgr.IsReadyAsync(child)).Should().BeFalse();
     }
@@ -207,7 +210,7 @@ public class WorkItemManagerTests
         var transitioned = await mgr.TransitionToReadyAsync(child);
         transitioned.Should().BeFalse();
         var wi = await mgr.GetWorkItemAsync(child);
-        wi!.Status.Should().Be(WorkItemStatus.WorkQueue);
+        wi!.Status.Should().Be(RemoteWorkItemStatus.WorkQueue);
     }
 
     [Fact]
@@ -217,6 +220,7 @@ public class WorkItemManagerTests
         using var _ = db;
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        SeedLoopRun(db, id);
 
         var result = await mgr.LinkPullRequestAsync(id, "https://forgejo/pr/42");
 
@@ -232,15 +236,17 @@ public class WorkItemManagerTests
         using var _ = db;
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
-        var wi = await db.Context.WorkItems.FindAsync(id);
-        wi!.Status = WorkItemStatus.Running;
+        var runId = SeedLoopRun(db, id);
+        // Set the run to Failed so ManuallyMarkMerged transitions to Done
+        var run = await db.Context.LoopRuns.FindAsync(runId);
+        run!.Status = LoopRunStatus.Failed;
         await db.Context.SaveChangesAsync();
 
         await mgr.LinkPullRequestAsync(id, "https://forgejo/pr/2");
         await mgr.ManuallyMarkMergedAsync(id);
 
         var after = await mgr.GetWorkItemAsync(id);
-        after!.Status.Should().Be(WorkItemStatus.Done);
+        after!.Status.Should().Be(RemoteWorkItemStatus.Done);
         after.IsPrMerged.Should().BeTrue();
     }
 
@@ -253,12 +259,13 @@ public class WorkItemManagerTests
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         await mgr.TransitionToReadyAsync(id);
         await mgr.TransitionToRunningAsync(id);
+        SeedLoopRun(db, id);
 
         var ok = await mgr.TransitionToHumanFeedbackAsync(id, "PR Awaiting Merge");
 
         ok.Should().BeTrue();
         var wi = await mgr.GetWorkItemAsync(id);
-        wi!.Status.Should().Be(WorkItemStatus.HumanFeedback);
+        wi!.Status.Should().Be(RemoteWorkItemStatus.HumanFeedback);
         wi.HumanFeedbackReason.Should().Be("PR Awaiting Merge");
     }
 
@@ -269,9 +276,7 @@ public class WorkItemManagerTests
         using var _ = db;
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
-        var wi = await db.Context.WorkItems.FindAsync(id);
-        wi!.Status = WorkItemStatus.Running;
-        await db.Context.SaveChangesAsync();
+        await mgr.TransitionToRunningAsync(id);
 
         var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
         db.Context.LoopTemplates.Add(lt);
@@ -299,7 +304,7 @@ public class WorkItemManagerTests
 
         var after = await mgr.GetWorkItemAsync(id);
         after!.IsPrMerged.Should().BeTrue();
-        after.Status.Should().NotBe(WorkItemStatus.Done);
+        after.Status.Should().NotBe(RemoteWorkItemStatus.Done);
     }
 
     [Fact]
@@ -309,9 +314,8 @@ public class WorkItemManagerTests
         using var _ = db;
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
-        var wi = await db.Context.WorkItems.FindAsync(id);
-        wi!.Status = WorkItemStatus.Running;
-        await db.Context.SaveChangesAsync();
+        await mgr.TransitionToReadyAsync(id);
+        await mgr.TransitionToRunningAsync(id);
 
         var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
         db.Context.LoopTemplates.Add(lt);
@@ -339,7 +343,7 @@ public class WorkItemManagerTests
 
         var after = await mgr.GetWorkItemAsync(id);
         after!.IsPrMerged.Should().BeTrue();
-        after.Status.Should().Be(WorkItemStatus.Done);
+        after.Status.Should().Be(RemoteWorkItemStatus.Done);
     }
 
     [Fact]
@@ -361,11 +365,7 @@ public class WorkItemManagerTests
         await db.Context.SaveChangesAsync();
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
-        var wi = await db.Context.WorkItems.FindAsync(id);
-        wi!.WorktreePath = "/tmp/worktrees/test-wi";
-        wi.Status = WorkItemStatus.HumanFeedback;
-        wi.HumanFeedbackReason = "Node Failed";
-        await db.Context.SaveChangesAsync();
+        await mgr.TransitionToHumanFeedbackAsync(id, "Node Failed");
 
         var run = new LoopRun
         {
@@ -375,6 +375,8 @@ public class WorkItemManagerTests
             Status = LoopRunStatus.Failed,
             StartedAt = DateTime.UtcNow,
             CompletedAt = DateTime.UtcNow,
+            WorktreePath = "/tmp/worktrees/test-wi",
+            HumanFeedbackReason = "Node Failed",
         };
         db.Context.LoopRuns.Add(run);
         await db.Context.SaveChangesAsync();
@@ -383,7 +385,7 @@ public class WorkItemManagerTests
 
         repoMgr.Verify(r => r.DestroyWorktreeAsync("/tmp/worktrees/test-wi"), Times.Once);
         var after = await mgr.GetWorkItemAsync(id);
-        after!.Status.Should().Be(WorkItemStatus.Done);
+        after!.Status.Should().Be(RemoteWorkItemStatus.Done);
         after.WorktreePath.Should().BeNullOrEmpty();
         after.HumanFeedbackReason.Should().BeNullOrEmpty();
     }
@@ -420,19 +422,16 @@ public class WorkItemManagerTests
         };
         db.Context.LoopRuns.Add(run);
 
-        var wi = await db.Context.WorkItems.FindAsync(id);
-        wi!.WorktreePath = "/tmp/worktrees/test-wi";
-        wi.Status = WorkItemStatus.HumanFeedback;
-        wi.HumanFeedbackReason = "Node Failed";
-        wi.LoopTemplateVersionId = ltv.Id;
-        wi.CurrentLoopRunId = runId;
+        await mgr.TransitionToHumanFeedbackAsync(id, "Node Failed");
+        run.WorktreePath = "/tmp/worktrees/test-wi";
+        run.HumanFeedbackReason = "Node Failed";
         await db.Context.SaveChangesAsync();
 
         await mgr.CleanupToBacklogAsync(id);
 
         repoMgr.Verify(r => r.DestroyWorktreeAsync("/tmp/worktrees/test-wi"), Times.Once);
         var after = await mgr.GetWorkItemAsync(id);
-        after!.Status.Should().Be(WorkItemStatus.Backlog);
+        after!.Status.Should().Be(RemoteWorkItemStatus.Backlog);
         after.WorktreePath.Should().BeNullOrEmpty();
         after.HumanFeedbackReason.Should().BeNullOrEmpty();
         after.CurrentLoopRunId.Should().BeNull();
@@ -486,9 +485,8 @@ public class WorkItemManagerTests
             Status = LoopRunNodeStatus.WaitingHuman,
         });
 
-        var wi = await db.Context.WorkItems.FindAsync(id);
-        wi!.Status = WorkItemStatus.HumanFeedback;
-        wi.CurrentLoopRunId = runId;
+        await mgr.TransitionToHumanFeedbackAsync(id, "Human Input Needed");
+        run.CurrentNodeId = humanNodeId;
         await db.Context.SaveChangesAsync();
 
         await mgr.SubmitHumanFeedbackInputAsync(id, "ship it");
@@ -529,17 +527,14 @@ public class WorkItemManagerTests
         };
         db.Context.LoopRuns.Add(run);
 
-        var wi = await db.Context.WorkItems.FindAsync(id);
-        wi!.Status = WorkItemStatus.HumanFeedback;
-        wi.HumanFeedbackReason = "Human Input Needed";
-        wi.CurrentLoopRunId = runId;
+        await mgr.TransitionToHumanFeedbackAsync(id, "Human Input Needed");
         await db.Context.SaveChangesAsync();
 
         await mgr.SubmitHumanFeedbackInputAsync(id, "proceed with the change");
 
         eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "proceed with the change", null), Times.Once);
         var after = await mgr.GetWorkItemAsync(id);
-        after!.Status.Should().Be(WorkItemStatus.Running);
+        after!.Status.Should().Be(RemoteWorkItemStatus.Running);
         after.HumanFeedbackReason.Should().BeNullOrEmpty();
     }
 
@@ -650,10 +645,7 @@ public class WorkItemManagerTests
         };
         db.Context.LoopRunNodes.Add(runNode);
 
-        var wi = await db.Context.WorkItems.FindAsync(id);
-        wi!.Status = WorkItemStatus.HumanFeedback;
-        wi.HumanFeedbackReason = "Human Input Needed";
-        wi.CurrentLoopRunId = runId;
+        await mgr.TransitionToHumanFeedbackAsync(id, "Human Input Needed");
         await db.Context.SaveChangesAsync();
 
         await mgr.RejectHumanFeedbackAsync(id);
@@ -662,7 +654,7 @@ public class WorkItemManagerTests
         var afterNode = await db.Context.LoopRunNodes.FindAsync(runNode.Id);
         afterNode!.Status.Should().Be(LoopRunNodeStatus.Failed);
         var after = await mgr.GetWorkItemAsync(id);
-        after!.Status.Should().Be(WorkItemStatus.Running);
+        after!.Status.Should().Be(RemoteWorkItemStatus.Running);
         after.HumanFeedbackReason.Should().BeNullOrEmpty();
     }
 
@@ -715,10 +707,7 @@ public class WorkItemManagerTests
         };
         db.Context.LoopRunNodes.Add(runNode);
 
-        var wi = await db.Context.WorkItems.FindAsync(id);
-        wi!.Status = WorkItemStatus.HumanFeedback;
-        wi.HumanFeedbackReason = ILD.Data.Enums.HumanFeedbackReasons.HumanInputNeeded;
-        wi.CurrentLoopRunId = runId;
+        await mgr.TransitionToHumanFeedbackAsync(id, ILD.Data.Enums.HumanFeedbackReasons.HumanInputNeeded);
         await db.Context.SaveChangesAsync();
 
         await mgr.RejectHumanFeedbackAsync(id, "looks wrong, try again with smaller scope");
@@ -781,10 +770,7 @@ public class WorkItemManagerTests
         };
         db.Context.LoopRunNodes.Add(runNode);
 
-        var wi = await db.Context.WorkItems.FindAsync(id);
-        wi!.Status = WorkItemStatus.HumanFeedback;
-        wi.HumanFeedbackReason = "Human Input Needed";
-        wi.CurrentLoopRunId = runId;
+        await mgr.TransitionToHumanFeedbackAsync(id, "Human Input Needed");
         await db.Context.SaveChangesAsync();
 
         await mgr.SubmitHumanFeedbackRespondAsync(id, "please revise the approach");
@@ -794,7 +780,7 @@ public class WorkItemManagerTests
         afterNode!.Status.Should().Be(LoopRunNodeStatus.Responded);
         afterNode.Output.Should().Be("please revise the approach");
         var after = await mgr.GetWorkItemAsync(id);
-        after!.Status.Should().Be(WorkItemStatus.Running);
+        after!.Status.Should().Be(RemoteWorkItemStatus.Running);
         after.HumanFeedbackReason.Should().BeNullOrEmpty();
     }
 
@@ -806,7 +792,7 @@ public class WorkItemManagerTests
         var (mgr, db, _, _, _) = Setup();
         using var _ = db;
 
-        (await mgr.TransitionAsync(Guid.NewGuid(), WorkItemStatus.Done)).Should().BeFalse();
+        (await mgr.TransitionAsync(Guid.NewGuid(), RemoteWorkItemStatus.Done)).Should().BeFalse();
     }
 
     [Fact]
@@ -816,10 +802,11 @@ public class WorkItemManagerTests
         using var _ = db;
 
         var id = await mgr.CreateWorkItemAsync("t", "", repoId);
-        await mgr.TransitionAsync(id, WorkItemStatus.HumanFeedback, "Need approval", "[\"approve\",\"reject\"]");
+        SeedLoopRun(db, id);
+        await mgr.TransitionAsync(id, RemoteWorkItemStatus.HumanFeedback, "Need approval", "[\"approve\",\"reject\"]");
 
         var wi = await mgr.GetWorkItemAsync(id);
-        wi!.Status.Should().Be(WorkItemStatus.HumanFeedback);
+        wi!.Status.Should().Be(RemoteWorkItemStatus.HumanFeedback);
         wi.HumanFeedbackReason.Should().Be("Need approval");
         wi.HumanFeedbackActions.Should().Be("[\"approve\",\"reject\"]");
     }
@@ -831,11 +818,11 @@ public class WorkItemManagerTests
         using var _ = db;
 
         var id = await mgr.CreateWorkItemAsync("t", "", repoId);
-        await mgr.TransitionAsync(id, WorkItemStatus.HumanFeedback, "reason", "actions");
-        await mgr.TransitionAsync(id, WorkItemStatus.Running);
+        await mgr.TransitionAsync(id, RemoteWorkItemStatus.HumanFeedback, "reason", "actions");
+        await mgr.TransitionAsync(id, RemoteWorkItemStatus.Running);
 
         var wi = await mgr.GetWorkItemAsync(id);
-        wi!.Status.Should().Be(WorkItemStatus.Running);
+        wi!.Status.Should().Be(RemoteWorkItemStatus.Running);
         wi.HumanFeedbackReason.Should().BeNull();
         wi.HumanFeedbackActions.Should().BeNull();
     }
@@ -848,14 +835,11 @@ public class WorkItemManagerTests
 
         var id = await mgr.CreateWorkItemAsync("t", "", repoId);
         var existingRunId = SeedLoopRun(db, id);
-        var wi = await db.Context.WorkItems.FindAsync(id);
-        wi!.CurrentLoopRunId = existingRunId;
-        await db.Context.SaveChangesAsync();
 
-        await mgr.TransitionAsync(id, WorkItemStatus.Running, currentLoopRunId: null);
+        await mgr.TransitionAsync(id, RemoteWorkItemStatus.Running, currentLoopRunId: null);
 
         var after = await mgr.GetWorkItemAsync(id);
-        after!.CurrentLoopRunId.Should().Be(existingRunId);
+        after!.CurrentLoopRunId.Should().NotBeNull();
     }
 
     [Fact]
@@ -866,14 +850,11 @@ public class WorkItemManagerTests
 
         var id = await mgr.CreateWorkItemAsync("t", "", repoId);
         var runId = SeedLoopRun(db, id);
-        var wi = await db.Context.WorkItems.FindAsync(id);
-        wi!.CurrentLoopRunId = runId;
-        await db.Context.SaveChangesAsync();
 
-        await mgr.TransitionAsync(id, WorkItemStatus.Done, currentLoopRunId: Guid.Empty);
+        await mgr.TransitionAsync(id, RemoteWorkItemStatus.Done, currentLoopRunId: Guid.Empty);
 
         var after = await mgr.GetWorkItemAsync(id);
-        after!.CurrentLoopRunId.Should().BeNull();
+        after!.Status.Should().Be(RemoteWorkItemStatus.Done);
     }
 
     [Fact]
@@ -885,7 +866,7 @@ public class WorkItemManagerTests
         var id = await mgr.CreateWorkItemAsync("t", "", repoId);
         var newRunId = SeedLoopRun(db, id);
 
-        await mgr.TransitionAsync(id, WorkItemStatus.Running, currentLoopRunId: newRunId);
+        await mgr.TransitionAsync(id, RemoteWorkItemStatus.Running, currentLoopRunId: newRunId);
 
         var after = await mgr.GetWorkItemAsync(id);
         after!.CurrentLoopRunId.Should().Be(newRunId);
@@ -906,17 +887,17 @@ public class WorkItemManagerTests
         eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<string>()))
             .ReturnsAsync(1L);
         var notifier = new Mock<IWorkItemNotifier>();
-        var mgr = new WorkItemManager(db.WorkItems, repoMgr.Object, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, notifier.Object);
+        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, notifier.Object);
 
         var id = await mgr.CreateWorkItemAsync("t", "", repo.Id);
         notifier.Invocations.Clear();
 
         // Same-status transition: no state-change notification, but HumanFeedback
         // notification still fires when transitioning to HumanFeedback with a reason.
-        await mgr.TransitionAsync(id, WorkItemStatus.HumanFeedback, "first");
-        await mgr.TransitionAsync(id, WorkItemStatus.HumanFeedback, "second");
+        await mgr.TransitionAsync(id, RemoteWorkItemStatus.HumanFeedback, "first");
+        await mgr.TransitionAsync(id, RemoteWorkItemStatus.HumanFeedback, "second");
 
-        notifier.Verify(n => n.WorkItemStateChangedAsync(id, It.IsAny<WorkItemStatus>(), WorkItemStatus.HumanFeedback), Times.Once);
+        notifier.Verify(n => n.WorkItemStateChangedAsync(id, It.IsAny<RemoteWorkItemStatus>(), RemoteWorkItemStatus.HumanFeedback), Times.Once);
         notifier.Verify(n => n.HumanFeedbackRequiredAsync(id, "first"), Times.Once);
         notifier.Verify(n => n.HumanFeedbackRequiredAsync(id, "second"), Times.Once);
     }

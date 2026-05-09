@@ -1,4 +1,5 @@
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Enums;
 using ILD.Data.Entities;
@@ -51,8 +52,8 @@ public class WorkItemsController : ControllerBase
         if (take <= 0) take = 100;
         if (take > 500) take = 500;
 
-        WorkItemStatus? statusFilter = null;
-        if (!string.IsNullOrEmpty(status) && Enum.TryParse<WorkItemStatus>(status, true, out var s))
+        RemoteWorkItemStatus? statusFilter = null;
+        if (!string.IsNullOrEmpty(status) && Enum.TryParse<RemoteWorkItemStatus>(status, true, out var s))
             statusFilter = s;
         Guid? runFilter = null;
         if (!string.IsNullOrEmpty(createdByLoopRunId) && Guid.TryParse(createdByLoopRunId, out var runGuid))
@@ -240,15 +241,11 @@ public class WorkItemsController : ControllerBase
         if (!ok) return NotFound();
 
         // Only resume the workitem's current run, not stale ones.
-        var wi = await _db.WorkItems.FindAsync(guid);
-        if (wi?.CurrentLoopRunId != null)
-        {
-            var currentRun = await _db.LoopRuns
-                .FirstOrDefaultAsync(r =>
-                    r.Id == wi.CurrentLoopRunId &&
-                    r.WorkItemId == guid &&
-                    (r.Status == ILD.Data.Enums.LoopRunStatus.Running ||
-                     r.Status == ILD.Data.Enums.LoopRunStatus.Failed));
+        var currentRun = await _db.LoopRuns
+            .FirstOrDefaultAsync(r =>
+                r.WorkItemId == guid &&
+                (r.Status == ILD.Data.Enums.LoopRunStatus.Running ||
+                 r.Status == ILD.Data.Enums.LoopRunStatus.Failed));
 
             if (currentRun != null)
             {
@@ -279,11 +276,8 @@ public class WorkItemsController : ControllerBase
                     // the run and mark the workitem Done directly.
                     if (prRunNode.LoopNode == null)
                     {
-                        currentRun.Status = ILD.Data.Enums.LoopRunStatus.Completed;
-                        currentRun.CompletedAt = DateTime.UtcNow;
-                        wi.Status = WorkItemStatus.Done;
-                        wi.HumanFeedbackReason = null;
-                        await _db.SaveChangesAsync();
+                        // Unrecoverable — transition work item to Done via manager
+                        await _workItemManager.TransitionAsync(guid, RemoteWorkItemStatus.Done);
                     }
                     else
                     {
@@ -294,7 +288,6 @@ public class WorkItemsController : ControllerBase
                     }
                 }
             }
-        }
 
         return Ok();
     }

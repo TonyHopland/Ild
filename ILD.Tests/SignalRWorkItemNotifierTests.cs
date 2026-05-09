@@ -1,6 +1,7 @@
 using FluentAssertions;
 using ILD.Api.Configuration;
 using ILD.Api.Hubs;
+using ILD.Core.Services.Remote;
 using ILD.Data.DTOs.SignalRPayloads;
 using ILD.Data.Enums;
 using Microsoft.AspNetCore.SignalR;
@@ -32,7 +33,7 @@ public class SignalRWorkItemNotifierTests
             .Returns(Task.CompletedTask);
 
         var notifier = new SignalRWorkItemNotifier(ctx.Object);
-        await notifier.WorkItemStateChangedAsync(workItemId, WorkItemStatus.Backlog, WorkItemStatus.WorkQueue);
+        await notifier.WorkItemStateChangedAsync(workItemId, RemoteWorkItemStatus.Backlog, RemoteWorkItemStatus.WorkQueue);
 
         capturedArgs!.Should().HaveCount(1);
         var payload = capturedArgs[0].Should().BeOfType<WorkItemStateChangedPayload>().Subject;

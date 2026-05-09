@@ -15,8 +15,8 @@ public class LoopEngineWorkItemFailureTransitionTests
         var status = await h.Engine.RunAsync(h.RunId);
 
         status.Should().Be(LoopRunStatus.Failed);
-        var wi = h.ReloadWorkItem();
-        wi.Status.Should().Be(WorkItemStatus.HumanFeedback);
-        wi.HumanFeedbackReason.Should().NotBeNullOrEmpty();
+        var wi = h.ReloadServerWorkItem();
+        ((WorkItemStatus)(int)wi.Status).Should().Be(WorkItemStatus.HumanFeedback);
+        h.ReloadRun().HumanFeedbackReason.Should().NotBeNullOrEmpty();
     }
 }

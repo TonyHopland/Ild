@@ -3,6 +3,7 @@ using ILD.Data.DTOs;
 using ILD.Data.Enums;
 using ILD.Data.Entities;
 using ILD.Data.Stores;
+using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
@@ -21,15 +22,14 @@ public class PRNodeExecutorTests
         var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://gitea.example/r.git", DefaultBranch = "main" };
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume, MaxNodeExecutions = 200, MaxWallClockHours = 24 };
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
-        var wi = new WorkItem { Id = Guid.NewGuid(), Title = "wi", RepositoryId = repo.Id, LoopTemplateVersionId = version.Id, Status = WorkItemStatus.Running, BranchName = "ild/test" };
-        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = wi.Id, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running };
+        var workItemId = Guid.NewGuid();
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = workItemId, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running, RepositoryId = repo.Id, BranchName = "ild/test" };
         var node = new LoopNode { Id = Guid.NewGuid(), LoopTemplateVersionId = version.Id, NodeType = NodeType.PR, Label = "pr" };
 
         db.Context.RemoteProviders.Add(remote);
         db.Context.Repositories.Add(repo);
         db.Context.LoopTemplates.Add(template);
         db.Context.LoopTemplateVersions.Add(version);
-        db.Context.WorkItems.Add(wi);
         db.Context.LoopRuns.Add(run);
         db.Context.LoopNodes.Add(node);
         db.Context.SaveChanges();
@@ -42,18 +42,20 @@ public class PRNodeExecutorTests
 
         var services = new ServiceCollection();
         services.AddSingleton(mockRemote.Object);
-        services.AddSingleton(db.WorkItems);
+        services.AddSingleton((ILoopRunStore)db.LoopRuns);
+        services.AddSingleton((IProviderStore)db.Providers);
         var sp = services.BuildServiceProvider();
 
         var executor = new PRNodeExecutor(sp);
 
         var runNode = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = run.Id, LoopNodeId = node.Id };
+        var wi = new WorkItemView { Id = workItemId, Title = "wi", RepositoryId = repo.Id };
         var ctx = new NodeExecutionContext(run, runNode, node, wi, null, CancellationToken.None);
 
         var result = await executor.ExecuteAsync(ctx);
 
         result.Success.Should().BeTrue();
-        var refreshed = db.Fresh().WorkItems.First(w => w.Id == wi.Id);
+        var refreshed = db.Fresh().LoopRuns.First(r => r.Id == run.Id);
         refreshed.PrUrl.Should().Be(prUrl);
     }
 
@@ -68,15 +70,14 @@ public class PRNodeExecutorTests
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
         var worktreePath = Path.Combine(Path.GetTempPath(), "ild-test-wt");
         Directory.CreateDirectory(worktreePath);
-        var wi = new WorkItem { Id = Guid.NewGuid(), Title = "wi", RepositoryId = repo.Id, LoopTemplateVersionId = version.Id, Status = WorkItemStatus.Running, BranchName = "ild/test", WorktreePath = worktreePath };
-        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = wi.Id, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running };
+        var workItemId = Guid.NewGuid();
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = workItemId, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running, RepositoryId = repo.Id, BranchName = "ild/test", WorktreePath = worktreePath };
         var node = new LoopNode { Id = Guid.NewGuid(), LoopTemplateVersionId = version.Id, NodeType = NodeType.PR, Label = "pr" };
 
         db.Context.RemoteProviders.Add(remote);
         db.Context.Repositories.Add(repo);
         db.Context.LoopTemplates.Add(template);
         db.Context.LoopTemplateVersions.Add(version);
-        db.Context.WorkItems.Add(wi);
         db.Context.LoopRuns.Add(run);
         db.Context.LoopNodes.Add(node);
         db.Context.SaveChanges();
@@ -97,12 +98,14 @@ public class PRNodeExecutorTests
         var services = new ServiceCollection();
         services.AddSingleton(mockRemote.Object);
         services.AddSingleton(mockRepoManager.Object);
-        services.AddSingleton(db.WorkItems);
+        services.AddSingleton((ILoopRunStore)db.LoopRuns);
+        services.AddSingleton((IProviderStore)db.Providers);
         var sp = services.BuildServiceProvider();
 
         var executor = new PRNodeExecutor(sp);
 
         var runNode = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = run.Id, LoopNodeId = node.Id };
+        var wi = new WorkItemView { Id = workItemId, Title = "wi", RepositoryId = repo.Id };
         var ctx = new NodeExecutionContext(run, runNode, node, wi, null, CancellationToken.None);
 
         var result = await executor.ExecuteAsync(ctx);
@@ -127,15 +130,14 @@ public class PRNodeExecutorTests
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
         var worktreePath = Path.Combine(Path.GetTempPath(), "ild-test-wt");
         Directory.CreateDirectory(worktreePath);
-        var wi = new WorkItem { Id = Guid.NewGuid(), Title = "fix: do a thing", RepositoryId = repo.Id, LoopTemplateVersionId = version.Id, Status = WorkItemStatus.Running, BranchName = "ild/test", WorktreePath = worktreePath };
-        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = wi.Id, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running };
+        var workItemId = Guid.NewGuid();
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = workItemId, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running, RepositoryId = repo.Id, BranchName = "ild/test", WorktreePath = worktreePath };
         var node = new LoopNode { Id = Guid.NewGuid(), LoopTemplateVersionId = version.Id, NodeType = NodeType.PR, Label = "pr" };
 
         db.Context.RemoteProviders.Add(remote);
         db.Context.Repositories.Add(repo);
         db.Context.LoopTemplates.Add(template);
         db.Context.LoopTemplateVersions.Add(version);
-        db.Context.WorkItems.Add(wi);
         db.Context.LoopRuns.Add(run);
         db.Context.LoopNodes.Add(node);
         db.Context.SaveChanges();
@@ -157,12 +159,14 @@ public class PRNodeExecutorTests
         var services = new ServiceCollection();
         services.AddSingleton(mockRemote.Object);
         services.AddSingleton(mockRepoManager.Object);
-        services.AddSingleton(db.WorkItems);
+        services.AddSingleton((ILoopRunStore)db.LoopRuns);
+        services.AddSingleton((IProviderStore)db.Providers);
         var sp = services.BuildServiceProvider();
 
         var executor = new PRNodeExecutor(sp);
 
         var runNode = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = run.Id, LoopNodeId = node.Id };
+        var wi = new WorkItemView { Id = workItemId, Title = "fix: do a thing", RepositoryId = repo.Id };
         var ctx = new NodeExecutionContext(run, runNode, node, wi, null, CancellationToken.None);
 
         var result = await executor.ExecuteAsync(ctx);
@@ -186,15 +190,14 @@ public class PRNodeExecutorTests
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
         var worktreePath = Path.Combine(Path.GetTempPath(), "ild-test-wt");
         Directory.CreateDirectory(worktreePath);
-        var wi = new WorkItem { Id = Guid.NewGuid(), Title = "wi", RepositoryId = repo.Id, LoopTemplateVersionId = version.Id, Status = WorkItemStatus.Running, BranchName = "ild/test", WorktreePath = worktreePath };
-        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = wi.Id, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running };
+        var workItemId = Guid.NewGuid();
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = workItemId, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running, RepositoryId = repo.Id, BranchName = "ild/test", WorktreePath = worktreePath };
         var node = new LoopNode { Id = Guid.NewGuid(), LoopTemplateVersionId = version.Id, NodeType = NodeType.PR, Label = "pr" };
 
         db.Context.RemoteProviders.Add(remote);
         db.Context.Repositories.Add(repo);
         db.Context.LoopTemplates.Add(template);
         db.Context.LoopTemplateVersions.Add(version);
-        db.Context.WorkItems.Add(wi);
         db.Context.LoopRuns.Add(run);
         db.Context.LoopNodes.Add(node);
         db.Context.SaveChanges();
@@ -211,12 +214,14 @@ public class PRNodeExecutorTests
         var services = new ServiceCollection();
         services.AddSingleton(mockRemote.Object);
         services.AddSingleton(mockRepoManager.Object);
-        services.AddSingleton(db.WorkItems);
+        services.AddSingleton((ILoopRunStore)db.LoopRuns);
+        services.AddSingleton((IProviderStore)db.Providers);
         var sp = services.BuildServiceProvider();
 
         var executor = new PRNodeExecutor(sp);
 
         var runNode = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = run.Id, LoopNodeId = node.Id };
+        var wi = new WorkItemView { Id = workItemId, Title = "wi", RepositoryId = repo.Id };
         var ctx = new NodeExecutionContext(run, runNode, node, wi, null, CancellationToken.None);
 
         var result = await executor.ExecuteAsync(ctx);
@@ -238,15 +243,14 @@ public class PRNodeExecutorTests
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume, MaxNodeExecutions = 200, MaxWallClockHours = 24 };
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
         var existingPrUrl = "https://gitea.example/r/pull/42";
-        var wi = new WorkItem { Id = Guid.NewGuid(), Title = "wi", RepositoryId = repo.Id, LoopTemplateVersionId = version.Id, Status = WorkItemStatus.Running, BranchName = "ild/test", PrUrl = existingPrUrl };
-        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = wi.Id, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running };
+        var workItemId = Guid.NewGuid();
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = workItemId, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running, RepositoryId = repo.Id, BranchName = "ild/test", PrUrl = existingPrUrl };
         var node = new LoopNode { Id = Guid.NewGuid(), LoopTemplateVersionId = version.Id, NodeType = NodeType.PR, Label = "pr" };
 
         db.Context.RemoteProviders.Add(remote);
         db.Context.Repositories.Add(repo);
         db.Context.LoopTemplates.Add(template);
         db.Context.LoopTemplateVersions.Add(version);
-        db.Context.WorkItems.Add(wi);
         db.Context.LoopRuns.Add(run);
         db.Context.LoopNodes.Add(node);
         db.Context.SaveChanges();
@@ -255,12 +259,14 @@ public class PRNodeExecutorTests
 
         var services = new ServiceCollection();
         services.AddSingleton(mockRemote.Object);
-        services.AddSingleton(db.WorkItems);
+        services.AddSingleton((ILoopRunStore)db.LoopRuns);
+        services.AddSingleton((IProviderStore)db.Providers);
         var sp = services.BuildServiceProvider();
 
         var executor = new PRNodeExecutor(sp);
 
         var runNode = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = run.Id, LoopNodeId = node.Id };
+        var wi = new WorkItemView { Id = workItemId, Title = "wi", RepositoryId = repo.Id };
         var ctx = new NodeExecutionContext(run, runNode, node, wi, null, CancellationToken.None);
 
         var result = await executor.ExecuteAsync(ctx);
@@ -279,8 +285,8 @@ public class PRNodeExecutorTests
         var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://gitea.example/r.git", DefaultBranch = "main" };
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume, MaxNodeExecutions = 200, MaxWallClockHours = 24 };
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
-        var wi = new WorkItem { Id = Guid.NewGuid(), Title = "Fix login bug", RepositoryId = repo.Id, LoopTemplateVersionId = version.Id, Status = WorkItemStatus.Running, BranchName = "ild/test", Description = "Original description" };
-        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = wi.Id, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running };
+        var workItemId = Guid.NewGuid();
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = workItemId, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running, RepositoryId = repo.Id, BranchName = "ild/test" };
         var node = new LoopNode
         {
             Id = Guid.NewGuid(),
@@ -294,7 +300,6 @@ public class PRNodeExecutorTests
         db.Context.Repositories.Add(repo);
         db.Context.LoopTemplates.Add(template);
         db.Context.LoopTemplateVersions.Add(version);
-        db.Context.WorkItems.Add(wi);
         db.Context.LoopRuns.Add(run);
         db.Context.LoopNodes.Add(node);
         db.Context.SaveChanges();
@@ -311,12 +316,14 @@ public class PRNodeExecutorTests
 
         var services = new ServiceCollection();
         services.AddSingleton(mockRemote.Object);
-        services.AddSingleton(db.WorkItems);
+        services.AddSingleton((ILoopRunStore)db.LoopRuns);
+        services.AddSingleton((IProviderStore)db.Providers);
         var sp = services.BuildServiceProvider();
 
         var executor = new PRNodeExecutor(sp);
 
         var runNode = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = run.Id, LoopNodeId = node.Id };
+        var wi = new WorkItemView { Id = workItemId, Title = "Fix login bug", Description = "Original description", RepositoryId = repo.Id };
         var ctx = new NodeExecutionContext(run, runNode, node, wi, "AI output here", CancellationToken.None);
 
         var result = await executor.ExecuteAsync(ctx);
@@ -336,15 +343,14 @@ public class PRNodeExecutorTests
         var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://gitea.example/r.git", DefaultBranch = "main" };
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume, MaxNodeExecutions = 200, MaxWallClockHours = 24 };
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
-        var wi = new WorkItem { Id = Guid.NewGuid(), Title = "wi", RepositoryId = repo.Id, LoopTemplateVersionId = version.Id, Status = WorkItemStatus.Running, BranchName = "ild/test", Description = "fallback description" };
-        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = wi.Id, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running };
+        var workItemId = Guid.NewGuid();
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = workItemId, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running, RepositoryId = repo.Id, BranchName = "ild/test" };
         var node = new LoopNode { Id = Guid.NewGuid(), LoopTemplateVersionId = version.Id, NodeType = NodeType.PR, Label = "pr" };
 
         db.Context.RemoteProviders.Add(remote);
         db.Context.Repositories.Add(repo);
         db.Context.LoopTemplates.Add(template);
         db.Context.LoopTemplateVersions.Add(version);
-        db.Context.WorkItems.Add(wi);
         db.Context.LoopRuns.Add(run);
         db.Context.LoopNodes.Add(node);
         db.Context.SaveChanges();
@@ -361,12 +367,14 @@ public class PRNodeExecutorTests
 
         var services = new ServiceCollection();
         services.AddSingleton(mockRemote.Object);
-        services.AddSingleton(db.WorkItems);
+        services.AddSingleton((ILoopRunStore)db.LoopRuns);
+        services.AddSingleton((IProviderStore)db.Providers);
         var sp = services.BuildServiceProvider();
 
         var executor = new PRNodeExecutor(sp);
 
         var runNode = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = run.Id, LoopNodeId = node.Id };
+        var wi = new WorkItemView { Id = workItemId, Title = "wi", Description = "fallback description", RepositoryId = repo.Id };
         var ctx = new NodeExecutionContext(run, runNode, node, wi, null, CancellationToken.None);
 
         var result = await executor.ExecuteAsync(ctx);
@@ -386,15 +394,14 @@ public class PRNodeExecutorTests
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
         var worktreePath = Path.Combine(Path.GetTempPath(), "ild-test-wt");
         Directory.CreateDirectory(worktreePath);
-        var wi = new WorkItem { Id = Guid.NewGuid(), Title = "wi", RepositoryId = repo.Id, LoopTemplateVersionId = version.Id, Status = WorkItemStatus.Running, BranchName = "ild/test", WorktreePath = worktreePath };
-        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = wi.Id, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running };
+        var workItemId = Guid.NewGuid();
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = workItemId, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running, RepositoryId = repo.Id, BranchName = "ild/test", WorktreePath = worktreePath };
         var node = new LoopNode { Id = Guid.NewGuid(), LoopTemplateVersionId = version.Id, NodeType = NodeType.PR, Label = "pr" };
 
         db.Context.RemoteProviders.Add(remote);
         db.Context.Repositories.Add(repo);
         db.Context.LoopTemplates.Add(template);
         db.Context.LoopTemplateVersions.Add(version);
-        db.Context.WorkItems.Add(wi);
         db.Context.LoopRuns.Add(run);
         db.Context.LoopNodes.Add(node);
         db.Context.SaveChanges();
@@ -409,12 +416,14 @@ public class PRNodeExecutorTests
         var services = new ServiceCollection();
         services.AddSingleton(mockRemote.Object);
         services.AddSingleton(mockRepoManager.Object);
-        services.AddSingleton(db.WorkItems);
+        services.AddSingleton((ILoopRunStore)db.LoopRuns);
+        services.AddSingleton((IProviderStore)db.Providers);
         var sp = services.BuildServiceProvider();
 
         var executor = new PRNodeExecutor(sp);
 
         var runNode = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = run.Id, LoopNodeId = node.Id };
+        var wi = new WorkItemView { Id = workItemId, Title = "wi", RepositoryId = repo.Id };
         var ctx = new NodeExecutionContext(run, runNode, node, wi, null, CancellationToken.None);
 
         var result = await executor.ExecuteAsync(ctx);

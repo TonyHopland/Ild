@@ -39,7 +39,7 @@ public class LoopEngineTests
         await h.Engine.RunAsync(h.RunId);
 
         h.ReloadRun().Status.Should().Be(LoopRunStatus.Failed);
-        h.ReloadWorkItem().Status.Should().Be(WorkItemStatus.HumanFeedback);
+        ((WorkItemStatus)(int)h.ReloadServerWorkItem().Status).Should().Be(WorkItemStatus.HumanFeedback);
     }
 
     [Fact]
@@ -144,8 +144,8 @@ public class LoopEngineTests
 
         await h.Engine.RunAsync(h.RunId);
 
-        h.ReloadWorkItem().Status.Should().Be(WorkItemStatus.HumanFeedback);
-        h.ReloadWorkItem().HumanFeedbackReason.Should().Be(ILD.Data.Enums.HumanFeedbackReasons.HumanInputNeeded);
+        ((WorkItemStatus)(int)h.ReloadServerWorkItem().Status).Should().Be(WorkItemStatus.HumanFeedback);
+        h.ReloadRun().HumanFeedbackReason.Should().Be(ILD.Data.Enums.HumanFeedbackReasons.HumanInputNeeded);
         h.ReloadRunNodes().Should().Contain(n => n.Status == LoopRunNodeStatus.WaitingHuman);
     }
 
@@ -163,8 +163,8 @@ public class LoopEngineTests
 
         await h.Engine.RunAsync(h.RunId);
 
-        h.ReloadWorkItem().Status.Should().Be(WorkItemStatus.HumanFeedback);
-        h.ReloadWorkItem().HumanFeedbackReason.Should().Be(ILD.Data.Enums.HumanFeedbackReasons.PrAwaitingMerge);
+        ((WorkItemStatus)(int)h.ReloadServerWorkItem().Status).Should().Be(WorkItemStatus.HumanFeedback);
+        h.ReloadRun().HumanFeedbackReason.Should().Be(ILD.Data.Enums.HumanFeedbackReasons.PrAwaitingMerge);
     }
 
     [Fact]
@@ -180,7 +180,7 @@ public class LoopEngineTests
         h.Save();
 
         await h.Engine.RunAsync(h.RunId);
-        h.ReloadWorkItem().Status.Should().Be(WorkItemStatus.HumanFeedback);
+        ((WorkItemStatus)(int)h.ReloadServerWorkItem().Status).Should().Be(WorkItemStatus.HumanFeedback);
 
         var prNodeId = h.NodesById["pr"].Id;
         var prRunNode = h.ReloadRunNodes().First(n => n.LoopNodeId == prNodeId);
@@ -208,7 +208,7 @@ public class LoopEngineTests
         h.Save();
 
         await h.Engine.RunAsync(h.RunId);
-        h.ReloadWorkItem().Status.Should().Be(WorkItemStatus.HumanFeedback);
+        ((WorkItemStatus)(int)h.ReloadServerWorkItem().Status).Should().Be(WorkItemStatus.HumanFeedback);
 
         var prNodeId = h.NodesById["pr"].Id;
         var prRunNode = h.ReloadRunNodes().First(n => n.LoopNodeId == prNodeId);
@@ -346,7 +346,7 @@ public class LoopEngineTests
 
         // First run pauses at the human node.
         await h.Engine.RunAsync(h.RunId);
-        h.ReloadWorkItem().Status.Should().Be(WorkItemStatus.HumanFeedback);
+        ((WorkItemStatus)(int)h.ReloadServerWorkItem().Status).Should().Be(WorkItemStatus.HumanFeedback);
         var startInvocations = h.Fakes[NodeType.Start].InvocationCount;
 
         // Simulate server restart: RunAsync is called again.
@@ -356,7 +356,7 @@ public class LoopEngineTests
         // Should return early without re-executing any nodes.
         h.Fakes[NodeType.Start].InvocationCount.Should().Be(startInvocations);
         h.ReloadRun().Status.Should().Be(LoopRunStatus.WaitingHuman);
-        h.ReloadWorkItem().Status.Should().Be(WorkItemStatus.HumanFeedback);
+        ((WorkItemStatus)(int)h.ReloadServerWorkItem().Status).Should().Be(WorkItemStatus.HumanFeedback);
     }
 
     [Fact]

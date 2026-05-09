@@ -19,7 +19,7 @@ public class CmdNodeExecutorTests
             Config = $"{{\"command\":\"{command}\"}}",
             TimeoutSeconds = timeoutSeconds,
         };
-        var wi = new WorkItem
+        var wi = new WorkItemView
         {
             Id = Guid.NewGuid(),
             Title = "t",

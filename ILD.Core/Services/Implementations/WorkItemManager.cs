@@ -1,28 +1,21 @@
+using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Remote;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
-using ILD.Core.Services.Interfaces;
-using ILD.Core.Services.Remote;
 using System.Text.Json;
 
 namespace ILD.Core.Services.Implementations;
 
 /// <summary>
 /// Remote-backed implementation of <see cref="IWorkItemManager"/>.
-/// The standalone WorkItemServer is authoritative for the work-item domain
-/// (Title, Description, Status, Priority, Tags, Dependencies, Conversation,
-/// CreatedBy). ILD keeps a local sidecar row that mirrors the server view
-/// and additionally stores engine-only fields (worktree, branch, PR, current
-/// loop run) that the server has no knowledge of.
-///
-/// Every write call hits the server first and then mirrors the result down
-/// to the local row so subsequent reads (engine, controllers, UI) stay
-/// consistent without round-tripping the server on every render.
+/// The WorkItemServer is authoritative for the work-item domain.
+/// Engine-only fields (worktree, branch, PR, current loop run) live on LoopRun.
 /// </summary>
 public class WorkItemManager : IWorkItemManager
 {
-    private readonly IWorkItemStore _store;
     private readonly IRepositoryManager _repoManager;
+    private readonly IProviderStore _providerStore;
     private readonly IEventLogService _eventLog;
     private readonly ILoopRunStore _loopRunStore;
     private readonly IWorkItemNotifier _notifier;
@@ -30,16 +23,16 @@ public class WorkItemManager : IWorkItemManager
     private readonly IWorkItemServerOptionsResolver _options;
 
     public WorkItemManager(
-        IWorkItemStore store,
         IRepositoryManager repoManager,
+        IProviderStore providerStore,
         IEventLogService eventLog,
         ILoopRunStore loopRunStore,
         IWorkItemServerClient server,
         IWorkItemServerOptionsResolver options,
         IWorkItemNotifier? notifier = null)
     {
-        _store = store;
         _repoManager = repoManager;
+        _providerStore = providerStore;
         _eventLog = eventLog;
         _loopRunStore = loopRunStore;
         _server = server;
@@ -67,7 +60,7 @@ public class WorkItemManager : IWorkItemManager
         RemoteWorkItemStatus? forceStatus = forceBacklog ? RemoteWorkItemStatus.Backlog : null;
         if (!forceBacklog && repositoryId.HasValue)
         {
-            var repo = await _store.GetRepositoryAsync(repositoryId.Value)
+            var repo = await _providerStore.GetRepositoryByIdAsync(repositoryId.Value)
                 ?? throw new InvalidOperationException("Repository not found");
             forceStatus = MapToRemote(repo.DefaultIntakeStatus);
         }
@@ -79,50 +72,31 @@ public class WorkItemManager : IWorkItemManager
             CreatedBy = createdByLoopRunId.HasValue ? $"Agent-{createdByLoopRunId.Value}" : null,
             ForceStatus = forceStatus,
             Tags = tags?.ToList() ?? (IReadOnlyList<string>)Array.Empty<string>(),
+            CreatedByLoopRunId = createdByLoopRunId,
         });
 
-        var local = new WorkItem
-        {
-            Id = serverWi.Id,
-            Title = serverWi.Title,
-            Description = serverWi.Description,
-            Priority = MapFromRemote(serverWi.Priority),
-            Status = MapFromRemote(serverWi.Status),
-            RepositoryId = repositoryId ?? Guid.Empty,
-            // Template version is no longer chosen by the user — the engine
-            // resolves it from tags at run start (PRD §3.7).
-            LoopTemplateVersionId = null,
-            CreatedByLoopRunId = createdByLoopRunId,
-            CreatedBy = serverWi.CreatedBy,
-            CreatedAt = serverWi.CreatedAt,
-            UpdatedAt = serverWi.UpdatedAt,
-        };
-        WriteCachedTags(local, serverWi.Tags);
-        WriteCachedConversation(local, serverWi.Conversation);
-
-        await _store.CreateAsync(local);
-        return local.Id;
+        return serverWi.Id;
     }
 
-    public async Task<WorkItem?> GetWorkItemAsync(Guid workItemId)
+    public async Task<WorkItemView?> GetWorkItemAsync(Guid workItemId)
     {
-        // Server-authoritative read. Local row is a sidecar for engine-only
-        // fields. Title/Status/Priority/Tags/Conversation always come from
-        // the server so the UI cannot show stale data when the server is
-        // unreachable — the HTTP exception surfaces to the caller.
-        var local = await _store.GetByIdAsync(workItemId);
-        if (local == null) return null;
-
-        var opts = await _options.ResolveForRepositoryAsync(local.RepositoryId);
-        var remote = await _server.GetAsync(opts, workItemId);
+        var remote = await _server.GetAsync(await _options.ResolveForWorkItemAsync(workItemId), workItemId);
         if (remote == null) return null;
 
-        MergeRemoteOntoLocal(local, remote);
-        return local;
+        var runs = await _loopRunStore.GetAllByWorkItemAsync(workItemId);
+        var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
+                       ?? runs.FirstOrDefault(r => r.Status == LoopRunStatus.WaitingHuman)
+                       ?? runs.FirstOrDefault(r => r.Status == LoopRunStatus.Failed)
+                       ?? runs.FirstOrDefault(r => r.Status == LoopRunStatus.Cancelled)
+                       ?? runs.Where(r => r.Status != LoopRunStatus.Completed)
+                              .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
+                              .FirstOrDefault();
+
+        return BuildView(remote, currentRun);
     }
 
-    public async Task<IReadOnlyList<WorkItem>> ListAsync(
-        WorkItemStatus? status,
+    public async Task<IReadOnlyList<WorkItemView>> ListAsync(
+        RemoteWorkItemStatus? status,
         Guid? createdByLoopRunId,
         Guid? repositoryId,
         int skip,
@@ -132,63 +106,75 @@ public class WorkItemManager : IWorkItemManager
         if (take <= 0) take = 100;
 
         var opts = await _options.ResolveForRepositoryAsync(repositoryId);
-        var remoteStatus = status.HasValue ? MapToRemote(status.Value) : (RemoteWorkItemStatus?)null;
-        var remoteList = await _server.ListAsync(opts, remoteStatus, tags: null);
-        if (remoteList.Count == 0) return Array.Empty<WorkItem>();
+        var remoteList = await _server.ListAsync(opts, status, tags: null);
+        if (remoteList.Count == 0) return Array.Empty<WorkItemView>();
 
-        var ids = remoteList.Select(r => r.Id).ToList();
-        var localById = (await _store.GetByIdsAsync(ids)).ToDictionary(w => w.Id);
+        var allRuns = await _loopRunStore.GetAllAsync(skip: 0, take: int.MaxValue);
+        var runsByWorkItem = allRuns.GroupBy(r => r.WorkItemId).ToDictionary(g => g.Key, g => g.ToList());
 
-        var merged = new List<WorkItem>(remoteList.Count);
+        var views = new List<WorkItemView>();
         foreach (var r in remoteList)
         {
-            // Items the server knows about but this ILD instance has no
-            // sidecar for belong to another ILD — skip them.
-            if (!localById.TryGetValue(r.Id, out var local)) continue;
-            if (createdByLoopRunId.HasValue && local.CreatedByLoopRunId != createdByLoopRunId) continue;
-            if (repositoryId.HasValue && local.RepositoryId != repositoryId) continue;
-            MergeRemoteOntoLocal(local, r);
-            merged.Add(local);
+            LoopRun? currentRun = null;
+            if (runsByWorkItem.TryGetValue(r.Id, out var runs))
+            {
+                currentRun = runs.FirstOrDefault(rn => rn.Status == LoopRunStatus.Running)
+                           ?? runs.FirstOrDefault(rn => rn.Status == LoopRunStatus.WaitingHuman)
+                           ?? runs.FirstOrDefault(rn => rn.Status == LoopRunStatus.Failed)
+                           ?? runs.FirstOrDefault(rn => rn.Status == LoopRunStatus.Cancelled)
+                           ?? runs.Where(rn => rn.Status != LoopRunStatus.Completed)
+                                  .OrderByDescending(rn => rn.StartedAt ?? rn.CreatedAt)
+                                  .FirstOrDefault();
+            }
+            var view = BuildView(r, currentRun);
+            if (createdByLoopRunId.HasValue && view.CreatedByLoopRunId != createdByLoopRunId) continue;
+            if (repositoryId.HasValue && view.RepositoryId != repositoryId) continue;
+            views.Add(view);
         }
 
-        return merged
-            .OrderByDescending(w => w.CreatedAt)
+        return views
+            .OrderByDescending(v => v.CreatedAt)
             .Skip(skip)
             .Take(take)
             .ToList();
     }
 
-    private static void MergeRemoteOntoLocal(WorkItem local, RemoteWorkItem remote)
+    private static WorkItemView BuildView(RemoteWorkItem remote, LoopRun? run)
     {
-        local.Title = remote.Title;
-        local.Description = remote.Description ?? string.Empty;
-        local.Status = MapFromRemote(remote.Status);
-        local.Priority = MapFromRemote(remote.Priority);
-        local.CreatedBy = remote.CreatedBy;
-        local.HumanFeedbackActions = remote.HumanFeedbackActions;
-        WriteCachedTags(local, remote.Tags);
-        WriteCachedConversation(local, remote.Conversation);
+        return new WorkItemView
+        {
+            Id = remote.Id,
+            Title = remote.Title,
+            Description = remote.Description,
+            CreatedBy = remote.CreatedBy,
+            CreatedAt = remote.CreatedAt,
+            UpdatedAt = remote.UpdatedAt,
+            Priority = remote.Priority,
+            Status = remote.Status,
+            Tags = remote.Tags,
+            Conversation = remote.Conversation,
+            HumanFeedbackActions = remote.HumanFeedbackActions,
+            RepositoryId = run?.RepositoryId,
+            CreatedByLoopRunId = run?.CreatedByLoopRunId ?? remote.CreatedByLoopRunId,
+            WorktreePath = run?.WorktreePath,
+            BranchName = run?.BranchName,
+            PrUrl = run?.PrUrl,
+            IsPrMerged = run?.IsPrMerged == true,
+            HumanFeedbackReason = run?.HumanFeedbackReason,
+            CurrentLoopRunId = run?.Id,
+        };
     }
 
     public async Task<bool> UpdateAsync(Guid workItemId, string title, string description, IEnumerable<string>? tags = null)
     {
-        var wi = await _store.GetByIdAsync(workItemId);
-        if (wi == null) return false;
-
-        var opts = await _options.ResolveForRepositoryAsync(wi.RepositoryId);
+        var opts = await _options.ResolveForWorkItemAsync(workItemId);
         var updated = await _server.UpdateAsync(opts, workItemId, new RemoteUpdateWorkItemRequest
         {
             Title = title,
             Description = description,
             Tags = tags?.ToList(),
         });
-        if (updated == null) return false;
-
-        wi.Title = updated.Title;
-        wi.Description = updated.Description;
-        wi.UpdatedAt = DateTime.UtcNow;
-        await _store.UpdateAsync(wi);
-        return true;
+        return updated != null;
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -197,12 +183,12 @@ public class WorkItemManager : IWorkItemManager
 
     public async Task<bool> TransitionToWorkQueueAsync(Guid workItemId)
     {
-        var wi = await _store.GetByIdAsync(workItemId);
+        var wi = await GetWorkItemAsync(workItemId);
         if (wi == null) return false;
-        if (wi.Status != WorkItemStatus.Backlog && wi.Status != WorkItemStatus.HumanFeedback)
+        if (wi.Status != RemoteWorkItemStatus.Backlog && wi.Status != RemoteWorkItemStatus.HumanFeedback)
             return false;
 
-        await TransitionAsync(workItemId, WorkItemStatus.WorkQueue);
+        await TransitionAsync(workItemId, RemoteWorkItemStatus.WorkQueue);
 
         if (await IsReadyAsync(workItemId))
             await TransitionToReadyAsync(workItemId);
@@ -211,44 +197,44 @@ public class WorkItemManager : IWorkItemManager
 
     public async Task<bool> TransitionToReadyAsync(Guid workItemId)
     {
-        var wi = await _store.GetByIdAsync(workItemId);
+        var wi = await GetWorkItemAsync(workItemId);
         if (wi == null) return false;
         if (!await IsReadyAsync(workItemId)) return false;
-        if (wi.Status != WorkItemStatus.WorkQueue && wi.Status != WorkItemStatus.Backlog)
+        if (wi.Status != RemoteWorkItemStatus.WorkQueue && wi.Status != RemoteWorkItemStatus.Backlog)
             return false;
-        return await TransitionAsync(workItemId, WorkItemStatus.Ready);
+        return await TransitionAsync(workItemId, RemoteWorkItemStatus.Ready);
     }
 
     public async Task<bool> TransitionToRunningAsync(Guid workItemId)
     {
-        var wi = await _store.GetByIdAsync(workItemId);
+        var wi = await GetWorkItemAsync(workItemId);
         if (wi == null) return false;
-        if (wi.Status != WorkItemStatus.Ready && wi.Status != WorkItemStatus.HumanFeedback)
+        if (wi.Status != RemoteWorkItemStatus.Ready && wi.Status != RemoteWorkItemStatus.HumanFeedback)
             return false;
-        return await TransitionAsync(workItemId, WorkItemStatus.Running);
+        return await TransitionAsync(workItemId, RemoteWorkItemStatus.Running);
     }
 
     public Task<bool> TransitionToHumanFeedbackAsync(Guid workItemId, string reason)
-        => TransitionAsync(workItemId, WorkItemStatus.HumanFeedback, reason);
+        => TransitionAsync(workItemId, RemoteWorkItemStatus.HumanFeedback, reason);
 
     public Task<bool> TransitionToDoneAsync(Guid workItemId)
-        => TransitionAsync(workItemId, WorkItemStatus.Done);
+        => TransitionAsync(workItemId, RemoteWorkItemStatus.Done);
 
     public async Task<bool> TransitionAsync(
         Guid workItemId,
-        WorkItemStatus targetStatus,
+        RemoteWorkItemStatus targetStatus,
         string? reason = null,
         string? actions = null,
         Guid? currentLoopRunId = null)
     {
-        var wi = await _store.GetByIdAsync(workItemId);
-        if (wi == null) return false;
+        var prevWi = await GetWorkItemAsync(workItemId);
+        if (prevWi == null) return false;
 
-        var prev = wi.Status;
-        var opts = await _options.ResolveForRepositoryAsync(wi.RepositoryId);
+        var prev = prevWi.Status;
+        var opts = await _options.ResolveForWorkItemAsync(workItemId);
         var resp = await _server.TransitionAsync(opts, workItemId, new RemoteTransitionRequest
         {
-            TargetStatus = MapToRemote(targetStatus),
+            TargetStatus = targetStatus,
             Reason = reason,
             Actions = actions,
         });
@@ -256,35 +242,34 @@ public class WorkItemManager : IWorkItemManager
         if (!resp.Success)
             return false;
 
-        var actual = MapFromRemote(resp.ActualStatus);
-        wi.Status = actual;
+        var actual = resp.ActualStatus;
 
-        if (actual == WorkItemStatus.HumanFeedback)
+        // Update engine-only fields on the current LoopRun
+        Guid? effectiveRunId = currentLoopRunId;
+        if (!effectiveRunId.HasValue || effectiveRunId.Value == Guid.Empty)
         {
-            if (reason != null) wi.HumanFeedbackReason = reason;
-            if (actions != null) wi.HumanFeedbackActions = actions;
+            var currentRun = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
+            effectiveRunId = currentRun?.Id;
         }
-        else
+        if (effectiveRunId.HasValue)
         {
-            wi.HumanFeedbackReason = null;
-            wi.HumanFeedbackActions = null;
+            var run = await _loopRunStore.GetByIdAsync(effectiveRunId.Value);
+            if (run != null)
+            {
+                if (actual == RemoteWorkItemStatus.HumanFeedback && reason != null)
+                    run.HumanFeedbackReason = reason;
+                else
+                    run.HumanFeedbackReason = null;
+                run.UpdatedAt = DateTime.UtcNow;
+                await _loopRunStore.UpdateRunAsync(run);
+            }
         }
-
-        if (currentLoopRunId.HasValue)
-        {
-            wi.CurrentLoopRunId = currentLoopRunId.Value == Guid.Empty
-                ? null
-                : currentLoopRunId.Value;
-        }
-
-        wi.UpdatedAt = DateTime.UtcNow;
-        await _store.UpdateAsync(wi);
 
         if (prev != actual)
             await _notifier.WorkItemStateChangedAsync(workItemId, prev, actual);
 
-        if (actual == WorkItemStatus.HumanFeedback && wi.HumanFeedbackReason != null)
-            await _notifier.HumanFeedbackRequiredAsync(workItemId, wi.HumanFeedbackReason);
+        if (actual == RemoteWorkItemStatus.HumanFeedback && reason != null)
+            await _notifier.HumanFeedbackRequiredAsync(workItemId, reason);
 
         return true;
     }
@@ -298,45 +283,59 @@ public class WorkItemManager : IWorkItemManager
         if (workItemId == dependsOnWorkItemId)
             throw new InvalidOperationException("A work item cannot depend on itself.");
 
-        var wi = await _store.GetByIdAsync(workItemId);
+        var wi = await GetWorkItemAsync(workItemId);
         if (wi == null) return false;
 
         if (await WouldCreateCycle(workItemId, dependsOnWorkItemId))
             throw new InvalidOperationException("Adding this dependency would create a cycle.");
 
-        var opts = await _options.ResolveForRepositoryAsync(wi.RepositoryId);
+        var opts = await _options.ResolveForWorkItemAsync(workItemId);
         return await _server.AddDependencyAsync(opts, workItemId, dependsOnWorkItemId);
     }
 
     public async Task<bool> RemoveDependencyAsync(Guid workItemId, Guid dependsOnWorkItemId)
     {
-        var wi = await _store.GetByIdAsync(workItemId);
-        if (wi == null) return false;
-
-        var opts = await _options.ResolveForRepositoryAsync(wi.RepositoryId);
+        var opts = await _options.ResolveForWorkItemAsync(workItemId);
         return await _server.RemoveDependencyAsync(opts, workItemId, dependsOnWorkItemId);
     }
 
-    public async Task<IEnumerable<WorkItem>> GetDependenciesAsync(Guid workItemId)
+    public async Task<IReadOnlyList<WorkItemView>> GetDependenciesAsync(Guid workItemId)
     {
         var ids = await GetServerDependencyIdsAsync(workItemId);
-        if (ids.Count == 0) return Array.Empty<WorkItem>();
-        return await _store.GetByIdsAsync(ids);
+        if (ids.Count == 0) return Array.Empty<WorkItemView>();
+
+        var opts = await _options.ResolveForWorkItemAsync(workItemId);
+        var views = new List<WorkItemView>();
+        foreach (var id in ids)
+        {
+            var remote = await _server.GetAsync(opts, id);
+            if (remote != null)
+            {
+                var runs = await _loopRunStore.GetAllByWorkItemAsync(id);
+                var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
+                               ?? runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).FirstOrDefault();
+                views.Add(BuildView(remote, currentRun));
+            }
+        }
+        return views;
     }
 
-    public async Task<IEnumerable<WorkItem>> GetDependentsAsync(Guid workItemId)
+    public async Task<IReadOnlyList<WorkItemView>> GetDependentsAsync(Guid workItemId)
     {
-        var wi = await _store.GetByIdAsync(workItemId);
-        if (wi == null) return Array.Empty<WorkItem>();
-        var opts = await _options.ResolveForRepositoryAsync(wi.RepositoryId);
+        var opts = await _options.ResolveForWorkItemAsync(workItemId);
         var all = await _server.ListAsync(opts, status: null, tags: null);
-        var dependentIds = new List<Guid>();
+        var views = new List<WorkItemView>();
         foreach (var candidate in all)
         {
             if (candidate.Dependencies.Contains(workItemId))
-                dependentIds.Add(candidate.Id);
+            {
+                var runs = await _loopRunStore.GetAllByWorkItemAsync(candidate.Id);
+                var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
+                               ?? runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).FirstOrDefault();
+                views.Add(BuildView(candidate, currentRun));
+            }
         }
-        return await _store.GetByIdsAsync(dependentIds);
+        return views;
     }
 
     public async Task<bool> IsReadyAsync(Guid workItemId)
@@ -344,20 +343,19 @@ public class WorkItemManager : IWorkItemManager
         var ids = await GetServerDependencyIdsAsync(workItemId);
         if (ids.Count == 0) return true;
 
-        var deps = await _store.GetByIdsAsync(ids);
-        foreach (var w in deps)
+        var opts = await _options.ResolveForWorkItemAsync(workItemId);
+        foreach (var depId in ids)
         {
-            if (w.Status != WorkItemStatus.Done)
+            var dep = await _server.GetAsync(opts, depId);
+            if (dep == null || dep.Status != RemoteWorkItemStatus.Done)
                 return false;
         }
-        return deps.Count == ids.Count;
+        return true;
     }
 
     private async Task<IReadOnlyList<Guid>> GetServerDependencyIdsAsync(Guid workItemId)
     {
-        var wi = await _store.GetByIdAsync(workItemId);
-        if (wi == null) return Array.Empty<Guid>();
-        var opts = await _options.ResolveForRepositoryAsync(wi.RepositoryId);
+        var opts = await _options.ResolveForWorkItemAsync(workItemId);
         var serverWi = await _server.GetAsync(opts, workItemId);
         return serverWi?.Dependencies?.ToList() ?? (IReadOnlyList<Guid>)Array.Empty<Guid>();
     }
@@ -379,60 +377,61 @@ public class WorkItemManager : IWorkItemManager
     }
 
     // ──────────────────────────────────────────────────────────────────
-    // PR / cleanup (engine-only fields, local sidecar)
+    // PR / cleanup (engine-only fields on LoopRun)
     // ──────────────────────────────────────────────────────────────────
 
     public async Task<bool> LinkPullRequestAsync(Guid workItemId, string prUrl)
     {
-        var wi = await _store.GetByIdAsync(workItemId);
-        if (wi == null) return false;
-        wi.PrUrl = prUrl;
-        wi.UpdatedAt = DateTime.UtcNow;
-        await _store.UpdateAsync(wi);
+        var run = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
+        if (run == null) return false;
+        run.PrUrl = prUrl;
+        run.UpdatedAt = DateTime.UtcNow;
+        await _loopRunStore.UpdateRunAsync(run);
         return true;
     }
 
     public async Task<bool> ManuallyMarkMergedAsync(Guid workItemId)
     {
-        var wi = await _store.GetByIdAsync(workItemId);
-        if (wi == null) return false;
-        wi.IsPrMerged = true;
-        wi.UpdatedAt = DateTime.UtcNow;
-
         var currentRun = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
-        if (currentRun == null || currentRun.Status != LoopRunStatus.Running)
+        if (currentRun == null) return false;
+
+        currentRun.IsPrMerged = true;
+        currentRun.UpdatedAt = DateTime.UtcNow;
+
+        if (currentRun.Status != LoopRunStatus.Running)
         {
             try
             {
-                var opts = await _options.ResolveForRepositoryAsync(wi.RepositoryId);
+                var opts = await _options.ResolveForWorkItemAsync(workItemId);
                 await _server.TransitionAsync(opts, workItemId, new RemoteTransitionRequest
                 {
                     TargetStatus = RemoteWorkItemStatus.Done,
                 });
             }
             catch (InvalidOperationException) { /* No remote — local only. */ }
-            wi.Status = WorkItemStatus.Done;
         }
 
-        await _store.UpdateAsync(wi);
+        await _loopRunStore.UpdateRunAsync(currentRun);
         return true;
     }
 
     public async Task<bool> CleanupToDoneAsync(Guid workItemId)
     {
-        var wi = await _store.GetByIdAsync(workItemId);
+        var currentRun = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
+        var wi = await GetWorkItemAsync(workItemId);
         if (wi == null) return false;
 
-        if (!string.IsNullOrEmpty(wi.WorktreePath))
+        if (!string.IsNullOrEmpty(currentRun?.WorktreePath))
         {
-            await _repoManager.DestroyWorktreeAsync(wi.WorktreePath);
-            wi.WorktreePath = null;
+            await _repoManager.DestroyWorktreeAsync(currentRun.WorktreePath);
+            currentRun.WorktreePath = null;
+            await _loopRunStore.UpdateRunAsync(currentRun);
         }
 
         var prev = wi.Status;
         try
         {
-            var opts = await _options.ResolveForRepositoryAsync(wi.RepositoryId);
+            var opts = await _options.ResolveForWorkItemAsync(workItemId);
             await _server.TransitionAsync(opts, workItemId, new RemoteTransitionRequest
             {
                 TargetStatus = RemoteWorkItemStatus.Done,
@@ -440,29 +439,30 @@ public class WorkItemManager : IWorkItemManager
         }
         catch (InvalidOperationException) { /* No remote — local only. */ }
 
-        wi.Status = WorkItemStatus.Done;
-        wi.HumanFeedbackReason = null;
-        wi.CurrentLoopRunId = null;
-        wi.UpdatedAt = DateTime.UtcNow;
-        await _store.UpdateAsync(wi);
-        await _notifier.WorkItemStateChangedAsync(workItemId, prev, WorkItemStatus.Done);
+        if (currentRun != null)
+        {
+            currentRun.HumanFeedbackReason = null;
+            currentRun.UpdatedAt = DateTime.UtcNow;
+            await _loopRunStore.UpdateRunAsync(currentRun);
+        }
+
+        await _notifier.WorkItemStateChangedAsync(workItemId, prev, RemoteWorkItemStatus.Done);
         return true;
     }
 
     public async Task<bool> CleanupToBacklogAsync(Guid workItemId)
     {
-        var wi = await _store.GetByIdAsync(workItemId);
-        if (wi == null) return false;
+        var currentRun = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
 
-        if (!string.IsNullOrEmpty(wi.WorktreePath))
+        if (currentRun != null && !string.IsNullOrEmpty(currentRun.WorktreePath))
         {
-            await _repoManager.DestroyWorktreeAsync(wi.WorktreePath);
-            wi.WorktreePath = null;
+            await _repoManager.DestroyWorktreeAsync(currentRun.WorktreePath);
+            currentRun.WorktreePath = null;
         }
 
         try
         {
-            var opts = await _options.ResolveForRepositoryAsync(wi.RepositoryId);
+            var opts = await _options.ResolveForWorkItemAsync(workItemId);
             await _server.TransitionAsync(opts, workItemId, new RemoteTransitionRequest
             {
                 TargetStatus = RemoteWorkItemStatus.Backlog,
@@ -470,12 +470,15 @@ public class WorkItemManager : IWorkItemManager
         }
         catch (InvalidOperationException) { /* No remote — local only. */ }
 
-        wi.Status = WorkItemStatus.Backlog;
-        wi.HumanFeedbackReason = null;
-        wi.CurrentLoopRunId = null;
-        wi.BranchName = null;
-        wi.UpdatedAt = DateTime.UtcNow;
-        await _store.UpdateAsync(wi);
+        if (currentRun != null)
+        {
+            currentRun.Status = LoopRunStatus.Completed;
+            currentRun.HumanFeedbackReason = null;
+            currentRun.BranchName = null;
+            currentRun.UpdatedAt = DateTime.UtcNow;
+            await _loopRunStore.UpdateRunAsync(currentRun);
+        }
+
         return true;
     }
 
@@ -485,24 +488,15 @@ public class WorkItemManager : IWorkItemManager
 
     public async Task<bool> SubmitHumanFeedbackInputAsync(Guid workItemId, string input)
     {
-        var wi = await _store.GetByIdAsync(workItemId);
-        if (wi == null) return false;
-        if (wi.CurrentLoopRunId == null) return false;
+        var wi = await GetWorkItemAsync(workItemId);
+        if (wi == null || wi.CurrentLoopRunId == null) return false;
 
         var runId = wi.CurrentLoopRunId.Value;
         var run = await _loopRunStore.GetByIdAsync(runId);
         if (run != null)
         {
             var nodes = await _loopRunStore.GetRunNodesAsync(runId);
-            var humanRunNode = nodes
-                .Where(n => n.Status == LoopRunNodeStatus.WaitingHuman
-                            && n.LoopNodeId == run.CurrentNodeId)
-                .OrderByDescending(n => n.StartedAt ?? DateTime.MinValue)
-                .FirstOrDefault()
-                ?? nodes
-                    .Where(n => n.Status == LoopRunNodeStatus.WaitingHuman)
-                    .OrderByDescending(n => n.StartedAt ?? DateTime.MinValue)
-                    .FirstOrDefault();
+            var humanRunNode = FindWaitingHumanNode(nodes, run.CurrentNodeId);
             if (humanRunNode != null)
             {
                 humanRunNode.Status = LoopRunNodeStatus.Succeeded;
@@ -511,7 +505,7 @@ public class WorkItemManager : IWorkItemManager
                 await _loopRunStore.UpdateRunNodeAsync(humanRunNode);
 
                 if (await IsPrNodeAsync(run, humanRunNode.LoopNodeId))
-                    wi.IsPrMerged = true;
+                    run.IsPrMerged = true;
             }
 
             if (run.Status == LoopRunStatus.WaitingHuman)
@@ -526,7 +520,7 @@ public class WorkItemManager : IWorkItemManager
 
         try
         {
-            var opts = await _options.ResolveForRepositoryAsync(wi.RepositoryId);
+            var opts = await _options.ResolveForWorkItemAsync(workItemId);
             await _server.AppendFeedbackAsync(opts, workItemId, input);
             await _server.TransitionAsync(opts, workItemId, new RemoteTransitionRequest
             {
@@ -535,12 +529,26 @@ public class WorkItemManager : IWorkItemManager
         }
         catch (InvalidOperationException) { /* No remote — local only. */ }
 
-        wi.Status = WorkItemStatus.Running;
-        wi.HumanFeedbackReason = null;
-        wi.HumanFeedbackActions = null;
-        wi.UpdatedAt = DateTime.UtcNow;
-        await _store.UpdateAsync(wi);
+        if (run != null)
+        {
+            run.HumanFeedbackReason = null;
+            run.UpdatedAt = DateTime.UtcNow;
+            await _loopRunStore.UpdateRunAsync(run);
+        }
         return true;
+    }
+
+    private static LoopRunNode? FindWaitingHumanNode(IReadOnlyList<LoopRunNode> nodes, Guid? currentNodeId)
+    {
+        var primary = nodes
+            .Where(n => n.Status == LoopRunNodeStatus.WaitingHuman && n.LoopNodeId == currentNodeId)
+            .OrderByDescending(n => n.StartedAt ?? DateTime.MinValue)
+            .FirstOrDefault();
+        if (primary != null) return primary;
+        return nodes
+            .Where(n => n.Status == LoopRunNodeStatus.WaitingHuman)
+            .OrderByDescending(n => n.StartedAt ?? DateTime.MinValue)
+            .FirstOrDefault();
     }
 
     private async Task<bool> IsPrNodeAsync(LoopRun run, Guid loopNodeId)
@@ -553,23 +561,14 @@ public class WorkItemManager : IWorkItemManager
 
     public async Task<bool> RejectHumanFeedbackAsync(Guid workItemId, string? input = null)
     {
-        var wi = await _store.GetByIdAsync(workItemId);
-        if (wi == null) return false;
-        if (wi.CurrentLoopRunId == null) return false;
+        var wi = await GetWorkItemAsync(workItemId);
+        if (wi == null || wi.CurrentLoopRunId == null) return false;
 
         var run = await _loopRunStore.GetByIdAsync(wi.CurrentLoopRunId.Value);
         if (run == null) return false;
 
         var nodes = await _loopRunStore.GetRunNodesAsync(run.Id);
-        var currentRunNode = nodes
-            .Where(n => n.Status == LoopRunNodeStatus.WaitingHuman
-                        && n.LoopNodeId == run.CurrentNodeId)
-            .OrderByDescending(n => n.StartedAt ?? DateTime.MinValue)
-            .FirstOrDefault()
-            ?? nodes
-                .Where(n => n.Status == LoopRunNodeStatus.WaitingHuman)
-                .OrderByDescending(n => n.StartedAt ?? DateTime.MinValue)
-                .FirstOrDefault();
+        var currentRunNode = FindWaitingHumanNode(nodes, run.CurrentNodeId);
 
         if (currentRunNode != null)
         {
@@ -592,7 +591,7 @@ public class WorkItemManager : IWorkItemManager
 
         try
         {
-            var opts = await _options.ResolveForRepositoryAsync(wi.RepositoryId);
+            var opts = await _options.ResolveForWorkItemAsync(workItemId);
             if (!string.IsNullOrEmpty(input))
                 await _server.AppendFeedbackAsync(opts, workItemId, $"rejected: {input}");
             await _server.TransitionAsync(opts, workItemId, new RemoteTransitionRequest
@@ -602,34 +601,23 @@ public class WorkItemManager : IWorkItemManager
         }
         catch (InvalidOperationException) { /* No remote — local only. */ }
 
-        wi.Status = WorkItemStatus.Running;
-        wi.HumanFeedbackReason = null;
-        wi.HumanFeedbackActions = null;
-        wi.UpdatedAt = DateTime.UtcNow;
-        await _store.UpdateAsync(wi);
+        run.HumanFeedbackReason = null;
+        run.UpdatedAt = DateTime.UtcNow;
+        await _loopRunStore.UpdateRunAsync(run);
         return true;
     }
 
     public async Task<bool> SubmitHumanFeedbackRespondAsync(Guid workItemId, string input)
     {
-        var wi = await _store.GetByIdAsync(workItemId);
-        if (wi == null) return false;
-        if (wi.CurrentLoopRunId == null) return false;
+        var wi = await GetWorkItemAsync(workItemId);
+        if (wi == null || wi.CurrentLoopRunId == null) return false;
 
         var runId = wi.CurrentLoopRunId.Value;
         var run = await _loopRunStore.GetByIdAsync(runId);
         if (run != null)
         {
             var nodes = await _loopRunStore.GetRunNodesAsync(runId);
-            var humanRunNode = nodes
-                .Where(n => n.Status == LoopRunNodeStatus.WaitingHuman
-                            && n.LoopNodeId == run.CurrentNodeId)
-                .OrderByDescending(n => n.StartedAt ?? DateTime.MinValue)
-                .FirstOrDefault()
-                ?? nodes
-                    .Where(n => n.Status == LoopRunNodeStatus.WaitingHuman)
-                    .OrderByDescending(n => n.StartedAt ?? DateTime.MinValue)
-                    .FirstOrDefault();
+            var humanRunNode = FindWaitingHumanNode(nodes, run.CurrentNodeId);
             if (humanRunNode != null)
             {
                 humanRunNode.Status = LoopRunNodeStatus.Responded;
@@ -650,7 +638,7 @@ public class WorkItemManager : IWorkItemManager
 
         try
         {
-            var opts = await _options.ResolveForRepositoryAsync(wi.RepositoryId);
+            var opts = await _options.ResolveForWorkItemAsync(workItemId);
             await _server.AppendFeedbackAsync(opts, workItemId, input);
             await _server.TransitionAsync(opts, workItemId, new RemoteTransitionRequest
             {
@@ -659,27 +647,34 @@ public class WorkItemManager : IWorkItemManager
         }
         catch (InvalidOperationException) { /* No remote — local only. */ }
 
-        wi.Status = WorkItemStatus.Running;
-        wi.HumanFeedbackReason = null;
-        wi.HumanFeedbackActions = null;
-        wi.UpdatedAt = DateTime.UtcNow;
-        await _store.UpdateAsync(wi);
+        if (run != null)
+        {
+            run.HumanFeedbackReason = null;
+            run.UpdatedAt = DateTime.UtcNow;
+            await _loopRunStore.UpdateRunAsync(run);
+        }
         return true;
     }
 
     public async Task<bool> DeleteAsync(Guid workItemId)
     {
-        var wi = await _store.GetByIdAsync(workItemId);
-        if (wi != null)
+        var wi = await GetWorkItemAsync(workItemId);
+        if (wi == null) return false;
+
+        try
         {
-            try
-            {
-                var opts = await _options.ResolveForRepositoryAsync(wi.RepositoryId);
-                await _server.DeleteAsync(opts, workItemId);
-            }
-            catch (InvalidOperationException) { /* No remote — local only. */ }
+            var opts = await _options.ResolveForWorkItemAsync(workItemId);
+            await _server.DeleteAsync(opts, workItemId);
         }
-        return await _store.DeleteAsync(workItemId);
+        catch (InvalidOperationException) { /* No remote — local only. */ }
+
+        // Delete all LoopRuns for this work item
+        var runs = await _loopRunStore.GetAllByWorkItemAsync(workItemId);
+        foreach (var run in runs)
+        {
+            await _loopRunStore.DeleteAsync(run.Id);
+        }
+        return true;
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -709,24 +704,4 @@ public class WorkItemManager : IWorkItemManager
         RemoteWorkItemStatus.Done => WorkItemStatus.Done,
         _ => WorkItemStatus.Backlog,
     };
-
-    internal static WorkItemPriority MapFromRemote(RemoteWorkItemPriority p) => p switch
-    {
-        RemoteWorkItemPriority.Low => WorkItemPriority.Low,
-        RemoteWorkItemPriority.Medium => WorkItemPriority.Medium,
-        RemoteWorkItemPriority.High => WorkItemPriority.High,
-        RemoteWorkItemPriority.Critical => WorkItemPriority.Critical,
-        _ => WorkItemPriority.Medium,
-    };
-
-    private static readonly JsonSerializerOptions JsonOpts = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    };
-
-    internal static void WriteCachedTags(WorkItem wi, IReadOnlyList<string> tags)
-        => wi.TagsJson = tags.Count == 0 ? null : JsonSerializer.Serialize(tags, JsonOpts);
-
-    internal static void WriteCachedConversation(WorkItem wi, IReadOnlyList<RemoteConversationMessage> messages)
-        => wi.ConversationJson = messages.Count == 0 ? null : JsonSerializer.Serialize(messages, JsonOpts);
 }

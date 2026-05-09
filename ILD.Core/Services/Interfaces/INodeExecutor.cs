@@ -79,7 +79,7 @@ public sealed record NodeExecutionContext(
     LoopRun Run,
     LoopRunNode RunNode,
     LoopNode Node,
-    WorkItem WorkItem,
+    WorkItemView WorkItem,
     string? PreviousNodeOutput,
     CancellationToken CancellationToken,
     Func<string, Task>? ProgressCallback = null);

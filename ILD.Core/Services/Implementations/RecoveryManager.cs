@@ -2,6 +2,7 @@ using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Remote;
 
 namespace ILD.Core.Services.Implementations;
 
@@ -43,7 +44,7 @@ public class RecoveryManager : IRecoveryManager
         {
             await _workItems.TransitionAsync(
                 run.WorkItemId,
-                WorkItemStatus.HumanFeedback,
+                RemoteWorkItemStatus.HumanFeedback,
                 reason: "Recovery requires review");
             return true;
         }
@@ -55,9 +56,9 @@ public class RecoveryManager : IRecoveryManager
             if (runNode?.Status == LoopRunNodeStatus.WaitingHuman)
             {
                 var wi = await _workItems.GetWorkItemAsync(run.WorkItemId);
-                if (wi != null && wi.Status != WorkItemStatus.HumanFeedback)
+                if (wi != null && wi.Status != RemoteWorkItemStatus.HumanFeedback)
                 {
-                    await _workItems.TransitionAsync(run.WorkItemId, WorkItemStatus.HumanFeedback);
+                    await _workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback);
                 }
                 return true;
             }
@@ -72,8 +73,8 @@ public class RecoveryManager : IRecoveryManager
         var run = await _loopRunStore.GetByIdAsync(runId);
         if (run == null) return false;
         var wi = await _workItems.GetWorkItemAsync(run.WorkItemId);
-        if (wi == null || string.IsNullOrEmpty(wi.WorktreePath)) return false;
-        return await _repo.ValidateWorktreeHealthAsync(wi.WorktreePath);
+        if (wi == null || string.IsNullOrEmpty(run.WorktreePath)) return false;
+        return await _repo.ValidateWorktreeHealthAsync(run.WorktreePath);
     }
 
     public async Task<RecoveryPolicy> GetRecoveryPolicyAsync(Guid templateId)

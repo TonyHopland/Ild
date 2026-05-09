@@ -1,4 +1,5 @@
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -58,8 +59,8 @@ public class AgentController : ControllerBase
         if (take <= 0) take = 100;
         if (take > 500) take = 500;
 
-        WorkItemStatus? statusFilter = null;
-        if (!string.IsNullOrEmpty(status) && Enum.TryParse<WorkItemStatus>(status, true, out var s))
+        RemoteWorkItemStatus? statusFilter = null;
+        if (!string.IsNullOrEmpty(status) && Enum.TryParse<RemoteWorkItemStatus>(status, true, out var s))
             statusFilter = s;
         Guid? repoFilter = null;
         if (!string.IsNullOrEmpty(repositoryId) && Guid.TryParse(repositoryId, out var repoGuid))
@@ -78,7 +79,7 @@ public class AgentController : ControllerBase
                 description = w.Description,
                 status = w.Status.ToString(),
                 repositoryId = w.RepositoryId == Guid.Empty ? null : (Guid?)w.RepositoryId,
-                loopTemplateVersionId = w.LoopTemplateVersionId,
+                loopTemplateVersionId = (Guid?)null,
                 createdByLoopRunId = w.CreatedByLoopRunId,
                 createdAt = w.CreatedAt,
                 updatedAt = w.UpdatedAt,
@@ -109,7 +110,7 @@ public class AgentController : ControllerBase
             description = wi.Description,
             status = wi.Status.ToString(),
             repositoryId = wi.RepositoryId == Guid.Empty ? null : (Guid?)wi.RepositoryId,
-            loopTemplateVersionId = wi.LoopTemplateVersionId,
+                loopTemplateVersionId = (Guid?)null,
             createdByLoopRunId = wi.CreatedByLoopRunId,
             createdAt = wi.CreatedAt,
             updatedAt = wi.UpdatedAt,
@@ -230,7 +231,7 @@ public class AgentController : ControllerBase
             {
                 if (!Guid.TryParse(raw, out var dep))
                     return BadRequest(new { error = $"Invalid dependency id: {raw}" });
-                var exists = await _db.WorkItems.AsNoTracking().AnyAsync(w => w.Id == dep);
+                var exists = await _workItems.GetWorkItemAsync(dep) != null;
                 if (!exists)
                     return BadRequest(new { error = $"Dependency not found: {dep}" });
                 dependencyIds.Add(dep);

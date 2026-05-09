@@ -1,20 +1,20 @@
+﻿using System;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace ILD.Data.Migrations
+namespace ILD.WorkItemServer.Migrations
 {
     /// <inheritdoc />
-    public partial class AddHumanFeedbackActionsToWorkItem : Migration
+    public partial class AddCreatedByLoopRunId : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.AddColumn<string>(
-                name: "HumanFeedbackActions",
+            migrationBuilder.AddColumn<Guid>(
+                name: "CreatedByLoopRunId",
                 table: "WorkItems",
                 type: "TEXT",
-                maxLength: 512,
                 nullable: true);
         }
 
@@ -22,7 +22,7 @@ namespace ILD.Data.Migrations
         protected override void Down(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.DropColumn(
-                name: "HumanFeedbackActions",
+                name: "CreatedByLoopRunId",
                 table: "WorkItems");
         }
     }

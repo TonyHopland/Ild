@@ -3,6 +3,7 @@ using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Remote;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -84,7 +85,6 @@ public class LoopEngine : ILoopEngine
             var manager = scope.ServiceProvider.GetRequiredService<IWorkItemManager>();
             var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
             var resolver = scope.ServiceProvider.GetRequiredService<Remote.ILoopTemplateResolver>();
-            var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
 
             var wi = await manager.GetWorkItemAsync(workItemId)
                 ?? throw new InvalidOperationException($"WorkItem {workItemId} not found");
@@ -94,7 +94,7 @@ public class LoopEngine : ILoopEngine
             // template explicitly. If the tags don't resolve to exactly one
             // template, escalate to HumanFeedback and return without starting
             // a run.
-            var tags = ParseLocalTags(wi.TagsJson);
+            var tags = wi.Tags;
             var resolution = resolver.Resolve(tags);
             if (resolution.Kind != Remote.LoopTemplateResolutionKind.Single || resolution.TemplateId is null)
             {
@@ -105,11 +105,12 @@ public class LoopEngine : ILoopEngine
                         $"Multiple loop templates match tags: {string.Join(", ", resolution.MatchingTemplateNames)}",
                     _ => "Unable to resolve template",
                 };
-                await manager.TransitionAsync(workItemId, WorkItemStatus.HumanFeedback, reason);
+                await manager.TransitionAsync(workItemId, RemoteWorkItemStatus.HumanFeedback, reason);
                 return;
             }
 
-            var version = await workItemStore.GetLatestTemplateVersionAsync(resolution.TemplateId.Value)
+            var templateStore = scope.ServiceProvider.GetRequiredService<ILoopTemplateStore>();
+            var version = await templateStore.GetLatestVersionAsync(resolution.TemplateId.Value)
                 ?? throw new InvalidOperationException(
                     $"Loop template {resolution.TemplateId} has no published version");
 
@@ -123,7 +124,7 @@ public class LoopEngine : ILoopEngine
                 StartedAt = DateTime.UtcNow,
             };
             await loopRunStore.CreateRunAsync(run);
-            await manager.TransitionAsync(workItemId, WorkItemStatus.Running, currentLoopRunId: run.Id);
+            await manager.TransitionAsync(workItemId, RemoteWorkItemStatus.Running, currentLoopRunId: run.Id);
             runId = run.Id;
         }
 
@@ -235,7 +236,7 @@ public class LoopEngine : ILoopEngine
                 await store.UpdateRunAsync(runEntity);
                 run = runEntity;
             }
-            await manager.TransitionAsync(run.WorkItemId, WorkItemStatus.Running);
+            await manager.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.Running);
             workItem = await manager.GetWorkItemAsync(run.WorkItemId) ?? workItem;
         }
 
@@ -310,7 +311,7 @@ public class LoopEngine : ILoopEngine
                 run.Status = LoopRunStatus.Running;
                 await loopRunStore.UpdateRunAsync(run);
 
-                await manager.TransitionAsync(run.WorkItemId, WorkItemStatus.Running);
+                await manager.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.Running);
             }
 
             await NotifyAsync(() => _notifier.NodeStateChangedAsync(runId, runNode.LoopNodeId, LoopRunNodeStatus.WaitingHuman, runNode.Status));
@@ -380,7 +381,7 @@ public class LoopEngine : ILoopEngine
                         EdgeType.OnRespond => $"Node {rf.Node.Label} responded but has no outgoing on_respond edge",
                         _ => $"Node {rf.Node.Label} has no outgoing {edgeTypeName} edge",
                     };
-                    await TransitionWorkItemAsync(workItem.Id, WorkItemStatus.HumanFeedback,
+                    await TransitionWorkItemAsync(workItem.Id, RemoteWorkItemStatus.HumanFeedback,
                         rf.EdgeType == EdgeType.OnFailure ? HumanFeedbackReasons.NodeFailed : $"No {edgeTypeName} edge");
                     return await FailRunAsync(runId, failMsg);
                 }
@@ -414,7 +415,7 @@ public class LoopEngine : ILoopEngine
     private async Task<LoopRunStatus> ExecuteRunLoopAsync(
         Guid runId,
         LoopRun run,
-        WorkItem workItem,
+        WorkItemView workItem,
         IReadOnlyList<LoopNode> nodes,
         IReadOnlyList<LoopNodeEdge> edges,
         LoopNode current,
@@ -464,7 +465,7 @@ public class LoopEngine : ILoopEngine
                         await TransitionRunAsync(runId, LoopRunStatus.WaitingHuman);
                         var availableActions = string.Join(",",
                             edges.Where(e => e.SourceNodeId == current.Id).Select(e => e.EdgeType.ToString()).Distinct());
-                        await TransitionWorkItemAsync(workItem.Id, WorkItemStatus.HumanFeedback, ReasonForSuspend(s.Kind), availableActions);
+                        await TransitionWorkItemAsync(workItem.Id, RemoteWorkItemStatus.HumanFeedback, ReasonForSuspend(s.Kind), availableActions);
                         return LoopRunStatus.WaitingHuman;
 
                     case NodeOutcome.Terminal t:
@@ -488,7 +489,7 @@ public class LoopEngine : ILoopEngine
                         if (nextFail == null)
                         {
                             await LogRoutingErrorAsync(runId, current, edges, EdgeType.OnFailure);
-                            await TransitionWorkItemAsync(workItem.Id, WorkItemStatus.HumanFeedback, HumanFeedbackReasons.NodeFailed);
+                            await TransitionWorkItemAsync(workItem.Id, RemoteWorkItemStatus.HumanFeedback, HumanFeedbackReasons.NodeFailed);
                             return await FailRunAsync(runId, "Retries exhausted with no on_failure edge");
                         }
                         if (nextFail.MaxExceeded)
@@ -601,7 +602,7 @@ public class LoopEngine : ILoopEngine
 
     // ---- Per-node execution ----------------------------------------------
 
-    private async Task<NodeOutcome> ExecuteNodeWithRetryAsync(LoopRun run, WorkItem wi, LoopNode node, string? prevOutput, IReadOnlyList<LoopNodeEdge> edges, CancellationToken ct)
+    private async Task<NodeOutcome> ExecuteNodeWithRetryAsync(LoopRun run, WorkItemView wi, LoopNode node, string? prevOutput, IReadOnlyList<LoopNodeEdge> edges, CancellationToken ct)
     {
         // PRD: error edge → follow immediately on failure; no error edge → auto-retry N times.
         var hasFailureEdge = edges.Any(e => e.SourceNodeId == node.Id && e.EdgeType == EdgeType.OnFailure);
@@ -702,7 +703,7 @@ public class LoopEngine : ILoopEngine
         }
     }
 
-    private NodeExecutionContext BuildContext(LoopRun run, LoopRunNode runNode, LoopNode node, WorkItem wi, string? prevOutput, CancellationToken ct)
+    private NodeExecutionContext BuildContext(LoopRun run, LoopRunNode runNode, LoopNode node, WorkItemView wi, string? prevOutput, CancellationToken ct)
     {
         Func<string, Task> progress = async (line) =>
         {
@@ -757,14 +758,14 @@ public class LoopEngine : ILoopEngine
         await store.PersistEdgeTraversalAsync(runId, edgeId, count);
     }
 
-    private async Task<WorkItem?> RefreshWorkItemAsync(Guid id)
+    private async Task<WorkItemView?> RefreshWorkItemAsync(Guid id)
     {
         using var scope = _sp.CreateScope();
         var manager = scope.ServiceProvider.GetRequiredService<IWorkItemManager>();
         return await manager.GetWorkItemAsync(id);
     }
 
-    private async Task<(LoopRun Run, WorkItem WorkItem, LoopTemplate Template, IReadOnlyList<LoopNode> Nodes, IReadOnlyList<LoopNodeEdge> Edges)?> LoadRunStateAsync(Guid runId)
+    private async Task<(LoopRun Run, WorkItemView WorkItem, LoopTemplate Template, IReadOnlyList<LoopNode> Nodes, IReadOnlyList<LoopNodeEdge> Edges)?> LoadRunStateAsync(Guid runId)
     {
         using var scope = _sp.CreateScope();
         var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
@@ -805,7 +806,7 @@ public class LoopEngine : ILoopEngine
             }
         }
         if (workItemId.HasValue)
-            await TransitionWorkItemAsync(workItemId.Value, WorkItemStatus.Done, null);
+            await TransitionWorkItemAsync(workItemId.Value, RemoteWorkItemStatus.Done, null);
         await NotifyAsync(() => _notifier.RunStateChangedAsync(runId, prevStatus, LoopRunStatus.Completed));
         await LogEventAsync(runId, "LoopRunCompleted", "Run completed successfully");
         ReleaseRunControl(runId);
@@ -831,7 +832,7 @@ public class LoopEngine : ILoopEngine
             }
         }
         if (workItemId.HasValue)
-            await TransitionWorkItemAsync(workItemId.Value, WorkItemStatus.HumanFeedback, reason);
+            await TransitionWorkItemAsync(workItemId.Value, RemoteWorkItemStatus.HumanFeedback, reason);
         await NotifyAsync(() => _notifier.EventLoggedAsync(runId, $"Run failed: {reason}", "Error", null, null));
         await NotifyAsync(() => _notifier.RunStateChangedAsync(runId, prevStatus, LoopRunStatus.Failed));
         ReleaseRunControl(runId);
@@ -857,7 +858,7 @@ public class LoopEngine : ILoopEngine
             }
         }
         if (workItemId.HasValue)
-            await TransitionWorkItemAsync(workItemId.Value, WorkItemStatus.HumanFeedback, "Run cancelled");
+            await TransitionWorkItemAsync(workItemId.Value, RemoteWorkItemStatus.HumanFeedback, "Run cancelled");
         await NotifyAsync(() => _notifier.RunStateChangedAsync(runId, prevStatus, LoopRunStatus.Cancelled));
         ReleaseRunControl(runId);
     }
@@ -885,7 +886,7 @@ public class LoopEngine : ILoopEngine
             control.Dispose();
     }
 
-    private async Task TransitionWorkItemAsync(Guid workItemId, WorkItemStatus next, string? reason, string? actions = null)
+    private async Task TransitionWorkItemAsync(Guid workItemId, RemoteWorkItemStatus next, string? reason, string? actions = null)
     {
         using var scope = _sp.CreateScope();
         var manager = scope.ServiceProvider.GetRequiredService<IWorkItemManager>();

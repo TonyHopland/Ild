@@ -15,7 +15,7 @@ public class AppDbContext : DbContext
     public DbSet<LoopTemplateVersion> LoopTemplateVersions => Set<LoopTemplateVersion>();
     public DbSet<LoopNode> LoopNodes => Set<LoopNode>();
     public DbSet<LoopNodeEdge> LoopNodeEdges => Set<LoopNodeEdge>();
-    public DbSet<WorkItem> WorkItems => Set<WorkItem>();
+
     public DbSet<LoopRun> LoopRuns => Set<LoopRun>();
     public DbSet<LoopRunNode> LoopRunNodes => Set<LoopRunNode>();
     public DbSet<LoopRunEdgeTraversal> LoopRunEdgeTraversals => Set<LoopRunEdgeTraversal>();
@@ -78,18 +78,12 @@ public class AppDbContext : DbContext
             e.HasIndex(l => new { l.SourceNodeId, l.TargetNodeId });
         });
 
-        modelBuilder.Entity<WorkItem>(e =>
-        {
-            e.HasIndex(w => w.RepositoryId);
-            e.HasIndex(w => w.Status);
-            e.HasIndex(w => w.CurrentLoopRunId);
-        });
-
         modelBuilder.Entity<LoopRun>(e =>
         {
             e.HasIndex(l => l.WorkItemId);
             e.HasIndex(l => l.LoopTemplateVersionId);
             e.HasIndex(l => l.Status);
+            e.HasIndex(l => l.PrUrl);
         });
 
         modelBuilder.Entity<LoopRunNode>(e =>
@@ -154,11 +148,6 @@ public class AppDbContext : DbContext
             e.Property(l => l.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
         });
 
-        modelBuilder.Entity<WorkItem>(e =>
-        {
-            e.Property(w => w.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
-        });
-
         modelBuilder.Entity<LoopRun>(e =>
         {
             e.Property(l => l.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
@@ -198,12 +187,6 @@ public class AppDbContext : DbContext
             .HasOne(rn => rn.LoopRun)
             .WithMany(lr => lr.RunNodes)
             .HasForeignKey(rn => rn.LoopRunId)
-            .OnDelete(DeleteBehavior.Cascade);
-
-        modelBuilder.Entity<LoopRun>()
-            .HasOne(r => r.WorkItem)
-            .WithMany(w => w.LoopRuns)
-            .HasForeignKey(r => r.WorkItemId)
             .OnDelete(DeleteBehavior.Cascade);
     }
 

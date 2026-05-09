@@ -27,19 +27,22 @@ public sealed class StartNodeExecutor : INodeExecutor
     public async Task<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
     {
         using var scope = _sp.CreateScope();
-        var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
+        var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
         var providerStore = scope.ServiceProvider.GetRequiredService<IProviderStore>();
 
-        var wi = await workItemStore.GetByIdAsync(ctx.WorkItem.Id);
-        if (wi == null) return new NodeOutcome.Failed("WorkItem not found");
-        var repo = await providerStore.GetRepositoryByIdAsync(wi.RepositoryId);
+        var wi = ctx.WorkItem;
+        if (wi.RepositoryId == null)
+            return new NodeOutcome.Failed(
+                "WorkItem has no repository attached; refusing to run loop without an isolated worktree.");
+        var repo = await providerStore.GetRepositoryByIdAsync(wi.RepositoryId.Value);
         if (repo == null)
             return new NodeOutcome.Failed(
                 "WorkItem has no repository attached; refusing to run loop without an isolated worktree.");
 
-        if (string.IsNullOrEmpty(wi.WorktreePath) || !Directory.Exists(wi.WorktreePath))
+        var run = await loopRunStore.GetByIdAsync(ctx.Run.Id);
+        if (string.IsNullOrEmpty(run?.WorktreePath) || !Directory.Exists(run.WorktreePath))
         {
-            var branch = wi.BranchName ?? $"ild/wi-{wi.Id:N}";
+            var branch = run.BranchName ?? $"ild/wi-{wi.Id:N}";
             var basePath = repo.WorktreesPath;
             var cloned = false;
             if (string.IsNullOrWhiteSpace(basePath) || !Directory.Exists(Path.Combine(basePath, ".git")))
@@ -48,8 +51,8 @@ public sealed class StartNodeExecutor : INodeExecutor
                 Directory.CreateDirectory(Path.GetDirectoryName(basePath)!);
                 if (!Directory.Exists(Path.Combine(basePath, ".git")))
                 {
-                    var (ok, err) = await _repo.CloneAsync(repo.CloneUrl, basePath, ctx.CancellationToken);
-                    if (!ok) return new NodeOutcome.Failed($"git clone failed: {err}");
+                    var result = await _repo.CloneAsync(repo.CloneUrl, basePath, ctx.CancellationToken);
+                    if (!result.Success) return new NodeOutcome.Failed($"git clone failed: {result.Error}");
                     cloned = true;
                 }
             }
@@ -59,14 +62,14 @@ public sealed class StartNodeExecutor : INodeExecutor
                 try { await _repo.PullAsync(basePath, ctx.CancellationToken); } catch { }
             }
             var path = await _repo.CreateWorktreeAsync(basePath, branch);
-            wi.WorktreePath = path;
-            wi.BranchName = branch;
-            await workItemStore.UpdateAsync(wi);
+            run.WorktreePath = path;
+            run.BranchName = branch;
+            await loopRunStore.UpdateRunAsync(run);
         }
-        if (string.IsNullOrEmpty(wi.WorktreePath) || !Directory.Exists(wi.WorktreePath))
+        if (string.IsNullOrEmpty(run?.WorktreePath) || !Directory.Exists(run.WorktreePath))
             return new NodeOutcome.Failed(
                 $"Failed to materialize worktree for WorkItem {wi.Id}; refusing to continue.");
-        return new NodeOutcome.Succeeded($"worktree={wi.WorktreePath}");
+        return new NodeOutcome.Succeeded($"worktree={run.WorktreePath}");
     }
 }
 
@@ -474,12 +477,12 @@ public sealed class CleanupNodeExecutor : INodeExecutor
     public async Task<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
     {
         using var scope = _sp.CreateScope();
-        var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
+        var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
 
-        var wi = await workItemStore.GetByIdAsync(ctx.WorkItem.Id);
-        if (wi == null) return new NodeOutcome.Failed("WorkItem not found");
+        var run = await loopRunStore.GetByIdAsync(ctx.Run.Id);
+        if (run == null) return new NodeOutcome.Failed("LoopRun not found");
 
-        string? worktreePath = wi.WorktreePath;
+        string? worktreePath = run.WorktreePath;
         if (!string.IsNullOrEmpty(worktreePath) && Directory.Exists(worktreePath))
         {
             try
@@ -488,17 +491,17 @@ public sealed class CleanupNodeExecutor : INodeExecutor
             }
             catch (Exception ex)
             {
-                wi.WorktreePath = null;
-                await workItemStore.UpdateAsync(wi);
+                run.WorktreePath = null;
+                await loopRunStore.UpdateRunAsync(run);
                 return new NodeOutcome.Terminal($"cleanup failed: {ex.Message} (path: {worktreePath})");
             }
-            wi.WorktreePath = null;
-            await workItemStore.UpdateAsync(wi);
+            run.WorktreePath = null;
+            await loopRunStore.UpdateRunAsync(run);
             return new NodeOutcome.Terminal($"worktree destroyed: {worktreePath}");
         }
 
-        wi.WorktreePath = null;
-        await workItemStore.UpdateAsync(wi);
+        run.WorktreePath = null;
+        await loopRunStore.UpdateRunAsync(run);
         return new NodeOutcome.Terminal("cleanup skipped: no worktree");
     }
 }

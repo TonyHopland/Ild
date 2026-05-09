@@ -36,7 +36,6 @@ public class LoopEngineProgressTests
         services.AddSingleton<INodeExecutorRegistry>(registry);
         services.AddSingleton<IRunNotifier>(notifier.Object);
         services.AddSingleton<LoopEngine>();
-        services.AddSingleton<IWorkItemStore>(db.WorkItems);
         services.AddSingleton<ILoopRunStore>(db.LoopRuns);
         services.AddSingleton<ILoopTemplateStore>(db.LoopTemplates);
         services.AddSingleton<IProviderStore>(db.Providers);
@@ -44,12 +43,11 @@ public class LoopEngineProgressTests
         services.AddSingleton<IEventLogService>(new EventLogService(db.EventLogs, db.LoopRuns));
         services.AddSingleton<IAuthStore>(db.Auth);
         services.AddSingleton<IRepositoryManager>(new Mock<IRepositoryManager>().Object);
-        var serverHarness = new FakeWorkItemServerHarness();
-        services.AddSingleton(serverHarness.Client);
-        services.AddSingleton(serverHarness.Options);
+        services.AddSingleton(db.ServerClient);
+        services.AddSingleton(db.ServerOptions);
         services.AddSingleton<IWorkItemManager>(sp => new WorkItemManager(
-            sp.GetRequiredService<IWorkItemStore>(),
             sp.GetRequiredService<IRepositoryManager>(),
+            sp.GetRequiredService<IProviderStore>(),
             sp.GetRequiredService<IEventLogService>(),
             sp.GetRequiredService<ILoopRunStore>(),
             sp.GetRequiredService<ILD.Core.Services.Remote.IWorkItemServerClient>(),
@@ -81,22 +79,21 @@ public class LoopEngineProgressTests
         db.Context.LoopNodeEdges.Add(new LoopNodeEdge { Id = Guid.NewGuid(), SourceNodeId = startNode.Id, TargetNodeId = aiNode.Id, EdgeType = EdgeType.OnSuccess });
         db.Context.LoopNodeEdges.Add(new LoopNodeEdge { Id = Guid.NewGuid(), SourceNodeId = aiNode.Id, TargetNodeId = cleanupNode.Id, EdgeType = EdgeType.OnSuccess });
 
-        var wi = new WorkItem { Id = Guid.NewGuid(), Title = "wi", RepositoryId = repo.Id, LoopTemplateVersionId = version.Id, Status = WorkItemStatus.Running };
-        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = wi.Id, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running };
-        db.Context.WorkItems.Add(wi);
+        var workItemId = Guid.NewGuid();
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = workItemId, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running };
         db.Context.LoopRuns.Add(run);
         db.Context.SaveChanges();
         // Mirror onto the WorkItemServer fake so the now server-first
         // WorkItemManager can resolve the item.
-        serverHarness.ServerDb.WorkItems.Add(new ILD.WorkItemServer.Domain.WorkItem
+        db.Server.ServerDb.WorkItems.Add(new ILD.WorkItemServer.Domain.WorkItem
         {
-            Id = wi.Id,
-            Title = wi.Title,
+            Id = workItemId,
+            Title = "wi",
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
             Status = ILD.WorkItemServer.Domain.WorkItemStatus.Running,
         });
-        serverHarness.ServerDb.SaveChanges();
+        db.Server.ServerDb.SaveChanges();
 
         // The AI fake executor calls the progress callback with streaming text
         fakes[NodeType.AI].AsyncBehavior = async ctx =>

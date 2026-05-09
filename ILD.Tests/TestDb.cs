@@ -30,7 +30,6 @@ public sealed class TestDb : IDisposable
     private readonly SqliteConnection _connection;
 
     public AppDbContext Context { get; }
-    public IWorkItemStore WorkItems { get; }
     public ILoopRunStore LoopRuns { get; }
     public ILoopTemplateStore LoopTemplates { get; }
     public IEventLogStore EventLogs { get; }
@@ -57,8 +56,6 @@ public sealed class TestDb : IDisposable
 
         Context = new AppDbContext(options);
         Context.Database.EnsureCreated();
-
-        WorkItems = new WorkItemStore(Context);
         LoopRuns = new LoopRunStore(Context);
         LoopTemplates = new LoopTemplateStore(Context);
         EventLogs = new EventLogStore(Context);

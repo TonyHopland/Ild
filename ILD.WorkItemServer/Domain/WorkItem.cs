@@ -47,4 +47,11 @@ public class WorkItem
     /// stale detector treats as not-yet-claimed (non-stale).
     /// </summary>
     public DateTime? LastHeartbeatAt { get; set; }
+
+    /// <summary>
+    /// The LoopRun that created this work item (e.g. agent-created items).
+    /// Stored on the server entity so it's available before any LoopRun exists
+    /// for the work item itself.
+    /// </summary>
+    public Guid? CreatedByLoopRunId { get; set; }
 }

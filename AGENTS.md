@@ -13,3 +13,14 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 - [ ] Check if there are `vite.config.ts` tasks or `package.json` scripts necessary for validation, run via `vp run <script>`.
 
 <!--VITE PLUS END-->
+
+## Database Migrations
+
+NEVER manually write or edit EF Core migration files. Always use the EF Core CLI tools to scaffold migrations from model changes:
+
+```bash
+dotnet ef migrations add <MigrationName> --project <project-with-dbcontext>
+dotnet ef database update --project <project-with-dbcontext>
+```
+
+Manually editing migration files is error-prone and will cause schema drift. The migration files are generated artifacts, not source of truth.

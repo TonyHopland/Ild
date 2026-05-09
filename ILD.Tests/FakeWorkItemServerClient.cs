@@ -38,6 +38,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             .Select(m => new RemoteConversationMessage(m.Role, m.Content, m.Timestamp))
             .ToList(),
         HumanFeedbackActions = dto.HumanFeedbackActions,
+        CreatedByLoopRunId = dto.CreatedByLoopRunId,
     };
 
     public async Task<RemoteWorkItem> CreateAsync(WorkItemServerOptions opts, RemoteCreateWorkItemRequest req, CancellationToken ct = default)
@@ -51,6 +52,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             Tags = req.Tags?.ToList() ?? new List<string>(),
             Dependencies = req.Dependencies?.ToList() ?? new List<Guid>(),
             ForceStatus = req.ForceStatus.HasValue ? Map(req.ForceStatus.Value) : null,
+            CreatedByLoopRunId = req.CreatedByLoopRunId,
         }, ct);
         return ToRemote(dto);
     }

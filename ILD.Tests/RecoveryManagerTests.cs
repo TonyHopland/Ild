@@ -1,6 +1,7 @@
 using FluentAssertions;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Remote;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
@@ -60,13 +61,13 @@ public class RecoveryManagerTests
             Status = LoopRunStatus.Running,
             RecoveryPolicy = RecoveryPolicy.NeedsReview,
         });
-        wiMgr.Setup(m => m.TransitionAsync(wiId, WorkItemStatus.HumanFeedback, It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>()))
+        wiMgr.Setup(m => m.TransitionAsync(wiId, RemoteWorkItemStatus.HumanFeedback, It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>()))
             .ReturnsAsync(true);
 
         var ok = await mgr.RecoverRunAsync(runId);
 
         ok.Should().BeTrue();
-        wiMgr.Verify(m => m.TransitionAsync(wiId, WorkItemStatus.HumanFeedback, It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>()), Times.Once);
+        wiMgr.Verify(m => m.TransitionAsync(wiId, RemoteWorkItemStatus.HumanFeedback, It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>()), Times.Once);
         engine.Verify(e => e.CancelRunAsync(It.IsAny<Guid>()), Times.Never);
     }
 
@@ -125,13 +126,13 @@ public class RecoveryManagerTests
             Id = runId,
             WorkItemId = wiId,
             Status = LoopRunStatus.Running,
+            WorktreePath = "/tmp/wt",
         });
-        wiMgr.Setup(s => s.GetWorkItemAsync(wiId)).ReturnsAsync(new WorkItem
+        wiMgr.Setup(s => s.GetWorkItemAsync(wiId)).ReturnsAsync(new WorkItemView
         {
             Id = wiId,
             Title = "t",
             Description = "d",
-            WorktreePath = "/tmp/wt",
         });
         repo.Setup(r => r.ValidateWorktreeHealthAsync("/tmp/wt")).ReturnsAsync(true);
 
@@ -149,13 +150,13 @@ public class RecoveryManagerTests
             Id = runId,
             WorkItemId = wiId,
             Status = LoopRunStatus.Running,
+            WorktreePath = "/tmp/wt",
         });
-        wiMgr.Setup(s => s.GetWorkItemAsync(wiId)).ReturnsAsync(new WorkItem
+        wiMgr.Setup(s => s.GetWorkItemAsync(wiId)).ReturnsAsync(new WorkItemView
         {
             Id = wiId,
             Title = "t",
             Description = "d",
-            WorktreePath = "/tmp/wt",
         });
         repo.Setup(r => r.ValidateWorktreeHealthAsync("/tmp/wt")).ReturnsAsync(false);
 
@@ -173,13 +174,13 @@ public class RecoveryManagerTests
             Id = runId,
             WorkItemId = wiId,
             Status = LoopRunStatus.Running,
+            WorktreePath = null,
         });
-        wiMgr.Setup(s => s.GetWorkItemAsync(wiId)).ReturnsAsync(new WorkItem
+        wiMgr.Setup(s => s.GetWorkItemAsync(wiId)).ReturnsAsync(new WorkItemView
         {
             Id = wiId,
             Title = "t",
             Description = "d",
-            WorktreePath = null,
         });
 
         (await mgr.ValidateWorktreeHealthAsync(runId)).Should().BeFalse();
@@ -235,7 +236,7 @@ public class RecoveryManagerTests
             LoopNodeId = currentNodeId,
             Status = LoopRunNodeStatus.WaitingHuman,
         });
-        wiMgr.Setup(s => s.GetWorkItemAsync(wiId)).ReturnsAsync(new WorkItem { Id = wiId, Title = "t", Description = "d", Status = WorkItemStatus.HumanFeedback });
+        wiMgr.Setup(s => s.GetWorkItemAsync(wiId)).ReturnsAsync(new WorkItemView { Id = wiId, Title = "t", Description = "d", Status = RemoteWorkItemStatus.HumanFeedback });
 
         var ok = await mgr.RecoverRunAsync(runId);
 

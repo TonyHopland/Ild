@@ -8,13 +8,13 @@ namespace ILD.Core.Services.Implementations;
 
 public class PrSyncService : IPrSyncService
 {
-    private readonly IWorkItemStore _workItemStore;
+    private readonly ILoopRunStore _loopRunStore;
     private readonly IEventLogStore _eventLogStore;
     private readonly IWorkItemManager _workItems;
 
-    public PrSyncService(IWorkItemStore workItemStore, IEventLogStore eventLogStore, IWorkItemManager workItems)
+    public PrSyncService(ILoopRunStore loopRunStore, IEventLogStore eventLogStore, IWorkItemManager workItems)
     {
-        _workItemStore = workItemStore;
+        _loopRunStore = loopRunStore;
         _eventLogStore = eventLogStore;
         _workItems = workItems;
     }
@@ -22,21 +22,24 @@ public class PrSyncService : IPrSyncService
     public async Task HandleWebhookAsync(WebhookPayload payload)
     {
         if (payload == null || string.IsNullOrEmpty(payload.PullRequestUrl)) return;
-        var wi = await FindByPrUrlAsync(payload.PullRequestUrl);
-        if (wi == null) return;
+        var run = await _loopRunStore.GetByPrUrlAsync(payload.PullRequestUrl);
+        if (run == null) return;
 
         if (string.Equals(payload.MergeStatus, "merged", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(payload.EventType, "pull_request.merged", StringComparison.OrdinalIgnoreCase))
         {
-            await _workItems.ManuallyMarkMergedAsync(wi.Id);
+            run.IsPrMerged = true;
+            run.UpdatedAt = DateTime.UtcNow;
+            await _loopRunStore.UpdateRunAsync(run);
+            await _workItems.ManuallyMarkMergedAsync(run.WorkItemId);
         }
 
-        if (!string.IsNullOrEmpty(payload.Comment) && wi.CurrentLoopRunId.HasValue)
+        if (!string.IsNullOrEmpty(payload.Comment))
         {
             await _eventLogStore.AppendAsync(new EventLog
             {
                 Id = Guid.NewGuid(),
-                LoopRunId = wi.CurrentLoopRunId.Value,
+                LoopRunId = run.Id,
                 EventType = EventType.HumanFeedbackReceived,
                 Data = payload.Comment,
                 Timestamp = DateTime.UtcNow,
@@ -50,29 +53,16 @@ public class PrSyncService : IPrSyncService
 
     public async Task RegisterWorkItemPrLinkAsync(Guid workItemId, string prUrl)
     {
-        var wi = await _workItemStore.GetByIdAsync(workItemId);
-        if (wi == null) return;
-        wi.PrUrl = prUrl;
-        wi.UpdatedAt = DateTime.UtcNow;
-        await _workItemStore.UpdateAsync(wi);
+        var run = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
+        if (run == null) return;
+        run.PrUrl = prUrl;
+        run.UpdatedAt = DateTime.UtcNow;
+        await _loopRunStore.UpdateRunAsync(run);
     }
 
     public async Task<string?> GetPrUrlForWorkItemAsync(Guid workItemId)
     {
-        var wi = await _workItemStore.GetByIdAsync(workItemId);
-        return wi?.PrUrl;
-    }
-
-    private async Task<WorkItem?> FindByPrUrlAsync(string prUrl)
-    {
-        foreach (var status in Enum.GetValues<WorkItemStatus>())
-        {
-            foreach (var w in await _workItemStore.GetByStatusAsync(status))
-            {
-                if (w.PrUrl == prUrl)
-                    return w;
-            }
-        }
-        return null;
+        var run = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
+        return run?.PrUrl;
     }
 }

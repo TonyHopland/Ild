@@ -11,8 +11,8 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace ILD.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20260505150253_AddNextEventSeqAndWaitingHuman")]
-    partial class AddNextEventSeqAndWaitingHuman
+    [Migration("20260509080315_Initial")]
+    partial class Initial
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -187,6 +187,10 @@ namespace ILD.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("BranchName")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime?>("CompletedAt")
                         .HasColumnType("TEXT");
 
@@ -195,10 +199,20 @@ namespace ILD.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasDefaultValueSql("CURRENT_TIMESTAMP");
 
+                    b.Property<Guid?>("CreatedByLoopRunId")
+                        .HasColumnType("TEXT");
+
                     b.Property<Guid?>("CurrentNodeId")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("HumanFeedbackReason")
+                        .HasMaxLength(512)
+                        .HasColumnType("TEXT");
+
                     b.Property<bool>("IsPaused")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("IsPrMerged")
                         .HasColumnType("INTEGER");
 
                     b.Property<Guid>("LoopTemplateVersionId")
@@ -210,9 +224,19 @@ namespace ILD.Data.Migrations
                     b.Property<int>("NodeExecutionCount")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("PrUrl")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("RecoveryPolicy")
                         .IsRequired()
                         .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("RepositoryId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SessionsJson")
                         .HasColumnType("TEXT");
 
                     b.Property<DateTime?>("StartedAt")
@@ -227,9 +251,15 @@ namespace ILD.Data.Migrations
                     b.Property<Guid>("WorkItemId")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("WorktreePath")
+                        .HasMaxLength(1024)
+                        .HasColumnType("TEXT");
+
                     b.HasKey("Id");
 
                     b.HasIndex("LoopTemplateVersionId");
+
+                    b.HasIndex("PrUrl");
 
                     b.HasIndex("Status");
 
@@ -329,6 +359,9 @@ namespace ILD.Data.Migrations
                         .HasMaxLength(2048)
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("IsArchived")
+                        .HasColumnType("INTEGER");
+
                     b.Property<bool>("IsDefault")
                         .HasColumnType("INTEGER");
 
@@ -398,13 +431,22 @@ namespace ILD.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasDefaultValueSql("CURRENT_TIMESTAMP");
 
+                    b.Property<int>("GraceIntervalSeconds")
+                        .HasColumnType("INTEGER");
+
                     b.Property<bool>("IsDefault")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("MaxConcurrentWorkItems")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(256)
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("PollIntervalSeconds")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("Type")
                         .IsRequired()
@@ -421,6 +463,14 @@ namespace ILD.Data.Migrations
 
                     b.Property<string>("WebhookSecret")
                         .HasMaxLength(512)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("WorkItemApiKey")
+                        .HasMaxLength(1024)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("WorkItemServerUrl")
+                        .HasMaxLength(1024)
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
@@ -515,106 +565,6 @@ namespace ILD.Data.Migrations
                     b.ToTable("Users");
                 });
 
-            modelBuilder.Entity("ILD.Data.Entities.WorkItem", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("BranchName")
-                        .HasMaxLength(256)
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValueSql("CURRENT_TIMESTAMP");
-
-                    b.Property<Guid?>("CurrentLoopRunId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Description")
-                        .HasMaxLength(4096)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("HumanFeedbackReason")
-                        .HasMaxLength(512)
-                        .HasColumnType("TEXT");
-
-                    b.Property<bool>("IsPrMerged")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("Labels")
-                        .HasColumnType("TEXT");
-
-                    b.Property<Guid?>("LoopTemplateVersionId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("PrUrl")
-                        .HasMaxLength(2048)
-                        .HasColumnType("TEXT");
-
-                    b.Property<int>("Priority")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<Guid>("RepositoryId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<int>("Status")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("Title")
-                        .IsRequired()
-                        .HasMaxLength(512)
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("WorktreePath")
-                        .HasMaxLength(1024)
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CurrentLoopRunId");
-
-                    b.HasIndex("LoopTemplateVersionId");
-
-                    b.HasIndex("RepositoryId");
-
-                    b.HasIndex("Status");
-
-                    b.ToTable("WorkItems");
-                });
-
-            modelBuilder.Entity("ILD.Data.Entities.WorkItemDependency", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValueSql("CURRENT_TIMESTAMP");
-
-                    b.Property<Guid>("DependencyWorkItemId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<Guid>("WorkItemId")
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("DependencyWorkItemId");
-
-                    b.HasIndex("WorkItemId", "DependencyWorkItemId")
-                        .IsUnique();
-
-                    b.ToTable("WorkItemDependencies");
-                });
-
             modelBuilder.Entity("ILD.Data.Entities.EventLog", b =>
                 {
                     b.HasOne("ILD.Data.Entities.LoopRun", "LoopRun")
@@ -662,15 +612,7 @@ namespace ILD.Data.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("ILD.Data.Entities.WorkItem", "WorkItem")
-                        .WithMany("LoopRuns")
-                        .HasForeignKey("WorkItemId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
                     b.Navigation("LoopTemplateVersion");
-
-                    b.Navigation("WorkItem");
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.LoopRunEdgeTraversal", b =>
@@ -733,48 +675,6 @@ namespace ILD.Data.Migrations
                     b.Navigation("RemoteProvider");
                 });
 
-            modelBuilder.Entity("ILD.Data.Entities.WorkItem", b =>
-                {
-                    b.HasOne("ILD.Data.Entities.LoopRun", "CurrentLoopRun")
-                        .WithMany()
-                        .HasForeignKey("CurrentLoopRunId");
-
-                    b.HasOne("ILD.Data.Entities.LoopTemplateVersion", "LoopTemplateVersion")
-                        .WithMany("WorkItems")
-                        .HasForeignKey("LoopTemplateVersionId");
-
-                    b.HasOne("ILD.Data.Entities.Repository", "Repository")
-                        .WithMany("WorkItems")
-                        .HasForeignKey("RepositoryId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("CurrentLoopRun");
-
-                    b.Navigation("LoopTemplateVersion");
-
-                    b.Navigation("Repository");
-                });
-
-            modelBuilder.Entity("ILD.Data.Entities.WorkItemDependency", b =>
-                {
-                    b.HasOne("ILD.Data.Entities.WorkItem", "DependentWorkItem")
-                        .WithMany("DependentDependencies")
-                        .HasForeignKey("DependencyWorkItemId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("ILD.Data.Entities.WorkItem", "WorkItem")
-                        .WithMany("Dependencies")
-                        .HasForeignKey("WorkItemId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("DependentWorkItem");
-
-                    b.Navigation("WorkItem");
-                });
-
             modelBuilder.Entity("ILD.Data.Entities.LoopNode", b =>
                 {
                     b.Navigation("IncomingEdges");
@@ -808,27 +708,11 @@ namespace ILD.Data.Migrations
                     b.Navigation("LoopRuns");
 
                     b.Navigation("Nodes");
-
-                    b.Navigation("WorkItems");
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.RemoteProvider", b =>
                 {
                     b.Navigation("Repositories");
-                });
-
-            modelBuilder.Entity("ILD.Data.Entities.Repository", b =>
-                {
-                    b.Navigation("WorkItems");
-                });
-
-            modelBuilder.Entity("ILD.Data.Entities.WorkItem", b =>
-                {
-                    b.Navigation("Dependencies");
-
-                    b.Navigation("DependentDependencies");
-
-                    b.Navigation("LoopRuns");
                 });
 #pragma warning restore 612, 618
         }

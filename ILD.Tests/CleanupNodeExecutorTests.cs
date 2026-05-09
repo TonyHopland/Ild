@@ -24,46 +24,49 @@ public class CleanupNodeExecutorTests
         db.Context.Repositories.Add(repoEntity);
         db.Context.LoopTemplates.Add(template);
         db.Context.LoopTemplateVersions.Add(version);
-        var wi = new WorkItem
-        {
-            Id = Guid.NewGuid(),
-            Title = "wi",
-            RepositoryId = repoEntity.Id,
-            LoopTemplateVersionId = version.Id,
-            Status = WorkItemStatus.Running,
-            WorktreePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString()),
-        };
-        Directory.CreateDirectory(wi.WorktreePath);
+
+        var worktreePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        Directory.CreateDirectory(worktreePath);
         try
         {
-            db.Context.WorkItems.Add(wi);
+            var run = new LoopRun
+            {
+                Id = Guid.NewGuid(),
+                WorkItemId = Guid.NewGuid(),
+                LoopTemplateVersionId = version.Id,
+                RecoveryPolicy = RecoveryPolicy.AutoResume,
+                Status = LoopRunStatus.Running,
+                RepositoryId = repoEntity.Id,
+                WorktreePath = worktreePath,
+            };
+            db.Context.LoopRuns.Add(run);
             db.Context.SaveChanges();
 
             var repo = new Mock<IRepositoryManager>();
-            repo.Setup(r => r.DestroyWorktreeAsync(wi.WorktreePath)).Returns(Task.CompletedTask);
+            repo.Setup(r => r.DestroyWorktreeAsync(worktreePath)).Returns(Task.CompletedTask);
 
             var services = new ServiceCollection();
-            services.AddSingleton<IWorkItemStore>(db.WorkItems);
+            services.AddSingleton((ILoopRunStore)db.LoopRuns);
+            services.AddSingleton((IProviderStore)db.Providers);
             var sp = services.BuildServiceProvider();
 
-            var expectedPath = wi.WorktreePath;
             var executor = new CleanupNodeExecutor(repo.Object, sp);
             var node = new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.Cleanup, Label = "cleanup" };
-            var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = wi.Id };
             var runNode = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = run.Id, LoopNodeId = node.Id };
+            var wi = new WorkItemView { Id = run.WorkItemId, Title = "wi" };
             var ctx = new NodeExecutionContext(run, runNode, node, wi, null, default);
 
             var result = await executor.ExecuteAsync(ctx);
 
             result.Success.Should().BeTrue();
             result.Output.Should().Contain("destroyed");
-            result.Output.Should().Contain(expectedPath);
-            var reloaded = db.Fresh().WorkItems.AsNoTracking().First(w => w.Id == wi.Id);
+            result.Output.Should().Contain(worktreePath);
+            var reloaded = db.Fresh().LoopRuns.AsNoTracking().First(r => r.Id == run.Id);
             reloaded.WorktreePath.Should().BeNull("Cleanup must clear the WorktreePath after destroying the worktree");
         }
         finally
         {
-            if (Directory.Exists(wi.WorktreePath)) Directory.Delete(wi.WorktreePath, true);
+            if (Directory.Exists(worktreePath)) Directory.Delete(worktreePath, true);
         }
     }
 
@@ -79,27 +82,30 @@ public class CleanupNodeExecutorTests
         db.Context.Repositories.Add(repoEntity);
         db.Context.LoopTemplates.Add(template);
         db.Context.LoopTemplateVersions.Add(version);
-        var wi = new WorkItem
+
+        var run = new LoopRun
         {
             Id = Guid.NewGuid(),
-            Title = "wi",
-            RepositoryId = repoEntity.Id,
+            WorkItemId = Guid.NewGuid(),
             LoopTemplateVersionId = version.Id,
-            Status = WorkItemStatus.Running,
+            RecoveryPolicy = RecoveryPolicy.AutoResume,
+            Status = LoopRunStatus.Running,
+            RepositoryId = repoEntity.Id,
             WorktreePath = null,
         };
-        db.Context.WorkItems.Add(wi);
+        db.Context.LoopRuns.Add(run);
         db.Context.SaveChanges();
 
         var repo = new Mock<IRepositoryManager>();
         var services = new ServiceCollection();
-        services.AddSingleton<IWorkItemStore>(db.WorkItems);
+        services.AddSingleton<ILoopRunStore>(db.LoopRuns);
+        services.AddSingleton<IProviderStore>(db.Providers);
         var sp = services.BuildServiceProvider();
 
         var executor = new CleanupNodeExecutor(repo.Object, sp);
         var node = new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.Cleanup, Label = "cleanup" };
-        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = wi.Id };
         var runNode = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = run.Id, LoopNodeId = node.Id };
+        var wi = new WorkItemView { Id = run.WorkItemId, Title = "wi" };
         var ctx = new NodeExecutionContext(run, runNode, node, wi, null, default);
 
         var result = await executor.ExecuteAsync(ctx);
@@ -121,33 +127,36 @@ public class CleanupNodeExecutorTests
         db.Context.Repositories.Add(repoEntity);
         db.Context.LoopTemplates.Add(template);
         db.Context.LoopTemplateVersions.Add(version);
-        var wi = new WorkItem
-        {
-            Id = Guid.NewGuid(),
-            Title = "wi",
-            RepositoryId = repoEntity.Id,
-            LoopTemplateVersionId = version.Id,
-            Status = WorkItemStatus.Running,
-            WorktreePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString()),
-        };
-        Directory.CreateDirectory(wi.WorktreePath);
+
+        var worktreePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        Directory.CreateDirectory(worktreePath);
         try
         {
-            db.Context.WorkItems.Add(wi);
+            var run = new LoopRun
+            {
+                Id = Guid.NewGuid(),
+                WorkItemId = Guid.NewGuid(),
+                LoopTemplateVersionId = version.Id,
+                RecoveryPolicy = RecoveryPolicy.AutoResume,
+                Status = LoopRunStatus.Running,
+                RepositoryId = repoEntity.Id,
+                WorktreePath = worktreePath,
+            };
+            db.Context.LoopRuns.Add(run);
             db.Context.SaveChanges();
 
-            var expectedPath = wi.WorktreePath;
             var repo = new Mock<IRepositoryManager>();
-            repo.Setup(r => r.DestroyWorktreeAsync(expectedPath)).ThrowsAsync(new InvalidOperationException("disk full"));
+            repo.Setup(r => r.DestroyWorktreeAsync(worktreePath)).ThrowsAsync(new InvalidOperationException("disk full"));
 
             var services = new ServiceCollection();
-            services.AddSingleton<IWorkItemStore>(db.WorkItems);
+            services.AddSingleton((ILoopRunStore)db.LoopRuns);
+            services.AddSingleton((IProviderStore)db.Providers);
             var sp = services.BuildServiceProvider();
 
             var executor = new CleanupNodeExecutor(repo.Object, sp);
             var node = new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.Cleanup, Label = "cleanup" };
-            var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = wi.Id };
             var runNode = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = run.Id, LoopNodeId = node.Id };
+            var wi = new WorkItemView { Id = run.WorkItemId, Title = "wi" };
             var ctx = new NodeExecutionContext(run, runNode, node, wi, null, default);
 
             var result = await executor.ExecuteAsync(ctx);
@@ -155,12 +164,12 @@ public class CleanupNodeExecutorTests
             result.Success.Should().BeTrue();
             result.Output.Should().Contain("failed");
             result.Output.Should().Contain("disk full");
-            var reloaded = db.Fresh().WorkItems.AsNoTracking().First(w => w.Id == wi.Id);
+            var reloaded = db.Fresh().LoopRuns.AsNoTracking().First(r => r.Id == run.Id);
             reloaded.WorktreePath.Should().BeNull("WorktreePath should still be cleared even if destroy fails");
         }
         finally
         {
-            if (Directory.Exists(wi.WorktreePath)) Directory.Delete(wi.WorktreePath, true);
+            if (Directory.Exists(worktreePath)) Directory.Delete(worktreePath, true);
         }
     }
 }

@@ -6,6 +6,7 @@ namespace ILD.Data.Stores.Interfaces;
 public interface ILoopRunStore
 {
     Task<LoopRun?> GetByIdAsync(Guid id);
+    Task<LoopRun?> GetByPrUrlAsync(string prUrl);
     Task<LoopRun?> GetByWorkItemAsync(Guid workItemId);
     Task<IReadOnlyList<LoopRun>> GetAllByWorkItemAsync(Guid workItemId);
     Task<LoopRun?> GetCurrentByWorkItemAsync(Guid workItemId);

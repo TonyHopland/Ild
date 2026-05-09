@@ -1,5 +1,6 @@
 using ILD.Api.Hubs;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Remote;
 using ILD.Data.DTOs.SignalRPayloads;
 using ILD.Data.Enums;
 using Microsoft.AspNetCore.SignalR;
@@ -16,9 +17,9 @@ public class SignalRWorkItemNotifier : IWorkItemNotifier
         _hub = hub;
     }
 
-    public Task WorkItemStateChangedAsync(Guid workItemId, WorkItemStatus oldStatus, WorkItemStatus newStatus)
+    public Task WorkItemStateChangedAsync(Guid workItemId, RemoteWorkItemStatus oldStatus, RemoteWorkItemStatus newStatus)
         => _hub.Clients.Group(WorkItemGroup)
-            .SendAsync("WorkItemStateChanged", new WorkItemStateChangedPayload(workItemId, oldStatus, newStatus));
+            .SendAsync("WorkItemStateChanged", new WorkItemStateChangedPayload(workItemId, (WorkItemStatus)(int)oldStatus, (WorkItemStatus)(int)newStatus));
 
     public Task HumanFeedbackRequiredAsync(Guid workItemId, string reason)
         => _hub.Clients.Group(WorkItemGroup)

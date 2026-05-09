@@ -159,7 +159,7 @@ public class AINodeExecutorEventLogTests
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
             Node: new LoopNode { Id = nodeId, Config = config },
-            WorkItem: new WorkItem { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            WorkItem: new WorkItemView { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
             PreviousNodeOutput: null,
             CancellationToken: CancellationToken.None);
     }

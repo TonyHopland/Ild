@@ -57,7 +57,7 @@ public sealed class WorkItemServerProgram
         using (var scope = app.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<WorkItemServerDbContext>();
-            db.Database.Migrate();
+            db.Database.EnsureCreated();
         }
 
         app.MapGet("/health", () => Results.Ok(new { status = "ok" }));

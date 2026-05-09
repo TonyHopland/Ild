@@ -22,6 +22,9 @@ public class LoopRunStore : ILoopRunStore
             .FirstOrDefaultAsync(r => r.Id == id);
     }
 
+    public async Task<LoopRun?> GetByPrUrlAsync(string prUrl)
+        => await _db.LoopRuns.FirstOrDefaultAsync(r => r.PrUrl == prUrl);
+
     public async Task<LoopRun?> GetByWorkItemAsync(Guid workItemId)
         => await _db.LoopRuns.FirstOrDefaultAsync(r => r.WorkItemId == workItemId);
 
@@ -33,7 +36,10 @@ public class LoopRunStore : ILoopRunStore
 
     public async Task<LoopRun?> GetCurrentByWorkItemAsync(Guid workItemId)
         => await _db.LoopRuns
-            .Where(r => r.WorkItemId == workItemId && r.Status == LoopRunStatus.Running)
+            .Where(r => r.WorkItemId == workItemId && (r.Status == LoopRunStatus.Running
+                || r.Status == LoopRunStatus.Failed
+                || r.Status == LoopRunStatus.Cancelled
+                || r.Status == LoopRunStatus.WaitingHuman))
             .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
             .FirstOrDefaultAsync();
 
@@ -166,12 +172,6 @@ public class LoopRunStore : ILoopRunStore
         var run = await _db.LoopRuns.FirstOrDefaultAsync(r => r.Id == runId);
         if (run == null) return false;
         if (run.Status == LoopRunStatus.Running) return false;
-
-        // Detach the run from any work item still pointing at it as the
-        // "current" run so the FK doesn't block deletion. EF cascade rules
-        // handle the rest (run nodes, edge traversals, event log).
-        var owners = await _db.WorkItems.Where(w => w.CurrentLoopRunId == runId).ToListAsync();
-        foreach (var w in owners) w.CurrentLoopRunId = null;
 
         _db.LoopRuns.Remove(run);
         await _db.SaveChangesAsync();

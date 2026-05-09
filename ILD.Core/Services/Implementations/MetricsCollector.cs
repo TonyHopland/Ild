@@ -68,14 +68,14 @@ public class MetricsCollector : IMetricsCollector
 
     private string WorkItemsTotalMetrics()
     {
-        var statuses = Enum.GetValues<WorkItemStatus>().ToList();
+        var statuses = Enum.GetValues<LoopRunStatus>().ToList();
         var lines = new List<string>();
         lines.Add("# HELP ild_workitems_total Total work items by status");
         lines.Add("# TYPE ild_workitems_total gauge");
 
         foreach (var status in statuses)
         {
-            var count = _db.WorkItems.Count(w => w.Status == status);
+            var count = _db.LoopRuns.Count(r => r.Status == status);
             lines.Add($"ild_workitems_total{{status=\"{status}\"}} {count}");
         }
 

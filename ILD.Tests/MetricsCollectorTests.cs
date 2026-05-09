@@ -49,7 +49,6 @@ public class MetricsCollectorTests
 
         body.Should().Contain("ild_loop_runs_total");
         body.Should().Contain("ild_node_execution_duration_seconds");
-        body.Should().Contain("ild_workitems_total");
         body.Should().Contain("ild_db_connection_healthy");
         body.Should().Contain("ild_disk_space_bytes");
     }
@@ -96,39 +95,15 @@ public class MetricsCollectorTests
         var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/r.git" };
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume, MaxNodeExecutions = 200, MaxWallClockHours = 24 };
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
-        var wi = new WorkItem { Id = Guid.NewGuid(), Title = "test", Status = WorkItemStatus.Running, RepositoryId = repo.Id, LoopTemplateVersionId = version.Id };
-        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = wi.Id, LoopTemplateVersionId = version.Id, Status = status, RecoveryPolicy = RecoveryPolicy.AutoResume };
+        var wi = Guid.NewGuid();
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = wi, LoopTemplateVersionId = version.Id, Status = status, RecoveryPolicy = RecoveryPolicy.AutoResume };
 
         db.Context.RemoteProviders.Add(remote);
         db.Context.Repositories.Add(repo);
         db.Context.LoopTemplates.Add(template);
         db.Context.LoopTemplateVersions.Add(version);
-        db.Context.WorkItems.Add(wi);
         db.Context.LoopRuns.Add(run);
         db.Context.SaveChanges();
-    }
-
-    [Fact]
-    public void WorkItemsTotal_reflects_workitem_count_by_status()
-    {
-        using var db = new TestDb();
-
-        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
-        var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/r.git" };
-        db.Context.RemoteProviders.Add(remote);
-        db.Context.Repositories.Add(repo);
-
-        db.Context.WorkItems.Add(new WorkItem { Id = Guid.NewGuid(), Title = "Backlog Item", Status = WorkItemStatus.Backlog, RepositoryId = repo.Id });
-        db.Context.WorkItems.Add(new WorkItem { Id = Guid.NewGuid(), Title = "Running Item", Status = WorkItemStatus.Running, RepositoryId = repo.Id });
-        db.Context.WorkItems.Add(new WorkItem { Id = Guid.NewGuid(), Title = "Done Item", Status = WorkItemStatus.Done, RepositoryId = repo.Id });
-        db.Context.SaveChanges();
-
-        var collector = new MetricsCollector(db.Context);
-        var snapshot = collector.Snapshot();
-
-        snapshot.Should().Contain("ild_workitems_total{status=\"Backlog\"} 1");
-        snapshot.Should().Contain("ild_workitems_total{status=\"Running\"} 1");
-        snapshot.Should().Contain("ild_workitems_total{status=\"Done\"} 1");
     }
 
     [Fact]

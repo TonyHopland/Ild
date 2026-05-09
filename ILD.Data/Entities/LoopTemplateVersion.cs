@@ -23,8 +23,5 @@ public class LoopTemplateVersion
     public ICollection<LoopNode> Nodes { get; set; } = new List<LoopNode>();
 
     [InverseProperty("LoopTemplateVersion")]
-    public ICollection<WorkItem> WorkItems { get; set; } = new List<WorkItem>();
-
-    [InverseProperty("LoopTemplateVersion")]
     public ICollection<LoopRun> LoopRuns { get; set; } = new List<LoopRun>();
 }

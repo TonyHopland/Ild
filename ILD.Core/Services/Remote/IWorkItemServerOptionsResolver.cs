@@ -62,10 +62,10 @@ public sealed class DbWorkItemServerOptionsResolver : IWorkItemServerOptionsReso
 
     public async Task<WorkItemServerOptions> ResolveForWorkItemAsync(Guid workItemId, CancellationToken ct = default)
     {
-        var repoId = await _db.WorkItems
+        var repoId = await _db.LoopRuns
             .AsNoTracking()
-            .Where(w => w.Id == workItemId)
-            .Select(w => (Guid?)w.RepositoryId)
+            .Where(r => r.WorkItemId == workItemId)
+            .Select(r => (Guid?)r.RepositoryId)
             .FirstOrDefaultAsync(ct);
         return await ResolveForRepositoryAsync(repoId, ct);
     }

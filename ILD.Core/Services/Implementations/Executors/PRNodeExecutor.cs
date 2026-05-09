@@ -26,17 +26,19 @@ public sealed class PRNodeExecutor : INodeExecutor
     public async Task<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
     {
         using var scope = _sp.CreateScope();
-        var workItemStore = scope.ServiceProvider.GetRequiredService<IWorkItemStore>();
+        var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+        var providerStore = scope.ServiceProvider.GetRequiredService<IProviderStore>();
 
-        var wi = await workItemStore.GetByIdAsync(ctx.WorkItem.Id);
-        if (wi == null)
-            return new NodeOutcome.Failed("WorkItem not found");
+        var wi = ctx.WorkItem;
+        var run = await loopRunStore.GetByIdAsync(ctx.Run.Id);
+        if (run == null)
+            return new NodeOutcome.Failed("LoopRun not found");
 
-        string? prUrl = wi.PrUrl;
-        var repo = await workItemStore.GetRepositoryAsync(wi.RepositoryId);
+        string? prUrl = run.PrUrl;
+        var repo = wi.RepositoryId != null ? await providerStore.GetRepositoryByIdAsync(wi.RepositoryId.Value) : null;
         if (repo == null)
             return new NodeOutcome.Failed("Repository not found");
-        var branch = wi.BranchName ?? $"ild/wi-{wi.Id:N}";
+        var branch = run.BranchName ?? $"ild/wi-{wi.Id:N}";
         var target = repo.DefaultBranch ?? "main";
 
         // Commit + push on every visit so a re-entered PR node updates the
@@ -44,25 +46,25 @@ public sealed class PRNodeExecutor : INodeExecutor
         // guard only fires on initial PR creation; once a PR exists the
         // branch is allowed to be at parity with target (e.g. all changes
         // already merged or pushed previously).
-        if (!string.IsNullOrEmpty(wi.WorktreePath) && Directory.Exists(wi.WorktreePath))
+        if (!string.IsNullOrEmpty(run.WorktreePath) && Directory.Exists(run.WorktreePath))
         {
             var repoManager = scope.ServiceProvider.GetRequiredService<IRepositoryManager>();
 
-            var diff = await repoManager.GetDiffAsync(wi.WorktreePath);
+            var diff = await repoManager.GetDiffAsync(run.WorktreePath);
             if (!string.IsNullOrEmpty(diff))
             {
-                if (!await repoManager.CommitAsync(wi.WorktreePath, wi.Title))
+                if (!await repoManager.CommitAsync(run.WorktreePath, wi.Title))
                     return new NodeOutcome.Failed("Failed to commit uncommitted changes");
             }
 
-            var pushResult = await repoManager.PushAsync(wi.WorktreePath, branch, ctx.CancellationToken);
+            var pushResult = await repoManager.PushAsync(run.WorktreePath, branch, ctx.CancellationToken);
             if (!pushResult.Success)
                 return new NodeOutcome.Failed($"Failed to push branch '{branch}' to remote: {pushResult.Error ?? "unknown error"}");
 
             if (string.IsNullOrEmpty(prUrl))
             {
-                _ = await repoManager.FetchAsync(wi.WorktreePath, ctx.CancellationToken);
-                var ahead = await repoManager.GetCommitsAheadCountAsync(wi.WorktreePath, $"origin/{target}");
+                _ = await repoManager.FetchAsync(run.WorktreePath, ctx.CancellationToken);
+                var ahead = await repoManager.GetCommitsAheadCountAsync(run.WorktreePath, $"origin/{target}");
                 if (ahead == 0)
                     return new NodeOutcome.Failed($"Branch '{branch}' has no commits ahead of 'origin/{target}'; no changes were made");
             }
@@ -87,9 +89,9 @@ public sealed class PRNodeExecutor : INodeExecutor
             if (!string.IsNullOrEmpty(prResult.Error))
                 return new NodeOutcome.Failed($"PR creation failed: {prResult.Error}");
 
-            wi.PrUrl = prResult.HtmlUrl ?? prResult.Url;
-            await workItemStore.UpdateAsync(wi);
-            prUrl = wi.PrUrl;
+            run.PrUrl = prResult.HtmlUrl ?? prResult.Url;
+            await loopRunStore.UpdateRunAsync(run);
+            prUrl = run.PrUrl;
         }
 
         // PR exists; suspend until the webhook signals merge or rejection.
@@ -99,7 +101,7 @@ public sealed class PRNodeExecutor : INodeExecutor
             prUrl);
     }
 
-    static string ResolvePrDescription(IServiceProvider sp, string? nodeConfig, WorkItem wi, string? previousNodeOutput)
+    static string ResolvePrDescription(IServiceProvider sp, string? nodeConfig, WorkItemView wi, string? previousNodeOutput)
     {
         var cfg = NodeConfig.Parse<NodeConfig.Pr>(nodeConfig);
         var template = cfg.PrDescriptionTemplate;

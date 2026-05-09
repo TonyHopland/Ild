@@ -16,7 +16,6 @@ public static class ServiceCollectionExtensions
 
     public static IServiceCollection AddDataStores(this IServiceCollection services)
     {
-        services.AddScoped<IWorkItemStore, Stores.WorkItemStore>();
         services.AddScoped<ILoopRunStore, Stores.LoopRunStore>();
         services.AddScoped<ILoopTemplateStore, Stores.LoopTemplateStore>();
         services.AddScoped<IEventLogStore, Stores.EventLogStore>();

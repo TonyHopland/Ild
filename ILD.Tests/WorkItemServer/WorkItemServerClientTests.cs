@@ -35,10 +35,14 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
             {
                 var existing = services.Single(d => d.ServiceType == typeof(DbContextOptions<WorkItemServerDbContext>));
                 services.Remove(existing);
-                services.AddDbContext<WorkItemServerDbContext>(o => o.UseSqlite(_conn));
+                services.AddDbContext<WorkItemServerDbContext>(o =>
+                {
+                    o.UseSqlite(_conn);
+                    o.ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning));
+                });
                 using var sp = services.BuildServiceProvider();
                 using var scope = sp.CreateScope();
-                scope.ServiceProvider.GetRequiredService<WorkItemServerDbContext>().Database.Migrate();
+                scope.ServiceProvider.GetRequiredService<WorkItemServerDbContext>().Database.EnsureCreated();
             });
         });
 

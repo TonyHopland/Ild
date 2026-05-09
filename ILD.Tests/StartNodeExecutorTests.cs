@@ -23,14 +23,12 @@ public class StartNodeExecutorTests
             Directory.CreateDirectory(worktreePath);
             Directory.CreateDirectory(Path.Combine(basePath, ".git"));
 
-            var workItem = new WorkItem
+            var workItem = new WorkItemView
             {
                 Id = workItemId,
                 RepositoryId = repoId,
                 Title = "test",
                 Description = "test",
-                WorktreePath = null,
-                BranchName = null,
             };
 
             var repository = new Repository
@@ -41,16 +39,6 @@ public class StartNodeExecutorTests
                 WorktreesPath = basePath,
             };
 
-            var workItemStore = new Mock<IWorkItemStore>();
-            workItemStore.Setup(s => s.GetByIdAsync(workItemId))
-                .ReturnsAsync(workItem)
-                .Callback(() =>
-                {
-                    // After first call, worktree path is still null so Start node will enter creation path
-                });
-            workItemStore.Setup(s => s.UpdateAsync(It.IsAny<WorkItem>()))
-                .Returns(Task.CompletedTask);
-
             var providerStore = new Mock<IProviderStore>();
             providerStore.Setup(s => s.GetRepositoryByIdAsync(repoId))
                 .ReturnsAsync(repository);
@@ -59,12 +47,17 @@ public class StartNodeExecutorTests
             repoManager.Setup(r => r.CreateWorktreeAsync(basePath, It.IsAny<string>()))
                 .ReturnsAsync(worktreePath);
 
-            var sp = BuildServiceProvider(workItemStore.Object, providerStore.Object, repoManager.Object);
+            var runId = Guid.NewGuid();
+            var loopRunStore = new Mock<ILoopRunStore>();
+            loopRunStore.Setup(s => s.GetByIdAsync(runId))
+                .ReturnsAsync(new ILD.Data.Entities.LoopRun { Id = runId, WorktreePath = null });
+
+            var sp = BuildServiceProvider(providerStore.Object, repoManager.Object, loopRunStore.Object);
 
             var executor = new StartNodeExecutor(repoManager.Object, sp);
 
             var ctx = new NodeExecutionContext(
-                Run: new ILD.Data.Entities.LoopRun { Id = Guid.NewGuid() },
+                Run: new ILD.Data.Entities.LoopRun { Id = runId },
                 RunNode: new ILD.Data.Entities.LoopRunNode { RetryCount = 0 },
                 Node: new ILD.Data.Entities.LoopNode { Id = Guid.NewGuid() },
                 WorkItem: workItem,
@@ -98,14 +91,12 @@ public class StartNodeExecutorTests
             Directory.CreateDirectory(worktreePath);
             Directory.CreateDirectory(Path.Combine(basePath, ".git"));
 
-            var workItem = new WorkItem
+            var workItem = new WorkItemView
             {
                 Id = workItemId,
                 RepositoryId = repoId,
                 Title = "test",
                 Description = "test",
-                WorktreePath = null,
-                BranchName = null,
             };
 
             var repository = new Repository
@@ -115,12 +106,6 @@ public class StartNodeExecutorTests
                 CloneUrl = "https://example.com/test.git",
                 WorktreesPath = basePath,
             };
-
-            var workItemStore = new Mock<IWorkItemStore>();
-            workItemStore.Setup(s => s.GetByIdAsync(workItemId))
-                .ReturnsAsync(workItem);
-            workItemStore.Setup(s => s.UpdateAsync(It.IsAny<WorkItem>()))
-                .Returns(Task.CompletedTask);
 
             var providerStore = new Mock<IProviderStore>();
             providerStore.Setup(s => s.GetRepositoryByIdAsync(repoId))
@@ -132,12 +117,17 @@ public class StartNodeExecutorTests
             repoManager.Setup(r => r.CreateWorktreeAsync(basePath, It.IsAny<string>()))
                 .ReturnsAsync(worktreePath);
 
-            var sp = BuildServiceProvider(workItemStore.Object, providerStore.Object, repoManager.Object);
+            var runId = Guid.NewGuid();
+            var loopRunStore = new Mock<ILoopRunStore>();
+            loopRunStore.Setup(s => s.GetByIdAsync(runId))
+                .ReturnsAsync(new ILD.Data.Entities.LoopRun { Id = runId, WorktreePath = null });
+
+            var sp = BuildServiceProvider(providerStore.Object, repoManager.Object, loopRunStore.Object);
 
             var executor = new StartNodeExecutor(repoManager.Object, sp);
 
             var ctx = new NodeExecutionContext(
-                Run: new ILD.Data.Entities.LoopRun { Id = Guid.NewGuid() },
+                Run: new ILD.Data.Entities.LoopRun { Id = runId },
                 RunNode: new ILD.Data.Entities.LoopRunNode { RetryCount = 0 },
                 Node: new ILD.Data.Entities.LoopNode { Id = Guid.NewGuid() },
                 WorkItem: workItem,
@@ -156,14 +146,15 @@ public class StartNodeExecutorTests
     }
 
     private static IServiceProvider BuildServiceProvider(
-        IWorkItemStore workItemStore,
         IProviderStore providerStore,
-        IRepositoryManager repoManager)
+        IRepositoryManager repoManager,
+        ILoopRunStore? loopRunStore = null)
     {
         var services = new ServiceCollection();
-        services.AddSingleton(workItemStore);
         services.AddSingleton(providerStore);
         services.AddSingleton(repoManager);
+        if (loopRunStore != null)
+            services.AddSingleton(loopRunStore);
         return services.BuildServiceProvider();
     }
 }

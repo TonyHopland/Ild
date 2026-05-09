@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace ILD.Data.Migrations
 {
     /// <inheritdoc />
-    public partial class AddAiProviderConfig : Migration
+    public partial class Initial : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
@@ -39,6 +39,7 @@ namespace ILD.Data.Migrations
                     Name = table.Column<string>(type: "TEXT", maxLength: 256, nullable: false),
                     Description = table.Column<string>(type: "TEXT", maxLength: 2048, nullable: true),
                     IsDefault = table.Column<bool>(type: "INTEGER", nullable: false),
+                    IsArchived = table.Column<bool>(type: "INTEGER", nullable: false),
                     RecoveryPolicy = table.Column<string>(type: "TEXT", maxLength: 128, nullable: false),
                     MaxNodeExecutions = table.Column<int>(type: "INTEGER", nullable: false),
                     MaxWallClockHours = table.Column<int>(type: "INTEGER", nullable: false),
@@ -61,6 +62,11 @@ namespace ILD.Data.Migrations
                     ApiKey = table.Column<string>(type: "TEXT", maxLength: 1024, nullable: true),
                     WebhookSecret = table.Column<string>(type: "TEXT", maxLength: 512, nullable: true),
                     IsDefault = table.Column<bool>(type: "INTEGER", nullable: false),
+                    WorkItemServerUrl = table.Column<string>(type: "TEXT", maxLength: 1024, nullable: true),
+                    WorkItemApiKey = table.Column<string>(type: "TEXT", maxLength: 1024, nullable: true),
+                    PollIntervalSeconds = table.Column<int>(type: "INTEGER", nullable: false),
+                    GraceIntervalSeconds = table.Column<int>(type: "INTEGER", nullable: false),
+                    MaxConcurrentWorkItems = table.Column<int>(type: "INTEGER", nullable: false),
                     CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false, defaultValueSql: "CURRENT_TIMESTAMP"),
                     UpdatedAt = table.Column<DateTime>(type: "TEXT", nullable: true)
                 },
@@ -155,6 +161,43 @@ namespace ILD.Data.Migrations
                 });
 
             migrationBuilder.CreateTable(
+                name: "LoopRuns",
+                columns: table => new
+                {
+                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
+                    WorkItemId = table.Column<Guid>(type: "TEXT", nullable: false),
+                    LoopTemplateVersionId = table.Column<Guid>(type: "TEXT", nullable: false),
+                    Status = table.Column<int>(type: "INTEGER", nullable: false),
+                    RecoveryPolicy = table.Column<string>(type: "TEXT", maxLength: 128, nullable: false),
+                    IsPaused = table.Column<bool>(type: "INTEGER", nullable: false),
+                    NodeExecutionCount = table.Column<int>(type: "INTEGER", nullable: false),
+                    NextEventSeq = table.Column<int>(type: "INTEGER", nullable: false),
+                    StartedAt = table.Column<DateTime>(type: "TEXT", nullable: true),
+                    CompletedAt = table.Column<DateTime>(type: "TEXT", nullable: true),
+                    CurrentNodeId = table.Column<Guid>(type: "TEXT", nullable: true),
+                    SessionsJson = table.Column<string>(type: "TEXT", nullable: true),
+                    WorktreePath = table.Column<string>(type: "TEXT", maxLength: 1024, nullable: true),
+                    BranchName = table.Column<string>(type: "TEXT", maxLength: 256, nullable: true),
+                    PrUrl = table.Column<string>(type: "TEXT", maxLength: 2048, nullable: true),
+                    IsPrMerged = table.Column<bool>(type: "INTEGER", nullable: false),
+                    RepositoryId = table.Column<Guid>(type: "TEXT", nullable: true),
+                    CreatedByLoopRunId = table.Column<Guid>(type: "TEXT", nullable: true),
+                    HumanFeedbackReason = table.Column<string>(type: "TEXT", maxLength: 512, nullable: true),
+                    CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false, defaultValueSql: "CURRENT_TIMESTAMP"),
+                    UpdatedAt = table.Column<DateTime>(type: "TEXT", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_LoopRuns", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_LoopRuns_LoopTemplateVersions_LoopTemplateVersionId",
+                        column: x => x.LoopTemplateVersionId,
+                        principalTable: "LoopTemplateVersions",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
                 name: "LoopNodeEdges",
                 columns: table => new
                 {
@@ -190,6 +233,8 @@ namespace ILD.Data.Migrations
                     LoopRunId = table.Column<Guid>(type: "TEXT", nullable: true),
                     Sequence = table.Column<int>(type: "INTEGER", nullable: false),
                     EventType = table.Column<int>(type: "INTEGER", nullable: false),
+                    NodeId = table.Column<Guid>(type: "TEXT", nullable: true),
+                    RunNodeId = table.Column<Guid>(type: "TEXT", nullable: true),
                     Timestamp = table.Column<DateTime>(type: "TEXT", nullable: false),
                     PayloadPath = table.Column<string>(type: "TEXT", maxLength: 1024, nullable: true),
                     Data = table.Column<string>(type: "TEXT", nullable: true)
@@ -197,6 +242,44 @@ namespace ILD.Data.Migrations
                 constraints: table =>
                 {
                     table.PrimaryKey("PK_EventLogs", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_EventLogs_LoopRuns_LoopRunId",
+                        column: x => x.LoopRunId,
+                        principalTable: "LoopRuns",
+                        principalColumn: "Id");
+                });
+
+            migrationBuilder.CreateTable(
+                name: "LoopRunNodes",
+                columns: table => new
+                {
+                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
+                    LoopRunId = table.Column<Guid>(type: "TEXT", nullable: false),
+                    LoopNodeId = table.Column<Guid>(type: "TEXT", nullable: false),
+                    NodeLabel = table.Column<string>(type: "TEXT", nullable: true),
+                    Status = table.Column<int>(type: "INTEGER", nullable: false),
+                    Output = table.Column<string>(type: "TEXT", nullable: true),
+                    Error = table.Column<string>(type: "TEXT", nullable: true),
+                    RetryCount = table.Column<int>(type: "INTEGER", nullable: false),
+                    StartedAt = table.Column<DateTime>(type: "TEXT", nullable: true),
+                    CompletedAt = table.Column<DateTime>(type: "TEXT", nullable: true),
+                    CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_LoopRunNodes", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_LoopRunNodes_LoopNodes_LoopNodeId",
+                        column: x => x.LoopNodeId,
+                        principalTable: "LoopNodes",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                    table.ForeignKey(
+                        name: "FK_LoopRunNodes_LoopRuns_LoopRunId",
+                        column: x => x.LoopRunId,
+                        principalTable: "LoopRuns",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
                 });
 
             migrationBuilder.CreateTable(
@@ -218,127 +301,12 @@ namespace ILD.Data.Migrations
                         principalTable: "LoopNodeEdges",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "LoopRunNodes",
-                columns: table => new
-                {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    LoopRunId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    LoopNodeId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    Status = table.Column<int>(type: "INTEGER", nullable: false),
-                    Output = table.Column<string>(type: "TEXT", nullable: true),
-                    Error = table.Column<string>(type: "TEXT", nullable: true),
-                    RetryCount = table.Column<int>(type: "INTEGER", nullable: false),
-                    StartedAt = table.Column<DateTime>(type: "TEXT", nullable: true),
-                    CompletedAt = table.Column<DateTime>(type: "TEXT", nullable: true)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_LoopRunNodes", x => x.Id);
                     table.ForeignKey(
-                        name: "FK_LoopRunNodes_LoopNodes_LoopNodeId",
-                        column: x => x.LoopNodeId,
-                        principalTable: "LoopNodes",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "LoopRuns",
-                columns: table => new
-                {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    WorkItemId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    LoopTemplateVersionId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    Status = table.Column<int>(type: "INTEGER", nullable: false),
-                    RecoveryPolicy = table.Column<string>(type: "TEXT", maxLength: 128, nullable: false),
-                    IsPaused = table.Column<bool>(type: "INTEGER", nullable: false),
-                    NodeExecutionCount = table.Column<int>(type: "INTEGER", nullable: false),
-                    StartedAt = table.Column<DateTime>(type: "TEXT", nullable: true),
-                    CompletedAt = table.Column<DateTime>(type: "TEXT", nullable: true),
-                    CurrentNodeId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false, defaultValueSql: "CURRENT_TIMESTAMP"),
-                    UpdatedAt = table.Column<DateTime>(type: "TEXT", nullable: true)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_LoopRuns", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_LoopRuns_LoopTemplateVersions_LoopTemplateVersionId",
-                        column: x => x.LoopTemplateVersionId,
-                        principalTable: "LoopTemplateVersions",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "WorkItems",
-                columns: table => new
-                {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    Title = table.Column<string>(type: "TEXT", maxLength: 512, nullable: false),
-                    Description = table.Column<string>(type: "TEXT", maxLength: 4096, nullable: true),
-                    Priority = table.Column<int>(type: "INTEGER", nullable: false),
-                    Status = table.Column<int>(type: "INTEGER", nullable: false),
-                    RepositoryId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    LoopTemplateVersionId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    CurrentLoopRunId = table.Column<Guid>(type: "TEXT", nullable: true),
-                    Labels = table.Column<string>(type: "TEXT", nullable: true),
-                    WorktreePath = table.Column<string>(type: "TEXT", maxLength: 1024, nullable: true),
-                    BranchName = table.Column<string>(type: "TEXT", maxLength: 256, nullable: true),
-                    PrUrl = table.Column<string>(type: "TEXT", maxLength: 2048, nullable: true),
-                    IsPrMerged = table.Column<bool>(type: "INTEGER", nullable: false),
-                    HumanFeedbackReason = table.Column<string>(type: "TEXT", maxLength: 512, nullable: true),
-                    CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false, defaultValueSql: "CURRENT_TIMESTAMP"),
-                    UpdatedAt = table.Column<DateTime>(type: "TEXT", nullable: true)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_WorkItems", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_WorkItems_LoopRuns_CurrentLoopRunId",
-                        column: x => x.CurrentLoopRunId,
+                        name: "FK_LoopRunEdgeTraversals_LoopRuns_LoopRunId",
+                        column: x => x.LoopRunId,
                         principalTable: "LoopRuns",
-                        principalColumn: "Id");
-                    table.ForeignKey(
-                        name: "FK_WorkItems_LoopTemplateVersions_LoopTemplateVersionId",
-                        column: x => x.LoopTemplateVersionId,
-                        principalTable: "LoopTemplateVersions",
-                        principalColumn: "Id");
-                    table.ForeignKey(
-                        name: "FK_WorkItems_Repositories_RepositoryId",
-                        column: x => x.RepositoryId,
-                        principalTable: "Repositories",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "WorkItemDependencies",
-                columns: table => new
-                {
-                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
-                    WorkItemId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    DependencyWorkItemId = table.Column<Guid>(type: "TEXT", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "TEXT", nullable: false, defaultValueSql: "CURRENT_TIMESTAMP")
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_WorkItemDependencies", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_WorkItemDependencies_WorkItems_DependencyWorkItemId",
-                        column: x => x.DependencyWorkItemId,
-                        principalTable: "WorkItems",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Restrict);
-                    table.ForeignKey(
-                        name: "FK_WorkItemDependencies_WorkItems_WorkItemId",
-                        column: x => x.WorkItemId,
-                        principalTable: "WorkItems",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Restrict);
                 });
 
             migrationBuilder.CreateIndex(
@@ -402,6 +370,11 @@ namespace ILD.Data.Migrations
                 column: "LoopTemplateVersionId");
 
             migrationBuilder.CreateIndex(
+                name: "IX_LoopRuns_PrUrl",
+                table: "LoopRuns",
+                column: "PrUrl");
+
+            migrationBuilder.CreateIndex(
                 name: "IX_LoopRuns_Status",
                 table: "LoopRuns",
                 column: "Status");
@@ -447,77 +420,11 @@ namespace ILD.Data.Migrations
                 table: "Users",
                 column: "Username",
                 unique: true);
-
-            migrationBuilder.CreateIndex(
-                name: "IX_WorkItemDependencies_DependencyWorkItemId",
-                table: "WorkItemDependencies",
-                column: "DependencyWorkItemId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_WorkItemDependencies_WorkItemId_DependencyWorkItemId",
-                table: "WorkItemDependencies",
-                columns: new[] { "WorkItemId", "DependencyWorkItemId" },
-                unique: true);
-
-            migrationBuilder.CreateIndex(
-                name: "IX_WorkItems_CurrentLoopRunId",
-                table: "WorkItems",
-                column: "CurrentLoopRunId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_WorkItems_LoopTemplateVersionId",
-                table: "WorkItems",
-                column: "LoopTemplateVersionId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_WorkItems_RepositoryId",
-                table: "WorkItems",
-                column: "RepositoryId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_WorkItems_Status",
-                table: "WorkItems",
-                column: "Status");
-
-            migrationBuilder.AddForeignKey(
-                name: "FK_EventLogs_LoopRuns_LoopRunId",
-                table: "EventLogs",
-                column: "LoopRunId",
-                principalTable: "LoopRuns",
-                principalColumn: "Id");
-
-            migrationBuilder.AddForeignKey(
-                name: "FK_LoopRunEdgeTraversals_LoopRuns_LoopRunId",
-                table: "LoopRunEdgeTraversals",
-                column: "LoopRunId",
-                principalTable: "LoopRuns",
-                principalColumn: "Id",
-                onDelete: ReferentialAction.Cascade);
-
-            migrationBuilder.AddForeignKey(
-                name: "FK_LoopRunNodes_LoopRuns_LoopRunId",
-                table: "LoopRunNodes",
-                column: "LoopRunId",
-                principalTable: "LoopRuns",
-                principalColumn: "Id",
-                onDelete: ReferentialAction.Cascade);
-
-            migrationBuilder.AddForeignKey(
-                name: "FK_LoopRuns_WorkItems_WorkItemId",
-                table: "LoopRuns",
-                column: "WorkItemId",
-                principalTable: "WorkItems",
-                principalColumn: "Id",
-                onDelete: ReferentialAction.Cascade);
         }
 
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.DropForeignKey(
-                name: "FK_WorkItems_LoopRuns_CurrentLoopRunId",
-                table: "WorkItems");
-
             migrationBuilder.DropTable(
                 name: "AiProviders");
 
@@ -531,34 +438,28 @@ namespace ILD.Data.Migrations
                 name: "LoopRunNodes");
 
             migrationBuilder.DropTable(
-                name: "Users");
+                name: "Repositories");
 
             migrationBuilder.DropTable(
-                name: "WorkItemDependencies");
+                name: "Users");
 
             migrationBuilder.DropTable(
                 name: "LoopNodeEdges");
 
             migrationBuilder.DropTable(
-                name: "LoopNodes");
-
-            migrationBuilder.DropTable(
                 name: "LoopRuns");
 
             migrationBuilder.DropTable(
-                name: "WorkItems");
+                name: "RemoteProviders");
+
+            migrationBuilder.DropTable(
+                name: "LoopNodes");
 
             migrationBuilder.DropTable(
                 name: "LoopTemplateVersions");
 
             migrationBuilder.DropTable(
-                name: "Repositories");
-
-            migrationBuilder.DropTable(
                 name: "LoopTemplates");
-
-            migrationBuilder.DropTable(
-                name: "RemoteProviders");
         }
     }
 }

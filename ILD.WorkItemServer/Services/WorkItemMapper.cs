@@ -48,5 +48,6 @@ internal static class WorkItemMapper
         Dependencies = ReadDependencies(w),
         Conversation = ReadConversation(w),
         HumanFeedbackActions = w.HumanFeedbackActions,
+        CreatedByLoopRunId = w.CreatedByLoopRunId,
     };
 }

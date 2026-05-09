@@ -10,7 +10,6 @@ public class LoopRun : IHasUpdatedAt
     public Guid Id { get; set; }
 
     [Required]
-    [ForeignKey("WorkItem")]
     public Guid WorkItemId { get; set; }
 
     [Required]
@@ -42,12 +41,27 @@ public class LoopRun : IHasUpdatedAt
 
     public string? SessionsJson { get; set; }
 
+    [MaxLength(1024)]
+    public string? WorktreePath { get; set; }
+
+    [MaxLength(256)]
+    public string? BranchName { get; set; }
+
+    [MaxLength(2048)]
+    public string? PrUrl { get; set; }
+
+    public bool IsPrMerged { get; set; }
+
+    public Guid? RepositoryId { get; set; }
+
+    public Guid? CreatedByLoopRunId { get; set; }
+
+    [MaxLength(512)]
+    public string? HumanFeedbackReason { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     public DateTime? UpdatedAt { get; set; }
-
-    [ForeignKey(nameof(WorkItemId))]
-    public WorkItem WorkItem { get; set; } = null!;
 
     [ForeignKey(nameof(LoopTemplateVersionId))]
     public LoopTemplateVersion LoopTemplateVersion { get; set; } = null!;

@@ -35,7 +35,4 @@ public class Repository : IHasUpdatedAt
 
     [ForeignKey(nameof(RemoteProviderId))]
     public RemoteProvider RemoteProvider { get; set; } = null!;
-
-    [InverseProperty("Repository")]
-    public ICollection<WorkItem> WorkItems { get; set; } = new List<WorkItem>();
 }

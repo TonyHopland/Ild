@@ -39,7 +39,11 @@ public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTest
             {
                 var dbDescriptor = services.Single(d => d.ServiceType == typeof(DbContextOptions<WorkItemServerDbContext>));
                 services.Remove(dbDescriptor);
-                services.AddDbContext<WorkItemServerDbContext>(opt => opt.UseSqlite(_conn));
+                services.AddDbContext<WorkItemServerDbContext>(opt =>
+                {
+                    opt.UseSqlite(_conn);
+                    opt.ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning));
+                });
             });
         }
 
