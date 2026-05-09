@@ -9,7 +9,6 @@ interface TaskboardColumnProps {
   workItems: WorkItem[];
   onWorkItemUpdate: (workItem: WorkItem) => void;
   onWorkItemClick?: (workItem: WorkItem) => void;
-  onWorkItemDeleted?: (id: string) => void;
   onError?: (message: string) => void;
   onMoveWorkItem?: (workItem: WorkItem, direction: "prev" | "next") => void;
 }
@@ -20,7 +19,6 @@ export default function TaskboardColumn({
   workItems,
   onWorkItemUpdate,
   onWorkItemClick,
-  onWorkItemDeleted,
   onError,
   onMoveWorkItem,
 }: TaskboardColumnProps) {
@@ -76,7 +74,6 @@ export default function TaskboardColumn({
             key={item.id}
             workItem={item}
             onClick={onWorkItemClick}
-            onDeleted={onWorkItemDeleted}
             onMove={onMoveWorkItem}
           />
         ))}

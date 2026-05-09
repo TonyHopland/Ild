@@ -182,7 +182,6 @@ export default function Taskboard() {
               workItems={items}
               onWorkItemUpdate={handleWorkItemUpdate}
               onWorkItemClick={handleCardClick}
-              onWorkItemDeleted={handleDeleted}
               onError={(msg) => setErrorText(msg)}
               onMoveWorkItem={handleMoveWorkItem}
             />

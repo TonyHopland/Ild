@@ -238,6 +238,26 @@ public class WorkItemServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ReclaimStale_never_reclaims_HumanFeedback_items_to_Ready()
+    {
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
+        await _svc.TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running });
+        await _svc.TransitionAsync(dto.Id, new TransitionRequest
+        {
+            TargetStatus = WorkItemStatus.HumanFeedback,
+            Reason = "Need approval",
+        });
+
+        // advance time far past timeout
+        _clock.Now = _clock.Now.AddMinutes(30);
+        var n = await _svc.ReclaimStaleAsync(TimeSpan.FromMinutes(15));
+
+        n.Should().Be(0);
+        var fresh = await _svc.GetAsync(dto.Id);
+        fresh!.Status.Should().Be(WorkItemStatus.HumanFeedback);
+    }
+
+    [Fact]
     public async Task AddDependency_rejects_self_reference_and_unknown_targets()
     {
         var a = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });

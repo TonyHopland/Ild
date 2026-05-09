@@ -264,7 +264,6 @@ public sealed class WorkItemService : IWorkItemService
         var cutoff = _clock.GetUtcNow().UtcDateTime - timeout;
         var stale = await _db.WorkItems
             .Where(w => (w.Status == WorkItemStatus.Running
-                      || w.Status == WorkItemStatus.HumanFeedback
                       || w.Status == WorkItemStatus.WaitingForIld)
                     && w.LastHeartbeatAt != null
                     && w.LastHeartbeatAt < cutoff)

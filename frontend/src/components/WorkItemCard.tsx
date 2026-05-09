@@ -1,13 +1,9 @@
-import { useState } from "react";
 import { WorkItem } from "../types";
-import { workItemService } from "../services/auth";
 import { parseTags } from "../utils/workItemJson";
-import ConfirmModal from "./ConfirmModal";
 
 interface WorkItemCardProps {
   workItem: WorkItem;
   onClick?: (workItem: WorkItem) => void;
-  onDeleted?: (id: string) => void;
   onMove?: (workItem: WorkItem, direction: "prev" | "next") => void;
 }
 
@@ -18,17 +14,7 @@ const REASON_STYLES: Record<string, { bg: string; color: string; border: string 
   "Human Input Needed": { bg: "#1a2d2a", color: "#34d399", border: "#059669" },
 };
 
-const PRIORITY_COLORS: Record<string, string> = {
-  Low: "#6b7280",
-  Medium: "#f59e0b",
-  High: "#ef4444",
-  Critical: "#dc2626",
-};
-
-export default function WorkItemCard({ workItem, onClick, onDeleted, onMove }: WorkItemCardProps) {
-  const [showConfirm, setShowConfirm] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
-
+export default function WorkItemCard({ workItem, onClick, onMove }: WorkItemCardProps) {
   const handleDragStart = (e: React.DragEvent) => {
     e.dataTransfer.setData("text/plain", workItem.id);
   };
@@ -50,25 +36,6 @@ export default function WorkItemCard({ workItem, onClick, onDeleted, onMove }: W
     }
   };
 
-  const handleDeleteClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setShowConfirm(true);
-  };
-
-  const handleDeleteConfirm = async () => {
-    try {
-      await workItemService.delete(workItem.id);
-      onDeleted?.(workItem.id);
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : "Failed to delete work item";
-      setDeleteError(msg);
-    } finally {
-      setShowConfirm(false);
-    }
-  };
-
-  const priorityColor = PRIORITY_COLORS[workItem.priority] ?? "#6b7280";
-
   const reasonStyle = workItem.humanFeedbackReason
     ? (REASON_STYLES[workItem.humanFeedbackReason] ?? {
         bg: "#2d2d44",
@@ -88,17 +55,6 @@ export default function WorkItemCard({ workItem, onClick, onDeleted, onMove }: W
       tabIndex={0}
       aria-label={`${workItem.title}, status ${workItem.status}. Use left and right arrow keys to move between columns.`}
     >
-      <div className="work-item-card-header">
-        <span className="work-item-priority-dot" style={{ backgroundColor: priorityColor }} />
-        <button
-          className="work-item-delete-btn"
-          onClick={handleDeleteClick}
-          aria-label="Delete work item"
-          title="Delete"
-        >
-          ×
-        </button>
-      </div>
       <h4 className="work-item-title">{workItem.title}</h4>
       {reasonStyle && workItem.humanFeedbackReason && (
         <div
@@ -139,19 +95,6 @@ export default function WorkItemCard({ workItem, onClick, onDeleted, onMove }: W
           cursor: grabbing;
         }
 
-        .work-item-card-header {
-          display: flex;
-          justify-content: flex-end;
-          align-items: center;
-          margin-bottom: 0.5rem;
-        }
-
-        .work-item-priority-dot {
-          width: 0.5rem;
-          height: 0.5rem;
-          border-radius: 50%;
-        }
-
         .work-item-title {
           font-size: 0.875rem;
           font-weight: 500;
@@ -184,61 +127,7 @@ export default function WorkItemCard({ workItem, onClick, onDeleted, onMove }: W
           color: #a0a0b0;
         }
 
-        .work-item-delete-btn {
-          background: none;
-          border: none;
-          color: #808090;
-          font-size: 1.25rem;
-          cursor: pointer;
-          line-height: 1;
-          padding: 0.125rem 0.375rem;
-        }
-
-        .work-item-delete-btn:hover {
-          color: #ef4444;
-        }
-
-        .work-item-delete-error {
-          position: absolute;
-          bottom: calc(100% + 0.5rem);
-          left: 0;
-          right: 0;
-          background-color: #2d1a1a;
-          border: 1px solid #dc2626;
-          border-radius: 0.375rem;
-          padding: 0.5rem 0.75rem;
-          color: #f87171;
-          font-size: 0.75rem;
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          z-index: 10;
-        }
-
-        .work-item-delete-error-close {
-          background: none;
-          border: none;
-          color: #f87171;
-          cursor: pointer;
-          font-size: 1rem;
-          padding: 0 0.25rem;
-        }
       `}</style>
-      {deleteError && (
-        <div className="work-item-delete-error" role="alert">
-          {deleteError}
-          <button className="work-item-delete-error-close" onClick={() => setDeleteError(null)}>
-            ×
-          </button>
-        </div>
-      )}
-      <ConfirmModal
-        isOpen={showConfirm}
-        title="Delete Work Item"
-        message={`Are you sure you want to delete "${workItem.title}"?`}
-        onConfirm={handleDeleteConfirm}
-        onCancel={() => setShowConfirm(false)}
-      />
     </div>
   );
 }
