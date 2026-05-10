@@ -39,12 +39,17 @@ COPY . .
 WORKDIR /src/ILD.Api
 RUN dotnet publish -c Release -o /app/publish --no-restore
 
+# Build the MCP server so it can be shipped alongside ILD.Api
+WORKDIR /src/ILD.McpServer
+RUN dotnet publish -c Release -o /app/mcp-server --no-restore
+
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS final
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && \
     mkdir -p /usr/local/share/ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/publish ./
+COPY --from=build /app/mcp-server/ ./
 COPY --from=frontend-build /app/frontend/dist ./wwwroot
 ENV ILD_DATA_PATH=/data
 ENV ILD_WORKTREES_PATH=/worktrees

@@ -38,6 +38,7 @@ services:
       - ILD_DATA_PATH=/data
       - ILD_WORKTREES_PATH=/worktrees
       - ILD_LOG_LEVEL=${ILD_LOG_LEVEL:-Information}
+      - ILD_API_URL=${ILD_API_URL:-http://localhost:8080}
       - ILD_WORKITEM_SERVER_URL=${ILD_WORKITEM_SERVER_URL:-http://workitem-server:8081}
       - ILD_WORKITEM_SERVER_API_KEY=${ILD_WORKITEM_SERVER_API_KEY:-${WORKITEM_API_KEYS:-${WORKITEM_API_KEY:-test-api-key-123}}}
       - ASPNETCORE_URLS=http://+:8080
