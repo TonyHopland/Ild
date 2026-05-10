@@ -226,7 +226,8 @@ public class WorkItemManager : IWorkItemManager
         RemoteWorkItemStatus targetStatus,
         string? reason = null,
         string? actions = null,
-        Guid? currentLoopRunId = null)
+        Guid? currentLoopRunId = null,
+        string? humanFeedbackReason = null)
     {
         var prevWi = await GetWorkItemAsync(workItemId);
         if (prevWi == null) return false;
@@ -258,7 +259,11 @@ public class WorkItemManager : IWorkItemManager
             if (run != null)
             {
                 if (actual == RemoteWorkItemStatus.HumanFeedback && reason != null)
-                    run.HumanFeedbackReason = reason;
+                {
+                    // Use the dedicated humanFeedbackReason for UI routing on
+                    // the LoopRun. Falls back to reason when not supplied.
+                    run.HumanFeedbackReason = humanFeedbackReason ?? reason;
+                }
                 else
                     run.HumanFeedbackReason = null;
                 run.UpdatedAt = DateTime.UtcNow;

@@ -170,12 +170,12 @@ public class OpenCodeAdapterTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_uses_worktree_as_working_directory()
+    public async Task ExecuteAsync_passes_worktree_via_dir_argument()
     {
         var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(worktreeDir);
         var scriptPath = Path.Combine(worktreeDir, "pwd.sh");
-        File.WriteAllText(scriptPath, "#!/bin/sh\npwd\n");
+        File.WriteAllText(scriptPath, "#!/bin/sh\nprintf '%s\\n' \"$@\"\npwd\n");
         System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
 
         try
@@ -191,6 +191,7 @@ public class OpenCodeAdapterTests
             var result = await adapter.ExecuteAsync(ctx);
 
             result.Success.Should().BeTrue();
+            result.Output.Should().Contain("--dir");
             result.Output.Should().Contain(worktreeDir);
         }
         finally
@@ -506,6 +507,122 @@ public class OpenCodeAdapterTests
 
             result.Success.Should().BeTrue();
             result.SessionId.Should().Be("nested-session");
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_extracts_text_from_typed_text_event_part()
+    {
+        // opencode --format json emits `{"type":"text","part":{"type":"text","text":"..."}}`
+        // alongside step_start/step_finish/tool_use events. We must extract the
+        // assistant's response from the text part, ignoring boundary events.
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-typed-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "echo '{\"type\":\"step_start\",\"timestamp\":1,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"step-start\",\"id\":\"prt_1\",\"messageID\":\"msg_1\",\"sessionID\":\"ses_x\"}}'\n" +
+            "echo '{\"type\":\"text\",\"timestamp\":2,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"text\",\"text\":\"final answer\",\"messageID\":\"msg_1\",\"sessionID\":\"ses_x\"}}'\n" +
+            "echo '{\"type\":\"step_finish\",\"timestamp\":3,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"step-finish\",\"id\":\"prt_2\",\"messageID\":\"msg_1\",\"sessionID\":\"ses_x\"}}'\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var adapter = new OpenCodeAdapter();
+
+            var ctx = BuildContext(
+                binaryPath: scriptPath,
+                initialPrompt: "ignored",
+                worktreePath: worktreeDir,
+                executionCount: 1);
+
+            var result = await adapter.ExecuteAsync(ctx);
+
+            result.Success.Should().BeTrue();
+            result.Output.Should().Be("final answer");
+            result.Output.Should().NotContain("step_start");
+            result.Output.Should().NotContain("step_finish");
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_does_not_dump_raw_ndjson_when_no_text_event_present()
+    {
+        // Regression: when opencode emits only boundary events (step_start /
+        // step_finish / tool_use) without a final text event — e.g. when the
+        // model only produced tool calls — we must not surface the raw NDJSON
+        // event stream as the AI node output. Surface a clear diagnostic
+        // instead so downstream nodes get a readable signal.
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-no-text-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "echo '{\"type\":\"step_start\",\"timestamp\":1,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"step-start\",\"id\":\"prt_1\",\"messageID\":\"msg_1\",\"sessionID\":\"ses_x\"}}'\n" +
+            "echo '{\"type\":\"step_finish\",\"timestamp\":2,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"step-finish\",\"id\":\"prt_2\",\"messageID\":\"msg_1\",\"sessionID\":\"ses_x\"}}'\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var adapter = new OpenCodeAdapter();
+
+            var ctx = BuildContext(
+                binaryPath: scriptPath,
+                initialPrompt: "ignored",
+                worktreePath: worktreeDir,
+                executionCount: 1);
+
+            var result = await adapter.ExecuteAsync(ctx);
+
+            result.Success.Should().BeTrue();
+            result.Output.Should().NotContain("step_start");
+            result.Output.Should().NotContain("step_finish");
+            result.Output.Should().NotContain("\"type\":");
+            result.Output.Should().Contain("opencode");
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_surfaces_session_error_event_as_failure()
+    {
+        // opencode emits `{"type":"error","error":{...}}` when a session
+        // fails (auth, rate limit, model error, ...). Even when the CLI
+        // exits with code 0, we must propagate that error so the AI node
+        // reflects the failure instead of silently returning empty output.
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-err-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "echo '{\"type\":\"error\",\"timestamp\":1,\"sessionID\":\"ses_x\",\"error\":{\"name\":\"ProviderAuthError\",\"data\":{\"message\":\"invalid api key\"}}}'\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var adapter = new OpenCodeAdapter();
+
+            var ctx = BuildContext(
+                binaryPath: scriptPath,
+                initialPrompt: "ignored",
+                worktreePath: worktreeDir,
+                executionCount: 1);
+
+            var result = await adapter.ExecuteAsync(ctx);
+
+            result.Success.Should().BeFalse();
+            result.Error.Should().Contain("invalid api key");
         }
         finally
         {

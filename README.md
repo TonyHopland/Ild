@@ -105,14 +105,40 @@ ILD_PASSWORD=letmein docker compose up --build
 
 Then open <http://localhost:8080> and log in with `admin` / `letmein`.
 
-The container persists state in two named volumes:
+The containers persist state in three named volumes:
 
 | Volume          | Mounted at   | Purpose                               |
 | --------------- | ------------ | ------------------------------------- |
 | `ild-data`      | `/data`      | SQLite DB at `/data/ild.db` (sidecar) |
 | `ild-worktrees` | `/worktrees` | Per-work-item git worktrees           |
+| `workitem-data` | `/data`      | WorkItemServer SQLite DB              |
 
 Your host `~/.gitconfig` is mounted read-only so commits inherit your name/email. Override with `GIT_CONFIG=/path/to/config docker compose up`.
+
+#### Container toolchain
+
+The ILD container can be built with additional tools needed to execute work items. Control which tools are installed via build args (env vars passed to `docker compose`):
+
+| Build arg         | Default | Installs                         | Needed for                       |
+| ----------------- | ------- | -------------------------------- | -------------------------------- |
+| `WITH_OPENCODE`   | `0`     | `opencode` CLI                   | AI agent execution               |
+| `WITH_NODE`       | `0`     | Node 22, npm, corepack (pnpm/vp) | TypeScript/JavaScript work items |
+| `WITH_DOTNET_SDK` | `0`     | .NET 10 SDK                      | .NET work items                  |
+| `WITH_CHROME`     | `0`     | Google Chrome stable             | Browser automation tests         |
+
+Example — build with all tools for full integration testing:
+
+```bash
+WITH_OPENCODE=1 WITH_NODE=1 WITH_DOTNET_SDK=1 ILD_PASSWORD=letmein docker compose up --build
+```
+
+Or use the `.env.example` template:
+
+```bash
+cp .env.example .env
+# Edit .env to set your password and desired toolchain
+ILD_PASSWORD=letmein docker compose up --build
+```
 
 ### Option B — Local development (no container)
 
@@ -138,8 +164,9 @@ On first startup the API:
 1. Creates `data/ild.db` with the EF schema.
 2. Bootstraps user `admin` whose password is the value of `ILD_PASSWORD` (PBKDF2-SHA256, 100k iterations).
 3. Seeds three loop templates: **Simple Code Change**, **AI-Assisted Feature**, **Plan**.
-4. Best-effort recovers any `LoopRun` left in `Running` from a previous process.
-5. Runs startup reconciliation against the remote WorkItem server (if configured).
+4. Seeds a default `RemoteProvider` pointing at the WorkItem server (if no providers exist and `ILD_WORKITEM_SERVER_URL` is set).
+5. Best-effort recovers any `LoopRun` left in `Running` from a previous process.
+6. Runs startup reconciliation against the remote WorkItem server (if configured).
 
 To smoke-test the API directly:
 
@@ -159,14 +186,26 @@ curl -s http://localhost:5000/api/v1/looptemplates \
 
 All configuration is via environment variables.
 
-| Variable             | Default                    | Description                                                                                     |
-| -------------------- | -------------------------- | ----------------------------------------------------------------------------------------------- |
-| `ILD_USERNAME`       | `admin`                    | Bootstrap username.                                                                             |
-| `ILD_PASSWORD`       | _(required)_               | Plaintext password used the **first time** the user is created. After that, it's stored hashed. |
-| `ILD_DATA_PATH`      | `data` (`/data` in Docker) | Where `ild.db` lives.                                                                           |
-| `ILD_WORKTREES_PATH` | `worktrees` (`/worktrees`) | Default base path for per-work-item worktrees.                                                  |
-| `ILD_LOG_LEVEL`      | `Information`              | Serilog minimum level.                                                                          |
-| `ASPNETCORE_URLS`    | `http://+:8080`            | Listening URLs.                                                                                 |
+| Variable                      | Default                       | Description                                                                                     |
+| ----------------------------- | ----------------------------- | ----------------------------------------------------------------------------------------------- |
+| `ILD_USERNAME`                | `admin`                       | Bootstrap username.                                                                             |
+| `ILD_PASSWORD`                | _(required)_                  | Plaintext password used the **first time** the user is created. After that, it's stored hashed. |
+| `ILD_DATA_PATH`               | `data` (`/data` in Docker)    | Where `ild.db` lives.                                                                           |
+| `ILD_WORKTREES_PATH`          | `worktrees` (`/worktrees`)    | Default base path for per-work-item worktrees.                                                  |
+| `ILD_LOG_LEVEL`               | `Information`                 | Serilog minimum level.                                                                          |
+| `ILD_WORKITEM_SERVER_URL`     | `http://workitem-server:8081` | WorkItemServer endpoint. Auto-seeds RemoteProvider on first run if no providers exist.          |
+| `ILD_WORKITEM_SERVER_API_KEY` | `test-api-key-123`            | API key for the WorkItemServer. Auto-seeds with the provider on first run.                      |
+| `ASPNETCORE_URLS`             | `http://+:8080`               | Listening URLs.                                                                                 |
+| `WORKITEM_API_KEY`            | `test-api-key-123`            | API key accepted by the WorkItemServer.                                                         |
+
+##### Build args (Docker only)
+
+| Build arg         | Default | Installs                         |
+| ----------------- | ------- | -------------------------------- |
+| `WITH_OPENCODE`   | `0`     | `opencode` CLI                   |
+| `WITH_NODE`       | `0`     | Node 22, npm, corepack (pnpm/vp) |
+| `WITH_DOTNET_SDK` | `0`     | .NET 10 SDK                      |
+| `WITH_CHROME`     | `0`     | Google Chrome stable             |
 
 AI providers, remote git providers, and repositories are configured at runtime through the API / UI rather than environment variables.
 
@@ -398,7 +437,12 @@ Auth: `Authorization: Bearer <api-key>` or `X-Api-Key` header.
 
 ## Deployment
 
-`docker compose up --build` is the supported path for the ILD instance. The `ILD.WorkItemServer` deploys as a separate container with its own SQLite database.
+`docker compose up --build` is the supported path. Two containers are deployed:
+
+- **`ild`** — the main ILD API + frontend on port 8080
+- **`ild-workitem-server`** — the WorkItem server on port 8081
+
+### Container images
 
 The `Dockerfile` is multi-stage:
 
@@ -406,13 +450,42 @@ The `Dockerfile` is multi-stage:
 2. **build** — `mcr.microsoft.com/dotnet/sdk:10.0`, `dotnet publish -c Release`.
 3. **final** — `mcr.microsoft.com/dotnet/aspnet:10.0` + `git`. Frontend assets land in `wwwroot/`.
 
-Bind-mount alternatives (instead of named volumes):
+The `Dockerfile.WorkItemServer` is a simpler two-stage build for the WorkItem server.
+
+### Toolchain customization
+
+The ILD container can be built with additional tools via `ARG` parameters. This is useful when work items need to run build commands, tests, or AI agent execution:
+
+```yaml
+services:
+  ild:
+    build:
+      args:
+        WITH_OPENCODE: 1
+        WITH_NODE: 1
+        WITH_DOTNET_SDK: 1
+        WITH_CHROME: 0
+```
+
+Or via environment variables:
+
+```bash
+WITH_OPENCODE=1 WITH_NODE=1 docker compose build ild
+```
+
+### Bind-mount alternatives
+
+Instead of named volumes, bind-mount to host directories:
 
 ```yaml
 volumes:
   - ./.local/data:/data
   - ./.local/worktrees:/worktrees
 ```
+
+### First-run auto-seed
+
+On first startup, if no `RemoteProvider` exists, ILD auto-seeds one using `ILD_WORKITEM_SERVER_URL` and `ILD_WORKITEM_SERVER_API_KEY`. This connects ILD to the WorkItem server without manual UI configuration.
 
 For multi-tenant or HTTPS deployments, terminate TLS at a reverse proxy (Caddy, Traefik, nginx). ILD itself only speaks HTTP and assumes a single trusted user. The WorkItem server should be deployed behind the same reverse proxy with its own API key authentication.
 

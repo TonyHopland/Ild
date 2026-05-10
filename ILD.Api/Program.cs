@@ -98,6 +98,9 @@ try
         var mgr = scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Interfaces.ILoopTemplateManager>();
         await ILD.Api.Configuration.TemplateSeeder.SeedAsync(templateStore, mgr);
 
+        var providerStore = scope.ServiceProvider.GetRequiredService<ILD.Data.Stores.Interfaces.IProviderStore>();
+        await ILD.Api.Configuration.TemplateSeeder.SeedRemoteProviderAsync(providerStore);
+
         // Best-effort recovery: any LoopRun left in Running across restart
         var recovery = scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Interfaces.IRecoveryManager>();
         foreach (var runId in await recovery.GetRecoverableRunIdsAsync())
@@ -114,6 +117,14 @@ try
     }
     app.UseSecurityHeaders();
     app.UseCors("AllowFrontend");
+
+    var wwwroot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
+    if (Directory.Exists(wwwroot))
+    {
+        app.UseDefaultFiles();
+        app.UseStaticFiles();
+    }
+
     app.UseMiddleware<AuthMiddleware>();
     app.UseRouting();
 
@@ -121,10 +132,8 @@ try
     app.MapHub<LoopRunHub>("/hubs/loop-run");
     app.MapHub<WorkItemHub>("/hubs/work-item");
 
-    var spaPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "frontend", "dist");
-    if (Directory.Exists(spaPath))
+    if (Directory.Exists(wwwroot))
     {
-        app.UseStaticFiles();
         app.MapFallbackToFile("index.html");
     }
 
