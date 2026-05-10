@@ -49,10 +49,10 @@ export interface WorkItem {
    */
   tagsJson?: string | null;
   /**
-   * JSON-encoded array of {@link ConversationMessage} mirrored from the
-   * WorkItemServer. Use {@link parseConversation} to decode.
+   * Array of {@link ConversationMessage} mirrored from the WorkItemServer.
+   * Use {@link parseConversation} to safely read (handles null/missing).
    */
-  conversationJson?: string | null;
+  conversation?: ConversationMessage[] | null;
   /**
    * Deprecated: template is resolved from {@link tagsJson} at run start
    * (PRD §3.7). The server may still return it for legacy reasons.

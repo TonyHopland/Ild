@@ -28,12 +28,15 @@ public interface IWorkItemManager
     /// <summary>
     /// Generic transition entry point. Mirrors the remote server transition contract.
     /// </summary>
+    /// <param name="reason">Content stored in the server conversation thread.</param>
+    /// <param name="humanFeedbackReason">Short label stored on LoopRun for frontend UI routing. Falls back to <paramref name="reason"/> when null.</param>
     Task<bool> TransitionAsync(
         Guid workItemId,
         RemoteWorkItemStatus targetStatus,
         string? reason = null,
         string? actions = null,
-        Guid? currentLoopRunId = null);
+        Guid? currentLoopRunId = null,
+        string? humanFeedbackReason = null);
     Task<bool> AddDependencyAsync(Guid workItemId, Guid dependsOnWorkItemId);
     Task<bool> RemoveDependencyAsync(Guid workItemId, Guid dependsOnWorkItemId);
     Task<IReadOnlyList<WorkItemView>> GetDependenciesAsync(Guid workItemId);

@@ -467,7 +467,14 @@ public class LoopEngine : ILoopEngine
                         await TransitionRunAsync(runId, LoopRunStatus.WaitingHuman);
                         var availableActions = string.Join(",",
                             edges.Where(e => e.SourceNodeId == current.Id).Select(e => e.EdgeType.ToString()).Distinct());
-                        await TransitionWorkItemAsync(workItem.Id, RemoteWorkItemStatus.HumanFeedback, ReasonForSuspend(s.Kind), availableActions);
+                        var baseReason = ReasonForSuspend(s.Kind);
+                        // Include the previous node's output in the conversation
+                        // so the human sees the AI's actual response, not just
+                        // a generic "Human Input Needed" label.
+                        var conversationContent = !string.IsNullOrWhiteSpace(prevOutput)
+                            ? prevOutput.Trim()
+                            : baseReason;
+                        await TransitionWorkItemAsync(workItem.Id, RemoteWorkItemStatus.HumanFeedback, conversationContent, availableActions, baseReason);
                         return LoopRunStatus.WaitingHuman;
 
                     case NodeOutcome.Terminal t:
@@ -888,10 +895,10 @@ public class LoopEngine : ILoopEngine
             control.Dispose();
     }
 
-    private async Task TransitionWorkItemAsync(Guid workItemId, RemoteWorkItemStatus next, string? reason, string? actions = null)
+    private async Task TransitionWorkItemAsync(Guid workItemId, RemoteWorkItemStatus next, string? reason, string? actions = null, string? humanFeedbackReason = null)
     {
         using var scope = _sp.CreateScope();
         var manager = scope.ServiceProvider.GetRequiredService<IWorkItemManager>();
-        await manager.TransitionAsync(workItemId, next, reason, actions);
+        await manager.TransitionAsync(workItemId, next, reason, actions, humanFeedbackReason: humanFeedbackReason);
     }
 }

@@ -45,17 +45,20 @@ RUN dotnet publish -c Release -o /app/mcp-server --no-restore
 
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS final
 WORKDIR /app
+
+ARG WITH_OPENCODE=0
+ARG WITH_NODE=0
+ARG NODE_RUNTIME_VERSION=24.15.0
+ARG WITH_DOTNET_SDK=0
+ARG DOTNET_SDK_CHANNEL=10.0
+ARG WITH_CHROME=0
+
+# Install base utilities and optional tools before copying source so Docker
+# layer caching skips tool installs when only source code changes.
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && \
     mkdir -p /usr/local/share/ca-certificates && \
     rm -rf /var/lib/apt/lists/*
-COPY --from=build /app/publish ./
-COPY --from=build /app/mcp-server/ ./
-COPY --from=frontend-build /app/frontend/dist ./wwwroot
-ENV ILD_DATA_PATH=/data
-ENV ILD_WORKTREES_PATH=/worktrees
-RUN mkdir -p /data /worktrees
 
-ARG WITH_OPENCODE=0
 # The opencode install script drops the binary into $HOME/.opencode/bin and
 # only updates interactive shell rc files. ILD launches opencode via
 # Process.Start, which inherits the container's non-interactive PATH, so we
@@ -69,8 +72,6 @@ RUN if [ "$WITH_OPENCODE" = "1" ]; then \
     fi
 ENV PATH="/root/.opencode/bin:${PATH}"
 
-ARG WITH_NODE=0
-ARG NODE_RUNTIME_VERSION=24.15.0
 RUN if [ "$WITH_NODE" = "1" ]; then \
   apt-get update && \
   apt-get install -y ca-certificates curl xz-utils && \
@@ -86,8 +87,6 @@ RUN if [ "$WITH_NODE" = "1" ]; then \
   rm -rf /var/lib/apt/lists/*; \
 fi
 
-ARG WITH_DOTNET_SDK=0
-ARG DOTNET_SDK_CHANNEL=10.0
 RUN if [ "$WITH_DOTNET_SDK" = "1" ]; then \
   apt-get update && \
   apt-get install -y ca-certificates curl && \
@@ -104,7 +103,6 @@ RUN if [ "$WITH_DOTNET_SDK" = "1" ]; then \
   rm -rf /var/lib/apt/lists/*; \
 fi
 
-ARG WITH_CHROME=0
 RUN if [ "$WITH_CHROME" = "1" ]; then \
   apt-get update && \
   apt-get install -y ca-certificates wget gnupg && \
@@ -119,6 +117,13 @@ fi
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /app/publish ./
+COPY --from=build /app/mcp-server/ ./
+COPY --from=frontend-build /app/frontend/dist ./wwwroot
+ENV ILD_DATA_PATH=/data
+ENV ILD_WORKTREES_PATH=/worktrees
+RUN mkdir -p /data /worktrees
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
