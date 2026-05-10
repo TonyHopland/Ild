@@ -32,15 +32,7 @@ public class OpenCodeAdapter : IAgentAdapter
                 return NodeExecutionResult.Fail(
                     "[opencode-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
 
-            var psi = new ProcessStartInfo(binaryPath)
-            {
-                WorkingDirectory = worktreePath,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                RedirectStandardInput = false,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
+            var psi = BuildProcessStartInfo(binaryPath, worktreePath);
 
             var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, ctx.RunContext);
 
@@ -68,7 +60,21 @@ public class OpenCodeAdapter : IAgentAdapter
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
-                return NodeExecutionResult.Fail($"[opencode-error] cannot start '{binaryPath}' — make sure the opencode binary is installed and on PATH. Details: {ex.Message}");
+                if (ShouldRetryWithoutWorkingDirectory(ex, worktreePath))
+                {
+                    try
+                    {
+                        proc = Process.Start(BuildProcessStartInfo(binaryPath, worktreePath, useWorktreeAsWorkingDirectory: false));
+                    }
+                    catch (Exception retryEx) when (retryEx is InvalidOperationException or IOException)
+                    {
+                        return NodeExecutionResult.Fail($"[opencode-error] cannot start '{binaryPath}' — make sure the opencode binary is installed and on PATH. Details: {retryEx.Message}");
+                    }
+                }
+                else
+                {
+                    return NodeExecutionResult.Fail($"[opencode-error] cannot start '{binaryPath}' — make sure the opencode binary is installed and on PATH. Details: {ex.Message}");
+                }
             }
             using var p = proc ?? throw new InvalidOperationException("Process.Start returned null");
 
@@ -101,9 +107,31 @@ public class OpenCodeAdapter : IAgentAdapter
                 try { p.Kill(entireProcessTree: true); } catch { }
                 return NodeExecutionResult.Fail("opencode stream read timed out");
             }
-            var (response, sessionId) = ExtractTextAndSessionIdFromJsonEvents(stdout);
+            var (response, sessionId, jsonError, sawJsonEvents) = ExtractTextAndSessionIdFromJsonEvents(stdout);
+
+            // opencode --format json emits a stream of typed events (step_start,
+            // tool_use, text, error, ...). Only `text` events carry assistant
+            // output, and `error` events surface session failures. Previously
+            // we fell back to dumping the raw NDJSON whenever no text was
+            // extracted, which made the AI node output unreadable when the
+            // model only produced tool calls or the session errored. Surface
+            // a clear diagnostic instead and propagate session errors. When
+            // stdout is not JSON at all (e.g. tests using a stub binary), keep
+            // the raw stdout as the response.
             if (string.IsNullOrEmpty(response))
-                response = stdout;
+            {
+                if (!string.IsNullOrEmpty(jsonError))
+                    response = $"[opencode-error] {jsonError}";
+                else if (!sawJsonEvents)
+                    response = stdout;
+                else if (!string.IsNullOrEmpty(stderr))
+                    response = $"[opencode] no text response. stderr: {stderr.Trim()}";
+                else
+                    response = "[opencode] no text response from model";
+            }
+
+            if (p.ExitCode == 0 && !string.IsNullOrEmpty(jsonError))
+                return NodeExecutionResult.Fail($"opencode session error: {jsonError}", response);
 
             return p.ExitCode == 0
                 ? NodeExecutionResult.Ok(response, rendered, sessionId, ctx.IncomingSessionId)
@@ -113,6 +141,33 @@ public class OpenCodeAdapter : IAgentAdapter
         {
             return NodeExecutionResult.Fail($"[opencode-error] {ex.Message}");
         }
+    }
+
+    private static ProcessStartInfo BuildProcessStartInfo(string binaryPath, string worktreePath, bool useWorktreeAsWorkingDirectory = true)
+    {
+        var psi = new ProcessStartInfo(binaryPath)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            RedirectStandardInput = false,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+
+        if (useWorktreeAsWorkingDirectory)
+            psi.WorkingDirectory = worktreePath;
+
+        return psi;
+    }
+
+    private static bool ShouldRetryWithoutWorkingDirectory(Exception ex, string worktreePath)
+    {
+        if (!Directory.Exists(worktreePath))
+            return false;
+
+        var message = ex.Message;
+        return message.Contains("working directory", StringComparison.OrdinalIgnoreCase)
+            || message.Contains(worktreePath, StringComparison.Ordinal);
     }
 
     static string ExtractTextFromJsonEvents(string raw)
@@ -134,10 +189,12 @@ public class OpenCodeAdapter : IAgentAdapter
         return sb.ToString();
     }
 
-    static (string Text, string? SessionId) ExtractTextAndSessionIdFromJsonEvents(string raw)
+    static (string Text, string? SessionId, string? Error, bool SawJsonEvents) ExtractTextAndSessionIdFromJsonEvents(string raw)
     {
         var sb = new StringBuilder();
         string? lastSessionId = null;
+        string? lastError = null;
+        var sawJsonEvents = false;
         foreach (var line in raw.Split('\n'))
         {
             var trimmed = line.Trim();
@@ -147,6 +204,16 @@ public class OpenCodeAdapter : IAgentAdapter
             try
             {
                 using var doc = JsonDocument.Parse(trimmed);
+                // Recognise opencode `--format json` events by their `type`
+                // discriminator. Plain JSON output (e.g. dumped env vars in
+                // tests) doesn't have one and should fall through to the
+                // raw-stdout fallback below.
+                if (doc.RootElement.ValueKind == JsonValueKind.Object
+                    && doc.RootElement.TryGetProperty("type", out var typeProbe)
+                    && typeProbe.ValueKind == JsonValueKind.String)
+                {
+                    sawJsonEvents = true;
+                }
                 ExtractTextFromElement(doc.RootElement, sb);
                 // opencode's JSON output may carry the session id at the
                 // root (`{"sessionId": "..."}`) or nested under a `session`
@@ -154,10 +221,43 @@ public class OpenCodeAdapter : IAgentAdapter
                 // pick it up regardless of the event shape.
                 var found = ExtractSessionIdFromElement(doc.RootElement);
                 if (!string.IsNullOrEmpty(found)) lastSessionId = found;
+
+                // `--format json` emits typed events; capture session errors
+                // so the caller can surface them instead of silently producing
+                // an empty response.
+                if (doc.RootElement.ValueKind == JsonValueKind.Object
+                    && doc.RootElement.TryGetProperty("type", out var typeProp)
+                    && typeProp.ValueKind == JsonValueKind.String
+                    && typeProp.GetString() == "error"
+                    && doc.RootElement.TryGetProperty("error", out var errProp))
+                {
+                    var msg = ExtractErrorMessage(errProp);
+                    if (!string.IsNullOrEmpty(msg)) lastError = msg;
+                }
             }
             catch { }
         }
-        return (sb.ToString(), lastSessionId);
+        return (sb.ToString(), lastSessionId, lastError, sawJsonEvents);
+    }
+
+    static string? ExtractErrorMessage(JsonElement error)
+    {
+        if (error.ValueKind == JsonValueKind.String)
+            return error.GetString();
+        if (error.ValueKind != JsonValueKind.Object)
+            return null;
+        if (error.TryGetProperty("data", out var data)
+            && data.ValueKind == JsonValueKind.Object
+            && data.TryGetProperty("message", out var dataMsg)
+            && dataMsg.ValueKind == JsonValueKind.String)
+            return dataMsg.GetString();
+        if (error.TryGetProperty("message", out var msg)
+            && msg.ValueKind == JsonValueKind.String)
+            return msg.GetString();
+        if (error.TryGetProperty("name", out var name)
+            && name.ValueKind == JsonValueKind.String)
+            return name.GetString();
+        return null;
     }
 
     static string? ExtractSessionIdFromElement(JsonElement element)

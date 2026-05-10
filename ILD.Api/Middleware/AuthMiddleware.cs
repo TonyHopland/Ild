@@ -87,6 +87,17 @@ public class AuthMiddleware
             return true;
         }
 
+        // Only enforce auth on API/Hub endpoints. Anything else is either a
+        // static asset or an SPA route that should fall through to index.html;
+        // the frontend handles auth client-side from there.
+        if (!pathValue.StartsWith("/api/", StringComparison.OrdinalIgnoreCase)
+            && !pathValue.Equals("/api", StringComparison.OrdinalIgnoreCase)
+            && !pathValue.StartsWith("/hubs/", StringComparison.OrdinalIgnoreCase)
+            && !pathValue.StartsWith("/metrics", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
         return false;
     }
 

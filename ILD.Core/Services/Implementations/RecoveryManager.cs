@@ -64,6 +64,16 @@ public class RecoveryManager : IRecoveryManager
             }
         }
 
+        if (!string.IsNullOrWhiteSpace(run.WorktreePath)
+            && !await _repo.ValidateWorktreeHealthAsync(run.WorktreePath))
+        {
+            await _workItems.TransitionAsync(
+                run.WorkItemId,
+                RemoteWorkItemStatus.HumanFeedback,
+                reason: $"Recovery requires review: worktree is missing or unhealthy at '{run.WorktreePath}'");
+            return true;
+        }
+
         await _engine.ResumeRecoveredRunAsync(runId);
         return true;
     }

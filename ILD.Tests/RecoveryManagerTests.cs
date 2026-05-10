@@ -90,6 +90,43 @@ public class RecoveryManagerTests
     }
 
     [Fact]
+    public async Task RecoverRunAsync_with_AutoResume_and_unhealthy_worktree_marks_work_item_HumanFeedback()
+    {
+        var (mgr, wiMgr, runStore, _, _, repo, engine) = Build();
+        var runId = Guid.NewGuid();
+        var wiId = Guid.NewGuid();
+        const string worktreePath = "/tmp/wt";
+
+        runStore.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(new LoopRun
+        {
+            Id = runId,
+            WorkItemId = wiId,
+            Status = LoopRunStatus.Running,
+            RecoveryPolicy = RecoveryPolicy.AutoResume,
+            WorktreePath = worktreePath,
+        });
+        repo.Setup(r => r.ValidateWorktreeHealthAsync(worktreePath)).ReturnsAsync(false);
+        wiMgr.Setup(m => m.TransitionAsync(
+                wiId,
+                RemoteWorkItemStatus.HumanFeedback,
+                It.Is<string?>(reason => reason != null && reason.Contains("worktree", StringComparison.OrdinalIgnoreCase)),
+                It.IsAny<string?>(),
+                It.IsAny<Guid?>()))
+            .ReturnsAsync(true);
+
+        var ok = await mgr.RecoverRunAsync(runId);
+
+        ok.Should().BeTrue();
+        wiMgr.Verify(m => m.TransitionAsync(
+            wiId,
+            RemoteWorkItemStatus.HumanFeedback,
+            It.Is<string?>(reason => reason != null && reason.Contains(worktreePath, StringComparison.Ordinal)),
+            It.IsAny<string?>(),
+            It.IsAny<Guid?>()), Times.Once);
+        engine.Verify(e => e.ResumeRecoveredRunAsync(It.IsAny<Guid>()), Times.Never);
+    }
+
+    [Fact]
     public async Task RecoverRunAsync_returns_false_when_run_missing()
     {
         var (mgr, _, runStore, _, _, _, _) = Build();

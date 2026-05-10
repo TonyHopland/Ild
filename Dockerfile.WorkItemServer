@@ -1,0 +1,20 @@
+ARG DOTNET_VERSION=10.0
+
+FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS build
+WORKDIR /src
+COPY ILD.sln ./
+COPY ILD.Data/ILD.Data.csproj ILD.Data/
+COPY ILD.WorkItemServer/ILD.WorkItemServer.csproj ILD.WorkItemServer/
+RUN dotnet restore ILD.WorkItemServer/ILD.WorkItemServer.csproj
+COPY . .
+WORKDIR /src/ILD.WorkItemServer
+RUN dotnet publish -c Release -o /app/publish --no-restore
+
+FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS final
+WORKDIR /app
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+COPY --from=build /app/publish ./
+ENV WORKITEM_DATA_PATH=/data
+RUN mkdir -p /data
+EXPOSE 8081
+ENTRYPOINT ["dotnet", "ILD.WorkItemServer.dll"]

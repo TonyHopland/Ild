@@ -1,10 +1,34 @@
-version: "3.9"
-
 services:
+  workitem-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.WorkItemServer
+      args:
+        DOTNET_VERSION: ${DOTNET_VERSION:-10.0}
+    container_name: ild-workitem-server
+    ports:
+      - "8081:8081"
+    environment:
+      - WORKITEM_DATA_PATH=/data
+      - WORKITEM_API_KEYS=${WORKITEM_API_KEYS:-${WORKITEM_API_KEY:-test-api-key-123}}
+      - ASPNETCORE_URLS=http://+:8081
+    volumes:
+      - workitem-data:/data
+    restart: unless-stopped
+
   ild:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        NODE_VERSION: ${NODE_VERSION:-22-alpine}
+        DOTNET_VERSION: ${DOTNET_VERSION:-10.0}
+        NODE_RUNTIME_VERSION: ${NODE_RUNTIME_VERSION:-24.15.0}
+        DOTNET_SDK_CHANNEL: ${DOTNET_SDK_CHANNEL:-10.0}
+        WITH_OPENCODE: ${WITH_OPENCODE:-0}
+        WITH_NODE: ${WITH_NODE:-0}
+        WITH_DOTNET_SDK: ${WITH_DOTNET_SDK:-0}
+        WITH_CHROME: ${WITH_CHROME:-0}
     container_name: ild
     ports:
       - "8080:8080"
@@ -14,13 +38,19 @@ services:
       - ILD_DATA_PATH=/data
       - ILD_WORKTREES_PATH=/worktrees
       - ILD_LOG_LEVEL=${ILD_LOG_LEVEL:-Information}
+      - ILD_WORKITEM_SERVER_URL=${ILD_WORKITEM_SERVER_URL:-http://workitem-server:8081}
+      - ILD_WORKITEM_SERVER_API_KEY=${ILD_WORKITEM_SERVER_API_KEY:-${WORKITEM_API_KEYS:-${WORKITEM_API_KEY:-test-api-key-123}}}
       - ASPNETCORE_URLS=http://+:8080
     volumes:
       - ild-data:/data
       - ild-worktrees:/worktrees
       - ${GIT_CONFIG:-~/.gitconfig}:/root/.gitconfig:ro
+      - ./certs:/etc/extra-certs:ro
+    depends_on:
+      - workitem-server
     restart: unless-stopped
 
 volumes:
   ild-data:
   ild-worktrees:
+  workitem-data:

@@ -5,6 +5,8 @@ using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Remote;
 using ILD.Api.Middleware;
 using ILD.Api.Services;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace ILD.Api.Configuration;
@@ -19,7 +21,18 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IWorkItemManager, WorkItemManager>();
         services.AddScoped<ILoopTemplateManager, LoopTemplateManager>();
-        services.AddSingleton<IRepositoryManager, RepositoryManager>();
+        services.AddSingleton<IRepositoryManager>(sp =>
+        {
+            var runner = sp.GetRequiredService<IProcessRunner>();
+            var logger = sp.GetService<ILogger<RepositoryManager>>();
+            var config = sp.GetRequiredService<IConfiguration>();
+            var worktreesRoot = config["App:WorktreesPath"];
+
+            return new RepositoryManager(
+                runner,
+                logger,
+                string.IsNullOrWhiteSpace(worktreesRoot) ? null : worktreesRoot);
+        });
         services.AddSingleton<IPromptTemplateResolver, PromptTemplateResolver>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
         services.AddScoped<IRemoteProvider, RemoteProviderService>();

@@ -1,4 +1,5 @@
 using ILD.Data.DTOs;
+using ILD.Data.Entities;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
 
@@ -17,6 +18,33 @@ public static class TemplateSeeder
         await CreateSimpleCodeChangeAsync(mgr);
         await CreateAiAssistedFeatureAsync(mgr);
         await CreatePlanAsync(mgr);
+    }
+
+    public static async Task SeedRemoteProviderAsync(IProviderStore providerStore)
+    {
+        var serverUrl = Environment.GetEnvironmentVariable("ILD_WORKITEM_SERVER_URL");
+        var apiKey = Environment.GetEnvironmentVariable("ILD_WORKITEM_SERVER_API_KEY");
+
+        if (string.IsNullOrEmpty(serverUrl) || string.IsNullOrEmpty(apiKey))
+            return;
+
+        var existing = await providerStore.GetAllRemoteProvidersAsync();
+        if (existing.Any())
+            return;
+
+        var provider = new RemoteProvider
+        {
+            Id = Guid.NewGuid(),
+            Name = "Default",
+            Type = "Local",
+            Url = serverUrl,
+            WorkItemServerUrl = serverUrl,
+            WorkItemApiKey = apiKey,
+            IsDefault = true,
+            CreatedAt = DateTime.UtcNow,
+        };
+
+        await providerStore.CreateRemoteProviderAsync(provider);
     }
 
     private static async Task CreateSimpleCodeChangeAsync(ILoopTemplateManager mgr)

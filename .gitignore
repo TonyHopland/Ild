@@ -31,6 +31,9 @@ data/
 ## Secrets
 .env
 
+## Certificates
+certs/
+
 ## Worktrees
 worktrees/
 
