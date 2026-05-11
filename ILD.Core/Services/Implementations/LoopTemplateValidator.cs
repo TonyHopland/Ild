@@ -6,16 +6,6 @@ namespace ILD.Core.Services.Implementations;
 
 public static class LoopTemplateValidator
 {
-    private static readonly HashSet<string> KnownPlaceholders = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "WorkItem.Title", "WorkItem.Description",
-        "EventLog.LastN", "EventLog.Summary",
-        "Node.Input", "PreviousNode.Output",
-        "WorkTree.Diff",
-    };
-
-    private static readonly Regex PlaceholderPattern = new(@"\{\{\s*([A-Za-z][A-Za-z0-9_.:/\\-]*)\s*\}\}", RegexOptions.Compiled);
-
     private static readonly Dictionary<string, HashSet<string>> AllowedEdgeTypes = new(StringComparer.OrdinalIgnoreCase)
     {
         { "Human", new() { "OnSuccess", "OnFailure", "OnRespond" } },
@@ -111,11 +101,10 @@ public static class LoopTemplateValidator
             var templates = new[] { prompt, prTemplate, humanPrompt }.Where(t => !string.IsNullOrEmpty(t)).ToList();
             foreach (var template in templates)
             {
-                foreach (Match m in PlaceholderPattern.Matches(template!))
+                foreach (Match m in PromptPlaceholderRegistry.Pattern.Matches(template!))
                 {
                     var key = m.Groups[1].Value;
-                    if (key.StartsWith("WorkTree.File:", StringComparison.OrdinalIgnoreCase)) continue;
-                    if (!KnownPlaceholders.Contains(key))
+                    if (!PromptPlaceholderRegistry.IsKnown(key))
                         errors.Add($"Unknown placeholder '{{{{{key}}}}}' in node {node.Id}.");
                 }
             }

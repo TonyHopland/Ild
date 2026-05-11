@@ -1,4 +1,5 @@
 using FluentAssertions;
+using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
@@ -1087,6 +1088,8 @@ public class AINodeExecutorTests
         eventLogService.Setup(s => s.GetByRunIdAsync(It.IsAny<Guid>(), null))
             .ReturnsAsync(Array.Empty<EventLogEntry>());
         services.AddSingleton(eventLogService.Object);
+
+        services.AddSingleton<IAiSessionManager, AiSessionManager>();
 
         return services.BuildServiceProvider();
     }

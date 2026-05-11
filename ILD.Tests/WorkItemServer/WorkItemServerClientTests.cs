@@ -40,9 +40,10 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
                     o.UseSqlite(_conn);
                     o.ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning));
                 });
-                using var sp = services.BuildServiceProvider();
-                using var scope = sp.CreateScope();
-                scope.ServiceProvider.GetRequiredService<WorkItemServerDbContext>().Database.EnsureCreated();
+                // Schema creation is handled by the server's own startup
+                // (Database.Migrate()). Calling EnsureCreated() here would
+                // create the tables first and then the migration step would
+                // fail with "table already exists".
             });
         });
 

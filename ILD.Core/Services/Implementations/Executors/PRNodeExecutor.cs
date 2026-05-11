@@ -74,7 +74,7 @@ public sealed class PRNodeExecutor : INodeExecutor
         {
             var remote = scope.ServiceProvider.GetRequiredService<IRemoteProvider>();
 
-            var prBody = ResolvePrDescription(_sp, ctx.Node.Config, wi, ctx.PreviousNodeOutput);
+            var prBody = await ResolvePrDescriptionAsync(scope.ServiceProvider, ctx.Node.Config, ctx.Run.Id, wi, ctx.PreviousNodeOutput);
 
             var prResult = await remote.CreatePullRequestAsync(
                 repo.CloneUrl,
@@ -101,13 +101,22 @@ public sealed class PRNodeExecutor : INodeExecutor
             prUrl);
     }
 
-    static string ResolvePrDescription(IServiceProvider sp, string? nodeConfig, WorkItemView wi, string? previousNodeOutput)
+    static async Task<string> ResolvePrDescriptionAsync(IServiceProvider sp, string? nodeConfig, Guid runId, WorkItemView wi, string? previousNodeOutput)
     {
         var cfg = NodeConfig.Parse<NodeConfig.Pr>(nodeConfig);
         var template = cfg.PrDescriptionTemplate;
 
         if (string.IsNullOrEmpty(template))
             return wi.Description ?? "";
+
+        // Prefer the DI-registered service so all rendering shares the same
+        // event-log lookup and resolver instance. Fall back to a direct
+        // construction so unit tests that don't wire the full service graph
+        // (e.g. PRNodeExecutorTests) keep working: rendering without an
+        // event log just produces an empty {{EventLog.*}} expansion.
+        var rendering = sp.GetService<IPromptRenderingService>();
+        if (rendering != null)
+            return await rendering.RenderAsync(template, runId, wi, previousNodeOutput);
 
         var resolver = sp.GetService<IPromptTemplateResolver>() ?? new PromptTemplateResolver();
         return resolver.Render(template, new PromptContext(

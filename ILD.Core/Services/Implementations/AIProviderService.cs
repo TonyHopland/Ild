@@ -76,22 +76,14 @@ public class AIProviderService : IAIProviderService
 
     public Task<bool> ValidatePromptTemplateAsync(string template)
     {
-        var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "WorkItem.Title","WorkItem.Description","WorkTree.Diff",
-            "EventLog.Summary","EventLog.LastN","Node.Input","PreviousNode.Output",
-        };
-        foreach (Match m in PlaceholderPattern.Matches(template))
+        foreach (Match m in PromptPlaceholderRegistry.Pattern.Matches(template))
         {
             var name = m.Groups[1].Value;
-            if (!known.Contains(name) && !name.StartsWith("WorkTree.File:", StringComparison.OrdinalIgnoreCase))
+            if (!PromptPlaceholderRegistry.IsKnown(name))
                 return Task.FromResult(false);
         }
         return Task.FromResult(true);
     }
-
-    private static readonly Regex PlaceholderPattern =
-        new(@"\{\{\s*([A-Za-z][A-Za-z0-9_.:/\\-]*)\s*\}\}", RegexOptions.Compiled);
 
     public async Task<IEnumerable<string>> GetAvailableProvidersAsync()
         => await _providerStore.GetAiProviderNamesAsync();

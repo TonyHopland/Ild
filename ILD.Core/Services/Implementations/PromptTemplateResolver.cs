@@ -1,13 +1,9 @@
-using System.Text.RegularExpressions;
 using ILD.Core.Services.Interfaces;
 
 namespace ILD.Core.Services.Implementations;
 
 public sealed class PromptTemplateResolver : IPromptTemplateResolver
 {
-    private static readonly Regex Placeholder =
-        new(@"\{\{\s*([A-Za-z][A-Za-z0-9_.:/\\-]*)\s*\}\}", RegexOptions.Compiled);
-
     public string Render(string template, PromptContext context)
     {
         if (string.IsNullOrEmpty(template)) return template ?? "";
@@ -24,13 +20,13 @@ public sealed class PromptTemplateResolver : IPromptTemplateResolver
             ["PreviousNode.Output"] = context.PreviousNodeOutput,
         };
 
-        return Placeholder.Replace(template, m =>
+        return PromptPlaceholderRegistry.Pattern.Replace(template, m =>
         {
             var key = m.Groups[1].Value;
             if (values.TryGetValue(key, out var v)) return v ?? "";
-            if (key.StartsWith("WorkTree.File:", StringComparison.OrdinalIgnoreCase))
+            if (key.StartsWith(PromptPlaceholderRegistry.WorkTreeFilePrefix, StringComparison.OrdinalIgnoreCase))
             {
-                var rel = key.Substring("WorkTree.File:".Length);
+                var rel = key.Substring(PromptPlaceholderRegistry.WorkTreeFilePrefix.Length);
                 var full = string.IsNullOrEmpty(context.WorktreePath) ? null : Path.Combine(context.WorktreePath, rel);
                 return full != null && File.Exists(full) ? File.ReadAllText(full) : "";
             }

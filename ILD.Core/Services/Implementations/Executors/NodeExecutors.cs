@@ -99,20 +99,18 @@ public sealed class CmdNodeExecutor : INodeExecutor
             return new NodeOutcome.Failed(
                 "Cmd node requires a valid WorkItem.WorktreePath; refusing to run outside the loop's worktree.");
 
-        var timeout = TimeSpan.FromSeconds(ctx.Node.TimeoutSeconds > 0 ? ctx.Node.TimeoutSeconds : 300);
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ctx.CancellationToken);
-        timeoutCts.CancelAfter(timeout);
+        using var timeout = NodeTimeoutScope.From(ctx);
 
         try
         {
-            var r = await _runner.RunAsync("/bin/sh", new[] { "-c", command }, cwd, timeoutCts.Token);
+            var r = await _runner.RunAsync("/bin/sh", new[] { "-c", command }, cwd, timeout.Token);
             return r.Success
                 ? new NodeOutcome.Succeeded(r.StdOut)
                 : new NodeOutcome.Failed($"exit={r.ExitCode} stderr={r.StdErr}", r.StdOut);
         }
-        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ctx.CancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (timeout.TimedOut)
         {
-            return new NodeOutcome.Failed($"command timed out after {timeout}");
+            return new NodeOutcome.Failed($"command timed out after {timeout.Duration}");
         }
     }
 }
@@ -160,9 +158,10 @@ public sealed class AINodeExecutor : INodeExecutor
             string? sessionId = null;
             string? incomingSessionId = null;
             var sessionInput = cfg.SessionInput ?? "incoming";
+            var sessionManager = scope.ServiceProvider.GetRequiredService<IAiSessionManager>();
             if (sessionInput == "incoming" && run is not null)
             {
-                incomingSessionId = ResolveSessionForProvider(run.SessionsJson, provider.Id);
+                incomingSessionId = sessionManager.Resolve(run.SessionsJson, provider.Id);
                 sessionId = incomingSessionId;
             }
 
@@ -200,9 +199,7 @@ public sealed class AINodeExecutor : INodeExecutor
                 eventLogSummary,
                 ctx.PreviousNodeOutput);
 
-            var timeout = TimeSpan.FromSeconds(ctx.Node.TimeoutSeconds > 0 ? ctx.Node.TimeoutSeconds : 300);
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ctx.CancellationToken);
-            timeoutCts.CancelAfter(timeout);
+            using var timeout = NodeTimeoutScope.From(ctx);
 
             var initialPrompt = cfg.InitialPrompt ?? "";
             var loopPrompt = cfg.LoopPrompt ?? initialPrompt;
@@ -213,7 +210,7 @@ public sealed class AINodeExecutor : INodeExecutor
                 loopPrompt,
                 runContext,
                 executionCount,
-                timeoutCts.Token,
+                timeout.Token,
                 ctx.ProgressCallback,
                 ExtractAdapterConfig(cfg.AdapterConfig),
                 sessionId,
@@ -249,7 +246,7 @@ public sealed class AINodeExecutor : INodeExecutor
                 // mutations. Reloading also ensures we merge with the
                 // current SessionsJson value if anything else touched it.
                 var freshRun = await loopRunStore.GetByIdAsync(ctx.Run.Id) ?? run;
-                await UpdateRunSessionAsync(loopRunStore, freshRun, provider.Id, effectiveSessionId);
+                await sessionManager.PersistAsync(freshRun, provider.Id, effectiveSessionId, loopRunStore.UpdateRunAsync);
 
                 try
                 {
@@ -304,88 +301,6 @@ public sealed class AINodeExecutor : INodeExecutor
         }
         return result;
     }
-
-    private static string? ResolveSessionForProvider(string? sessionsJson, Guid providerId)
-    {
-        if (string.IsNullOrEmpty(sessionsJson)) return null;
-        try
-        {
-            using var doc = JsonDocument.Parse(sessionsJson);
-            if (doc.RootElement.ValueKind != JsonValueKind.Array) return null;
-            foreach (var entry in doc.RootElement.EnumerateArray())
-            {
-                // Tolerate both camelCase (current) and PascalCase (legacy
-                // pre-fix payloads in the DB) so existing runs continue to
-                // resolve their session after upgrade.
-                var pid = TryGetStringInsensitive(entry, "providerId");
-                if (pid == null || !Guid.TryParse(pid, out var parsedPid) || parsedPid != providerId)
-                    continue;
-                return TryGetStringInsensitive(entry, "sessionId");
-            }
-        }
-        catch { }
-        return null;
-    }
-
-    private static string? TryGetStringInsensitive(JsonElement obj, string name)
-    {
-        if (obj.ValueKind != JsonValueKind.Object) return null;
-        foreach (var prop in obj.EnumerateObject())
-        {
-            if (string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase))
-                return prop.Value.ValueKind == JsonValueKind.String ? prop.Value.GetString() : null;
-        }
-        return null;
-    }
-
-    // SessionsJson is read via raw JsonDocument in ResolveSessionForProvider
-    // using camelCase property names (providerId/sessionId), so we must
-    // serialize the same shape here. Default System.Text.Json serialization
-    // is PascalCase and case-sensitive on read — without these options the
-    // reader would silently fail to find any sessions written by the writer
-    // and AI nodes would always start a fresh session.
-    private static readonly JsonSerializerOptions SessionJsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        PropertyNameCaseInsensitive = true,
-    };
-
-    private static async Task UpdateRunSessionAsync(ILoopRunStore store, LoopRun run, Guid providerId, string? sessionId)
-    {
-        var sessions = ParseSessions(run.SessionsJson);
-        if (sessionId is null)
-        {
-            sessions.RemoveAll(s => s.ProviderId == providerId.ToString());
-        }
-        else
-        {
-            var existing = sessions.Find(s => s.ProviderId == providerId.ToString());
-            if (existing is not null)
-                existing.SessionId = sessionId;
-            else
-                sessions.Add(new RunSessionEntry(providerId.ToString(), sessionId));
-        }
-        run.SessionsJson = JsonSerializer.Serialize(sessions, SessionJsonOptions);
-        await store.UpdateRunAsync(run);
-    }
-
-    private static List<RunSessionEntry> ParseSessions(string? json)
-    {
-        if (string.IsNullOrEmpty(json)) return new List<RunSessionEntry>();
-        try { return JsonSerializer.Deserialize<List<RunSessionEntry>>(json, SessionJsonOptions) ?? new List<RunSessionEntry>(); }
-        catch { return new List<RunSessionEntry>(); }
-    }
-
-    private sealed class RunSessionEntry
-    {
-        public string ProviderId { get; set; } = "";
-        public string SessionId { get; set; } = "";
-        public RunSessionEntry(string providerId, string sessionId)
-        {
-            ProviderId = providerId;
-            SessionId = sessionId;
-        }
-    }
 }
 
 public sealed class HumanNodeExecutor : INodeExecutor
@@ -404,14 +319,15 @@ public sealed class HumanNodeExecutor : INodeExecutor
     public async Task<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
     {
         var cfg = NodeConfig.Parse<NodeConfig.Human>(ctx.Node.Config);
-        var rendered = await RenderPromptAsync(_sp, cfg.Prompt, ctx);
+        using var scope = _sp.CreateScope();
+        var rendering = scope.ServiceProvider.GetRequiredService<IPromptRenderingService>();
+        var rendered = await rendering.RenderAsync(cfg.Prompt, ctx.Run.Id, ctx.WorkItem, ctx.PreviousNodeOutput);
         if (!string.IsNullOrEmpty(rendered))
         {
             // Surface the resolved prompt via the event log so the UI can
             // display exactly what the human is being asked. We deliberately
             // do NOT stash it on the run-node Output: that slot belongs to
             // the human's eventual answer.
-            using var scope = _sp.CreateScope();
             var eventLog = scope.ServiceProvider.GetService<IEventLogService>();
             if (eventLog != null)
             {
@@ -433,30 +349,6 @@ public sealed class HumanNodeExecutor : INodeExecutor
     }
 
     public const string HumanPromptRenderedEvent = "HumanPromptRendered";
-
-    private static async Task<string?> RenderPromptAsync(IServiceProvider sp, string? template, NodeExecutionContext ctx)
-    {
-        if (string.IsNullOrEmpty(template)) return null;
-        using var scope = sp.CreateScope();
-        var resolver = scope.ServiceProvider.GetService<IPromptTemplateResolver>() ?? new PromptTemplateResolver();
-        var eventLogService = scope.ServiceProvider.GetService<IEventLogService>();
-        IReadOnlyList<string>? summary = null;
-        if (eventLogService != null)
-        {
-            try
-            {
-                var entries = await eventLogService.GetByRunIdAsync(ctx.Run.Id);
-                summary = entries.Select(e => $"{e.EventType}: {e.Data}").ToList();
-            }
-            catch { /* event log is best-effort */ }
-        }
-        return resolver.Render(template, new PromptContext(
-            WorkItemTitle: ctx.WorkItem.Title,
-            WorkItemDescription: ctx.WorkItem.Description,
-            PreviousNodeOutput: ctx.PreviousNodeOutput,
-            EventLogSummary: summary,
-            WorktreePath: ctx.WorkItem.WorktreePath));
-    }
 }
 
 public sealed class CleanupNodeExecutor : INodeExecutor
