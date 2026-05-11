@@ -97,7 +97,9 @@ export function useSignalR(hubUrl = "/hubs/work-item") {
         if (stopped) return;
         updateState(signalR.HubConnectionState.Connected);
         handlersRef.current.forEach((_, eventType) => ensureDispatcher(connection, eventType));
-        await connection.invoke("SubscribeToWorkItems");
+        if (hubUrl === "/hubs/work-item") {
+          await connection.invoke("SubscribeToWorkItems");
+        }
       })
       .catch((err) => {
         if (stopped) return; // expected during teardown

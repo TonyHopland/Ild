@@ -3,6 +3,7 @@ import { renderHook, act } from "@testing-library/react";
 
 const startMock = vi.fn().mockResolvedValue(undefined);
 const stopMock = vi.fn().mockResolvedValue(undefined);
+const invokeMock = vi.fn().mockResolvedValue(undefined);
 const onMock = vi.fn();
 const onreconnectingMock = vi.fn();
 const onreconnectedMock = vi.fn();
@@ -12,6 +13,7 @@ let connectionState = 1; // Connected
 const fakeConnection = {
   start: startMock,
   stop: stopMock,
+  invoke: invokeMock,
   on: onMock,
   onreconnecting: onreconnectingMock,
   onreconnected: onreconnectedMock,
@@ -52,6 +54,7 @@ import { authService } from "../services/auth";
 beforeEach(() => {
   startMock.mockClear();
   stopMock.mockClear();
+  invokeMock.mockClear();
   onMock.mockClear();
   localStorage.clear();
 });
@@ -87,5 +90,29 @@ describe("useSignalR", () => {
       result.current.off("TestEvent", handler);
     });
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  test("does not auto-subscribe to work items when connected to a non-work-item hub", async () => {
+    localStorage.setItem("auth_token", "tok-1");
+    authService.setAuth({ id: "u1", username: "x", createdAt: "" }, "tok-1");
+
+    const { unmount } = renderHook(() => useSignalR("/hubs/loop-run"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith("SubscribeToWorkItems");
+    unmount();
+  });
+
+  test("auto-subscribes to work items when connected to the work-item hub", async () => {
+    localStorage.setItem("auth_token", "tok-1");
+    authService.setAuth({ id: "u1", username: "x", createdAt: "" }, "tok-1");
+
+    const { unmount } = renderHook(() => useSignalR("/hubs/work-item"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(invokeMock).toHaveBeenCalledWith("SubscribeToWorkItems");
+    unmount();
   });
 });
