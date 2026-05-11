@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
   LoopRun,
@@ -76,6 +76,8 @@ export default function EventLogViewer() {
   const [progressLines, setProgressLines] = useState<string[]>([]);
   const [effectiveInputs, setEffectiveInputs] = useState<Record<string, EffectiveInput>>({});
   const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
+  const timelineContainerRef = useRef<HTMLDivElement | null>(null);
+  const isAtBottomRef = useRef(true);
   const { on, off, invoke, connectionState } = useSignalR("/hubs/loop-run");
 
   const loadRun = useCallback(async () => {
@@ -153,6 +155,25 @@ export default function EventLogViewer() {
   const handleToggleNode = useCallback((nodeId: string) => {
     setExpandedNodeId((prev) => (prev === nodeId ? null : nodeId));
   }, []);
+
+  const handleTimelineScroll = useCallback(() => {
+    const el = timelineContainerRef.current;
+    if (!el) return;
+    isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+  }, []);
+
+  const runningNode = runNodes.find((n) => n.status === LoopRunNodeStatus.Running);
+  const scrollToBottom = useCallback(() => {
+    const el = timelineContainerRef.current;
+    if (!el) return;
+    if (isAtBottomRef.current || runningNode) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [runningNode]);
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [runNodes.length, scrollToBottom]);
 
   useEffect(() => {
     const runningNode = runNodes.find((n) => n.status === LoopRunNodeStatus.Running);
@@ -380,7 +401,11 @@ export default function EventLogViewer() {
       </div>
       <ErrorBanner message={errorText} onDismiss={() => setErrorText("")} />
 
-      <div className="run-details-timeline-container">
+      <div
+        ref={timelineContainerRef}
+        className="run-details-timeline-container"
+        onScroll={handleTimelineScroll}
+      >
         {runNodes.map((rn, index) => {
           const isRunning = rn.status === LoopRunNodeStatus.Running;
           const templateNodeType = getTemplateNodeType(rn.nodeId);

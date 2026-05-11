@@ -509,14 +509,14 @@ export default function WorkItemModal({
                       className="conversation-thread"
                       style={{
                         display: "flex",
-                        flexDirection: "column",
+                        flexDirection: "column-reverse",
                         gap: 8,
                         marginTop: 4,
                         maxHeight: 320,
                         overflowY: "auto",
                       }}
                     >
-                      {messages.map((m, i) => (
+                      {[...messages].reverse().map((m, i) => (
                         <div
                           key={i}
                           className={`conversation-message conversation-${m.role.toLowerCase()}`}
