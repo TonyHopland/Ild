@@ -31,7 +31,7 @@ public class OpenCodeAdapter : IAgentAdapter
     {
         try
         {
-            var prompt = ctx.ExecutionCount == 1 ? ctx.InitialPrompt : ctx.LoopPrompt;
+            var prompt = string.IsNullOrWhiteSpace(ctx.SessionId) ? ctx.InitialPrompt : ctx.SessionPrompt;
             var rendered = await RenderPromptAsync(prompt, ctx.RunContext);
 
             var binaryPath = ResolveBinaryPath(ctx.Provider);
@@ -44,7 +44,7 @@ public class OpenCodeAdapter : IAgentAdapter
                 return NodeExecutionResult.Fail(
                     "[opencode-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
 
-            if (!string.IsNullOrEmpty(ctx.SessionId))
+            if (ctx.ManageSession && !string.IsNullOrEmpty(ctx.SessionId))
             {
                 var restoreError = await RestoreManagedSessionAsync(binaryPath, worktreePath, ctx);
                 if (!string.IsNullOrEmpty(restoreError))
@@ -153,7 +153,7 @@ public class OpenCodeAdapter : IAgentAdapter
                 return NodeExecutionResult.Fail($"opencode session error: {jsonError}", response);
 
             var effectiveSessionId = sessionId ?? ctx.SessionId;
-            if (p.ExitCode == 0 && !string.IsNullOrEmpty(effectiveSessionId))
+            if (ctx.ManageSession && p.ExitCode == 0 && !string.IsNullOrEmpty(effectiveSessionId))
             {
                 var exportError = await PersistManagedSessionAsync(binaryPath, worktreePath, ctx, effectiveSessionId);
                 if (!string.IsNullOrEmpty(exportError))

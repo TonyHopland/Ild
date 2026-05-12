@@ -92,6 +92,16 @@ const mockRun = {
   nodeExecutionCount: 2,
   startedAt: "2025-01-01T00:00:00Z",
   completedAt: "2025-01-01T00:02:00Z",
+  availableSessions: [
+    {
+      adapterName: "OpenCode",
+      sessionId: "ses_current",
+      createdAt: "2025-01-01T00:00:00Z",
+      updatedAt: "2025-01-01T00:01:00Z",
+      isCurrent: true,
+      placeholders: ["research"],
+    },
+  ],
   nodes: [
     {
       id: "run-node-1",
@@ -133,6 +143,16 @@ const mockRunWithAI = {
   nodeExecutionCount: 1,
   startedAt: "2025-01-01T00:00:00Z",
   completedAt: "2025-01-01T00:02:00Z",
+  availableSessions: [
+    {
+      adapterName: "OpenCode",
+      sessionId: "ses_ai",
+      createdAt: "2025-01-01T00:00:00Z",
+      updatedAt: "2025-01-01T00:01:00Z",
+      isCurrent: true,
+      placeholders: ["analysis"],
+    },
+  ],
   nodes: [
     {
       id: "run-node-ai",
@@ -249,6 +269,16 @@ describe("EventLogViewer", () => {
     await waitFor(() => {
       expect(screen.getByText("Completed")).toBeTruthy();
     });
+  });
+
+  test("renders available AI sessions for the run", async () => {
+    renderComponent();
+    await waitFor(() => {
+      expect(screen.getByText("Available AI Sessions")).toBeTruthy();
+    });
+    expect(screen.getByText("ses_current")).toBeTruthy();
+    expect(screen.getByText(/Placeholders: research/)).toBeTruthy();
+    expect(screen.getByText("Current")).toBeTruthy();
   });
 
   test("renders back link to loop runs overview", async () => {

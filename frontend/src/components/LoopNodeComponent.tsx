@@ -22,6 +22,11 @@ const nodeStyles: Record<string, { bg: string; border: string; icon: string }> =
     border: "#a855f7",
     icon: "\uD83D\uDC64",
   },
+  [NodeType.Prompt]: {
+    bg: "#172554",
+    border: "#38bdf8",
+    icon: "\u270E",
+  },
   [NodeType.PR]: {
     bg: "#0c4a6e",
     border: "#0ea5e9",

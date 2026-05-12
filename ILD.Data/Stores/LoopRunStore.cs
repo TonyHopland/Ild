@@ -60,6 +60,48 @@ public class LoopRunStore : ILoopRunStore
             .OrderBy(rn => rn.CreatedAt)
             .ToListAsync();
 
+    public async Task<IReadOnlyList<AdapterSessionSnapshot>> GetSessionSnapshotsAsync(Guid runId)
+        => await _db.AdapterSessionSnapshots
+            .Where(s => s.LoopRunId == runId)
+            .OrderByDescending(s => s.UpdatedAt ?? s.CreatedAt)
+            .ThenBy(s => s.AdapterName)
+            .ThenBy(s => s.SessionId)
+            .ToListAsync();
+
+    public async Task<IReadOnlyList<LoopRunSessionBinding>> GetSessionBindingsAsync(Guid runId)
+        => await _db.LoopRunSessionBindings
+            .Where(s => s.LoopRunId == runId)
+            .OrderBy(s => s.AdapterName)
+            .ThenBy(s => s.PlaceholderId)
+            .ToListAsync();
+
+    public async Task<LoopRunSessionBinding?> GetSessionBindingAsync(Guid runId, string adapterName, string placeholderId)
+        => await _db.LoopRunSessionBindings.FirstOrDefaultAsync(s =>
+            s.LoopRunId == runId
+            && s.AdapterName == adapterName
+            && s.PlaceholderId == placeholderId);
+
+    public async Task UpsertSessionBindingAsync(Guid runId, string adapterName, string placeholderId, string sessionId)
+    {
+        var existing = await GetSessionBindingAsync(runId, adapterName, placeholderId);
+        if (existing is null)
+        {
+            _db.LoopRunSessionBindings.Add(new LoopRunSessionBinding
+            {
+                LoopRunId = runId,
+                AdapterName = adapterName,
+                PlaceholderId = placeholderId,
+                SessionId = sessionId,
+            });
+        }
+        else
+        {
+            existing.SessionId = sessionId;
+        }
+
+        await _db.SaveChangesAsync();
+    }
+
     public async Task<LoopRunNode?> GetRunNodeAsync(Guid runId, Guid nodeId)
         => await _db.LoopRunNodes
             .Where(rn => rn.LoopRunId == runId && rn.LoopNodeId == nodeId)

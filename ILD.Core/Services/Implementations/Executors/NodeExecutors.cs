@@ -40,7 +40,10 @@ public sealed class StartNodeExecutor : INodeExecutor
                 "WorkItem has no repository attached; refusing to run loop without an isolated worktree.");
 
         var run = await loopRunStore.GetByIdAsync(ctx.Run.Id);
-        if (string.IsNullOrEmpty(run?.WorktreePath) || !Directory.Exists(run.WorktreePath))
+        if (run == null)
+            return new NodeOutcome.Failed("LoopRun not found");
+
+        if (string.IsNullOrEmpty(run.WorktreePath) || !Directory.Exists(run.WorktreePath))
         {
             var branch = run.BranchName ?? $"ild/wi-{wi.Id:N}";
             var basePath = repo.WorktreesPath;
@@ -66,7 +69,7 @@ public sealed class StartNodeExecutor : INodeExecutor
             run.BranchName = branch;
             await loopRunStore.UpdateRunAsync(run);
         }
-        if (string.IsNullOrEmpty(run?.WorktreePath) || !Directory.Exists(run.WorktreePath))
+        if (string.IsNullOrEmpty(run.WorktreePath) || !Directory.Exists(run.WorktreePath))
             return new NodeOutcome.Failed(
                 $"Failed to materialize worktree for WorkItem {wi.Id}; refusing to continue.");
         return new NodeOutcome.Succeeded($"worktree={run.WorktreePath}");
@@ -126,12 +129,13 @@ public sealed class AINodeExecutor : INodeExecutor
     {
         var cfg = NodeConfig.Parse<NodeConfig.Ai>(ctx.Node.Config);
         var initial = cfg.InitialPrompt ?? "";
-        var loopPrompt = cfg.LoopPrompt ?? initial;
         var payload = new
         {
             nodeType = NodeType.ToString(),
             prompt = initial,
-            loopPrompt,
+            useSession = cfg.UseSession ?? false,
+            sessionPrompt = cfg.SessionPrompt,
+            sessionPlaceholder = cfg.SessionPlaceholder,
             context = new
             {
                 workItemTitle = ctx.WorkItem.Title,
@@ -152,21 +156,27 @@ public sealed class AINodeExecutor : INodeExecutor
             var provider = await ResolveProviderAsync(providerStore, cfg.AiProviderId);
             if (provider == null) return new NodeOutcome.Failed("No AI provider found");
 
+            var registry = scope.ServiceProvider.GetRequiredService<IAgentAdapterRegistry>();
+            var adapter = registry.ResolveForProvider(provider)();
+
             var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
             var run = await loopRunStore.GetByIdAsync(ctx.Run.Id);
 
             string? sessionId = null;
             string? incomingSessionId = null;
-            var sessionInput = cfg.SessionInput ?? "incoming";
+            var sessionPlaceholder = string.IsNullOrWhiteSpace(cfg.SessionPlaceholder)
+                ? null
+                : cfg.SessionPlaceholder.Trim();
             var sessionManager = scope.ServiceProvider.GetRequiredService<IAiSessionManager>();
-            if (sessionInput == "incoming" && run is not null)
+            var useSession = cfg.UseSession == true;
+            if (useSession)
             {
-                incomingSessionId = sessionManager.Resolve(run.SessionsJson, provider.Id);
+                var binding = !string.IsNullOrWhiteSpace(sessionPlaceholder)
+                    ? await loopRunStore.GetSessionBindingAsync(ctx.Run.Id, adapter.Name, sessionPlaceholder)
+                    : null;
+                incomingSessionId = binding?.SessionId;
                 sessionId = incomingSessionId;
             }
-
-            var registry = scope.ServiceProvider.GetRequiredService<IAgentAdapterRegistry>();
-            var adapter = registry.ResolveForProvider(provider)();
 
             var executionCount = await CountNodeVisitsAsync(scope.ServiceProvider, ctx.Run.Id, ctx.Node.Id);
 
@@ -183,8 +193,8 @@ public sealed class AINodeExecutor : INodeExecutor
             try
             {
                 var resolvedMsg = string.IsNullOrEmpty(sessionId)
-                    ? $"sessionInput={sessionInput} provider={provider.Id} resolved=<none> (sessionsJson={(string.IsNullOrEmpty(run?.SessionsJson) ? "<null>" : run!.SessionsJson)})"
-                    : $"sessionInput={sessionInput} provider={provider.Id} resolved={sessionId}";
+                    ? $"useSession={useSession} provider={provider.Id} placeholder={(sessionPlaceholder ?? "<none>")} resolved=<none> (sessionsJson={(string.IsNullOrEmpty(run?.SessionsJson) ? "<null>" : run!.SessionsJson)})"
+                    : $"useSession={useSession} provider={provider.Id} placeholder={(sessionPlaceholder ?? "<none>")} resolved={sessionId}";
                 await eventLogService.AppendAsync(ctx.Run.Id, AiSessionResolvedEvent, resolvedMsg, ctx.Node.Id, runNodeId: ctx.RunNode.Id);
             }
             catch { /* best-effort observability */ }
@@ -202,19 +212,20 @@ public sealed class AINodeExecutor : INodeExecutor
             using var timeout = NodeTimeoutScope.From(ctx);
 
             var initialPrompt = cfg.InitialPrompt ?? "";
-            var loopPrompt = cfg.LoopPrompt ?? initialPrompt;
+            var sessionPrompt = cfg.SessionPrompt ?? initialPrompt;
 
             var agentCtx = new AgentExecutionContext(
                 provider,
                 initialPrompt,
-                loopPrompt,
+                sessionPrompt,
                 runContext,
                 executionCount,
                 timeout.Token,
                 ctx.ProgressCallback,
                 ExtractAdapterConfig(cfg.AdapterConfig),
                 sessionId,
-                incomingSessionId);
+                incomingSessionId,
+                ManageSession: useSession);
 
             var result = await adapter.ExecuteAsync(agentCtx);
 
@@ -230,32 +241,24 @@ public sealed class AINodeExecutor : INodeExecutor
 
             if (run is not null)
             {
-                var sessionOutput = cfg.SessionOutput ?? "current";
-                string? effectiveSessionId = sessionOutput switch
+                if (useSession)
                 {
-                    "current" => result.SessionId,
-                    "incoming" => result.IncomingSessionId,
-                    _ => null
-                };
+                    var effectiveSessionId = result.SessionId;
+                    if (!string.IsNullOrWhiteSpace(effectiveSessionId))
+                    {
+                        var freshRun = await loopRunStore.GetByIdAsync(ctx.Run.Id) ?? run;
+                        await sessionManager.PersistAsync(freshRun, provider.Id, effectiveSessionId, loopRunStore.UpdateRunAsync);
+                        if (!string.IsNullOrWhiteSpace(sessionPlaceholder))
+                            await loopRunStore.UpsertSessionBindingAsync(ctx.Run.Id, adapter.Name, sessionPlaceholder, effectiveSessionId);
 
-                // Reload the run to avoid clobbering concurrent writes
-                // (status/currentNodeId/etc.) made by the engine while the
-                // AI was running. EF's `Update(run)` marks every column as
-                // Modified, so updating the stale local copy from the
-                // start of execution would silently roll back those
-                // mutations. Reloading also ensures we merge with the
-                // current SessionsJson value if anything else touched it.
-                var freshRun = await loopRunStore.GetByIdAsync(ctx.Run.Id) ?? run;
-                await sessionManager.PersistAsync(freshRun, provider.Id, effectiveSessionId, loopRunStore.UpdateRunAsync);
-
-                try
-                {
-                    var persistedMsg = effectiveSessionId is null
-                        ? $"sessionOutput={sessionOutput} provider={provider.Id} adapterReturned=<null> (sessionsJson cleared for this provider)"
-                        : $"sessionOutput={sessionOutput} provider={provider.Id} persisted={effectiveSessionId} sessionsJson={freshRun.SessionsJson}";
-                    await eventLogService.AppendAsync(ctx.Run.Id, AiSessionPersistedEvent, persistedMsg, ctx.Node.Id, runNodeId: ctx.RunNode.Id);
+                        try
+                        {
+                            var persistedMsg = $"useSession provider={provider.Id} placeholder={(sessionPlaceholder ?? "<none>")} persisted={effectiveSessionId} sessionsJson={freshRun.SessionsJson}";
+                            await eventLogService.AppendAsync(ctx.Run.Id, AiSessionPersistedEvent, persistedMsg, ctx.Node.Id, runNodeId: ctx.RunNode.Id);
+                        }
+                        catch { /* best-effort observability */ }
+                    }
                 }
-                catch { /* best-effort observability */ }
             }
 
             return NodeOutcome.FromResult(result);
@@ -349,6 +352,29 @@ public sealed class HumanNodeExecutor : INodeExecutor
     }
 
     public const string HumanPromptRenderedEvent = "HumanPromptRendered";
+}
+
+public sealed class PromptNodeExecutor : INodeExecutor
+{
+    public NodeType NodeType => NodeType.Prompt;
+    private readonly IServiceProvider _sp;
+
+    public PromptNodeExecutor(IServiceProvider sp) { _sp = sp; }
+
+    public string DescribeInput(NodeExecutionContext ctx)
+    {
+        var cfg = NodeConfig.Parse<NodeConfig.Prompt>(ctx.Node.Config);
+        return JsonSerializer.Serialize(new { nodeType = NodeType.ToString(), prompt = cfg.Template ?? "(no prompt)" });
+    }
+
+    public async Task<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
+    {
+        var cfg = NodeConfig.Parse<NodeConfig.Prompt>(ctx.Node.Config);
+        using var scope = _sp.CreateScope();
+        var rendering = scope.ServiceProvider.GetRequiredService<IPromptRenderingService>();
+        var rendered = await rendering.RenderAsync(cfg.Template, ctx.Run.Id, ctx.WorkItem, ctx.PreviousNodeOutput);
+        return new NodeOutcome.Succeeded(rendered, rendered);
+    }
 }
 
 public sealed class CleanupNodeExecutor : INodeExecutor

@@ -30,7 +30,7 @@ public class OpenAiCompatibleAdapterTests
                 Model = "gpt-4"
             },
             InitialPrompt: "test prompt",
-            LoopPrompt: "test prompt",
+            SessionPrompt: "test prompt",
             RunContext: new LoopRunContext(
                 Guid.NewGuid(), Guid.NewGuid(), "Title", "Desc", "/tmp", "main", new List<string>(), null),
             ExecutionCount: 1,
@@ -70,7 +70,7 @@ public class OpenAiCompatibleAdapterTests
                 Config = "{\"temperature\":0.2,\"maxTokens\":1024}"
             },
             InitialPrompt: "test prompt",
-            LoopPrompt: "test prompt",
+            SessionPrompt: "test prompt",
             RunContext: new LoopRunContext(
                 Guid.NewGuid(), Guid.NewGuid(), "Title", "Desc", "/tmp", "main", new List<string>(), null),
             ExecutionCount: 1,
@@ -106,7 +106,7 @@ public class OpenAiCompatibleAdapterTests
                 Config = "{\"temperature\":0.2,\"maxTokens\":1024}"
             },
             InitialPrompt: "test prompt",
-            LoopPrompt: "test prompt",
+            SessionPrompt: "test prompt",
             RunContext: new LoopRunContext(
                 Guid.NewGuid(), Guid.NewGuid(), "Title", "Desc", "/tmp", "main", new List<string>(), null),
             ExecutionCount: 1,
@@ -144,7 +144,7 @@ public class OpenAiCompatibleAdapterTests
                 Model = "gpt-4"
             },
             InitialPrompt: "test prompt",
-            LoopPrompt: "test prompt",
+            SessionPrompt: "test prompt",
             RunContext: new LoopRunContext(
                 Guid.NewGuid(), Guid.NewGuid(), "Title", "Desc", "/tmp", "main", new List<string>(), null),
             ExecutionCount: 1,

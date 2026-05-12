@@ -2,6 +2,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Mvc;
+using System.Text.Json;
 
 namespace ILD.Api.Controllers;
 
@@ -67,6 +68,9 @@ public class LoopRunsController : ControllerBase
             return NotFound(new { error = "Run not found" });
 
         var runNodes = await _loopRunStore.GetRunNodesAsync(guid);
+        var sessionSnapshots = await _loopRunStore.GetSessionSnapshotsAsync(guid);
+        var sessionBindings = await _loopRunStore.GetSessionBindingsAsync(guid);
+        var currentSessionIds = ExtractCurrentSessionIds(run.SessionsJson);
 
         return Ok(new
         {
@@ -80,6 +84,20 @@ public class LoopRunsController : ControllerBase
             nodeExecutionCount = run.NodeExecutionCount,
             startedAt = run.StartedAt,
             completedAt = run.CompletedAt,
+            availableSessions = sessionSnapshots.Select(s => new
+            {
+                adapterName = s.AdapterName,
+                sessionId = s.SessionId,
+                createdAt = s.CreatedAt,
+                updatedAt = s.UpdatedAt,
+                isCurrent = currentSessionIds.Contains(s.SessionId),
+                placeholders = sessionBindings
+                    .Where(b => b.AdapterName == s.AdapterName && b.SessionId == s.SessionId)
+                    .Select(b => b.PlaceholderId)
+                    .Distinct()
+                    .OrderBy(v => v)
+                    .ToList(),
+            }).ToList(),
             nodes = runNodes.Select(rn => new
             {
                 id = rn.Id,
@@ -93,6 +111,44 @@ public class LoopRunsController : ControllerBase
                 executionCount = rn.RetryCount,
             }).ToList(),
         });
+    }
+
+    private static HashSet<string> ExtractCurrentSessionIds(string? sessionsJson)
+    {
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        if (string.IsNullOrWhiteSpace(sessionsJson))
+            return ids;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(sessionsJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                return ids;
+
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                foreach (var prop in item.EnumerateObject())
+                {
+                    if (!string.Equals(prop.Name, "sessionId", StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    if (prop.Value.ValueKind != JsonValueKind.String)
+                        continue;
+
+                    var value = prop.Value.GetString();
+                    if (!string.IsNullOrWhiteSpace(value))
+                        ids.Add(value);
+                }
+            }
+        }
+        catch
+        {
+            return ids;
+        }
+
+        return ids;
     }
 
     [HttpPost("{id}/pause")]

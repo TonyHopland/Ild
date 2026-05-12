@@ -77,6 +77,7 @@ export enum NodeType {
   Cmd = "Cmd",
   AI = "AI",
   Human = "Human",
+  Prompt = "Prompt",
   PR = "PR",
   Cleanup = "Cleanup",
 }
@@ -147,6 +148,15 @@ export interface LoopRunNode {
   executionCount: number;
 }
 
+export interface LoopRunAvailableSession {
+  adapterName: string;
+  sessionId: string;
+  createdAt: string;
+  updatedAt: string | null;
+  isCurrent: boolean;
+  placeholders: string[];
+}
+
 export interface LoopRun {
   id: string;
   workItemId: string;
@@ -158,6 +168,7 @@ export interface LoopRun {
   nodeExecutionCount: number;
   startedAt: string;
   completedAt: string | null;
+  availableSessions?: LoopRunAvailableSession[];
   nodes: LoopRunNode[];
 }
 

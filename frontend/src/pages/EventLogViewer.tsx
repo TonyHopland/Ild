@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
   LoopRun,
+  LoopRunAvailableSession,
   LoopRunNode,
   LoopRunNodeStatus,
   LoopRunStatus,
@@ -63,6 +64,11 @@ function normalizeNodeStatus(value: unknown): LoopRunNodeStatus {
     return map[value] ?? LoopRunNodeStatus.Pending;
   }
   return LoopRunNodeStatus.Pending;
+}
+
+function formatSessionTimestamp(ts: string | null): string {
+  if (!ts) return "Unknown";
+  return new Date(ts).toLocaleString();
 }
 
 export default function EventLogViewer() {
@@ -352,6 +358,8 @@ export default function EventLogViewer() {
     );
   }
 
+  const availableSessions = run.availableSessions ?? [];
+
   const runStatusColors: Record<string, string> = {
     [LoopRunStatus.Running]: "#3b82f6",
     [LoopRunStatus.Completed]: "#22c55e",
@@ -399,6 +407,63 @@ export default function EventLogViewer() {
         <span>Executions: {run.nodeExecutionCount}</span>
         {run.completedAt && <span>Completed: {formatTimestamp(run.completedAt)}</span>}
       </div>
+      {availableSessions.length > 0 && (
+        <div
+          style={{
+            border: "1px solid #334155",
+            borderRadius: "12px",
+            padding: "0.9rem 1rem",
+            marginBottom: "1rem",
+            background: "#0f172a",
+          }}
+        >
+          <div style={{ fontWeight: 600, marginBottom: "0.5rem" }}>Available AI Sessions</div>
+          <div style={{ color: "#94a3b8", marginBottom: "0.75rem", fontSize: "0.95rem" }}>
+            These are the saved adapter sessions for this run. Use these generated ids when routing
+            an AI node to a specific session.
+          </div>
+          <div style={{ display: "grid", gap: "0.5rem" }}>
+            {availableSessions.map((session: LoopRunAvailableSession) => (
+              <div
+                key={`${session.adapterName}:${session.sessionId}`}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: "1rem",
+                  padding: "0.65rem 0.75rem",
+                  borderRadius: "10px",
+                  background: "#111827",
+                  border: "1px solid #1f2937",
+                  flexWrap: "wrap",
+                }}
+              >
+                <div style={{ display: "grid", gap: "0.2rem" }}>
+                  <div style={{ fontWeight: 600 }}>{session.adapterName}</div>
+                  <div style={{ fontFamily: "monospace", fontSize: "0.95rem" }}>
+                    {session.sessionId}
+                  </div>
+                  {session.placeholders.length > 0 && (
+                    <div style={{ color: "#cbd5e1", fontSize: "0.85rem" }}>
+                      Placeholders: {session.placeholders.join(", ")}
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: "grid", gap: "0.2rem", justifyItems: "end" }}>
+                  {session.isCurrent && (
+                    <span style={{ color: "#22c55e", fontSize: "0.9rem", fontWeight: 600 }}>
+                      Current
+                    </span>
+                  )}
+                  <span style={{ color: "#94a3b8", fontSize: "0.85rem" }}>
+                    Updated: {formatSessionTimestamp(session.updatedAt ?? session.createdAt)}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <ErrorBanner message={errorText} onDismiss={() => setErrorText("")} />
 
       <div

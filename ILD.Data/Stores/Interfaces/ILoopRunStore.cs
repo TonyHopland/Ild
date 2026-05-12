@@ -13,6 +13,10 @@ public interface ILoopRunStore
     Task<IReadOnlyList<LoopRun>> GetAllAsync(int skip = 0, int take = 100);
     Task<IReadOnlyList<LoopRun>> GetRunningRunsAsync();
     Task<IReadOnlyList<LoopRunNode>> GetRunNodesAsync(Guid runId);
+    Task<IReadOnlyList<AdapterSessionSnapshot>> GetSessionSnapshotsAsync(Guid runId);
+    Task<IReadOnlyList<LoopRunSessionBinding>> GetSessionBindingsAsync(Guid runId);
+    Task<LoopRunSessionBinding?> GetSessionBindingAsync(Guid runId, string adapterName, string placeholderId);
+    Task UpsertSessionBindingAsync(Guid runId, string adapterName, string placeholderId, string sessionId);
     Task<LoopRunNode?> GetRunNodeAsync(Guid runId, Guid nodeId);
     Task<LoopRunNode?> GetRunNodeByIdAsync(Guid runNodeId);
     Task CreateRunAsync(LoopRun run);

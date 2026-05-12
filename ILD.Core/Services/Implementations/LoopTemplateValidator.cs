@@ -12,6 +12,7 @@ public static class LoopTemplateValidator
         { "Start", new() { "OnSuccess", "OnFailure" } },
         { "Cmd", new() { "OnSuccess", "OnFailure" } },
         { "AI", new() { "OnSuccess", "OnFailure" } },
+        { "Prompt", new() { "OnSuccess", "OnFailure" } },
         { "PR", new() { "OnSuccess", "OnFailure" } },
         { "Cleanup", new() { "OnSuccess", "OnFailure" } },
     };
@@ -87,18 +88,21 @@ public static class LoopTemplateValidator
             }
         }
 
-        // Unknown placeholders in AI/Human prompt templates and PR description template
+        // Unknown placeholders in AI/Human/Prompt prompt templates and PR description template
         foreach (var node in nodes)
         {
             var prompt = (node.Config.GetValueOrDefault("initialPrompt")
-                ?? node.Config.GetValueOrDefault("loopPrompt"))?.ToString();
+                ?? node.Config.GetValueOrDefault("sessionPrompt"))?.ToString();
             var prTemplate = node.Config.GetValueOrDefault("prDescriptionTemplate")?.ToString();
             var humanPrompt = string.Equals(node.NodeType, "Human", StringComparison.OrdinalIgnoreCase)
                 ? node.Config.GetValueOrDefault("prompt")?.ToString()
                 : null;
-            if (string.IsNullOrEmpty(prompt) && string.IsNullOrEmpty(prTemplate) && string.IsNullOrEmpty(humanPrompt)) continue;
+            var promptNodePrompt = string.Equals(node.NodeType, "Prompt", StringComparison.OrdinalIgnoreCase)
+                ? node.Config.GetValueOrDefault("prompt")?.ToString()
+                : null;
+            if (string.IsNullOrEmpty(prompt) && string.IsNullOrEmpty(prTemplate) && string.IsNullOrEmpty(humanPrompt) && string.IsNullOrEmpty(promptNodePrompt)) continue;
 
-            var templates = new[] { prompt, prTemplate, humanPrompt }.Where(t => !string.IsNullOrEmpty(t)).ToList();
+            var templates = new[] { prompt, prTemplate, humanPrompt, promptNodePrompt }.Where(t => !string.IsNullOrEmpty(t)).ToList();
             foreach (var template in templates)
             {
                 foreach (Match m in PromptPlaceholderRegistry.Pattern.Matches(template!))

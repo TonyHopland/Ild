@@ -190,7 +190,7 @@ public class AdapterIntegrationTests
         return new AgentExecutionContext(
             Provider: provider,
             InitialPrompt: prompt,
-            LoopPrompt: prompt,
+            SessionPrompt: prompt,
             RunContext: new LoopRunContext(
                 Guid.NewGuid(),
                 Guid.NewGuid(),

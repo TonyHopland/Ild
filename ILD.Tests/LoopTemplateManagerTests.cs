@@ -111,7 +111,8 @@ public class LoopTemplateManagerTests
         // Verify round-trip through GetVersionGraph returns OnRespond
         var versions = await mgr.GetVersionsAsync(id);
         var loadedGraph = await mgr.GetVersionGraphAsync(id, versions.Max(v => v.VersionNumber));
-        var loadedRespondEdge = loadedGraph.Edges.FirstOrDefault(e => e.EdgeType == "OnRespond");
+        loadedGraph.Should().NotBeNull();
+        var loadedRespondEdge = loadedGraph!.Edges.FirstOrDefault(e => e.EdgeType == "OnRespond");
         loadedRespondEdge.Should().NotBeNull("Loaded template should contain an OnRespond edge");
     }
 }

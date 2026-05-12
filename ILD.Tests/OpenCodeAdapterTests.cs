@@ -60,7 +60,7 @@ public class OpenCodeAdapterTests
         var ctx = BuildContext(
             binaryPath: "/bin/true",
             initialPrompt: "initial prompt here",
-            loopPrompt: "loop prompt here",
+            sessionPrompt: "loop prompt here",
             executionCount: 1);
 
         var result = await adapter.ExecuteAsync(ctx);
@@ -76,7 +76,7 @@ public class OpenCodeAdapterTests
         var ctx = BuildContext(
             binaryPath: "/bin/true",
             initialPrompt: "initial prompt here",
-            loopPrompt: "loop prompt here",
+            sessionPrompt: "loop prompt here",
             executionCount: 2);
 
         var result = await adapter.ExecuteAsync(ctx);
@@ -561,7 +561,8 @@ public class OpenCodeAdapterTests
                 initialPrompt: "ignored",
                 worktreePath: worktreeDir,
                 executionCount: 1,
-                runId: runId));
+                runId: runId,
+                manageSession: true));
 
             result.Success.Should().BeTrue();
             result.SessionId.Should().Be("managed-session");
@@ -632,7 +633,8 @@ public class OpenCodeAdapterTests
                 worktreePath: worktreeDir,
                 sessionId: "resume-session",
                 executionCount: 1,
-                runId: runId));
+                runId: runId,
+                manageSession: true));
 
             result.Success.Should().BeTrue();
             result.SessionId.Should().Be("resume-session");
@@ -776,7 +778,7 @@ public class OpenCodeAdapterTests
     private static AgentExecutionContext BuildContext(
         string binaryPath,
         string initialPrompt = "test prompt",
-        string? loopPrompt = null,
+        string? sessionPrompt = null,
         string? config = null,
         string? workItemTitle = null,
         string? workItemDescription = null,
@@ -786,7 +788,8 @@ public class OpenCodeAdapterTests
         CancellationToken? cancel = null,
         Func<string, Task>? progressCallback = null,
         string? sessionId = null,
-        Guid? runId = null)
+        Guid? runId = null,
+        bool manageSession = false)
     {
         var dict = System.Text.Json.JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, object>>(
             config ?? "{}") ?? new System.Collections.Generic.Dictionary<string, object>();
@@ -805,7 +808,7 @@ public class OpenCodeAdapterTests
                 Config = mergedConfig
             },
             InitialPrompt: initialPrompt,
-            LoopPrompt: loopPrompt ?? initialPrompt,
+            SessionPrompt: sessionPrompt ?? initialPrompt,
             RunContext: new LoopRunContext(
                 runId ?? Guid.NewGuid(),
                 Guid.NewGuid(),
@@ -818,7 +821,8 @@ public class OpenCodeAdapterTests
             ExecutionCount: executionCount,
             Cancel: cancel ?? CancellationToken.None,
             ProgressCallback: progressCallback,
-            SessionId: sessionId);
+            SessionId: sessionId,
+            ManageSession: manageSession);
     }
 
     private static async Task<SessionHarness> CreateSessionHarnessAsync()

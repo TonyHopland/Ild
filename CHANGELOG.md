@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- AI node session configuration now uses a single `useSession` flow with `sessionPrompt` and `sessionPlaceholder`; the old `loopPrompt`, `sessionInput`, `sessionOutput`, and explicit `sessionId` config fields were removed.
+- AI adapters now choose between the default prompt and the session prompt based on whether the node starts with an existing bound session, rather than on loopback execution count.
+- Opencode managed session import/export now only runs for AI nodes that explicitly enable session usage.
+- The seeded `Plan` template now inserts a `Prompt` node ahead of `AI create tasks` so the first message into the shared planning session can differ from later follow-up turns without breaking session continuity.
+
+### Added
+
+- Added a `Prompt` loop node type that renders a prompt template with the same placeholder-aware editor used by AI and PR prompt fields, then emits the rendered text as node output.
+
+### Removed
+
+- Backward compatibility for legacy AI node session config fields and editor shims for loading or saving the old session model.
+
 ## [0.1.0] - 2026-05-12
 
 ### Added
