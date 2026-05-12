@@ -1047,4 +1047,133 @@ describe("WorkItemModal", () => {
     expect(screen.queryByText("Live Output")).toBeFalsy();
     expect(screen.getByText("Done")).toBeTruthy();
   });
+
+  test("re-renders conversation when workItem.conversation changes but status stays the same", async () => {
+    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+      on: vi.fn(),
+      off: vi.fn(),
+      invoke: vi.fn(),
+      connectionState: "connected",
+    });
+
+    const initialWorkItem = makeWorkItem({
+      status: WorkItemStatus.HumanFeedback,
+      humanFeedbackReason: "Human Input Needed",
+      humanFeedbackActions: "OnSuccess,OnFailure",
+      conversation: [
+        { role: "ai", content: "AI initial message", timestamp: "2025-01-01T00:00:00Z" },
+      ],
+    });
+
+    const updatedWorkItem = makeWorkItem({
+      ...initialWorkItem,
+      conversation: [
+        { role: "ai", content: "AI initial message", timestamp: "2025-01-01T00:00:00Z" },
+        { role: "human", content: "Human response", timestamp: "2025-01-01T01:00:00Z" },
+        { role: "ai", content: "AI follow-up response", timestamp: "2025-01-01T02:00:00Z" },
+      ],
+    });
+
+    const fetchMock = mockFetch([]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const onSave = vi.fn();
+
+    const { rerender } = render(
+      <MemoryRouter>
+        <WorkItemModal workItem={initialWorkItem} isOpen={true} onClose={vi.fn()} onSave={onSave} />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("AI initial message")).toBeTruthy();
+    });
+
+    // Rerender with updated conversation (same status, same ID)
+    rerender(
+      <MemoryRouter>
+        <WorkItemModal workItem={updatedWorkItem} isOpen={true} onClose={vi.fn()} onSave={onSave} />
+      </MemoryRouter>,
+    );
+
+    // The new AI message should appear without requiring a page refresh
+    await waitFor(() => {
+      expect(screen.getByText("AI follow-up response")).toBeTruthy();
+    });
+    expect(screen.getByText("Human response")).toBeTruthy();
+  });
+
+  test("performs delayed refetch after LoopRunStateChanged to catch persisted conversation data", async () => {
+    const runHandlers: Record<string, ((msg: any) => void)[]> = {};
+    const mockRunOn = vi.fn((eventType: string, handler: (msg: any) => void) => {
+      runHandlers[eventType] = runHandlers[eventType] || [];
+      runHandlers[eventType].push(handler);
+    });
+
+    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+      on: mockRunOn,
+      off: vi.fn(),
+      invoke: vi.fn(),
+      connectionState: "connected",
+    });
+
+    const workItem = makeWorkItem({
+      status: WorkItemStatus.Running,
+      currentLoopRunId: "run-active-1",
+    });
+
+    // First refetch returns stale data (conversation not yet persisted)
+    const staleWorkItem = makeWorkItem({
+      status: WorkItemStatus.HumanFeedback,
+      currentLoopRunId: "run-active-1",
+      humanFeedbackReason: "Human Input Needed",
+      conversation: [],
+    });
+
+    // Delayed refetch returns fresh data with conversation
+    const freshWorkItem = makeWorkItem({
+      status: WorkItemStatus.HumanFeedback,
+      currentLoopRunId: "run-active-1",
+      humanFeedbackReason: "Human Input Needed",
+      conversation: [
+        { role: "ai", content: "AI response message", timestamp: "2025-01-01T00:00:00Z" },
+      ],
+    });
+
+    const fetchMock = mockFetch([]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    let callCount = 0;
+    vi.spyOn(authServices.workItemService, "getById").mockImplementation(() => {
+      callCount++;
+      return callCount === 1 ? Promise.resolve(staleWorkItem) : Promise.resolve(freshWorkItem);
+    });
+
+    const onSave = vi.fn();
+
+    render(
+      <MemoryRouter>
+        <WorkItemModal workItem={workItem} isOpen={true} onClose={vi.fn()} onSave={onSave} />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Live Output")).toBeTruthy();
+    });
+
+    // Trigger the SignalR event
+    runHandlers["LoopRunStateChanged"]![0]({
+      payload: { runId: "run-active-1", oldStatus: "Running", newStatus: "WaitingHuman" },
+    });
+
+    // Should refetch at least twice: immediate + delayed
+    await waitFor(() => {
+      expect(callCount).toBeGreaterThan(1);
+    });
+
+    // The final onSave call should have the fresh data with conversation
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith(freshWorkItem);
+    });
+  }, 15000);
 });

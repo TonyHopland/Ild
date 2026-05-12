@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { WorkItem, WorkItemStatus } from "../types";
 import type { TypedSignalRMessage } from "../types/signalr";
 import { workItemService } from "../services/auth";
@@ -19,6 +19,8 @@ export default function Taskboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<WorkItem | null>(null);
+  const editingItemIdRef = useRef<string | null>(null);
+  editingItemIdRef.current = editingItem?.id ?? null;
   const [errorText, setErrorText] = useState("");
   const { on, off } = useSignalR();
 
@@ -27,6 +29,24 @@ export default function Taskboard() {
   }, []);
 
   useEffect(() => {
+    const delayedTimers: number[] = [];
+
+    const syncWorkItem = (workItemId: string) => {
+      void workItemService
+        .getById(workItemId)
+        .then((wi) => {
+          setWorkItems((items) => {
+            const exists = items.some((item) => item.id === wi.id);
+            if (!exists) return [...items, wi];
+            return items.map((item) => (item.id === wi.id ? wi : item));
+          });
+          if (editingItemIdRef.current === wi.id) {
+            setEditingItem(wi);
+          }
+        })
+        .catch(() => {});
+    };
+
     const onHumanFeedback = async (message: TypedSignalRMessage<"HumanFeedbackRequired">) => {
       const { workItemId, reason } = message.payload;
       setWorkItems((prev) =>
@@ -36,12 +56,8 @@ export default function Taskboard() {
             : item,
         ),
       );
-      if (editingItem?.id === workItemId) {
-        void workItemService
-          .getById(workItemId)
-          .then((wi) => setEditingItem(wi))
-          .catch(() => {});
-      }
+      syncWorkItem(workItemId);
+      delayedTimers.push(setTimeout(() => syncWorkItem(workItemId), 500));
 
       const notificationsEnabled = localStorage.getItem("ild_notifications_enabled") !== "false";
       if (
@@ -73,12 +89,8 @@ export default function Taskboard() {
         }
         return prev.map((item) => (item.id === workItemId ? { ...item, status: newStatus } : item));
       });
-      if (editingItem?.id === workItemId) {
-        void workItemService
-          .getById(workItemId)
-          .then((wi) => setEditingItem(wi))
-          .catch(() => {});
-      }
+      syncWorkItem(workItemId);
+      delayedTimers.push(setTimeout(() => syncWorkItem(workItemId), 500));
     };
 
     on("HumanFeedbackRequired", onHumanFeedback);
@@ -87,6 +99,7 @@ export default function Taskboard() {
     return () => {
       off("HumanFeedbackRequired", onHumanFeedback);
       off("WorkItemStateChanged", onWorkItemStateChanged);
+      for (const t of delayedTimers) clearTimeout(t);
     };
   }, [on, off]);
 

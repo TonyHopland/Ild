@@ -228,6 +228,8 @@ export default function WorkItemModal({
       return;
     }
 
+    const delayedTimers: number[] = [];
+
     const onNodeProgress = (message: TypedSignalRMessage<"NodeProgress">) => {
       const { runId: msgRunId, line } = message.payload;
       if (msgRunId !== workItem?.currentLoopRunId) return;
@@ -238,12 +240,16 @@ export default function WorkItemModal({
       const { runId: msgRunId } = message.payload;
       if (msgRunId !== workItem?.currentLoopRunId) return;
       refetchWorkItem();
+      // Delayed refetch to catch conversation data that may not be persisted yet
+      delayedTimers.push(setTimeout(refetchWorkItem, 500));
     };
 
     const onNodeStateChanged = (message: TypedSignalRMessage<"NodeStateChanged">) => {
       const { runId: msgRunId } = message.payload;
       if (msgRunId !== workItem?.currentLoopRunId) return;
       refetchWorkItem();
+      // Delayed refetch to catch conversation data that may not be persisted yet
+      delayedTimers.push(setTimeout(refetchWorkItem, 500));
     };
 
     const onEventLogged = (message: TypedSignalRMessage<"EventLogged">) => {
@@ -262,6 +268,7 @@ export default function WorkItemModal({
       runOff("LoopRunStateChanged", onLoopRunStateChanged);
       runOff("NodeStateChanged", onNodeStateChanged);
       runOff("EventLogged", onEventLogged);
+      for (const t of delayedTimers) clearTimeout(t);
     };
   }, [shouldStream, runOn, runOff, workItem?.currentLoopRunId, refetchWorkItem]);
 
@@ -505,41 +512,17 @@ export default function WorkItemModal({
                 return (
                   <div className="detail-section">
                     <span className="detail-label">Conversation</span>
-                    <div
-                      className="conversation-thread"
-                      style={{
-                        display: "flex",
-                        flexDirection: "column-reverse",
-                        gap: 8,
-                        marginTop: 4,
-                        maxHeight: 320,
-                        overflowY: "auto",
-                      }}
-                    >
+                    <div className="conversation-thread">
                       {[...messages].reverse().map((m, i) => (
                         <div
                           key={i}
                           className={`conversation-message conversation-${m.role.toLowerCase()}`}
-                          style={{
-                            border: "1px solid #2a2a3a",
-                            borderRadius: 4,
-                            padding: 8,
-                            background: "#1a1a24",
-                          }}
                         >
-                          <div
-                            style={{
-                              display: "flex",
-                              justifyContent: "space-between",
-                              fontSize: "0.75rem",
-                              color: "#9ca3af",
-                              marginBottom: 4,
-                            }}
-                          >
-                            <strong style={{ color: "#e5e7eb" }}>{m.role}</strong>
+                          <div className="conversation-message-header">
+                            <strong className="conversation-message-role">{m.role}</strong>
                             <span>{new Date(m.timestamp).toLocaleString()}</span>
                           </div>
-                          <div style={{ whiteSpace: "pre-wrap" }}>{m.content}</div>
+                          <div className="conversation-message-content">{m.content}</div>
                         </div>
                       ))}
                     </div>

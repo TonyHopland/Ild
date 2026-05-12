@@ -81,6 +81,50 @@ describe("Taskboard SignalR", () => {
     });
   });
 
+  test("reconciles board item from server after WorkItemStateChanged event", async () => {
+    const handlers: Record<string, ((msg: any) => void)[]> = {};
+    const mockOn = vi.fn((eventType: string, handler: (msg: any) => void) => {
+      handlers[eventType] = handlers[eventType] || [];
+      handlers[eventType].push(handler);
+    });
+
+    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+      on: mockOn,
+      off: vi.fn(),
+      invoke: vi.fn(),
+      connectionState: "connected",
+    });
+
+    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([
+      makeItem({ status: WorkItemStatus.Running }),
+    ]);
+    const getByIdSpy = vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(
+      makeItem({
+        status: WorkItemStatus.HumanFeedback,
+        humanFeedbackReason: "Human Input Needed",
+      }),
+    );
+
+    render(
+      <MemoryRouter>
+        <Taskboard />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Item")).toBeTruthy();
+    });
+
+    handlers["WorkItemStateChanged"]![0]({
+      payload: { workItemId: "wi-1", oldStatus: "Running", newStatus: "HumanFeedback" },
+    });
+
+    await waitFor(() => {
+      expect(getByIdSpy).toHaveBeenCalledWith("wi-1");
+      expect(screen.getByText("Human Input Needed")).toBeTruthy();
+    });
+  });
+
   test("fires browser notification when HumanFeedbackRequired event arrives", async () => {
     const notificationCalls: Array<[string, NotificationOptions]> = [];
     class MockNotification {
@@ -210,5 +254,80 @@ describe("Taskboard keyboard navigation", () => {
     // aria-live region should announce the move
     const live = await screen.findByRole("status");
     expect(live.textContent).toContain("Running");
+  });
+});
+
+describe("Taskboard editing item refetch", () => {
+  test("performs delayed refetch of editing item after WorkItemStateChanged to catch conversation data", async () => {
+    const handlers: Record<string, ((msg: any) => void)[]> = {};
+    const mockOn = vi.fn((eventType: string, handler: (msg: any) => void) => {
+      handlers[eventType] = handlers[eventType] || [];
+      handlers[eventType].push(handler);
+    });
+
+    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+      on: mockOn,
+      off: vi.fn(),
+      invoke: vi.fn(),
+      connectionState: "connected",
+    });
+
+    const initialItem = makeItem({ status: WorkItemStatus.Running });
+    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([initialItem]);
+    // Mock modal's internal fetches
+    vi.spyOn(authServices.workItemService, "getRuns").mockResolvedValue([]);
+    vi.spyOn(authServices.workItemService, "getDependencies").mockResolvedValue([]);
+    vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
+    vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([]);
+
+    // First refetch returns stale data (conversation not yet persisted)
+    const staleItem = makeItem({
+      status: WorkItemStatus.HumanFeedback,
+      humanFeedbackReason: "Human Input Needed",
+      conversation: [],
+    });
+
+    // Delayed refetch returns fresh data with conversation
+    const freshItem = makeItem({
+      status: WorkItemStatus.HumanFeedback,
+      humanFeedbackReason: "Human Input Needed",
+      conversation: [{ role: "ai", content: "AI response", timestamp: "2025-01-01T00:00:00Z" }],
+    });
+
+    let getByIdCallCount = 0;
+    vi.spyOn(authServices.workItemService, "getById").mockImplementation(() => {
+      getByIdCallCount++;
+      return getByIdCallCount === 1 ? Promise.resolve(staleItem) : Promise.resolve(freshItem);
+    });
+
+    render(
+      <MemoryRouter>
+        <Taskboard />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Item")).toBeTruthy();
+    });
+
+    // Click the card to open the modal (set editingItem)
+    const card = await screen.findByRole("button", { name: /Test Item/i });
+    const { fireEvent } = await import("@testing-library/react");
+    fireEvent.click(card);
+
+    // Wait for modal to open
+    await waitFor(() => {
+      expect(screen.getByRole("dialog")).toBeTruthy();
+    });
+
+    // Trigger WorkItemStateChanged event
+    handlers["WorkItemStateChanged"]![0]({
+      payload: { workItemId: "wi-1", oldStatus: "Running", newStatus: "HumanFeedback" },
+    });
+
+    // Should refetch at least twice: immediate + delayed
+    await waitFor(() => {
+      expect(getByIdCallCount).toBeGreaterThan(1);
+    });
   });
 });
