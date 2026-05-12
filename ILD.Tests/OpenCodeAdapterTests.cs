@@ -660,6 +660,63 @@ public class OpenCodeAdapterTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_recovers_response_from_exported_managed_session_when_stdout_has_no_text()
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-managed-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "managed.sh");
+        var logPath = Path.Combine(worktreeDir, "opencode.log");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "cmd=\"$1\"\n" +
+            "shift\n" +
+            "case \"$cmd\" in\n" +
+            "  import)\n" +
+            "    printf 'import %s\\n' \"$1\" >> \"$ILD_TEST_LOG\"\n" +
+            "    ;;\n" +
+            "  run)\n" +
+            "    printf 'run %s\\n' \"$*\" >> \"$ILD_TEST_LOG\"\n" +
+            "    echo '{\"type\":\"step_start\",\"sessionID\":\"resume-session\",\"part\":{\"type\":\"step-start\"}}'\n" +
+            "    echo '{\"type\":\"step_finish\",\"sessionID\":\"resume-session\",\"part\":{\"type\":\"step-finish\"}}'\n" +
+            "    ;;\n" +
+            "  export)\n" +
+            "    printf 'export %s\\n' \"$1\" >> \"$ILD_TEST_LOG\"\n" +
+            "    printf '%s' '{\"id\":\"resume-session\",\"messages\":[{\"role\":\"assistant\",\"parts\":[{\"type\":\"reasoning\",\"text\":\"hidden\"},{\"type\":\"text\",\"text\":\"Recovered from session export.\"}]}]}'\n" +
+            "    ;;\n" +
+            "esac\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        var previousLog = Environment.GetEnvironmentVariable("ILD_TEST_LOG");
+        Environment.SetEnvironmentVariable("ILD_TEST_LOG", logPath);
+
+        try
+        {
+            await using var harness = await CreateSessionHarnessAsync();
+            var runId = Guid.NewGuid();
+            await harness.SeedRunAsync(runId);
+            await harness.SeedSnapshotAsync(runId, "OpenCode", "resume-session", "{\"id\":\"resume-session\",\"messages\":[]}");
+
+            var adapter = new OpenCodeAdapter(harness.Services.GetRequiredService<IServiceScopeFactory>());
+            var result = await adapter.ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                initialPrompt: "ignored",
+                worktreePath: worktreeDir,
+                sessionId: "resume-session",
+                executionCount: 1,
+                runId: runId,
+                manageSession: true));
+
+            result.Success.Should().BeTrue();
+            result.Output.Should().Be("Recovered from session export.");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ILD_TEST_LOG", previousLog);
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_extracts_text_from_typed_text_event_part()
     {
         // opencode --format json emits `{"type":"text","part":{"type":"text","text":"..."}}`

@@ -157,6 +157,14 @@ export interface LoopRunAvailableSession {
   placeholders: string[];
 }
 
+export interface LoopRunSessionPreview {
+  adapterName: string;
+  sessionId: string;
+  createdAt: string;
+  updatedAt: string | null;
+  sessionJson: string;
+}
+
 export interface LoopRun {
   id: string;
   workItemId: string;

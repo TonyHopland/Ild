@@ -3,6 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import {
   LoopRun,
   LoopRunAvailableSession,
+  LoopRunSessionPreview,
   LoopRunNode,
   LoopRunNodeStatus,
   LoopRunStatus,
@@ -71,6 +72,40 @@ function formatSessionTimestamp(ts: string | null): string {
   return new Date(ts).toLocaleString();
 }
 
+function formatSessionJson(sessionJson: string): string {
+  try {
+    return JSON.stringify(JSON.parse(sessionJson), null, 2);
+  } catch {
+    return sessionJson;
+  }
+}
+
+function buildSessionSummary(preview: LoopRunSessionPreview): string[] {
+  const lines = [
+    `Adapter: ${preview.adapterName}`,
+    `Session: ${preview.sessionId}`,
+    `Updated: ${formatSessionTimestamp(preview.updatedAt ?? preview.createdAt)}`,
+  ];
+
+  try {
+    const parsed = JSON.parse(preview.sessionJson) as Record<string, unknown>;
+    if (Array.isArray(parsed.messages)) {
+      lines.push(`Messages: ${parsed.messages.length}`);
+    }
+    if (typeof parsed.id === "string") {
+      lines.push(`Snapshot Id: ${parsed.id}`);
+    }
+    if (Array.isArray(parsed.tools)) {
+      lines.push(`Tools: ${parsed.tools.length}`);
+    }
+    lines.push(`Root: ${Array.isArray(parsed) ? "array" : typeof parsed}`);
+  } catch {
+    lines.push("Root: raw text");
+  }
+
+  return lines;
+}
+
 export default function EventLogViewer() {
   const { runId } = useParams<{ runId: string }>();
   const [run, setRun] = useState<LoopRun | null>(null);
@@ -82,6 +117,9 @@ export default function EventLogViewer() {
   const [progressLines, setProgressLines] = useState<string[]>([]);
   const [effectiveInputs, setEffectiveInputs] = useState<Record<string, EffectiveInput>>({});
   const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
+  const [selectedSessionPreview, setSelectedSessionPreview] =
+    useState<LoopRunSessionPreview | null>(null);
+  const [isSessionPreviewLoading, setIsSessionPreviewLoading] = useState(false);
   const timelineContainerRef = useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = useRef(true);
   const { on, off, invoke, connectionState } = useSignalR("/hubs/loop-run");
@@ -321,6 +359,26 @@ export default function EventLogViewer() {
     }
   };
 
+  const handlePreviewSession = useCallback(
+    async (session: LoopRunAvailableSession) => {
+      if (!runId) return;
+      try {
+        setIsSessionPreviewLoading(true);
+        const preview = await loopRunService.getSessionPreview(
+          runId,
+          session.adapterName,
+          session.sessionId,
+        );
+        setSelectedSessionPreview(preview);
+      } catch (error) {
+        setErrorText(error instanceof Error ? error.message : "Failed to load session preview.");
+      } finally {
+        setIsSessionPreviewLoading(false);
+      }
+    },
+    [runId],
+  );
+
   const getTemplateNode = (nodeId: string): LoopNode | undefined => {
     return templateNodes.find((n) => n.id === nodeId);
   };
@@ -458,9 +516,115 @@ export default function EventLogViewer() {
                   <span style={{ color: "#94a3b8", fontSize: "0.85rem" }}>
                     Updated: {formatSessionTimestamp(session.updatedAt ?? session.createdAt)}
                   </span>
+                  <button
+                    className="btn btn-secondary btn-small"
+                    onClick={() => void handlePreviewSession(session)}
+                    disabled={isSessionPreviewLoading}
+                  >
+                    {isSessionPreviewLoading &&
+                    selectedSessionPreview?.sessionId === session.sessionId
+                      ? "Loading..."
+                      : "Preview"}
+                  </button>
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+      {selectedSessionPreview && (
+        <div
+          onClick={() => setSelectedSessionPreview(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Session preview"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(2, 6, 23, 0.78)",
+            display: "grid",
+            placeItems: "center",
+            padding: "1rem",
+            zIndex: 40,
+          }}
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              width: "min(920px, 100%)",
+              maxHeight: "85vh",
+              overflow: "hidden",
+              borderRadius: "18px",
+              border: "1px solid #1e293b",
+              background: "linear-gradient(180deg, rgba(15,23,42,0.98), rgba(2,6,23,0.98))",
+              boxShadow: "0 30px 80px rgba(0, 0, 0, 0.45)",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "flex-start",
+                gap: "1rem",
+                padding: "1.1rem 1.2rem",
+                borderBottom: "1px solid #1e293b",
+              }}
+            >
+              <div style={{ display: "grid", gap: "0.35rem" }}>
+                <div style={{ fontSize: "1.1rem", fontWeight: 700 }}>Session Preview</div>
+                <div style={{ color: "#cbd5e1", fontFamily: "monospace", fontSize: "0.95rem" }}>
+                  {selectedSessionPreview.sessionId}
+                </div>
+              </div>
+              <button
+                className="btn btn-secondary btn-small"
+                onClick={() => setSelectedSessionPreview(null)}
+              >
+                Close
+              </button>
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                gap: "0.75rem",
+                padding: "1rem 1.2rem 0",
+              }}
+            >
+              {buildSessionSummary(selectedSessionPreview).map((line) => (
+                <div
+                  key={line}
+                  style={{
+                    padding: "0.8rem 0.9rem",
+                    borderRadius: "12px",
+                    background: "rgba(15, 23, 42, 0.88)",
+                    border: "1px solid #1e293b",
+                    color: "#e2e8f0",
+                    fontSize: "0.92rem",
+                  }}
+                >
+                  {line}
+                </div>
+              ))}
+            </div>
+            <div style={{ padding: "1rem 1.2rem 1.2rem", overflow: "auto", maxHeight: "55vh" }}>
+              <pre
+                style={{
+                  margin: 0,
+                  padding: "1rem 1.1rem",
+                  borderRadius: "14px",
+                  background: "#020617",
+                  border: "1px solid #1e293b",
+                  color: "#dbeafe",
+                  fontSize: "0.9rem",
+                  lineHeight: 1.55,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                }}
+              >
+                {formatSessionJson(selectedSessionPreview.sessionJson)}
+              </pre>
+            </div>
           </div>
         </div>
       )}

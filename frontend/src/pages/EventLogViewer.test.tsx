@@ -7,6 +7,7 @@ vi.mock("../services/auth", () => ({
     getById: vi.fn(),
     getEvents: vi.fn(),
     getPayload: vi.fn(),
+    getSessionPreview: vi.fn(),
     cancel: vi.fn(),
     pause: vi.fn(),
     resume: vi.fn(),
@@ -194,6 +195,13 @@ beforeEach(() => {
   (loopRunService.getPayload as ReturnType<typeof vi.fn>).mockResolvedValue({
     payload: "large payload content",
   });
+  (loopRunService.getSessionPreview as ReturnType<typeof vi.fn>).mockResolvedValue({
+    adapterName: "OpenCode",
+    sessionId: "ses_current",
+    createdAt: "2025-01-01T00:00:00Z",
+    updatedAt: "2025-01-01T00:01:00Z",
+    sessionJson: '{"id":"ses_current","messages":[{"role":"user","content":"hello"}]}',
+  });
   (loopTemplateService.getVersionGraph as ReturnType<typeof vi.fn>).mockResolvedValue(
     mockTemplateGraph,
   );
@@ -279,6 +287,28 @@ describe("EventLogViewer", () => {
     expect(screen.getByText("ses_current")).toBeTruthy();
     expect(screen.getByText(/Placeholders: research/)).toBeTruthy();
     expect(screen.getByText("Current")).toBeTruthy();
+  });
+
+  test("opens a formatted session preview", async () => {
+    renderComponent();
+
+    await waitFor(() => {
+      expect(screen.getByText("Available AI Sessions")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("Preview"));
+
+    await waitFor(() => {
+      expect(loopRunService.getSessionPreview).toHaveBeenCalledWith(
+        "test-run",
+        "OpenCode",
+        "ses_current",
+      );
+    });
+
+    expect(screen.getByText("Session Preview")).toBeTruthy();
+    expect(screen.getByText(/Messages: 1/)).toBeTruthy();
+    expect(screen.getByText(/"role": "user"/)).toBeTruthy();
   });
 
   test("renders back link to loop runs overview", async () => {

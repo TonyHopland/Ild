@@ -39,10 +39,11 @@ public class LoopRunsControllerTests
 
         var store = new Mock<ILoopRunStore>();
         store.Setup(s => s.GetAllAsync()).ReturnsAsync(new[] { run1, run2 });
+        var snapshots = new Mock<IAdapterSessionSnapshotStore>();
 
         var engine = new Mock<ILoopEngine>();
         var events = new Mock<IEventLogService>();
-        var controller = new LoopRunsController(engine.Object, events.Object, store.Object);
+        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object);
 
         var result = await controller.GetAll();
 
@@ -74,6 +75,7 @@ public class LoopRunsControllerTests
         };
 
         var eventLogService = new Mock<IEventLogService>();
+        var snapshots = new Mock<IAdapterSessionSnapshotStore>();
         eventLogService.Setup(s => s.GetByRunIdAfterCursorAsync(runId, 0, 100))
             .ReturnsAsync(new Data.DTOs.EventLogPage
             {
@@ -96,7 +98,7 @@ public class LoopRunsControllerTests
             RunNodes = new List<LoopRunNode>(),
         });
 
-        var controller = new LoopRunsController(engine.Object, eventLogService.Object, store.Object);
+        var controller = new LoopRunsController(engine.Object, eventLogService.Object, store.Object, snapshots.Object);
 
         var result = await controller.GetEvents(runId.ToString());
 
@@ -161,7 +163,8 @@ public class LoopRunsControllerTests
 
         var engine = new Mock<ILoopEngine>();
         var events = new Mock<IEventLogService>();
-        var controller = new LoopRunsController(engine.Object, events.Object, store.Object);
+        var snapshots = new Mock<IAdapterSessionSnapshotStore>();
+        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object);
 
         var result = await controller.GetById(runId.ToString());
 
@@ -176,5 +179,35 @@ public class LoopRunsControllerTests
         current.GetType().GetProperty("isCurrent")!.GetValue(current).Should().BeEquivalentTo(true);
         var placeholders = (System.Collections.IEnumerable)current.GetType().GetProperty("placeholders")!.GetValue(current)!;
         placeholders.Cast<object>().Should().ContainSingle().Which.Should().Be("research");
+    }
+
+    [Fact]
+    public async Task GetSessionPreview_returns_snapshot_json_for_session()
+    {
+        var runId = Guid.NewGuid();
+        var store = new Mock<ILoopRunStore>();
+        var snapshots = new Mock<IAdapterSessionSnapshotStore>();
+        snapshots.Setup(s => s.GetAsync(runId, "OpenCode", "ses_current", default))
+            .ReturnsAsync(new AdapterSessionSnapshot
+            {
+                LoopRunId = runId,
+                AdapterName = "OpenCode",
+                SessionId = "ses_current",
+                CreatedAt = DateTime.UtcNow.AddMinutes(-10),
+                UpdatedAt = DateTime.UtcNow.AddMinutes(-5),
+                SessionJson = "{\"id\":\"ses_current\",\"messages\":[]}",
+            });
+
+        var engine = new Mock<ILoopEngine>();
+        var events = new Mock<IEventLogService>();
+        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object);
+
+        var result = await controller.GetSessionPreview(runId.ToString(), "OpenCode", "ses_current");
+
+        result.Should().BeOfType<OkObjectResult>();
+        var ok = (OkObjectResult)result;
+        ok.Value.Should().NotBeNull();
+        ok.Value!.GetType().GetProperty("sessionJson")!.GetValue(ok.Value)!
+            .Should().Be("{\"id\":\"ses_current\",\"messages\":[]}");
     }
 }

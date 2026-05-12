@@ -2,7 +2,6 @@ using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Mvc;
-using System.Text.Json;
 
 namespace ILD.Api.Controllers;
 
@@ -13,12 +12,18 @@ public class LoopRunsController : ControllerBase
     private readonly ILoopEngine _loopEngine;
     private readonly IEventLogService _eventLogService;
     private readonly ILoopRunStore _loopRunStore;
+    private readonly IAdapterSessionSnapshotStore _sessionSnapshotStore;
 
-    public LoopRunsController(ILoopEngine loopEngine, IEventLogService eventLogService, ILoopRunStore loopRunStore)
+    public LoopRunsController(
+        ILoopEngine loopEngine,
+        IEventLogService eventLogService,
+        ILoopRunStore loopRunStore,
+        IAdapterSessionSnapshotStore sessionSnapshotStore)
     {
         _loopEngine = loopEngine;
         _eventLogService = eventLogService;
         _loopRunStore = loopRunStore;
+        _sessionSnapshotStore = sessionSnapshotStore;
     }
 
     [HttpGet]
@@ -226,5 +231,31 @@ public class LoopRunsController : ControllerBase
 
         var content = await System.IO.File.ReadAllTextAsync(entry.PayloadPath);
         return Ok(new { payload = content });
+    }
+
+    [HttpGet("{id}/sessions/preview")]
+    public async Task<IActionResult> GetSessionPreview(
+        string id,
+        [FromQuery] string adapterName,
+        [FromQuery] string sessionId)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+
+        if (string.IsNullOrWhiteSpace(adapterName) || string.IsNullOrWhiteSpace(sessionId))
+            return BadRequest(new { error = "adapterName and sessionId are required" });
+
+        var snapshot = await _sessionSnapshotStore.GetAsync(guid, adapterName, sessionId);
+        if (snapshot == null)
+            return NotFound(new { error = "Session snapshot not found" });
+
+        return Ok(new
+        {
+            adapterName = snapshot.AdapterName,
+            sessionId = snapshot.SessionId,
+            createdAt = snapshot.CreatedAt,
+            updatedAt = snapshot.UpdatedAt,
+            sessionJson = snapshot.SessionJson,
+        });
     }
 }

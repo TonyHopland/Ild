@@ -137,6 +137,21 @@ public class OpenCodeAdapter : IAgentAdapter
             // a clear diagnostic instead and propagate session errors. When
             // stdout is not JSON at all (e.g. tests using a stub binary), keep
             // the raw stdout as the response.
+            var effectiveSessionId = sessionId ?? ctx.SessionId;
+            string? exportedSessionJson = null;
+            if (ctx.ManageSession && p.ExitCode == 0 && !string.IsNullOrEmpty(effectiveSessionId))
+            {
+                var (exportError, sessionJson) = await PersistManagedSessionAsync(binaryPath, worktreePath, ctx, effectiveSessionId);
+                if (!string.IsNullOrEmpty(exportError))
+                    return NodeExecutionResult.Fail(exportError, response);
+                exportedSessionJson = sessionJson;
+            }
+
+            if (string.IsNullOrEmpty(response) && !string.IsNullOrWhiteSpace(exportedSessionJson))
+            {
+                response = ExtractLatestAssistantTextFromSessionJson(exportedSessionJson!);
+            }
+
             if (string.IsNullOrEmpty(response))
             {
                 if (!string.IsNullOrEmpty(jsonError))
@@ -151,14 +166,6 @@ public class OpenCodeAdapter : IAgentAdapter
 
             if (p.ExitCode == 0 && !string.IsNullOrEmpty(jsonError))
                 return NodeExecutionResult.Fail($"opencode session error: {jsonError}", response);
-
-            var effectiveSessionId = sessionId ?? ctx.SessionId;
-            if (ctx.ManageSession && p.ExitCode == 0 && !string.IsNullOrEmpty(effectiveSessionId))
-            {
-                var exportError = await PersistManagedSessionAsync(binaryPath, worktreePath, ctx, effectiveSessionId);
-                if (!string.IsNullOrEmpty(exportError))
-                    return NodeExecutionResult.Fail(exportError, response);
-            }
 
             return p.ExitCode == 0
                 ? NodeExecutionResult.Ok(response, rendered, effectiveSessionId, ctx.IncomingSessionId)
@@ -202,21 +209,23 @@ public class OpenCodeAdapter : IAgentAdapter
         return null;
     }
 
-    private async Task<string?> PersistManagedSessionAsync(string binaryPath, string worktreePath, AgentExecutionContext ctx, string sessionId)
+    private async Task<(string? Error, string? SessionJson)> PersistManagedSessionAsync(string binaryPath, string worktreePath, AgentExecutionContext ctx, string sessionId)
     {
         if (_scopeFactory is null)
-            return null;
+            return (null, null);
 
         var exportResult = await RunOpencodeCommandAsync(binaryPath, worktreePath, ctx.Cancel, ["export", sessionId]);
         if (exportResult.ExitCode != 0)
-            return $"[opencode-error] failed to export managed session '{sessionId}': {BuildCommandFailure(exportResult)}";
+            return ($"[opencode-error] failed to export managed session '{sessionId}': {BuildCommandFailure(exportResult)}", null);
         if (string.IsNullOrWhiteSpace(exportResult.Stdout))
-            return $"[opencode-error] failed to export managed session '{sessionId}': no session json returned";
+            return ($"[opencode-error] failed to export managed session '{sessionId}': no session json returned", null);
+
+        var sessionJson = exportResult.Stdout.Trim();
 
         await using var scope = _scopeFactory.CreateAsyncScope();
         var snapshotStore = scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>();
-        await snapshotStore.UpsertAsync(ctx.RunContext.LoopRunId, Name, sessionId, exportResult.Stdout.Trim(), ctx.Cancel);
-        return null;
+        await snapshotStore.UpsertAsync(ctx.RunContext.LoopRunId, Name, sessionId, sessionJson, ctx.Cancel);
+        return (null, sessionJson);
     }
 
     private static async Task<OpencodeCommandResult> RunOpencodeCommandAsync(
@@ -459,6 +468,72 @@ public class OpenCodeAdapter : IAgentAdapter
             foreach (var item in element.EnumerateArray())
                 ExtractTextFromElement(item, sb);
         }
+    }
+
+    static string? ExtractLatestAssistantTextFromSessionJson(string sessionJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(sessionJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return null;
+            if (!doc.RootElement.TryGetProperty("messages", out var messages)
+                || messages.ValueKind != JsonValueKind.Array)
+                return null;
+
+            for (var i = messages.GetArrayLength() - 1; i >= 0; i--)
+            {
+                var message = messages[i];
+                var role = TryGetString(message, "role");
+                if (!string.IsNullOrEmpty(role)
+                    && !string.Equals(role, "assistant", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var text = ExtractVisibleTextFromSessionMessage(message);
+                if (!string.IsNullOrWhiteSpace(text))
+                    return text;
+            }
+        }
+        catch
+        {
+        }
+
+        return null;
+    }
+
+    static string? ExtractVisibleTextFromSessionMessage(JsonElement message)
+    {
+        if (message.ValueKind != JsonValueKind.Object)
+            return null;
+
+        if (message.TryGetProperty("parts", out var parts) && parts.ValueKind == JsonValueKind.Array)
+        {
+            var sb = new StringBuilder();
+            foreach (var part in parts.EnumerateArray())
+            {
+                if (part.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                var partType = TryGetString(part, "type");
+                if (!string.IsNullOrEmpty(partType)
+                    && !string.Equals(partType, "text", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var text = TryGetString(part, "text")
+                    ?? TryGetString(part, "content")
+                    ?? TryGetString(part, "delta")
+                    ?? TryGetString(part, "body");
+                if (!string.IsNullOrWhiteSpace(text))
+                    sb.Append(text);
+            }
+
+            if (sb.Length > 0)
+                return sb.ToString().Trim();
+        }
+
+        var fallback = new StringBuilder();
+        ExtractTextFromElement(message, fallback);
+        return fallback.Length > 0 ? fallback.ToString().Trim() : null;
     }
 
     private static string ResolveBinaryPath(AiProvider provider)
