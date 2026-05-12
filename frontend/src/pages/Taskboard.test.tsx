@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, waitFor, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import Taskboard from "./Taskboard";
 import { WorkItemStatus, WorkItemPriority, WorkItem } from "../types";
@@ -15,6 +15,12 @@ afterEach(() => {
 beforeEach(() => {
   localStorage.clear();
 });
+
+async function dispatchSignalR(handler: (msg: any) => void, payload: unknown) {
+  await act(async () => {
+    handler({ payload });
+  });
+}
 
 function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
   return {
@@ -72,8 +78,9 @@ describe("Taskboard SignalR", () => {
     expect(humanFeedbackHandlers).toBeDefined();
     expect(humanFeedbackHandlers!.length).toBeGreaterThan(0);
 
-    humanFeedbackHandlers![0]({
-      payload: { workItemId: "wi-1", reason: "PR Awaiting Merge" },
+    await dispatchSignalR(humanFeedbackHandlers![0], {
+      workItemId: "wi-1",
+      reason: "PR Awaiting Merge",
     });
 
     await waitFor(() => {
@@ -115,8 +122,10 @@ describe("Taskboard SignalR", () => {
       expect(screen.getByText("Test Item")).toBeTruthy();
     });
 
-    handlers["WorkItemStateChanged"]![0]({
-      payload: { workItemId: "wi-1", oldStatus: "Running", newStatus: "HumanFeedback" },
+    await dispatchSignalR(handlers["WorkItemStateChanged"]![0], {
+      workItemId: "wi-1",
+      oldStatus: "Running",
+      newStatus: "HumanFeedback",
     });
 
     await waitFor(() => {
@@ -160,8 +169,9 @@ describe("Taskboard SignalR", () => {
       expect(screen.getByText("Test Item")).toBeTruthy();
     });
 
-    handlers["HumanFeedbackRequired"]![0]({
-      payload: { workItemId: "wi-1", reason: "Node Failed" },
+    await dispatchSignalR(handlers["HumanFeedbackRequired"]![0], {
+      workItemId: "wi-1",
+      reason: "Node Failed",
     });
 
     await waitFor(() => {
@@ -208,11 +218,14 @@ describe("Taskboard SignalR", () => {
       expect(screen.getByText("Test Item")).toBeTruthy();
     });
 
-    handlers["HumanFeedbackRequired"]![0]({
-      payload: { workItemId: "wi-1", reason: "Node Failed" },
+    await dispatchSignalR(handlers["HumanFeedbackRequired"]![0], {
+      workItemId: "wi-1",
+      reason: "Node Failed",
     });
 
-    await new Promise((r) => setTimeout(r, 100));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    });
     expect(notificationCalls).toHaveLength(0);
   });
 });
@@ -321,8 +334,10 @@ describe("Taskboard editing item refetch", () => {
     });
 
     // Trigger WorkItemStateChanged event
-    handlers["WorkItemStateChanged"]![0]({
-      payload: { workItemId: "wi-1", oldStatus: "Running", newStatus: "HumanFeedback" },
+    await dispatchSignalR(handlers["WorkItemStateChanged"]![0], {
+      workItemId: "wi-1",
+      oldStatus: "Running",
+      newStatus: "HumanFeedback",
     });
 
     // Should refetch at least twice: immediate + delayed

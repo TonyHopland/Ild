@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthContext, useProvideAuth, useAuth } from "./hooks/useAuth";
 import Header from "./components/Header";
+import Footer from "./components/Footer";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import Login from "./pages/Login";
 import Taskboard from "./pages/Taskboard";
@@ -139,6 +140,7 @@ function AppRoutes() {
           <Route path="*" element={<Navigate to="/taskboard" replace />} />
         </Routes>
       </main>
+      <Footer />
     </div>
   );
 }

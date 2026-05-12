@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, cleanup, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import WorkItemModal from "../components/WorkItemModal";
 import { WorkItemStatus, WorkItemPriority, WorkItem, LoopRun, LoopRunStatus } from "../types";
@@ -20,13 +20,28 @@ function mockFetch(json: unknown, status = 200) {
   });
 }
 
-function renderModal(
+async function renderWithEffectsSettled(ui: React.ReactElement) {
+  let result: ReturnType<typeof render> | undefined;
+  await act(async () => {
+    result = render(ui);
+    await Promise.resolve();
+  });
+  return result!;
+}
+
+async function dispatchSignalR(handler: (msg: any) => void, payload: unknown) {
+  await act(async () => {
+    handler({ payload });
+  });
+}
+
+async function renderModal(
   mockFetchFn: ReturnType<typeof mockFetch>,
   props?: { isOpen?: boolean; workItem?: null },
 ) {
   vi.stubGlobal("fetch", mockFetchFn);
 
-  render(
+  await renderWithEffectsSettled(
     <WorkItemModal
       workItem={props?.workItem ?? null}
       isOpen={props?.isOpen ?? true}
@@ -106,7 +121,7 @@ describe("WorkItemModal", () => {
         }),
       );
 
-    renderModal(fetchMock);
+    await renderModal(fetchMock);
 
     await waitFor(() => {
       expect(screen.getByText("New Work Item")).toBeTruthy();
@@ -131,7 +146,9 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(<WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />);
+    await renderWithEffectsSettled(
+      <WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />,
+    );
 
     expect(screen.getByText(workItem.title)).toBeTruthy();
     expect(screen.getByText("Ready")).toBeTruthy();
@@ -212,7 +229,7 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(
+    await renderWithEffectsSettled(
       <MemoryRouter>
         <WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />
       </MemoryRouter>,
@@ -294,7 +311,7 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(
+    await renderWithEffectsSettled(
       <MemoryRouter>
         <WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />
       </MemoryRouter>,
@@ -374,7 +391,7 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(
+    await renderWithEffectsSettled(
       <MemoryRouter>
         <WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />
       </MemoryRouter>,
@@ -441,7 +458,7 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(
+    await renderWithEffectsSettled(
       <MemoryRouter>
         <WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />
       </MemoryRouter>,
@@ -474,7 +491,9 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(<WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />);
+    await renderWithEffectsSettled(
+      <WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />,
+    );
 
     expect(screen.getByText("Pull Request")).toBeTruthy();
     const prLink = screen.getByText(prUrl);
@@ -495,7 +514,9 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(<WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />);
+    await renderWithEffectsSettled(
+      <WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />,
+    );
 
     expect(screen.getByText("Pull Request")).toBeTruthy();
     expect(screen.getByText("No PR linked")).toBeTruthy();
@@ -521,7 +542,9 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(<WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />);
+    await renderWithEffectsSettled(
+      <WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />,
+    );
 
     expect(screen.getByText("Mark Merged")).toBeTruthy();
   });
@@ -539,7 +562,9 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(<WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />);
+    await renderWithEffectsSettled(
+      <WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />,
+    );
 
     expect(screen.queryByText("Mark Merged")).toBeFalsy();
   });
@@ -558,7 +583,9 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(<WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />);
+    await renderWithEffectsSettled(
+      <WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />,
+    );
 
     await waitFor(() => {
       expect(screen.getByText("Human Feedback")).toBeTruthy();
@@ -609,7 +636,9 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(<WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />);
+    await renderWithEffectsSettled(
+      <WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />,
+    );
 
     await waitFor(() => {
       expect(screen.getByText("Approve")).toBeTruthy();
@@ -670,7 +699,9 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(<WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />);
+    await renderWithEffectsSettled(
+      <WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />,
+    );
 
     await waitFor(() => {
       expect(screen.getByText("Reject")).toBeTruthy();
@@ -699,7 +730,9 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(<WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />);
+    await renderWithEffectsSettled(
+      <WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />,
+    );
 
     await waitFor(() => {
       expect(screen.getByText("Human Feedback")).toBeTruthy();
@@ -748,7 +781,9 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(<WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />);
+    await renderWithEffectsSettled(
+      <WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />,
+    );
 
     await waitFor(() => {
       expect(screen.getByText("Cleanup -> Done")).toBeTruthy();
@@ -803,7 +838,9 @@ describe("WorkItemModal", () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
 
-    render(<WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />);
+    await renderWithEffectsSettled(
+      <WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />,
+    );
 
     await waitFor(() => {
       expect(screen.getByText("Cleanup -> Backlog")).toBeTruthy();
@@ -836,7 +873,7 @@ describe("WorkItemModal", () => {
 
     vi.stubGlobal("fetch", fetchMock);
 
-    render(
+    await renderWithEffectsSettled(
       <MemoryRouter>
         <WorkItemModal workItem={workItem} isOpen={true} onClose={vi.fn()} onSave={vi.fn()} />
       </MemoryRouter>,
@@ -864,13 +901,15 @@ describe("WorkItemModal", () => {
 
     vi.stubGlobal("fetch", fetchMock);
 
-    render(
+    await renderWithEffectsSettled(
       <MemoryRouter>
         <WorkItemModal workItem={workItem} isOpen={true} onClose={vi.fn()} onSave={vi.fn()} />
       </MemoryRouter>,
     );
 
-    await new Promise((r) => setTimeout(r, 200));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    });
     expect(screen.queryByText("Live Output")).toBeFalsy();
   });
 
@@ -907,7 +946,7 @@ describe("WorkItemModal", () => {
 
     const onSave = vi.fn();
 
-    render(
+    await renderWithEffectsSettled(
       <MemoryRouter>
         <WorkItemModal workItem={workItem} isOpen={true} onClose={vi.fn()} onSave={onSave} />
       </MemoryRouter>,
@@ -917,8 +956,10 @@ describe("WorkItemModal", () => {
       expect(screen.getByText("Live Output")).toBeTruthy();
     });
 
-    runHandlers["LoopRunStateChanged"]![0]({
-      payload: { runId: "run-active-1", oldStatus: "Running", newStatus: "Completed" },
+    await dispatchSignalR(runHandlers["LoopRunStateChanged"]![0], {
+      runId: "run-active-1",
+      oldStatus: "Running",
+      newStatus: "Completed",
     });
 
     await waitFor(() => {
@@ -959,7 +1000,7 @@ describe("WorkItemModal", () => {
 
     const onSave = vi.fn();
 
-    render(
+    await renderWithEffectsSettled(
       <MemoryRouter>
         <WorkItemModal workItem={workItem} isOpen={true} onClose={vi.fn()} onSave={onSave} />
       </MemoryRouter>,
@@ -969,13 +1010,11 @@ describe("WorkItemModal", () => {
       expect(screen.getByText("Live Output")).toBeTruthy();
     });
 
-    runHandlers["NodeStateChanged"]![0]({
-      payload: {
-        runId: "run-active-1",
-        nodeId: "node-1",
-        oldStatus: "Running",
-        newStatus: "Succeeded",
-      },
+    await dispatchSignalR(runHandlers["NodeStateChanged"]![0], {
+      runId: "run-active-1",
+      nodeId: "node-1",
+      oldStatus: "Running",
+      newStatus: "Succeeded",
     });
 
     await waitFor(() => {
@@ -1019,7 +1058,7 @@ describe("WorkItemModal", () => {
       currentWorkItem = wi;
     });
 
-    const { rerender } = render(
+    const { rerender } = await renderWithEffectsSettled(
       <MemoryRouter>
         <WorkItemModal workItem={currentWorkItem} isOpen={true} onClose={vi.fn()} onSave={onSave} />
       </MemoryRouter>,
@@ -1029,21 +1068,28 @@ describe("WorkItemModal", () => {
       expect(screen.getByText("Live Output")).toBeTruthy();
     });
 
-    runHandlers["LoopRunStateChanged"]![0]({
-      payload: { runId: "run-active-1", oldStatus: "Running", newStatus: "Completed" },
+    await dispatchSignalR(runHandlers["LoopRunStateChanged"]![0], {
+      runId: "run-active-1",
+      oldStatus: "Running",
+      newStatus: "Completed",
     });
 
     await waitFor(() => {
       expect(onSave).toHaveBeenCalledWith(doneWorkItem);
     });
 
-    rerender(
-      <MemoryRouter>
-        <WorkItemModal workItem={doneWorkItem} isOpen={true} onClose={vi.fn()} onSave={onSave} />
-      </MemoryRouter>,
-    );
+    await act(async () => {
+      rerender(
+        <MemoryRouter>
+          <WorkItemModal workItem={doneWorkItem} isOpen={true} onClose={vi.fn()} onSave={onSave} />
+        </MemoryRouter>,
+      );
+      await Promise.resolve();
+    });
 
-    await new Promise((r) => setTimeout(r, 200));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    });
     expect(screen.queryByText("Live Output")).toBeFalsy();
     expect(screen.getByText("Done")).toBeTruthy();
   });
@@ -1079,7 +1125,7 @@ describe("WorkItemModal", () => {
 
     const onSave = vi.fn();
 
-    const { rerender } = render(
+    const { rerender } = await renderWithEffectsSettled(
       <MemoryRouter>
         <WorkItemModal workItem={initialWorkItem} isOpen={true} onClose={vi.fn()} onSave={onSave} />
       </MemoryRouter>,
@@ -1090,11 +1136,19 @@ describe("WorkItemModal", () => {
     });
 
     // Rerender with updated conversation (same status, same ID)
-    rerender(
-      <MemoryRouter>
-        <WorkItemModal workItem={updatedWorkItem} isOpen={true} onClose={vi.fn()} onSave={onSave} />
-      </MemoryRouter>,
-    );
+    await act(async () => {
+      rerender(
+        <MemoryRouter>
+          <WorkItemModal
+            workItem={updatedWorkItem}
+            isOpen={true}
+            onClose={vi.fn()}
+            onSave={onSave}
+          />
+        </MemoryRouter>,
+      );
+      await Promise.resolve();
+    });
 
     // The new AI message should appear without requiring a page refresh
     await waitFor(() => {
@@ -1151,7 +1205,7 @@ describe("WorkItemModal", () => {
 
     const onSave = vi.fn();
 
-    render(
+    await renderWithEffectsSettled(
       <MemoryRouter>
         <WorkItemModal workItem={workItem} isOpen={true} onClose={vi.fn()} onSave={onSave} />
       </MemoryRouter>,
@@ -1162,8 +1216,10 @@ describe("WorkItemModal", () => {
     });
 
     // Trigger the SignalR event
-    runHandlers["LoopRunStateChanged"]![0]({
-      payload: { runId: "run-active-1", oldStatus: "Running", newStatus: "WaitingHuman" },
+    await dispatchSignalR(runHandlers["LoopRunStateChanged"]![0], {
+      runId: "run-active-1",
+      oldStatus: "Running",
+      newStatus: "WaitingHuman",
     });
 
     // Should refetch at least twice: immediate + delayed

@@ -1,3 +1,4 @@
+using System.Reflection;
 using ILD.Data.Entities;
 using ILD.Data.DTOs;
 using Microsoft.AspNetCore.Mvc;
@@ -20,6 +21,7 @@ public class HealthController : ControllerBase
     public async Task<IActionResult> Check()
     {
         var health = new HealthResponse();
+        health.Version = Assembly.GetEntryAssembly()?.GetName().Version?.ToString() ?? "unknown";
 
         try
         {

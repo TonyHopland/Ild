@@ -3,6 +3,7 @@ namespace ILD.Data.DTOs;
 public class HealthResponse
 {
     public string Status { get; set; } = string.Empty;
+    public string Version { get; set; } = string.Empty;
     public HealthComponent Database { get; set; } = new();
     public HealthComponent DiskSpace { get; set; } = new();
     public HealthComponent Connectivity { get; set; } = new();
