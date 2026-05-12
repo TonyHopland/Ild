@@ -5,6 +5,8 @@ using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Remote;
 using ILD.Api.Middleware;
 using ILD.Api.Services;
+using ILD.Data.Stores;
+using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -42,6 +44,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IEventLogService, EventLogService>();
         services.AddScoped<IRecoveryManager, RecoveryManager>();
         services.AddScoped<IPrSyncService, PrSyncService>();
+        services.AddScoped<IAdapterSessionSnapshotStore, AdapterSessionSnapshotStore>();
 
         services.AddSingleton<IRunNotifier, SignalRRunNotifier>();
         services.AddSingleton<IWorkItemNotifier, SignalRWorkItemNotifier>();

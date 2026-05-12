@@ -19,6 +19,7 @@ public class AppDbContext : DbContext
     public DbSet<LoopRun> LoopRuns => Set<LoopRun>();
     public DbSet<LoopRunNode> LoopRunNodes => Set<LoopRunNode>();
     public DbSet<LoopRunEdgeTraversal> LoopRunEdgeTraversals => Set<LoopRunEdgeTraversal>();
+    public DbSet<AdapterSessionSnapshot> AdapterSessionSnapshots => Set<AdapterSessionSnapshot>();
     public DbSet<EventLog> EventLogs => Set<EventLog>();
     public DbSet<AiProvider> AiProviders => Set<AiProvider>();
     public DbSet<User> Users => Set<User>();
@@ -98,6 +99,12 @@ public class AppDbContext : DbContext
             e.HasIndex(l => new { l.LoopRunId, l.EdgeId });
         });
 
+        modelBuilder.Entity<AdapterSessionSnapshot>(e =>
+        {
+            e.HasKey(s => new { s.LoopRunId, s.AdapterName, s.SessionId });
+            e.HasIndex(s => new { s.LoopRunId, s.AdapterName });
+        });
+
         modelBuilder.Entity<EventLog>(e =>
         {
             e.HasIndex(e => new { e.LoopRunId, e.Sequence });
@@ -158,6 +165,11 @@ public class AppDbContext : DbContext
             e.Property(l => l.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
         });
 
+        modelBuilder.Entity<AdapterSessionSnapshot>(e =>
+        {
+            e.Property(s => s.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
+        });
+
         modelBuilder.Entity<AiProvider>(e =>
         {
             e.Property(a => a.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
@@ -187,6 +199,12 @@ public class AppDbContext : DbContext
             .HasOne(rn => rn.LoopRun)
             .WithMany(lr => lr.RunNodes)
             .HasForeignKey(rn => rn.LoopRunId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<AdapterSessionSnapshot>()
+            .HasOne(s => s.LoopRun)
+            .WithMany()
+            .HasForeignKey(s => s.LoopRunId)
             .OnDelete(DeleteBehavior.Cascade);
     }
 
