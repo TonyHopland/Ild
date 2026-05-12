@@ -70,7 +70,9 @@ public class LoopRunsController : ControllerBase
         var runNodes = await _loopRunStore.GetRunNodesAsync(guid);
         var sessionSnapshots = await _loopRunStore.GetSessionSnapshotsAsync(guid);
         var sessionBindings = await _loopRunStore.GetSessionBindingsAsync(guid);
-        var currentSessionIds = ExtractCurrentSessionIds(run.SessionsJson);
+        var currentSessionIds = sessionBindings
+            .Select(b => $"{b.AdapterName}\n{b.SessionId}")
+            .ToHashSet(StringComparer.Ordinal);
 
         return Ok(new
         {
@@ -90,7 +92,7 @@ public class LoopRunsController : ControllerBase
                 sessionId = s.SessionId,
                 createdAt = s.CreatedAt,
                 updatedAt = s.UpdatedAt,
-                isCurrent = currentSessionIds.Contains(s.SessionId),
+                isCurrent = currentSessionIds.Contains($"{s.AdapterName}\n{s.SessionId}"),
                 placeholders = sessionBindings
                     .Where(b => b.AdapterName == s.AdapterName && b.SessionId == s.SessionId)
                     .Select(b => b.PlaceholderId)
@@ -111,44 +113,6 @@ public class LoopRunsController : ControllerBase
                 executionCount = rn.RetryCount,
             }).ToList(),
         });
-    }
-
-    private static HashSet<string> ExtractCurrentSessionIds(string? sessionsJson)
-    {
-        var ids = new HashSet<string>(StringComparer.Ordinal);
-        if (string.IsNullOrWhiteSpace(sessionsJson))
-            return ids;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(sessionsJson);
-            if (doc.RootElement.ValueKind != JsonValueKind.Array)
-                return ids;
-
-            foreach (var item in doc.RootElement.EnumerateArray())
-            {
-                if (item.ValueKind != JsonValueKind.Object)
-                    continue;
-
-                foreach (var prop in item.EnumerateObject())
-                {
-                    if (!string.Equals(prop.Name, "sessionId", StringComparison.OrdinalIgnoreCase))
-                        continue;
-                    if (prop.Value.ValueKind != JsonValueKind.String)
-                        continue;
-
-                    var value = prop.Value.GetString();
-                    if (!string.IsNullOrWhiteSpace(value))
-                        ids.Add(value);
-                }
-            }
-        }
-        catch
-        {
-            return ids;
-        }
-
-        return ids;
     }
 
     [HttpPost("{id}/pause")]

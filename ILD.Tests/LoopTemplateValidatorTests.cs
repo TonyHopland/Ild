@@ -81,6 +81,44 @@ public class LoopTemplateValidatorTests
     }
 
     [Fact]
+    public void Unknown_placeholder_in_session_prompt_invalid()
+    {
+        var ai = Node("a", "AI", "Title: {{WorkItem.Title}}");
+        ai.Config["useSession"] = true;
+        ai.Config["sessionPlaceholder"] = "research";
+        ai.Config["sessionPrompt"] = "Retry: {{Bogus.Session}}";
+
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() {
+                Node("s", "Start"),
+                ai,
+                Node("c", "Cleanup")
+            },
+            new() { Edge("s", "a"), Edge("a", "c") });
+
+        var errs = LoopTemplateValidator.Validate(g);
+        errs.Should().Contain(e => e.Contains("Bogus.Session"));
+    }
+
+    [Fact]
+    public void Ai_node_with_use_session_and_no_placeholder_is_invalid()
+    {
+        var ai = Node("a", "AI", "Title: {{WorkItem.Title}}");
+        ai.Config["useSession"] = true;
+
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() {
+                Node("s", "Start"),
+                ai,
+                Node("c", "Cleanup")
+            },
+            new() { Edge("s", "a"), Edge("a", "c") });
+
+        var errs = LoopTemplateValidator.Validate(g);
+        errs.Should().Contain(e => e.Contains("sessionPlaceholder"));
+    }
+
+    [Fact]
     public void Valid_minimal_graph_passes()
     {
         var g = new LoopTemplateGraph(Guid.NewGuid(),

@@ -122,7 +122,6 @@ public class LoopRunsControllerTests
             RecoveryPolicy = RecoveryPolicy.AutoResume,
             CreatedAt = DateTime.UtcNow,
             StartedAt = DateTime.UtcNow,
-            SessionsJson = "[{\"providerId\":\"provider-1\",\"sessionId\":\"ses_current\"}]",
         };
 
         var store = new Mock<ILoopRunStore>();

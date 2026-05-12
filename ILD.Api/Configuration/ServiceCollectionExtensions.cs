@@ -36,7 +36,6 @@ public static class ServiceCollectionExtensions
                 string.IsNullOrWhiteSpace(worktreesRoot) ? null : worktreesRoot);
         });
         services.AddSingleton<IPromptTemplateResolver, PromptTemplateResolver>();
-        services.AddSingleton<IAiSessionManager, AiSessionManager>();
         services.AddScoped<IPromptRenderingService, PromptRenderingService>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
         services.AddScoped<IRemoteProvider, RemoteProviderService>();

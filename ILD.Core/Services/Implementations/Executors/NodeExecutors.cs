@@ -167,10 +167,12 @@ public sealed class AINodeExecutor : INodeExecutor
             var sessionPlaceholder = string.IsNullOrWhiteSpace(cfg.SessionPlaceholder)
                 ? null
                 : cfg.SessionPlaceholder.Trim();
-            var sessionManager = scope.ServiceProvider.GetRequiredService<IAiSessionManager>();
             var useSession = cfg.UseSession == true;
             if (useSession)
             {
+                if (string.IsNullOrWhiteSpace(sessionPlaceholder))
+                    return new NodeOutcome.Failed("AI nodes with useSession=true must set sessionPlaceholder.");
+
                 var binding = !string.IsNullOrWhiteSpace(sessionPlaceholder)
                     ? await loopRunStore.GetSessionBindingAsync(ctx.Run.Id, adapter.Name, sessionPlaceholder)
                     : null;
@@ -188,12 +190,11 @@ public sealed class AINodeExecutor : INodeExecutor
 
             // Surface session resolution to the run's event log so the user
             // can see in the UI whether the AI node is resuming or starting
-            // fresh on each visit. Without this it's invisible whether
-            // SessionsJson is round-tripping or not.
+            // fresh on each visit.
             try
             {
                 var resolvedMsg = string.IsNullOrEmpty(sessionId)
-                    ? $"useSession={useSession} provider={provider.Id} placeholder={(sessionPlaceholder ?? "<none>")} resolved=<none> (sessionsJson={(string.IsNullOrEmpty(run?.SessionsJson) ? "<null>" : run!.SessionsJson)})"
+                    ? $"useSession={useSession} provider={provider.Id} placeholder={(sessionPlaceholder ?? "<none>")} resolved=<none>"
                     : $"useSession={useSession} provider={provider.Id} placeholder={(sessionPlaceholder ?? "<none>")} resolved={sessionId}";
                 await eventLogService.AppendAsync(ctx.Run.Id, AiSessionResolvedEvent, resolvedMsg, ctx.Node.Id, runNodeId: ctx.RunNode.Id);
             }
@@ -246,14 +247,11 @@ public sealed class AINodeExecutor : INodeExecutor
                     var effectiveSessionId = result.SessionId;
                     if (!string.IsNullOrWhiteSpace(effectiveSessionId))
                     {
-                        var freshRun = await loopRunStore.GetByIdAsync(ctx.Run.Id) ?? run;
-                        await sessionManager.PersistAsync(freshRun, provider.Id, effectiveSessionId, loopRunStore.UpdateRunAsync);
-                        if (!string.IsNullOrWhiteSpace(sessionPlaceholder))
-                            await loopRunStore.UpsertSessionBindingAsync(ctx.Run.Id, adapter.Name, sessionPlaceholder, effectiveSessionId);
+                        await loopRunStore.UpsertSessionBindingAsync(ctx.Run.Id, adapter.Name, sessionPlaceholder!, effectiveSessionId);
 
                         try
                         {
-                            var persistedMsg = $"useSession provider={provider.Id} placeholder={(sessionPlaceholder ?? "<none>")} persisted={effectiveSessionId} sessionsJson={freshRun.SessionsJson}";
+                            var persistedMsg = $"useSession provider={provider.Id} placeholder={sessionPlaceholder} persisted={effectiveSessionId}";
                             await eventLogService.AppendAsync(ctx.Run.Id, AiSessionPersistedEvent, persistedMsg, ctx.Node.Id, runNodeId: ctx.RunNode.Id);
                         }
                         catch { /* best-effort observability */ }

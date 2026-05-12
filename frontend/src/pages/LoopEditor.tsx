@@ -521,6 +521,12 @@ export default function LoopEditor() {
   const handleSaveNodeSettings = useCallback(() => {
     if (!selectedNode) return;
     const nodeType = (selectedNode.data as { type: string }).type;
+
+    if (nodeType === NodeType.AI && aiUseSession && !aiSessionPlaceholder.trim()) {
+      setErrorText("AI nodes with Use Session enabled must set a session placeholder.");
+      return;
+    }
+
     const config: Record<string, unknown> = {};
     if (nodeType === NodeType.Cmd) {
       config.command = cmdCommand;

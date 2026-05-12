@@ -146,7 +146,6 @@ public class AINodeExecutorEventLogTests
         services.AddSingleton(registry);
         services.AddSingleton(loopRunStore);
         services.AddSingleton(eventLogService);
-        services.AddSingleton<IAiSessionManager, AiSessionManager>();
         return services.BuildServiceProvider();
     }
 

@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations.Executors;
 using ILD.Data.DTOs;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -91,8 +92,8 @@ public static class LoopTemplateValidator
         // Unknown placeholders in AI/Human/Prompt prompt templates and PR description template
         foreach (var node in nodes)
         {
-            var prompt = (node.Config.GetValueOrDefault("initialPrompt")
-                ?? node.Config.GetValueOrDefault("sessionPrompt"))?.ToString();
+            var initialPrompt = node.Config.GetValueOrDefault("initialPrompt")?.ToString();
+            var sessionPrompt = node.Config.GetValueOrDefault("sessionPrompt")?.ToString();
             var prTemplate = node.Config.GetValueOrDefault("prDescriptionTemplate")?.ToString();
             var humanPrompt = string.Equals(node.NodeType, "Human", StringComparison.OrdinalIgnoreCase)
                 ? node.Config.GetValueOrDefault("prompt")?.ToString()
@@ -100,9 +101,16 @@ public static class LoopTemplateValidator
             var promptNodePrompt = string.Equals(node.NodeType, "Prompt", StringComparison.OrdinalIgnoreCase)
                 ? node.Config.GetValueOrDefault("prompt")?.ToString()
                 : null;
-            if (string.IsNullOrEmpty(prompt) && string.IsNullOrEmpty(prTemplate) && string.IsNullOrEmpty(humanPrompt) && string.IsNullOrEmpty(promptNodePrompt)) continue;
+            if (string.Equals(node.NodeType, "AI", StringComparison.OrdinalIgnoreCase))
+            {
+                var cfg = NodeConfig.Parse<NodeConfig.Ai>(System.Text.Json.JsonSerializer.Serialize(node.Config));
+                if (cfg.UseSession == true && string.IsNullOrWhiteSpace(cfg.SessionPlaceholder))
+                    errors.Add($"AI node {node.Id} with useSession=true must set sessionPlaceholder.");
+            }
 
-            var templates = new[] { prompt, prTemplate, humanPrompt, promptNodePrompt }.Where(t => !string.IsNullOrEmpty(t)).ToList();
+            if (string.IsNullOrEmpty(initialPrompt) && string.IsNullOrEmpty(sessionPrompt) && string.IsNullOrEmpty(prTemplate) && string.IsNullOrEmpty(humanPrompt) && string.IsNullOrEmpty(promptNodePrompt)) continue;
+
+            var templates = new[] { initialPrompt, sessionPrompt, prTemplate, humanPrompt, promptNodePrompt }.Where(t => !string.IsNullOrEmpty(t)).ToList();
             foreach (var template in templates)
             {
                 foreach (Match m in PromptPlaceholderRegistry.Pattern.Matches(template!))

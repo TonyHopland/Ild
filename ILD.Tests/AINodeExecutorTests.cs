@@ -763,9 +763,8 @@ public class AINodeExecutorTests
         loopRunStore.Setup(s => s.GetRunNodesAsync(runId))
             .ReturnsAsync(Array.Empty<LoopRunNode>());
 
-        var run = new LoopRun { Id = runId };
         loopRunStore.Setup(s => s.GetByIdAsync(runId))
-            .ReturnsAsync(run);
+            .ReturnsAsync(new LoopRun { Id = runId });
 
         var sp = BuildServiceProvider(providerStore.Object, registry.Object, loopRunStore.Object);
 
@@ -783,8 +782,6 @@ public class AINodeExecutorTests
         var result = await executor.ExecuteAsync(ctx);
 
         result.Success.Should().BeTrue();
-        run.SessionsJson.Should().Contain(providerId.ToString());
-        run.SessionsJson.Should().Contain("new-session-from-adapter");
         loopRunStore.Verify(
             s => s.UpsertSessionBindingAsync(runId, "Capturing", "research", "new-session-from-adapter"),
             Times.Once);
@@ -819,13 +816,8 @@ public class AINodeExecutorTests
         loopRunStore.Setup(s => s.GetRunNodesAsync(runId))
             .ReturnsAsync(Array.Empty<LoopRunNode>());
 
-        var run = new LoopRun
-        {
-            Id = runId,
-            SessionsJson = "[{\"providerId\":\"" + providerId + "\",\"sessionId\":\"old-session\"}]"
-        };
         loopRunStore.Setup(s => s.GetByIdAsync(runId))
-            .ReturnsAsync(run);
+            .ReturnsAsync(new LoopRun { Id = runId });
 
         var sp = BuildServiceProvider(providerStore.Object, registry.Object, loopRunStore.Object);
 
@@ -843,8 +835,9 @@ public class AINodeExecutorTests
         var result = await executor.ExecuteAsync(ctx);
 
         result.Success.Should().BeTrue();
-        run.SessionsJson.Should().Contain("old-session");
-        run.SessionsJson.Should().NotContain("new-session-from-adapter");
+        loopRunStore.Verify(
+            s => s.UpsertSessionBindingAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()),
+            Times.Never);
     }
 
     [Fact]
@@ -876,9 +869,8 @@ public class AINodeExecutorTests
         loopRunStore.Setup(s => s.GetRunNodesAsync(runId))
             .ReturnsAsync(Array.Empty<LoopRunNode>());
 
-        var run = new LoopRun { Id = runId };
         loopRunStore.Setup(s => s.GetByIdAsync(runId))
-            .ReturnsAsync(run);
+            .ReturnsAsync(new LoopRun { Id = runId });
         loopRunStore.Setup(s => s.GetSessionBindingAsync(runId, "Capturing", "research"))
             .ReturnsAsync((LoopRunSessionBinding?)null);
 
@@ -899,7 +891,6 @@ public class AINodeExecutorTests
 
         result.Success.Should().BeTrue();
         testAdapter.CapturedSessionId.Should().BeNull();
-        run.SessionsJson.Should().Contain("new-session-from-adapter");
         loopRunStore.Verify(
             s => s.UpsertSessionBindingAsync(runId, "Capturing", "research", "new-session-from-adapter"),
             Times.Once);
@@ -908,11 +899,6 @@ public class AINodeExecutorTests
     [Fact]
     public async Task ExecuteAsync_useSession_round_trips_so_second_execution_resolves_first_session()
     {
-        // Regression: the writer once produced PascalCase JSON
-        // ({"ProviderId":...}) while the reader looked for camelCase keys
-        // (providerId/sessionId). Sessions written by the executor were
-        // therefore invisible on the next execution and the AI node would
-        // always start a fresh session.
         var providerId = Guid.NewGuid();
         var nodeId = Guid.NewGuid();
         var runId = Guid.NewGuid();
@@ -935,15 +921,10 @@ public class AINodeExecutorTests
         registry.Setup(r => r.ResolveForProvider(It.IsAny<AiProvider>()))
             .Returns(() => testAdapter);
 
-        var run = new LoopRun { Id = runId };
         var loopRunStore = new Mock<ILoopRunStore>();
         loopRunStore.Setup(s => s.GetRunNodesAsync(runId))
             .ReturnsAsync(Array.Empty<LoopRunNode>());
-        loopRunStore.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(run);
-        // Capture writes back into the local run instance so the second
-        // call observes the persisted SessionsJson.
-        loopRunStore.Setup(s => s.UpdateRunAsync(It.IsAny<LoopRun>()))
-            .Returns<LoopRun>(r => { run.SessionsJson = r.SessionsJson; return Task.CompletedTask; });
+        loopRunStore.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(new LoopRun { Id = runId });
 
         var sp = BuildServiceProvider(providerStore.Object, registry.Object, loopRunStore.Object);
         var executor = new AINodeExecutor(sp);
@@ -961,7 +942,6 @@ public class AINodeExecutorTests
         var first = await executor.ExecuteAsync(MakeCtx());
         first.Success.Should().BeTrue();
         testAdapter.CapturedSessionId.Should().BeNull("first run has no session yet");
-        run.SessionsJson.Should().Contain("new-session-from-adapter");
         loopRunStore.Verify(
             s => s.UpsertSessionBindingAsync(runId, "Capturing", "research", "new-session-from-adapter"),
             Times.Once);
@@ -980,6 +960,50 @@ public class AINodeExecutorTests
         testAdapter.CapturedSessionId.Should().Be("new-session-from-adapter",
             "the session written on the first execution must be readable on the next");
         testAdapter.CapturedIncomingSessionId.Should().Be("new-session-from-adapter");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_when_useSession_is_enabled_without_placeholder_fails()
+    {
+        var provider = new AiProvider
+        {
+            Id = Guid.NewGuid(),
+            Name = "my-provider",
+            Type = "test",
+            BaseUrl = "https://test.api",
+            Model = "test-model"
+        };
+
+        var providerStore = new Mock<IProviderStore>();
+        providerStore.Setup(s => s.GetAiProviderByNameAsync(It.IsAny<string>()))
+            .ReturnsAsync(provider);
+
+        var registry = new Mock<IAgentAdapterRegistry>();
+        registry.Setup(r => r.ResolveForProvider(It.IsAny<AiProvider>()))
+            .Returns(() => new CapturingAdapter());
+
+        var loopRunStore = new Mock<ILoopRunStore>();
+        loopRunStore.Setup(s => s.GetRunNodesAsync(It.IsAny<Guid>()))
+            .ReturnsAsync(Array.Empty<LoopRunNode>());
+        loopRunStore.Setup(s => s.GetByIdAsync(It.IsAny<Guid>()))
+            .ReturnsAsync(new LoopRun { Id = Guid.NewGuid() });
+
+        var sp = BuildServiceProvider(providerStore.Object, registry.Object, loopRunStore.Object);
+        var executor = new AINodeExecutor(sp);
+
+        var config = """{"aiProviderId":"my-provider","initialPrompt":"test","useSession":true}""";
+        var ctx = new NodeExecutionContext(
+            Run: new LoopRun { Id = Guid.NewGuid() },
+            RunNode: new LoopRunNode { RetryCount = 0 },
+            Node: new LoopNode { Id = Guid.NewGuid(), Config = config },
+            WorkItem: new WorkItemView { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            PreviousNodeOutput: null,
+            CancellationToken: CancellationToken.None);
+
+        var result = await executor.ExecuteAsync(ctx);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("sessionPlaceholder");
     }
 
     [Fact]
@@ -1107,8 +1131,6 @@ public class AINodeExecutorTests
         eventLogService.Setup(s => s.GetByRunIdAsync(It.IsAny<Guid>(), null))
             .ReturnsAsync(Array.Empty<EventLogEntry>());
         services.AddSingleton(eventLogService.Object);
-
-        services.AddSingleton<IAiSessionManager, AiSessionManager>();
 
         return services.BuildServiceProvider();
     }

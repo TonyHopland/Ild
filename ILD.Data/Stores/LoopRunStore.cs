@@ -126,9 +126,7 @@ public class LoopRunStore : ILoopRunStore
         // relationship fixup also pulls in any navigation already linked
         // via POCO references from prior scopes (see e.g. LoopRunNode.LoopRun
         // populated by an earlier per-attempt scope), causing those stale
-        // entities to be saved back over fresh data (in particular wiping
-        // SessionsJson back to its loaded NULL value after the AI node
-        // had just persisted a session ID).
+        // entities to be saved back over fresh data.
         var entry = _db.Entry(run);
         if (entry.State == EntityState.Detached)
             _db.LoopRuns.Attach(run);
@@ -145,9 +143,8 @@ public class LoopRunStore : ILoopRunStore
     public async Task UpdateRunNodeAsync(LoopRunNode runNode)
     {
         // Same rationale as UpdateRunAsync: avoid DbSet.Update graph
-        // traversal which would drag a navigation-linked LoopRun (with
-        // stale SessionsJson) into the new context as Modified and clobber
-        // it on save.
+        // traversal which would drag a navigation-linked LoopRun into the
+        // new context as Modified and clobber it on save.
         var entry = _db.Entry(runNode);
         if (entry.State == EntityState.Detached)
             _db.LoopRunNodes.Attach(runNode);
