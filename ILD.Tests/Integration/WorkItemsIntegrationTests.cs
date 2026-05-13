@@ -4,6 +4,7 @@ using FluentAssertions;
 
 namespace ILD.Tests.Integration;
 
+[Collection("AuthEnvironment")]
 public class WorkItemsIntegrationTests
 {
     [Fact]

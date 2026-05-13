@@ -39,8 +39,6 @@ public class LoopRun : IHasUpdatedAt
 
     public Guid? CurrentNodeId { get; set; }
 
-    public string? SessionsJson { get; set; }
-
     [MaxLength(1024)]
     public string? WorktreePath { get; set; }
 

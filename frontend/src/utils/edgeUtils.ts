@@ -21,6 +21,7 @@ const allowedEdgeTypesByNodeType: Record<NodeType, EdgeType[]> = {
   [NodeType.Cmd]: [EdgeType.OnSuccess, EdgeType.OnFailure],
   [NodeType.AI]: [EdgeType.OnSuccess, EdgeType.OnFailure],
   [NodeType.Human]: [EdgeType.OnSuccess, EdgeType.OnFailure, EdgeType.OnRespond],
+  [NodeType.Prompt]: [EdgeType.OnSuccess, EdgeType.OnFailure],
   [NodeType.PR]: [EdgeType.OnSuccess, EdgeType.OnFailure],
   [NodeType.Cleanup]: [EdgeType.OnSuccess, EdgeType.OnFailure],
 };

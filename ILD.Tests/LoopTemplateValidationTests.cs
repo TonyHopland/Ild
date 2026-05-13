@@ -9,10 +9,10 @@ namespace ILD.Tests;
 
 public class LoopTemplateValidationTests
 {
-    private static LoopNodeDto Node(string id, string type, string? initialPrompt = null)
+    private static LoopNodeDto Node(string id, string type, string? prompt = null)
     {
         var dto = new LoopNodeDto { Id = id, NodeType = type, Label = id };
-        if (initialPrompt != null) dto.Config["initialPrompt"] = initialPrompt;
+        if (prompt != null) dto.Config["prompt"] = prompt;
         return dto;
     }
 

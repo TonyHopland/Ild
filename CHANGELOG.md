@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- AI nodes now use a single `prompt` field regardless of whether they run in a fresh or resumed session; prompt variation across turns is now modeled explicitly with `Prompt` nodes in the graph.
+- AI adapters now always receive one prompt from the AI node; session handling only controls binding and resume behavior.
+- Opencode managed session import/export now only runs for AI nodes that explicitly enable session usage.
+- The seeded templates now insert `Prompt` nodes ahead of session-backed AI nodes wherever the first turn should differ from later follow-up turns.
+
+### Added
+
+- Added a `Prompt` loop node type that renders a prompt template with the same placeholder-aware editor used by AI and PR prompt fields, then emits the rendered text as node output.
+
+### Removed
+
+- Backward compatibility for legacy AI node prompt fields and editor shims for loading or saving the old prompt model.
+
 ## [0.1.0] - 2026-05-12
 
 ### Added

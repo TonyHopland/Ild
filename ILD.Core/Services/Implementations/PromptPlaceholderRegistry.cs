@@ -4,7 +4,7 @@ namespace ILD.Core.Services.Implementations;
 
 /// <summary>
 /// Single source of truth for the placeholder grammar used in user-authored
-/// templates (AI initial/loopPrompt, Human prompt, PR description).
+/// templates (AI, Human, Prompt node, PR description).
 ///
 /// This module owns the regex, the set of known names, and the special-prefix
 /// rules (<c>WorkTree.File:&lt;rel&gt;</c>). Previously the regex and the set

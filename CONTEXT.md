@@ -37,7 +37,7 @@ Executes a shell command in the worktree with a configurable timeout. Succeeds o
 _Avoid_: shell, command
 
 **AI Node**:
-Delegates execution to an `IAgentAdapter` resolved by `AiProvider.Type`. The adapter controls the full execution lifecycle including multi-turn loops, tool use, and internal state. Has two prompt fields: `initialPrompt` (first execution) and `loopPrompt` (subsequent loopback executions; falls back to `initialPrompt` if unset). `initialPrompt` and `loopPrompt` are the only valid prompt config keys — legacy `prompt`/`promptTemplate` are not supported. If `provider` config specifies a provider that doesn't exist, the node fails (no fallback to default or first provider). Supports `rejectPattern` — a regex that, when matched against the AI output, causes the node to fail and route to the `on_failure` edge. Default timeout is 300 seconds.
+Delegates execution to an `IAgentAdapter` resolved by `AiProvider.Type`. The adapter controls the full execution lifecycle including multi-turn loops, tool use, and internal state. Has a single `prompt` field regardless of whether the node starts fresh or resumes a bound session. If the graph needs different first-turn and follow-up prompts, model that explicitly with upstream `Prompt` nodes. If `provider` config specifies a provider that doesn't exist, the node fails (no fallback to default or first provider). Supports `rejectPattern` — a regex that, when matched against the AI output, causes the node to fail and route to the `on_failure` edge. Default timeout is 300 seconds.
 _Avoid_: LLM node, model node
 
 **Human Node**:
@@ -101,7 +101,7 @@ _Avoid_: draft, planned
 - A **Worktree** is created on first run, destroyed on Cleanup. Re-starting a WorkItem creates a fresh worktree
 - `{{PreviousNode.Output}}` resolves to the source node of the incoming edge, not the chronologically previous execution
 - `{{EventLog.LastN}}` defaults to N=10, capped at 50
-- AI node uses `initialPrompt` on first execution, `loopPrompt` on loopback executions
+- AI node always uses its single `prompt`; graph structure controls prompt variation across turns
 - `AiProvider.Config` is a free-form JSON blob; each adapter reads what it needs
 - Rebase happens only at loop start, not before each node
 - Failed/cancelled WorkItems: "Done" destroys worktree and discards; "Backlog" fully resets for re-planning

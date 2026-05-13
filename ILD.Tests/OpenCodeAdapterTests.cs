@@ -2,6 +2,12 @@ using FluentAssertions;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
+using ILD.Data.Enums;
+using ILD.Data.Stores;
+using ILD.Data.Stores.Interfaces;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Tests;
 
@@ -47,30 +53,13 @@ public class OpenCodeAdapterTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_on_first_execution_uses_initial_prompt()
+    public async Task ExecuteAsync_uses_prompt_for_all_executions()
     {
         var adapter = new OpenCodeAdapter();
 
         var ctx = BuildContext(
             binaryPath: "/bin/true",
-            initialPrompt: "initial prompt here",
-            loopPrompt: "loop prompt here",
-            executionCount: 1);
-
-        var result = await adapter.ExecuteAsync(ctx);
-
-        result.Success.Should().BeTrue();
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_on_loopback_uses_loop_prompt()
-    {
-        var adapter = new OpenCodeAdapter();
-
-        var ctx = BuildContext(
-            binaryPath: "/bin/true",
-            initialPrompt: "initial prompt here",
-            loopPrompt: "loop prompt here",
+            prompt: "shared prompt here",
             executionCount: 2);
 
         var result = await adapter.ExecuteAsync(ctx);
@@ -115,7 +104,7 @@ public class OpenCodeAdapterTests
 
         var ctx = BuildContext(
             binaryPath: "/bin/sh",
-            initialPrompt: "-c exit 42",
+            prompt: "-c exit 42",
             executionCount: 1);
 
         var result = await adapter.ExecuteAsync(ctx);
@@ -131,7 +120,7 @@ public class OpenCodeAdapterTests
 
         var ctx = BuildContext(
             binaryPath: "/bin/true",
-            initialPrompt: "Fix: {{WorkItem.Title}} - {{WorkItem.Description}}",
+            prompt: "Fix: {{WorkItem.Title}} - {{WorkItem.Description}}",
             workItemTitle: "Null reference in parser",
             workItemDescription: "Fix the crash",
             executionCount: 1);
@@ -155,7 +144,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: "/bin/true",
-                initialPrompt: "Read: {{WorkTree.File:test.txt}}",
+                prompt: "Read: {{WorkTree.File:test.txt}}",
                 worktreePath: worktreeDir,
                 executionCount: 1);
 
@@ -184,7 +173,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "ignored",
+                prompt: "ignored",
                 worktreePath: worktreeDir,
                 executionCount: 1);
 
@@ -244,7 +233,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "ignored",
+                prompt: "ignored",
                 worktreePath: worktreeDir,
                 executionCount: 1,
                 progressCallback: (line) =>
@@ -292,7 +281,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "ignored",
+                prompt: "ignored",
                 worktreePath: worktreeDir,
                 executionCount: 1,
                 progressCallback: (line) =>
@@ -335,7 +324,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "ignored",
+                prompt: "ignored",
                 executionCount: 1,
                 progressCallback: (line) =>
                 {
@@ -371,7 +360,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "ignored",
+                prompt: "ignored",
                 worktreePath: worktreeDir,
                 apiKey: "test-secret-key-123",
                 executionCount: 1);
@@ -402,7 +391,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "my prompt",
+                prompt: "my prompt",
                 worktreePath: worktreeDir,
                 sessionId: "test-session-abc",
                 executionCount: 1);
@@ -434,7 +423,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "my prompt",
+                prompt: "my prompt",
                 worktreePath: worktreeDir,
                 sessionId: null,
                 executionCount: 1);
@@ -465,7 +454,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "ignored",
+                prompt: "ignored",
                 worktreePath: worktreeDir,
                 executionCount: 1);
 
@@ -499,7 +488,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "ignored",
+                prompt: "ignored",
                 worktreePath: worktreeDir,
                 executionCount: 1);
 
@@ -510,6 +499,202 @@ public class OpenCodeAdapterTests
         }
         finally
         {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_exports_managed_session_snapshot_after_successful_run()
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-managed-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "managed.sh");
+        var logPath = Path.Combine(worktreeDir, "opencode.log");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "cmd=\"$1\"\n" +
+            "shift\n" +
+            "case \"$cmd\" in\n" +
+            "  run)\n" +
+            "    printf 'run %s\\n' \"$*\" >> \"$ILD_TEST_LOG\"\n" +
+            "    echo '{\"text\":\"hello\",\"sessionId\":\"managed-session\"}'\n" +
+            "    ;;\n" +
+            "  export)\n" +
+            "    printf 'export %s\\n' \"$1\" >> \"$ILD_TEST_LOG\"\n" +
+            "    printf '%s' '{\"id\":\"managed-session\",\"messages\":[1]}'\n" +
+            "    ;;\n" +
+            "  import)\n" +
+            "    printf 'import %s\\n' \"$1\" >> \"$ILD_TEST_LOG\"\n" +
+            "    ;;\n" +
+            "esac\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        var previousLog = Environment.GetEnvironmentVariable("ILD_TEST_LOG");
+        Environment.SetEnvironmentVariable("ILD_TEST_LOG", logPath);
+
+        try
+        {
+            await using var harness = await CreateSessionHarnessAsync();
+            var adapter = new OpenCodeAdapter(harness.Services.GetRequiredService<IServiceScopeFactory>());
+            var runId = Guid.NewGuid();
+            await harness.SeedRunAsync(runId);
+
+            var result = await adapter.ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                prompt: "ignored",
+                worktreePath: worktreeDir,
+                executionCount: 1,
+                runId: runId,
+                manageSession: true));
+
+            result.Success.Should().BeTrue();
+            result.SessionId.Should().Be("managed-session");
+
+            await using var verifyDb = harness.CreateDbContext();
+            var snapshot = await verifyDb.AdapterSessionSnapshots.FindAsync(runId, "OpenCode", "managed-session");
+            snapshot.Should().NotBeNull();
+            snapshot!.SessionJson.Should().Be("{\"id\":\"managed-session\",\"messages\":[1]}");
+
+            File.ReadAllText(logPath).Should().Contain("export managed-session");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ILD_TEST_LOG", previousLog);
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_imports_managed_session_snapshot_before_resuming_run()
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-managed-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "managed.sh");
+        var logPath = Path.Combine(worktreeDir, "opencode.log");
+        var importedPath = Path.Combine(worktreeDir, "imported.json");
+        var readyPath = Path.Combine(worktreeDir, "session-ready");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "cmd=\"$1\"\n" +
+            "shift\n" +
+            "case \"$cmd\" in\n" +
+            "  import)\n" +
+            "    printf 'import %s\\n' \"$1\" >> \"$ILD_TEST_LOG\"\n" +
+            "    cat \"$1\" > \"$ILD_TEST_IMPORTED\"\n" +
+            "    ;;\n" +
+            "  run)\n" +
+            "    printf 'run %s\\n' \"$*\" >> \"$ILD_TEST_LOG\"\n" +
+            "    touch \"$ILD_TEST_READY\"\n" +
+            "    echo '{\"text\":\"still here\"}'\n" +
+            "    ;;\n" +
+            "  export)\n" +
+            "    printf 'export %s\\n' \"$1\" >> \"$ILD_TEST_LOG\"\n" +
+            "    if [ ! -f \"$ILD_TEST_READY\" ]; then exit 1; fi\n" +
+            "    printf '%s' '{\"id\":\"resume-session\",\"messages\":[2]}'\n" +
+            "    ;;\n" +
+            "esac\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        var previousLog = Environment.GetEnvironmentVariable("ILD_TEST_LOG");
+        var previousImported = Environment.GetEnvironmentVariable("ILD_TEST_IMPORTED");
+        var previousReady = Environment.GetEnvironmentVariable("ILD_TEST_READY");
+        Environment.SetEnvironmentVariable("ILD_TEST_LOG", logPath);
+        Environment.SetEnvironmentVariable("ILD_TEST_IMPORTED", importedPath);
+        Environment.SetEnvironmentVariable("ILD_TEST_READY", readyPath);
+
+        try
+        {
+            await using var harness = await CreateSessionHarnessAsync();
+            var runId = Guid.NewGuid();
+            await harness.SeedRunAsync(runId);
+            await harness.SeedSnapshotAsync(runId, "OpenCode", "resume-session", "{\"id\":\"resume-session\",\"messages\":[1]}");
+
+            var adapter = new OpenCodeAdapter(harness.Services.GetRequiredService<IServiceScopeFactory>());
+            var result = await adapter.ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                prompt: "ignored",
+                worktreePath: worktreeDir,
+                sessionId: "resume-session",
+                executionCount: 1,
+                runId: runId,
+                manageSession: true));
+
+            result.Success.Should().BeTrue();
+            result.SessionId.Should().Be("resume-session");
+            File.ReadAllText(importedPath).Should().Be("{\"id\":\"resume-session\",\"messages\":[1]}");
+
+            var log = File.ReadAllText(logPath);
+            log.Should().Contain("import ");
+            log.Should().Contain("run --dir");
+            log.Should().Contain("--session resume-session");
+            log.Should().Contain("export resume-session");
+
+            await using var verifyDb = harness.CreateDbContext();
+            var snapshot = await verifyDb.AdapterSessionSnapshots.FindAsync(runId, "OpenCode", "resume-session");
+            snapshot!.SessionJson.Should().Be("{\"id\":\"resume-session\",\"messages\":[2]}");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ILD_TEST_LOG", previousLog);
+            Environment.SetEnvironmentVariable("ILD_TEST_IMPORTED", previousImported);
+            Environment.SetEnvironmentVariable("ILD_TEST_READY", previousReady);
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_recovers_response_from_exported_managed_session_when_stdout_has_no_text()
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-managed-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "managed.sh");
+        var logPath = Path.Combine(worktreeDir, "opencode.log");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "cmd=\"$1\"\n" +
+            "shift\n" +
+            "case \"$cmd\" in\n" +
+            "  import)\n" +
+            "    printf 'import %s\\n' \"$1\" >> \"$ILD_TEST_LOG\"\n" +
+            "    ;;\n" +
+            "  run)\n" +
+            "    printf 'run %s\\n' \"$*\" >> \"$ILD_TEST_LOG\"\n" +
+            "    echo '{\"type\":\"step_start\",\"sessionID\":\"resume-session\",\"part\":{\"type\":\"step-start\"}}'\n" +
+            "    echo '{\"type\":\"step_finish\",\"sessionID\":\"resume-session\",\"part\":{\"type\":\"step-finish\"}}'\n" +
+            "    ;;\n" +
+            "  export)\n" +
+            "    printf 'export %s\\n' \"$1\" >> \"$ILD_TEST_LOG\"\n" +
+            "    printf '%s' '{\"id\":\"resume-session\",\"messages\":[{\"role\":\"assistant\",\"parts\":[{\"type\":\"reasoning\",\"text\":\"hidden\"},{\"type\":\"text\",\"text\":\"Recovered from session export.\"}]}]}'\n" +
+            "    ;;\n" +
+            "esac\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        var previousLog = Environment.GetEnvironmentVariable("ILD_TEST_LOG");
+        Environment.SetEnvironmentVariable("ILD_TEST_LOG", logPath);
+
+        try
+        {
+            await using var harness = await CreateSessionHarnessAsync();
+            var runId = Guid.NewGuid();
+            await harness.SeedRunAsync(runId);
+            await harness.SeedSnapshotAsync(runId, "OpenCode", "resume-session", "{\"id\":\"resume-session\",\"messages\":[]}");
+
+            var adapter = new OpenCodeAdapter(harness.Services.GetRequiredService<IServiceScopeFactory>());
+            var result = await adapter.ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                prompt: "ignored",
+                worktreePath: worktreeDir,
+                sessionId: "resume-session",
+                executionCount: 1,
+                runId: runId,
+                manageSession: true));
+
+            result.Success.Should().BeTrue();
+            result.Output.Should().Be("Recovered from session export.");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ILD_TEST_LOG", previousLog);
             Directory.Delete(worktreeDir, true);
         }
     }
@@ -536,7 +721,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "ignored",
+                prompt: "ignored",
                 worktreePath: worktreeDir,
                 executionCount: 1);
 
@@ -576,7 +761,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "ignored",
+                prompt: "ignored",
                 worktreePath: worktreeDir,
                 executionCount: 1);
 
@@ -615,7 +800,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "ignored",
+                prompt: "ignored",
                 worktreePath: worktreeDir,
                 executionCount: 1);
 
@@ -632,8 +817,7 @@ public class OpenCodeAdapterTests
 
     private static AgentExecutionContext BuildContext(
         string binaryPath,
-        string initialPrompt = "test prompt",
-        string? loopPrompt = null,
+        string prompt = "test prompt",
         string? config = null,
         string? workItemTitle = null,
         string? workItemDescription = null,
@@ -642,7 +826,9 @@ public class OpenCodeAdapterTests
         int executionCount = 1,
         CancellationToken? cancel = null,
         Func<string, Task>? progressCallback = null,
-        string? sessionId = null)
+        string? sessionId = null,
+        Guid? runId = null,
+        bool manageSession = false)
     {
         var dict = System.Text.Json.JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, object>>(
             config ?? "{}") ?? new System.Collections.Generic.Dictionary<string, object>();
@@ -660,10 +846,9 @@ public class OpenCodeAdapterTests
                 Model = "test-model",
                 Config = mergedConfig
             },
-            InitialPrompt: initialPrompt,
-            LoopPrompt: loopPrompt ?? initialPrompt,
+            Prompt: prompt,
             RunContext: new LoopRunContext(
-                Guid.NewGuid(),
+                runId ?? Guid.NewGuid(),
                 Guid.NewGuid(),
                 workItemTitle ?? "Test Task",
                 workItemDescription ?? "Test description",
@@ -674,6 +859,102 @@ public class OpenCodeAdapterTests
             ExecutionCount: executionCount,
             Cancel: cancel ?? CancellationToken.None,
             ProgressCallback: progressCallback,
-            SessionId: sessionId);
+            SessionId: sessionId,
+            ManageSession: manageSession);
+    }
+
+    private static async Task<SessionHarness> CreateSessionHarnessAsync()
+    {
+        var connection = new SqliteConnection("Filename=:memory:");
+        await connection.OpenAsync();
+
+        var services = new ServiceCollection();
+        services.AddDbContext<AppDbContext>(options => options.UseSqlite(connection));
+        services.AddScoped<IAdapterSessionSnapshotStore, AdapterSessionSnapshotStore>();
+
+        var provider = services.BuildServiceProvider();
+        await using (var scope = provider.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await db.Database.EnsureCreatedAsync();
+        }
+
+        return new SessionHarness(provider, connection);
+    }
+
+    private sealed class SessionHarness : IAsyncDisposable
+    {
+        private readonly ServiceProvider _provider;
+        private readonly SqliteConnection _connection;
+
+        public SessionHarness(ServiceProvider provider, SqliteConnection connection)
+        {
+            _provider = provider;
+            _connection = connection;
+        }
+
+        public IServiceProvider Services => _provider;
+
+        public AppDbContext CreateDbContext()
+        {
+            var options = new DbContextOptionsBuilder<AppDbContext>()
+                .UseSqlite(_connection)
+                .Options;
+            return new AppDbContext(options);
+        }
+
+        public async Task SeedSnapshotAsync(Guid runId, string adapterName, string sessionId, string sessionJson)
+        {
+            await using var db = CreateDbContext();
+            db.AdapterSessionSnapshots.Add(new AdapterSessionSnapshot
+            {
+                LoopRunId = runId,
+                AdapterName = adapterName,
+                SessionId = sessionId,
+                SessionJson = sessionJson,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        public async Task SeedRunAsync(Guid runId)
+        {
+            await using var db = CreateDbContext();
+
+            var templateId = Guid.NewGuid();
+            var versionId = Guid.NewGuid();
+
+            db.LoopTemplates.Add(new LoopTemplate
+            {
+                Id = templateId,
+                Name = $"template-{runId:N}",
+                RecoveryPolicy = RecoveryPolicy.AutoResume,
+                MaxNodeExecutions = 1,
+                MaxWallClockHours = 1,
+            });
+
+            db.LoopTemplateVersions.Add(new LoopTemplateVersion
+            {
+                Id = versionId,
+                LoopTemplateId = templateId,
+                VersionNumber = 1,
+            });
+
+            db.LoopRuns.Add(new LoopRun
+            {
+                Id = runId,
+                WorkItemId = Guid.NewGuid(),
+                LoopTemplateVersionId = versionId,
+                Status = LoopRunStatus.Running,
+                RecoveryPolicy = RecoveryPolicy.AutoResume,
+            });
+
+            await db.SaveChangesAsync();
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await _provider.DisposeAsync();
+            await _connection.DisposeAsync();
+        }
     }
 }

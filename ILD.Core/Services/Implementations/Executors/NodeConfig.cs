@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace ILD.Core.Services.Implementations.Executors;
 
@@ -26,17 +27,22 @@ internal static class NodeConfig
     public sealed record Ai
     {
         public string? AiProviderId { get; init; }
-        public string? InitialPrompt { get; init; }
-        public string? LoopPrompt { get; init; }
+        public bool? UseSession { get; init; }
+        public string? Prompt { get; init; }
         public string? RejectPattern { get; init; }
         public JsonElement? AdapterConfig { get; init; }
-        public string? SessionInput { get; init; }
-        public string? SessionOutput { get; init; }
+        public string? SessionPlaceholder { get; init; }
     }
 
     public sealed record Human
     {
         public string? Prompt { get; init; }
+    }
+
+    public sealed record Prompt
+    {
+        [JsonPropertyName("prompt")]
+        public string? Template { get; init; }
     }
 
     public sealed record Pr

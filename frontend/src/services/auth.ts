@@ -13,6 +13,7 @@ import {
   LoopNode,
   LoopNodeEdge,
   PrComment,
+  LoopRunSessionPreview,
 } from "../types";
 
 interface BackendLoginResponse {
@@ -291,6 +292,15 @@ export const loopRunService = {
 
   getPayload: async (runId: string, sequence: number): Promise<{ payload: string }> => {
     return api.get<{ payload: string }>(`/loopruns/${runId}/events/payload?sequence=${sequence}`);
+  },
+
+  getSessionPreview: async (
+    runId: string,
+    adapterName: string,
+    sessionId: string,
+  ): Promise<LoopRunSessionPreview> => {
+    const params = new URLSearchParams({ adapterName, sessionId });
+    return api.get<LoopRunSessionPreview>(`/loopruns/${runId}/sessions/preview?${params}`);
   },
 };
 

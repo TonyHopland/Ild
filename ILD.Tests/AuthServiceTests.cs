@@ -4,6 +4,7 @@ using ILD.Core.Services.Implementations;
 
 namespace ILD.Tests;
 
+[Collection("AuthEnvironment")]
 public class AuthServiceTests
 {
     private static AuthService Make(TestDb db, string password = "secret")

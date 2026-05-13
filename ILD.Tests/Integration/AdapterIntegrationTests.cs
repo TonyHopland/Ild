@@ -19,6 +19,7 @@ namespace ILD.Tests.Integration;
 ///   ILD_INTEGRATION_LLM_MODEL=default_model \
 ///   dotnet test --filter "FullyQualifiedName~ILD.Tests.Integration.AdapterIntegrationTests"
 /// </summary>
+[Collection("AuthEnvironment")]
 [Trait("category", "manual")]
 [Trait("category", "explicit")]
 public class AdapterIntegrationTests
@@ -189,8 +190,7 @@ public class AdapterIntegrationTests
     {
         return new AgentExecutionContext(
             Provider: provider,
-            InitialPrompt: prompt,
-            LoopPrompt: prompt,
+            Prompt: prompt,
             RunContext: new LoopRunContext(
                 Guid.NewGuid(),
                 Guid.NewGuid(),

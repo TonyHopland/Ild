@@ -62,6 +62,18 @@ describe("loopRunService URL contract", () => {
     expect(url).toBe("/api/v1/loopruns/abc-123/resume");
     expect(init?.method).toBe("POST");
   });
+
+  test("getSessionPreview calls GET /api/v1/loopruns/:id/sessions/preview", async () => {
+    fetchSpy.mockResolvedValue(okJsonResponse({}));
+
+    await loopRunService.getSessionPreview("abc-123", "OpenCode", "ses_1");
+
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe(
+      "/api/v1/loopruns/abc-123/sessions/preview?adapterName=OpenCode&sessionId=ses_1",
+    );
+    expect(init?.method).toBe("GET");
+  });
 });
 
 describe("workItemService URL contract", () => {

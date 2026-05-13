@@ -146,15 +146,14 @@ public class AINodeExecutorEventLogTests
         services.AddSingleton(registry);
         services.AddSingleton(loopRunStore);
         services.AddSingleton(eventLogService);
-        services.AddSingleton<IAiSessionManager, AiSessionManager>();
         return services.BuildServiceProvider();
     }
 
     private static NodeExecutionContext BuildNodeExecutionContext(string? providerName, Guid runId, Guid nodeId)
     {
         var config = providerName != null
-            ? $"{{\"aiProviderId\":\"{providerName}\",\"initialPrompt\":\"test prompt\"}}"
-            : "{\"initialPrompt\":\"test prompt\"}";
+            ? $"{{\"aiProviderId\":\"{providerName}\",\"prompt\":\"test prompt\"}}"
+            : "{\"prompt\":\"test prompt\"}";
 
         return new NodeExecutionContext(
             Run: new LoopRun { Id = runId },

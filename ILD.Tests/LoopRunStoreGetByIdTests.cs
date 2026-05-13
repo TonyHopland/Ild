@@ -2,6 +2,7 @@ using FluentAssertions;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores;
+using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Tests;
 
@@ -84,5 +85,58 @@ public class LoopRunStoreGetByIdTests
         var result = await freshStore.GetRunNodesAsync(run.Id);
 
         result.Select(n => n.Id).Should().Equal(n1.Id, n2.Id, n3.Id);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_removes_run_with_event_logs()
+    {
+        using var db = new TestDb();
+
+        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/repo.git" };
+        db.Context.RemoteProviders.Add(remote);
+        db.Context.Repositories.Add(repo);
+
+        var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t" };
+        db.Context.LoopTemplates.Add(template);
+        var version = new LoopTemplateVersion
+        {
+            Id = Guid.NewGuid(),
+            LoopTemplateId = template.Id,
+            VersionNumber = 1,
+            CreatedAt = DateTime.UtcNow,
+        };
+        db.Context.LoopTemplateVersions.Add(version);
+
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = Guid.NewGuid(),
+            LoopTemplateVersionId = version.Id,
+            Status = LoopRunStatus.Completed,
+            RecoveryPolicy = RecoveryPolicy.AutoResume,
+            StartedAt = DateTime.UtcNow.AddMinutes(-1),
+            CompletedAt = DateTime.UtcNow,
+        };
+        db.Context.LoopRuns.Add(run);
+        db.Context.EventLogs.Add(new EventLog
+        {
+            Id = Guid.NewGuid(),
+            LoopRunId = run.Id,
+            Sequence = 1,
+            EventType = EventType.LoopRunCompleted,
+            Timestamp = DateTime.UtcNow,
+            Data = "done",
+        });
+        await db.Context.SaveChangesAsync();
+
+        var freshStore = new LoopRunStore(db.Fresh());
+        var deleted = await freshStore.DeleteAsync(run.Id);
+
+        deleted.Should().BeTrue();
+
+        using var verify = db.Fresh();
+        (await verify.LoopRuns.FindAsync(run.Id)).Should().BeNull();
+        (await verify.EventLogs.Where(e => e.LoopRunId == run.Id).CountAsync()).Should().Be(0);
     }
 }

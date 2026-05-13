@@ -5,6 +5,8 @@ using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Remote;
 using ILD.Api.Middleware;
 using ILD.Api.Services;
+using ILD.Data.Stores;
+using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -34,7 +36,6 @@ public static class ServiceCollectionExtensions
                 string.IsNullOrWhiteSpace(worktreesRoot) ? null : worktreesRoot);
         });
         services.AddSingleton<IPromptTemplateResolver, PromptTemplateResolver>();
-        services.AddSingleton<IAiSessionManager, AiSessionManager>();
         services.AddScoped<IPromptRenderingService, PromptRenderingService>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
         services.AddScoped<IRemoteProvider, RemoteProviderService>();
@@ -42,6 +43,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IEventLogService, EventLogService>();
         services.AddScoped<IRecoveryManager, RecoveryManager>();
         services.AddScoped<IPrSyncService, PrSyncService>();
+        services.AddScoped<IAdapterSessionSnapshotStore, AdapterSessionSnapshotStore>();
 
         services.AddSingleton<IRunNotifier, SignalRRunNotifier>();
         services.AddSingleton<IWorkItemNotifier, SignalRWorkItemNotifier>();
@@ -49,6 +51,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<INodeExecutor, CmdNodeExecutor>();
         services.AddSingleton<INodeExecutor, AINodeExecutor>();
         services.AddSingleton<INodeExecutor, HumanNodeExecutor>();
+        services.AddSingleton<INodeExecutor, PromptNodeExecutor>();
         services.AddSingleton<INodeExecutor, PRNodeExecutor>();
         services.AddSingleton<INodeExecutor, CleanupNodeExecutor>();
         services.AddSingleton<INodeExecutorRegistry, NodeExecutorRegistry>();

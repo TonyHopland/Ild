@@ -60,6 +60,48 @@ public class LoopRunStore : ILoopRunStore
             .OrderBy(rn => rn.CreatedAt)
             .ToListAsync();
 
+    public async Task<IReadOnlyList<AdapterSessionSnapshot>> GetSessionSnapshotsAsync(Guid runId)
+        => await _db.AdapterSessionSnapshots
+            .Where(s => s.LoopRunId == runId)
+            .OrderByDescending(s => s.UpdatedAt ?? s.CreatedAt)
+            .ThenBy(s => s.AdapterName)
+            .ThenBy(s => s.SessionId)
+            .ToListAsync();
+
+    public async Task<IReadOnlyList<LoopRunSessionBinding>> GetSessionBindingsAsync(Guid runId)
+        => await _db.LoopRunSessionBindings
+            .Where(s => s.LoopRunId == runId)
+            .OrderBy(s => s.AdapterName)
+            .ThenBy(s => s.PlaceholderId)
+            .ToListAsync();
+
+    public async Task<LoopRunSessionBinding?> GetSessionBindingAsync(Guid runId, string adapterName, string placeholderId)
+        => await _db.LoopRunSessionBindings.FirstOrDefaultAsync(s =>
+            s.LoopRunId == runId
+            && s.AdapterName == adapterName
+            && s.PlaceholderId == placeholderId);
+
+    public async Task UpsertSessionBindingAsync(Guid runId, string adapterName, string placeholderId, string sessionId)
+    {
+        var existing = await GetSessionBindingAsync(runId, adapterName, placeholderId);
+        if (existing is null)
+        {
+            _db.LoopRunSessionBindings.Add(new LoopRunSessionBinding
+            {
+                LoopRunId = runId,
+                AdapterName = adapterName,
+                PlaceholderId = placeholderId,
+                SessionId = sessionId,
+            });
+        }
+        else
+        {
+            existing.SessionId = sessionId;
+        }
+
+        await _db.SaveChangesAsync();
+    }
+
     public async Task<LoopRunNode?> GetRunNodeAsync(Guid runId, Guid nodeId)
         => await _db.LoopRunNodes
             .Where(rn => rn.LoopRunId == runId && rn.LoopNodeId == nodeId)
@@ -84,9 +126,7 @@ public class LoopRunStore : ILoopRunStore
         // relationship fixup also pulls in any navigation already linked
         // via POCO references from prior scopes (see e.g. LoopRunNode.LoopRun
         // populated by an earlier per-attempt scope), causing those stale
-        // entities to be saved back over fresh data (in particular wiping
-        // SessionsJson back to its loaded NULL value after the AI node
-        // had just persisted a session ID).
+        // entities to be saved back over fresh data.
         var entry = _db.Entry(run);
         if (entry.State == EntityState.Detached)
             _db.LoopRuns.Attach(run);
@@ -103,9 +143,8 @@ public class LoopRunStore : ILoopRunStore
     public async Task UpdateRunNodeAsync(LoopRunNode runNode)
     {
         // Same rationale as UpdateRunAsync: avoid DbSet.Update graph
-        // traversal which would drag a navigation-linked LoopRun (with
-        // stale SessionsJson) into the new context as Modified and clobber
-        // it on save.
+        // traversal which would drag a navigation-linked LoopRun into the
+        // new context as Modified and clobber it on save.
         var entry = _db.Entry(runNode);
         if (entry.State == EntityState.Detached)
             _db.LoopRunNodes.Attach(runNode);
@@ -172,6 +211,12 @@ public class LoopRunStore : ILoopRunStore
         var run = await _db.LoopRuns.FirstOrDefaultAsync(r => r.Id == runId);
         if (run == null) return false;
         if (run.Status == LoopRunStatus.Running) return false;
+
+        var eventLogs = await _db.EventLogs
+            .Where(e => e.LoopRunId == runId)
+            .ToListAsync();
+        if (eventLogs.Count > 0)
+            _db.EventLogs.RemoveRange(eventLogs);
 
         _db.LoopRuns.Remove(run);
         await _db.SaveChangesAsync();

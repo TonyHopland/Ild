@@ -6,10 +6,10 @@ namespace ILD.Tests;
 
 public class LoopTemplateValidatorTests
 {
-    private static LoopNodeDto Node(string id, string type, string? initialPrompt = null)
+    private static LoopNodeDto Node(string id, string type, string? prompt = null)
     {
         var dto = new LoopNodeDto { Id = id, NodeType = type, Label = id };
-        if (initialPrompt != null) dto.Config["initialPrompt"] = initialPrompt;
+        if (prompt != null) dto.Config["prompt"] = prompt;
         return dto;
     }
 
@@ -78,6 +78,39 @@ public class LoopTemplateValidatorTests
             new() { Edge("s", "a"), Edge("a", "c") });
         var errs = LoopTemplateValidator.Validate(g);
         errs.Should().Contain(e => e.Contains("Bogus"));
+    }
+
+    [Fact]
+    public void Unknown_placeholder_in_prompt_node_invalid()
+    {
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() {
+                Node("s", "Start"),
+                Node("a", "Prompt", "Retry: {{Bogus.Session}}"),
+                Node("c", "Cleanup")
+            },
+            new() { Edge("s", "a"), Edge("a", "c") });
+
+        var errs = LoopTemplateValidator.Validate(g);
+        errs.Should().Contain(e => e.Contains("Bogus.Session"));
+    }
+
+    [Fact]
+    public void Ai_node_with_use_session_and_no_placeholder_is_invalid()
+    {
+        var ai = Node("a", "AI", "Title: {{WorkItem.Title}}");
+        ai.Config["useSession"] = true;
+
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() {
+                Node("s", "Start"),
+                ai,
+                Node("c", "Cleanup")
+            },
+            new() { Edge("s", "a"), Edge("a", "c") });
+
+        var errs = LoopTemplateValidator.Validate(g);
+        errs.Should().Contain(e => e.Contains("sessionPlaceholder"));
     }
 
     [Fact]

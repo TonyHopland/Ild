@@ -14,24 +14,25 @@ public class AuthService : IAuthService
     private const string DefaultUsername = "admin";
 
     private readonly IAuthStore _authStore;
+    private readonly string? _configuredPassword;
 
     public AuthService(IAuthStore authStore)
     {
         _authStore = authStore;
+        _configuredPassword = Environment.GetEnvironmentVariable("ILD_PASSWORD");
     }
 
     public async Task<AuthResult> LoginAsync(string username, string password)
     {
-        var envPassword = Environment.GetEnvironmentVariable("ILD_PASSWORD");
         var user = await _authStore.GetByUsernameAsync(username);
 
-        if (user == null && username == DefaultUsername && !string.IsNullOrEmpty(envPassword))
+        if (user == null && username == DefaultUsername && !string.IsNullOrEmpty(_configuredPassword))
         {
             user = new User
             {
                 Id = Guid.NewGuid(),
                 Username = DefaultUsername,
-                PasswordHash = HashPassword(envPassword),
+                PasswordHash = HashPassword(_configuredPassword),
                 CreatedAt = DateTime.UtcNow,
             };
             await _authStore.CreateUserAsync(user);

@@ -12,12 +12,18 @@ public class LoopRunsController : ControllerBase
     private readonly ILoopEngine _loopEngine;
     private readonly IEventLogService _eventLogService;
     private readonly ILoopRunStore _loopRunStore;
+    private readonly IAdapterSessionSnapshotStore _sessionSnapshotStore;
 
-    public LoopRunsController(ILoopEngine loopEngine, IEventLogService eventLogService, ILoopRunStore loopRunStore)
+    public LoopRunsController(
+        ILoopEngine loopEngine,
+        IEventLogService eventLogService,
+        ILoopRunStore loopRunStore,
+        IAdapterSessionSnapshotStore sessionSnapshotStore)
     {
         _loopEngine = loopEngine;
         _eventLogService = eventLogService;
         _loopRunStore = loopRunStore;
+        _sessionSnapshotStore = sessionSnapshotStore;
     }
 
     [HttpGet]
@@ -67,6 +73,11 @@ public class LoopRunsController : ControllerBase
             return NotFound(new { error = "Run not found" });
 
         var runNodes = await _loopRunStore.GetRunNodesAsync(guid);
+        var sessionSnapshots = await _loopRunStore.GetSessionSnapshotsAsync(guid);
+        var sessionBindings = await _loopRunStore.GetSessionBindingsAsync(guid);
+        var currentSessionIds = sessionBindings
+            .Select(b => $"{b.AdapterName}\n{b.SessionId}")
+            .ToHashSet(StringComparer.Ordinal);
 
         return Ok(new
         {
@@ -80,6 +91,20 @@ public class LoopRunsController : ControllerBase
             nodeExecutionCount = run.NodeExecutionCount,
             startedAt = run.StartedAt,
             completedAt = run.CompletedAt,
+            availableSessions = sessionSnapshots.Select(s => new
+            {
+                adapterName = s.AdapterName,
+                sessionId = s.SessionId,
+                createdAt = s.CreatedAt,
+                updatedAt = s.UpdatedAt,
+                isCurrent = currentSessionIds.Contains($"{s.AdapterName}\n{s.SessionId}"),
+                placeholders = sessionBindings
+                    .Where(b => b.AdapterName == s.AdapterName && b.SessionId == s.SessionId)
+                    .Select(b => b.PlaceholderId)
+                    .Distinct()
+                    .OrderBy(v => v)
+                    .ToList(),
+            }).ToList(),
             nodes = runNodes.Select(rn => new
             {
                 id = rn.Id,
@@ -206,5 +231,31 @@ public class LoopRunsController : ControllerBase
 
         var content = await System.IO.File.ReadAllTextAsync(entry.PayloadPath);
         return Ok(new { payload = content });
+    }
+
+    [HttpGet("{id}/sessions/preview")]
+    public async Task<IActionResult> GetSessionPreview(
+        string id,
+        [FromQuery] string adapterName,
+        [FromQuery] string sessionId)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+
+        if (string.IsNullOrWhiteSpace(adapterName) || string.IsNullOrWhiteSpace(sessionId))
+            return BadRequest(new { error = "adapterName and sessionId are required" });
+
+        var snapshot = await _sessionSnapshotStore.GetAsync(guid, adapterName, sessionId);
+        if (snapshot == null)
+            return NotFound(new { error = "Session snapshot not found" });
+
+        return Ok(new
+        {
+            adapterName = snapshot.AdapterName,
+            sessionId = snapshot.SessionId,
+            createdAt = snapshot.CreatedAt,
+            updatedAt = snapshot.UpdatedAt,
+            sessionJson = snapshot.SessionJson,
+        });
     }
 }

@@ -17,6 +17,38 @@ namespace ILD.Data.Migrations
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.7");
 
+            modelBuilder.Entity("ILD.Data.Entities.AdapterSessionSnapshot", b =>
+                {
+                    b.Property<Guid>("LoopRunId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AdapterName")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SessionId")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP");
+
+                    b.Property<string>("SessionJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("LoopRunId", "AdapterName", "SessionId");
+
+                    b.HasIndex("LoopRunId", "AdapterName");
+
+                    b.ToTable("AdapterSessionSnapshots");
+                });
+
             modelBuilder.Entity("ILD.Data.Entities.AiProvider", b =>
                 {
                     b.Property<Guid>("Id")
@@ -233,9 +265,6 @@ namespace ILD.Data.Migrations
                     b.Property<Guid?>("RepositoryId")
                         .HasColumnType("TEXT");
 
-                    b.Property<string>("SessionsJson")
-                        .HasColumnType("TEXT");
-
                     b.Property<DateTime?>("StartedAt")
                         .HasColumnType("TEXT");
 
@@ -339,6 +368,39 @@ namespace ILD.Data.Migrations
                     b.HasIndex("Status");
 
                     b.ToTable("LoopRunNodes");
+                });
+
+            modelBuilder.Entity("ILD.Data.Entities.LoopRunSessionBinding", b =>
+                {
+                    b.Property<Guid>("LoopRunId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AdapterName")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PlaceholderId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP");
+
+                    b.Property<string>("SessionId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("LoopRunId", "AdapterName", "PlaceholderId");
+
+                    b.HasIndex("LoopRunId", "AdapterName", "SessionId");
+
+                    b.ToTable("LoopRunSessionBindings");
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.LoopTemplate", b =>
@@ -562,6 +624,17 @@ namespace ILD.Data.Migrations
                     b.ToTable("Users");
                 });
 
+            modelBuilder.Entity("ILD.Data.Entities.AdapterSessionSnapshot", b =>
+                {
+                    b.HasOne("ILD.Data.Entities.LoopRun", "LoopRun")
+                        .WithMany()
+                        .HasForeignKey("LoopRunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("LoopRun");
+                });
+
             modelBuilder.Entity("ILD.Data.Entities.EventLog", b =>
                 {
                     b.HasOne("ILD.Data.Entities.LoopRun", "LoopRun")
@@ -646,6 +719,17 @@ namespace ILD.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("LoopNode");
+
+                    b.Navigation("LoopRun");
+                });
+
+            modelBuilder.Entity("ILD.Data.Entities.LoopRunSessionBinding", b =>
+                {
+                    b.HasOne("ILD.Data.Entities.LoopRun", "LoopRun")
+                        .WithMany()
+                        .HasForeignKey("LoopRunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
 
                     b.Navigation("LoopRun");
                 });
