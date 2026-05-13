@@ -2,8 +2,7 @@ namespace ILD.Data.DTOs;
 
 public record AgentExecutionContext(
     Entities.AiProvider Provider,
-    string InitialPrompt,
-    string SessionPrompt,
+    string Prompt,
     LoopRunContext RunContext,
     int ExecutionCount,
     CancellationToken Cancel,

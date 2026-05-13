@@ -29,8 +29,7 @@ public class OpenAiCompatibleAdapter : IAgentAdapter
 
     public async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
-        var prompt = string.IsNullOrWhiteSpace(ctx.SessionId) ? ctx.InitialPrompt : ctx.SessionPrompt;
-        var rendered = await RenderPromptAsync(prompt, ctx.RunContext);
+        var rendered = await RenderPromptAsync(ctx.Prompt, ctx.RunContext);
 
         var (baseUrl, apiKey, model, providerTemp, providerMaxTokens) = ResolveProviderSettings(ctx.Provider);
 

@@ -8,6 +8,7 @@ namespace ILD.Tests.Integration;
 /// (<c>/api/v1/loopruns/{id}/events</c>). These tests verify route wiring and
 /// auth behaviour for those event endpoints.
 /// </summary>
+[Collection("AuthEnvironment")]
 public class EventLogIntegrationTests
 {
     [Fact]

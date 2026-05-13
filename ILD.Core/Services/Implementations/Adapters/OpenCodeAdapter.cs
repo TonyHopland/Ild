@@ -31,8 +31,7 @@ public class OpenCodeAdapter : IAgentAdapter
     {
         try
         {
-            var prompt = string.IsNullOrWhiteSpace(ctx.SessionId) ? ctx.InitialPrompt : ctx.SessionPrompt;
-            var rendered = await RenderPromptAsync(prompt, ctx.RunContext);
+            var rendered = await RenderPromptAsync(ctx.Prompt, ctx.RunContext);
 
             var binaryPath = ResolveBinaryPath(ctx.Provider);
 

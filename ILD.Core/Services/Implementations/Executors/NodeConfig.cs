@@ -28,8 +28,7 @@ internal static class NodeConfig
     {
         public string? AiProviderId { get; init; }
         public bool? UseSession { get; init; }
-        public string? InitialPrompt { get; init; }
-        public string? SessionPrompt { get; init; }
+        public string? Prompt { get; init; }
         public string? RejectPattern { get; init; }
         public JsonElement? AdapterConfig { get; init; }
         public string? SessionPlaceholder { get; init; }

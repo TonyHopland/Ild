@@ -53,30 +53,13 @@ public class OpenCodeAdapterTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_on_first_execution_uses_initial_prompt()
+    public async Task ExecuteAsync_uses_prompt_for_all_executions()
     {
         var adapter = new OpenCodeAdapter();
 
         var ctx = BuildContext(
             binaryPath: "/bin/true",
-            initialPrompt: "initial prompt here",
-            sessionPrompt: "loop prompt here",
-            executionCount: 1);
-
-        var result = await adapter.ExecuteAsync(ctx);
-
-        result.Success.Should().BeTrue();
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_on_loopback_uses_loop_prompt()
-    {
-        var adapter = new OpenCodeAdapter();
-
-        var ctx = BuildContext(
-            binaryPath: "/bin/true",
-            initialPrompt: "initial prompt here",
-            sessionPrompt: "loop prompt here",
+            prompt: "shared prompt here",
             executionCount: 2);
 
         var result = await adapter.ExecuteAsync(ctx);
@@ -121,7 +104,7 @@ public class OpenCodeAdapterTests
 
         var ctx = BuildContext(
             binaryPath: "/bin/sh",
-            initialPrompt: "-c exit 42",
+            prompt: "-c exit 42",
             executionCount: 1);
 
         var result = await adapter.ExecuteAsync(ctx);
@@ -137,7 +120,7 @@ public class OpenCodeAdapterTests
 
         var ctx = BuildContext(
             binaryPath: "/bin/true",
-            initialPrompt: "Fix: {{WorkItem.Title}} - {{WorkItem.Description}}",
+            prompt: "Fix: {{WorkItem.Title}} - {{WorkItem.Description}}",
             workItemTitle: "Null reference in parser",
             workItemDescription: "Fix the crash",
             executionCount: 1);
@@ -161,7 +144,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: "/bin/true",
-                initialPrompt: "Read: {{WorkTree.File:test.txt}}",
+                prompt: "Read: {{WorkTree.File:test.txt}}",
                 worktreePath: worktreeDir,
                 executionCount: 1);
 
@@ -190,7 +173,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "ignored",
+                prompt: "ignored",
                 worktreePath: worktreeDir,
                 executionCount: 1);
 
@@ -250,7 +233,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "ignored",
+                prompt: "ignored",
                 worktreePath: worktreeDir,
                 executionCount: 1,
                 progressCallback: (line) =>
@@ -298,7 +281,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "ignored",
+                prompt: "ignored",
                 worktreePath: worktreeDir,
                 executionCount: 1,
                 progressCallback: (line) =>
@@ -341,7 +324,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "ignored",
+                prompt: "ignored",
                 executionCount: 1,
                 progressCallback: (line) =>
                 {
@@ -377,7 +360,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "ignored",
+                prompt: "ignored",
                 worktreePath: worktreeDir,
                 apiKey: "test-secret-key-123",
                 executionCount: 1);
@@ -408,7 +391,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "my prompt",
+                prompt: "my prompt",
                 worktreePath: worktreeDir,
                 sessionId: "test-session-abc",
                 executionCount: 1);
@@ -440,7 +423,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "my prompt",
+                prompt: "my prompt",
                 worktreePath: worktreeDir,
                 sessionId: null,
                 executionCount: 1);
@@ -471,7 +454,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "ignored",
+                prompt: "ignored",
                 worktreePath: worktreeDir,
                 executionCount: 1);
 
@@ -505,7 +488,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "ignored",
+                prompt: "ignored",
                 worktreePath: worktreeDir,
                 executionCount: 1);
 
@@ -558,7 +541,7 @@ public class OpenCodeAdapterTests
 
             var result = await adapter.ExecuteAsync(BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "ignored",
+                prompt: "ignored",
                 worktreePath: worktreeDir,
                 executionCount: 1,
                 runId: runId,
@@ -629,7 +612,7 @@ public class OpenCodeAdapterTests
             var adapter = new OpenCodeAdapter(harness.Services.GetRequiredService<IServiceScopeFactory>());
             var result = await adapter.ExecuteAsync(BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "ignored",
+                prompt: "ignored",
                 worktreePath: worktreeDir,
                 sessionId: "resume-session",
                 executionCount: 1,
@@ -699,7 +682,7 @@ public class OpenCodeAdapterTests
             var adapter = new OpenCodeAdapter(harness.Services.GetRequiredService<IServiceScopeFactory>());
             var result = await adapter.ExecuteAsync(BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "ignored",
+                prompt: "ignored",
                 worktreePath: worktreeDir,
                 sessionId: "resume-session",
                 executionCount: 1,
@@ -738,7 +721,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "ignored",
+                prompt: "ignored",
                 worktreePath: worktreeDir,
                 executionCount: 1);
 
@@ -778,7 +761,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "ignored",
+                prompt: "ignored",
                 worktreePath: worktreeDir,
                 executionCount: 1);
 
@@ -817,7 +800,7 @@ public class OpenCodeAdapterTests
 
             var ctx = BuildContext(
                 binaryPath: scriptPath,
-                initialPrompt: "ignored",
+                prompt: "ignored",
                 worktreePath: worktreeDir,
                 executionCount: 1);
 
@@ -834,8 +817,7 @@ public class OpenCodeAdapterTests
 
     private static AgentExecutionContext BuildContext(
         string binaryPath,
-        string initialPrompt = "test prompt",
-        string? sessionPrompt = null,
+        string prompt = "test prompt",
         string? config = null,
         string? workItemTitle = null,
         string? workItemDescription = null,
@@ -864,8 +846,7 @@ public class OpenCodeAdapterTests
                 Model = "test-model",
                 Config = mergedConfig
             },
-            InitialPrompt: initialPrompt,
-            SessionPrompt: sessionPrompt ?? initialPrompt,
+            Prompt: prompt,
             RunContext: new LoopRunContext(
                 runId ?? Guid.NewGuid(),
                 Guid.NewGuid(),

@@ -17,6 +17,7 @@ namespace ILD.Tests.Integration;
 ///   - items MUST be stamped with the originating LoopRun id (from header or
 ///     body) so a user can batch-clean up rogue agent output.
 /// </summary>
+[Collection("AuthEnvironment")]
 public class AgentApiIntegrationTests
 {
     [Fact]

@@ -152,7 +152,7 @@ public class AINodeExecutorTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_when_session_prompt_not_set_uses_initial_prompt()
+    public async Task ExecuteAsync_uses_prompt_config_for_adapter_context()
     {
         var nodeId = Guid.NewGuid();
         var runId = Guid.NewGuid();
@@ -186,8 +186,7 @@ public class AINodeExecutorTests
 
         var executor = new AINodeExecutor(sp);
 
-        // Config has initialPrompt but no sessionPrompt
-        var config = $"{{\"aiProviderId\":\"my-provider\",\"initialPrompt\":\"first prompt here\"}}";
+        var config = $"{{\"aiProviderId\":\"my-provider\",\"prompt\":\"first prompt here\"}}";
         var ctx = new NodeExecutionContext(
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
@@ -199,8 +198,7 @@ public class AINodeExecutorTests
         var result = await executor.ExecuteAsync(ctx);
 
         result.Success.Should().BeTrue();
-        testAdapter.CapturedInitialPrompt.Should().Be("first prompt here");
-        testAdapter.CapturedSessionPrompt.Should().Be("first prompt here");
+        testAdapter.CapturedPrompt.Should().Be("first prompt here");
     }
 
     [Fact]
@@ -351,7 +349,7 @@ public class AINodeExecutorTests
 
         var executor = new AINodeExecutor(sp);
 
-        var config = "{\"aiProviderId\":\"my-provider\",\"initialPrompt\":\"test prompt\"}";
+        var config = "{\"aiProviderId\":\"my-provider\",\"prompt\":\"test prompt\"}";
         var ctx = new NodeExecutionContext(
             Run: new LoopRun { Id = Guid.NewGuid() },
             RunNode: new LoopRunNode { RetryCount = 0 },
@@ -390,7 +388,7 @@ public class AINodeExecutorTests
 
         var executor = new AINodeExecutor(sp);
 
-        var config = "{\"aiProviderId\":\"my-provider\",\"initialPrompt\":\"test prompt\"}";
+        var config = "{\"aiProviderId\":\"my-provider\",\"prompt\":\"test prompt\"}";
         var ctx = new NodeExecutionContext(
             Run: new LoopRun { Id = Guid.NewGuid() },
             RunNode: new LoopRunNode { RetryCount = 0 },
@@ -456,7 +454,7 @@ public class AINodeExecutorTests
 
         var executor = new AINodeExecutor(sp);
 
-        var config = "{\"aiProviderId\":\"my-provider\",\"initialPrompt\":\"test\",\"rejectPattern\":\"I cannot|I'm unable\"}";
+        var config = "{\"aiProviderId\":\"my-provider\",\"prompt\":\"test\",\"rejectPattern\":\"I cannot|I'm unable\"}";
         var ctx = new NodeExecutionContext(
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
@@ -502,7 +500,7 @@ public class AINodeExecutorTests
 
         var executor = new AINodeExecutor(sp);
 
-        var config = "{\"aiProviderId\":\"my-provider\",\"initialPrompt\":\"test\",\"rejectPattern\":\"REJECT\"}";
+        var config = "{\"aiProviderId\":\"my-provider\",\"prompt\":\"test\",\"rejectPattern\":\"REJECT\"}";
         var ctx = new NodeExecutionContext(
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
@@ -547,7 +545,7 @@ public class AINodeExecutorTests
 
         var executor = new AINodeExecutor(sp);
 
-        var config = "{\"aiProviderId\":\"my-provider\",\"initialPrompt\":\"test\",\"rejectPattern\":\"cannot\"}";
+        var config = "{\"aiProviderId\":\"my-provider\",\"prompt\":\"test\",\"rejectPattern\":\"cannot\"}";
         var ctx = new NodeExecutionContext(
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
@@ -604,7 +602,7 @@ public class AINodeExecutorTests
 
         var executor = new AINodeExecutor(sp);
 
-        var config = """{"aiProviderId":"my-provider","initialPrompt":"test","useSession":true,"sessionPlaceholder":"research"}""";
+        var config = """{"aiProviderId":"my-provider","prompt":"test","useSession":true,"sessionPlaceholder":"research"}""";
         var ctx = new NodeExecutionContext(
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
@@ -621,7 +619,7 @@ public class AINodeExecutorTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_when_useSession_and_binding_exists_uses_session_prompt()
+    public async Task ExecuteAsync_when_useSession_and_binding_exists_uses_same_prompt_with_bound_session()
     {
         var providerId = Guid.NewGuid();
         var nodeId = Guid.NewGuid();
@@ -663,7 +661,7 @@ public class AINodeExecutorTests
 
         var executor = new AINodeExecutor(sp);
 
-        var config = """{"aiProviderId":"my-provider","useSession":true,"initialPrompt":"default prompt","sessionPrompt":"session prompt","sessionPlaceholder":"research"}""";
+        var config = """{"aiProviderId":"my-provider","useSession":true,"prompt":"default prompt","sessionPlaceholder":"research"}""";
         var ctx = new NodeExecutionContext(
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
@@ -675,13 +673,12 @@ public class AINodeExecutorTests
         var result = await executor.ExecuteAsync(ctx);
 
         result.Success.Should().BeTrue();
-        testAdapter.CapturedInitialPrompt.Should().Be("default prompt");
-        testAdapter.CapturedSessionPrompt.Should().Be("session prompt");
+        testAdapter.CapturedPrompt.Should().Be("default prompt");
         testAdapter.CapturedSessionId.Should().Be("bound-session");
     }
 
     [Fact]
-    public async Task ExecuteAsync_when_useSession_and_binding_missing_uses_default_prompt()
+    public async Task ExecuteAsync_when_useSession_and_binding_missing_uses_same_prompt_without_bound_session()
     {
         var providerId = Guid.NewGuid();
         var nodeId = Guid.NewGuid();
@@ -717,7 +714,7 @@ public class AINodeExecutorTests
 
         var executor = new AINodeExecutor(sp);
 
-        var config = """{"aiProviderId":"my-provider","useSession":true,"initialPrompt":"default prompt","sessionPrompt":"session prompt","sessionPlaceholder":"research"}""";
+        var config = """{"aiProviderId":"my-provider","useSession":true,"prompt":"default prompt","sessionPlaceholder":"research"}""";
         var ctx = new NodeExecutionContext(
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
@@ -729,8 +726,7 @@ public class AINodeExecutorTests
         var result = await executor.ExecuteAsync(ctx);
 
         result.Success.Should().BeTrue();
-        testAdapter.CapturedInitialPrompt.Should().Be("default prompt");
-        testAdapter.CapturedSessionPrompt.Should().Be("session prompt");
+        testAdapter.CapturedPrompt.Should().Be("default prompt");
         testAdapter.CapturedSessionId.Should().BeNull();
     }
 
@@ -770,7 +766,7 @@ public class AINodeExecutorTests
 
         var executor = new AINodeExecutor(sp);
 
-        var config = """{"aiProviderId":"my-provider","initialPrompt":"test","useSession":true,"sessionPlaceholder":"research"}""";
+        var config = """{"aiProviderId":"my-provider","prompt":"test","useSession":true,"sessionPlaceholder":"research"}""";
         var ctx = new NodeExecutionContext(
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
@@ -823,7 +819,7 @@ public class AINodeExecutorTests
 
         var executor = new AINodeExecutor(sp);
 
-        var config = """{"aiProviderId":"my-provider","initialPrompt":"test"}""";
+        var config = """{"aiProviderId":"my-provider","prompt":"test"}""";
         var ctx = new NodeExecutionContext(
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
@@ -878,7 +874,7 @@ public class AINodeExecutorTests
 
         var executor = new AINodeExecutor(sp);
 
-        var config = """{"aiProviderId":"my-provider","initialPrompt":"test","useSession":true,"sessionPlaceholder":"research"}""";
+        var config = """{"aiProviderId":"my-provider","prompt":"test","useSession":true,"sessionPlaceholder":"research"}""";
         var ctx = new NodeExecutionContext(
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
@@ -929,7 +925,7 @@ public class AINodeExecutorTests
         var sp = BuildServiceProvider(providerStore.Object, registry.Object, loopRunStore.Object);
         var executor = new AINodeExecutor(sp);
 
-        var config = """{"aiProviderId":"my-provider","initialPrompt":"test","useSession":true,"sessionPlaceholder":"research"}""";
+        var config = """{"aiProviderId":"my-provider","prompt":"test","useSession":true,"sessionPlaceholder":"research"}""";
         NodeExecutionContext MakeCtx() => new(
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
@@ -991,7 +987,7 @@ public class AINodeExecutorTests
         var sp = BuildServiceProvider(providerStore.Object, registry.Object, loopRunStore.Object);
         var executor = new AINodeExecutor(sp);
 
-        var config = """{"aiProviderId":"my-provider","initialPrompt":"test","useSession":true}""";
+        var config = """{"aiProviderId":"my-provider","prompt":"test","useSession":true}""";
         var ctx = new NodeExecutionContext(
             Run: new LoopRun { Id = Guid.NewGuid() },
             RunNode: new LoopRunNode { RetryCount = 0 },
@@ -1038,7 +1034,7 @@ public class AINodeExecutorTests
 
         var executor = new AINodeExecutor(sp);
 
-        var config = """{"aiProviderId":"my-provider","initialPrompt":"test prompt","adapterConfig":{"temperature":0.5,"maxTokens":8192}}""";
+        var config = """{"aiProviderId":"my-provider","prompt":"test prompt","adapterConfig":{"temperature":0.5,"maxTokens":8192}}""";
         var ctx = new NodeExecutionContext(
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
@@ -1058,8 +1054,7 @@ public class AINodeExecutorTests
     private sealed class CapturingAdapter : IAgentAdapter
     {
         public int CapturedCount;
-        public string? CapturedInitialPrompt;
-        public string? CapturedSessionPrompt;
+        public string? CapturedPrompt;
         public Dictionary<string, object?>? CapturedAdapterConfig;
         public string? CapturedSessionId;
         public string? CapturedIncomingSessionId;
@@ -1071,8 +1066,7 @@ public class AINodeExecutorTests
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
         {
             CapturedCount = ctx.ExecutionCount;
-            CapturedInitialPrompt = ctx.InitialPrompt;
-            CapturedSessionPrompt = ctx.SessionPrompt;
+            CapturedPrompt = ctx.Prompt;
             CapturedAdapterConfig = ctx.AdapterConfig;
             CapturedSessionId = ctx.SessionId;
             CapturedIncomingSessionId = ctx.IncomingSessionId;
@@ -1141,8 +1135,8 @@ public class AINodeExecutorTests
     private static NodeExecutionContext BuildNodeExecutionContextWithRetry(string? providerName, int retryCount)
     {
         var config = providerName != null
-            ? $"{{\"aiProviderId\":\"{providerName}\",\"initialPrompt\":\"test prompt\"}}"
-            : "{\"initialPrompt\":\"test prompt\"}";
+            ? $"{{\"aiProviderId\":\"{providerName}\",\"prompt\":\"test prompt\"}}"
+            : "{\"prompt\":\"test prompt\"}";
 
         return new NodeExecutionContext(
             Run: new LoopRun { Id = Guid.NewGuid() },
@@ -1159,8 +1153,8 @@ public class AINodeExecutorTests
     private static NodeExecutionContext BuildNodeExecutionContextWithIdsAndRetry(string? providerName, Guid runId, Guid nodeId, int retryCount)
     {
         var config = providerName != null
-            ? $"{{\"aiProviderId\":\"{providerName}\",\"initialPrompt\":\"test prompt\"}}"
-            : "{\"initialPrompt\":\"test prompt\"}";
+            ? $"{{\"aiProviderId\":\"{providerName}\",\"prompt\":\"test prompt\"}}"
+            : "{\"prompt\":\"test prompt\"}";
 
         return new NodeExecutionContext(
             Run: new LoopRun { Id = runId },

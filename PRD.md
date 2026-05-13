@@ -152,34 +152,34 @@ The system runs in a single container, persists state in SQLite, and integrates 
 
 ### Resolved Design Decisions
 
-| Decision              | Outcome                                                                                          |
-| --------------------- | ------------------------------------------------------------------------------------------------ |
-| Node execution model  | Sequential, single-threaded per loop run                                                         |
-| Worktree lifecycle    | One worktree per work item, created on first run, destroyed when Cleanup node executes           |
-| State model           | DB (`LoopRun`, `LoopRunNode` tables) is source of truth; event log is observability + AI context |
-| Tool architecture     | In-process tool abstractions (not MCP subprocesses)                                              |
-| Agent adapter model   | `IAgentAdapter` resolved by `AiProvider.Type`; adapter controls full execution lifecycle         |
-| Adapter lifecycle     | Per AI node per `LoopRun`; sibling AI nodes do not share state                                   |
-| AI node prompts       | `initialPrompt` for first execution, `loopPrompt` for loopback executions                        |
-| Provider config       | Free-form JSON `Config` column on `AiProvider`; adapter reads what it needs                      |
-| HIL pattern           | Graph-level only (AI → Human → loopback edge); adapter has no HIL awareness                      |
-| Engine scheduling     | Async `while` loop with `CancellationToken`; SignalR pushes per node transition                  |
-| Crash recovery        | Re-execute in-flight node; per-template policy (auto-resume / needs review / cancel)             |
-| Node editor           | React Flow                                                                                       |
-| Dependency resolution | Push-based via webhook on Done status                                                            |
-| SignalR reconnect     | State snapshot + delta (not full event replay)                                                   |
-| Prompt rendering      | Engine resolves placeholders; unknown placeholder validation on save                             |
-| Large payloads        | Stored on disk under `data/payloads/{runId}/{sequence}.json`; DB stores path reference           |
-| Webhook fallback      | Webhook-only; manual PR link/merge override available                                            |
-| DB migrations         | EF Core auto-migrate on startup                                                                  |
-| Auth                  | Single user, env vars only (`ILD_USERNAME`, `ILD_PASSWORD`), no wizard                           |
-| Edge traversal limits | 200 node executions + 24h wall-clock default; configurable per template                          |
-| Frontend              | Vite+ + React + TypeScript                                                                       |
-| Retry semantics       | Error edge exists → follow immediately on failure; no error edge → auto-retry N times            |
-| Edge types            | `on_success` / `on_failure`; max one of each per node                                            |
-| Node output           | Structured output per node; source node of incoming edge is `{{PreviousNode.Output}}`            |
-| Cleanup behavior      | Done → destroy worktree + branch; Failed/Cancelled → user chooses "Done" or "Backlog"            |
-| Work item states      | `Backlog → Work Queue → Ready → Running → Human Feedback → Done`                                 |
+| Decision              | Outcome                                                                                           |
+| --------------------- | ------------------------------------------------------------------------------------------------- |
+| Node execution model  | Sequential, single-threaded per loop run                                                          |
+| Worktree lifecycle    | One worktree per work item, created on first run, destroyed when Cleanup node executes            |
+| State model           | DB (`LoopRun`, `LoopRunNode` tables) is source of truth; event log is observability + AI context  |
+| Tool architecture     | In-process tool abstractions (not MCP subprocesses)                                               |
+| Agent adapter model   | `IAgentAdapter` resolved by `AiProvider.Type`; adapter controls full execution lifecycle          |
+| Adapter lifecycle     | Per AI node per `LoopRun`; sibling AI nodes do not share state                                    |
+| AI node prompts       | Single `prompt`; use explicit `Prompt` nodes before AI nodes when turn-specific wording is needed |
+| Provider config       | Free-form JSON `Config` column on `AiProvider`; adapter reads what it needs                       |
+| HIL pattern           | Graph-level only (AI → Human → loopback edge); adapter has no HIL awareness                       |
+| Engine scheduling     | Async `while` loop with `CancellationToken`; SignalR pushes per node transition                   |
+| Crash recovery        | Re-execute in-flight node; per-template policy (auto-resume / needs review / cancel)              |
+| Node editor           | React Flow                                                                                        |
+| Dependency resolution | Push-based via webhook on Done status                                                             |
+| SignalR reconnect     | State snapshot + delta (not full event replay)                                                    |
+| Prompt rendering      | Engine resolves placeholders; unknown placeholder validation on save                              |
+| Large payloads        | Stored on disk under `data/payloads/{runId}/{sequence}.json`; DB stores path reference            |
+| Webhook fallback      | Webhook-only; manual PR link/merge override available                                             |
+| DB migrations         | EF Core auto-migrate on startup                                                                   |
+| Auth                  | Single user, env vars only (`ILD_USERNAME`, `ILD_PASSWORD`), no wizard                            |
+| Edge traversal limits | 200 node executions + 24h wall-clock default; configurable per template                           |
+| Frontend              | Vite+ + React + TypeScript                                                                        |
+| Retry semantics       | Error edge exists → follow immediately on failure; no error edge → auto-retry N times             |
+| Edge types            | `on_success` / `on_failure`; max one of each per node                                             |
+| Node output           | Structured output per node; source node of incoming edge is `{{PreviousNode.Output}}`             |
+| Cleanup behavior      | Done → destroy worktree + branch; Failed/Cancelled → user chooses "Done" or "Backlog"             |
+| Work item states      | `Backlog → Work Queue → Ready → Running → Human Feedback → Done`                                  |
 
 ### Module Architecture
 
@@ -225,7 +225,7 @@ Loop templates are normalized relational model. Node config is JSON per node typ
 
 ### AI Node Model
 
-- Two prompt fields per AI node: `initialPrompt` (first execution) and `loopPrompt` (subsequent loopback executions). Falls back to `initialPrompt` if `loopPrompt` is unset.
+- One prompt field per AI node: `prompt`. If the first turn should differ from later turns, add `Prompt` nodes before the AI node instead of encoding two prompt fields into the AI node.
 - Prompt templates with placeholders: `{{WorkItem.Title}}`, `{{WorkItem.Description}}`, `{{EventLog.LastN}}`, `{{EventLog.Summary}}`, `{{Node.Input}}`, `{{WorkTree.Diff}}`, `{{WorkTree.File:path}}`, `{{PreviousNode.Output}}`
 - Unknown placeholder validation on template save
 - `AINodeExecutor` resolves `IAgentAdapter` via `IAgentAdapterRegistry` based on `AiProvider.Type`

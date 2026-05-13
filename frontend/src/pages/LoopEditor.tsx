@@ -109,7 +109,6 @@ export default function LoopEditor() {
   const [cmdCommand, setCmdCommand] = useState("");
   const [cmdTimeout, setCmdTimeout] = useState(30);
   const [aiPrompt, setAiPrompt] = useState("");
-  const [aiSessionPrompt, setAiSessionPrompt] = useState("");
   const [aiProvider, setAiProvider] = useState("");
   const [aiTimeout, setAiTimeout] = useState(300);
   const [aiTools, setAiTools] = useState<string[]>([]);
@@ -152,7 +151,6 @@ export default function LoopEditor() {
     cmdCommand: string;
     cmdTimeout: number;
     aiPrompt: string;
-    aiSessionPrompt: string;
     aiProvider: string;
     aiTimeout: number;
     aiTools: string[];
@@ -171,6 +169,112 @@ export default function LoopEditor() {
   const selectedPlaceholderUsage = sessionPlaceholderUsages.find(
     (entry) => entry.name === aiSessionPlaceholder.trim(),
   );
+  const renderAiSessionControls = () => {
+    if (!aiUseSession) return null;
+
+    return (
+      <>
+        {hasKnownSessionPlaceholders && (
+          <div className="config-field">
+            <label htmlFor="ai-session-placeholder-picker">Reuse Existing Placeholder</label>
+            <select
+              id="ai-session-placeholder-picker"
+              value={aiSessionPlaceholder.trim()}
+              onChange={(e) => setAiSessionPlaceholder(e.target.value)}
+            >
+              <option value="">Create or type a new placeholder</option>
+              {sessionPlaceholderUsages.map((entry) => (
+                <option key={entry.name} value={entry.name}>
+                  {entry.name} ({entry.count} node{entry.count === 1 ? "" : "s"})
+                </option>
+              ))}
+            </select>
+            <small
+              style={{
+                color: "#94a3b8",
+                marginTop: "0.25rem",
+                display: "block",
+              }}
+            >
+              Pick an existing placeholder to keep multiple AI nodes attached to the same
+              conversation lane.
+            </small>
+          </div>
+        )}
+        <div className="config-field">
+          <label htmlFor="ai-session-placeholder">Local Session Placeholder</label>
+          <input
+            id="ai-session-placeholder"
+            type="text"
+            value={aiSessionPlaceholder}
+            onChange={(e) => setAiSessionPlaceholder(e.target.value)}
+            placeholder="e.g. research"
+            list="ai-session-placeholder-options"
+          />
+          <datalist id="ai-session-placeholder-options">
+            {sessionPlaceholderUsages.map((entry) => (
+              <option key={entry.name} value={entry.name} />
+            ))}
+          </datalist>
+          <small
+            style={{
+              color: "#94a3b8",
+              marginTop: "0.25rem",
+              display: "block",
+            }}
+          >
+            This is a design-time name. ILD binds it to the real adapter-generated session id for
+            each run.
+          </small>
+          {selectedPlaceholderUsage && (
+            <small
+              style={{
+                color: "#cbd5e1",
+                marginTop: "0.35rem",
+                display: "block",
+              }}
+            >
+              Reused by {selectedPlaceholderUsage.count} AI node
+              {selectedPlaceholderUsage.count === 1 ? "" : "s"} in this template.
+            </small>
+          )}
+        </div>
+        {hasKnownSessionPlaceholders && (
+          <div className="config-field">
+            <label>Placeholder Library</label>
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: "0.5rem",
+              }}
+            >
+              {sessionPlaceholderUsages.map((entry) => {
+                const isSelected = entry.name === aiSessionPlaceholder.trim();
+                return (
+                  <button
+                    key={entry.name}
+                    type="button"
+                    onClick={() => setAiSessionPlaceholder(entry.name)}
+                    style={{
+                      border: isSelected ? "1px solid #38bdf8" : "1px solid #334155",
+                      background: isSelected ? "#082f49" : "#111827",
+                      color: "#e2e8f0",
+                      borderRadius: "999px",
+                      padding: "0.35rem 0.7rem",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {entry.name} ({entry.count})
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </>
+    );
+  };
 
   useEffect(() => {
     void loadTemplates();
@@ -455,8 +559,7 @@ export default function LoopEditor() {
       setNodeLabel(data.label || "");
       setCmdCommand((config.command as string) || "");
       setCmdTimeout((config.timeout as number) ?? 30);
-      setAiPrompt((config.initialPrompt as string) || "");
-      setAiSessionPrompt((config.sessionPrompt as string) || "");
+      setAiPrompt((config.prompt as string) || "");
       setAiProvider((config.aiProviderId as string) || "");
       setAiTimeout((config.timeout as number) ?? 300);
       setAiTools((config.toolAllowlist as string[]) || []);
@@ -499,8 +602,7 @@ export default function LoopEditor() {
         label: data.label || "",
         cmdCommand: (config.command as string) || "",
         cmdTimeout: (config.timeout as number) ?? 30,
-        aiPrompt: (config.initialPrompt as string) || "",
-        aiSessionPrompt: (config.sessionPrompt as string) || "",
+        aiPrompt: (config.prompt as string) || "",
         aiProvider: (config.aiProviderId as string) || "",
         aiTimeout: (config.timeout as number) ?? 300,
         aiTools: (config.toolAllowlist as string[]) || [],
@@ -532,9 +634,8 @@ export default function LoopEditor() {
       config.command = cmdCommand;
       config.timeout = cmdTimeout;
     } else if (nodeType === NodeType.AI) {
-      config.initialPrompt = aiPrompt;
+      config.prompt = aiPrompt;
       config.useSession = aiUseSession;
-      if (aiUseSession && aiSessionPrompt.trim()) config.sessionPrompt = aiSessionPrompt;
       config.aiProviderId = aiProvider;
       config.timeout = aiTimeout;
       config.toolAllowlist = aiTools;
@@ -574,7 +675,6 @@ export default function LoopEditor() {
     cmdCommand,
     cmdTimeout,
     aiPrompt,
-    aiSessionPrompt,
     aiProvider,
     aiTimeout,
     aiTools,
@@ -596,7 +696,6 @@ export default function LoopEditor() {
       setCmdCommand(originalNodeConfig.cmdCommand);
       setCmdTimeout(originalNodeConfig.cmdTimeout);
       setAiPrompt(originalNodeConfig.aiPrompt);
-      setAiSessionPrompt(originalNodeConfig.aiSessionPrompt);
       setAiProvider(originalNodeConfig.aiProvider);
       setAiTimeout(originalNodeConfig.aiTimeout);
       setAiTools(originalNodeConfig.aiTools);
@@ -1031,7 +1130,7 @@ export default function LoopEditor() {
                       {(selectedNode.data as { type: string }).type === NodeType.AI && (
                         <>
                           <div className="config-field">
-                            <label htmlFor="ai-prompt">Prompt Template</label>
+                            <label htmlFor="ai-prompt">Prompt</label>
                             <PromptEditor
                               id="ai-prompt"
                               rows={4}
@@ -1049,23 +1148,7 @@ export default function LoopEditor() {
                               Use Session
                             </label>
                           </div>
-                          {aiUseSession && (
-                            <div className="config-field">
-                              <label htmlFor="ai-session-prompt">Session Prompt</label>
-                              <PromptEditor
-                                id="ai-session-prompt"
-                                rows={3}
-                                value={aiSessionPrompt}
-                                onChange={(v) => setAiSessionPrompt(v)}
-                              />
-                              <small
-                                style={{ color: "#94a3b8", marginTop: "0.25rem", display: "block" }}
-                              >
-                                Used only when this node starts with an already-bound session. Falls
-                                back to the default prompt otherwise.
-                              </small>
-                            </div>
-                          )}
+                          {renderAiSessionControls()}
                           <div className="config-field">
                             <label htmlFor="ai-timeout">Timeout (seconds)</label>
                             <input
@@ -1169,116 +1252,6 @@ export default function LoopEditor() {
                               fails and routes to the onFailure edge.
                             </small>
                           </div>
-                          {aiUseSession && (
-                            <>
-                              {hasKnownSessionPlaceholders && (
-                                <div className="config-field">
-                                  <label htmlFor="ai-session-placeholder-picker">
-                                    Reuse Existing Placeholder
-                                  </label>
-                                  <select
-                                    id="ai-session-placeholder-picker"
-                                    value={aiSessionPlaceholder.trim()}
-                                    onChange={(e) => setAiSessionPlaceholder(e.target.value)}
-                                  >
-                                    <option value="">Create or type a new placeholder</option>
-                                    {sessionPlaceholderUsages.map((entry) => (
-                                      <option key={entry.name} value={entry.name}>
-                                        {entry.name} ({entry.count} node
-                                        {entry.count === 1 ? "" : "s"})
-                                      </option>
-                                    ))}
-                                  </select>
-                                  <small
-                                    style={{
-                                      color: "#94a3b8",
-                                      marginTop: "0.25rem",
-                                      display: "block",
-                                    }}
-                                  >
-                                    Pick an existing placeholder to keep multiple AI nodes attached
-                                    to the same conversation lane.
-                                  </small>
-                                </div>
-                              )}
-                              <div className="config-field">
-                                <label htmlFor="ai-session-placeholder">
-                                  Local Session Placeholder
-                                </label>
-                                <input
-                                  id="ai-session-placeholder"
-                                  type="text"
-                                  value={aiSessionPlaceholder}
-                                  onChange={(e) => setAiSessionPlaceholder(e.target.value)}
-                                  placeholder="e.g. research"
-                                  list="ai-session-placeholder-options"
-                                />
-                                <datalist id="ai-session-placeholder-options">
-                                  {sessionPlaceholderUsages.map((entry) => (
-                                    <option key={entry.name} value={entry.name} />
-                                  ))}
-                                </datalist>
-                                <small
-                                  style={{
-                                    color: "#94a3b8",
-                                    marginTop: "0.25rem",
-                                    display: "block",
-                                  }}
-                                >
-                                  This is a design-time name. ILD binds it to the real
-                                  adapter-generated session id for each run.
-                                </small>
-                                {selectedPlaceholderUsage && (
-                                  <small
-                                    style={{
-                                      color: "#cbd5e1",
-                                      marginTop: "0.35rem",
-                                      display: "block",
-                                    }}
-                                  >
-                                    Reused by {selectedPlaceholderUsage.count} AI node
-                                    {selectedPlaceholderUsage.count === 1 ? "" : "s"} in this
-                                    template.
-                                  </small>
-                                )}
-                              </div>
-                              {hasKnownSessionPlaceholders && (
-                                <div className="config-field">
-                                  <label>Placeholder Library</label>
-                                  <div
-                                    style={{
-                                      display: "flex",
-                                      flexWrap: "wrap",
-                                      gap: "0.5rem",
-                                    }}
-                                  >
-                                    {sessionPlaceholderUsages.map((entry) => {
-                                      const isSelected = entry.name === aiSessionPlaceholder.trim();
-                                      return (
-                                        <button
-                                          key={entry.name}
-                                          type="button"
-                                          onClick={() => setAiSessionPlaceholder(entry.name)}
-                                          style={{
-                                            border: isSelected
-                                              ? "1px solid #38bdf8"
-                                              : "1px solid #334155",
-                                            background: isSelected ? "#082f49" : "#111827",
-                                            color: "#e2e8f0",
-                                            borderRadius: "999px",
-                                            padding: "0.35rem 0.7rem",
-                                            cursor: "pointer",
-                                          }}
-                                        >
-                                          {entry.name} ({entry.count})
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-                                </div>
-                              )}
-                            </>
-                          )}
                         </>
                       )}
 

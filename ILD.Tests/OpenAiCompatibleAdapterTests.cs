@@ -29,8 +29,7 @@ public class OpenAiCompatibleAdapterTests
                 ApiKey = "sk-test",
                 Model = "gpt-4"
             },
-            InitialPrompt: "test prompt",
-            SessionPrompt: "test prompt",
+            Prompt: "test prompt",
             RunContext: new LoopRunContext(
                 Guid.NewGuid(), Guid.NewGuid(), "Title", "Desc", "/tmp", "main", new List<string>(), null),
             ExecutionCount: 1,
@@ -69,8 +68,7 @@ public class OpenAiCompatibleAdapterTests
                 Model = "gpt-4",
                 Config = "{\"temperature\":0.2,\"maxTokens\":1024}"
             },
-            InitialPrompt: "test prompt",
-            SessionPrompt: "test prompt",
+            Prompt: "test prompt",
             RunContext: new LoopRunContext(
                 Guid.NewGuid(), Guid.NewGuid(), "Title", "Desc", "/tmp", "main", new List<string>(), null),
             ExecutionCount: 1,
@@ -105,8 +103,7 @@ public class OpenAiCompatibleAdapterTests
                 Model = "gpt-4",
                 Config = "{\"temperature\":0.2,\"maxTokens\":1024}"
             },
-            InitialPrompt: "test prompt",
-            SessionPrompt: "test prompt",
+            Prompt: "test prompt",
             RunContext: new LoopRunContext(
                 Guid.NewGuid(), Guid.NewGuid(), "Title", "Desc", "/tmp", "main", new List<string>(), null),
             ExecutionCount: 1,
@@ -143,8 +140,7 @@ public class OpenAiCompatibleAdapterTests
                 ApiKey = "sk-test",
                 Model = "gpt-4"
             },
-            InitialPrompt: "test prompt",
-            SessionPrompt: "test prompt",
+            Prompt: "test prompt",
             RunContext: new LoopRunContext(
                 Guid.NewGuid(), Guid.NewGuid(), "Title", "Desc", "/tmp", "main", new List<string>(), null),
             ExecutionCount: 1,

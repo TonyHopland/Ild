@@ -128,13 +128,12 @@ public sealed class AINodeExecutor : INodeExecutor
     public string DescribeInput(NodeExecutionContext ctx)
     {
         var cfg = NodeConfig.Parse<NodeConfig.Ai>(ctx.Node.Config);
-        var initial = cfg.InitialPrompt ?? "";
+        var prompt = cfg.Prompt ?? "";
         var payload = new
         {
             nodeType = NodeType.ToString(),
-            prompt = initial,
+            prompt,
             useSession = cfg.UseSession ?? false,
-            sessionPrompt = cfg.SessionPrompt,
             sessionPlaceholder = cfg.SessionPlaceholder,
             context = new
             {
@@ -212,13 +211,11 @@ public sealed class AINodeExecutor : INodeExecutor
 
             using var timeout = NodeTimeoutScope.From(ctx);
 
-            var initialPrompt = cfg.InitialPrompt ?? "";
-            var sessionPrompt = cfg.SessionPrompt ?? initialPrompt;
+            var prompt = cfg.Prompt ?? "";
 
             var agentCtx = new AgentExecutionContext(
                 provider,
-                initialPrompt,
-                sessionPrompt,
+                prompt,
                 runContext,
                 executionCount,
                 timeout.Token,

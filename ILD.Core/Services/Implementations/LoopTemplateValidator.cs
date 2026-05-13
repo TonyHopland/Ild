@@ -92,8 +92,9 @@ public static class LoopTemplateValidator
         // Unknown placeholders in AI/Human/Prompt prompt templates and PR description template
         foreach (var node in nodes)
         {
-            var initialPrompt = node.Config.GetValueOrDefault("initialPrompt")?.ToString();
-            var sessionPrompt = node.Config.GetValueOrDefault("sessionPrompt")?.ToString();
+            var aiPrompt = string.Equals(node.NodeType, "AI", StringComparison.OrdinalIgnoreCase)
+                ? node.Config.GetValueOrDefault("prompt")?.ToString()
+                : null;
             var prTemplate = node.Config.GetValueOrDefault("prDescriptionTemplate")?.ToString();
             var humanPrompt = string.Equals(node.NodeType, "Human", StringComparison.OrdinalIgnoreCase)
                 ? node.Config.GetValueOrDefault("prompt")?.ToString()
@@ -108,9 +109,9 @@ public static class LoopTemplateValidator
                     errors.Add($"AI node {node.Id} with useSession=true must set sessionPlaceholder.");
             }
 
-            if (string.IsNullOrEmpty(initialPrompt) && string.IsNullOrEmpty(sessionPrompt) && string.IsNullOrEmpty(prTemplate) && string.IsNullOrEmpty(humanPrompt) && string.IsNullOrEmpty(promptNodePrompt)) continue;
+            if (string.IsNullOrEmpty(aiPrompt) && string.IsNullOrEmpty(prTemplate) && string.IsNullOrEmpty(humanPrompt) && string.IsNullOrEmpty(promptNodePrompt)) continue;
 
-            var templates = new[] { initialPrompt, sessionPrompt, prTemplate, humanPrompt, promptNodePrompt }.Where(t => !string.IsNullOrEmpty(t)).ToList();
+            var templates = new[] { aiPrompt, prTemplate, humanPrompt, promptNodePrompt }.Where(t => !string.IsNullOrEmpty(t)).ToList();
             foreach (var template in templates)
             {
                 foreach (Match m in PromptPlaceholderRegistry.Pattern.Matches(template!))

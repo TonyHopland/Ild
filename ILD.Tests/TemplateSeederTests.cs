@@ -8,7 +8,7 @@ namespace ILD.Tests;
 public class TemplateSeederTests
 {
     [Fact]
-    public async Task SeedAsync_creates_templates_with_new_ai_session_config_shape()
+    public async Task SeedAsync_creates_templates_with_single_ai_prompt_shape()
     {
         using var db = new TestDb();
         var mgr = new LoopTemplateManager(db.LoopTemplates);
@@ -23,14 +23,20 @@ public class TemplateSeederTests
         aiFeatureGraph.Should().NotBeNull();
         var implementConfig = aiFeatureGraph!.Nodes.Single(n => n.Label == "AI Implement").Config;
         ReadBool(implementConfig, "useSession").Should().BeTrue();
-        ReadString(implementConfig, "sessionPrompt").Should().NotBeNullOrWhiteSpace();
+        ReadString(implementConfig, "prompt").Should().Be("{{PreviousNode.Output}}");
         ReadString(implementConfig, "sessionPlaceholder").Should().Be("implementation");
-        implementConfig.Should().NotContainKey("loopPrompt");
-        implementConfig.Should().NotContainKey("sessionInput");
-        implementConfig.Should().NotContainKey("sessionOutput");
+        implementConfig.Should().NotContainKey("initialPrompt");
+        implementConfig.Should().NotContainKey("sessionPrompt");
+
+        var implementInitialConfig = aiFeatureGraph.Nodes.Single(n => n.Label == "Prompt implement initial").Config;
+        ReadString(implementInitialConfig, "prompt").Should().Contain("You are in charge of implementing this workitem");
+
+        var implementRetryConfig = aiFeatureGraph.Nodes.Single(n => n.Label == "Prompt implement retry").Config;
+        ReadString(implementRetryConfig, "prompt").Should().Contain("Your implementation was rejected");
 
         var reviewConfig = aiFeatureGraph.Nodes.Single(n => n.Label == "AI Review").Config;
         reviewConfig.Should().NotContainKey("useSession");
+        ReadString(reviewConfig, "prompt").Should().Contain("Do a thorough review of this change.");
         reviewConfig.Should().NotContainKey("sessionPrompt");
         reviewConfig.Should().NotContainKey("sessionPlaceholder");
 
@@ -40,22 +46,26 @@ public class TemplateSeederTests
 
         var grillConfig = planGraph!.Nodes.Single(n => n.Label == "AI Grill").Config;
         ReadBool(grillConfig, "useSession").Should().BeTrue();
-        ReadString(grillConfig, "sessionPrompt").Should().Be("{{PreviousNode.Output}}");
+        ReadString(grillConfig, "prompt").Should().Be("{{PreviousNode.Output}}");
         ReadString(grillConfig, "sessionPlaceholder").Should().Be("plan");
-        grillConfig.Should().NotContainKey("loopPrompt");
-        grillConfig.Should().NotContainKey("sessionInput");
-        grillConfig.Should().NotContainKey("sessionOutput");
+        grillConfig.Should().NotContainKey("initialPrompt");
+        grillConfig.Should().NotContainKey("sessionPrompt");
+
+        var grillInitialConfig = planGraph.Nodes.Single(n => n.Label == "Prompt grill initial").Config;
+        ReadString(grillInitialConfig, "prompt").Should().Contain("Interview me relentlessly");
+
+        var grillFollowupConfig = planGraph.Nodes.Single(n => n.Label == "Prompt grill followup").Config;
+        ReadString(grillFollowupConfig, "prompt").Should().Be("{{PreviousNode.Output}}");
 
         var promptCreateTasksConfig = planGraph.Nodes.Single(n => n.Label == "Prompt create tasks").Config;
         ReadString(promptCreateTasksConfig, "prompt").Should().Contain("name: to-issues");
 
         var createTasksConfig = planGraph.Nodes.Single(n => n.Label == "AI create tasks").Config;
         ReadBool(createTasksConfig, "useSession").Should().BeTrue();
-        ReadString(createTasksConfig, "sessionPrompt").Should().Be("{{PreviousNode.Output}}");
+        ReadString(createTasksConfig, "prompt").Should().Be("{{PreviousNode.Output}}");
         ReadString(createTasksConfig, "sessionPlaceholder").Should().Be("plan");
-        createTasksConfig.Should().NotContainKey("loopPrompt");
-        createTasksConfig.Should().NotContainKey("sessionInput");
-        createTasksConfig.Should().NotContainKey("sessionOutput");
+        createTasksConfig.Should().NotContainKey("initialPrompt");
+        createTasksConfig.Should().NotContainKey("sessionPrompt");
     }
 
     private static bool ReadBool(Dictionary<string, object> config, string key)

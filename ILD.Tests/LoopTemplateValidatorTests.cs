@@ -6,10 +6,10 @@ namespace ILD.Tests;
 
 public class LoopTemplateValidatorTests
 {
-    private static LoopNodeDto Node(string id, string type, string? initialPrompt = null)
+    private static LoopNodeDto Node(string id, string type, string? prompt = null)
     {
         var dto = new LoopNodeDto { Id = id, NodeType = type, Label = id };
-        if (initialPrompt != null) dto.Config["initialPrompt"] = initialPrompt;
+        if (prompt != null) dto.Config["prompt"] = prompt;
         return dto;
     }
 
@@ -81,17 +81,12 @@ public class LoopTemplateValidatorTests
     }
 
     [Fact]
-    public void Unknown_placeholder_in_session_prompt_invalid()
+    public void Unknown_placeholder_in_prompt_node_invalid()
     {
-        var ai = Node("a", "AI", "Title: {{WorkItem.Title}}");
-        ai.Config["useSession"] = true;
-        ai.Config["sessionPlaceholder"] = "research";
-        ai.Config["sessionPrompt"] = "Retry: {{Bogus.Session}}";
-
         var g = new LoopTemplateGraph(Guid.NewGuid(),
             new() {
                 Node("s", "Start"),
-                ai,
+                Node("a", "Prompt", "Retry: {{Bogus.Session}}"),
                 Node("c", "Cleanup")
             },
             new() { Edge("s", "a"), Edge("a", "c") });
