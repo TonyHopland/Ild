@@ -796,32 +796,26 @@ export default function LoopEditor() {
   );
 
   const selectedTemplateName = selectedTemplate?.name || newTemplateName || "Untitled";
+  const showSidebar = sidebarVisible || isNarrow;
 
   return (
     <div className="page-container">
       <ErrorBanner message={errorText} onDismiss={() => setErrorText("")} />
 
-      <LoopEditorHeader
-        isNarrow={isNarrow}
-        sidebarVisible={sidebarVisible}
-        isNewTemplate={isNewTemplate}
-        newTemplateName={newTemplateName}
-        saveSuccess={saveSuccess}
-        canSave={Boolean(selectedTemplate || isNewTemplate)}
-        isSaving={isSaving}
-        readOnlyVersion={readOnlyVersion}
-        onToggleSidebar={() => setSidebarVisible((visible) => !visible)}
-        onExitReadOnlyMode={exitReadOnlyMode}
-        onNewTemplateNameChange={setNewTemplateName}
-        onSave={handleSave}
-        onCreateTemplate={handleNewTemplate}
-      />
+      <LoopEditorHeader readOnlyVersion={readOnlyVersion} onExitReadOnlyMode={exitReadOnlyMode} />
 
-      <div className="loop-editor-layout">
-        {(sidebarVisible || isNarrow) && (
+      <div
+        className={`loop-editor-layout ${showSidebar ? "loop-editor-layout-with-sidebar" : "loop-editor-layout-collapsed"}`}
+      >
+        {showSidebar ? (
           <LoopEditorSidebar
+            isNarrow={isNarrow}
+            saveSuccess={saveSuccess}
+            canSave={Boolean(selectedTemplate || isNewTemplate)}
+            isSaving={isSaving}
+            isNewTemplate={isNewTemplate}
+            newTemplateName={newTemplateName}
             readOnlyVersion={readOnlyVersion}
-            paletteItems={paletteItems}
             showArchived={showArchived}
             templates={templates}
             selectedTemplateId={selectedTemplate?.id ?? null}
@@ -829,7 +823,10 @@ export default function LoopEditor() {
             cloneName={cloneName}
             showVersionHistory={showVersionHistory}
             versionHistory={versionHistory}
-            onPaletteDragStart={onPaletteDragStart}
+            onToggleSidebar={() => setSidebarVisible(false)}
+            onNewTemplateNameChange={setNewTemplateName}
+            onSave={handleSave}
+            onCreateTemplate={handleNewTemplate}
             onShowArchivedChange={setShowArchived}
             onSelectTemplate={selectTemplate}
             onStartClone={(template) => {
@@ -845,115 +842,149 @@ export default function LoopEditor() {
               void handleSelectVersion(loopTemplateId, versionNumber)
             }
           />
+        ) : (
+          <button
+            className="loop-editor-sidebar-rail"
+            onClick={() => setSidebarVisible(true)}
+            aria-label="Expand loop menu"
+          >
+            <span className="loop-editor-sidebar-rail-grip" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </span>
+            <span className="loop-editor-sidebar-rail-arrow" aria-hidden="true">
+              ▶
+            </span>
+            <span className="loop-editor-sidebar-rail-label" aria-hidden="true">
+              LOOPS
+            </span>
+          </button>
         )}
 
-        <div
-          className="loop-canvas-container"
-          ref={reactFlowWrapper}
-          onDrop={onDrop}
-          onDragOver={onDragOver}
-        >
-          {selectedTemplate || isNewTemplate ? (
-            <ReactFlow
-              nodes={nodes}
-              edges={edges}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChangeCustom}
-              nodeTypes={nodeTypes}
-              onInit={onInit}
-              onNodeClick={onNodeClick}
-              onConnect={onConnect}
-              onEdgeClick={onEdgeClick}
-              fitView
-              panOnDrag={true}
-              zoomOnScroll={true}
-              elementsSelectable={true}
-            >
-              <Background />
-              <Controls />
+        <div className="loop-editor-workspace">
+          <div className={`node-palette ${readOnlyVersion !== null ? "palette-disabled" : ""}`}>
+            <div className="palette-header">Drag &amp; Drop</div>
+            {paletteItems.map((item) => (
+              <div
+                key={item.type}
+                className="palette-item"
+                draggable={readOnlyVersion === null}
+                onDragStart={(event) => onPaletteDragStart(item.type, event)}
+              >
+                {item.label}
+              </div>
+            ))}
+          </div>
 
-              <Panel position="top-right" className="loop-canvas-info">
-                <span>{selectedTemplateName}</span>
-                <span>v{selectedTemplate?.version ?? "new"}</span>
-              </Panel>
-
-              {validationErrors.length > 0 && (
-                <Panel position="top-center" className="validation-errors-panel">
-                  <div className="validation-errors-header">Validation Errors</div>
-                  {validationErrors.map((error, index) => (
-                    <div key={index} className="validation-error-badge">
-                      {error}
-                    </div>
-                  ))}
-                </Panel>
-              )}
-
-              {showNodeSettingsModal && selectedNode && (
-                <NodeSettingsModal
-                  selectedNode={selectedNode}
-                  labelError={labelError}
-                  nodeLabel={nodeLabel}
-                  cmdCommand={cmdCommand}
-                  cmdTimeout={cmdTimeout}
-                  aiPrompt={aiPrompt}
-                  aiProvider={aiProvider}
-                  aiTimeout={aiTimeout}
-                  aiTools={aiTools}
-                  aiRejectPattern={aiRejectPattern}
-                  aiUseSession={aiUseSession}
-                  aiSessionPlaceholder={aiSessionPlaceholder}
-                  startCreateWorktree={startCreateWorktree}
-                  humanInputLabel={humanInputLabel}
-                  humanPrompt={humanPrompt}
-                  promptNodePrompt={promptNodePrompt}
-                  prDescriptionTemplate={prDescriptionTemplate}
-                  aiProviders={aiProviders}
-                  adapterConfigSchema={adapterConfigSchema}
-                  adapterConfigValues={adapterConfigValues}
-                  sessionPlaceholderUsages={sessionPlaceholderUsages}
-                  selectedPlaceholderUsage={selectedPlaceholderUsage}
-                  onClose={handleCancelNodeSettings}
-                  onDeleteNode={deleteSelectedNode}
-                  onSave={handleSaveNodeSettings}
-                  onValidateLabel={validateLabel}
-                  onNodeLabelChange={setNodeLabel}
-                  onCmdCommandChange={setCmdCommand}
-                  onCmdTimeoutChange={setCmdTimeout}
-                  onAiPromptChange={setAiPrompt}
-                  onAiProviderChange={handleAiProviderChange}
-                  onAiTimeoutChange={setAiTimeout}
-                  onAiToolsChange={setAiTools}
-                  onAiRejectPatternChange={setAiRejectPattern}
-                  onAiUseSessionChange={setAiUseSession}
-                  onAiSessionPlaceholderChange={setAiSessionPlaceholder}
-                  onStartCreateWorktreeChange={setStartCreateWorktree}
-                  onHumanInputLabelChange={setHumanInputLabel}
-                  onHumanPromptChange={setHumanPrompt}
-                  onPromptNodePromptChange={setPromptNodePrompt}
-                  onPrDescriptionTemplateChange={setPrDescriptionTemplate}
-                  onAdapterConfigChange={(name, value) =>
-                    setAdapterConfigValues((current) => ({ ...current, [name]: value }))
-                  }
-                />
-              )}
-
-              <EdgePanels
-                pendingConnection={pendingConnection !== null}
-                edgeType={edgeType}
-                edgeMaxTraversals={edgeMaxTraversals}
-                edgeError={edgeError}
-                showEdgeDeletePanel={showEdgeDeletePanel}
-                selectedEdge={selectedEdge}
+          <div
+            className="loop-canvas-container"
+            ref={reactFlowWrapper}
+            onDrop={onDrop}
+            onDragOver={onDragOver}
+          >
+            {selectedTemplate || isNewTemplate ? (
+              <ReactFlow
                 nodes={nodes}
-                onEdgeMaxTraversalsChange={setEdgeMaxTraversals}
-                onConfirmEdge={confirmEdge}
-                onCancelEdge={cancelEdge}
-                onDeleteEdge={deleteSelectedEdge}
-              />
-            </ReactFlow>
-          ) : (
-            <div className="loop-canvas-empty">Select a template to view its graph</div>
-          )}
+                edges={edges}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChangeCustom}
+                nodeTypes={nodeTypes}
+                onInit={onInit}
+                onNodeClick={onNodeClick}
+                onConnect={onConnect}
+                onEdgeClick={onEdgeClick}
+                fitView
+                panOnDrag={true}
+                zoomOnScroll={true}
+                elementsSelectable={true}
+              >
+                <Background />
+                <Controls />
+
+                <Panel position="top-right" className="loop-canvas-info">
+                  <span>{selectedTemplateName}</span>
+                  <span>v{selectedTemplate?.version ?? "new"}</span>
+                </Panel>
+
+                {validationErrors.length > 0 && (
+                  <Panel position="top-center" className="validation-errors-panel">
+                    <div className="validation-errors-header">Validation Errors</div>
+                    {validationErrors.map((error, index) => (
+                      <div key={index} className="validation-error-badge">
+                        {error}
+                      </div>
+                    ))}
+                  </Panel>
+                )}
+
+                {showNodeSettingsModal && selectedNode && (
+                  <NodeSettingsModal
+                    selectedNode={selectedNode}
+                    labelError={labelError}
+                    nodeLabel={nodeLabel}
+                    cmdCommand={cmdCommand}
+                    cmdTimeout={cmdTimeout}
+                    aiPrompt={aiPrompt}
+                    aiProvider={aiProvider}
+                    aiTimeout={aiTimeout}
+                    aiTools={aiTools}
+                    aiRejectPattern={aiRejectPattern}
+                    aiUseSession={aiUseSession}
+                    aiSessionPlaceholder={aiSessionPlaceholder}
+                    startCreateWorktree={startCreateWorktree}
+                    humanInputLabel={humanInputLabel}
+                    humanPrompt={humanPrompt}
+                    promptNodePrompt={promptNodePrompt}
+                    prDescriptionTemplate={prDescriptionTemplate}
+                    aiProviders={aiProviders}
+                    adapterConfigSchema={adapterConfigSchema}
+                    adapterConfigValues={adapterConfigValues}
+                    sessionPlaceholderUsages={sessionPlaceholderUsages}
+                    selectedPlaceholderUsage={selectedPlaceholderUsage}
+                    onClose={handleCancelNodeSettings}
+                    onDeleteNode={deleteSelectedNode}
+                    onSave={handleSaveNodeSettings}
+                    onValidateLabel={validateLabel}
+                    onNodeLabelChange={setNodeLabel}
+                    onCmdCommandChange={setCmdCommand}
+                    onCmdTimeoutChange={setCmdTimeout}
+                    onAiPromptChange={setAiPrompt}
+                    onAiProviderChange={handleAiProviderChange}
+                    onAiTimeoutChange={setAiTimeout}
+                    onAiToolsChange={setAiTools}
+                    onAiRejectPatternChange={setAiRejectPattern}
+                    onAiUseSessionChange={setAiUseSession}
+                    onAiSessionPlaceholderChange={setAiSessionPlaceholder}
+                    onStartCreateWorktreeChange={setStartCreateWorktree}
+                    onHumanInputLabelChange={setHumanInputLabel}
+                    onHumanPromptChange={setHumanPrompt}
+                    onPromptNodePromptChange={setPromptNodePrompt}
+                    onPrDescriptionTemplateChange={setPrDescriptionTemplate}
+                    onAdapterConfigChange={(name, value) =>
+                      setAdapterConfigValues((current) => ({ ...current, [name]: value }))
+                    }
+                  />
+                )}
+
+                <EdgePanels
+                  pendingConnection={pendingConnection !== null}
+                  edgeType={edgeType}
+                  edgeMaxTraversals={edgeMaxTraversals}
+                  edgeError={edgeError}
+                  showEdgeDeletePanel={showEdgeDeletePanel}
+                  selectedEdge={selectedEdge}
+                  nodes={nodes}
+                  onEdgeMaxTraversalsChange={setEdgeMaxTraversals}
+                  onConfirmEdge={confirmEdge}
+                  onCancelEdge={cancelEdge}
+                  onDeleteEdge={deleteSelectedEdge}
+                />
+              </ReactFlow>
+            ) : (
+              <div className="loop-canvas-empty">Select a template to view its graph</div>
+            )}
+          </div>
         </div>
       </div>
     </div>

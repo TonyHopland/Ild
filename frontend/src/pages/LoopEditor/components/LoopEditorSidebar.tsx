@@ -1,15 +1,14 @@
-import type { DragEvent } from "react";
-import { NodeType, type LoopTemplate } from "../../../types";
+import type { LoopTemplate } from "../../../types";
 import type { LoopTemplateVersion } from "../types";
 
-interface PaletteItem {
-  type: NodeType;
-  label: string;
-}
-
 interface LoopEditorSidebarProps {
+  isNarrow: boolean;
+  saveSuccess: boolean;
+  canSave: boolean;
+  isSaving: boolean;
+  isNewTemplate: boolean;
+  newTemplateName: string;
   readOnlyVersion: number | null;
-  paletteItems: PaletteItem[];
   showArchived: boolean;
   templates: LoopTemplate[];
   selectedTemplateId: string | null;
@@ -17,7 +16,10 @@ interface LoopEditorSidebarProps {
   cloneName: string;
   showVersionHistory: boolean;
   versionHistory: LoopTemplateVersion[];
-  onPaletteDragStart: (nodeType: NodeType, event: DragEvent<HTMLDivElement>) => void;
+  onToggleSidebar: () => void;
+  onNewTemplateNameChange: (value: string) => void;
+  onSave: () => void;
+  onCreateTemplate: () => void;
   onShowArchivedChange: (value: boolean) => void;
   onSelectTemplate: (template: LoopTemplate) => void;
   onStartClone: (template: LoopTemplate) => void;
@@ -30,8 +32,13 @@ interface LoopEditorSidebarProps {
 }
 
 export function LoopEditorSidebar({
+  isNarrow,
+  saveSuccess,
+  canSave,
+  isSaving,
+  isNewTemplate,
+  newTemplateName,
   readOnlyVersion,
-  paletteItems,
   showArchived,
   templates,
   selectedTemplateId,
@@ -39,7 +46,10 @@ export function LoopEditorSidebar({
   cloneName,
   showVersionHistory,
   versionHistory,
-  onPaletteDragStart,
+  onToggleSidebar,
+  onNewTemplateNameChange,
+  onSave,
+  onCreateTemplate,
   onShowArchivedChange,
   onSelectTemplate,
   onStartClone,
@@ -53,19 +63,44 @@ export function LoopEditorSidebar({
   const visibleTemplates = templates.filter((template) => showArchived || !template.isArchived);
 
   return (
-    <>
-      <div className={`node-palette ${readOnlyVersion !== null ? "palette-disabled" : ""}`}>
-        <div className="palette-header">Drag &amp; Drop</div>
-        {paletteItems.map((item) => (
-          <div
-            key={item.type}
-            className="palette-item"
-            draggable={readOnlyVersion === null}
-            onDragStart={(event) => onPaletteDragStart(item.type, event)}
+    <aside className="loop-editor-sidebar">
+      <div className="sidebar-header">
+        <div>
+          <div className="sidebar-title">Loops</div>
+          <div className="sidebar-subtitle">Templates and saves</div>
+        </div>
+        {!isNarrow && (
+          <button
+            className="sidebar-toggle-btn"
+            onClick={onToggleSidebar}
+            aria-label="Collapse loop menu"
           >
-            {item.label}
-          </div>
-        ))}
+            Hide
+          </button>
+        )}
+      </div>
+
+      <div className="sidebar-actions-panel">
+        <div className="sidebar-primary-actions">
+          {canSave && readOnlyVersion === null && (
+            <button className="save-btn" onClick={onSave} disabled={isSaving}>
+              {isSaving ? "Saving..." : "Save"}
+            </button>
+          )}
+          <button className="new-template-btn" onClick={onCreateTemplate}>
+            New Template
+          </button>
+        </div>
+        {isNewTemplate && (
+          <input
+            type="text"
+            className="new-template-name-input"
+            placeholder="Template name"
+            value={newTemplateName}
+            onChange={(event) => onNewTemplateNameChange(event.target.value)}
+          />
+        )}
+        {saveSuccess && <span className="save-success">Saved!</span>}
       </div>
 
       <div className="loop-list">
@@ -175,6 +210,6 @@ export function LoopEditorSidebar({
           </div>
         )}
       </div>
-    </>
+    </aside>
   );
 }

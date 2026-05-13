@@ -131,6 +131,30 @@ const sampleTemplate = {
 };
 
 describe("Loop Editor canvas", () => {
+  test("collapsing the loop menu keeps the drag palette visible", async () => {
+    const fetchMock = mockFetch(null);
+    fetchMock.mockReturnValueOnce(
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify([sampleTemplate])),
+      }),
+    );
+
+    renderPage(fetchMock);
+
+    await waitFor(() => {
+      expect(screen.getByText("Dev Loop")).toBeTruthy();
+    });
+
+    expect(screen.getByText("Drag & Drop")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Collapse loop menu" }));
+
+    expect(screen.queryByText("Dev Loop")).toBeNull();
+    expect(screen.getByText("Drag & Drop")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Expand loop menu" })).toBeTruthy();
+  });
+
   test("selecting a template renders its nodes on the canvas", async () => {
     const fetchMock = mockFetch(null);
     fetchMock.mockReturnValueOnce(
@@ -763,17 +787,17 @@ describe("Loop Editor responsive sidebar", () => {
       expect(screen.getByText("Dev Loop")).toBeTruthy();
     });
 
-    // Sidebar panels should be visible initially
+    // Menu and palette should be visible initially
     expect(document.querySelector(".node-palette")).toBeTruthy();
     expect(document.querySelector(".loop-list")).toBeTruthy();
 
-    // Click the sidebar toggle button
-    const toggle = screen.getByRole("button", { name: /toggle sidebar/i });
+    // Click the menu toggle button
+    const toggle = screen.getByRole("button", { name: /collapse loop menu/i });
     fireEvent.click(toggle);
 
-    // Sidebar panels should be hidden
+    // The menu should hide but the palette stays beside the canvas
     await waitFor(() => {
-      expect(document.querySelector(".node-palette")).toBeFalsy();
+      expect(document.querySelector(".node-palette")).toBeTruthy();
       expect(document.querySelector(".loop-list")).toBeFalsy();
     });
   });
@@ -794,20 +818,39 @@ describe("Loop Editor responsive sidebar", () => {
       expect(screen.getByText("Dev Loop")).toBeTruthy();
     });
 
-    // Hide sidebar
-    const toggle = screen.getByRole("button", { name: /toggle sidebar/i });
-    fireEvent.click(toggle);
+    // Hide menu
+    const hideToggle = screen.getByRole("button", { name: /collapse loop menu/i });
+    fireEvent.click(hideToggle);
 
     await waitFor(() => {
-      expect(document.querySelector(".node-palette")).toBeFalsy();
+      expect(document.querySelector(".loop-list")).toBeFalsy();
     });
 
-    // Show sidebar again
-    fireEvent.click(toggle);
+    // Show menu again from the left rail
+    fireEvent.click(screen.getByRole("button", { name: /expand loop menu/i }));
 
     await waitFor(() => {
       expect(document.querySelector(".node-palette")).toBeTruthy();
       expect(document.querySelector(".loop-list")).toBeTruthy();
     });
+  });
+
+  test("header does not render a loop menu toggle", async () => {
+    const fetchMock = mockFetch(null);
+    fetchMock.mockReturnValueOnce(
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify([sampleTemplate])),
+      }),
+    );
+
+    renderPage(fetchMock);
+
+    await waitFor(() => {
+      expect(screen.getByText("Dev Loop")).toBeTruthy();
+    });
+
+    expect(screen.queryByRole("button", { name: /show loop menu/i })).toBeNull();
   });
 });
