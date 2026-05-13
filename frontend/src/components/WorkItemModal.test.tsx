@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, waitFor, fireEvent, cleanup, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import WorkItemModal from "../components/WorkItemModal";
+import WorkItemModal from "./WorkItemModal";
 import { WorkItemStatus, WorkItemPriority, WorkItem, LoopRun, LoopRunStatus } from "../types";
 import * as signalRHook from "../hooks/useSignalR";
 import * as authServices from "../services/auth";

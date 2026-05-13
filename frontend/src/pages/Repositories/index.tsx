@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import { Repository, RemoteProvider, WorkItemStatus } from "../types";
-import { repositoryService, remoteProviderService } from "../services/auth";
+import { Repository, RemoteProvider, WorkItemStatus } from "../../types";
+import { repositoryService, remoteProviderService } from "../../services/auth";
 
 export default function Repositories() {
   const [repositories, setRepositories] = useState<Repository[]>([]);

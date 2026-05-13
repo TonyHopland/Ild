@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/tes
 import { render, screen, cleanup, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 
-vi.mock("../services/auth", () => ({
+vi.mock("../../services/auth", () => ({
   loopRunService: {
     getById: vi.fn(),
     getEvents: vi.fn(),
@@ -17,7 +17,7 @@ vi.mock("../services/auth", () => ({
   },
 }));
 
-vi.mock("../hooks/useSignalR", () => ({
+vi.mock("../../hooks/useSignalR", () => ({
   useSignalR: vi.fn().mockReturnValue({
     on: vi.fn(),
     off: vi.fn(),
@@ -26,8 +26,8 @@ vi.mock("../hooks/useSignalR", () => ({
   }),
 }));
 
-import EventLogViewer from "./EventLogViewer";
-import { loopRunService, loopTemplateService } from "../services/auth";
+import EventLogViewer from "./index";
+import { loopRunService, loopTemplateService } from "../../services/auth";
 
 const mockEvents = [
   {

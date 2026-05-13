@@ -777,6 +777,49 @@
   background: #6b0a1f;
 }
 
+.config-help-text {
+  color: #94a3b8;
+  margin-top: 0.25rem;
+  display: block;
+}
+
+.config-help-text-strong {
+  color: #cbd5e1;
+  margin-top: 0.35rem;
+}
+
+.config-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.config-chip {
+  border: 1px solid #334155;
+  background: #111827;
+  color: #e2e8f0;
+  border-radius: 999px;
+  padding: 0.35rem 0.7rem;
+  cursor: pointer;
+}
+
+.config-chip.active {
+  border-color: #38bdf8;
+  background: #082f49;
+}
+
+.edge-type-dot--success {
+  background: #10b981;
+}
+
+.edge-type-dot--failure {
+  background: #ef4444;
+}
+
+.edge-type-dot--respond {
+  background: #f59e0b;
+}
+
 /* Handle labels */
 .handle-success::after {
   content: "✓";

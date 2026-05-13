@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef } from "react";
-import { WorkItem, WorkItemStatus } from "../types";
-import type { TypedSignalRMessage } from "../types/signalr";
-import { workItemService } from "../services/auth";
-import TaskboardColumn from "../components/TaskboardColumn";
-import WorkItemModal from "../components/WorkItemModal";
-import ErrorBanner from "../components/ErrorBanner";
-import { useSignalR } from "../hooks/useSignalR";
-import { WORK_ITEM_STATUSES } from "../utils/constants";
+import { WorkItem, WorkItemStatus } from "../../types";
+import type { TypedSignalRMessage } from "../../types/signalr";
+import { workItemService } from "../../services/auth";
+import TaskboardColumn from "../../components/TaskboardColumn";
+import WorkItemModal from "../../components/WorkItemModal";
+import ErrorBanner from "../../components/ErrorBanner";
+import { useSignalR } from "../../hooks/useSignalR";
+import { WORK_ITEM_STATUSES } from "../../utils/constants";
 
 function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message) return error.message;

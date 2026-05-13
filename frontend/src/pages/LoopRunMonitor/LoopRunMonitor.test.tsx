@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, cleanup, waitFor, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import LoopRunMonitor from "./LoopRunMonitor";
-import { LoopRunStatus, LoopRun } from "../types";
-import * as authServices from "../services/auth";
-import * as signalRHook from "../hooks/useSignalR";
+import LoopRunMonitor from "./index";
+import { LoopRunStatus, LoopRun } from "../../types";
+import * as authServices from "../../services/auth";
+import * as signalRHook from "../../hooks/useSignalR";
 
 afterEach(() => {
   cleanup();

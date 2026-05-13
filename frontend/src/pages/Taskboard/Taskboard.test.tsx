@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, cleanup, waitFor, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import Taskboard from "./Taskboard";
-import { WorkItemStatus, WorkItemPriority, WorkItem } from "../types";
-import * as authServices from "../services/auth";
-import * as signalRHook from "../hooks/useSignalR";
+import Taskboard from "./index";
+import { WorkItemStatus, WorkItemPriority, WorkItem } from "../../types";
+import * as authServices from "../../services/auth";
+import * as signalRHook from "../../hooks/useSignalR";
 
 afterEach(() => {
   cleanup();
@@ -248,7 +248,7 @@ describe("Taskboard keyboard navigation", () => {
       makeItem({ status: WorkItemStatus.Running }),
     );
 
-    const { default: Taskboard } = await import("./Taskboard");
+    const { default: Taskboard } = await import("./index");
     render(
       <MemoryRouter>
         <Taskboard />

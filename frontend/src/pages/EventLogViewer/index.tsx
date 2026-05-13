@@ -11,20 +11,20 @@ import {
   EventLogEntry,
   LoopNode,
   EdgeType,
-} from "../types";
-import type { TypedSignalRMessage } from "../types/signalr";
-import { loopRunService, loopTemplateService } from "../services/auth";
-import { useSignalR } from "../hooks/useSignalR";
-import ErrorBanner from "../components/ErrorBanner";
+} from "../../types";
+import type { TypedSignalRMessage } from "../../types/signalr";
+import { loopRunService, loopTemplateService } from "../../services/auth";
+import { useSignalR } from "../../hooks/useSignalR";
+import ErrorBanner from "../../components/ErrorBanner";
 import {
   NodeItem,
   NodeInputSection,
   NodeEventsSection,
   NodeOutputSection,
   LiveStream,
-} from "../components/NodeTimeline";
-import EdgeArrow from "../components/NodeTimeline/EdgeArrow";
-import "../components/NodeTimeline/NodeTimeline.css";
+} from "../../components/NodeTimeline";
+import EdgeArrow from "../../components/NodeTimeline/EdgeArrow";
+import "../../components/NodeTimeline/NodeTimeline.css";
 
 interface EffectiveInput {
   nodeType?: string;

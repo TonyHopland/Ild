@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import { AiProvider } from "../types";
-import { aiProviderService, agentAdapterService } from "../services/auth";
+import { AiProvider } from "../../types";
+import { aiProviderService, agentAdapterService } from "../../services/auth";
 
 export default function AiProviders() {
   const [providers, setProviders] = useState<AiProvider[]>([]);

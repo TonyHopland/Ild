@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import { useAuth } from "../hooks/useAuth";
-import { loggingService } from "../services/auth";
+import { useAuth } from "../../hooks/useAuth";
+import { loggingService } from "../../services/auth";
 
 const LOG_LEVELS = ["Debug", "Information", "Warning", "Error"] as const;
 

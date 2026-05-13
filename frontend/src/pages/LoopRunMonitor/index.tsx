@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
-import { LoopRun, LoopRunNodeStatus, LoopRunStatus } from "../types";
-import type { TypedSignalRMessage } from "../types/signalr";
-import { loopRunService } from "../services/auth";
-import { useSignalR } from "../hooks/useSignalR";
-import ErrorBanner from "../components/ErrorBanner";
+import { LoopRun, LoopRunNodeStatus, LoopRunStatus } from "../../types";
+import type { TypedSignalRMessage } from "../../types/signalr";
+import { loopRunService } from "../../services/auth";
+import { useSignalR } from "../../hooks/useSignalR";
+import ErrorBanner from "../../components/ErrorBanner";
 
 function normalizeLoopRunStatus(value: unknown): LoopRunStatus {
   if (typeof value === "string") return value as LoopRunStatus;

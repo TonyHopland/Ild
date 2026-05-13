@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import Login from "./Login";
-import { AuthContext } from "../hooks/useAuth";
-import type { AuthState } from "../types";
+import Login from "./index";
+import { AuthContext } from "../../hooks/useAuth";
+import type { AuthState } from "../../types";
 
 afterEach(() => {
   cleanup();

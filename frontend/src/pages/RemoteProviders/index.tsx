@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import { RemoteProvider } from "../types";
-import { remoteProviderService } from "../services/auth";
+import { RemoteProvider } from "../../types";
+import { remoteProviderService } from "../../services/auth";
 
 const REMOTE_PROVIDER_TYPES = ["Forgejo", "GitHub", "GitLab"];
 

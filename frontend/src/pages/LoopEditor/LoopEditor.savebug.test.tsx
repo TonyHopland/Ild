@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { AuthContext } from "../hooks/useAuth";
-import { NodeType, EdgeType } from "../types";
-import LoopEditor from "./LoopEditor";
+import { AuthContext } from "../../hooks/useAuth";
+import { NodeType, EdgeType } from "../../types";
+import LoopEditor from "./index";
 
 beforeEach(() => {
   vi.stubGlobal(

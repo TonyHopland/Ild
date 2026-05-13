@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
+import type { Edge } from "@xyflow/react";
 import { MemoryRouter } from "react-router-dom";
-import { AuthContext } from "../hooks/useAuth";
-import { NodeType, EdgeType } from "../types";
-import LoopEditor from "./LoopEditor";
+import { AuthContext } from "../../hooks/useAuth";
+import { NodeType, EdgeType } from "../../types";
+import LoopEditor from "./index";
 
 beforeEach(() => {
   vi.stubGlobal(
@@ -308,7 +309,7 @@ describe("Loop Editor canvas", () => {
   });
 
   test("on-success and on-failure edges are visually distinguished", async () => {
-    const { templateToEdges } = await import("../utils/loopGraphConverter");
+    const { templateToEdges } = await import("../../utils/loopGraphConverter");
 
     const templateWithBothEdgeTypes = {
       ...sampleTemplate,
@@ -334,12 +335,12 @@ describe("Loop Editor canvas", () => {
     expect(edges.length).toBe(2);
 
     // On-success edge should not have dasharray
-    const successEdge = edges.find((e) => e.id === "e-1");
+    const successEdge = edges.find((edge: Edge) => edge.id === "e-1");
     expect(successEdge?.style?.stroke).toBe("#10b981");
     expect(successEdge?.style?.strokeDasharray).toBeUndefined();
 
     // On-failure edge should have dasharray and different color
-    const failureEdge = edges.find((e) => e.id === "e-2");
+    const failureEdge = edges.find((edge: Edge) => edge.id === "e-2");
     expect(failureEdge?.style?.stroke).toBe("#ef4444");
     expect(failureEdge?.style?.strokeDasharray).toBe("8 4");
   });
