@@ -212,6 +212,12 @@ public class LoopRunStore : ILoopRunStore
         if (run == null) return false;
         if (run.Status == LoopRunStatus.Running) return false;
 
+        var eventLogs = await _db.EventLogs
+            .Where(e => e.LoopRunId == runId)
+            .ToListAsync();
+        if (eventLogs.Count > 0)
+            _db.EventLogs.RemoveRange(eventLogs);
+
         _db.LoopRuns.Remove(run);
         await _db.SaveChangesAsync();
         return true;
