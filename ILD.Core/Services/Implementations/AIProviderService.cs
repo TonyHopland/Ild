@@ -16,13 +16,15 @@ public class AIProviderService : IAIProviderService
 {
     private readonly IProviderStore _providerStore;
     private readonly IWorkItemManager _workItemManager;
+    private readonly IWorktreePreviewService _worktreePreviewService;
     private readonly HttpClient _http;
     private readonly IPromptTemplateResolver _resolver;
 
-    public AIProviderService(IProviderStore providerStore, IWorkItemManager workItemManager, HttpClient http, IPromptTemplateResolver? resolver = null)
+    public AIProviderService(IProviderStore providerStore, IWorkItemManager workItemManager, IWorktreePreviewService worktreePreviewService, HttpClient http, IPromptTemplateResolver? resolver = null)
     {
         _providerStore = providerStore;
         _workItemManager = workItemManager;
+        _worktreePreviewService = worktreePreviewService;
         _http = http;
         _resolver = resolver ?? new PromptTemplateResolver();
     }
@@ -91,7 +93,7 @@ public class AIProviderService : IAIProviderService
     public Task<IEnumerable<string>> GetAvailableToolsAsync()
         => Task.FromResult<IEnumerable<string>>(new[]
         {
-            "shell.exec","file.read","file.write","git.diff","ild.create_workitem"
+            "shell.exec","file.read","file.write","git.diff","ild.create_workitem","ild.preview_start","ild.preview_status","ild.preview_stop"
         });
 
     public async Task<ToolExecutionResult> ExecuteToolAsync(string toolName, string arguments, string worktreePath)
@@ -124,6 +126,12 @@ public class AIProviderService : IAIProviderService
                     return await RunShellAsync("git diff HEAD", worktreePath);
                 case "ild.create_workitem":
                     return await CreateWorkItemAsync(arguments);
+                case "ild.preview_start":
+                    return await StartPreviewAsync(arguments, worktreePath);
+                case "ild.preview_status":
+                    return await GetPreviewStatusAsync(worktreePath);
+                case "ild.preview_stop":
+                    return await StopPreviewAsync(worktreePath);
                 default:
                     return new ToolExecutionResult(false, "", $"unknown tool {toolName}", -1);
             }
@@ -184,6 +192,80 @@ public class AIProviderService : IAIProviderService
                 repositoryId = repoId;
             var id = await _workItemManager.CreateWorkItemAsync(title!, description ?? "", repositoryId);
             return new ToolExecutionResult(true, id.ToString(), null);
+        }
+        catch (Exception ex)
+        {
+            return new ToolExecutionResult(false, "", ex.Message, -1);
+        }
+    }
+
+    private async Task<ToolExecutionResult> StartPreviewAsync(string arguments, string worktreePath)
+    {
+        try
+        {
+            string? profileName = null;
+            bool skipInstall = false;
+            string? publicHost = null;
+            Dictionary<string, int>? portOverrides = null;
+            int? timeoutSeconds = null;
+
+            if (!string.IsNullOrWhiteSpace(arguments))
+            {
+                using var doc = JsonDocument.Parse(arguments);
+                var root = doc.RootElement;
+                if (root.TryGetProperty("profileName", out var profileProp))
+                    profileName = profileProp.GetString();
+                if (root.TryGetProperty("skipInstall", out var skipProp) && skipProp.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                    skipInstall = skipProp.GetBoolean();
+                if (root.TryGetProperty("publicHost", out var hostProp))
+                    publicHost = hostProp.GetString();
+                if (root.TryGetProperty("portOverrides", out var portsProp) && portsProp.ValueKind == JsonValueKind.Object)
+                {
+                    portOverrides = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var property in portsProp.EnumerateObject())
+                    {
+                        if (property.Value.ValueKind == JsonValueKind.Number && property.Value.TryGetInt32(out var port))
+                            portOverrides[property.Name] = port;
+                    }
+                }
+                if (root.TryGetProperty("timeoutSeconds", out var timeoutProp)
+                    && timeoutProp.ValueKind == JsonValueKind.Number
+                    && timeoutProp.TryGetInt32(out var parsedTimeout))
+                {
+                    timeoutSeconds = parsedTimeout;
+                }
+            }
+
+            var status = await _worktreePreviewService.StartAsync(
+                worktreePath,
+                new WorktreePreviewStartOptions(profileName, skipInstall, publicHost, portOverrides, timeoutSeconds));
+            return new ToolExecutionResult(true, JsonSerializer.Serialize(status), null);
+        }
+        catch (Exception ex)
+        {
+            return new ToolExecutionResult(false, "", ex.Message, -1);
+        }
+    }
+
+    private async Task<ToolExecutionResult> GetPreviewStatusAsync(string worktreePath)
+    {
+        try
+        {
+            var status = await _worktreePreviewService.GetStatusAsync(worktreePath);
+            return new ToolExecutionResult(true, JsonSerializer.Serialize(status), null);
+        }
+        catch (Exception ex)
+        {
+            return new ToolExecutionResult(false, "", ex.Message, -1);
+        }
+    }
+
+    private async Task<ToolExecutionResult> StopPreviewAsync(string worktreePath)
+    {
+        try
+        {
+            var status = await _worktreePreviewService.StopAsync(worktreePath);
+            return new ToolExecutionResult(true, JsonSerializer.Serialize(status), null);
         }
         catch (Exception ex)
         {

@@ -40,6 +40,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IProcessRunner, ProcessRunner>();
         services.AddScoped<IRemoteProvider, RemoteProviderService>();
         services.AddHttpClient<IAIProviderService, AIProviderService>();
+        services.AddSingleton<IWorktreePreviewService, WorktreePreviewService>();
         services.AddScoped<IEventLogService, EventLogService>();
         services.AddScoped<IRecoveryManager, RecoveryManager>();
         services.AddScoped<IPrSyncService, PrSyncService>();

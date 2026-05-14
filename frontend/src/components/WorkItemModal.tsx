@@ -8,6 +8,7 @@ import {
   Repository,
   LoopTemplate,
   LoopRun,
+  WorktreePreview,
 } from "../types";
 import type { TypedSignalRMessage } from "../types/signalr";
 import {
@@ -61,6 +62,10 @@ export default function WorkItemModal({
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [progressLines, setProgressLines] = useState<string[]>([]);
+  const [preview, setPreview] = useState<WorktreePreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewPortInputs, setPreviewPortInputs] = useState<Record<string, string>>({});
 
   useEffect(() => {
     repositoryService
@@ -89,6 +94,48 @@ export default function WorkItemModal({
         .catch(() => {});
     }
   }, [workItem?.id, editMode]);
+
+  const refreshPreview = useCallback(async () => {
+    if (!workItem?.id || !workItem.worktreePath || editMode) {
+      setPreview(null);
+      setPreviewError(null);
+      return;
+    }
+
+    setPreviewLoading(true);
+    setPreviewError(null);
+    try {
+      const result = await workItemService.getPreview(workItem.id);
+      setPreview(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to load preview status.";
+      setPreviewError(message);
+      setPreview(null);
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, [workItem?.id, workItem?.worktreePath, editMode]);
+
+  useEffect(() => {
+    void refreshPreview();
+  }, [refreshPreview]);
+
+  useEffect(() => {
+    if (!preview?.services.length) return;
+
+    setPreviewPortInputs((prev) => {
+      const next = { ...prev };
+      for (const service of preview.services) {
+        if (
+          (!next[service.portAlias] || next[service.portAlias].length === 0) &&
+          service.suggestedPort
+        ) {
+          next[service.portAlias] = String(service.suggestedPort);
+        }
+      }
+      return next;
+    });
+  }, [preview]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -365,6 +412,54 @@ export default function WorkItemModal({
       console.error("Failed to cleanup to backlog:", error);
     }
   };
+
+  const handleStartPreview = async () => {
+    if (!workItem) return;
+    setPreviewLoading(true);
+    setPreviewError(null);
+    try {
+      const portOverrides: Record<string, number> = {};
+      for (const [alias, value] of Object.entries(previewPortInputs)) {
+        const trimmed = value.trim();
+        if (trimmed.length === 0) continue;
+        const port = Number.parseInt(trimmed, 10);
+        if (!Number.isInteger(port) || port <= 0) {
+          setPreviewError(`Invalid port '${value}' for ${alias}.`);
+          setPreviewLoading(false);
+          return;
+        }
+        portOverrides[alias] = port;
+      }
+
+      const result = await workItemService.startPreview(workItem.id, {
+        portOverrides: Object.keys(portOverrides).length > 0 ? portOverrides : undefined,
+      });
+      setPreview(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to start preview.";
+      setPreviewError(message);
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const handleStopPreview = async () => {
+    if (!workItem) return;
+    setPreviewLoading(true);
+    setPreviewError(null);
+    try {
+      const result = await workItemService.stopPreview(workItem.id);
+      setPreview(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to stop preview.";
+      setPreviewError(message);
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const primaryPreviewUrl =
+    preview?.services.find((service) => !!service.publicUrl)?.publicUrl ?? null;
 
   const handleDelete = async () => {
     if (!workItem) return;
@@ -663,6 +758,111 @@ export default function WorkItemModal({
                         <span className="run-time">{new Date(run.startedAt).toLocaleString()}</span>
                       </Link>
                     ))}
+                  </div>
+                </div>
+              )}
+              {workItem.worktreePath && (
+                <div className="detail-section">
+                  <span className="detail-label">QA Preview</span>
+                  <div className="preview-summary">
+                    <span className="detail-value">
+                      {previewLoading ? "Checking preview..." : (preview?.state ?? "stopped")}
+                    </span>
+                    {preview?.profileName && (
+                      <span className="run-time">profile: {preview.profileName}</span>
+                    )}
+                  </div>
+                  {previewError && (
+                    <div className="preview-message preview-error">{previewError}</div>
+                  )}
+                  {!previewError && preview?.message && (
+                    <div className="preview-message">{preview.message}</div>
+                  )}
+                  {preview?.services.length ? (
+                    <div className="preview-service-list">
+                      {preview.services.map((service) => (
+                        <div key={service.name} className="preview-service-item">
+                          <span className="detail-value">
+                            {service.name}: {service.status}
+                            {service.port ? ` on :${service.port}` : ""}
+                          </span>
+                          <label className="preview-port-label">
+                            Port for {service.portAlias}
+                            <input
+                              type="number"
+                              min="1"
+                              className="pr-input preview-port-input"
+                              value={previewPortInputs[service.portAlias] ?? ""}
+                              onChange={(e) =>
+                                setPreviewPortInputs((prev) => ({
+                                  ...prev,
+                                  [service.portAlias]: e.target.value,
+                                }))
+                              }
+                              disabled={previewLoading || preview?.state === "running"}
+                              placeholder={
+                                service.suggestedPort ? String(service.suggestedPort) : "auto"
+                              }
+                            />
+                          </label>
+                          {service.publicUrl && (
+                            <a
+                              href={service.publicUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="preview-url"
+                            >
+                              {service.publicUrl}
+                            </a>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="preview-message">
+                    Leave a port blank to let ILD choose one automatically. In Docker, only
+                    published ports are reachable from the host.
+                  </div>
+                  <div className="feedback-actions">
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-secondary"
+                      onClick={() => void refreshPreview()}
+                      disabled={previewLoading}
+                    >
+                      Refresh
+                    </button>
+                    {preview?.state === "running" ? (
+                      <>
+                        {primaryPreviewUrl && (
+                          <a
+                            href={primaryPreviewUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="btn btn-sm btn-primary preview-open-link"
+                          >
+                            Open App
+                          </a>
+                        )}
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-warning"
+                          onClick={handleStopPreview}
+                          disabled={previewLoading}
+                        >
+                          Stop Preview
+                        </button>
+                      </>
+                    ) : preview?.configured !== false ? (
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-primary"
+                        onClick={handleStartPreview}
+                        disabled={previewLoading}
+                      >
+                        Start Preview
+                      </button>
+                    ) : null}
                   </div>
                 </div>
               )}

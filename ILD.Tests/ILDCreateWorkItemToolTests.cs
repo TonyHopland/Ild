@@ -18,7 +18,7 @@ public class ILDCreateWorkItemToolTests
             .ReturnsAsync(createdId);
 
         using var db = new TestDb();
-        var svc = new AIProviderService(db.Providers, workItemManager.Object, new HttpClient());
+        var svc = new AIProviderService(db.Providers, workItemManager.Object, Mock.Of<IWorktreePreviewService>(), new HttpClient());
 
         // Act
         var args = System.Text.Json.JsonSerializer.Serialize(new { title = "Test feature", description = "Implement it" });
@@ -35,7 +35,7 @@ public class ILDCreateWorkItemToolTests
     {
         // Arrange
         using var db = new TestDb();
-        var svc = new AIProviderService(db.Providers, Mock.Of<IWorkItemManager>(), new HttpClient());
+        var svc = new AIProviderService(db.Providers, Mock.Of<IWorkItemManager>(), Mock.Of<IWorktreePreviewService>(), new HttpClient());
 
         // Act
         var args = System.Text.Json.JsonSerializer.Serialize(new { description = "no title" });
@@ -51,7 +51,7 @@ public class ILDCreateWorkItemToolTests
     {
         // Arrange
         using var db = new TestDb();
-        var svc = new AIProviderService(db.Providers, Mock.Of<IWorkItemManager>(), new HttpClient());
+        var svc = new AIProviderService(db.Providers, Mock.Of<IWorkItemManager>(), Mock.Of<IWorktreePreviewService>(), new HttpClient());
 
         // Act
         var result = await svc.ExecuteToolAsync("ild.create_workitem", "not-json", "/tmp/worktree");

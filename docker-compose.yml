@@ -32,6 +32,8 @@ services:
     container_name: ild
     ports:
       - "8080:8080"
+      - "3100:3100"
+      - "5100:5100"
     environment:
       - ILD_USERNAME=${ILD_USERNAME:-admin}
       - ILD_PASSWORD=${ILD_PASSWORD}

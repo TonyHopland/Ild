@@ -361,6 +361,42 @@ Vite+ rules of thumb (see [AGENTS.md](AGENTS.md)):
 - `vp test` runs the bundled Vitest. Don't install `vitest` as a dep.
 - `vp dev` / `vp build` run Vite, not your npm scripts.
 
+### QA Preview Config
+
+Repositories can opt into shared worktree QA previews by adding an `ild.config.json`
+file at the repository root. ILD reads the `preview.profiles` section to know how
+to install dependencies, start long-running services inside a worktree, wait for
+health checks, and expose a public QA URL. The current repository includes a
+working example in [ild.config.json](ild.config.json).
+
+When a work item has an active worktree, both the UI and AI tools call the same
+preview control plane to start, inspect, and stop the preview. The default UI
+entry point is the **QA Preview** section in the work item modal.
+
+Preview config and runtime behavior:
+
+- Each preview service declares a required `port` alias such as `frontend` or `backend`.
+- `suggestedPort` is only a default presented to humans in the UI. ILD does **not** bind to that port automatically.
+- If no override is supplied when starting a preview, ILD picks a free port for each alias at runtime.
+- Humans can override ports in the **QA Preview** panel before starting the preview.
+- AI agents can override ports by passing `portOverrides` to `ild.preview_start`.
+- Preview sessions default to `600` seconds and auto-stop when that deadline is reached.
+- Setting `timeoutSeconds` to `0` disables auto-stop and keeps the preview running until it is explicitly stopped.
+
+Runtime notes:
+
+- The UI shows the effective timeout and auto-stop deadline returned by the preview status endpoint.
+- In Docker, only container ports published in [docker-compose.yml](docker-compose.yml) are reachable from the host.
+- If you override a preview port to something other than a published host port, the preview still works inside the container for AI-driven QA, but it will not be reachable from the host browser.
+
+`POST /api/v1/workitems/{id}/preview/start` accepts an optional JSON body with:
+
+- `profileName`: select a non-default preview profile
+- `skipInstall`: skip the `install` steps
+- `publicHost`: override the host used when constructing public preview URLs
+- `portOverrides`: map of port alias to concrete port number, for example `{ "frontend": 3100, "backend": 5100 }`
+- `timeoutSeconds`: preview lifetime in seconds; defaults to `600`, use `0` to disable auto-stop
+
 ---
 
 ## Testing
@@ -395,6 +431,9 @@ All routes are prefixed with `/api/v1`. Auth: `Authorization: Bearer <token>` (t
 | GET    | `/workitems/{id}`                                   | Get work item with runs                |
 | PUT    | `/workitems/{id}`                                   | Update                                 |
 | POST   | `/workitems/{id}/start`                             | Trigger a loop run                     |
+| GET    | `/workitems/{id}/preview`                           | Inspect worktree preview status        |
+| POST   | `/workitems/{id}/preview/start`                     | Start the configured worktree preview  |
+| POST   | `/workitems/{id}/preview/stop`                      | Stop the active worktree preview       |
 | POST   | `/workitems/{id}/transition`                        | Manual status transition               |
 | GET    | `/looptemplates`                                    | List templates                         |
 | POST   | `/looptemplates`                                    | Create (validates graph)               |

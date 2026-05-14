@@ -68,8 +68,37 @@ export interface WorkItem {
   startedAt: string | null;
   completedAt: string | null;
   currentLoopRunId: string | null;
+  worktreePath?: string | null;
+  branchName?: string | null;
   dependencyIds: string[];
   dependentIds: string[];
+}
+
+export interface WorktreePreviewService {
+  name: string;
+  portAlias: string;
+  status: string;
+  port: number | null;
+  suggestedPort: number | null;
+  healthUrl: string | null;
+  publicUrl: string | null;
+  logFilePath: string | null;
+  processId: number | null;
+  exitCode: number | null;
+}
+
+export interface WorktreePreview {
+  configured: boolean;
+  state: string;
+  worktreePath: string;
+  configPath: string | null;
+  profileName: string | null;
+  publicHost: string | null;
+  stateDirectory: string | null;
+  timeoutSeconds: number;
+  autoStopAt: string | null;
+  message: string | null;
+  services: WorktreePreviewService[];
 }
 
 export enum NodeType {

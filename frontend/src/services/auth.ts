@@ -14,6 +14,7 @@ import {
   LoopNodeEdge,
   PrComment,
   LoopRunSessionPreview,
+  WorktreePreview,
 } from "../types";
 
 interface BackendLoginResponse {
@@ -187,6 +188,27 @@ export const workItemService = {
 
   removeDependency: async (id: string, dependencyId: string): Promise<void> => {
     return api.delete<void>(`/workitems/${id}/dependencies/${dependencyId}`);
+  },
+
+  getPreview: async (id: string): Promise<WorktreePreview> => {
+    return api.get<WorktreePreview>(`/workitems/${id}/preview`);
+  },
+
+  startPreview: async (
+    id: string,
+    request?: {
+      profileName?: string;
+      skipInstall?: boolean;
+      publicHost?: string;
+      portOverrides?: Record<string, number>;
+      timeoutSeconds?: number;
+    },
+  ): Promise<WorktreePreview> => {
+    return api.post<WorktreePreview>(`/workitems/${id}/preview/start`, request ?? {});
+  },
+
+  stopPreview: async (id: string): Promise<WorktreePreview> => {
+    return api.post<WorktreePreview>(`/workitems/${id}/preview/stop`, {});
   },
 };
 

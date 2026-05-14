@@ -14,19 +14,32 @@ public class WorkItemsController : ControllerBase
 {
     private readonly IWorkItemManager _workItemManager;
     private readonly ILoopEngine _engine;
+    private readonly IWorktreePreviewService _worktreePreviewService;
     private readonly AppDbContext _db;
     private readonly ILogger<WorkItemsController> _logger;
     private readonly IWorkItemNotifier _notifier;
     private readonly IRemoteProvider? _remoteProvider;
 
-    public WorkItemsController(IWorkItemManager workItemManager, ILoopEngine engine, AppDbContext db, ILogger<WorkItemsController> logger, IWorkItemNotifier? notifier = null, IRemoteProvider? remoteProvider = null)
+    public WorkItemsController(IWorkItemManager workItemManager, ILoopEngine engine, IWorktreePreviewService worktreePreviewService, AppDbContext db, ILogger<WorkItemsController> logger, IWorkItemNotifier? notifier = null, IRemoteProvider? remoteProvider = null)
     {
         _workItemManager = workItemManager;
         _engine = engine;
+        _worktreePreviewService = worktreePreviewService;
         _db = db;
         _logger = logger;
         _notifier = notifier ?? new NoopWorkItemNotifier();
         _remoteProvider = remoteProvider;
+    }
+
+    private async Task<(WorkItemView? WorkItem, IActionResult? Error)> GetPreviewableWorkItemAsync(string id)
+    {
+        var workItem = await _workItemManager.GetWorkItemAsync(id);
+        if (workItem == null)
+            return (null, NotFound());
+        if (string.IsNullOrWhiteSpace(workItem.WorktreePath))
+            return (null, BadRequest(new { error = "Work item does not currently have an active worktree." }));
+
+        return (workItem, null);
     }
 
     private void RunInBackground(Guid runId)
@@ -132,6 +145,59 @@ public class WorkItemsController : ControllerBase
     {
         await _engine.StartRunAsync(id);
         return Accepted();
+    }
+
+    [HttpGet("{id}/preview")]
+    public async Task<IActionResult> GetPreview(string id)
+    {
+        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
+        if (error != null) return error;
+        try
+        {
+            return Ok(await _worktreePreviewService.GetStatusAsync(workItem!.WorktreePath!));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpPost("{id}/preview/start")]
+    public async Task<IActionResult> StartPreview(string id, [FromBody] WorktreePreviewStartRequest? request)
+    {
+        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
+        if (error != null) return error;
+        try
+        {
+            var response = await _worktreePreviewService.StartAsync(
+                workItem!.WorktreePath!,
+                new WorktreePreviewStartOptions(
+                    request?.ProfileName,
+                    request?.SkipInstall == true,
+                    request?.PublicHost,
+                    request?.PortOverrides,
+                    request?.TimeoutSeconds));
+            return Ok(response);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpPost("{id}/preview/stop")]
+    public async Task<IActionResult> StopPreview(string id)
+    {
+        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
+        if (error != null) return error;
+        try
+        {
+            return Ok(await _worktreePreviewService.StopAsync(workItem!.WorktreePath!));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
     [HttpPost("{id}/transition")]
