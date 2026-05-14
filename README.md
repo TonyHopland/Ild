@@ -375,6 +375,7 @@ entry point is the **QA Preview** section in the work item modal.
 
 Preview config and runtime behavior:
 
+- `install` steps run inside the ILD container before preview services start, so they can bootstrap repo-specific global tooling when needed.
 - Each preview service declares a required `port` alias such as `frontend` or `backend`.
 - `suggestedPort` is only a default presented to humans in the UI. ILD does **not** bind to that port automatically.
 - If no override is supplied when starting a preview, ILD picks a free port for each alias at runtime.
@@ -385,6 +386,7 @@ Preview config and runtime behavior:
 
 Runtime notes:
 
+- Use `install` commands for uncommon global dependencies that should not be baked into the base ILD image, for example `command -v vp >/dev/null 2>&1 || npm install -g vite-plus`.
 - The UI shows the effective timeout and auto-stop deadline returned by the preview status endpoint.
 - In Docker, only container ports published in [docker-compose.yml](docker-compose.yml) are reachable from the host.
 - If you override a preview port to something other than a published host port, the preview still works inside the container for AI-driven QA, but it will not be reachable from the host browser.
