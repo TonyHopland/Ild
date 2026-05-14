@@ -20,19 +20,19 @@ public class WorkItemHub : Hub
         await Groups.RemoveFromGroupAsync(Context.ConnectionId, WorkItemGroup);
     }
 
-    public async Task NotifyWorkItemStateChanged(Guid workItemId, WorkItemStatus oldStatus, WorkItemStatus newStatus)
+    public async Task NotifyWorkItemStateChanged(string workItemId, WorkItemStatus oldStatus, WorkItemStatus newStatus)
     {
         await Clients.Group(WorkItemGroup).SendAsync("WorkItemStateChanged",
             new ILD.Data.DTOs.SignalRPayloads.WorkItemStateChangedPayload(workItemId, oldStatus, newStatus));
     }
 
-    public async Task NotifyDependencyResolved(Guid workItemId)
+    public async Task NotifyDependencyResolved(string workItemId)
     {
         await Clients.Group(WorkItemGroup).SendAsync("DependencyResolved",
             new ILD.Data.DTOs.SignalRPayloads.DependencyResolvedPayload(workItemId));
     }
 
-    public async Task NotifyHumanFeedbackRequired(Guid workItemId, string reason)
+    public async Task NotifyHumanFeedbackRequired(string workItemId, string reason)
     {
         await Clients.Group(WorkItemGroup).SendAsync("HumanFeedbackRequired",
             new ILD.Data.DTOs.SignalRPayloads.HumanFeedbackRequiredPayload(workItemId, reason));

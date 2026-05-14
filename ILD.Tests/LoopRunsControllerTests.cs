@@ -17,7 +17,7 @@ public class LoopRunsControllerTests
         var run1 = new LoopRun
         {
             Id = Guid.NewGuid(),
-            WorkItemId = Guid.NewGuid(),
+            WorkItemId = Guid.NewGuid().ToString(),
             LoopTemplateVersionId = Guid.NewGuid(),
             Status = LoopRunStatus.Running,
             RecoveryPolicy = RecoveryPolicy.AutoResume,
@@ -28,7 +28,7 @@ public class LoopRunsControllerTests
         var run2 = new LoopRun
         {
             Id = Guid.NewGuid(),
-            WorkItemId = Guid.NewGuid(),
+            WorkItemId = Guid.NewGuid().ToString(),
             LoopTemplateVersionId = Guid.NewGuid(),
             Status = LoopRunStatus.Completed,
             RecoveryPolicy = RecoveryPolicy.AutoResume,
@@ -89,7 +89,7 @@ public class LoopRunsControllerTests
         store.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(new LoopRun
         {
             Id = runId,
-            WorkItemId = Guid.NewGuid(),
+            WorkItemId = Guid.NewGuid().ToString(),
             LoopTemplateVersionId = Guid.NewGuid(),
             Status = LoopRunStatus.Running,
             RecoveryPolicy = RecoveryPolicy.AutoResume,
@@ -118,7 +118,7 @@ public class LoopRunsControllerTests
         var run = new LoopRun
         {
             Id = runId,
-            WorkItemId = Guid.NewGuid(),
+            WorkItemId = Guid.NewGuid().ToString(),
             LoopTemplateVersionId = Guid.NewGuid(),
             Status = LoopRunStatus.Running,
             RecoveryPolicy = RecoveryPolicy.AutoResume,

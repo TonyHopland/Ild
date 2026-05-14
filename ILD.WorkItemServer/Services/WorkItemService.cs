@@ -1,25 +1,26 @@
 using ILD.WorkItemServer.Domain;
 using ILD.WorkItemServer.Dtos;
 using Microsoft.EntityFrameworkCore;
+using System.Globalization;
 
 namespace ILD.WorkItemServer.Services;
 
 public interface IWorkItemService
 {
     Task<WorkItemDto> CreateAsync(CreateWorkItemRequest req, CancellationToken ct = default);
-    Task<WorkItemDto?> GetAsync(Guid id, CancellationToken ct = default);
+    Task<WorkItemDto?> GetAsync(string id, CancellationToken ct = default);
     Task<IReadOnlyList<WorkItemDto>> ListAsync(WorkItemStatus? status, IReadOnlyList<string>? tags, CancellationToken ct = default);
-    Task<WorkItemDto?> UpdateAsync(Guid id, UpdateWorkItemRequest req, CancellationToken ct = default);
-    Task<bool> DeleteAsync(Guid id, CancellationToken ct = default);
+    Task<WorkItemDto?> UpdateAsync(string id, UpdateWorkItemRequest req, CancellationToken ct = default);
+    Task<bool> DeleteAsync(string id, CancellationToken ct = default);
 
-    Task<TransitionResponse> TransitionAsync(Guid id, TransitionRequest req, CancellationToken ct = default);
-    Task<bool> AddDependencyAsync(Guid id, Guid dependencyId, CancellationToken ct = default);
-    Task<bool> RemoveDependencyAsync(Guid id, Guid dependencyId, CancellationToken ct = default);
-    Task<IReadOnlyList<Guid>?> GetDependenciesAsync(Guid id, CancellationToken ct = default);
+    Task<TransitionResponse> TransitionAsync(string id, TransitionRequest req, CancellationToken ct = default);
+    Task<bool> AddDependencyAsync(string id, string dependencyId, CancellationToken ct = default);
+    Task<bool> RemoveDependencyAsync(string id, string dependencyId, CancellationToken ct = default);
+    Task<IReadOnlyList<string>?> GetDependenciesAsync(string id, CancellationToken ct = default);
 
-    Task<bool> AppendFeedbackAsync(Guid id, string content, CancellationToken ct = default);
+    Task<bool> AppendFeedbackAsync(string id, string content, CancellationToken ct = default);
 
-    Task<PollResponse> PollAsync(IReadOnlyList<Guid> activeIds, CancellationToken ct = default);
+    Task<PollResponse> PollAsync(IReadOnlyList<string> activeIds, CancellationToken ct = default);
     Task<int> ReclaimStaleAsync(TimeSpan timeout, CancellationToken ct = default);
 }
 
@@ -39,7 +40,6 @@ public sealed class WorkItemService : IWorkItemService
         var now = _clock.GetUtcNow().UtcDateTime;
         var w = new WorkItem
         {
-            Id = Guid.NewGuid(),
             Title = req.Title,
             Description = req.Description,
             CreatedBy = req.CreatedBy,
@@ -51,17 +51,19 @@ public sealed class WorkItemService : IWorkItemService
             RepositoryId = req.RepositoryId,
         };
         WorkItemMapper.WriteTags(w, req.Tags ?? Array.Empty<string>());
-        WorkItemMapper.WriteDependencies(w, req.Dependencies ?? Array.Empty<Guid>());
+        WorkItemMapper.WriteDependencies(w, req.Dependencies ?? Array.Empty<string>());
         WorkItemMapper.WriteConversation(w, Array.Empty<ConversationMessage>());
 
         _db.WorkItems.Add(w);
         await _db.SaveChangesAsync(ct);
+        w.Id = w.InternalId.ToString(CultureInfo.InvariantCulture);
+        await _db.SaveChangesAsync(ct);
         return WorkItemMapper.ToDto(w);
     }
 
-    public async Task<WorkItemDto?> GetAsync(Guid id, CancellationToken ct = default)
+    public async Task<WorkItemDto?> GetAsync(string id, CancellationToken ct = default)
     {
-        var w = await _db.WorkItems.FindAsync(new object[] { id }, ct);
+        var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
         return w == null ? null : WorkItemMapper.ToDto(w);
     }
 
@@ -84,9 +86,9 @@ public sealed class WorkItemService : IWorkItemService
         return items.Select(WorkItemMapper.ToDto).ToList();
     }
 
-    public async Task<WorkItemDto?> UpdateAsync(Guid id, UpdateWorkItemRequest req, CancellationToken ct = default)
+    public async Task<WorkItemDto?> UpdateAsync(string id, UpdateWorkItemRequest req, CancellationToken ct = default)
     {
-        var w = await _db.WorkItems.FindAsync(new object[] { id }, ct);
+        var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
         if (w == null) return null;
 
         if (req.Title != null) w.Title = req.Title;
@@ -97,18 +99,18 @@ public sealed class WorkItemService : IWorkItemService
         return WorkItemMapper.ToDto(w);
     }
 
-    public async Task<bool> DeleteAsync(Guid id, CancellationToken ct = default)
+    public async Task<bool> DeleteAsync(string id, CancellationToken ct = default)
     {
-        var w = await _db.WorkItems.FindAsync(new object[] { id }, ct);
+        var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
         if (w == null) return false;
         _db.WorkItems.Remove(w);
         await _db.SaveChangesAsync(ct);
         return true;
     }
 
-    public async Task<TransitionResponse> TransitionAsync(Guid id, TransitionRequest req, CancellationToken ct = default)
+    public async Task<TransitionResponse> TransitionAsync(string id, TransitionRequest req, CancellationToken ct = default)
     {
-        var w = await _db.WorkItems.FindAsync(new object[] { id }, ct);
+        var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
         if (w == null)
             return new TransitionResponse { Success = false, ActualStatus = WorkItemStatus.Backlog, Reason = "Not found" };
 
@@ -181,10 +183,10 @@ public sealed class WorkItemService : IWorkItemService
         || s == WorkItemStatus.WaitingForIld
         || s == WorkItemStatus.Done;
 
-    public async Task<bool> AddDependencyAsync(Guid id, Guid dependencyId, CancellationToken ct = default)
+    public async Task<bool> AddDependencyAsync(string id, string dependencyId, CancellationToken ct = default)
     {
         if (id == dependencyId) return false;
-        var w = await _db.WorkItems.FindAsync(new object[] { id }, ct);
+        var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
         if (w == null) return false;
         var depExists = await _db.WorkItems.AnyAsync(x => x.Id == dependencyId, ct);
         if (!depExists) return false;
@@ -198,9 +200,9 @@ public sealed class WorkItemService : IWorkItemService
         return true;
     }
 
-    public async Task<bool> RemoveDependencyAsync(Guid id, Guid dependencyId, CancellationToken ct = default)
+    public async Task<bool> RemoveDependencyAsync(string id, string dependencyId, CancellationToken ct = default)
     {
-        var w = await _db.WorkItems.FindAsync(new object[] { id }, ct);
+        var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
         if (w == null) return false;
         var deps = WorkItemMapper.ReadDependencies(w).ToList();
         if (!deps.Remove(dependencyId)) return false;
@@ -210,15 +212,15 @@ public sealed class WorkItemService : IWorkItemService
         return true;
     }
 
-    public async Task<IReadOnlyList<Guid>?> GetDependenciesAsync(Guid id, CancellationToken ct = default)
+    public async Task<IReadOnlyList<string>?> GetDependenciesAsync(string id, CancellationToken ct = default)
     {
-        var w = await _db.WorkItems.FindAsync(new object[] { id }, ct);
+        var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
         return w == null ? null : WorkItemMapper.ReadDependencies(w);
     }
 
-    public async Task<bool> AppendFeedbackAsync(Guid id, string content, CancellationToken ct = default)
+    public async Task<bool> AppendFeedbackAsync(string id, string content, CancellationToken ct = default)
     {
-        var w = await _db.WorkItems.FindAsync(new object[] { id }, ct);
+        var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
         if (w == null) return false;
         var now = _clock.GetUtcNow().UtcDateTime;
         var msgs = WorkItemMapper.ReadConversation(w);
@@ -232,7 +234,7 @@ public sealed class WorkItemService : IWorkItemService
         return true;
     }
 
-    public async Task<PollResponse> PollAsync(IReadOnlyList<Guid> activeIds, CancellationToken ct = default)
+    public async Task<PollResponse> PollAsync(IReadOnlyList<string> activeIds, CancellationToken ct = default)
     {
         var now = _clock.GetUtcNow().UtcDateTime;
 

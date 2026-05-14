@@ -22,7 +22,7 @@ public class PRNodeExecutorTests
         var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://gitea.example/r.git", DefaultBranch = "main" };
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume, MaxNodeExecutions = 200, MaxWallClockHours = 24 };
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
-        var workItemId = Guid.NewGuid();
+        var workItemId = Guid.NewGuid().ToString();
         var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = workItemId, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running, RepositoryId = repo.Id, BranchName = "ild/test" };
         var node = new LoopNode { Id = Guid.NewGuid(), LoopTemplateVersionId = version.Id, NodeType = NodeType.PR, Label = "pr" };
 
@@ -70,7 +70,7 @@ public class PRNodeExecutorTests
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
         var worktreePath = Path.Combine(Path.GetTempPath(), "ild-test-wt");
         Directory.CreateDirectory(worktreePath);
-        var workItemId = Guid.NewGuid();
+        var workItemId = Guid.NewGuid().ToString();
         var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = workItemId, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running, RepositoryId = repo.Id, BranchName = "ild/test", WorktreePath = worktreePath };
         var node = new LoopNode { Id = Guid.NewGuid(), LoopTemplateVersionId = version.Id, NodeType = NodeType.PR, Label = "pr" };
 
@@ -130,7 +130,7 @@ public class PRNodeExecutorTests
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
         var worktreePath = Path.Combine(Path.GetTempPath(), "ild-test-wt");
         Directory.CreateDirectory(worktreePath);
-        var workItemId = Guid.NewGuid();
+        var workItemId = Guid.NewGuid().ToString();
         var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = workItemId, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running, RepositoryId = repo.Id, BranchName = "ild/test", WorktreePath = worktreePath };
         var node = new LoopNode { Id = Guid.NewGuid(), LoopTemplateVersionId = version.Id, NodeType = NodeType.PR, Label = "pr" };
 
@@ -190,7 +190,7 @@ public class PRNodeExecutorTests
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
         var worktreePath = Path.Combine(Path.GetTempPath(), "ild-test-wt");
         Directory.CreateDirectory(worktreePath);
-        var workItemId = Guid.NewGuid();
+        var workItemId = Guid.NewGuid().ToString();
         var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = workItemId, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running, RepositoryId = repo.Id, BranchName = "ild/test", WorktreePath = worktreePath };
         var node = new LoopNode { Id = Guid.NewGuid(), LoopTemplateVersionId = version.Id, NodeType = NodeType.PR, Label = "pr" };
 
@@ -243,7 +243,7 @@ public class PRNodeExecutorTests
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume, MaxNodeExecutions = 200, MaxWallClockHours = 24 };
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
         var existingPrUrl = "https://gitea.example/r/pull/42";
-        var workItemId = Guid.NewGuid();
+        var workItemId = Guid.NewGuid().ToString();
         var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = workItemId, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running, RepositoryId = repo.Id, BranchName = "ild/test", PrUrl = existingPrUrl };
         var node = new LoopNode { Id = Guid.NewGuid(), LoopTemplateVersionId = version.Id, NodeType = NodeType.PR, Label = "pr" };
 
@@ -285,7 +285,7 @@ public class PRNodeExecutorTests
         var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://gitea.example/r.git", DefaultBranch = "main" };
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume, MaxNodeExecutions = 200, MaxWallClockHours = 24 };
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
-        var workItemId = Guid.NewGuid();
+        var workItemId = Guid.NewGuid().ToString();
         var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = workItemId, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running, RepositoryId = repo.Id, BranchName = "ild/test" };
         var node = new LoopNode
         {
@@ -343,7 +343,7 @@ public class PRNodeExecutorTests
         var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://gitea.example/r.git", DefaultBranch = "main" };
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume, MaxNodeExecutions = 200, MaxWallClockHours = 24 };
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
-        var workItemId = Guid.NewGuid();
+        var workItemId = Guid.NewGuid().ToString();
         var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = workItemId, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running, RepositoryId = repo.Id, BranchName = "ild/test" };
         var node = new LoopNode { Id = Guid.NewGuid(), LoopTemplateVersionId = version.Id, NodeType = NodeType.PR, Label = "pr" };
 
@@ -394,7 +394,7 @@ public class PRNodeExecutorTests
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
         var worktreePath = Path.Combine(Path.GetTempPath(), "ild-test-wt");
         Directory.CreateDirectory(worktreePath);
-        var workItemId = Guid.NewGuid();
+        var workItemId = Guid.NewGuid().ToString();
         var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = workItemId, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running, RepositoryId = repo.Id, BranchName = "ild/test", WorktreePath = worktreePath };
         var node = new LoopNode { Id = Guid.NewGuid(), LoopTemplateVersionId = version.Id, NodeType = NodeType.PR, Label = "pr" };
 

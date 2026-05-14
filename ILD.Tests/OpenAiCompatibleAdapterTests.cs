@@ -30,8 +30,7 @@ public class OpenAiCompatibleAdapterTests
                 Model = "gpt-4"
             },
             Prompt: "test prompt",
-            RunContext: new LoopRunContext(
-                Guid.NewGuid(), Guid.NewGuid(), "Title", "Desc", "/tmp", "main", new List<string>(), null),
+            RunContext: new LoopRunContext(Guid.NewGuid(), Guid.NewGuid().ToString(), "Title", "Desc", "/tmp", "main", new List<string>(), null),
             ExecutionCount: 1,
             Cancel: CancellationToken.None,
             AdapterConfig: new Dictionary<string, object?>
@@ -69,8 +68,7 @@ public class OpenAiCompatibleAdapterTests
                 Config = "{\"temperature\":0.2,\"maxTokens\":1024}"
             },
             Prompt: "test prompt",
-            RunContext: new LoopRunContext(
-                Guid.NewGuid(), Guid.NewGuid(), "Title", "Desc", "/tmp", "main", new List<string>(), null),
+            RunContext: new LoopRunContext(Guid.NewGuid(), Guid.NewGuid().ToString(), "Title", "Desc", "/tmp", "main", new List<string>(), null),
             ExecutionCount: 1,
             Cancel: CancellationToken.None,
             AdapterConfig: null);
@@ -104,8 +102,7 @@ public class OpenAiCompatibleAdapterTests
                 Config = "{\"temperature\":0.2,\"maxTokens\":1024}"
             },
             Prompt: "test prompt",
-            RunContext: new LoopRunContext(
-                Guid.NewGuid(), Guid.NewGuid(), "Title", "Desc", "/tmp", "main", new List<string>(), null),
+            RunContext: new LoopRunContext(Guid.NewGuid(), Guid.NewGuid().ToString(), "Title", "Desc", "/tmp", "main", new List<string>(), null),
             ExecutionCount: 1,
             Cancel: CancellationToken.None,
             AdapterConfig: new Dictionary<string, object?>
@@ -141,8 +138,7 @@ public class OpenAiCompatibleAdapterTests
                 Model = "gpt-4"
             },
             Prompt: "test prompt",
-            RunContext: new LoopRunContext(
-                Guid.NewGuid(), Guid.NewGuid(), "Title", "Desc", "/tmp", "main", new List<string>(), null),
+            RunContext: new LoopRunContext(Guid.NewGuid(), Guid.NewGuid().ToString(), "Title", "Desc", "/tmp", "main", new List<string>(), null),
             ExecutionCount: 1,
             Cancel: CancellationToken.None,
             AdapterConfig: null);

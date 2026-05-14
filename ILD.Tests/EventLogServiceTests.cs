@@ -14,7 +14,7 @@ public class EventLogServiceTests
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
         var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
         var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/repo.git" };
-        var workItemId = Guid.NewGuid();
+        var workItemId = Guid.NewGuid().ToString();
         var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = workItemId, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume };
 
         db.Context.LoopTemplates.Add(template);
@@ -85,7 +85,7 @@ public class EventLogServiceTests
         var (svc, db, runId) = Setup();
         using var _ = db;
 
-        var failedRun = new LoopRun { Id = Guid.NewGuid(), WorkItemId = Guid.NewGuid(), LoopTemplateVersionId = db.Context.LoopTemplateVersions.First().Id, RecoveryPolicy = RecoveryPolicy.Cancel, Status = LoopRunStatus.Failed };
+        var failedRun = new LoopRun { Id = Guid.NewGuid(), WorkItemId = Guid.NewGuid().ToString(), LoopTemplateVersionId = db.Context.LoopTemplateVersions.First().Id, RecoveryPolicy = RecoveryPolicy.Cancel, Status = LoopRunStatus.Failed };
         db.Context.LoopRuns.Add(failedRun);
         db.Context.SaveChanges();
 

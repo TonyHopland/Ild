@@ -19,8 +19,8 @@ internal static class WorkItemMapper
     public static IReadOnlyList<string> ReadTags(WorkItem w)
         => JsonSerializer.Deserialize<List<string>>(w.TagsJson, JsonOpts) ?? new();
 
-    public static IReadOnlyList<Guid> ReadDependencies(WorkItem w)
-        => JsonSerializer.Deserialize<List<Guid>>(w.DependenciesJson, JsonOpts) ?? new();
+    public static IReadOnlyList<string> ReadDependencies(WorkItem w)
+        => JsonSerializer.Deserialize<List<string>>(w.DependenciesJson, JsonOpts) ?? new();
 
     public static List<ConversationMessage> ReadConversation(WorkItem w)
         => JsonSerializer.Deserialize<List<ConversationMessage>>(w.ConversationJson, JsonOpts) ?? new();
@@ -28,7 +28,7 @@ internal static class WorkItemMapper
     public static void WriteTags(WorkItem w, IReadOnlyList<string> tags)
         => w.TagsJson = JsonSerializer.Serialize(tags, JsonOpts);
 
-    public static void WriteDependencies(WorkItem w, IReadOnlyList<Guid> deps)
+    public static void WriteDependencies(WorkItem w, IReadOnlyList<string> deps)
         => w.DependenciesJson = JsonSerializer.Serialize(deps, JsonOpts);
 
     public static void WriteConversation(WorkItem w, IReadOnlyList<ConversationMessage> messages)

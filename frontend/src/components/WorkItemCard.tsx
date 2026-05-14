@@ -55,6 +55,7 @@ export default function WorkItemCard({ workItem, onClick, onMove }: WorkItemCard
       tabIndex={0}
       aria-label={`${workItem.title}, status ${workItem.status}. Use left and right arrow keys to move between columns.`}
     >
+      <div className="work-item-id">#{workItem.id}</div>
       <h4 className="work-item-title">{workItem.title}</h4>
       {reasonStyle && workItem.humanFeedbackReason && (
         <div
@@ -101,6 +102,13 @@ export default function WorkItemCard({ workItem, onClick, onMove }: WorkItemCard
           color: #e0e0e0;
           margin-bottom: 0.25rem;
           line-height: 1.4;
+        }
+
+        .work-item-id {
+          font-size: 0.7rem;
+          color: #7f849c;
+          margin-bottom: 0.35rem;
+          letter-spacing: 0.04em;
         }
 
         .human-feedback-badge {

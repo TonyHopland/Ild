@@ -17,15 +17,15 @@ public class SignalRWorkItemNotifier : IWorkItemNotifier
         _hub = hub;
     }
 
-    public Task WorkItemStateChangedAsync(Guid workItemId, RemoteWorkItemStatus oldStatus, RemoteWorkItemStatus newStatus)
+    public Task WorkItemStateChangedAsync(string workItemId, RemoteWorkItemStatus oldStatus, RemoteWorkItemStatus newStatus)
         => _hub.Clients.Group(WorkItemGroup)
             .SendAsync("WorkItemStateChanged", new WorkItemStateChangedPayload(workItemId, (WorkItemStatus)(int)oldStatus, (WorkItemStatus)(int)newStatus));
 
-    public Task HumanFeedbackRequiredAsync(Guid workItemId, string reason)
+    public Task HumanFeedbackRequiredAsync(string workItemId, string reason)
         => _hub.Clients.Group(WorkItemGroup)
             .SendAsync("HumanFeedbackRequired", new HumanFeedbackRequiredPayload(workItemId, reason));
 
-    public Task DependencyResolvedAsync(Guid workItemId)
+    public Task DependencyResolvedAsync(string workItemId)
         => _hub.Clients.Group(WorkItemGroup)
             .SendAsync("DependencyResolved", new DependencyResolvedPayload(workItemId));
 }

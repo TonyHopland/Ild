@@ -30,12 +30,12 @@ public sealed class WorkItemsController : ControllerBase
         [FromQuery] string? activeIds,
         CancellationToken ct)
     {
-        var ids = ParseGuidList(activeIds);
+        var ids = ParseIdList(activeIds);
         return Ok(await _svc.PollAsync(ids, ct));
     }
 
-    [HttpGet("{id:guid}")]
-    public async Task<ActionResult<WorkItemDto>> Get(Guid id, CancellationToken ct)
+    [HttpGet("{id}")]
+    public async Task<ActionResult<WorkItemDto>> Get(string id, CancellationToken ct)
     {
         var w = await _svc.GetAsync(id, ct);
         return w == null ? NotFound() : Ok(w);
@@ -50,56 +50,51 @@ public sealed class WorkItemsController : ControllerBase
         return CreatedAtAction(nameof(Get), new { id = dto.Id }, dto);
     }
 
-    [HttpPut("{id:guid}")]
-    public async Task<ActionResult<WorkItemDto>> Update(Guid id, [FromBody] UpdateWorkItemRequest req, CancellationToken ct)
+    [HttpPut("{id}")]
+    public async Task<ActionResult<WorkItemDto>> Update(string id, [FromBody] UpdateWorkItemRequest req, CancellationToken ct)
     {
         var dto = await _svc.UpdateAsync(id, req, ct);
         return dto == null ? NotFound() : Ok(dto);
     }
 
-    [HttpDelete("{id:guid}")]
-    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
+    [HttpDelete("{id}")]
+    public async Task<IActionResult> Delete(string id, CancellationToken ct)
         => await _svc.DeleteAsync(id, ct) ? NoContent() : NotFound();
 
-    [HttpPost("{id:guid}/transition")]
-    public async Task<ActionResult<TransitionResponse>> Transition(Guid id, [FromBody] TransitionRequest req, CancellationToken ct)
+    [HttpPost("{id}/transition")]
+    public async Task<ActionResult<TransitionResponse>> Transition(string id, [FromBody] TransitionRequest req, CancellationToken ct)
     {
         var resp = await _svc.TransitionAsync(id, req, ct);
         if (!resp.Success && resp.Reason == "Not found") return NotFound();
         return Ok(resp);
     }
 
-    [HttpGet("{id:guid}/dependencies")]
-    public async Task<ActionResult<IReadOnlyList<Guid>>> GetDependencies(Guid id, CancellationToken ct)
+    [HttpGet("{id}/dependencies")]
+    public async Task<ActionResult<IReadOnlyList<string>>> GetDependencies(string id, CancellationToken ct)
     {
         var deps = await _svc.GetDependenciesAsync(id, ct);
         return deps == null ? NotFound() : Ok(deps);
     }
 
-    [HttpPost("{id:guid}/dependencies")]
-    public async Task<IActionResult> AddDependency(Guid id, [FromBody] AddDependencyRequest req, CancellationToken ct)
+    [HttpPost("{id}/dependencies")]
+    public async Task<IActionResult> AddDependency(string id, [FromBody] AddDependencyRequest req, CancellationToken ct)
         => await _svc.AddDependencyAsync(id, req.DependencyId, ct) ? NoContent() : NotFound();
 
-    [HttpDelete("{id:guid}/dependencies/{depId:guid}")]
-    public async Task<IActionResult> RemoveDependency(Guid id, Guid depId, CancellationToken ct)
+    [HttpDelete("{id}/dependencies/{depId}")]
+    public async Task<IActionResult> RemoveDependency(string id, string depId, CancellationToken ct)
         => await _svc.RemoveDependencyAsync(id, depId, ct) ? NoContent() : NotFound();
 
-    [HttpPost("{id:guid}/feedback")]
-    public async Task<IActionResult> Feedback(Guid id, [FromBody] FeedbackRequest req, CancellationToken ct)
+    [HttpPost("{id}/feedback")]
+    public async Task<IActionResult> Feedback(string id, [FromBody] FeedbackRequest req, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(req.Content)) return BadRequest("Content is required");
         return await _svc.AppendFeedbackAsync(id, req.Content, ct) ? NoContent() : NotFound();
     }
 
-    private static IReadOnlyList<Guid> ParseGuidList(string? csv)
+    private static IReadOnlyList<string> ParseIdList(string? csv)
     {
-        if (string.IsNullOrWhiteSpace(csv)) return Array.Empty<Guid>();
+        if (string.IsNullOrWhiteSpace(csv)) return Array.Empty<string>();
         var parts = csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var result = new List<Guid>(parts.Length);
-        foreach (var p in parts)
-        {
-            if (Guid.TryParse(p, out var g)) result.Add(g);
-        }
-        return result;
+        return parts.Length == 0 ? Array.Empty<string>() : parts;
     }
 }

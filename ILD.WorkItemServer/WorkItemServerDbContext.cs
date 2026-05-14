@@ -14,7 +14,10 @@ public sealed class WorkItemServerDbContext : DbContext
     {
         modelBuilder.Entity<WorkItem>(b =>
         {
-            b.HasKey(w => w.Id);
+            b.HasKey(w => w.InternalId);
+            b.Property(w => w.InternalId).ValueGeneratedOnAdd();
+            b.Property(w => w.Id).IsRequired();
+            b.HasIndex(w => w.Id).IsUnique();
             b.HasIndex(w => w.Status);
             b.Property(w => w.Status).HasConversion<int>();
             b.Property(w => w.Priority).HasConversion<int>();

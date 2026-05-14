@@ -9,7 +9,11 @@ namespace ILD.WorkItemServer.Domain;
 public class WorkItem
 {
     [Key]
-    public Guid Id { get; set; }
+    public int InternalId { get; set; }
+
+    [Required]
+    [MaxLength(64)]
+    public string Id { get; set; } = string.Empty;
 
     [Required]
     [MaxLength(512)]
@@ -32,7 +36,7 @@ public class WorkItem
     /// <summary>JSON-serialized string[] of tags.</summary>
     public string TagsJson { get; set; } = "[]";
 
-    /// <summary>JSON-serialized Guid[] of dependency work item IDs.</summary>
+    /// <summary>JSON-serialized string[] of dependency work item IDs.</summary>
     public string DependenciesJson { get; set; } = "[]";
 
     /// <summary>JSON-serialized array of <see cref="ConversationMessage"/>.</summary>

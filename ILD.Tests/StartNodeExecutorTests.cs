@@ -13,7 +13,7 @@ public class StartNodeExecutorTests
     [Fact]
     public async Task ExecuteAsync_runs_pull_on_existing_base_repo_before_worktree_creation()
     {
-        var workItemId = Guid.NewGuid();
+        var workItemId = Guid.NewGuid().ToString();
         var repoId = Guid.NewGuid();
         var worktreePath = Path.Combine(Path.GetTempPath(), $"ild-test-{workItemId:N}");
         var basePath = Path.Combine(Path.GetTempPath(), $"ild-base-{repoId:N}");
@@ -81,7 +81,7 @@ public class StartNodeExecutorTests
     [Fact]
     public async Task ExecuteAsync_pull_failure_does_not_fail_node()
     {
-        var workItemId = Guid.NewGuid();
+        var workItemId = Guid.NewGuid().ToString();
         var repoId = Guid.NewGuid();
         var worktreePath = Path.Combine(Path.GetTempPath(), $"ild-test-{workItemId:N}");
         var basePath = Path.Combine(Path.GetTempPath(), $"ild-base-{repoId:N}");

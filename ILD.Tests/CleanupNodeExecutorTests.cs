@@ -32,7 +32,7 @@ public class CleanupNodeExecutorTests
             var run = new LoopRun
             {
                 Id = Guid.NewGuid(),
-                WorkItemId = Guid.NewGuid(),
+                WorkItemId = Guid.NewGuid().ToString(),
                 LoopTemplateVersionId = version.Id,
                 RecoveryPolicy = RecoveryPolicy.AutoResume,
                 Status = LoopRunStatus.Running,
@@ -86,7 +86,7 @@ public class CleanupNodeExecutorTests
         var run = new LoopRun
         {
             Id = Guid.NewGuid(),
-            WorkItemId = Guid.NewGuid(),
+            WorkItemId = Guid.NewGuid().ToString(),
             LoopTemplateVersionId = version.Id,
             RecoveryPolicy = RecoveryPolicy.AutoResume,
             Status = LoopRunStatus.Running,
@@ -135,7 +135,7 @@ public class CleanupNodeExecutorTests
             var run = new LoopRun
             {
                 Id = Guid.NewGuid(),
-                WorkItemId = Guid.NewGuid(),
+                WorkItemId = Guid.NewGuid().ToString(),
                 LoopTemplateVersionId = version.Id,
                 RecoveryPolicy = RecoveryPolicy.AutoResume,
                 Status = LoopRunStatus.Running,

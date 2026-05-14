@@ -98,11 +98,9 @@ public class AgentController : ControllerBase
     [HttpGet("workitems/{id}")]
     public async Task<IActionResult> GetWorkItem(string id)
     {
-        if (!Guid.TryParse(id, out var guid))
-            return BadRequest(new { error = "Invalid GUID" });
-        var wi = await _workItems.GetWorkItemAsync(guid);
+        var wi = await _workItems.GetWorkItemAsync(id);
         if (wi == null) return NotFound();
-        var deps = await _workItems.GetDependenciesAsync(guid);
+        var deps = await _workItems.GetDependenciesAsync(id);
         return Ok(new
         {
             id = wi.Id,
@@ -168,10 +166,8 @@ public class AgentController : ControllerBase
 
         if (!string.IsNullOrEmpty(workItemId))
         {
-            if (!Guid.TryParse(workItemId, out var wiGuid))
-                return BadRequest(new { error = "Invalid workItemId" });
             var filtered = await _db.LoopRuns.AsNoTracking()
-                .Where(r => r.WorkItemId == wiGuid)
+                .Where(r => r.WorkItemId == workItemId)
                 .OrderByDescending(r => r.StartedAt)
                 .Skip(skip).Take(take)
                 .Select(r => new
@@ -224,13 +220,14 @@ public class AgentController : ControllerBase
             createdByLoopRunId = headerRun;
 
         // Validate dependencies up-front so we don't half-create.
-        var dependencyIds = new List<Guid>();
+        var dependencyIds = new List<string>();
         if (request.Dependencies is { Count: > 0 })
         {
             foreach (var raw in request.Dependencies)
             {
-                if (!Guid.TryParse(raw, out var dep))
-                    return BadRequest(new { error = $"Invalid dependency id: {raw}" });
+                var dep = raw.Trim();
+                if (dep.Length == 0)
+                    return BadRequest(new { error = "Dependency id cannot be empty" });
                 var exists = await _workItems.GetWorkItemAsync(dep) != null;
                 if (!exists)
                     return BadRequest(new { error = $"Dependency not found: {dep}" });
@@ -238,7 +235,7 @@ public class AgentController : ControllerBase
             }
         }
 
-        Guid id;
+        string id;
         try
         {
             id = await _workItems.CreateWorkItemAsync(

@@ -59,7 +59,7 @@ public class OpenCodeAdapterMcpInjectionTests : IDisposable
         var runId = Guid.NewGuid();
         var ctx = new LoopRunContext(
             LoopRunId: runId,
-            WorkItemId: Guid.NewGuid(),
+            WorkItemId: Guid.NewGuid().ToString(),
             WorkItemTitle: "t",
             WorkItemDescription: "d",
             WorktreePath: "/tmp",

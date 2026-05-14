@@ -10,7 +10,7 @@ public class LoopRun : IHasUpdatedAt
     public Guid Id { get; set; }
 
     [Required]
-    public Guid WorkItemId { get; set; }
+    public string WorkItemId { get; set; } = string.Empty;
 
     [Required]
     [ForeignKey("LoopTemplateVersion")]

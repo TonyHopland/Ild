@@ -4,7 +4,7 @@ namespace ILD.WorkItemServer.Dtos;
 
 public sealed class WorkItemDto
 {
-    public Guid Id { get; set; }
+    public string Id { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
     public string? Description { get; set; }
     public string? CreatedBy { get; set; }
@@ -13,7 +13,7 @@ public sealed class WorkItemDto
     public WorkItemPriority Priority { get; set; }
     public WorkItemStatus Status { get; set; }
     public IReadOnlyList<string> Tags { get; set; } = Array.Empty<string>();
-    public IReadOnlyList<Guid> Dependencies { get; set; } = Array.Empty<Guid>();
+    public IReadOnlyList<string> Dependencies { get; set; } = Array.Empty<string>();
     public IReadOnlyList<ConversationMessage> Conversation { get; set; } = Array.Empty<ConversationMessage>();
     public string? HumanFeedbackActions { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
@@ -27,7 +27,7 @@ public sealed class CreateWorkItemRequest
     public string? CreatedBy { get; set; }
     public WorkItemPriority Priority { get; set; } = WorkItemPriority.Medium;
     public IReadOnlyList<string>? Tags { get; set; }
-    public IReadOnlyList<Guid>? Dependencies { get; set; }
+    public IReadOnlyList<string>? Dependencies { get; set; }
     public WorkItemStatus? ForceStatus { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? RepositoryId { get; set; }
@@ -61,7 +61,7 @@ public sealed class FeedbackRequest
 
 public sealed class AddDependencyRequest
 {
-    public Guid DependencyId { get; set; }
+    public string DependencyId { get; set; } = string.Empty;
 }
 
 public sealed class PollResponse

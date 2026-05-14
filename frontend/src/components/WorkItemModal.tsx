@@ -472,7 +472,10 @@ export default function WorkItemModal({
             aria-label="Work item details"
           >
             <div className="modal-header">
-              <h2>{workItem.title}</h2>
+              <div className="modal-header-copy">
+                <div className="modal-work-item-id">#{workItem.id}</div>
+                <h2>{workItem.title}</h2>
+              </div>
               <button className="modal-close" onClick={onClose}>
                 &times;
               </button>

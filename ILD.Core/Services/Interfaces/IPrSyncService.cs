@@ -8,7 +8,7 @@ public interface IPrSyncService
 {
     Task HandleWebhookAsync(WebhookPayload payload);
     Task<bool> IsPullRequestMergedAsync(string prUrl);
-    Task SyncPullRequestCommentsAsync(Guid workItemId, string prUrl);
-    Task RegisterWorkItemPrLinkAsync(Guid workItemId, string prUrl);
-    Task<string?> GetPrUrlForWorkItemAsync(Guid workItemId);
+    Task SyncPullRequestCommentsAsync(string workItemId, string prUrl);
+    Task RegisterWorkItemPrLinkAsync(string workItemId, string prUrl);
+    Task<string?> GetPrUrlForWorkItemAsync(string workItemId);
 }

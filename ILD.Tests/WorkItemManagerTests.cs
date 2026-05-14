@@ -11,7 +11,7 @@ namespace ILD.Tests;
 
 public class WorkItemManagerTests
 {
-    private static Guid SeedLoopRun(TestDb db, Guid workItemId)
+    private static Guid SeedLoopRun(TestDb db, string workItemId)
     {
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume, MaxNodeExecutions = 100, MaxWallClockHours = 1 };
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
@@ -102,7 +102,7 @@ public class WorkItemManagerTests
         var (mgr, db, _, _, _) = Setup();
         using var _ = db;
 
-        (await mgr.UpdateAsync(Guid.NewGuid(), "t", "d")).Should().BeFalse();
+        (await mgr.UpdateAsync(Guid.NewGuid().ToString(), "t", "d")).Should().BeFalse();
     }
 
     [Fact]
@@ -592,7 +592,7 @@ public class WorkItemManagerTests
         var (mgr, db, _, _, _) = Setup();
         using var _ = db;
 
-        (await mgr.DeleteAsync(Guid.NewGuid())).Should().BeFalse();
+        (await mgr.DeleteAsync(Guid.NewGuid().ToString())).Should().BeFalse();
     }
 
     [Fact]
@@ -792,7 +792,7 @@ public class WorkItemManagerTests
         var (mgr, db, _, _, _) = Setup();
         using var _ = db;
 
-        (await mgr.TransitionAsync(Guid.NewGuid(), RemoteWorkItemStatus.Done)).Should().BeFalse();
+        (await mgr.TransitionAsync(Guid.NewGuid().ToString(), RemoteWorkItemStatus.Done)).Should().BeFalse();
     }
 
     [Fact]

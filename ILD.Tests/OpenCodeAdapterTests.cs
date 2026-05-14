@@ -849,7 +849,7 @@ public class OpenCodeAdapterTests
             Prompt: prompt,
             RunContext: new LoopRunContext(
                 runId ?? Guid.NewGuid(),
-                Guid.NewGuid(),
+                Guid.NewGuid().ToString(),
                 workItemTitle ?? "Test Task",
                 workItemDescription ?? "Test description",
                 worktreePath ?? "/tmp",
@@ -942,7 +942,7 @@ public class OpenCodeAdapterTests
             db.LoopRuns.Add(new LoopRun
             {
                 Id = runId,
-                WorkItemId = Guid.NewGuid(),
+                WorkItemId = Guid.NewGuid().ToString(),
                 LoopTemplateVersionId = versionId,
                 Status = LoopRunStatus.Running,
                 RecoveryPolicy = RecoveryPolicy.AutoResume,

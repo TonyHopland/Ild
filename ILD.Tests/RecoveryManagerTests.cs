@@ -53,7 +53,7 @@ public class RecoveryManagerTests
     {
         var (mgr, wiMgr, runStore, _, _, _, engine) = Build();
         var runId = Guid.NewGuid();
-        var wiId = Guid.NewGuid();
+        var wiId = Guid.NewGuid().ToString();
         runStore.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(new LoopRun
         {
             Id = runId,
@@ -94,7 +94,7 @@ public class RecoveryManagerTests
     {
         var (mgr, wiMgr, runStore, _, _, repo, engine) = Build();
         var runId = Guid.NewGuid();
-        var wiId = Guid.NewGuid();
+        var wiId = Guid.NewGuid().ToString();
         const string worktreePath = "/tmp/wt";
 
         runStore.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(new LoopRun
@@ -157,7 +157,7 @@ public class RecoveryManagerTests
     {
         var (mgr, wiMgr, runStore, _, _, repo, _) = Build();
         var runId = Guid.NewGuid();
-        var wiId = Guid.NewGuid();
+        var wiId = Guid.NewGuid().ToString();
         runStore.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(new LoopRun
         {
             Id = runId,
@@ -181,7 +181,7 @@ public class RecoveryManagerTests
     {
         var (mgr, wiMgr, runStore, _, _, repo, _) = Build();
         var runId = Guid.NewGuid();
-        var wiId = Guid.NewGuid();
+        var wiId = Guid.NewGuid().ToString();
         runStore.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(new LoopRun
         {
             Id = runId,
@@ -205,7 +205,7 @@ public class RecoveryManagerTests
     {
         var (mgr, wiMgr, runStore, _, _, _, _) = Build();
         var runId = Guid.NewGuid();
-        var wiId = Guid.NewGuid();
+        var wiId = Guid.NewGuid().ToString();
         runStore.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(new LoopRun
         {
             Id = runId,
@@ -254,7 +254,7 @@ public class RecoveryManagerTests
     {
         var (mgr, wiMgr, runStore, _, _, _, engine) = Build();
         var runId = Guid.NewGuid();
-        var wiId = Guid.NewGuid();
+        var wiId = Guid.NewGuid().ToString();
         var currentNodeId = Guid.NewGuid();
         var prRunNodeId = Guid.NewGuid();
 

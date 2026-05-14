@@ -11,18 +11,18 @@ namespace ILD.Core.Services.Remote;
 /// </summary>
 public interface IActiveWorkItemTracker
 {
-    IReadOnlyList<Guid> Snapshot();
-    void Add(Guid workItemId);
-    void Remove(Guid workItemId);
+    IReadOnlyList<string> Snapshot();
+    void Add(string workItemId);
+    void Remove(string workItemId);
     int Count { get; }
 }
 
 public sealed class InMemoryActiveWorkItemTracker : IActiveWorkItemTracker
 {
-    private readonly ConcurrentDictionary<Guid, byte> _ids = new();
+    private readonly ConcurrentDictionary<string, byte> _ids = new();
 
-    public IReadOnlyList<Guid> Snapshot() => _ids.Keys.ToList();
-    public void Add(Guid id) => _ids.TryAdd(id, 0);
-    public void Remove(Guid id) => _ids.TryRemove(id, out _);
+    public IReadOnlyList<string> Snapshot() => _ids.Keys.ToList();
+    public void Add(string id) => _ids.TryAdd(id, 0);
+    public void Remove(string id) => _ids.TryRemove(id, out _);
     public int Count => _ids.Count;
 }

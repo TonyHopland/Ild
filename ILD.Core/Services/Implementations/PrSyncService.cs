@@ -49,9 +49,9 @@ public class PrSyncService : IPrSyncService
 
     public Task<bool> IsPullRequestMergedAsync(string prUrl) => Task.FromResult(false);
 
-    public Task SyncPullRequestCommentsAsync(Guid workItemId, string prUrl) => Task.CompletedTask;
+    public Task SyncPullRequestCommentsAsync(string workItemId, string prUrl) => Task.CompletedTask;
 
-    public async Task RegisterWorkItemPrLinkAsync(Guid workItemId, string prUrl)
+    public async Task RegisterWorkItemPrLinkAsync(string workItemId, string prUrl)
     {
         var run = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
         if (run == null) return;
@@ -60,7 +60,7 @@ public class PrSyncService : IPrSyncService
         await _loopRunStore.UpdateRunAsync(run);
     }
 
-    public async Task<string?> GetPrUrlForWorkItemAsync(Guid workItemId)
+    public async Task<string?> GetPrUrlForWorkItemAsync(string workItemId)
     {
         var run = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
         return run?.PrUrl;

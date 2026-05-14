@@ -4,10 +4,10 @@ namespace ILD.Core.Services.Interfaces;
 
 public interface IWorkItemManager
 {
-    Task<Guid> CreateWorkItemAsync(string title, string description, Guid? repositoryId);
-    Task<Guid> CreateWorkItemAsync(string title, string description, Guid? repositoryId, Guid? createdByLoopRunId, bool forceBacklog, IEnumerable<string>? tags = null);
-    Task<bool> UpdateAsync(Guid workItemId, string title, string description, IEnumerable<string>? tags = null);
-    Task<WorkItemView?> GetWorkItemAsync(Guid workItemId);
+    Task<string> CreateWorkItemAsync(string title, string description, Guid? repositoryId);
+    Task<string> CreateWorkItemAsync(string title, string description, Guid? repositoryId, Guid? createdByLoopRunId, bool forceBacklog, IEnumerable<string>? tags = null);
+    Task<bool> UpdateAsync(string workItemId, string title, string description, IEnumerable<string>? tags = null);
+    Task<WorkItemView?> GetWorkItemAsync(string workItemId);
 
     /// <summary>
     /// Server-authoritative listing. Queries the WorkItemServer and merges
@@ -19,11 +19,11 @@ public interface IWorkItemManager
         Guid? repositoryId,
         int skip,
         int take);
-    Task<bool> TransitionToWorkQueueAsync(Guid workItemId);
-    Task<bool> TransitionToReadyAsync(Guid workItemId);
-    Task<bool> TransitionToRunningAsync(Guid workItemId);
-    Task<bool> TransitionToHumanFeedbackAsync(Guid workItemId, string reason);
-    Task<bool> TransitionToDoneAsync(Guid workItemId);
+    Task<bool> TransitionToWorkQueueAsync(string workItemId);
+    Task<bool> TransitionToReadyAsync(string workItemId);
+    Task<bool> TransitionToRunningAsync(string workItemId);
+    Task<bool> TransitionToHumanFeedbackAsync(string workItemId, string reason);
+    Task<bool> TransitionToDoneAsync(string workItemId);
 
     /// <summary>
     /// Generic transition entry point. Mirrors the remote server transition contract.
@@ -31,23 +31,23 @@ public interface IWorkItemManager
     /// <param name="reason">Content stored in the server conversation thread.</param>
     /// <param name="humanFeedbackReason">Short label stored on LoopRun for frontend UI routing. Falls back to <paramref name="reason"/> when null.</param>
     Task<bool> TransitionAsync(
-        Guid workItemId,
+        string workItemId,
         RemoteWorkItemStatus targetStatus,
         string? reason = null,
         string? actions = null,
         Guid? currentLoopRunId = null,
         string? humanFeedbackReason = null);
-    Task<bool> AddDependencyAsync(Guid workItemId, Guid dependsOnWorkItemId);
-    Task<bool> RemoveDependencyAsync(Guid workItemId, Guid dependsOnWorkItemId);
-    Task<IReadOnlyList<WorkItemView>> GetDependenciesAsync(Guid workItemId);
-    Task<IReadOnlyList<WorkItemView>> GetDependentsAsync(Guid workItemId);
-    Task<bool> IsReadyAsync(Guid workItemId);
-    Task<bool> LinkPullRequestAsync(Guid workItemId, string prUrl);
-    Task<bool> ManuallyMarkMergedAsync(Guid workItemId);
-    Task<bool> CleanupToDoneAsync(Guid workItemId);
-    Task<bool> CleanupToBacklogAsync(Guid workItemId);
-    Task<bool> SubmitHumanFeedbackInputAsync(Guid workItemId, string input);
-    Task<bool> SubmitHumanFeedbackRespondAsync(Guid workItemId, string input);
-    Task<bool> RejectHumanFeedbackAsync(Guid workItemId, string? input = null);
-    Task<bool> DeleteAsync(Guid workItemId);
+    Task<bool> AddDependencyAsync(string workItemId, string dependsOnWorkItemId);
+    Task<bool> RemoveDependencyAsync(string workItemId, string dependsOnWorkItemId);
+    Task<IReadOnlyList<WorkItemView>> GetDependenciesAsync(string workItemId);
+    Task<IReadOnlyList<WorkItemView>> GetDependentsAsync(string workItemId);
+    Task<bool> IsReadyAsync(string workItemId);
+    Task<bool> LinkPullRequestAsync(string workItemId, string prUrl);
+    Task<bool> ManuallyMarkMergedAsync(string workItemId);
+    Task<bool> CleanupToDoneAsync(string workItemId);
+    Task<bool> CleanupToBacklogAsync(string workItemId);
+    Task<bool> SubmitHumanFeedbackInputAsync(string workItemId, string input);
+    Task<bool> SubmitHumanFeedbackRespondAsync(string workItemId, string input);
+    Task<bool> RejectHumanFeedbackAsync(string workItemId, string? input = null);
+    Task<bool> DeleteAsync(string workItemId);
 }

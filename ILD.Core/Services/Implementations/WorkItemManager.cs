@@ -44,10 +44,10 @@ public class WorkItemManager : IWorkItemManager
     // Create / Read / Update
     // ──────────────────────────────────────────────────────────────────
 
-    public Task<Guid> CreateWorkItemAsync(string title, string description, Guid? repositoryId)
+    public Task<string> CreateWorkItemAsync(string title, string description, Guid? repositoryId)
         => CreateWorkItemAsync(title, description, repositoryId, null, false);
 
-    public async Task<Guid> CreateWorkItemAsync(
+    public async Task<string> CreateWorkItemAsync(
         string title,
         string description,
         Guid? repositoryId,
@@ -79,7 +79,7 @@ public class WorkItemManager : IWorkItemManager
         return serverWi.Id;
     }
 
-    public async Task<WorkItemView?> GetWorkItemAsync(Guid workItemId)
+    public async Task<WorkItemView?> GetWorkItemAsync(string workItemId)
     {
         var remote = await _server.GetAsync(await _options.ResolveForWorkItemAsync(workItemId), workItemId);
         if (remote == null) return null;
@@ -166,7 +166,7 @@ public class WorkItemManager : IWorkItemManager
         };
     }
 
-    public async Task<bool> UpdateAsync(Guid workItemId, string title, string description, IEnumerable<string>? tags = null)
+    public async Task<bool> UpdateAsync(string workItemId, string title, string description, IEnumerable<string>? tags = null)
     {
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
         var updated = await _server.UpdateAsync(opts, workItemId, new RemoteUpdateWorkItemRequest
@@ -182,7 +182,7 @@ public class WorkItemManager : IWorkItemManager
     // Transitions
     // ──────────────────────────────────────────────────────────────────
 
-    public async Task<bool> TransitionToWorkQueueAsync(Guid workItemId)
+    public async Task<bool> TransitionToWorkQueueAsync(string workItemId)
     {
         var wi = await GetWorkItemAsync(workItemId);
         if (wi == null) return false;
@@ -196,7 +196,7 @@ public class WorkItemManager : IWorkItemManager
         return true;
     }
 
-    public async Task<bool> TransitionToReadyAsync(Guid workItemId)
+    public async Task<bool> TransitionToReadyAsync(string workItemId)
     {
         var wi = await GetWorkItemAsync(workItemId);
         if (wi == null) return false;
@@ -206,7 +206,7 @@ public class WorkItemManager : IWorkItemManager
         return await TransitionAsync(workItemId, RemoteWorkItemStatus.Ready);
     }
 
-    public async Task<bool> TransitionToRunningAsync(Guid workItemId)
+    public async Task<bool> TransitionToRunningAsync(string workItemId)
     {
         var wi = await GetWorkItemAsync(workItemId);
         if (wi == null) return false;
@@ -215,14 +215,14 @@ public class WorkItemManager : IWorkItemManager
         return await TransitionAsync(workItemId, RemoteWorkItemStatus.Running);
     }
 
-    public Task<bool> TransitionToHumanFeedbackAsync(Guid workItemId, string reason)
+    public Task<bool> TransitionToHumanFeedbackAsync(string workItemId, string reason)
         => TransitionAsync(workItemId, RemoteWorkItemStatus.HumanFeedback, reason);
 
-    public Task<bool> TransitionToDoneAsync(Guid workItemId)
+    public Task<bool> TransitionToDoneAsync(string workItemId)
         => TransitionAsync(workItemId, RemoteWorkItemStatus.Done);
 
     public async Task<bool> TransitionAsync(
-        Guid workItemId,
+        string workItemId,
         RemoteWorkItemStatus targetStatus,
         string? reason = null,
         string? actions = null,
@@ -284,7 +284,7 @@ public class WorkItemManager : IWorkItemManager
     // Dependencies (server-only)
     // ──────────────────────────────────────────────────────────────────
 
-    public async Task<bool> AddDependencyAsync(Guid workItemId, Guid dependsOnWorkItemId)
+    public async Task<bool> AddDependencyAsync(string workItemId, string dependsOnWorkItemId)
     {
         if (workItemId == dependsOnWorkItemId)
             throw new InvalidOperationException("A work item cannot depend on itself.");
@@ -299,13 +299,13 @@ public class WorkItemManager : IWorkItemManager
         return await _server.AddDependencyAsync(opts, workItemId, dependsOnWorkItemId);
     }
 
-    public async Task<bool> RemoveDependencyAsync(Guid workItemId, Guid dependsOnWorkItemId)
+    public async Task<bool> RemoveDependencyAsync(string workItemId, string dependsOnWorkItemId)
     {
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
         return await _server.RemoveDependencyAsync(opts, workItemId, dependsOnWorkItemId);
     }
 
-    public async Task<IReadOnlyList<WorkItemView>> GetDependenciesAsync(Guid workItemId)
+    public async Task<IReadOnlyList<WorkItemView>> GetDependenciesAsync(string workItemId)
     {
         var ids = await GetServerDependencyIdsAsync(workItemId);
         if (ids.Count == 0) return Array.Empty<WorkItemView>();
@@ -326,7 +326,7 @@ public class WorkItemManager : IWorkItemManager
         return views;
     }
 
-    public async Task<IReadOnlyList<WorkItemView>> GetDependentsAsync(Guid workItemId)
+    public async Task<IReadOnlyList<WorkItemView>> GetDependentsAsync(string workItemId)
     {
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
         var all = await _server.ListAsync(opts, status: null, tags: null);
@@ -344,7 +344,7 @@ public class WorkItemManager : IWorkItemManager
         return views;
     }
 
-    public async Task<bool> IsReadyAsync(Guid workItemId)
+    public async Task<bool> IsReadyAsync(string workItemId)
     {
         var ids = await GetServerDependencyIdsAsync(workItemId);
         if (ids.Count == 0) return true;
@@ -359,17 +359,17 @@ public class WorkItemManager : IWorkItemManager
         return true;
     }
 
-    private async Task<IReadOnlyList<Guid>> GetServerDependencyIdsAsync(Guid workItemId)
+    private async Task<IReadOnlyList<string>> GetServerDependencyIdsAsync(string workItemId)
     {
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
         var serverWi = await _server.GetAsync(opts, workItemId);
-        return serverWi?.Dependencies?.ToList() ?? (IReadOnlyList<Guid>)Array.Empty<Guid>();
+        return serverWi?.Dependencies?.ToList() ?? (IReadOnlyList<string>)Array.Empty<string>();
     }
 
-    private async Task<bool> WouldCreateCycle(Guid workItemId, Guid newDepId)
+    private async Task<bool> WouldCreateCycle(string workItemId, string newDepId)
     {
-        var visited = new HashSet<Guid>();
-        var stack = new Stack<Guid>();
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        var stack = new Stack<string>();
         stack.Push(newDepId);
         while (stack.Count > 0)
         {
@@ -386,7 +386,7 @@ public class WorkItemManager : IWorkItemManager
     // PR / cleanup (engine-only fields on LoopRun)
     // ──────────────────────────────────────────────────────────────────
 
-    public async Task<bool> LinkPullRequestAsync(Guid workItemId, string prUrl)
+    public async Task<bool> LinkPullRequestAsync(string workItemId, string prUrl)
     {
         var run = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
         if (run == null) return false;
@@ -396,7 +396,7 @@ public class WorkItemManager : IWorkItemManager
         return true;
     }
 
-    public async Task<bool> ManuallyMarkMergedAsync(Guid workItemId)
+    public async Task<bool> ManuallyMarkMergedAsync(string workItemId)
     {
         var currentRun = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
         if (currentRun == null) return false;
@@ -421,7 +421,7 @@ public class WorkItemManager : IWorkItemManager
         return true;
     }
 
-    public async Task<bool> CleanupToDoneAsync(Guid workItemId)
+    public async Task<bool> CleanupToDoneAsync(string workItemId)
     {
         var currentRun = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
         var wi = await GetWorkItemAsync(workItemId);
@@ -456,7 +456,7 @@ public class WorkItemManager : IWorkItemManager
         return true;
     }
 
-    public async Task<bool> CleanupToBacklogAsync(Guid workItemId)
+    public async Task<bool> CleanupToBacklogAsync(string workItemId)
     {
         var currentRun = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
 
@@ -492,7 +492,7 @@ public class WorkItemManager : IWorkItemManager
     // Human feedback
     // ──────────────────────────────────────────────────────────────────
 
-    public async Task<bool> SubmitHumanFeedbackInputAsync(Guid workItemId, string input)
+    public async Task<bool> SubmitHumanFeedbackInputAsync(string workItemId, string input)
     {
         var wi = await GetWorkItemAsync(workItemId);
         if (wi == null || wi.CurrentLoopRunId == null) return false;
@@ -565,7 +565,7 @@ public class WorkItemManager : IWorkItemManager
         return node?.NodeType == NodeType.PR;
     }
 
-    public async Task<bool> RejectHumanFeedbackAsync(Guid workItemId, string? input = null)
+    public async Task<bool> RejectHumanFeedbackAsync(string workItemId, string? input = null)
     {
         var wi = await GetWorkItemAsync(workItemId);
         if (wi == null || wi.CurrentLoopRunId == null) return false;
@@ -613,7 +613,7 @@ public class WorkItemManager : IWorkItemManager
         return true;
     }
 
-    public async Task<bool> SubmitHumanFeedbackRespondAsync(Guid workItemId, string input)
+    public async Task<bool> SubmitHumanFeedbackRespondAsync(string workItemId, string input)
     {
         var wi = await GetWorkItemAsync(workItemId);
         if (wi == null || wi.CurrentLoopRunId == null) return false;
@@ -662,7 +662,7 @@ public class WorkItemManager : IWorkItemManager
         return true;
     }
 
-    public async Task<bool> DeleteAsync(Guid workItemId)
+    public async Task<bool> DeleteAsync(string workItemId)
     {
         var wi = await GetWorkItemAsync(workItemId);
         if (wi == null) return false;

@@ -11,7 +11,7 @@ public class ILDCreateWorkItemToolTests
     public async Task ExecuteTool_create_workitem_succeeds_with_minimal_args()
     {
         // Arrange
-        var createdId = Guid.NewGuid();
+        var createdId = Guid.NewGuid().ToString();
         var workItemManager = new Mock<IWorkItemManager>();
         workItemManager
             .Setup(m => m.CreateWorkItemAsync(It.IsAny<string>(), It.IsAny<string>(), (Guid?)null))

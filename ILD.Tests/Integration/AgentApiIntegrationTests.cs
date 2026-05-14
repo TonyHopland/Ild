@@ -116,7 +116,8 @@ public class AgentApiIntegrationTests
         resp.StatusCode.Should().Be(HttpStatusCode.Created);
 
         var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
-        var newId = doc.RootElement.GetProperty("id").GetGuid();
+        var newId = doc.RootElement.GetProperty("id").GetString();
+        newId.Should().NotBeNullOrWhiteSpace();
 
         var detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{newId}");
         detail.GetProperty("dependencies").GetArrayLength().Should().Be(1);
@@ -139,7 +140,7 @@ public class AgentApiIntegrationTests
             because: "agent surface intentionally has no transition endpoint");
     }
 
-    private static async Task<Guid> CreateAsync(HttpClient client, string title, Guid? runId, Guid repositoryId)
+    private static async Task<string> CreateAsync(HttpClient client, string title, Guid? runId, Guid repositoryId)
     {
         var req = new HttpRequestMessage(HttpMethod.Post, "/api/v1/agent/workitems")
         {
@@ -150,7 +151,8 @@ public class AgentApiIntegrationTests
         var resp = await client.SendAsync(req);
         resp.EnsureSuccessStatusCode();
         var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
-        return doc.RootElement.GetProperty("id").GetGuid();
+        return doc.RootElement.GetProperty("id").GetString()
+            ?? throw new InvalidOperationException("Created work item response did not include an id.");
     }
 
     private static async Task<Guid> SeedRepositoryAsync(ApiFactory factory, WorkItemStatus intake)

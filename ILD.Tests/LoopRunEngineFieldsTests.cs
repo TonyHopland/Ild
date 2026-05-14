@@ -21,7 +21,7 @@ public class LoopRunEngineFieldsTests
         db.Context.LoopTemplates.Add(lt);
         var ltv = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = lt.Id, VersionNumber = 1, CreatedAt = DateTime.UtcNow };
         db.Context.LoopTemplateVersions.Add(ltv);
-        var wi = Guid.NewGuid();
+        var wi = Guid.NewGuid().ToString();
         await db.Context.SaveChangesAsync();
 
         var run = new LoopRun
@@ -68,7 +68,7 @@ public class LoopRunEngineFieldsTests
         db.Context.LoopTemplates.Add(lt);
         var ltv = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = lt.Id, VersionNumber = 1, CreatedAt = DateTime.UtcNow };
         db.Context.LoopTemplateVersions.Add(ltv);
-        var wi = Guid.NewGuid();
+        var wi = Guid.NewGuid().ToString();
         await db.Context.SaveChangesAsync();
 
         var run = new LoopRun

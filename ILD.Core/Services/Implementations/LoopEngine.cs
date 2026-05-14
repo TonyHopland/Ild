@@ -77,7 +77,7 @@ public class LoopEngine : ILoopEngine
 
     // ---- Public lifecycle API --------------------------------------------
 
-    public async Task StartRunAsync(Guid workItemId, CancellationToken cancellationToken = default)
+    public async Task StartRunAsync(string workItemId, CancellationToken cancellationToken = default)
     {
         Guid runId;
         using (var scope = _sp.CreateScope())
@@ -767,7 +767,7 @@ public class LoopEngine : ILoopEngine
         await store.PersistEdgeTraversalAsync(runId, edgeId, count);
     }
 
-    private async Task<WorkItemView?> RefreshWorkItemAsync(Guid id)
+    private async Task<WorkItemView?> RefreshWorkItemAsync(string id)
     {
         using var scope = _sp.CreateScope();
         var manager = scope.ServiceProvider.GetRequiredService<IWorkItemManager>();
@@ -798,7 +798,7 @@ public class LoopEngine : ILoopEngine
         if (!string.IsNullOrEmpty(cleanupOutput))
             await LogEventAsync(runId, "CleanupCompleted", $"Cleanup finished: {cleanupOutput}");
 
-        Guid? workItemId = null;
+        string? workItemId = null;
         LoopRunStatus prevStatus = LoopRunStatus.Running;
         using (var scope = _sp.CreateScope())
         {
@@ -814,8 +814,8 @@ public class LoopEngine : ILoopEngine
                 await store.UpdateRunAsync(run);
             }
         }
-        if (workItemId.HasValue)
-            await TransitionWorkItemAsync(workItemId.Value, RemoteWorkItemStatus.Done, null);
+        if (!string.IsNullOrEmpty(workItemId))
+            await TransitionWorkItemAsync(workItemId, RemoteWorkItemStatus.Done, null);
         await NotifyAsync(() => _notifier.RunStateChangedAsync(runId, prevStatus, LoopRunStatus.Completed));
         await LogEventAsync(runId, "LoopRunCompleted", "Run completed successfully");
         ReleaseRunControl(runId);
@@ -824,7 +824,7 @@ public class LoopEngine : ILoopEngine
 
     private async Task<LoopRunStatus> FailRunAsync(Guid runId, string reason)
     {
-        Guid? workItemId = null;
+        string? workItemId = null;
         LoopRunStatus prevStatus = LoopRunStatus.Running;
         using (var scope = _sp.CreateScope())
         {
@@ -840,8 +840,8 @@ public class LoopEngine : ILoopEngine
                 await store.UpdateRunAsync(run);
             }
         }
-        if (workItemId.HasValue)
-            await TransitionWorkItemAsync(workItemId.Value, RemoteWorkItemStatus.HumanFeedback, reason);
+        if (!string.IsNullOrEmpty(workItemId))
+            await TransitionWorkItemAsync(workItemId, RemoteWorkItemStatus.HumanFeedback, reason);
         await NotifyAsync(() => _notifier.EventLoggedAsync(runId, $"Run failed: {reason}", "Error", null, null));
         await NotifyAsync(() => _notifier.RunStateChangedAsync(runId, prevStatus, LoopRunStatus.Failed));
         ReleaseRunControl(runId);
@@ -850,7 +850,7 @@ public class LoopEngine : ILoopEngine
 
     private async Task CancelRunInternalAsync(Guid runId)
     {
-        Guid? workItemId = null;
+        string? workItemId = null;
         LoopRunStatus prevStatus = LoopRunStatus.Running;
         using (var scope = _sp.CreateScope())
         {
@@ -866,8 +866,8 @@ public class LoopEngine : ILoopEngine
                 await store.UpdateRunAsync(run);
             }
         }
-        if (workItemId.HasValue)
-            await TransitionWorkItemAsync(workItemId.Value, RemoteWorkItemStatus.HumanFeedback, "Run cancelled");
+        if (!string.IsNullOrEmpty(workItemId))
+            await TransitionWorkItemAsync(workItemId, RemoteWorkItemStatus.HumanFeedback, "Run cancelled");
         await NotifyAsync(() => _notifier.RunStateChangedAsync(runId, prevStatus, LoopRunStatus.Cancelled));
         ReleaseRunControl(runId);
     }
@@ -895,7 +895,7 @@ public class LoopEngine : ILoopEngine
             control.Dispose();
     }
 
-    private async Task TransitionWorkItemAsync(Guid workItemId, RemoteWorkItemStatus next, string? reason, string? actions = null, string? humanFeedbackReason = null)
+    private async Task TransitionWorkItemAsync(string workItemId, RemoteWorkItemStatus next, string? reason, string? actions = null, string? humanFeedbackReason = null)
     {
         using var scope = _sp.CreateScope();
         var manager = scope.ServiceProvider.GetRequiredService<IWorkItemManager>();

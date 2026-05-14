@@ -80,7 +80,7 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
     [Fact]
     public async Task Get_returns_null_on_not_found()
     {
-        var item = await _client.GetAsync(_opts, Guid.NewGuid());
+        var item = await _client.GetAsync(_opts, Guid.NewGuid().ToString());
         item.Should().BeNull();
     }
 

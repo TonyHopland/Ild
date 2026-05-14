@@ -21,7 +21,7 @@ public class LoopRunNoWorkItemFKTests
         var run = new LoopRun
         {
             Id = Guid.NewGuid(),
-            WorkItemId = Guid.NewGuid(),
+            WorkItemId = Guid.NewGuid().ToString(),
             LoopTemplateVersionId = ltv.Id,
             Status = LoopRunStatus.Running,
             RecoveryPolicy = RecoveryPolicy.AutoResume,

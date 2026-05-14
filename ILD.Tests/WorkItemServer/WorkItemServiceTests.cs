@@ -263,7 +263,7 @@ public class WorkItemServiceTests : IAsyncLifetime
         var a = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
 
         (await _svc.AddDependencyAsync(a.Id, a.Id)).Should().BeFalse();
-        (await _svc.AddDependencyAsync(a.Id, Guid.NewGuid())).Should().BeFalse();
+        (await _svc.AddDependencyAsync(a.Id, Guid.NewGuid().ToString())).Should().BeFalse();
     }
 
     [Fact]
@@ -271,7 +271,7 @@ public class WorkItemServiceTests : IAsyncLifetime
     {
         var a = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
 
-        (await _svc.RemoveDependencyAsync(a.Id, Guid.NewGuid())).Should().BeFalse();
+        (await _svc.RemoveDependencyAsync(a.Id, Guid.NewGuid().ToString())).Should().BeFalse();
     }
 
     [Fact]

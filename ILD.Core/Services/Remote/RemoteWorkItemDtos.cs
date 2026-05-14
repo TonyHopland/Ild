@@ -28,7 +28,7 @@ public sealed record RemoteConversationMessage(string Role, string Content, Date
 
 public sealed class RemoteWorkItem
 {
-    public Guid Id { get; set; }
+    public string Id { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
     public string? Description { get; set; }
     public string? CreatedBy { get; set; }
@@ -37,7 +37,7 @@ public sealed class RemoteWorkItem
     public RemoteWorkItemPriority Priority { get; set; }
     public RemoteWorkItemStatus Status { get; set; }
     public IReadOnlyList<string> Tags { get; set; } = Array.Empty<string>();
-    public IReadOnlyList<Guid> Dependencies { get; set; } = Array.Empty<Guid>();
+    public IReadOnlyList<string> Dependencies { get; set; } = Array.Empty<string>();
     public IReadOnlyList<RemoteConversationMessage> Conversation { get; set; } = Array.Empty<RemoteConversationMessage>();
     public string? HumanFeedbackActions { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
@@ -51,7 +51,7 @@ public sealed class RemoteCreateWorkItemRequest
     public string? CreatedBy { get; set; }
     public RemoteWorkItemPriority Priority { get; set; } = RemoteWorkItemPriority.Medium;
     public IReadOnlyList<string>? Tags { get; set; }
-    public IReadOnlyList<Guid>? Dependencies { get; set; }
+    public IReadOnlyList<string>? Dependencies { get; set; }
     public RemoteWorkItemStatus? ForceStatus { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? RepositoryId { get; set; }

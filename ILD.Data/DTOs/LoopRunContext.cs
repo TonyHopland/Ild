@@ -2,7 +2,7 @@ namespace ILD.Data.DTOs;
 
 public record LoopRunContext(
     Guid LoopRunId,
-    Guid WorkItemId,
+    string WorkItemId,
     string WorkItemTitle,
     string WorkItemDescription,
     string WorktreePath,

@@ -51,7 +51,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             CreatedBy = req.CreatedBy,
             Priority = MapPri(req.Priority),
             Tags = req.Tags?.ToList() ?? new List<string>(),
-            Dependencies = req.Dependencies?.ToList() ?? new List<Guid>(),
+            Dependencies = req.Dependencies?.ToList() ?? new List<string>(),
             ForceStatus = req.ForceStatus.HasValue ? Map(req.ForceStatus.Value) : null,
             CreatedByLoopRunId = req.CreatedByLoopRunId,
             RepositoryId = req.RepositoryId,
@@ -59,7 +59,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         return ToRemote(dto);
     }
 
-    public async Task<RemoteWorkItem?> GetAsync(WorkItemServerOptions opts, Guid id, CancellationToken ct = default)
+    public async Task<RemoteWorkItem?> GetAsync(WorkItemServerOptions opts, string id, CancellationToken ct = default)
     {
         var dto = await _svc.GetAsync(id, ct);
         return dto == null ? null : ToRemote(dto);
@@ -71,7 +71,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         return list.Select(ToRemote).ToList();
     }
 
-    public async Task<RemoteWorkItem?> UpdateAsync(WorkItemServerOptions opts, Guid id, RemoteUpdateWorkItemRequest req, CancellationToken ct = default)
+    public async Task<RemoteWorkItem?> UpdateAsync(WorkItemServerOptions opts, string id, RemoteUpdateWorkItemRequest req, CancellationToken ct = default)
     {
         var dto = await _svc.UpdateAsync(id, new UpdateWorkItemRequest
         {
@@ -82,9 +82,9 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         return dto == null ? null : ToRemote(dto);
     }
 
-    public Task<bool> DeleteAsync(WorkItemServerOptions opts, Guid id, CancellationToken ct = default) => _svc.DeleteAsync(id, ct);
+    public Task<bool> DeleteAsync(WorkItemServerOptions opts, string id, CancellationToken ct = default) => _svc.DeleteAsync(id, ct);
 
-    public async Task<RemoteTransitionResponse> TransitionAsync(WorkItemServerOptions opts, Guid id, RemoteTransitionRequest req, CancellationToken ct = default)
+    public async Task<RemoteTransitionResponse> TransitionAsync(WorkItemServerOptions opts, string id, RemoteTransitionRequest req, CancellationToken ct = default)
     {
         var resp = await _svc.TransitionAsync(id, new TransitionRequest
         {
@@ -100,16 +100,16 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         };
     }
 
-    public Task<bool> AddDependencyAsync(WorkItemServerOptions opts, Guid id, Guid dependencyId, CancellationToken ct = default)
+    public Task<bool> AddDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, CancellationToken ct = default)
         => _svc.AddDependencyAsync(id, dependencyId, ct);
 
-    public Task<bool> RemoveDependencyAsync(WorkItemServerOptions opts, Guid id, Guid dependencyId, CancellationToken ct = default)
+    public Task<bool> RemoveDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, CancellationToken ct = default)
         => _svc.RemoveDependencyAsync(id, dependencyId, ct);
 
-    public Task<bool> AppendFeedbackAsync(WorkItemServerOptions opts, Guid id, string content, CancellationToken ct = default)
+    public Task<bool> AppendFeedbackAsync(WorkItemServerOptions opts, string id, string content, CancellationToken ct = default)
         => _svc.AppendFeedbackAsync(id, content, ct);
 
-    public async Task<RemotePollResponse> PollAsync(WorkItemServerOptions opts, IReadOnlyList<Guid> activeIds, CancellationToken ct = default)
+    public async Task<RemotePollResponse> PollAsync(WorkItemServerOptions opts, IReadOnlyList<string> activeIds, CancellationToken ct = default)
     {
         var resp = await _svc.PollAsync(activeIds, ct);
         return new RemotePollResponse
@@ -129,6 +129,6 @@ public sealed class StubWorkItemServerOptionsResolver : IWorkItemServerOptionsRe
     public Task<WorkItemServerOptions> ResolveForRepositoryAsync(Guid? repositoryId, CancellationToken ct = default)
         => Task.FromResult(new WorkItemServerOptions { BaseUrl = "http://localhost", ApiKey = "test-key" });
 
-    public Task<WorkItemServerOptions> ResolveForWorkItemAsync(Guid workItemId, CancellationToken ct = default)
+    public Task<WorkItemServerOptions> ResolveForWorkItemAsync(string workItemId, CancellationToken ct = default)
         => Task.FromResult(new WorkItemServerOptions { BaseUrl = "http://localhost", ApiKey = "test-key" });
 }

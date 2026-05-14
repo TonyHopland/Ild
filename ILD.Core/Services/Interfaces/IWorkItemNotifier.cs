@@ -9,14 +9,14 @@ namespace ILD.Core.Services.Interfaces;
 /// </summary>
 public interface IWorkItemNotifier
 {
-    Task WorkItemStateChangedAsync(Guid workItemId, RemoteWorkItemStatus oldStatus, RemoteWorkItemStatus newStatus);
-    Task HumanFeedbackRequiredAsync(Guid workItemId, string reason);
-    Task DependencyResolvedAsync(Guid workItemId);
+    Task WorkItemStateChangedAsync(string workItemId, RemoteWorkItemStatus oldStatus, RemoteWorkItemStatus newStatus);
+    Task HumanFeedbackRequiredAsync(string workItemId, string reason);
+    Task DependencyResolvedAsync(string workItemId);
 }
 
 public sealed class NoopWorkItemNotifier : IWorkItemNotifier
 {
-    public Task WorkItemStateChangedAsync(Guid workItemId, RemoteWorkItemStatus oldStatus, RemoteWorkItemStatus newStatus) => Task.CompletedTask;
-    public Task HumanFeedbackRequiredAsync(Guid workItemId, string reason) => Task.CompletedTask;
-    public Task DependencyResolvedAsync(Guid workItemId) => Task.CompletedTask;
+    public Task WorkItemStateChangedAsync(string workItemId, RemoteWorkItemStatus oldStatus, RemoteWorkItemStatus newStatus) => Task.CompletedTask;
+    public Task HumanFeedbackRequiredAsync(string workItemId, string reason) => Task.CompletedTask;
+    public Task DependencyResolvedAsync(string workItemId) => Task.CompletedTask;
 }

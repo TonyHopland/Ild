@@ -15,7 +15,7 @@ public sealed record NodeSignal(bool Success, string? Output = null, string? Err
 
 public interface ILoopEngine
 {
-    Task StartRunAsync(Guid workItemId, CancellationToken cancellationToken = default);
+    Task StartRunAsync(string workItemId, CancellationToken cancellationToken = default);
     Task PauseRunAsync(Guid runId);
     Task ResumeRunAsync(Guid runId);
     Task CancelRunAsync(Guid runId);

@@ -79,7 +79,7 @@ public class LoopEngineProgressTests
         db.Context.LoopNodeEdges.Add(new LoopNodeEdge { Id = Guid.NewGuid(), SourceNodeId = startNode.Id, TargetNodeId = aiNode.Id, EdgeType = EdgeType.OnSuccess });
         db.Context.LoopNodeEdges.Add(new LoopNodeEdge { Id = Guid.NewGuid(), SourceNodeId = aiNode.Id, TargetNodeId = cleanupNode.Id, EdgeType = EdgeType.OnSuccess });
 
-        var workItemId = Guid.NewGuid();
+        var workItemId = Guid.NewGuid().ToString();
         var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = workItemId, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running };
         db.Context.LoopRuns.Add(run);
         db.Context.SaveChanges();

@@ -36,7 +36,7 @@ public class PromptNodeExecutorTests
             },
             WorkItem: new WorkItemView
             {
-                Id = Guid.NewGuid(),
+                Id = Guid.NewGuid().ToString(),
                 Title = "Plan work",
                 Description = "desc",
                 WorktreePath = "/tmp",

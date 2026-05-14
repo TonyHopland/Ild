@@ -20,7 +20,7 @@ public class AIProviderServiceTests
         using var db = new TestDb();
         var svc = new AIProviderService(db.Providers, Mock.Of<IWorkItemManager>(), new HttpClient());
 
-        var ctx = new LoopRunContext(Guid.NewGuid(), Guid.NewGuid(), "Title", "Desc", "/tmp/x", "feat", new List<string> { "a", "b" }, "prev");
+        var ctx = new LoopRunContext(Guid.NewGuid(), Guid.NewGuid().ToString(), "Title", "Desc", "/tmp/x", "feat", new List<string> { "a", "b" }, "prev");
         var rendered = await svc.RenderPromptAsync("T={{WorkItem.Title}} P={{PreviousNode.Output}}", ctx);
 
         rendered.Should().Be("T=Title P=prev");

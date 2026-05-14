@@ -193,7 +193,7 @@ public class AdapterIntegrationTests
             Prompt: prompt,
             RunContext: new LoopRunContext(
                 Guid.NewGuid(),
-                Guid.NewGuid(),
+                Guid.NewGuid().ToString(),
                 "Integration Test",
                 "Verify adapter produces valid output",
                 Environment.CurrentDirectory,

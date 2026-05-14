@@ -12,7 +12,7 @@ namespace ILD.Core.Services.Remote;
 public interface IWorkItemServerOptionsResolver
 {
     Task<WorkItemServerOptions> ResolveForRepositoryAsync(Guid? repositoryId, CancellationToken ct = default);
-    Task<WorkItemServerOptions> ResolveForWorkItemAsync(Guid workItemId, CancellationToken ct = default);
+    Task<WorkItemServerOptions> ResolveForWorkItemAsync(string workItemId, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -60,7 +60,7 @@ public sealed class DbWorkItemServerOptionsResolver : IWorkItemServerOptionsReso
         };
     }
 
-    public async Task<WorkItemServerOptions> ResolveForWorkItemAsync(Guid workItemId, CancellationToken ct = default)
+    public async Task<WorkItemServerOptions> ResolveForWorkItemAsync(string workItemId, CancellationToken ct = default)
     {
         var repoId = await _db.LoopRuns
             .AsNoTracking()

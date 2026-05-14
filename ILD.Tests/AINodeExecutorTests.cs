@@ -191,7 +191,7 @@ public class AINodeExecutorTests
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
             Node: new LoopNode { Id = nodeId, Config = config },
-            WorkItem: new WorkItemView { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            WorkItem: new WorkItemView { Id = Guid.NewGuid().ToString(), Title = "test", Description = "desc" },
             PreviousNodeOutput: null,
             CancellationToken: CancellationToken.None);
 
@@ -354,7 +354,7 @@ public class AINodeExecutorTests
             Run: new LoopRun { Id = Guid.NewGuid() },
             RunNode: new LoopRunNode { RetryCount = 0 },
             Node: new LoopNode { Config = config, TimeoutSeconds = 1 },
-            WorkItem: new WorkItemView { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            WorkItem: new WorkItemView { Id = Guid.NewGuid().ToString(), Title = "test", Description = "desc" },
             PreviousNodeOutput: null,
             CancellationToken: CancellationToken.None);
 
@@ -393,7 +393,7 @@ public class AINodeExecutorTests
             Run: new LoopRun { Id = Guid.NewGuid() },
             RunNode: new LoopRunNode { RetryCount = 0 },
             Node: new LoopNode { Config = config, TimeoutSeconds = 300 },
-            WorkItem: new WorkItemView { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            WorkItem: new WorkItemView { Id = Guid.NewGuid().ToString(), Title = "test", Description = "desc" },
             PreviousNodeOutput: null,
             CancellationToken: CancellationToken.None);
 
@@ -459,7 +459,7 @@ public class AINodeExecutorTests
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
             Node: new LoopNode { Id = nodeId, Config = config },
-            WorkItem: new WorkItemView { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            WorkItem: new WorkItemView { Id = Guid.NewGuid().ToString(), Title = "test", Description = "desc" },
             PreviousNodeOutput: null,
             CancellationToken: CancellationToken.None);
 
@@ -505,7 +505,7 @@ public class AINodeExecutorTests
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
             Node: new LoopNode { Id = nodeId, Config = config },
-            WorkItem: new WorkItemView { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            WorkItem: new WorkItemView { Id = Guid.NewGuid().ToString(), Title = "test", Description = "desc" },
             PreviousNodeOutput: null,
             CancellationToken: CancellationToken.None);
 
@@ -550,7 +550,7 @@ public class AINodeExecutorTests
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
             Node: new LoopNode { Id = nodeId, Config = config },
-            WorkItem: new WorkItemView { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            WorkItem: new WorkItemView { Id = Guid.NewGuid().ToString(), Title = "test", Description = "desc" },
             PreviousNodeOutput: null,
             CancellationToken: CancellationToken.None);
 
@@ -607,7 +607,7 @@ public class AINodeExecutorTests
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
             Node: new LoopNode { Id = nodeId, Config = config },
-            WorkItem: new WorkItemView { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            WorkItem: new WorkItemView { Id = Guid.NewGuid().ToString(), Title = "test", Description = "desc" },
             PreviousNodeOutput: null,
             CancellationToken: CancellationToken.None);
 
@@ -666,7 +666,7 @@ public class AINodeExecutorTests
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
             Node: new LoopNode { Id = nodeId, Config = config },
-            WorkItem: new WorkItemView { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            WorkItem: new WorkItemView { Id = Guid.NewGuid().ToString(), Title = "test", Description = "desc" },
             PreviousNodeOutput: null,
             CancellationToken: CancellationToken.None);
 
@@ -719,7 +719,7 @@ public class AINodeExecutorTests
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
             Node: new LoopNode { Id = nodeId, Config = config },
-            WorkItem: new WorkItemView { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            WorkItem: new WorkItemView { Id = Guid.NewGuid().ToString(), Title = "test", Description = "desc" },
             PreviousNodeOutput: null,
             CancellationToken: CancellationToken.None);
 
@@ -771,7 +771,7 @@ public class AINodeExecutorTests
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
             Node: new LoopNode { Id = nodeId, Config = config },
-            WorkItem: new WorkItemView { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            WorkItem: new WorkItemView { Id = Guid.NewGuid().ToString(), Title = "test", Description = "desc" },
             PreviousNodeOutput: null,
             CancellationToken: CancellationToken.None);
 
@@ -824,7 +824,7 @@ public class AINodeExecutorTests
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
             Node: new LoopNode { Id = nodeId, Config = config },
-            WorkItem: new WorkItemView { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            WorkItem: new WorkItemView { Id = Guid.NewGuid().ToString(), Title = "test", Description = "desc" },
             PreviousNodeOutput: null,
             CancellationToken: CancellationToken.None);
 
@@ -879,7 +879,7 @@ public class AINodeExecutorTests
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
             Node: new LoopNode { Id = nodeId, Config = config },
-            WorkItem: new WorkItemView { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            WorkItem: new WorkItemView { Id = Guid.NewGuid().ToString(), Title = "test", Description = "desc" },
             PreviousNodeOutput: null,
             CancellationToken: CancellationToken.None);
 
@@ -930,7 +930,7 @@ public class AINodeExecutorTests
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
             Node: new LoopNode { Id = nodeId, Config = config },
-            WorkItem: new WorkItemView { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            WorkItem: new WorkItemView { Id = Guid.NewGuid().ToString(), Title = "test", Description = "desc" },
             PreviousNodeOutput: null,
             CancellationToken: CancellationToken.None);
 
@@ -992,7 +992,7 @@ public class AINodeExecutorTests
             Run: new LoopRun { Id = Guid.NewGuid() },
             RunNode: new LoopRunNode { RetryCount = 0 },
             Node: new LoopNode { Id = Guid.NewGuid(), Config = config },
-            WorkItem: new WorkItemView { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            WorkItem: new WorkItemView { Id = Guid.NewGuid().ToString(), Title = "test", Description = "desc" },
             PreviousNodeOutput: null,
             CancellationToken: CancellationToken.None);
 
@@ -1039,7 +1039,7 @@ public class AINodeExecutorTests
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = 0 },
             Node: new LoopNode { Id = nodeId, Config = config },
-            WorkItem: new WorkItemView { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            WorkItem: new WorkItemView { Id = Guid.NewGuid().ToString(), Title = "test", Description = "desc" },
             PreviousNodeOutput: null,
             CancellationToken: CancellationToken.None);
 
@@ -1142,7 +1142,7 @@ public class AINodeExecutorTests
             Run: new LoopRun { Id = Guid.NewGuid() },
             RunNode: new LoopRunNode { RetryCount = retryCount },
             Node: new LoopNode { Config = config },
-            WorkItem: new WorkItemView { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            WorkItem: new WorkItemView { Id = Guid.NewGuid().ToString(), Title = "test", Description = "desc" },
             PreviousNodeOutput: null,
             CancellationToken: CancellationToken.None);
     }
@@ -1160,7 +1160,7 @@ public class AINodeExecutorTests
             Run: new LoopRun { Id = runId },
             RunNode: new LoopRunNode { RetryCount = retryCount },
             Node: new LoopNode { Id = nodeId, Config = config },
-            WorkItem: new WorkItemView { Id = Guid.NewGuid(), Title = "test", Description = "desc" },
+            WorkItem: new WorkItemView { Id = Guid.NewGuid().ToString(), Title = "test", Description = "desc" },
             PreviousNodeOutput: null,
             CancellationToken: CancellationToken.None);
     }

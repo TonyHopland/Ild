@@ -85,10 +85,7 @@ public class WorkItemsController : ControllerBase
     [HttpGet("{id}")]
     public async Task<IActionResult> GetById(string id)
     {
-        if (!Guid.TryParse(id, out var guid))
-            return BadRequest(new { error = "Invalid GUID" });
-
-        var workItem = await _workItemManager.GetWorkItemAsync(guid);
+        var workItem = await _workItemManager.GetWorkItemAsync(id);
         if (workItem == null)
             return NotFound();
 
@@ -124,39 +121,31 @@ public class WorkItemsController : ControllerBase
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(string id, [FromBody] WorkItemCreateRequest request)
     {
-        if (!Guid.TryParse(id, out var guid))
-            return BadRequest(new { error = "Invalid GUID" });
-        var ok = await _workItemManager.UpdateAsync(guid, request.Title, request.Description, request.Tags);
+        var ok = await _workItemManager.UpdateAsync(id, request.Title, request.Description, request.Tags);
         if (!ok) return NotFound();
-        var wi = await _workItemManager.GetWorkItemAsync(guid);
+        var wi = await _workItemManager.GetWorkItemAsync(id);
         return Ok(wi);
     }
 
     [HttpPost("{id}/start")]
     public async Task<IActionResult> Start(string id)
     {
-        if (!Guid.TryParse(id, out var guid))
-            return BadRequest(new { error = "Invalid GUID" });
-
-        await _engine.StartRunAsync(guid);
+        await _engine.StartRunAsync(id);
         return Accepted();
     }
 
     [HttpPost("{id}/transition")]
     public async Task<IActionResult> Transition(string id, [FromBody] WorkItemTransitionRequest request)
     {
-        if (!Guid.TryParse(id, out var guid))
-            return BadRequest(new { error = "Invalid GUID" });
-
         if (!Enum.TryParse<WorkItemStatus>(request.TargetStatus, true, out var target))
             return BadRequest(new { error = "Invalid target status" });
         var ok = target switch
         {
-            WorkItemStatus.WorkQueue => await _workItemManager.TransitionToWorkQueueAsync(guid),
-            WorkItemStatus.Ready => await _workItemManager.TransitionToReadyAsync(guid),
-            WorkItemStatus.Running => await _workItemManager.TransitionToRunningAsync(guid),
-            WorkItemStatus.HumanFeedback => await _workItemManager.TransitionToHumanFeedbackAsync(guid, "manual"),
-            WorkItemStatus.Done => await _workItemManager.TransitionToDoneAsync(guid),
+            WorkItemStatus.WorkQueue => await _workItemManager.TransitionToWorkQueueAsync(id),
+            WorkItemStatus.Ready => await _workItemManager.TransitionToReadyAsync(id),
+            WorkItemStatus.Running => await _workItemManager.TransitionToRunningAsync(id),
+            WorkItemStatus.HumanFeedback => await _workItemManager.TransitionToHumanFeedbackAsync(id, "manual"),
+            WorkItemStatus.Done => await _workItemManager.TransitionToDoneAsync(id),
             _ => false,
         };
         return ok ? Ok() : BadRequest(new { error = "Transition not allowed" });
@@ -165,26 +154,20 @@ public class WorkItemsController : ControllerBase
     [HttpGet("{id}/dependencies")]
     public async Task<IActionResult> GetDependencies(string id, [FromQuery] int skip = 0, [FromQuery] int take = 100)
     {
-        if (!Guid.TryParse(id, out var guid))
-            return BadRequest(new { error = "Invalid GUID" });
-
         if (skip < 0) skip = 0;
         if (take <= 0) take = 100;
         if (take > 500) take = 500;
 
-        var dependencies = await _workItemManager.GetDependenciesAsync(guid);
+        var dependencies = await _workItemManager.GetDependenciesAsync(id);
         return Ok(dependencies.Skip(skip).Take(take));
     }
 
     [HttpPost("{id}/dependencies")]
     public async Task<IActionResult> AddDependency(string id, [FromBody] AddDependencyRequest request)
     {
-        if (!Guid.TryParse(id, out var workItemId) || !Guid.TryParse(request.DependencyId, out var depId))
-            return BadRequest(new { error = "Invalid GUID" });
-
         try
         {
-            var success = await _workItemManager.AddDependencyAsync(workItemId, depId);
+            var success = await _workItemManager.AddDependencyAsync(id, request.DependencyId);
             return success ? Ok() : BadRequest();
         }
         catch (InvalidOperationException ex)
@@ -196,22 +179,18 @@ public class WorkItemsController : ControllerBase
     [HttpDelete("{id}/dependencies/{depId}")]
     public async Task<IActionResult> RemoveDependency(string id, string depId)
     {
-        if (!Guid.TryParse(id, out var wiId) || !Guid.TryParse(depId, out var dId))
-            return BadRequest(new { error = "Invalid GUID" });
-        var ok = await _workItemManager.RemoveDependencyAsync(wiId, dId);
+        var ok = await _workItemManager.RemoveDependencyAsync(id, depId);
         return ok ? Ok() : NotFound();
     }
 
     [HttpGet("{id}/runs")]
     public async Task<IActionResult> GetRuns(string id, [FromQuery] int skip = 0, [FromQuery] int take = 100)
     {
-        if (!Guid.TryParse(id, out var guid))
-            return BadRequest(new { error = "Invalid GUID" });
         if (skip < 0) skip = 0;
         if (take <= 0) take = 100;
         if (take > 500) take = 500;
         var runs = await _db.LoopRuns.AsNoTracking()
-            .Where(r => r.WorkItemId == guid)
+            .Where(r => r.WorkItemId == id)
             .OrderByDescending(r => r.StartedAt)
             .Skip(skip).Take(take)
             .ToListAsync();
@@ -221,29 +200,23 @@ public class WorkItemsController : ControllerBase
     [HttpPost("{id}/link-pr")]
     public async Task<IActionResult> LinkPr(string id, [FromBody] LinkPrRequest request)
     {
-        if (!Guid.TryParse(id, out var guid))
-            return BadRequest(new { error = "Invalid GUID" });
-
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
 
-        var ok = await _workItemManager.LinkPullRequestAsync(guid, request.PrUrl);
+        var ok = await _workItemManager.LinkPullRequestAsync(id, request.PrUrl);
         return ok ? Ok() : NotFound();
     }
 
     [HttpPost("{id}/mark-merged")]
     public async Task<IActionResult> MarkMerged(string id)
     {
-        if (!Guid.TryParse(id, out var guid))
-            return BadRequest(new { error = "Invalid GUID" });
-
-        var ok = await _workItemManager.ManuallyMarkMergedAsync(guid);
+        var ok = await _workItemManager.ManuallyMarkMergedAsync(id);
         if (!ok) return NotFound();
 
         // Only resume the workitem's current run, not stale ones.
         var currentRun = await _db.LoopRuns
             .FirstOrDefaultAsync(r =>
-                r.WorkItemId == guid &&
+                r.WorkItemId == id &&
                 (r.Status == ILD.Data.Enums.LoopRunStatus.Running ||
                  r.Status == ILD.Data.Enums.LoopRunStatus.Failed));
 
@@ -277,7 +250,7 @@ public class WorkItemsController : ControllerBase
                     if (prRunNode.LoopNode == null)
                     {
                         // Unrecoverable — transition work item to Done via manager
-                        await _workItemManager.TransitionAsync(guid, RemoteWorkItemStatus.Done);
+                            await _workItemManager.TransitionAsync(id, RemoteWorkItemStatus.Done);
                     }
                     else
                     {
@@ -295,17 +268,14 @@ public class WorkItemsController : ControllerBase
     [HttpPost("{id}/human-feedback/input")]
     public async Task<IActionResult> HumanFeedbackInput(string id, [FromBody] HumanFeedbackInputRequest request)
     {
-        if (!Guid.TryParse(id, out var guid))
-            return BadRequest(new { error = "Invalid GUID" });
-
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
 
-        var ok = await _workItemManager.SubmitHumanFeedbackInputAsync(guid, request.Input ?? string.Empty);
+        var ok = await _workItemManager.SubmitHumanFeedbackInputAsync(id, request.Input ?? string.Empty);
         if (!ok) return NotFound();
 
         // Resume the engine
-        var wi = await _workItemManager.GetWorkItemAsync(guid);
+        var wi = await _workItemManager.GetWorkItemAsync(id);
         if (wi?.CurrentLoopRunId != null)
             RunInBackground(wi.CurrentLoopRunId.Value);
 
@@ -315,18 +285,15 @@ public class WorkItemsController : ControllerBase
     [HttpPost("{id}/human-feedback/reject")]
     public async Task<IActionResult> HumanFeedbackReject(string id, [FromBody] HumanFeedbackRejectRequest? request = null)
     {
-        if (!Guid.TryParse(id, out var guid))
-            return BadRequest(new { error = "Invalid GUID" });
-
         // Validate length only when text is supplied; reject without text is valid.
         if (request?.Input is { Length: > 8192 })
             return BadRequest(new { error = "Input exceeds 8192 characters" });
 
-        var ok = await _workItemManager.RejectHumanFeedbackAsync(guid, request?.Input);
+        var ok = await _workItemManager.RejectHumanFeedbackAsync(id, request?.Input);
         if (!ok) return NotFound();
 
         // Resume the engine to route failure edge
-        var wi = await _workItemManager.GetWorkItemAsync(guid);
+        var wi = await _workItemManager.GetWorkItemAsync(id);
         if (wi?.CurrentLoopRunId != null)
             RunInBackground(wi.CurrentLoopRunId.Value);
 
@@ -336,17 +303,14 @@ public class WorkItemsController : ControllerBase
     [HttpPost("{id}/human-feedback/respond")]
     public async Task<IActionResult> HumanFeedbackRespond(string id, [FromBody] HumanFeedbackInputRequest request)
     {
-        if (!Guid.TryParse(id, out var guid))
-            return BadRequest(new { error = "Invalid GUID" });
-
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
 
-        var ok = await _workItemManager.SubmitHumanFeedbackRespondAsync(guid, request.Input ?? string.Empty);
+        var ok = await _workItemManager.SubmitHumanFeedbackRespondAsync(id, request.Input ?? string.Empty);
         if (!ok) return NotFound();
 
         // Resume the engine to route respond edge
-        var wi = await _workItemManager.GetWorkItemAsync(guid);
+        var wi = await _workItemManager.GetWorkItemAsync(id);
         if (wi?.CurrentLoopRunId != null)
             RunInBackground(wi.CurrentLoopRunId.Value);
 
@@ -356,10 +320,7 @@ public class WorkItemsController : ControllerBase
     [HttpGet("{id}/pr-comments")]
     public async Task<IActionResult> GetPrComments(string id)
     {
-        if (!Guid.TryParse(id, out var guid))
-            return BadRequest(new { error = "Invalid GUID" });
-
-        var wi = await _workItemManager.GetWorkItemAsync(guid);
+        var wi = await _workItemManager.GetWorkItemAsync(id);
         if (wi == null) return NotFound();
         if (string.IsNullOrEmpty(wi.PrUrl)) return Ok(Array.Empty<RemotePrComment>());
         if (_remoteProvider == null) return Ok(Array.Empty<RemotePrComment>());
@@ -376,7 +337,7 @@ public class WorkItemsController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to fetch PR comments for work item {WorkItemId}", guid);
+            _logger.LogWarning(ex, "Failed to fetch PR comments for work item {WorkItemId}", id);
             return Ok(Array.Empty<RemotePrComment>());
         }
     }
@@ -397,30 +358,21 @@ public class WorkItemsController : ControllerBase
     [HttpPost("{id}/cleanup-to-done")]
     public async Task<IActionResult> CleanupToDone(string id)
     {
-        if (!Guid.TryParse(id, out var guid))
-            return BadRequest(new { error = "Invalid GUID" });
-
-        var ok = await _workItemManager.CleanupToDoneAsync(guid);
+        var ok = await _workItemManager.CleanupToDoneAsync(id);
         return ok ? Ok() : NotFound();
     }
 
     [HttpPost("{id}/cleanup-to-backlog")]
     public async Task<IActionResult> CleanupToBacklog(string id)
     {
-        if (!Guid.TryParse(id, out var guid))
-            return BadRequest(new { error = "Invalid GUID" });
-
-        var ok = await _workItemManager.CleanupToBacklogAsync(guid);
+        var ok = await _workItemManager.CleanupToBacklogAsync(id);
         return ok ? Ok() : NotFound();
     }
 
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(string id)
     {
-        if (!Guid.TryParse(id, out var guid))
-            return BadRequest(new { error = "Invalid GUID" });
-
-        var dependents = await _workItemManager.GetDependentsAsync(guid);
+        var dependents = await _workItemManager.GetDependentsAsync(id);
         var dependentList = dependents.ToList();
         if (dependentList.Count > 0)
         {
@@ -432,7 +384,7 @@ public class WorkItemsController : ControllerBase
             });
         }
 
-        var ok = await _workItemManager.DeleteAsync(guid);
+        var ok = await _workItemManager.DeleteAsync(id);
         return ok ? Ok() : NotFound();
     }
 }

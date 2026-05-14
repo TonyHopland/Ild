@@ -21,7 +21,7 @@ public class CmdNodeExecutorTests
         };
         var wi = new WorkItemView
         {
-            Id = Guid.NewGuid(),
+            Id = Guid.NewGuid().ToString(),
             Title = "t",
             Description = "d",
             WorktreePath = Path.GetTempPath(),

@@ -28,7 +28,7 @@ public class LoopRunStoreGetByIdTests
             CreatedAt = DateTime.UtcNow,
         };
         db.Context.LoopTemplateVersions.Add(ltv);
-        var wi = Guid.NewGuid();
+        var wi = Guid.NewGuid().ToString();
         await db.Context.SaveChangesAsync();
 
         var run = new LoopRun
@@ -60,7 +60,7 @@ public class LoopRunStoreGetByIdTests
         var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/repo.git" };
         db.Context.RemoteProviders.Add(remote);
         db.Context.Repositories.Add(repo);
-        var wi = Guid.NewGuid();
+        var wi = Guid.NewGuid().ToString();
 
         var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "t" };
         db.Context.LoopTemplates.Add(lt);
@@ -111,7 +111,7 @@ public class LoopRunStoreGetByIdTests
         var run = new LoopRun
         {
             Id = Guid.NewGuid(),
-            WorkItemId = Guid.NewGuid(),
+            WorkItemId = Guid.NewGuid().ToString(),
             LoopTemplateVersionId = version.Id,
             Status = LoopRunStatus.Completed,
             RecoveryPolicy = RecoveryPolicy.AutoResume,

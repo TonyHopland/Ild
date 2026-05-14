@@ -95,7 +95,7 @@ public class MetricsCollectorTests
         var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/r.git" };
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume, MaxNodeExecutions = 200, MaxWallClockHours = 24 };
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
-        var wi = Guid.NewGuid();
+        var wi = Guid.NewGuid().ToString();
         var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = wi, LoopTemplateVersionId = version.Id, Status = status, RecoveryPolicy = RecoveryPolicy.AutoResume };
 
         db.Context.RemoteProviders.Add(remote);

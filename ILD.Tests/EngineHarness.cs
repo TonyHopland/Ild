@@ -19,7 +19,7 @@ internal sealed class EngineHarness : IDisposable
     public IServiceProvider ServiceProvider { get; }
     public LoopEngine Engine { get; }
     public Dictionary<NodeType, FakeExecutor> Fakes { get; } = new();
-    public Guid WorkItemId { get; private set; }
+    public string WorkItemId { get; private set; } = string.Empty;
     public Guid RunId { get; private set; }
     public Dictionary<string, LoopNode> NodesById { get; } = new();
     public Dictionary<string, LoopNodeEdge> EdgesById { get; } = new();
@@ -79,7 +79,7 @@ internal sealed class EngineHarness : IDisposable
             Db.Context.LoopNodes.Add(n);
         }
 
-        var workItemId = Guid.NewGuid();
+        var workItemId = Guid.NewGuid().ToString();
         var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = workItemId, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running, RepositoryId = repo.Id };
         Db.Context.LoopRuns.Add(run);
         Db.Context.SaveChanges();

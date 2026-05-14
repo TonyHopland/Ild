@@ -24,7 +24,7 @@ public class SignalRWorkItemNotifierTests
     [Fact]
     public async Task WorkItemStateChangedAsync_sends_a_single_typed_payload()
     {
-        var workItemId = Guid.NewGuid();
+        var workItemId = Guid.NewGuid().ToString();
         var (ctx, proxy) = BuildHubContext();
 
         object?[]? capturedArgs = null;
@@ -45,7 +45,7 @@ public class SignalRWorkItemNotifierTests
     [Fact]
     public async Task HumanFeedbackRequiredAsync_sends_a_single_typed_payload()
     {
-        var workItemId = Guid.NewGuid();
+        var workItemId = Guid.NewGuid().ToString();
         var (ctx, proxy) = BuildHubContext();
 
         object?[]? capturedArgs = null;

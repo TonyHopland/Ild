@@ -25,16 +25,16 @@ public class LoopRunStore : ILoopRunStore
     public async Task<LoopRun?> GetByPrUrlAsync(string prUrl)
         => await _db.LoopRuns.FirstOrDefaultAsync(r => r.PrUrl == prUrl);
 
-    public async Task<LoopRun?> GetByWorkItemAsync(Guid workItemId)
+    public async Task<LoopRun?> GetByWorkItemAsync(string workItemId)
         => await _db.LoopRuns.FirstOrDefaultAsync(r => r.WorkItemId == workItemId);
 
-    public async Task<IReadOnlyList<LoopRun>> GetAllByWorkItemAsync(Guid workItemId)
+    public async Task<IReadOnlyList<LoopRun>> GetAllByWorkItemAsync(string workItemId)
         => await _db.LoopRuns
             .Where(r => r.WorkItemId == workItemId)
             .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
             .ToListAsync();
 
-    public async Task<LoopRun?> GetCurrentByWorkItemAsync(Guid workItemId)
+    public async Task<LoopRun?> GetCurrentByWorkItemAsync(string workItemId)
         => await _db.LoopRuns
             .Where(r => r.WorkItemId == workItemId && (r.Status == LoopRunStatus.Running
                 || r.Status == LoopRunStatus.Failed

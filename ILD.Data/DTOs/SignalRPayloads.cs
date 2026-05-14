@@ -12,10 +12,10 @@ public record RunPausedPayload(Guid RunId);
 
 public record RunResumedPayload(Guid RunId);
 
-public record WorkItemStateChangedPayload(Guid WorkItemId, WorkItemStatus OldStatus, WorkItemStatus NewStatus);
+public record WorkItemStateChangedPayload(string WorkItemId, WorkItemStatus OldStatus, WorkItemStatus NewStatus);
 
-public record DependencyResolvedPayload(Guid WorkItemId);
+public record DependencyResolvedPayload(string WorkItemId);
 
-public record HumanFeedbackRequiredPayload(Guid WorkItemId, string Reason);
+public record HumanFeedbackRequiredPayload(string WorkItemId, string Reason);
 
 public record NodeProgressPayload(Guid RunId, Guid NodeId, string Line);
