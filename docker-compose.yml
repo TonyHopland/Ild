@@ -29,6 +29,7 @@ services:
         WITH_NODE: ${WITH_NODE:-1}
         WITH_DOTNET_SDK: ${WITH_DOTNET_SDK:-1}
         WITH_CHROME: ${WITH_CHROME:-1}
+        WITH_CERTS: ${WITH_CERTS:-0}
     container_name: ild
     ports:
       - "8080:8080"
@@ -47,8 +48,7 @@ services:
     volumes:
       - ild-data:/data
       - ild-worktrees:/worktrees
-      - ${GIT_CONFIG:-~/.gitconfig}:/root/.gitconfig:ro
-      - ./certs:/etc/extra-certs:ro
+      - ${GIT_CONFIG:-~/.gitconfig}:/home/ild/.gitconfig:ro
     depends_on:
       - workitem-server
     restart: unless-stopped

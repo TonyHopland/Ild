@@ -113,7 +113,9 @@ The containers persist state in three named volumes:
 | `ild-worktrees` | `/worktrees` | Per-work-item git worktrees           |
 | `workitem-data` | `/data`      | WorkItemServer SQLite DB              |
 
-Your host `~/.gitconfig` is mounted read-only so commits inherit your name/email. Override with `GIT_CONFIG=/path/to/config docker compose up`.
+Your host `~/.gitconfig` is mounted read-only into the ILD runtime user's home so commits inherit your name/email. Override with `GIT_CONFIG=/path/to/config docker compose up`.
+
+Certificate import is opt-in at build time. Set `WITH_CERTS=1` and place `.crt` or `.pem` files in `./certs` before `docker compose build` if you want those CA certificates baked into the ILD image.
 
 #### Container toolchain
 
@@ -125,6 +127,7 @@ The ILD container can be built with additional tools needed to execute work item
 | `WITH_NODE`       | `0`     | Node 22, npm, corepack (pnpm/vp) | TypeScript/JavaScript work items |
 | `WITH_DOTNET_SDK` | `0`     | .NET 10 SDK                      | .NET work items                  |
 | `WITH_CHROME`     | `0`     | Google Chrome stable             | Browser automation tests         |
+| `WITH_CERTS`      | `0`     | Build-time import of `./certs/*` | Custom internal CAs / TLS trust  |
 
 Example — build with all tools for full integration testing:
 
@@ -489,7 +492,7 @@ The `Dockerfile` is multi-stage:
 
 1. **frontend-build** — `node:22-alpine`, `npm ci && npm run build` → static files.
 2. **build** — `mcr.microsoft.com/dotnet/sdk:10.0`, `dotnet publish -c Release`.
-3. **final** — `mcr.microsoft.com/dotnet/aspnet:10.0` + `git`. Frontend assets land in `wwwroot/`.
+3. **final** — `mcr.microsoft.com/dotnet/aspnet:10.0` + `git`. Frontend assets land in `wwwroot/`. Container startup performs root-only setup, then drops to an unprivileged `ild` user before launching the application process.
 
 The `Dockerfile.WorkItemServer` is a simpler two-stage build for the WorkItem server.
 

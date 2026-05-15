@@ -36,6 +36,8 @@ COPY ILD.McpServer/ILD.McpServer.csproj ILD.McpServer/
 COPY ILD.WorkItemServer/ILD.WorkItemServer.csproj ILD.WorkItemServer/
 RUN dotnet restore
 COPY . .
+RUN mkdir -p /certs && \
+  if [ -d /src/certs ]; then cp -a /src/certs/. /certs/; fi
 WORKDIR /src/ILD.Api
 RUN dotnet publish -c Release -o /app/publish --no-restore
 
@@ -52,10 +54,13 @@ ARG NODE_RUNTIME_VERSION=24.15.0
 ARG WITH_DOTNET_SDK=0
 ARG DOTNET_SDK_CHANNEL=10.0
 ARG WITH_CHROME=0
+ARG WITH_CERTS=0
+ARG APP_UID=10001
+ARG APP_GID=10001
 
 # Install base utilities and optional tools before copying source so Docker
 # layer caching skips tool installs when only source code changes.
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && \
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates gosu && \
     mkdir -p /usr/local/share/ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
@@ -70,7 +75,6 @@ RUN if [ "$WITH_OPENCODE" = "1" ]; then \
       ln -sf /root/.opencode/bin/opencode /usr/local/bin/opencode && \
       rm -rf /var/lib/apt/lists/*; \
     fi
-ENV PATH="/root/.opencode/bin:${PATH}"
 
 RUN if [ "$WITH_NODE" = "1" ]; then \
   apt-get update && \
@@ -118,16 +122,32 @@ fi
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
+COPY --from=build /certs /tmp/extra-certs
+RUN if [ "$WITH_CERTS" = "1" ]; then \
+      copied=0; \
+      for cert in /tmp/extra-certs/*.crt /tmp/extra-certs/*.pem; do \
+        [ -e "$cert" ] || continue; \
+        cp "$cert" /usr/local/share/ca-certificates/; \
+        copied=1; \
+      done; \
+      if [ "$copied" -eq 1 ]; then update-ca-certificates; fi; \
+    fi && \
+    rm -rf /tmp/extra-certs
+
 COPY --from=build /app/publish ./
 COPY --from=build /app/mcp-server/ ./
 COPY --from=frontend-build /app/frontend/dist ./wwwroot
+RUN groupadd --gid ${APP_GID} ild && \
+  useradd --uid ${APP_UID} --gid ${APP_GID} --create-home --home-dir /home/ild --shell /usr/sbin/nologin ild
+ENV HOME=/home/ild
 ENV ILD_DATA_PATH=/data
 ENV ILD_WORKTREES_PATH=/worktrees
-RUN mkdir -p /data /worktrees
+RUN mkdir -p /data /worktrees && \
+  chown -R ild:ild /app /data /worktrees /home/ild
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 EXPOSE 8080
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["/bin/sh", "/entrypoint.sh"]
 CMD ["dotnet", "ILD.Api.dll"]

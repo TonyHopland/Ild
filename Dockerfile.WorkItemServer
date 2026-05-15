@@ -12,9 +12,19 @@ RUN dotnet publish -c Release -o /app/publish --no-restore
 
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS final
 WORKDIR /app
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+ARG APP_UID=10001
+ARG APP_GID=10001
+RUN apt-get update && apt-get install -y --no-install-recommends git gosu && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/publish ./
+RUN groupadd --gid ${APP_GID} ild && \
+	useradd --uid ${APP_UID} --gid ${APP_GID} --create-home --home-dir /home/ild --shell /usr/sbin/nologin ild
+ENV HOME=/home/ild
+ENV WITH_CERTS=0
 ENV WORKITEM_DATA_PATH=/data
-RUN mkdir -p /data
+ENV RUNTIME_DIRS=/data
+RUN mkdir -p /data && chown -R ild:ild /app /data /home/ild
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 EXPOSE 8081
-ENTRYPOINT ["dotnet", "ILD.WorkItemServer.dll"]
+ENTRYPOINT ["/bin/sh", "/entrypoint.sh"]
+CMD ["dotnet", "ILD.WorkItemServer.dll"]
