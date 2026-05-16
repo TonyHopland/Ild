@@ -38,6 +38,7 @@ export default function Repositories() {
   };
 
   const openEdit = (repo: Repository) => {
+    setShowModal(true);
     setEditingRepo(repo);
     setName(repo.name);
     setCloneUrl(repo.cloneUrl);

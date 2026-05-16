@@ -313,4 +313,69 @@ describe("Repositories page", () => {
       expect.objectContaining({ method: "DELETE" }),
     );
   });
+
+  test("edit button opens modal with repository data pre-filled", async () => {
+    const repos = [
+      {
+        id: "repo-1",
+        name: "my-repo",
+        cloneUrl: "https://git.example.com/my-repo.git",
+        remoteProviderId: "prov-1",
+        defaultBranch: "main",
+        worktreesPath: null,
+        defaultIntakeStatus: "Backlog",
+        createdAt: "2025-01-01T00:00:00Z",
+      },
+    ];
+
+    const providers = [
+      {
+        id: "prov-1",
+        name: "Forgejo",
+        type: "gitea",
+        baseUrl: "https://git.example.com",
+        apiKey: "",
+        webhookSecret: "",
+        createdAt: "2025-01-01T00:00:00Z",
+      },
+    ];
+
+    const fetchMock = mockFetch(null);
+    fetchMock
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify(repos)),
+        }),
+      )
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify(providers)),
+        }),
+      );
+
+    renderPage(fetchMock);
+
+    await waitFor(() => {
+      expect(screen.getByText("my-repo")).toBeTruthy();
+    });
+
+    // Click edit button
+    fireEvent.click(screen.getByText("Edit"));
+
+    // Modal should open with "Edit Repository" title
+    await waitFor(() => {
+      expect(screen.getByText("Edit Repository")).toBeTruthy();
+    });
+
+    // Form fields should be pre-filled with repository data
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("my-repo");
+    expect((screen.getByLabelText("Clone URL") as HTMLInputElement).value).toBe(
+      "https://git.example.com/my-repo.git",
+    );
+    expect((screen.getByLabelText("Default Branch") as HTMLInputElement).value).toBe("main");
+  });
 });
