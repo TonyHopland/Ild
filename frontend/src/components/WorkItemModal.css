@@ -49,6 +49,12 @@
   gap: 0.15rem;
 }
 
+.modal-header-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 .modal-work-item-id {
   font-size: 0.72rem;
   color: #808090;
@@ -150,7 +156,8 @@
 }
 
 .modal-content-detail {
-  max-width: 700px;
+  max-width: 900px;
+  width: 95vw;
 }
 
 .detail-row {
@@ -325,7 +332,7 @@
   margin-top: 0.5rem;
   padding: 0.75rem;
   background-color: #1e1e30;
-  border: 1px solid #3a3a5c;
+  border: 2px solid #f59e0b;
   border-radius: 0.375rem;
 }
 
@@ -339,6 +346,7 @@
   font-size: 0.875rem;
   resize: vertical;
   margin-top: 0.25rem;
+  max-height: 16rem;
 }
 
 .feedback-prompt {
@@ -504,4 +512,10 @@
   text-decoration: none;
   display: inline-flex;
   align-items: center;
+}
+
+.detail-actions-row {
+  display: flex;
+  gap: 0.375rem;
+  padding-top: 0.5rem;
 }

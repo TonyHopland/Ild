@@ -22,6 +22,7 @@ import LiveStream from "./NodeTimeline/LiveStream";
 import ConfirmModal from "./ConfirmModal";
 import TagAutocomplete from "./TagAutocomplete";
 import { parseConversation, parseTags } from "../utils/workItemJson";
+import Accordion from "./Accordion";
 
 interface WorkItemModalProps {
   workItem: WorkItem | null;
@@ -566,307 +567,23 @@ export default function WorkItemModal({
             aria-modal="true"
             aria-label="Work item details"
           >
+            {/* Header with status badge */}
             <div className="modal-header">
               <div className="modal-header-copy">
                 <div className="modal-work-item-id">#{workItem.id}</div>
-                <h2>{workItem.title}</h2>
+                <div className="modal-header-title-row">
+                  <h2>{workItem.title}</h2>
+                  <span className={`status-badge status-${workItem.status.toLowerCase()}`}>
+                    {workItem.status}
+                  </span>
+                </div>
               </div>
               <button className="modal-close" onClick={onClose}>
                 &times;
               </button>
             </div>
             <div className="modal-body">
-              <div className="detail-row">
-                <span className="detail-label">Status</span>
-                <span className={`status-badge status-${workItem.status.toLowerCase()}`}>
-                  {workItem.status}
-                </span>
-              </div>
-              {workItem.description && (
-                <div className="detail-row">
-                  <span className="detail-label">Description</span>
-                  <span className="detail-value">{workItem.description}</span>
-                </div>
-              )}
-              {(() => {
-                const tagList = parseTags(workItem);
-                if (tagList.length === 0) return null;
-                return (
-                  <div className="detail-row">
-                    <span className="detail-label">Tags</span>
-                    <span className="detail-value">
-                      {tagList.map((t) => (
-                        <span key={t} className="work-item-tag" style={{ marginRight: 4 }}>
-                          {t}
-                        </span>
-                      ))}
-                    </span>
-                  </div>
-                );
-              })()}
-              {(() => {
-                const messages = parseConversation(workItem);
-                if (messages.length === 0) return null;
-                return (
-                  <div className="detail-section">
-                    <span className="detail-label">Conversation</span>
-                    <div className="conversation-thread">
-                      {[...messages].reverse().map((m, i) => (
-                        <div
-                          key={i}
-                          className={`conversation-message conversation-${m.role.toLowerCase()}`}
-                        >
-                          <div className="conversation-message-header">
-                            <strong className="conversation-message-role">{m.role}</strong>
-                            <span>{new Date(m.timestamp).toLocaleString()}</span>
-                          </div>
-                          <div className="conversation-message-content">{m.content}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })()}
-              <div className="detail-section">
-                <span className="detail-label">Pull Request</span>
-                {workItem.prUrl ? (
-                  <div className="pr-section">
-                    <a
-                      href={workItem.prUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="pr-link"
-                    >
-                      {workItem.prUrl}
-                    </a>
-                  </div>
-                ) : (
-                  <span className="detail-value pr-none">No PR linked</span>
-                )}
-                {showLinkPr ? (
-                  <div className="link-pr-form">
-                    <input
-                      type="url"
-                      value={prUrlInput}
-                      onChange={(e) => setPrUrlInput(e.target.value)}
-                      placeholder="https://forgejo/pr/..."
-                      className="pr-input"
-                    />
-                    <div className="link-pr-actions">
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-primary"
-                        onClick={handleLinkPr}
-                      >
-                        Link
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-secondary"
-                        onClick={() => setShowLinkPr(false)}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-secondary"
-                    onClick={() => setShowLinkPr(true)}
-                  >
-                    Link PR
-                  </button>
-                )}
-              </div>
-              <div className="detail-section">
-                <span className="detail-label">Dependencies</span>
-                <div className="dependency-list">
-                  {dependencies.length === 0 && (
-                    <span className="detail-value">No dependencies</span>
-                  )}
-                  {dependencies.map((dep) => (
-                    <span key={dep.id} className="dependency-tag">
-                      <Link to={`/workitems/${dep.id}`} className="dependency-link">
-                        {dep.title}
-                      </Link>
-                      <button
-                        type="button"
-                        className="dependency-remove-btn"
-                        onClick={() => handleRemoveDependency(dep.id)}
-                        aria-label={`Remove dependency ${dep.title}`}
-                      >
-                        ×
-                      </button>
-                    </span>
-                  ))}
-                </div>
-                {showAddDep ? (
-                  <div className="link-pr-form">
-                    <select
-                      value={selectedDepId}
-                      onChange={(e) => setSelectedDepId(e.target.value)}
-                      className="pr-input"
-                    >
-                      <option value="">Select work item...</option>
-                      {allWorkItems
-                        .filter(
-                          (w) => w.id !== workItem.id && !dependencies.some((d) => d.id === w.id),
-                        )
-                        .map((w) => (
-                          <option key={w.id} value={w.id}>
-                            {w.title}
-                          </option>
-                        ))}
-                    </select>
-                    <div className="link-pr-actions">
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-primary"
-                        onClick={handleAddDependency}
-                      >
-                        Add
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-secondary"
-                        onClick={() => setShowAddDep(false)}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-secondary"
-                    onClick={() => setShowAddDep(true)}
-                  >
-                    Add Dependency
-                  </button>
-                )}
-              </div>
-              {runs.length > 0 && (
-                <div className="detail-section">
-                  <span className="detail-label">Run History</span>
-                  <div className="run-history">
-                    {runs.map((run) => (
-                      <Link key={run.id} to={`/loop-runs/${run.id}`} className="run-history-item">
-                        <span className={`status-badge status-${run.status.toLowerCase()}`}>
-                          {run.status}
-                        </span>
-                        <span className="run-time">{new Date(run.startedAt).toLocaleString()}</span>
-                      </Link>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {workItem.worktreePath && (
-                <div className="detail-section">
-                  <span className="detail-label">QA Preview</span>
-                  <div className="preview-summary">
-                    <span className="detail-value">
-                      {previewLoading ? "Checking preview..." : (preview?.state ?? "stopped")}
-                    </span>
-                    {preview?.profileName && (
-                      <span className="run-time">profile: {preview.profileName}</span>
-                    )}
-                  </div>
-                  {previewError && (
-                    <div className="preview-message preview-error">{previewError}</div>
-                  )}
-                  {!previewError && preview?.message && (
-                    <div className="preview-message">{preview.message}</div>
-                  )}
-                  {preview?.services.length ? (
-                    <div className="preview-service-list">
-                      {preview.services.map((service) => (
-                        <div key={service.name} className="preview-service-item">
-                          <span className="detail-value">
-                            {service.name}: {service.status}
-                            {service.port ? ` on :${service.port}` : ""}
-                          </span>
-                          <label className="preview-port-label">
-                            Port for {service.portAlias}
-                            <input
-                              type="number"
-                              min="1"
-                              className="pr-input preview-port-input"
-                              value={previewPortInputs[service.portAlias] ?? ""}
-                              onChange={(e) =>
-                                setPreviewPortInputs((prev) => ({
-                                  ...prev,
-                                  [service.portAlias]: e.target.value,
-                                }))
-                              }
-                              disabled={previewLoading || preview?.state === "running"}
-                              placeholder={
-                                service.suggestedPort ? String(service.suggestedPort) : "auto"
-                              }
-                            />
-                          </label>
-                          {service.publicUrl && (
-                            <a
-                              href={service.publicUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="preview-url"
-                            >
-                              {service.publicUrl}
-                            </a>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                  <div className="preview-message">
-                    Leave a port blank to let ILD choose one automatically. In Docker, only
-                    published ports are reachable from the host.
-                  </div>
-                  <div className="feedback-actions">
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-secondary"
-                      onClick={() => void refreshPreview()}
-                      disabled={previewLoading}
-                    >
-                      Refresh
-                    </button>
-                    {preview?.state === "running" ? (
-                      <>
-                        {primaryPreviewUrl && (
-                          <a
-                            href={primaryPreviewUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="btn btn-sm btn-primary preview-open-link"
-                          >
-                            Open App
-                          </a>
-                        )}
-                        <button
-                          type="button"
-                          className="btn btn-sm btn-warning"
-                          onClick={handleStopPreview}
-                          disabled={previewLoading}
-                        >
-                          Stop Preview
-                        </button>
-                      </>
-                    ) : preview?.configured !== false ? (
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-primary"
-                        onClick={handleStartPreview}
-                        disabled={previewLoading}
-                      >
-                        Start Preview
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-              )}
-              {shouldStream && <LiveStream lines={progressLines} />}
+              {/* Human Feedback — always visible when applicable */}
               {workItem.status === WorkItemStatus.HumanFeedback &&
                 workItem.humanFeedbackReason === "Human Input Needed" && (
                   <div className="detail-section human-feedback-section">
@@ -985,7 +702,321 @@ export default function WorkItemModal({
                     </div>
                   </div>
                 )}
+
+              {/* Live Stream — always visible when running */}
+              {shouldStream && <LiveStream lines={progressLines} />}
+
+              {/* Details Accordion */}
+              <Accordion title="Details">
+                {workItem.description && (
+                  <div className="detail-row">
+                    <span className="detail-label">Description</span>
+                    <span className="detail-value">{workItem.description}</span>
+                  </div>
+                )}
+                {(() => {
+                  const tagList = parseTags(workItem);
+                  if (tagList.length === 0) return null;
+                  return (
+                    <div className="detail-row">
+                      <span className="detail-label">Tags</span>
+                      <span className="detail-value">
+                        {tagList.map((t) => (
+                          <span key={t} className="work-item-tag" style={{ marginRight: 4 }}>
+                            {t}
+                          </span>
+                        ))}
+                      </span>
+                    </div>
+                  );
+                })()}
+                <div className="detail-section">
+                  <span className="detail-label">Pull Request</span>
+                  {workItem.prUrl ? (
+                    <div className="pr-section">
+                      <a
+                        href={workItem.prUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="pr-link"
+                      >
+                        {workItem.prUrl}
+                      </a>
+                    </div>
+                  ) : (
+                    <span className="detail-value pr-none">No PR linked</span>
+                  )}
+                  {showLinkPr ? (
+                    <div className="link-pr-form">
+                      <input
+                        type="url"
+                        value={prUrlInput}
+                        onChange={(e) => setPrUrlInput(e.target.value)}
+                        placeholder="https://forgejo/pr/..."
+                        className="pr-input"
+                      />
+                      <div className="link-pr-actions">
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-primary"
+                          onClick={handleLinkPr}
+                        >
+                          Link
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-secondary"
+                          onClick={() => setShowLinkPr(false)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-secondary"
+                      onClick={() => setShowLinkPr(true)}
+                    >
+                      Link PR
+                    </button>
+                  )}
+                </div>
+                <div className="detail-section">
+                  <span className="detail-label">Dependencies</span>
+                  <div className="dependency-list">
+                    {dependencies.length === 0 && (
+                      <span className="detail-value">No dependencies</span>
+                    )}
+                    {dependencies.map((dep) => (
+                      <span key={dep.id} className="dependency-tag">
+                        <Link to={`/workitems/${dep.id}`} className="dependency-link">
+                          {dep.title}
+                        </Link>
+                        <button
+                          type="button"
+                          className="dependency-remove-btn"
+                          onClick={() => handleRemoveDependency(dep.id)}
+                          aria-label={`Remove dependency ${dep.title}`}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                  {showAddDep ? (
+                    <div className="link-pr-form">
+                      <select
+                        value={selectedDepId}
+                        onChange={(e) => setSelectedDepId(e.target.value)}
+                        className="pr-input"
+                      >
+                        <option value="">Select work item...</option>
+                        {allWorkItems
+                          .filter(
+                            (w) => w.id !== workItem.id && !dependencies.some((d) => d.id === w.id),
+                          )
+                          .map((w) => (
+                            <option key={w.id} value={w.id}>
+                              {w.title}
+                            </option>
+                          ))}
+                      </select>
+                      <div className="link-pr-actions">
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-primary"
+                          onClick={handleAddDependency}
+                        >
+                          Add
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-secondary"
+                          onClick={() => setShowAddDep(false)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-secondary"
+                      onClick={() => setShowAddDep(true)}
+                    >
+                      Add Dependency
+                    </button>
+                  )}
+                </div>
+                {runs.length > 0 && (
+                  <div className="detail-section">
+                    <span className="detail-label">Run History</span>
+                    <div className="run-history">
+                      {runs.map((run) => (
+                        <Link key={run.id} to={`/loop-runs/${run.id}`} className="run-history-item">
+                          <span className={`status-badge status-${run.status.toLowerCase()}`}>
+                            {run.status}
+                          </span>
+                          <span className="run-time">
+                            {new Date(run.startedAt).toLocaleString()}
+                          </span>
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <div className="detail-section detail-actions-row">
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-edit"
+                    onClick={() => setEditMode(true)}
+                  >
+                    Edit
+                  </button>
+                  <button type="button" className="btn btn-sm btn-danger" onClick={handleDelete}>
+                    Delete
+                  </button>
+                </div>
+              </Accordion>
+
+              {/* QA Accordion */}
+              {workItem.worktreePath && (
+                <Accordion
+                  title="QA"
+                  status={`(${(preview?.state ?? "stopped").charAt(0).toUpperCase() + (preview?.state ?? "stopped").slice(1)})`}
+                >
+                  <div className="detail-section">
+                    <div className="preview-summary">
+                      <span className="detail-value">
+                        {previewLoading ? "Checking preview..." : (preview?.state ?? "stopped")}
+                      </span>
+                      {preview?.profileName && (
+                        <span className="run-time">profile: {preview.profileName}</span>
+                      )}
+                    </div>
+                    {previewError && (
+                      <div className="preview-message preview-error">{previewError}</div>
+                    )}
+                    {!previewError && preview?.message && (
+                      <div className="preview-message">{preview.message}</div>
+                    )}
+                    {preview?.services.length ? (
+                      <div className="preview-service-list">
+                        {preview.services.map((service) => (
+                          <div key={service.name} className="preview-service-item">
+                            <span className="detail-value">
+                              {service.name}: {service.status}
+                              {service.port ? ` on :${service.port}` : ""}
+                            </span>
+                            <label className="preview-port-label">
+                              Port for {service.portAlias}
+                              <input
+                                type="number"
+                                min="1"
+                                className="pr-input preview-port-input"
+                                value={previewPortInputs[service.portAlias] ?? ""}
+                                onChange={(e) =>
+                                  setPreviewPortInputs((prev) => ({
+                                    ...prev,
+                                    [service.portAlias]: e.target.value,
+                                  }))
+                                }
+                                disabled={previewLoading || preview?.state === "running"}
+                                placeholder={
+                                  service.suggestedPort ? String(service.suggestedPort) : "auto"
+                                }
+                              />
+                            </label>
+                            {service.publicUrl && (
+                              <a
+                                href={service.publicUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="preview-url"
+                              >
+                                {service.publicUrl}
+                              </a>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    <div className="preview-message">
+                      Leave a port blank to let ILD choose one automatically. In Docker, only
+                      published ports are reachable from the host.
+                    </div>
+                    <div className="feedback-actions">
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => void refreshPreview()}
+                        disabled={previewLoading}
+                      >
+                        Refresh
+                      </button>
+                      {preview?.state === "running" ? (
+                        <>
+                          {primaryPreviewUrl && (
+                            <a
+                              href={primaryPreviewUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="btn btn-sm btn-primary preview-open-link"
+                            >
+                              Open App
+                            </a>
+                          )}
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-warning"
+                            onClick={handleStopPreview}
+                            disabled={previewLoading}
+                          >
+                            Stop Preview
+                          </button>
+                        </>
+                      ) : preview?.configured !== false ? (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-primary"
+                          onClick={handleStartPreview}
+                          disabled={previewLoading}
+                        >
+                          Start Preview
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                </Accordion>
+              )}
+
+              {/* Conversation Accordion */}
+              {(() => {
+                const messages = parseConversation(workItem);
+                if (messages.length === 0) return null;
+                return (
+                  <Accordion title="Conversation" status={`(${messages.length})`}>
+                    <div className="conversation-thread">
+                      {[...messages].reverse().map((m, i) => (
+                        <div
+                          key={i}
+                          className={`conversation-message conversation-${m.role.toLowerCase()}`}
+                        >
+                          <div className="conversation-message-header">
+                            <strong className="conversation-message-role">{m.role}</strong>
+                            <span>{new Date(m.timestamp).toLocaleString()}</span>
+                          </div>
+                          <div className="conversation-message-content">{m.content}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </Accordion>
+                );
+              })()}
             </div>
+
+            {/* Footer */}
             <div className="modal-footer">
               {workItem.status === WorkItemStatus.Ready && (
                 <button type="button" className="btn btn-primary" onClick={handleStart}>
@@ -997,12 +1028,6 @@ export default function WorkItemModal({
                   Mark Merged
                 </button>
               )}
-              <button type="button" className="btn btn-edit" onClick={() => setEditMode(true)}>
-                Edit
-              </button>
-              <button type="button" className="btn btn-danger" onClick={handleDelete}>
-                Delete
-              </button>
               <button type="button" className="btn btn-secondary" onClick={onClose}>
                 Close
               </button>
