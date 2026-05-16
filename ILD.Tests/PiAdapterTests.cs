@@ -360,6 +360,143 @@ public class PiAdapterTests
         }
     }
 
+    [Fact]
+    public async Task ExecuteAsync_writes_ild_extension_to_agent_directory_when_http_base_url()
+    {
+        var runId = Guid.NewGuid();
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-pi-ext-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "args.sh");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "printf 'agent-dir=%s\\n' \"$PI_CODING_AGENT_DIR\"\n" +
+            "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-session-ext\",\"cwd\":\"$PWD\"}'\n" +
+            "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ok\"}]}}'\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        var previousApiUrl = Environment.GetEnvironmentVariable("ILD_API_URL");
+        var previousApiToken = Environment.GetEnvironmentVariable("ILD_API_TOKEN");
+        Environment.SetEnvironmentVariable("ILD_API_URL", "http://ild-api.test:5000");
+        Environment.SetEnvironmentVariable("ILD_API_TOKEN", "ild-token");
+
+        try
+        {
+            var result = await new PiAdapter().ExecuteAsync(new AgentExecutionContext(
+                Provider: new AiProvider
+                {
+                    Id = Guid.Parse("22222222-2222-2222-2222-222222222222"),
+                    Name = "test-provider",
+                    Type = "pi",
+                    BaseUrl = "http://192.168.1.5:1234/v1",
+                    ApiKey = "sk-local",
+                    Model = "default_model",
+                    Config = JsonSerializer.Serialize(new { binaryPath = scriptPath }),
+                },
+                Prompt: "test prompt",
+                RunContext: new LoopRunContext(
+                    runId,
+                    Guid.NewGuid().ToString(),
+                    "Test Task",
+                    "Test description",
+                    worktreeDir,
+                    "main",
+                    new List<string>(),
+                    null),
+                ExecutionCount: 1,
+                Cancel: CancellationToken.None));
+
+            var agentDir = Path.Combine(Path.GetTempPath(), "ild-pi-agent", runId.ToString("N"));
+            var extensionPath = Path.Combine(agentDir, "extensions", "ild.ts");
+            File.Exists(extensionPath).Should().BeTrue("extension file should be written to agent directory/extensions");
+
+            var extensionContent = await File.ReadAllTextAsync(extensionPath);
+            extensionContent.Should().Contain("ild_list_workitems");
+            extensionContent.Should().Contain("ild_get_workitem");
+            extensionContent.Should().Contain("ild_create_workitem");
+            extensionContent.Should().Contain("ild_list_repositories");
+            extensionContent.Should().Contain("ild_list_loop_templates");
+            extensionContent.Should().Contain("ild_list_loop_runs");
+            extensionContent.Should().Contain("http://ild-api.test:5000");
+            extensionContent.Should().Contain("ild-token");
+            extensionContent.Should().NotContain("http://192.168.1.5:1234/v1");
+            extensionContent.Should().NotContain("sk-local");
+            extensionContent.Should().Contain(runId.ToString());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ILD_API_URL", previousApiUrl);
+            Environment.SetEnvironmentVariable("ILD_API_TOKEN", previousApiToken);
+            var agentDir = Path.Combine(Path.GetTempPath(), "ild-pi-agent", runId.ToString("N"));
+            if (Directory.Exists(agentDir))
+                Directory.Delete(agentDir, true);
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public void ExecuteAsync_escapes_control_characters_in_ild_extension_strings()
+    {
+        var extensionContent = GeneratePiExtension(
+            "http://192.168.1.5:1234/v1",
+            "sk-local\r\nnext-line",
+            Guid.NewGuid().ToString());
+
+        extensionContent.Should().Contain("const API_TOKEN = \"sk-local\\r\\nnext-line\";");
+        extensionContent.Should().NotContain("sk-local\r\nnext-line");
+    }
+
+    [Fact]
+    public void ExecuteAsync_generates_query_parameter_code_without_embedded_newlines()
+    {
+        var extensionContent = GeneratePiExtension(
+            "http://192.168.1.5:1234/v1",
+            "Local",
+            Guid.NewGuid().ToString());
+
+        extensionContent.Should().Contain("function joinApiUrl(base: string, path: string): string {");
+        extensionContent.Should().Contain("const url = joinApiUrl(API_BASE, path);");
+        extensionContent.Should().NotContain("const url = API_BASE + path;");
+        extensionContent.Should().Contain("if (params.status != null) qs.set(\"status\", params.status);");
+        extensionContent.Should().Contain("if (params.skip !== undefined) qs.set(\"skip\", String(params.skip));");
+        extensionContent.Should().Contain("const url = qs.toString() ? `api/v1/agent/workitems?${qs.toString()}` : \"api/v1/agent/workitems\";");
+        extensionContent.Should().NotContain("qs.set(\"\nstatus");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_does_not_write_ild_extension_when_no_http_base_url()
+    {
+        var runId = Guid.NewGuid();
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-pi-no-ext-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "args.sh");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-session-noext\",\"cwd\":\"$PWD\"}'\n" +
+            "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ok\"}]}}'\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var result = await new PiAdapter().ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                worktreePath: worktreeDir,
+                runId: runId,
+                executionCount: 1));
+
+            result.Success.Should().BeTrue();
+
+            var agentDir = Path.Combine(Path.GetTempPath(), "ild-pi-agent", runId.ToString("N"));
+            Directory.Exists(agentDir).Should().BeFalse("agent directory should not be created when no HTTP base URL");
+        }
+        finally
+        {
+            var agentDir = Path.Combine(Path.GetTempPath(), "ild-pi-agent", runId.ToString("N"));
+            if (Directory.Exists(agentDir))
+                Directory.Delete(agentDir, true);
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
     private static AgentExecutionContext BuildContext(
         string binaryPath,
         int executionCount,
@@ -405,6 +542,17 @@ public class PiAdapterTests
             ProgressCallback: progressCallback,
             SessionId: sessionId,
             ManageSession: manageSession);
+    }
+
+    private static string GeneratePiExtension(string apiUrl, string apiToken, string loopRunId)
+    {
+        var generatorType = typeof(PiAdapter).Assembly
+            .GetType("ILD.Core.Services.Implementations.Adapters.PiExtensionGenerator", throwOnError: true)!;
+        var generateMethod = generatorType.GetMethod(
+            "Generate",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public)!;
+
+        return (string)generateMethod.Invoke(null, [apiUrl, apiToken, loopRunId])!;
     }
 
     private static async Task<SessionHarness> CreateSessionHarnessAsync()
