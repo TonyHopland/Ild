@@ -21,15 +21,6 @@ export default function NodeInputSection({ nodeType, effectiveInput }: NodeInput
       content = effectiveInput.resolvedPrompt;
     } else if (effectiveInput.prompt) {
       content = effectiveInput.prompt;
-      if (effectiveInput.context) {
-        const ctx = effectiveInput.context as Record<string, string>;
-        const parts: string[] = [];
-        if (ctx.workItemTitle) parts.push(`Title: ${ctx.workItemTitle}`);
-        if (ctx.workItemDescription) parts.push(`Description: ${ctx.workItemDescription}`);
-        if (parts.length > 0) {
-          content += `\n\n--- Context ---\n${parts.join("\n")}`;
-        }
-      }
     } else if (effectiveInput.message) {
       content = effectiveInput.message;
     }

@@ -43,38 +43,27 @@ public class OpenCodeAdapter : IAgentAdapter
                 return NodeExecutionResult.Fail(
                     "[opencode-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
 
-            if (ctx.ManageSession && !string.IsNullOrEmpty(ctx.SessionId))
+            var sessionIdToUse = ctx.SessionId;
+            if (ctx.ManageSession && !string.IsNullOrEmpty(sessionIdToUse))
             {
-                var restoreError = await RestoreManagedSessionAsync(binaryPath, worktreePath, ctx);
-                if (!string.IsNullOrEmpty(restoreError))
-                    return NodeExecutionResult.Fail(restoreError);
+                var restoreResult = await RestoreManagedSessionAsync(binaryPath, worktreePath, ctx, sessionIdToUse);
+                if (!string.IsNullOrEmpty(restoreResult.Error))
+                    return NodeExecutionResult.Fail(restoreResult.Error);
+                sessionIdToUse = restoreResult.SessionIdToUse;
             }
-
-            var psi = BuildProcessStartInfo(binaryPath, worktreePath);
 
             var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, ctx.RunContext);
-
-            psi.EnvironmentVariables["OPENCODE_CONFIG_CONTENT"] = opencodeConfigJson;
-
-            psi.ArgumentList.Add("run");
-            psi.ArgumentList.Add("--dir");
-            psi.ArgumentList.Add(worktreePath);
-            psi.ArgumentList.Add("--model");
-            psi.ArgumentList.Add(opencodeModel);
-            psi.ArgumentList.Add("--format");
-            psi.ArgumentList.Add("json");
-            if (!string.IsNullOrEmpty(ctx.SessionId))
-            {
-                psi.ArgumentList.Add("--session");
-                psi.ArgumentList.Add(ctx.SessionId);
-            }
-            psi.ArgumentList.Add("--dangerously-skip-permissions");
-            psi.ArgumentList.Add(rendered);
 
             Process? proc = null;
             try
             {
-                proc = Process.Start(psi);
+                proc = Process.Start(BuildRunProcessStartInfo(
+                    binaryPath,
+                    worktreePath,
+                    rendered,
+                    opencodeModel,
+                    opencodeConfigJson,
+                    sessionIdToUse));
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
@@ -82,7 +71,14 @@ public class OpenCodeAdapter : IAgentAdapter
                 {
                     try
                     {
-                        proc = Process.Start(BuildProcessStartInfo(binaryPath, worktreePath, useWorktreeAsWorkingDirectory: false));
+                        proc = Process.Start(BuildRunProcessStartInfo(
+                            binaryPath,
+                            worktreePath,
+                            rendered,
+                            opencodeModel,
+                            opencodeConfigJson,
+                            sessionIdToUse,
+                            useWorktreeAsWorkingDirectory: false));
                     }
                     catch (Exception retryEx) when (retryEx is InvalidOperationException or IOException)
                     {
@@ -136,14 +132,13 @@ public class OpenCodeAdapter : IAgentAdapter
             // a clear diagnostic instead and propagate session errors. When
             // stdout is not JSON at all (e.g. tests using a stub binary), keep
             // the raw stdout as the response.
-            var effectiveSessionId = sessionId ?? ctx.SessionId;
+            var effectiveSessionId = sessionId ?? sessionIdToUse;
             string? exportedSessionJson = null;
             if (ctx.ManageSession && p.ExitCode == 0 && !string.IsNullOrEmpty(effectiveSessionId))
             {
                 var (exportError, sessionJson) = await PersistManagedSessionAsync(binaryPath, worktreePath, ctx, effectiveSessionId);
-                if (!string.IsNullOrEmpty(exportError))
-                    return NodeExecutionResult.Fail(exportError, response);
-                exportedSessionJson = sessionJson;
+                if (string.IsNullOrEmpty(exportError))
+                    exportedSessionJson = sessionJson;
             }
 
             if (string.IsNullOrEmpty(response) && !string.IsNullOrWhiteSpace(exportedSessionJson))
@@ -176,20 +171,27 @@ public class OpenCodeAdapter : IAgentAdapter
         }
     }
 
-    private async Task<string?> RestoreManagedSessionAsync(string binaryPath, string worktreePath, AgentExecutionContext ctx)
+    private async Task<ManagedSessionRestoreResult> RestoreManagedSessionAsync(
+        string binaryPath,
+        string worktreePath,
+        AgentExecutionContext ctx,
+        string sessionId)
     {
-        if (_scopeFactory is null || string.IsNullOrEmpty(ctx.SessionId))
-            return null;
+        if (_scopeFactory is null || string.IsNullOrEmpty(sessionId))
+            return ManagedSessionRestoreResult.Use(sessionId);
 
         await using var scope = _scopeFactory.CreateAsyncScope();
         var snapshotStore = scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>();
-        var snapshot = await snapshotStore.GetAsync(ctx.RunContext.LoopRunId, Name, ctx.SessionId, ctx.Cancel);
+        var snapshot = await snapshotStore.GetAsync(ctx.RunContext.LoopRunId, Name, sessionId, ctx.Cancel);
         if (snapshot is null || string.IsNullOrWhiteSpace(snapshot.SessionJson))
-            return null;
+            return ManagedSessionRestoreResult.Use(sessionId);
 
-        var localSession = await RunOpencodeCommandAsync(binaryPath, worktreePath, ctx.Cancel, ["export", ctx.SessionId]);
+        var localSession = await RunOpencodeCommandAsync(binaryPath, worktreePath, ctx.Cancel, ["export", sessionId]);
         if (localSession.ExitCode == 0 && !string.IsNullOrWhiteSpace(localSession.Stdout))
-            return null;
+            return ManagedSessionRestoreResult.Use(sessionId);
+
+        if (!IsValidJson(snapshot.SessionJson))
+            return ManagedSessionRestoreResult.StartFresh();
 
         var tempFile = Path.Combine(Path.GetTempPath(), $"ild-opencode-session-{Guid.NewGuid():N}.json");
         await File.WriteAllTextAsync(tempFile, snapshot.SessionJson, ctx.Cancel);
@@ -198,14 +200,14 @@ public class OpenCodeAdapter : IAgentAdapter
         {
             var importResult = await RunOpencodeCommandAsync(binaryPath, worktreePath, ctx.Cancel, ["import", tempFile]);
             if (importResult.ExitCode != 0)
-                return $"[opencode-error] failed to import managed session '{ctx.SessionId}': {BuildCommandFailure(importResult)}";
+                return ManagedSessionRestoreResult.StartFresh();
         }
         finally
         {
             try { File.Delete(tempFile); } catch { }
         }
 
-        return null;
+        return ManagedSessionRestoreResult.Use(sessionId);
     }
 
     private async Task<(string? Error, string? SessionJson)> PersistManagedSessionAsync(string binaryPath, string worktreePath, AgentExecutionContext ctx, string sessionId)
@@ -220,6 +222,8 @@ public class OpenCodeAdapter : IAgentAdapter
             return ($"[opencode-error] failed to export managed session '{sessionId}': no session json returned", null);
 
         var sessionJson = exportResult.Stdout.Trim();
+        if (!IsValidJson(sessionJson))
+            return ($"[opencode-error] failed to export managed session '{sessionId}': invalid JSON returned ({sessionJson.Length} chars)", null);
 
         await using var scope = _scopeFactory.CreateAsyncScope();
         var snapshotStore = scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>();
@@ -259,8 +263,8 @@ public class OpenCodeAdapter : IAgentAdapter
 
         using var process = proc ?? throw new InvalidOperationException("Process.Start returned null");
 
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        var stdoutTask = ReadAllFromStreamAsync(process.StandardOutput, cancellationToken);
+        var stderrTask = ReadAllFromStreamAsync(process.StandardError, cancellationToken);
 
         await process.WaitForExitAsync(cancellationToken);
 
@@ -268,6 +272,23 @@ public class OpenCodeAdapter : IAgentAdapter
             process.ExitCode,
             await stdoutTask,
             await stderrTask);
+    }
+
+    private static async Task<string> ReadAllFromStreamAsync(StreamReader reader, CancellationToken cancellationToken)
+    {
+        var buffer = new char[8192];
+        var builder = new StringBuilder();
+
+        while (true)
+        {
+            var read = await reader.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken);
+            if (read == 0)
+                break;
+
+            builder.Append(buffer, 0, read);
+        }
+
+        return builder.ToString();
     }
 
     private static string BuildCommandFailure(OpencodeCommandResult result)
@@ -282,6 +303,55 @@ public class OpenCodeAdapter : IAgentAdapter
     }
 
     private sealed record OpencodeCommandResult(int ExitCode, string Stdout, string Stderr);
+
+    private sealed record ManagedSessionRestoreResult(string? Error, string? SessionIdToUse)
+    {
+        public static ManagedSessionRestoreResult Use(string sessionId) => new(null, sessionId);
+
+        public static ManagedSessionRestoreResult StartFresh() => new(null, null);
+    }
+
+    private static bool IsValidJson(string value)
+    {
+        try
+        {
+            using var _ = JsonDocument.Parse(value);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static ProcessStartInfo BuildRunProcessStartInfo(
+        string binaryPath,
+        string worktreePath,
+        string renderedPrompt,
+        string opencodeModel,
+        string opencodeConfigJson,
+        string? sessionId,
+        bool useWorktreeAsWorkingDirectory = true)
+    {
+        var psi = BuildProcessStartInfo(binaryPath, worktreePath, useWorktreeAsWorkingDirectory);
+        psi.EnvironmentVariables["OPENCODE_CONFIG_CONTENT"] = opencodeConfigJson;
+        psi.ArgumentList.Add("run");
+        psi.ArgumentList.Add("--dir");
+        psi.ArgumentList.Add(worktreePath);
+        psi.ArgumentList.Add("--model");
+        psi.ArgumentList.Add(opencodeModel);
+        psi.ArgumentList.Add("--format");
+        psi.ArgumentList.Add("json");
+        if (!string.IsNullOrEmpty(sessionId))
+        {
+            psi.ArgumentList.Add("--session");
+            psi.ArgumentList.Add(sessionId);
+        }
+        psi.ArgumentList.Add("--dangerously-skip-permissions");
+        psi.ArgumentList.Add("--");
+        psi.ArgumentList.Add(renderedPrompt);
+        return psi;
+    }
 
     private static ProcessStartInfo BuildProcessStartInfo(string binaryPath, string worktreePath, bool useWorktreeAsWorkingDirectory = true)
     {

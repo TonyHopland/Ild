@@ -8,6 +8,7 @@ using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
+using System.Text.Json;
 
 namespace ILD.Tests;
 
@@ -133,6 +134,40 @@ public class AINodeExecutorEventLogTests
         result.Success.Should().BeTrue();
         testAdapter.CapturedContext.Should().NotBeNull();
         testAdapter.CapturedContext!.EventLogSummary.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void DescribeInput_only_reports_prompt_and_session_settings()
+    {
+        var providerStore = new Mock<IProviderStore>();
+        var registry = new Mock<IAgentAdapterRegistry>();
+        var loopRunStore = new Mock<ILoopRunStore>();
+        var eventLogService = new Mock<IEventLogService>();
+
+        var sp = BuildServiceProvider(
+            providerStore.Object,
+            registry.Object,
+            loopRunStore.Object,
+            eventLogService.Object);
+
+        var executor = new AINodeExecutor(sp);
+        var ctx = new NodeExecutionContext(
+            Run: new LoopRun { Id = Guid.NewGuid() },
+            RunNode: new LoopRunNode { RetryCount = 0 },
+            Node: new LoopNode
+            {
+                Id = Guid.NewGuid(),
+                Config = "{\"prompt\":\"{{PreviousNode.Output}}\",\"useSession\":true,\"sessionPlaceholder\":\"plan\"}",
+            },
+            WorkItem: new WorkItemView { Id = Guid.NewGuid().ToString(), Title = "title", Description = "desc" },
+            PreviousNodeOutput: "prompt output",
+            CancellationToken: CancellationToken.None);
+
+        using var doc = JsonDocument.Parse(executor.DescribeInput(ctx));
+        doc.RootElement.GetProperty("prompt").GetString().Should().Be("{{PreviousNode.Output}}");
+        doc.RootElement.GetProperty("useSession").GetBoolean().Should().BeTrue();
+        doc.RootElement.GetProperty("sessionPlaceholder").GetString().Should().Be("plan");
+        doc.RootElement.TryGetProperty("context", out _).Should().BeFalse();
     }
 
     private static IServiceProvider BuildServiceProvider(

@@ -354,4 +354,33 @@ describe("EventLogViewer", () => {
       expect(elements.length).toBeGreaterThanOrEqual(1);
     });
   });
+
+  test("does not append context block to AI input display", async () => {
+    (loopRunService.getById as ReturnType<typeof vi.fn>).mockResolvedValue(mockRunWithAI);
+    (loopRunService.getEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      entries: mockEventsWithAIInput,
+      nextCursor: 1,
+      hasMore: false,
+    });
+    (loopTemplateService.getVersionGraph as ReturnType<typeof vi.fn>).mockResolvedValue(
+      mockTemplateGraphAI,
+    );
+
+    render(
+      <MemoryRouter initialEntries={["/loop-runs/test-run-ai/events"]}>
+        <Routes>
+          <Route path="/loop-runs/:runId/events" element={<EventLogViewer />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("AI Node")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("AI Node"));
+    await waitFor(() => {
+      expect(screen.queryByText(/--- Context ---/)).toBeNull();
+    });
+  });
 });

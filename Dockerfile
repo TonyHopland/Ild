@@ -64,15 +64,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
     mkdir -p /usr/local/share/ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-# The opencode install script drops the binary into $HOME/.opencode/bin and
-# only updates interactive shell rc files. ILD launches opencode via
-# Process.Start, which inherits the container's non-interactive PATH, so we
-# additionally symlink the binary into /usr/local/bin so it is discoverable
-# without relying on shell rc evaluation.
+# The opencode install script drops files under $HOME/.opencode. Because ILD
+# runs as a non-root runtime user, keep that install outside /root so the
+# binary and any adjacent assets remain executable after gosu switches users.
 RUN if [ "$WITH_OPENCODE" = "1" ]; then \
       apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && \
       curl -fsSL https://opencode.ai/install | bash && \
-      ln -sf /root/.opencode/bin/opencode /usr/local/bin/opencode && \
+  mkdir -p /opt && \
+  rm -rf /opt/opencode && \
+  cp -a /root/.opencode /opt/opencode && \
+  chmod -R a+rX /opt/opencode && \
+  ln -sf /opt/opencode/bin/opencode /usr/local/bin/opencode && \
       rm -rf /var/lib/apt/lists/*; \
     fi
 
@@ -137,8 +139,18 @@ RUN if [ "$WITH_CERTS" = "1" ]; then \
 COPY --from=build /app/publish ./
 COPY --from=build /app/mcp-server/ ./
 COPY --from=frontend-build /app/frontend/dist ./wwwroot
-RUN groupadd --gid ${APP_GID} ild && \
-  useradd --uid ${APP_UID} --gid ${APP_GID} --create-home --home-dir /home/ild --shell /usr/sbin/nologin ild
+RUN existing_group="$(getent group "${APP_GID}" | cut -d: -f1 || true)" && \
+    if [ -n "$existing_group" ] && [ "$existing_group" != "ild" ]; then \
+      groupmod -n ild "$existing_group"; \
+    elif [ -z "$existing_group" ]; then \
+      groupadd --gid ${APP_GID} ild; \
+    fi && \
+    existing_user="$(getent passwd "${APP_UID}" | cut -d: -f1 || true)" && \
+    if [ -n "$existing_user" ] && [ "$existing_user" != "ild" ]; then \
+      usermod -l ild -g ild -d /home/ild -m -s /usr/sbin/nologin "$existing_user"; \
+    elif [ -z "$existing_user" ]; then \
+      useradd --uid ${APP_UID} --gid ${APP_GID} --create-home --home-dir /home/ild --shell /usr/sbin/nologin ild; \
+    fi
 ENV HOME=/home/ild
 ENV ILD_DATA_PATH=/data
 ENV ILD_WORKTREES_PATH=/worktrees
@@ -146,7 +158,7 @@ RUN mkdir -p /data /worktrees && \
   chown -R ild:ild /app /data /worktrees /home/ild
 
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 
 EXPOSE 8080
 ENTRYPOINT ["/bin/sh", "/entrypoint.sh"]
