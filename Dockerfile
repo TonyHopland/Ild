@@ -49,6 +49,7 @@ FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS final
 WORKDIR /app
 
 ARG WITH_OPENCODE=0
+ARG WITH_PI=0
 ARG WITH_NODE=0
 ARG NODE_RUNTIME_VERSION=24.15.0
 ARG WITH_DOTNET_SDK=0
@@ -91,6 +92,14 @@ RUN if [ "$WITH_NODE" = "1" ]; then \
   apt-get remove -y ca-certificates curl && \
   apt-get autoremove -y && \
   rm -rf /var/lib/apt/lists/*; \
+fi
+
+RUN if [ "$WITH_PI" = "1" ]; then \
+  if ! command -v npm >/dev/null 2>&1; then \
+    echo "WITH_PI=1 requires Node/npm. Enable WITH_NODE=1 as well." >&2; \
+    exit 1; \
+  fi && \
+  npm install -g @earendil-works/pi-coding-agent; \
 fi
 
 RUN if [ "$WITH_DOTNET_SDK" = "1" ]; then \

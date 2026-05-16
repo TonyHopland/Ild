@@ -74,7 +74,7 @@ describe("AI Providers page", () => {
       Promise.resolve({
         ok: true,
         status: 200,
-        text: () => Promise.resolve(JSON.stringify(["openai", "opencode"])),
+        text: () => Promise.resolve(JSON.stringify(["openai", "opencode", "pi"])),
       }),
     );
 
@@ -115,7 +115,7 @@ describe("AI Providers page", () => {
       Promise.resolve({
         ok: true,
         status: 200,
-        text: () => Promise.resolve(JSON.stringify(["openai", "opencode"])),
+        text: () => Promise.resolve(JSON.stringify(["openai", "opencode", "pi"])),
       }),
     );
 
@@ -155,7 +155,7 @@ describe("AI Providers page", () => {
       Promise.resolve({
         ok: true,
         status: 200,
-        text: () => Promise.resolve(JSON.stringify(["openai", "opencode"])),
+        text: () => Promise.resolve(JSON.stringify(["openai", "opencode", "pi"])),
       }),
     );
 
@@ -209,7 +209,7 @@ describe("AI Providers page", () => {
         Promise.resolve({
           ok: true,
           status: 200,
-          text: () => Promise.resolve(JSON.stringify(["openai", "opencode"])),
+          text: () => Promise.resolve(JSON.stringify(["openai", "opencode", "pi"])),
         }),
       );
 
@@ -257,7 +257,7 @@ describe("AI Providers page", () => {
       Promise.resolve({
         ok: true,
         status: 200,
-        text: () => Promise.resolve(JSON.stringify(["openai", "opencode"])),
+        text: () => Promise.resolve(JSON.stringify(["openai", "opencode", "pi"])),
       }),
     );
 
@@ -302,7 +302,7 @@ describe("AI Providers page", () => {
         Promise.resolve({
           ok: true,
           status: 200,
-          text: () => Promise.resolve(JSON.stringify(["openai", "opencode"])),
+          text: () => Promise.resolve(JSON.stringify(["openai", "opencode", "pi"])),
         }),
       );
 
@@ -355,7 +355,7 @@ describe("AI Providers page", () => {
       Promise.resolve({
         ok: true,
         status: 200,
-        text: () => Promise.resolve(JSON.stringify(["openai", "opencode"])),
+        text: () => Promise.resolve(JSON.stringify(["openai", "opencode", "pi"])),
       }),
     );
 
