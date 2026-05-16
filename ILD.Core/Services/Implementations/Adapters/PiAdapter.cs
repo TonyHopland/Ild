@@ -52,8 +52,6 @@ public sealed class PiAdapter : IAgentAdapter
             if (ctx.ManageSession && !string.IsNullOrWhiteSpace(sessionIdToUse))
             {
                 var restoreResult = await RestoreManagedSessionAsync(sessionDirectory, ctx, sessionIdToUse);
-                if (!string.IsNullOrWhiteSpace(restoreResult.Error))
-                    return NodeExecutionResult.Fail(restoreResult.Error!);
 
                 sessionIdToUse = restoreResult.SessionIdToUse;
                 sessionPathToUse = restoreResult.SessionPathToUse;
@@ -442,6 +440,14 @@ public sealed class PiAdapter : IAgentAdapter
 
         Directory.CreateDirectory(settings.AgentDirectory);
         File.WriteAllText(Path.Combine(settings.AgentDirectory, "models.json"), settings.ModelsJsonContent);
+
+        // Write the ILD extension so Pi can list/create work items via its tool system.
+        if (!string.IsNullOrWhiteSpace(settings.IldExtensionContent))
+        {
+            var extensionsDir = Path.Combine(settings.AgentDirectory, "extensions");
+            Directory.CreateDirectory(extensionsDir);
+            File.WriteAllText(Path.Combine(extensionsDir, "ild.ts"), settings.IldExtensionContent);
+        }
     }
 
     private static PiAdapterSettings ResolveSettings(AiProvider provider, Guid loopRunId)
@@ -470,8 +476,9 @@ public sealed class PiAdapter : IAgentAdapter
                 if (TryGetString(root, "api", out var configuredApi) && !string.IsNullOrWhiteSpace(configuredApi))
                     api = configuredApi;
             }
-            catch
+            catch (JsonException)
             {
+                // Misconfigured provider JSON — fall through with defaults
             }
         }
 
@@ -490,12 +497,7 @@ public sealed class PiAdapter : IAgentAdapter
         if (hasAbsoluteBaseUrl)
         {
             providerName ??= BuildSyntheticProviderName(provider);
-            if (!string.IsNullOrWhiteSpace(providerName)
-                && !string.IsNullOrWhiteSpace(model)
-                && model.StartsWith(providerName + "/", StringComparison.OrdinalIgnoreCase))
-            {
-                model = model[(providerName.Length + 1)..];
-            }
+            model = StripProviderPrefix(model, providerName);
 
             agentDirectory = BuildAgentDirectory(loopRunId);
             apiKeyEnvironmentVariableName = "ILD_PI_PROVIDER_API_KEY";
@@ -503,12 +505,7 @@ public sealed class PiAdapter : IAgentAdapter
             passApiKeyViaCli = false;
         }
 
-        if (!string.IsNullOrWhiteSpace(providerName)
-            && !string.IsNullOrWhiteSpace(model)
-            && model.StartsWith(providerName + "/", StringComparison.OrdinalIgnoreCase))
-        {
-            model = model[(providerName.Length + 1)..];
-        }
+        model = StripProviderPrefix(model, providerName);
 
         return new PiAdapterSettings(
             binaryPath,
@@ -518,7 +515,19 @@ public sealed class PiAdapter : IAgentAdapter
             passApiKeyViaCli,
             agentDirectory,
             modelsJsonContent,
-            apiKeyEnvironmentVariableName);
+            apiKeyEnvironmentVariableName,
+            BuildIldExtensionContent(hasAbsoluteBaseUrl ? provider.BaseUrl : null, apiKey, loopRunId));
+    }
+
+    private static string StripProviderPrefix(string? model, string? providerName)
+    {
+        if (string.IsNullOrWhiteSpace(providerName) || string.IsNullOrWhiteSpace(model))
+            return model!;
+
+        if (model.StartsWith(providerName + "/", StringComparison.OrdinalIgnoreCase))
+            return model[(providerName.Length + 1)..];
+
+        return model;
     }
 
     private static string BuildSyntheticProviderName(AiProvider provider)
@@ -570,6 +579,20 @@ public sealed class PiAdapter : IAgentAdapter
         }.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
 
+    /// <summary>
+    /// Build the TypeScript content for the ILD Pi extension that registers
+    /// tools for interacting with the ILD platform API.
+    /// Delegates to <see cref="PiExtensionGenerator"/> which reads from the shared
+    /// <see cref="ILD.Data.ToolDescriptors"/> to avoid duplicating tool definitions.
+    /// </summary>
+    private static string? BuildIldExtensionContent(string? apiUrl, string? apiToken, Guid loopRunId)
+    {
+        if (string.IsNullOrWhiteSpace(apiUrl))
+            return null;
+
+        return PiExtensionGenerator.Generate(apiUrl, apiToken ?? "", loopRunId.ToString());
+    }
+
     private static Task<string> RenderPromptAsync(string template, LoopRunContext context)
         => Task.FromResult(Resolver.Render(template, new PromptContext(
             WorkItemTitle: context.WorkItemTitle,
@@ -586,16 +609,17 @@ public sealed class PiAdapter : IAgentAdapter
         bool PassApiKeyViaCli,
         string? AgentDirectory,
         string? ModelsJsonContent,
-        string? ApiKeyEnvironmentVariableName);
+        string? ApiKeyEnvironmentVariableName,
+        string? IldExtensionContent);
 
     private sealed record PiExecutionOutput(string RawStdout, string Content, string? SessionId, bool SawJsonEvents);
 
-    private sealed record ManagedSessionRestoreResult(string? Error, string? SessionIdToUse, string? SessionPathToUse)
+    private sealed record ManagedSessionRestoreResult(string? SessionIdToUse, string? SessionPathToUse)
     {
         public static ManagedSessionRestoreResult Use(string sessionId, string sessionPath)
-            => new(null, sessionId, sessionPath);
+            => new(sessionId, sessionPath);
 
         public static ManagedSessionRestoreResult StartFresh()
-            => new(null, null, null);
+            => new(null, null);
     }
 }
