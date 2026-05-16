@@ -1,10 +1,10 @@
 import { useRef, useEffect, useCallback, useState } from "react";
 
 interface LiveStreamProps {
-  lines: string[];
+  text: string;
 }
 
-export default function LiveStream({ lines }: LiveStreamProps) {
+export default function LiveStream({ text }: LiveStreamProps) {
   const containerRef = useRef<HTMLPreElement | null>(null);
   const isAtBottomRef = useRef(true);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -19,7 +19,7 @@ export default function LiveStream({ lines }: LiveStreamProps) {
   }, []);
 
   useEffect(() => {
-    if (lines.length === 0) return;
+    if (!text) return;
     const el = containerRef.current;
     if (!el) return;
     if (isAtBottomRef.current) {
@@ -27,9 +27,9 @@ export default function LiveStream({ lines }: LiveStreamProps) {
     } else {
       setUnreadCount((prev) => prev + 1);
     }
-  }, [lines.length]);
+  }, [text]);
 
-  if (lines.length === 0) {
+  if (!text) {
     return (
       <div className="node-detail-section node-livestream-section">
         <h4>Live Output</h4>
@@ -42,7 +42,7 @@ export default function LiveStream({ lines }: LiveStreamProps) {
     <div className="node-detail-section node-livestream-section">
       <h4>Live Output</h4>
       <pre ref={containerRef} className="livestream-container" onScroll={handleScroll}>
-        {lines.join("\n")}
+        {text}
       </pre>
       {unreadCount > 0 && (
         <button

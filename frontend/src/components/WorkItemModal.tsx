@@ -62,7 +62,7 @@ export default function WorkItemModal({
   const [prCommentsLoading, setPrCommentsLoading] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [progressLines, setProgressLines] = useState<string[]>([]);
+  const [progressText, setProgressText] = useState<string>("");
   const [preview, setPreview] = useState<WorktreePreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -272,7 +272,7 @@ export default function WorkItemModal({
 
   useEffect(() => {
     if (!shouldStream) {
-      setProgressLines([]);
+      setProgressText("");
       return;
     }
 
@@ -281,7 +281,7 @@ export default function WorkItemModal({
     const onNodeProgress = (message: TypedSignalRMessage<"NodeProgress">) => {
       const { runId: msgRunId, line } = message.payload;
       if (msgRunId !== workItem?.currentLoopRunId) return;
-      setProgressLines((prev) => [...prev, line]);
+      setProgressText((prev) => prev + line);
     };
 
     const onLoopRunStateChanged = (message: TypedSignalRMessage<"LoopRunStateChanged">) => {
@@ -704,7 +704,7 @@ export default function WorkItemModal({
                 )}
 
               {/* Live Stream — always visible when running */}
-              {shouldStream && <LiveStream lines={progressLines} />}
+              {shouldStream && <LiveStream text={progressText} />}
 
               {/* Details Accordion */}
               <Accordion title="Details">
