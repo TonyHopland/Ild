@@ -114,7 +114,7 @@ export default function EventLogViewer() {
   const [events, setEvents] = useState<EventLogEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorText, setErrorText] = useState("");
-  const [progressLines, setProgressLines] = useState<string[]>([]);
+  const [progressText, setProgressText] = useState<string>("");
   const [effectiveInputs, setEffectiveInputs] = useState<Record<string, EffectiveInput>>({});
   const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
   const [selectedSessionPreview, setSelectedSessionPreview] =
@@ -266,7 +266,7 @@ export default function EventLogViewer() {
     const onNodeProgress = async (message: TypedSignalRMessage<"NodeProgress">) => {
       const { runId: msgRunId, line } = message.payload;
       if (msgRunId !== runId) return;
-      setProgressLines((prev) => [...prev, line]);
+      setProgressText((prev) => prev + line);
     };
 
     const onEventLogged = async (message: TypedSignalRMessage<"EventLogged">) => {
@@ -677,7 +677,7 @@ export default function EventLogViewer() {
                 onRetry={handleRetryFromNode}
                 retryDisabled={run.status === LoopRunStatus.Running && !run.isPaused}
               >
-                {isRunning && <LiveStream lines={progressLines} />}
+                {isRunning && <LiveStream text={progressText} />}
                 {!isRunning && (
                   <>
                     <NodeInputSection nodeType={templateNodeType} effectiveInput={effectiveInput} />
