@@ -38,6 +38,10 @@ public sealed class PRNodeExecutor : INodeExecutor
         var repo = wi.RepositoryId != null ? await providerStore.GetRepositoryByIdAsync(wi.RepositoryId.Value) : null;
         if (repo == null)
             return new NodeOutcome.Failed("Repository not found");
+        var remoteProvider = await providerStore.GetRemoteProviderByIdAsync(repo.RemoteProviderId);
+        var gitAuth = remoteProvider == null
+            ? null
+            : new GitAuthOptions(repo.CloneUrl, remoteProvider.ApiKey, remoteProvider.Type);
         var branch = run.BranchName ?? $"ild/wi-{wi.Id:N}";
         var target = repo.DefaultBranch ?? "main";
 
@@ -57,13 +61,13 @@ public sealed class PRNodeExecutor : INodeExecutor
                     return new NodeOutcome.Failed("Failed to commit uncommitted changes");
             }
 
-            var pushResult = await repoManager.PushAsync(run.WorktreePath, branch, ctx.CancellationToken);
+            var pushResult = await repoManager.PushAsync(run.WorktreePath, branch, ctx.CancellationToken, gitAuth);
             if (!pushResult.Success)
                 return new NodeOutcome.Failed($"Failed to push branch '{branch}' to remote: {pushResult.Error ?? "unknown error"}");
 
             if (string.IsNullOrEmpty(prUrl))
             {
-                _ = await repoManager.FetchAsync(run.WorktreePath, ctx.CancellationToken);
+                _ = await repoManager.FetchAsync(run.WorktreePath, ctx.CancellationToken, gitAuth);
                 var ahead = await repoManager.GetCommitsAheadCountAsync(run.WorktreePath, $"origin/{target}");
                 if (ahead == 0)
                     return new NodeOutcome.Failed($"Branch '{branch}' has no commits ahead of 'origin/{target}'; no changes were made");

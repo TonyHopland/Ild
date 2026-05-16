@@ -38,12 +38,20 @@ public sealed class StartNodeExecutor : INodeExecutor
         if (repo == null)
             return new NodeOutcome.Failed(
                 "WorkItem has no repository attached; refusing to run loop without an isolated worktree.");
+        var remoteProvider = await providerStore.GetRemoteProviderByIdAsync(repo.RemoteProviderId);
+        var gitAuth = remoteProvider == null
+            ? null
+            : new GitAuthOptions(repo.CloneUrl, remoteProvider.ApiKey, remoteProvider.Type);
 
         var run = await loopRunStore.GetByIdAsync(ctx.Run.Id);
         if (run == null)
             return new NodeOutcome.Failed("LoopRun not found");
 
-        if (string.IsNullOrEmpty(run.WorktreePath) || !Directory.Exists(run.WorktreePath))
+        var hasHealthyWorktree = !string.IsNullOrEmpty(run.WorktreePath)
+            && Directory.Exists(run.WorktreePath)
+            && await _repo.ValidateWorktreeHealthAsync(run.WorktreePath);
+
+        if (!hasHealthyWorktree)
         {
             var branch = run.BranchName ?? $"ild/wi-{wi.Id:N}";
             var basePath = repo.WorktreesPath;
@@ -54,7 +62,7 @@ public sealed class StartNodeExecutor : INodeExecutor
                 Directory.CreateDirectory(Path.GetDirectoryName(basePath)!);
                 if (!Directory.Exists(Path.Combine(basePath, ".git")))
                 {
-                    var result = await _repo.CloneAsync(repo.CloneUrl, basePath, ctx.CancellationToken);
+                    var result = await _repo.CloneAsync(repo.CloneUrl, basePath, ctx.CancellationToken, gitAuth);
                     if (!result.Success) return new NodeOutcome.Failed($"git clone failed: {result.Error}");
                     cloned = true;
                 }
@@ -62,7 +70,7 @@ public sealed class StartNodeExecutor : INodeExecutor
             // Pull existing base repo to ensure it's up to date (best-effort, skip if just cloned)
             if (!cloned)
             {
-                try { await _repo.PullAsync(basePath, ctx.CancellationToken); } catch { }
+                try { await _repo.PullAsync(basePath, ctx.CancellationToken, gitAuth); } catch { }
             }
             var path = await _repo.CreateWorktreeAsync(basePath, branch);
             run.WorktreePath = path;

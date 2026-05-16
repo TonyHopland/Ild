@@ -1,12 +1,24 @@
 using System.Diagnostics;
 using FluentAssertions;
 using ILD.Core.Services.Implementations;
+using ILD.Core.Services.Interfaces;
 
 namespace ILD.Tests;
 
 [Collection("Git")]
 public class RepositoryManagerTests : IDisposable
 {
+    private sealed class RecordingRunner : IProcessRunner
+    {
+        public List<(string FileName, IReadOnlyList<string> Args, string? WorkingDirectory, IReadOnlyDictionary<string, string?>? Environment)> Calls { get; } = new();
+
+        public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> args, string? workingDirectory = null, CancellationToken ct = default, IReadOnlyDictionary<string, string?>? environmentVariables = null)
+        {
+            Calls.Add((fileName, args, workingDirectory, environmentVariables == null ? null : new Dictionary<string, string?>(environmentVariables)));
+            return Task.FromResult(new ProcessResult(0, string.Empty, string.Empty));
+        }
+    }
+
     private readonly string _tmp;
     private readonly string _repo;
 
@@ -103,6 +115,42 @@ public class RepositoryManagerTests : IDisposable
 
         (await mgr.ReadFileAsync(path, "README.md")).Should().Contain("hello");
         (await mgr.ReadFileAsync(path, "../README.md")).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CloneAsync_passes_git_askpass_environment_when_api_key_is_present()
+    {
+        var runner = new RecordingRunner();
+        var mgr = new RepositoryManager(runner, worktreesRoot: Path.Combine(_tmp, "wt"));
+        var targetPath = Path.Combine(_tmp, "clone-target");
+
+        await mgr.CloneAsync(
+            "https://gitlab.example.com/group/repo.git",
+            targetPath,
+            auth: new GitAuthOptions("https://gitlab.example.com/group/repo.git", "token-123", "GitLab"));
+
+        runner.Calls.Should().ContainSingle();
+        runner.Calls[0].Environment.Should().NotBeNull();
+        runner.Calls[0].Environment!["GIT_ASKPASS"].Should().NotBeNullOrWhiteSpace();
+        runner.Calls[0].Environment!["ILD_GIT_USERNAME"].Should().Be("oauth2");
+        runner.Calls[0].Environment!["ILD_GIT_PASSWORD"].Should().Be("token-123");
+    }
+
+    [Fact]
+    public async Task PushAsync_uses_non_blank_username_for_forgejo_style_remotes()
+    {
+        var runner = new RecordingRunner();
+        var mgr = new RepositoryManager(runner, worktreesRoot: Path.Combine(_tmp, "wt"));
+
+        await mgr.PushAsync(
+            _repo,
+            "ild/wi-17",
+            auth: new GitAuthOptions("https://git.kube/team/repo.git", "token-123", "Forgejo"));
+
+        runner.Calls.Should().ContainSingle();
+        runner.Calls[0].Environment.Should().NotBeNull();
+        runner.Calls[0].Environment!["ILD_GIT_USERNAME"].Should().Be("git");
+        runner.Calls[0].Environment!["ILD_GIT_PASSWORD"].Should().Be("token-123");
     }
 
     private static void Git(string cwd, params string[] args)

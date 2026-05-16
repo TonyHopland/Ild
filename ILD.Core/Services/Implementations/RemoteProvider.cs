@@ -137,8 +137,9 @@ public class RemoteProviderService : IRemoteProvider
         var parts = path.Split('/', 2);
         if (parts.Length < 2) return (null, null, null);
 
-        if (!string.IsNullOrEmpty(match.ApiKey) && _http.DefaultRequestHeaders.Authorization == null)
-            _http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("token", match.ApiKey);
+        _http.DefaultRequestHeaders.Authorization = string.IsNullOrEmpty(match.ApiKey)
+            ? null
+            : new System.Net.Http.Headers.AuthenticationHeaderValue("token", match.ApiKey);
 
         var apiBase = match.Url.TrimEnd('/') + "/api/v1";
         return (apiBase, parts[0], parts[1]);

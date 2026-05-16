@@ -14,7 +14,8 @@ public sealed class ProcessRunner : IProcessRunner
         string fileName,
         IReadOnlyList<string> args,
         string? workingDirectory = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        IReadOnlyDictionary<string, string?>? environmentVariables = null)
     {
         var psi = new ProcessStartInfo(fileName)
         {
@@ -25,6 +26,16 @@ public sealed class ProcessRunner : IProcessRunner
         };
         if (!string.IsNullOrEmpty(workingDirectory)) psi.WorkingDirectory = workingDirectory;
         foreach (var a in args) psi.ArgumentList.Add(a);
+        if (environmentVariables != null)
+        {
+            foreach (var entry in environmentVariables)
+            {
+                if (entry.Value == null)
+                    psi.Environment.Remove(entry.Key);
+                else
+                    psi.Environment[entry.Key] = entry.Value;
+            }
+        }
 
         _logger?.LogDebug("exec {File} {Args} cwd={Cwd}", fileName, string.Join(' ', args), workingDirectory);
 

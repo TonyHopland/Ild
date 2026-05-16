@@ -9,6 +9,7 @@ namespace ILD.Core.Services.Implementations;
 /// </summary>
 public class RepositoryManager : IRepositoryManager
 {
+    private static readonly string AskPassScriptPath = EnsureAskPassScript();
     private readonly ILogger<RepositoryManager>? _logger;
     private readonly IProcessRunner _runner;
     private readonly string _worktreesRoot;
@@ -26,11 +27,11 @@ public class RepositoryManager : IRepositoryManager
     {
     }
 
-    public async Task<(bool Success, string? Error)> CloneAsync(string cloneUrl, string targetPath, CancellationToken cancellationToken = default)
+    public async Task<(bool Success, string? Error)> CloneAsync(string cloneUrl, string targetPath, CancellationToken cancellationToken = default, GitAuthOptions? auth = null)
     {
         var parent = Path.GetDirectoryName(targetPath);
         if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
-        var result = await _runner.RunAsync("git", new[] { "clone", cloneUrl, targetPath }, parent, cancellationToken);
+        var result = await _runner.RunAsync("git", new[] { "clone", cloneUrl, targetPath }, parent, cancellationToken, BuildGitEnvironment(auth));
         return result.Success ? (true, null) : (false, result.StdErr);
     }
 
@@ -95,15 +96,15 @@ public class RepositoryManager : IRepositoryManager
         return code == 0;
     }
 
-    public async Task<bool> FetchAsync(string worktreePath, CancellationToken cancellationToken = default)
+    public async Task<bool> FetchAsync(string worktreePath, CancellationToken cancellationToken = default, GitAuthOptions? auth = null)
     {
-        var (code, _, _) = await RunAsync(worktreePath, new[] { "fetch", "origin" }, cancellationToken);
+        var (code, _, _) = await RunAsync(worktreePath, new[] { "fetch", "origin" }, cancellationToken, auth);
         return code == 0;
     }
 
-    public async Task<bool> PullAsync(string worktreePath, CancellationToken cancellationToken = default)
+    public async Task<bool> PullAsync(string worktreePath, CancellationToken cancellationToken = default, GitAuthOptions? auth = null)
     {
-        var (code, _, _) = await RunAsync(worktreePath, new[] { "pull", "--ff-only" }, cancellationToken);
+        var (code, _, _) = await RunAsync(worktreePath, new[] { "pull", "--ff-only" }, cancellationToken, auth);
         return code == 0;
     }
 
@@ -120,9 +121,9 @@ public class RepositoryManager : IRepositoryManager
         return code == 0;
     }
 
-    public async Task<(bool Success, string? Error)> PushAsync(string worktreePath, string branchName, CancellationToken cancellationToken = default)
+    public async Task<(bool Success, string? Error)> PushAsync(string worktreePath, string branchName, CancellationToken cancellationToken = default, GitAuthOptions? auth = null)
     {
-        var (code, _, stderr) = await RunAsync(worktreePath, new[] { "push", "-u", "origin", branchName }, cancellationToken);
+        var (code, _, stderr) = await RunAsync(worktreePath, new[] { "push", "-u", "origin", branchName }, cancellationToken, auth);
         return code == 0 ? (true, null) : (false, stderr);
     }
 
@@ -162,11 +163,74 @@ public class RepositoryManager : IRepositoryManager
         => RunAsync(cwd, args, CancellationToken.None);
 
     private async Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(string cwd, IReadOnlyList<string> args, CancellationToken ct)
+        => await RunAsync(cwd, args, ct, null);
+
+    private async Task<(int ExitCode, string StdOut, string StdErr)> RunAsync(string cwd, IReadOnlyList<string> args, CancellationToken ct, GitAuthOptions? auth)
     {
-        var r = await _runner.RunAsync("git", args, cwd, ct);
+        var r = await _runner.RunAsync("git", args, cwd, ct, BuildGitEnvironment(auth));
         if (!r.Success)
             _logger?.LogDebug("git {Args} in {Worktree} exited {Code}: {Err}", string.Join(' ', args), cwd, r.ExitCode, r.StdErr);
         return (r.ExitCode, r.StdOut, r.StdErr);
+    }
+
+    private static IReadOnlyDictionary<string, string?>? BuildGitEnvironment(GitAuthOptions? auth)
+    {
+        if (auth == null || string.IsNullOrWhiteSpace(auth.ApiKey))
+            return null;
+
+        return new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            ["GIT_TERMINAL_PROMPT"] = "0",
+            ["GIT_ASKPASS"] = AskPassScriptPath,
+            ["ILD_GIT_USERNAME"] = ResolveGitUsername(auth.ProviderType, auth.RemoteUrl),
+            ["ILD_GIT_PASSWORD"] = auth.ApiKey,
+        };
+    }
+
+    private static string ResolveGitUsername(string? providerType, string remoteUrl)
+    {
+        if (Uri.TryCreate(remoteUrl, UriKind.Absolute, out var uri) && !string.IsNullOrEmpty(uri.UserInfo))
+        {
+            var parts = uri.UserInfo.Split(':', 2);
+            if (!string.IsNullOrWhiteSpace(parts[0]))
+                return Uri.UnescapeDataString(parts[0]);
+        }
+
+        return providerType?.Trim().ToLowerInvariant() switch
+        {
+            "github" => "x-access-token",
+            "gitlab" => "oauth2",
+            _ => "git",
+        };
+    }
+
+    private static string EnsureAskPassScript()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "ild-git-askpass.sh");
+        if (!File.Exists(path))
+        {
+            File.WriteAllText(path, "#!/bin/sh\ncase \"$1\" in\n  *Username*) printf '%s\\n' \"${ILD_GIT_USERNAME:-git}\" ;;\n  *Password*) printf '%s\\n' \"${ILD_GIT_PASSWORD:-}\" ;;\n  *) printf '\\n' ;;\nesac\n");
+            try
+            {
+                if (!OperatingSystem.IsWindows())
+                {
+                    File.SetUnixFileMode(path,
+                        UnixFileMode.UserRead |
+                        UnixFileMode.UserWrite |
+                        UnixFileMode.UserExecute |
+                        UnixFileMode.GroupRead |
+                        UnixFileMode.GroupExecute |
+                        UnixFileMode.OtherRead |
+                        UnixFileMode.OtherExecute);
+                }
+            }
+            catch
+            {
+                // Best effort only.
+            }
+        }
+
+        return path;
     }
 
     private static string FormatGitError(string stderr)

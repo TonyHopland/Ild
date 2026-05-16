@@ -90,9 +90,9 @@ public class PRNodeExecutorTests
 
         var mockRepoManager = new Mock<IRepositoryManager>();
         mockRepoManager.Setup(r => r.GetDiffAsync(worktreePath)).ReturnsAsync((string?)null);
-        mockRepoManager.Setup(r => r.PushAsync(worktreePath, "ild/test", CancellationToken.None))
+        mockRepoManager.Setup(r => r.PushAsync(worktreePath, "ild/test", CancellationToken.None, It.IsAny<GitAuthOptions?>()))
             .ReturnsAsync((true, (string?)null));
-        mockRepoManager.Setup(r => r.FetchAsync(worktreePath, CancellationToken.None)).ReturnsAsync(true);
+        mockRepoManager.Setup(r => r.FetchAsync(worktreePath, CancellationToken.None, It.IsAny<GitAuthOptions?>())).ReturnsAsync(true);
         mockRepoManager.Setup(r => r.GetCommitsAheadCountAsync(worktreePath, "origin/main")).ReturnsAsync(1);
 
         var services = new ServiceCollection();
@@ -113,7 +113,11 @@ public class PRNodeExecutorTests
         result.Success.Should().BeTrue();
         mockRepoManager.Verify(r => r.GetDiffAsync(worktreePath), Times.Once);
         mockRepoManager.Verify(r => r.CommitAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
-        mockRepoManager.Verify(r => r.PushAsync(worktreePath, "ild/test", CancellationToken.None), Times.Once);
+        mockRepoManager.Verify(r => r.PushAsync(
+            worktreePath,
+            "ild/test",
+            CancellationToken.None,
+            It.Is<GitAuthOptions>(a => a.ApiKey == remote.ApiKey && a.ProviderType == remote.Type)), Times.Once);
         mockRemote.Verify(r => r.CreatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Once);
 
         Directory.Delete(worktreePath, recursive: true);
@@ -151,9 +155,9 @@ public class PRNodeExecutorTests
         var mockRepoManager = new Mock<IRepositoryManager>();
         mockRepoManager.Setup(r => r.GetDiffAsync(worktreePath)).ReturnsAsync("--- some diff");
         mockRepoManager.Setup(r => r.CommitAsync(worktreePath, "fix: do a thing")).ReturnsAsync(true);
-        mockRepoManager.Setup(r => r.PushAsync(worktreePath, "ild/test", CancellationToken.None))
+        mockRepoManager.Setup(r => r.PushAsync(worktreePath, "ild/test", CancellationToken.None, It.IsAny<GitAuthOptions?>()))
             .ReturnsAsync((true, (string?)null));
-        mockRepoManager.Setup(r => r.FetchAsync(worktreePath, CancellationToken.None)).ReturnsAsync(true);
+        mockRepoManager.Setup(r => r.FetchAsync(worktreePath, CancellationToken.None, It.IsAny<GitAuthOptions?>())).ReturnsAsync(true);
         mockRepoManager.Setup(r => r.GetCommitsAheadCountAsync(worktreePath, "origin/main")).ReturnsAsync(1);
 
         var services = new ServiceCollection();
@@ -174,7 +178,7 @@ public class PRNodeExecutorTests
         result.Success.Should().BeTrue();
         mockRepoManager.Verify(r => r.GetDiffAsync(worktreePath), Times.Once);
         mockRepoManager.Verify(r => r.CommitAsync(worktreePath, "fix: do a thing"), Times.Once);
-        mockRepoManager.Verify(r => r.PushAsync(worktreePath, "ild/test", CancellationToken.None), Times.Once);
+        mockRepoManager.Verify(r => r.PushAsync(worktreePath, "ild/test", CancellationToken.None, It.IsAny<GitAuthOptions?>()), Times.Once);
 
         Directory.Delete(worktreePath, recursive: true);
     }
@@ -206,9 +210,9 @@ public class PRNodeExecutorTests
 
         var mockRepoManager = new Mock<IRepositoryManager>();
         mockRepoManager.Setup(r => r.GetDiffAsync(worktreePath)).ReturnsAsync((string?)null);
-        mockRepoManager.Setup(r => r.PushAsync(worktreePath, "ild/test", CancellationToken.None))
+        mockRepoManager.Setup(r => r.PushAsync(worktreePath, "ild/test", CancellationToken.None, It.IsAny<GitAuthOptions?>()))
             .ReturnsAsync((true, (string?)null));
-        mockRepoManager.Setup(r => r.FetchAsync(worktreePath, CancellationToken.None)).ReturnsAsync(true);
+        mockRepoManager.Setup(r => r.FetchAsync(worktreePath, CancellationToken.None, It.IsAny<GitAuthOptions?>())).ReturnsAsync(true);
         mockRepoManager.Setup(r => r.GetCommitsAheadCountAsync(worktreePath, "origin/main")).ReturnsAsync(0);
 
         var services = new ServiceCollection();
@@ -410,7 +414,7 @@ public class PRNodeExecutorTests
 
         var mockRepoManager = new Mock<IRepositoryManager>();
         mockRepoManager.Setup(r => r.GetDiffAsync(worktreePath)).ReturnsAsync((string?)null);
-        mockRepoManager.Setup(r => r.PushAsync(worktreePath, "ild/test", CancellationToken.None))
+        mockRepoManager.Setup(r => r.PushAsync(worktreePath, "ild/test", CancellationToken.None, It.IsAny<GitAuthOptions?>()))
             .ReturnsAsync((false, "fatal: Authentication failed for 'https://git.kube/Tony/Ild.git'"));
 
         var services = new ServiceCollection();

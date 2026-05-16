@@ -17,7 +17,8 @@ public interface IProcessRunner
         string fileName,
         IReadOnlyList<string> args,
         string? workingDirectory = null,
-        CancellationToken ct = default);
+        CancellationToken ct = default,
+        IReadOnlyDictionary<string, string?>? environmentVariables = null);
 }
 
 public readonly record struct ProcessResult(int ExitCode, string StdOut, string StdErr)
