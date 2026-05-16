@@ -43,6 +43,18 @@ public class RepositoryManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task CreateWorktree_supports_branch_names_with_slashes()
+    {
+        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var path = await mgr.CreateWorktreeAsync(_repo, "ild/wi-11");
+
+        path.Should().EndWith(Path.Combine("ild", "wi-11"));
+        Directory.Exists(path).Should().BeTrue();
+        File.Exists(Path.Combine(path, "README.md")).Should().BeTrue();
+        (await mgr.ValidateWorktreeHealthAsync(path)).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task Commit_and_diff_round_trip()
     {
         var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
@@ -64,6 +76,23 @@ public class RepositoryManagerTests : IDisposable
 
         await mgr.DestroyWorktreeAsync(path);
         Directory.Exists(path).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task CreateWorktree_recreates_stale_non_repo_directory()
+    {
+        var root = Path.Combine(_tmp, "wt");
+        var stalePath = Path.Combine(root, "ild", "wi-11");
+        Directory.CreateDirectory(stalePath);
+        File.WriteAllText(Path.Combine(stalePath, "leftover.txt"), "stale");
+
+        var mgr = new RepositoryManager(worktreesRoot: root);
+        var path = await mgr.CreateWorktreeAsync(_repo, "ild/wi-11");
+
+        path.Should().Be(stalePath);
+        File.Exists(Path.Combine(path, "README.md")).Should().BeTrue();
+        File.Exists(Path.Combine(path, "leftover.txt")).Should().BeFalse();
+        (await mgr.ValidateWorktreeHealthAsync(path)).Should().BeTrue();
     }
 
     [Fact]

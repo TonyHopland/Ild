@@ -38,14 +38,29 @@ public class RepositoryManager : IRepositoryManager
     {
         Directory.CreateDirectory(_worktreesRoot);
         var worktreePath = Path.GetFullPath(Path.Combine(_worktreesRoot, branchName));
+        var parent = Path.GetDirectoryName(worktreePath);
+        if (!string.IsNullOrEmpty(parent))
+            Directory.CreateDirectory(parent);
+
+        await RunAsync(repoPath, "worktree", "prune");
+
+        if (Directory.Exists(worktreePath))
+        {
+            if (await ValidateWorktreeHealthAsync(worktreePath))
+                return worktreePath;
+
+            await DestroyWorktreeAsync(worktreePath);
+            await RunAsync(repoPath, "worktree", "prune");
+        }
 
         // Try add as new branch first; if branch already exists, attach to it.
-        var (code, _, _) = await RunAsync(repoPath, "worktree", "add", "-b", branchName, worktreePath);
+        var (code, _, stderr) = await RunAsync(repoPath, "worktree", "add", "-b", branchName, worktreePath);
         if (code != 0)
         {
-            var (code2, _, _) = await RunAsync(repoPath, "worktree", "add", worktreePath, branchName);
+            var (code2, _, stderr2) = await RunAsync(repoPath, "worktree", "add", worktreePath, branchName);
             if (code2 != 0)
-                throw new InvalidOperationException($"Failed to create worktree at {worktreePath}");
+                throw new InvalidOperationException(
+                    $"Failed to create worktree at {worktreePath}. git add -b stderr: {FormatGitError(stderr)} git add existing-branch stderr: {FormatGitError(stderr2)}");
         }
 
         // Pin project root so opencode --dir works and doesn't walk up to parent workspace.
@@ -153,4 +168,7 @@ public class RepositoryManager : IRepositoryManager
             _logger?.LogDebug("git {Args} in {Worktree} exited {Code}: {Err}", string.Join(' ', args), cwd, r.ExitCode, r.StdErr);
         return (r.ExitCode, r.StdOut, r.StdErr);
     }
+
+    private static string FormatGitError(string stderr)
+        => string.IsNullOrWhiteSpace(stderr) ? "<empty>" : stderr.Trim().Replace(Environment.NewLine, " | ");
 }
