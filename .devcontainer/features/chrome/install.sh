@@ -2,12 +2,15 @@
 set -e
 
 echo "Installing Google Chrome..."
-wget -qO- https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
-echo "deb [signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list
+
+export DEBIAN_FRONTEND=noninteractive
+
+chrome_deb="/tmp/google-chrome-stable_current_amd64.deb"
 
 apt-get update
-apt-get install -y google-chrome-stable
-apt-get clean
-rm -rf /var/lib/apt/lists/*
+wget -q -O "$chrome_deb" https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+apt-get install -y "$chrome_deb"
+
+rm -f "$chrome_deb"
 
 echo "Google Chrome installed successfully"

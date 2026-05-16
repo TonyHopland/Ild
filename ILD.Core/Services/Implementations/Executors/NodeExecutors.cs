@@ -135,12 +135,6 @@ public sealed class AINodeExecutor : INodeExecutor
             prompt,
             useSession = cfg.UseSession ?? false,
             sessionPlaceholder = cfg.SessionPlaceholder,
-            context = new
-            {
-                workItemTitle = ctx.WorkItem.Title,
-                workItemDescription = ctx.WorkItem.Description,
-                previousNodeOutput = ctx.PreviousNodeOutput,
-            },
         };
         return JsonSerializer.Serialize(payload);
     }

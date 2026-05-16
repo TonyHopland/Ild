@@ -12,9 +12,28 @@ RUN dotnet publish -c Release -o /app/publish --no-restore
 
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS final
 WORKDIR /app
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+ARG APP_UID=10001
+ARG APP_GID=10001
+RUN apt-get update && apt-get install -y --no-install-recommends git gosu && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/publish ./
+RUN existing_group="$(getent group "${APP_GID}" | cut -d: -f1 || true)" && \
+	if [ -n "$existing_group" ] && [ "$existing_group" != "ild" ]; then \
+		groupmod -n ild "$existing_group"; \
+	elif [ -z "$existing_group" ]; then \
+		groupadd --gid ${APP_GID} ild; \
+	fi && \
+	existing_user="$(getent passwd "${APP_UID}" | cut -d: -f1 || true)" && \
+	if [ -n "$existing_user" ] && [ "$existing_user" != "ild" ]; then \
+		usermod -l ild -g ild -d /home/ild -m -s /usr/sbin/nologin "$existing_user"; \
+	elif [ -z "$existing_user" ]; then \
+		useradd --uid ${APP_UID} --gid ${APP_GID} --create-home --home-dir /home/ild --shell /usr/sbin/nologin ild; \
+	fi
+ENV HOME=/home/ild
 ENV WORKITEM_DATA_PATH=/data
-RUN mkdir -p /data
+ENV RUNTIME_DIRS=/data
+RUN mkdir -p /data && chown -R ild:ild /app /data /home/ild
+COPY entrypoint.sh /entrypoint.sh
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 EXPOSE 8081
-ENTRYPOINT ["dotnet", "ILD.WorkItemServer.dll"]
+ENTRYPOINT ["/bin/sh", "/entrypoint.sh"]
+CMD ["dotnet", "ILD.WorkItemServer.dll"]

@@ -610,7 +610,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private ResolvedStep BuildResolvedStep(PreviewCommandConfig step, PreviewRuntime runtime, string? currentPortAlias)
     {
         var workingDirectory = ResolveWorkingDirectory(step.Cwd, runtime, currentPortAlias);
-        var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var environment = BuildDefaultEnvironment(runtime);
         if (step.Env != null)
         {
             foreach (var entry in step.Env)
@@ -623,6 +623,38 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             ResolveTemplate(step.Command, runtime, currentPortAlias),
             workingDirectory,
             environment);
+    }
+
+    private static Dictionary<string, string> BuildDefaultEnvironment(PreviewRuntime runtime)
+    {
+        var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        var home = Environment.GetEnvironmentVariable("HOME");
+        if (string.IsNullOrWhiteSpace(home))
+        {
+            home = Path.Combine(Path.GetTempPath(), "ild-home");
+        }
+
+        Directory.CreateDirectory(home);
+
+        var npmPrefix = Path.Combine(home, ".local");
+        var npmBin = Path.Combine(npmPrefix, "bin");
+        var npmCache = Path.Combine(runtime.StateDirectory, "npm-cache");
+
+        Directory.CreateDirectory(npmPrefix);
+        Directory.CreateDirectory(npmBin);
+        Directory.CreateDirectory(npmCache);
+
+        var currentPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+
+        environment["HOME"] = home;
+        environment["NPM_CONFIG_PREFIX"] = npmPrefix;
+        environment["NPM_CONFIG_CACHE"] = npmCache;
+        environment["PATH"] = string.IsNullOrWhiteSpace(currentPath)
+            ? npmBin
+            : $"{npmBin}:{currentPath}";
+
+        return environment;
     }
 
     private string ResolveHealthUrl(PreviewServiceConfig service, PreviewRuntime runtime)

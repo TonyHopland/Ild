@@ -1,4 +1,5 @@
 using FluentAssertions;
+using System.Text.Json;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
@@ -440,6 +441,73 @@ public class OpenCodeAdapterTests
     }
 
     [Fact]
+    public void BuildRunProcessStartInfo_includes_full_command_and_config_for_retry()
+    {
+        var psi = OpenCodeAdapter.BuildRunProcessStartInfo(
+            binaryPath: "opencode",
+            worktreePath: "/tmp/worktree",
+            renderedPrompt: "prompt text",
+            opencodeModel: "provider/model",
+            opencodeConfigJson: "{\"config\":true}",
+            sessionId: "session-123",
+            useWorktreeAsWorkingDirectory: false);
+
+        psi.WorkingDirectory.Should().BeNullOrEmpty();
+        psi.EnvironmentVariables["OPENCODE_CONFIG_CONTENT"].Should().Be("{\"config\":true}");
+        psi.ArgumentList.Should().Equal(
+            "run",
+            "--dir",
+            "/tmp/worktree",
+            "--model",
+            "provider/model",
+            "--format",
+            "json",
+            "--session",
+            "session-123",
+            "--dangerously-skip-permissions",
+            "--",
+            "prompt text");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_treats_prompt_starting_with_dashes_as_message_argument()
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-dashes-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
+        var argsPath = Path.Combine(worktreeDir, "args.txt");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "printf '%s\\n' \"$@\" > \"$ILD_TEST_ARGS\"\n" +
+            "echo '{\"text\":\"ok\",\"sessionId\":\"dash-session\"}'\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        var previousArgs = Environment.GetEnvironmentVariable("ILD_TEST_ARGS");
+        Environment.SetEnvironmentVariable("ILD_TEST_ARGS", argsPath);
+
+        try
+        {
+            var adapter = new OpenCodeAdapter();
+            var result = await adapter.ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                prompt: "---\nname: to-issues\n",
+                worktreePath: worktreeDir,
+                executionCount: 1));
+
+            result.Success.Should().BeTrue();
+            var args = File.ReadAllLines(argsPath);
+            var separatorIndex = Array.IndexOf(args, "--");
+            separatorIndex.Should().BeGreaterThanOrEqualTo(0);
+            args.Skip(separatorIndex + 1).Should().Equal("---", "name: to-issues", "");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ILD_TEST_ARGS", previousArgs);
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_returns_session_id_from_json_output()
     {
         var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-test-{Guid.NewGuid():N}");
@@ -565,6 +633,151 @@ public class OpenCodeAdapterTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_persists_large_managed_session_snapshot_without_truncation()
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-managed-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "managed.sh");
+        var logPath = Path.Combine(worktreeDir, "opencode.log");
+        var exportPath = Path.Combine(worktreeDir, "session.json");
+        var exportJson = JsonSerializer.Serialize(new
+        {
+            id = "large-session",
+            messages = new[]
+            {
+                new
+                {
+                    role = "assistant",
+                    parts = new[]
+                    {
+                        new
+                        {
+                            type = "text",
+                            text = new string('x', 80_000),
+                        },
+                    },
+                },
+            },
+        });
+        File.WriteAllText(exportPath, exportJson);
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "cmd=\"$1\"\n" +
+            "shift\n" +
+            "case \"$cmd\" in\n" +
+            "  run)\n" +
+            "    printf 'run %s\\n' \"$*\" >> \"$ILD_TEST_LOG\"\n" +
+            "    echo '{\"text\":\"hello\",\"sessionId\":\"large-session\"}'\n" +
+            "    ;;\n" +
+            "  export)\n" +
+            "    printf 'export %s\\n' \"$1\" >> \"$ILD_TEST_LOG\"\n" +
+            "    cat \"$ILD_TEST_EXPORT\"\n" +
+            "    ;;\n" +
+            "  import)\n" +
+            "    printf 'import %s\\n' \"$1\" >> \"$ILD_TEST_LOG\"\n" +
+            "    ;;\n" +
+            "esac\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        var previousLog = Environment.GetEnvironmentVariable("ILD_TEST_LOG");
+        var previousExport = Environment.GetEnvironmentVariable("ILD_TEST_EXPORT");
+        Environment.SetEnvironmentVariable("ILD_TEST_LOG", logPath);
+        Environment.SetEnvironmentVariable("ILD_TEST_EXPORT", exportPath);
+
+        try
+        {
+            await using var harness = await CreateSessionHarnessAsync();
+            var adapter = new OpenCodeAdapter(harness.Services.GetRequiredService<IServiceScopeFactory>());
+            var runId = Guid.NewGuid();
+            await harness.SeedRunAsync(runId);
+
+            var result = await adapter.ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                prompt: "ignored",
+                worktreePath: worktreeDir,
+                executionCount: 1,
+                runId: runId,
+                manageSession: true));
+
+            result.Success.Should().BeTrue();
+            result.SessionId.Should().Be("large-session");
+
+            await using var verifyDb = harness.CreateDbContext();
+            var snapshot = await verifyDb.AdapterSessionSnapshots.FindAsync(runId, "OpenCode", "large-session");
+            snapshot.Should().NotBeNull();
+            snapshot!.SessionJson.Should().Be(exportJson);
+            snapshot.SessionJson.Length.Should().Be(exportJson.Length);
+
+            File.ReadAllText(logPath).Should().Contain("export large-session");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ILD_TEST_LOG", previousLog);
+            Environment.SetEnvironmentVariable("ILD_TEST_EXPORT", previousExport);
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_keeps_successful_output_when_managed_session_export_returns_invalid_json()
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-managed-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "managed.sh");
+        var logPath = Path.Combine(worktreeDir, "opencode.log");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "cmd=\"$1\"\n" +
+            "shift\n" +
+            "case \"$cmd\" in\n" +
+            "  run)\n" +
+            "    printf 'run %s\\n' \"$*\" >> \"$ILD_TEST_LOG\"\n" +
+            "    echo '{\"text\":\"hello\",\"sessionId\":\"managed-session\"}'\n" +
+            "    ;;\n" +
+            "  export)\n" +
+            "    printf 'export %s\\n' \"$1\" >> \"$ILD_TEST_LOG\"\n" +
+            "    printf '%s' '{\"id\":\"managed-session\",\"messages\":[{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"text\":\"unterminated\"}]}'\n" +
+            "    ;;\n" +
+            "  import)\n" +
+            "    printf 'import %s\\n' \"$1\" >> \"$ILD_TEST_LOG\"\n" +
+            "    ;;\n" +
+            "esac\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        var previousLog = Environment.GetEnvironmentVariable("ILD_TEST_LOG");
+        Environment.SetEnvironmentVariable("ILD_TEST_LOG", logPath);
+
+        try
+        {
+            await using var harness = await CreateSessionHarnessAsync();
+            var adapter = new OpenCodeAdapter(harness.Services.GetRequiredService<IServiceScopeFactory>());
+            var runId = Guid.NewGuid();
+            await harness.SeedRunAsync(runId);
+
+            var result = await adapter.ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                prompt: "ignored",
+                worktreePath: worktreeDir,
+                executionCount: 1,
+                runId: runId,
+                manageSession: true));
+
+            result.Success.Should().BeTrue();
+            result.Output.Should().Be("hello");
+            result.SessionId.Should().Be("managed-session");
+
+            await using var verifyDb = harness.CreateDbContext();
+            var snapshot = await verifyDb.AdapterSessionSnapshots.FindAsync(runId, "OpenCode", "managed-session");
+            snapshot.Should().BeNull();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ILD_TEST_LOG", previousLog);
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_imports_managed_session_snapshot_before_resuming_run()
     {
         var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-managed-{Guid.NewGuid():N}");
@@ -637,6 +850,79 @@ public class OpenCodeAdapterTests
         {
             Environment.SetEnvironmentVariable("ILD_TEST_LOG", previousLog);
             Environment.SetEnvironmentVariable("ILD_TEST_IMPORTED", previousImported);
+            Environment.SetEnvironmentVariable("ILD_TEST_READY", previousReady);
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_starts_fresh_when_stored_managed_session_snapshot_is_invalid_json()
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-managed-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "managed.sh");
+        var logPath = Path.Combine(worktreeDir, "opencode.log");
+        var previousLog = Environment.GetEnvironmentVariable("ILD_TEST_LOG");
+        var readyPath = Path.Combine(worktreeDir, "session-ready");
+        var previousReady = Environment.GetEnvironmentVariable("ILD_TEST_READY");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "cmd=\"$1\"\n" +
+            "shift\n" +
+            "case \"$cmd\" in\n" +
+            "  import)\n" +
+            "    printf 'import %s\\n' \"$1\" >> \"$ILD_TEST_LOG\"\n" +
+            "    exit 99\n" +
+            "    ;;\n" +
+            "  run)\n" +
+            "    printf 'run %s\\n' \"$*\" >> \"$ILD_TEST_LOG\"\n" +
+            "    touch \"$ILD_TEST_READY\"\n" +
+            "    echo '{\"text\":\"fresh start\",\"sessionId\":\"fresh-session\"}'\n" +
+            "    ;;\n" +
+            "  export)\n" +
+            "    printf 'export %s\\n' \"$1\" >> \"$ILD_TEST_LOG\"\n" +
+            "    if [ ! -f \"$ILD_TEST_READY\" ]; then exit 1; fi\n" +
+            "    printf '%s' '{\"id\":\"fresh-session\",\"messages\":[1]}'\n" +
+            "    ;;\n" +
+            "esac\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        Environment.SetEnvironmentVariable("ILD_TEST_LOG", logPath);
+        Environment.SetEnvironmentVariable("ILD_TEST_READY", readyPath);
+
+        try
+        {
+            await using var harness = await CreateSessionHarnessAsync();
+            var runId = Guid.NewGuid();
+            await harness.SeedRunAsync(runId);
+            await harness.SeedSnapshotAsync(runId, "OpenCode", "resume-session", "{\"info\":\"truncated");
+
+            var adapter = new OpenCodeAdapter(harness.Services.GetRequiredService<IServiceScopeFactory>());
+            var result = await adapter.ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                prompt: "ignored",
+                worktreePath: worktreeDir,
+                sessionId: "resume-session",
+                executionCount: 1,
+                runId: runId,
+                manageSession: true));
+
+            result.Success.Should().BeTrue();
+            result.SessionId.Should().Be("fresh-session");
+
+            var log = File.ReadAllText(logPath);
+            log.Should().NotContain("import ");
+            log.Should().Contain("run --dir");
+            log.Should().NotContain("--session resume-session");
+            log.Should().Contain("export fresh-session");
+
+            await using var verifyDb = harness.CreateDbContext();
+            var snapshot = await verifyDb.AdapterSessionSnapshots.FindAsync(runId, "OpenCode", "fresh-session");
+            snapshot!.SessionJson.Should().Be("{\"id\":\"fresh-session\",\"messages\":[1]}");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ILD_TEST_LOG", previousLog);
             Environment.SetEnvironmentVariable("ILD_TEST_READY", previousReady);
             Directory.Delete(worktreeDir, true);
         }
