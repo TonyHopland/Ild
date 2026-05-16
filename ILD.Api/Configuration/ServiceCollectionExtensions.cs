@@ -61,6 +61,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IAgentAdapterRegistry, AgentAdapterRegistry>();
         services.AddSingleton<IAgentAdapter, OpenAiCompatibleAdapter>();
         services.AddSingleton<IAgentAdapter, OpenCodeAdapter>();
+        services.AddSingleton<IAgentAdapter, PiAdapter>();
 
         services.AddHttpClient();
 

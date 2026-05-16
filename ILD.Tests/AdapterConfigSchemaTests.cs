@@ -47,4 +47,24 @@ public class AdapterConfigSchemaTests
 
         adapter.ConfigSchema.Should().BeEmpty();
     }
+
+    [Fact]
+    public void PiAdapter_schema_excludes_provider_level_fields()
+    {
+        var adapter = new PiAdapter();
+
+        var names = adapter.ConfigSchema.Select(f => f.Name).ToList();
+        names.Should().NotContain("binaryPath", "binaryPath is a provider-level setting");
+        names.Should().NotContain("provider", "provider routing is a provider-level setting");
+        names.Should().NotContain("model", "model is a provider-level setting");
+        names.Should().NotContain("apiKey", "apiKey is a provider-level setting");
+    }
+
+    [Fact]
+    public void PiAdapter_schema_is_empty()
+    {
+        var adapter = new PiAdapter();
+
+        adapter.ConfigSchema.Should().BeEmpty();
+    }
 }

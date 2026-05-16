@@ -57,7 +57,7 @@ public class AgentAdaptersControllerTests
     {
         var registry = new Mock<IAgentAdapterRegistry>();
         registry.Setup(r => r.GetAllSupportedProviderTypes())
-            .Returns(new[] { "openai", "opencode" });
+            .Returns(new[] { "openai", "opencode", "pi" });
 
         var controller = new AgentAdaptersController(registry.Object);
 
@@ -68,5 +68,6 @@ public class AgentAdaptersControllerTests
         var types = (string[])okResult.Value!;
         types.Should().Contain("openai");
         types.Should().Contain("opencode");
+        types.Should().Contain("pi");
     }
 }

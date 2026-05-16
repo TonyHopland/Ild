@@ -1,0 +1,601 @@
+using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using ILD.Core.Services.Interfaces;
+using ILD.Data.DTOs;
+using ILD.Data.Entities;
+using ILD.Data.Stores.Interfaces;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace ILD.Core.Services.Implementations.Adapters;
+
+public sealed class PiAdapter : IAgentAdapter
+{
+    private static readonly IPromptTemplateResolver Resolver = new PromptTemplateResolver();
+    private readonly IServiceScopeFactory? _scopeFactory;
+
+    public PiAdapter()
+    {
+    }
+
+    public PiAdapter(IServiceScopeFactory scopeFactory)
+    {
+        _scopeFactory = scopeFactory;
+    }
+
+    public string Name => "Pi";
+    public string[] SupportedProviderTypes => ["pi"];
+    public ConfigFieldDescriptor[] ConfigSchema => Array.Empty<ConfigFieldDescriptor>();
+
+    public async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
+    {
+        try
+        {
+            var rendered = await RenderPromptAsync(ctx.Prompt, ctx.RunContext);
+            var settings = ResolveSettings(ctx.Provider, ctx.RunContext.LoopRunId);
+
+            if (string.IsNullOrWhiteSpace(settings.BinaryPath))
+                return NodeExecutionResult.Fail("[pi-error] binaryPath is not configured");
+
+            var worktreePath = ctx.RunContext.WorktreePath;
+            if (string.IsNullOrWhiteSpace(worktreePath) || !Directory.Exists(worktreePath))
+                return NodeExecutionResult.Fail(
+                    "[pi-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
+
+            var sessionDirectory = BuildSessionDirectory(ctx.RunContext.LoopRunId);
+            Directory.CreateDirectory(sessionDirectory);
+            PrepareRuntimeFiles(settings);
+
+            string? sessionIdToUse = ctx.SessionId;
+            string? sessionPathToUse = null;
+            if (ctx.ManageSession && !string.IsNullOrWhiteSpace(sessionIdToUse))
+            {
+                var restoreResult = await RestoreManagedSessionAsync(sessionDirectory, ctx, sessionIdToUse);
+                if (!string.IsNullOrWhiteSpace(restoreResult.Error))
+                    return NodeExecutionResult.Fail(restoreResult.Error!);
+
+                sessionIdToUse = restoreResult.SessionIdToUse;
+                sessionPathToUse = restoreResult.SessionPathToUse;
+            }
+
+            Process? proc;
+            try
+            {
+                proc = Process.Start(BuildRunProcessStartInfo(
+                    settings,
+                    worktreePath,
+                    rendered,
+                    sessionDirectory,
+                    sessionIdToUse,
+                    sessionPathToUse));
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or IOException)
+            {
+                return NodeExecutionResult.Fail($"[pi-error] cannot start '{settings.BinaryPath}' — make sure the pi binary is installed and on PATH. Details: {ex.Message}");
+            }
+
+            using var process = proc ?? throw new InvalidOperationException("Process.Start returned null");
+            await process.StandardInput.WriteAsync(rendered.AsMemory(), ctx.Cancel);
+            await process.StandardInput.FlushAsync(ctx.Cancel);
+            process.StandardInput.Close();
+            var stdoutTask = ReadStdoutAsync(process.StandardOutput, ctx.ProgressCallback, ctx.Cancel);
+            var stderrTask = process.StandardError.ReadToEndAsync(ctx.Cancel);
+
+            try
+            {
+                await process.WaitForExitAsync(ctx.Cancel);
+            }
+            catch (OperationCanceledException)
+            {
+                try { process.Kill(entireProcessTree: true); } catch { }
+                return NodeExecutionResult.Fail("pi timed out");
+            }
+
+            PiExecutionOutput stdout;
+            string stderr;
+            try
+            {
+                stdout = await stdoutTask;
+                stderr = await stderrTask;
+            }
+            catch (OperationCanceledException)
+            {
+                try { process.Kill(entireProcessTree: true); } catch { }
+                return NodeExecutionResult.Fail("pi stream read timed out");
+            }
+
+            var effectiveSessionId = stdout.SessionId ?? sessionIdToUse;
+            if (ctx.ManageSession && process.ExitCode == 0 && !string.IsNullOrWhiteSpace(effectiveSessionId))
+                await PersistManagedSessionAsync(sessionDirectory, effectiveSessionId!, ctx);
+
+            var response = stdout.Content;
+            if (string.IsNullOrWhiteSpace(response))
+            {
+                if (!stdout.SawJsonEvents)
+                    response = stdout.RawStdout;
+                else if (!string.IsNullOrWhiteSpace(stderr))
+                    response = $"[pi] no assistant text response. stderr: {stderr.Trim()}";
+                else
+                    response = "[pi] no assistant text response from model";
+            }
+
+            return process.ExitCode == 0
+                ? NodeExecutionResult.Ok(response, rendered, effectiveSessionId, ctx.IncomingSessionId)
+                : NodeExecutionResult.Fail($"exit={process.ExitCode} stderr={stderr}", response);
+        }
+        catch (Exception ex)
+        {
+            return NodeExecutionResult.Fail($"[pi-error] {ex.Message}");
+        }
+    }
+
+    internal static ProcessStartInfo BuildRunProcessStartInfo(
+        PiAdapterSettings settings,
+        string worktreePath,
+        string renderedPrompt,
+        string sessionDirectory,
+        string? sessionId,
+        string? sessionPath)
+    {
+        var psi = new ProcessStartInfo(settings.BinaryPath)
+        {
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = worktreePath,
+        };
+
+        psi.EnvironmentVariables["PI_SKIP_VERSION_CHECK"] = "1";
+        psi.EnvironmentVariables["PI_TELEMETRY"] = "0";
+        psi.EnvironmentVariables["PI_CODING_AGENT_SESSION_DIR"] = sessionDirectory;
+
+        if (!string.IsNullOrWhiteSpace(settings.AgentDirectory))
+            psi.EnvironmentVariables["PI_CODING_AGENT_DIR"] = settings.AgentDirectory;
+
+        if (!string.IsNullOrWhiteSpace(settings.ApiKeyEnvironmentVariableName)
+            && !string.IsNullOrWhiteSpace(settings.ApiKey))
+        {
+            psi.EnvironmentVariables[settings.ApiKeyEnvironmentVariableName] = settings.ApiKey;
+        }
+
+        psi.ArgumentList.Add("--mode");
+        psi.ArgumentList.Add("json");
+        psi.ArgumentList.Add("--session-dir");
+        psi.ArgumentList.Add(sessionDirectory);
+
+        if (!string.IsNullOrWhiteSpace(settings.Provider))
+        {
+            psi.ArgumentList.Add("--provider");
+            psi.ArgumentList.Add(settings.Provider);
+        }
+
+        if (!string.IsNullOrWhiteSpace(settings.Model))
+        {
+            psi.ArgumentList.Add("--model");
+            psi.ArgumentList.Add(settings.Model);
+        }
+
+        if (settings.PassApiKeyViaCli && !string.IsNullOrWhiteSpace(settings.ApiKey))
+        {
+            psi.ArgumentList.Add("--api-key");
+            psi.ArgumentList.Add(settings.ApiKey);
+        }
+
+        if (!string.IsNullOrWhiteSpace(sessionPath))
+        {
+            psi.ArgumentList.Add("--session");
+            psi.ArgumentList.Add(sessionPath);
+        }
+        else if (!string.IsNullOrWhiteSpace(sessionId))
+        {
+            psi.ArgumentList.Add("--session");
+            psi.ArgumentList.Add(sessionId);
+        }
+
+        return psi;
+    }
+
+    private async Task<ManagedSessionRestoreResult> RestoreManagedSessionAsync(string sessionDirectory, AgentExecutionContext ctx, string sessionId)
+    {
+        var localSessionPath = FindSessionFile(sessionDirectory, sessionId);
+        if (!string.IsNullOrWhiteSpace(localSessionPath))
+            return ManagedSessionRestoreResult.Use(sessionId, localSessionPath);
+
+        if (_scopeFactory is null)
+            return ManagedSessionRestoreResult.StartFresh();
+
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var snapshotStore = scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>();
+        var snapshot = await snapshotStore.GetAsync(ctx.RunContext.LoopRunId, Name, sessionId, ctx.Cancel);
+        if (snapshot is null || string.IsNullOrWhiteSpace(snapshot.SessionJson))
+            return ManagedSessionRestoreResult.StartFresh();
+
+        var restoredPath = BuildSnapshotPath(sessionDirectory, sessionId);
+        Directory.CreateDirectory(Path.GetDirectoryName(restoredPath)!);
+        await File.WriteAllTextAsync(restoredPath, snapshot.SessionJson, ctx.Cancel);
+        return ManagedSessionRestoreResult.Use(sessionId, restoredPath);
+    }
+
+    private async Task PersistManagedSessionAsync(string sessionDirectory, string sessionId, AgentExecutionContext ctx)
+    {
+        if (_scopeFactory is null)
+            return;
+
+        var sessionPath = FindSessionFile(sessionDirectory, sessionId);
+        if (string.IsNullOrWhiteSpace(sessionPath) || !File.Exists(sessionPath))
+            return;
+
+        var sessionJson = await File.ReadAllTextAsync(sessionPath, ctx.Cancel);
+
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var snapshotStore = scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>();
+        await snapshotStore.UpsertAsync(ctx.RunContext.LoopRunId, Name, sessionId, sessionJson, ctx.Cancel);
+    }
+
+    private static async Task<PiExecutionOutput> ReadStdoutAsync(StreamReader reader, Func<string, Task>? progressCallback, CancellationToken ct)
+    {
+        var raw = new StringBuilder();
+        var content = new StringBuilder();
+        string? sessionId = null;
+        string? completedAssistantText = null;
+        var sawJsonEvents = false;
+
+        while (await reader.ReadLineAsync(ct).ConfigureAwait(false) is { } line)
+        {
+            raw.AppendLine(line);
+
+            if (!TryParseJson(line, out var doc))
+                continue;
+
+            sawJsonEvents = true;
+            using var jsonDoc = doc!;
+            {
+                var root = jsonDoc.RootElement;
+                var hasEventType = TryGetString(root, "type", out var eventType);
+                if (hasEventType && string.Equals(eventType, "session", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (TryGetString(root, "id", out var headerSessionId))
+                        sessionId = headerSessionId;
+                    continue;
+                }
+
+                if (hasEventType
+                    && string.Equals(eventType, "message_update", StringComparison.OrdinalIgnoreCase)
+                    && root.TryGetProperty("assistantMessageEvent", out var assistantEvent)
+                    && TryGetString(assistantEvent, "type", out var assistantEventType)
+                    && string.Equals(assistantEventType, "text_delta", StringComparison.OrdinalIgnoreCase)
+                    && TryGetString(assistantEvent, "delta", out var delta)
+                    && !string.IsNullOrEmpty(delta))
+                {
+                    content.Append(delta);
+                    if (progressCallback is not null)
+                        await progressCallback(delta).ConfigureAwait(false);
+                    continue;
+                }
+
+                if (hasEventType
+                    && (string.Equals(eventType, "message_end", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(eventType, "turn_end", StringComparison.OrdinalIgnoreCase))
+                    && root.TryGetProperty("message", out var message)
+                    && IsAssistantMessage(message))
+                {
+                    var assistantText = ExtractAssistantText(message);
+                    if (!string.IsNullOrWhiteSpace(assistantText))
+                        completedAssistantText = assistantText;
+                }
+            }
+        }
+
+        var finalContent = content.Length > 0
+            ? content.ToString()
+            : completedAssistantText ?? string.Empty;
+
+        return new PiExecutionOutput(raw.ToString(), finalContent, sessionId, sawJsonEvents);
+    }
+
+    private static string? ExtractAssistantText(JsonElement message)
+    {
+        if (!message.TryGetProperty("content", out var content))
+            return null;
+
+        if (content.ValueKind == JsonValueKind.String)
+            return content.GetString();
+
+        if (content.ValueKind != JsonValueKind.Array)
+            return null;
+
+        var sb = new StringBuilder();
+        foreach (var item in content.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String)
+            {
+                sb.Append(item.GetString());
+                continue;
+            }
+
+            if (item.ValueKind != JsonValueKind.Object)
+                continue;
+
+            if (TryGetString(item, "text", out var directText) && !string.IsNullOrWhiteSpace(directText))
+            {
+                sb.Append(directText);
+                continue;
+            }
+
+            if (item.TryGetProperty("text", out var nestedText) && nestedText.ValueKind == JsonValueKind.Object
+                && TryGetString(nestedText, "value", out var textValue) && !string.IsNullOrWhiteSpace(textValue))
+            {
+                sb.Append(textValue);
+            }
+        }
+
+        return sb.Length > 0 ? sb.ToString() : null;
+    }
+
+    private static bool IsAssistantMessage(JsonElement message)
+        => TryGetString(message, "role", out var role)
+            && string.Equals(role, "assistant", StringComparison.OrdinalIgnoreCase);
+
+    private static bool TryParseJson(string line, out JsonDocument? doc)
+    {
+        try
+        {
+            doc = JsonDocument.Parse(line);
+            return true;
+        }
+        catch (JsonException)
+        {
+            doc = null;
+            return false;
+        }
+    }
+
+    private static bool TryGetString(JsonElement element, string propertyName, out string? value)
+    {
+        if (element.ValueKind == JsonValueKind.Object
+            && element.TryGetProperty(propertyName, out var property)
+            && property.ValueKind == JsonValueKind.String)
+        {
+            value = property.GetString();
+            return true;
+        }
+
+        value = null;
+        return false;
+    }
+
+    private static string BuildSessionDirectory(Guid loopRunId)
+        => Path.Combine(Path.GetTempPath(), "ild-pi-sessions", loopRunId.ToString("N"));
+
+    private static string BuildSnapshotPath(string sessionDirectory, string sessionId)
+        => Path.Combine(sessionDirectory, $"{SanitizeFileName(sessionId)}.jsonl");
+
+    private static string? FindSessionFile(string sessionDirectory, string sessionId)
+    {
+        if (!Directory.Exists(sessionDirectory))
+            return null;
+
+        var exactPath = BuildSnapshotPath(sessionDirectory, sessionId);
+        if (File.Exists(exactPath))
+            return exactPath;
+
+        foreach (var path in Directory.EnumerateFiles(sessionDirectory, "*.jsonl", SearchOption.AllDirectories))
+        {
+            var fileName = Path.GetFileNameWithoutExtension(path);
+            if (string.Equals(fileName, sessionId, StringComparison.OrdinalIgnoreCase)
+                || fileName.Contains(sessionId, StringComparison.OrdinalIgnoreCase))
+                return path;
+
+            if (SessionFileHeaderMatches(path, sessionId))
+                return path;
+        }
+
+        return null;
+    }
+
+    private static bool SessionFileHeaderMatches(string path, string sessionId)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var reader = new StreamReader(stream);
+            var firstLine = reader.ReadLine();
+            if (string.IsNullOrWhiteSpace(firstLine))
+                return false;
+
+            using var doc = JsonDocument.Parse(firstLine);
+            var root = doc.RootElement;
+            return TryGetString(root, "type", out var type)
+                && string.Equals(type, "session", StringComparison.OrdinalIgnoreCase)
+                && TryGetString(root, "id", out var id)
+                && string.Equals(id, sessionId, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string SanitizeFileName(string value)
+    {
+        var invalidChars = Path.GetInvalidFileNameChars();
+        var sb = new StringBuilder(value.Length);
+        foreach (var ch in value)
+        {
+            sb.Append(invalidChars.Contains(ch) ? '_' : ch);
+        }
+
+        return sb.ToString();
+    }
+
+    private static string BuildAgentDirectory(Guid loopRunId)
+        => Path.Combine(Path.GetTempPath(), "ild-pi-agent", loopRunId.ToString("N"));
+
+    private static void PrepareRuntimeFiles(PiAdapterSettings settings)
+    {
+        if (string.IsNullOrWhiteSpace(settings.AgentDirectory)
+            || string.IsNullOrWhiteSpace(settings.ModelsJsonContent))
+            return;
+
+        Directory.CreateDirectory(settings.AgentDirectory);
+        File.WriteAllText(Path.Combine(settings.AgentDirectory, "models.json"), settings.ModelsJsonContent);
+    }
+
+    private static PiAdapterSettings ResolveSettings(AiProvider provider, Guid loopRunId)
+    {
+        var binaryPath = "pi";
+        var apiKey = provider.ApiKey;
+        var providerName = default(string?);
+        var model = provider.Model;
+        var api = "openai-completions";
+        var hasAbsoluteBaseUrl = Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out _);
+
+        if (!string.IsNullOrWhiteSpace(provider.Config))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(provider.Config);
+                var root = doc.RootElement;
+                if (TryGetString(root, "binaryPath", out var configuredBinaryPath) && !string.IsNullOrWhiteSpace(configuredBinaryPath))
+                    binaryPath = configuredBinaryPath;
+                if (TryGetString(root, "provider", out var configuredProvider) && !string.IsNullOrWhiteSpace(configuredProvider))
+                    providerName = configuredProvider;
+                if (TryGetString(root, "model", out var configuredModel) && !string.IsNullOrWhiteSpace(configuredModel))
+                    model = configuredModel;
+                if (TryGetString(root, "apiKey", out var configuredApiKey) && !string.IsNullOrWhiteSpace(configuredApiKey))
+                    apiKey = configuredApiKey;
+                if (TryGetString(root, "api", out var configuredApi) && !string.IsNullOrWhiteSpace(configuredApi))
+                    api = configuredApi;
+            }
+            catch
+            {
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(provider.BaseUrl)
+            && !Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out _)
+            && !provider.BaseUrl.Contains('/'))
+        {
+            binaryPath = provider.BaseUrl;
+        }
+
+        string? agentDirectory = null;
+        string? modelsJsonContent = null;
+        string? apiKeyEnvironmentVariableName = null;
+        var passApiKeyViaCli = true;
+
+        if (hasAbsoluteBaseUrl)
+        {
+            providerName ??= BuildSyntheticProviderName(provider);
+            if (!string.IsNullOrWhiteSpace(providerName)
+                && !string.IsNullOrWhiteSpace(model)
+                && model.StartsWith(providerName + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                model = model[(providerName.Length + 1)..];
+            }
+
+            agentDirectory = BuildAgentDirectory(loopRunId);
+            apiKeyEnvironmentVariableName = "ILD_PI_PROVIDER_API_KEY";
+            modelsJsonContent = BuildModelsJson(provider, providerName!, model, api, apiKeyEnvironmentVariableName, apiKey);
+            passApiKeyViaCli = false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(providerName)
+            && !string.IsNullOrWhiteSpace(model)
+            && model.StartsWith(providerName + "/", StringComparison.OrdinalIgnoreCase))
+        {
+            model = model[(providerName.Length + 1)..];
+        }
+
+        return new PiAdapterSettings(
+            binaryPath,
+            providerName,
+            model,
+            apiKey,
+            passApiKeyViaCli,
+            agentDirectory,
+            modelsJsonContent,
+            apiKeyEnvironmentVariableName);
+    }
+
+    private static string BuildSyntheticProviderName(AiProvider provider)
+    {
+        var seed = provider.Id != Guid.Empty ? provider.Id.ToString("N") : provider.Name;
+        seed = string.IsNullOrWhiteSpace(seed) ? "provider" : seed;
+        return "ild-" + SanitizeProviderKey(seed);
+    }
+
+    private static string SanitizeProviderKey(string value)
+    {
+        var sb = new StringBuilder(value.Length);
+        foreach (var ch in value)
+        {
+            sb.Append(char.IsLetterOrDigit(ch) ? char.ToLowerInvariant(ch) : '-');
+        }
+
+        return sb.ToString().Trim('-');
+    }
+
+    private static string BuildModelsJson(
+        AiProvider provider,
+        string providerName,
+        string model,
+        string api,
+        string apiKeyEnvironmentVariableName,
+        string? apiKey)
+    {
+        var providerNode = new JsonObject
+        {
+            ["baseUrl"] = provider.BaseUrl,
+            ["api"] = api,
+            ["apiKey"] = string.IsNullOrWhiteSpace(apiKey) ? "ild" : apiKeyEnvironmentVariableName,
+            ["models"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["id"] = model,
+                }
+            }
+        };
+
+        return new JsonObject
+        {
+            ["providers"] = new JsonObject
+            {
+                [providerName] = providerNode,
+            }
+        }.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private static Task<string> RenderPromptAsync(string template, LoopRunContext context)
+        => Task.FromResult(Resolver.Render(template, new PromptContext(
+            WorkItemTitle: context.WorkItemTitle,
+            WorkItemDescription: context.WorkItemDescription,
+            PreviousNodeOutput: context.PreviousNodeOutput,
+            EventLogSummary: context.EventLogSummary,
+            WorktreePath: context.WorktreePath)));
+
+    internal sealed record PiAdapterSettings(
+        string BinaryPath,
+        string? Provider,
+        string Model,
+        string? ApiKey,
+        bool PassApiKeyViaCli,
+        string? AgentDirectory,
+        string? ModelsJsonContent,
+        string? ApiKeyEnvironmentVariableName);
+
+    private sealed record PiExecutionOutput(string RawStdout, string Content, string? SessionId, bool SawJsonEvents);
+
+    private sealed record ManagedSessionRestoreResult(string? Error, string? SessionIdToUse, string? SessionPathToUse)
+    {
+        public static ManagedSessionRestoreResult Use(string sessionId, string sessionPath)
+            => new(null, sessionId, sessionPath);
+
+        public static ManagedSessionRestoreResult StartFresh()
+            => new(null, null, null);
+    }
+}
