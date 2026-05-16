@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using ILD.Data;
 using ILD.Data.DTOs;
 
@@ -56,8 +57,14 @@ internal static class PiExtensionGenerator
 
     private static void AppendHttpHelpers(StringBuilder sb)
     {
+        sb.AppendLine("function joinApiUrl(base: string, path: string): string {");
+        sb.AppendLine("    const normalizedBase = base.endsWith(\"/\") ? base.slice(0, -1) : base;");
+        sb.AppendLine("    const normalizedPath = path.startsWith(\"/\") ? path : `/${path}`;");
+        sb.AppendLine("    return `${normalizedBase}${normalizedPath}`;");
+        sb.AppendLine("}");
+        sb.AppendLine();
         sb.AppendLine("async function ildGet(path: string): Promise<string> {");
-        sb.AppendLine("    const url = API_BASE + path;");
+        sb.AppendLine("    const url = joinApiUrl(API_BASE, path);");
         sb.AppendLine("    const headers: Record<string, string> = {};");
         sb.AppendLine("    if (API_TOKEN) headers[\"Authorization\"] = `Bearer ${API_TOKEN}`;");
         sb.AppendLine("    if (LOOP_RUN_ID) headers[\"X-ILD-Run-Id\"] = LOOP_RUN_ID;");
@@ -68,7 +75,7 @@ internal static class PiExtensionGenerator
         sb.AppendLine("}");
         sb.AppendLine();
         sb.AppendLine("async function ildPost(path: string, body: object): Promise<string> {");
-        sb.AppendLine("    const url = API_BASE + path;");
+        sb.AppendLine("    const url = joinApiUrl(API_BASE, path);");
         sb.AppendLine("    const headers: Record<string, string> = { \"Content-Type\": \"application/json\" };");
         sb.AppendLine("    if (API_TOKEN) headers[\"Authorization\"] = `Bearer ${API_TOKEN}`;");
         sb.AppendLine("    if (LOOP_RUN_ID) headers[\"X-ILD-Run-Id\"] = LOOP_RUN_ID;");
@@ -181,24 +188,24 @@ internal static class PiExtensionGenerator
             sb.Append(param.Name);
             if (param.TsType == "number")
             {
-                sb.AppendLine(" !== undefined) qs.set(\"");
+                sb.Append(" !== undefined) qs.set(\"");
                 sb.Append(param.Name);
-                sb.AppendLine("\", String(params.");
+                sb.Append("\", String(params.");
                 sb.Append(param.Name);
                 sb.AppendLine("));");
             }
             else
             {
-                sb.AppendLine(" != null) qs.set(\"");
+                sb.Append(" != null) qs.set(\"");
                 sb.Append(param.Name);
-                sb.AppendLine("\", params.");
+                sb.Append("\", params.");
                 sb.Append(param.Name);
                 sb.AppendLine(");");
             }
         }
-        sb.Append("            const url = qs.toString() ? \"");
+        sb.Append("            const url = qs.toString() ? `");
         sb.Append(tool.EndpointPath);
-        sb.AppendLine("?${qs.toString()}\" : \"");
+        sb.Append("?${qs.toString()}` : \"");
         sb.Append(tool.EndpointPath);
         sb.AppendLine("\";");
         sb.AppendLine("            return { content: [{ type: \"text\", text: await ildGet(url) }], details: {} };");
@@ -235,5 +242,5 @@ internal static class PiExtensionGenerator
     };
 
     private static string EscapeTsString(string value)
-        => value.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("`", "\\`");
+        => JsonSerializer.Serialize(value)[1..^1];
 }

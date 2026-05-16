@@ -516,7 +516,7 @@ public sealed class PiAdapter : IAgentAdapter
             agentDirectory,
             modelsJsonContent,
             apiKeyEnvironmentVariableName,
-            BuildIldExtensionContent(hasAbsoluteBaseUrl ? provider.BaseUrl : null, apiKey, loopRunId));
+            BuildIldExtensionContent(hasAbsoluteBaseUrl, loopRunId));
     }
 
     private static string StripProviderPrefix(string? model, string? providerName)
@@ -585,12 +585,17 @@ public sealed class PiAdapter : IAgentAdapter
     /// Delegates to <see cref="PiExtensionGenerator"/> which reads from the shared
     /// <see cref="ILD.Data.ToolDescriptors"/> to avoid duplicating tool definitions.
     /// </summary>
-    private static string? BuildIldExtensionContent(string? apiUrl, string? apiToken, Guid loopRunId)
+    private static string? BuildIldExtensionContent(bool shouldGenerate, Guid loopRunId)
     {
-        if (string.IsNullOrWhiteSpace(apiUrl))
+        if (!shouldGenerate)
             return null;
 
-        return PiExtensionGenerator.Generate(apiUrl, apiToken ?? "", loopRunId.ToString());
+        var apiUrl = Environment.GetEnvironmentVariable("ILD_API_URL")
+            ?? "http://localhost:5000";
+        var apiToken = Environment.GetEnvironmentVariable("ILD_API_TOKEN")
+            ?? string.Empty;
+
+        return PiExtensionGenerator.Generate(apiUrl, apiToken, loopRunId.ToString());
     }
 
     private static Task<string> RenderPromptAsync(string template, LoopRunContext context)
