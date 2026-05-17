@@ -63,7 +63,6 @@ const sampleTemplate = {
       config: {},
       maxTraversals: null,
       retryCount: null,
-      timeoutSeconds: null,
     },
     {
       id: "n-ai",
@@ -72,7 +71,6 @@ const sampleTemplate = {
       config: {},
       maxTraversals: null,
       retryCount: null,
-      timeoutSeconds: null,
     },
     {
       id: "n-cleanup",
@@ -81,7 +79,6 @@ const sampleTemplate = {
       config: {},
       maxTraversals: null,
       retryCount: null,
-      timeoutSeconds: null,
     },
   ],
   edges: [
@@ -302,11 +299,6 @@ describe("Adapter config schema", () => {
     fireEvent.click(screen.getByText("Code"));
 
     // With default provider (no selection), adapter config fields should NOT appear
-    // but timeout field should be visible
-    await waitFor(() => {
-      expect(screen.getByText("Timeout (seconds)")).toBeTruthy();
-    });
-
     // Temperature should not be visible since no provider is selected
     expect(screen.queryByText("Temperature")).toBeFalsy();
   });
@@ -632,100 +624,5 @@ describe("Adapter config schema", () => {
     expect(aiNode).toBeTruthy();
     expect(aiNode!.config.adapterConfig).toBeTruthy();
     expect((aiNode!.config.adapterConfig as Record<string, unknown>).temperature).toBe(0.1);
-  });
-
-  test("AI node timeout is saved to config", async () => {
-    let savedPayload: unknown = null;
-
-    const trackingFetch = vi.fn(async (url: string, init?: RequestInit) => {
-      const method = (init?.method as string) ?? "GET";
-
-      if (method === "GET" && url.includes("looptemplates")) {
-        return {
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify([sampleTemplate])),
-        };
-      }
-
-      if (method === "GET" && url.includes("aiproviders")) {
-        return {
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify([])),
-        };
-      }
-
-      if (method === "POST" && url.includes("looptemplates/validate")) {
-        return {
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify({ valid: true })),
-        };
-      }
-
-      if (method === "PUT" && url.includes("looptemplates")) {
-        savedPayload = JSON.parse((init?.body as string) || "{}");
-        return {
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(sampleTemplate)),
-        };
-      }
-
-      return { ok: false, status: 500, text: () => Promise.resolve("") };
-    });
-
-    renderPage(trackingFetch);
-
-    await waitFor(() => {
-      expect(screen.getByText("Dev Loop")).toBeTruthy();
-    });
-
-    // Click the template to load the graph
-    fireEvent.click(screen.getByText("Dev Loop"));
-
-    await waitFor(() => {
-      expect(screen.getByText("Initialize")).toBeTruthy();
-    });
-
-    // Click the AI node
-    fireEvent.click(screen.getByText("Code"));
-
-    // Change the timeout field
-    const timeoutInput = screen.getByLabelText("Timeout (seconds)");
-    fireEvent.change(timeoutInput, { target: { value: "600" } });
-
-    // Save node settings
-    const nodeSettingsSaveBtn = document.querySelector(".node-settings-btn-save");
-    fireEvent.click(nodeSettingsSaveBtn!);
-
-    // Wait for node settings to close
-    await waitFor(() => {
-      expect(document.querySelector(".node-settings-modal")).toBeFalsy();
-    });
-
-    // Click the header save button
-    const saveBtn = document.querySelector(".save-btn");
-    fireEvent.click(saveBtn!);
-
-    // Wait for save to complete
-    await waitFor(() => {
-      expect(savedPayload).not.toBeNull();
-    });
-
-    // Verify the saved payload contains timeout
-    const savedNodes = (
-      savedPayload as {
-        nodes: Array<{
-          type: string;
-          config: Record<string, unknown>;
-          timeoutSeconds: number | null;
-        }>;
-      }
-    ).nodes;
-    const aiNode = savedNodes.find((n) => n.type === "AI");
-    expect(aiNode).toBeTruthy();
-    expect(aiNode!.timeoutSeconds).toBe(600);
   });
 });

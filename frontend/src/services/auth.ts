@@ -201,7 +201,6 @@ export const workItemService = {
       skipInstall?: boolean;
       publicHost?: string;
       portOverrides?: Record<string, number>;
-      timeoutSeconds?: number;
     },
   ): Promise<WorktreePreview> => {
     return api.post<WorktreePreview>(`/workitems/${id}/preview/start`, request ?? {});

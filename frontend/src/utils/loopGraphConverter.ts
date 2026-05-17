@@ -109,7 +109,6 @@ export function nodesToLoopNodes(nodes: Node[]): LoopNode[] {
       config: config as Record<string, unknown>,
       maxTraversals: null,
       retryCount: ((config as Record<string, unknown>).maxRetries as number) ?? null,
-      timeoutSeconds: ((config as Record<string, unknown>).timeout as number) ?? null,
     };
   });
 }

@@ -24,6 +24,6 @@ public class WorkItemsIntegrationTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var items = await response.Content.ReadFromJsonAsync<object[]>();
         Assert.NotNull(items);
-        Assert.Equal(0, items!.Length);
+        Assert.Empty(items!);
     }
 }

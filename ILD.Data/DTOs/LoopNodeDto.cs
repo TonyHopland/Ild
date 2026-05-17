@@ -17,5 +17,5 @@ public class LoopNodeDto
 
     public int? RetryCount { get; set; }
 
-    public double? TimeoutSeconds { get; set; }
+
 }

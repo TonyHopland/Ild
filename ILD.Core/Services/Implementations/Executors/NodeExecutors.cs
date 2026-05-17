@@ -110,19 +110,10 @@ public sealed class CmdNodeExecutor : INodeExecutor
             return new NodeOutcome.Failed(
                 "Cmd node requires a valid WorkItem.WorktreePath; refusing to run outside the loop's worktree.");
 
-        using var timeout = NodeTimeoutScope.From(ctx);
-
-        try
-        {
-            var r = await _runner.RunAsync("/bin/sh", new[] { "-c", command }, cwd, timeout.Token);
-            return r.Success
-                ? new NodeOutcome.Succeeded(r.StdOut)
-                : new NodeOutcome.Failed($"exit={r.ExitCode} stderr={r.StdErr}", r.StdOut);
-        }
-        catch (OperationCanceledException) when (timeout.TimedOut)
-        {
-            return new NodeOutcome.Failed($"command timed out after {timeout.Duration}");
-        }
+        var r = await _runner.RunAsync("/bin/sh", new[] { "-c", command }, cwd, ctx.CancellationToken);
+        return r.Success
+            ? new NodeOutcome.Succeeded(r.StdOut)
+            : new NodeOutcome.Failed($"exit={r.ExitCode} stderr={r.StdErr}", r.StdOut);
     }
 }
 
@@ -211,8 +202,6 @@ public sealed class AINodeExecutor : INodeExecutor
                 eventLogSummary,
                 ctx.PreviousNodeOutput);
 
-            using var timeout = NodeTimeoutScope.From(ctx);
-
             var prompt = cfg.Prompt ?? "";
 
             var agentCtx = new AgentExecutionContext(
@@ -220,7 +209,7 @@ public sealed class AINodeExecutor : INodeExecutor
                 prompt,
                 runContext,
                 executionCount,
-                timeout.Token,
+                ctx.CancellationToken,
                 ctx.ProgressCallback,
                 ExtractAdapterConfig(cfg.AdapterConfig),
                 sessionId,
@@ -260,7 +249,7 @@ public sealed class AINodeExecutor : INodeExecutor
 
             return NodeOutcome.FromResult(result);
         }
-        catch (OperationCanceledException) { return new NodeOutcome.Failed("AI node timed out"); }
+        catch (OperationCanceledException) { return new NodeOutcome.Failed("AI node cancelled"); }
         catch (Exception ex) { return new NodeOutcome.Failed(ex.Message); }
     }
 

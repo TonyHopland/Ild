@@ -60,8 +60,8 @@ public class SignalRRunNotifierTests
         await notifier.RunStateChangedAsync(runId, LoopRunStatus.Running, LoopRunStatus.Completed);
 
         Assert.NotNull(capturedArgs);
-        Assert.Equal(1, capturedArgs!.Count());
-        var payload = Assert.IsType<LoopRunStateChangedPayload>(capturedArgs[0]);
+        Assert.Single(capturedArgs!);
+        var payload = Assert.IsType<LoopRunStateChangedPayload>(capturedArgs![0]);
         Assert.Equal(runId, payload.RunId);
         Assert.Equal(LoopRunStatus.Completed, payload.NewStatus);
     }
@@ -81,8 +81,8 @@ public class SignalRRunNotifierTests
         var nodeId = Guid.NewGuid();
         await notifier.EventLoggedAsync(runId, "hello", "NodeStarted", nodeId, null);
 
-        Assert.Equal(1, capturedArgs!.Count());
-        var payload = Assert.IsType<EventLoggedPayload>(capturedArgs[0]);
+        Assert.Single(capturedArgs!);
+        var payload = Assert.IsType<EventLoggedPayload>(capturedArgs![0]);
         Assert.Equal(runId, payload.RunId);
         Assert.Equal("hello", payload.Message);
         Assert.Equal("NodeStarted", payload.EventType);
@@ -106,8 +106,8 @@ public class SignalRRunNotifierTests
         var runNodeId = Guid.NewGuid();
         await notifier.EventLoggedAsync(runId, "AI Node started", "NodeStarted", nodeId, runNodeId);
 
-        Assert.Equal(1, capturedArgs!.Count());
-        var payload = Assert.IsType<EventLoggedPayload>(capturedArgs[0]);
+        Assert.Single(capturedArgs!);
+        var payload = Assert.IsType<EventLoggedPayload>(capturedArgs![0]);
         Assert.Equal(runId, payload.RunId);
         Assert.Equal(nodeId, payload.NodeId);
         Assert.Equal(runNodeId, payload.RunNodeId);

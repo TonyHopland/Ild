@@ -15,7 +15,6 @@ namespace ILD.Core.Services.Implementations;
 public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposable
 {
     private const string ConfigFileName = "ild.config.json";
-    private const int DefaultTimeoutSeconds = 600;
     private static readonly Regex TemplateTokenRegex = new("\\$\\{([^}]+)\\}", RegexOptions.Compiled);
 
     private readonly ConcurrentDictionary<string, PreviewRuntime> _runtimes = new(StringComparer.Ordinal);
@@ -112,7 +111,6 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 stateDirectory,
                 publicHost,
                 ports,
-                ResolveTimeoutSeconds(options.TimeoutSeconds),
                 new List<ManagedPreviewProcess>());
 
             if (!options.SkipInstall)
@@ -132,7 +130,6 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             }
 
             _runtimes[normalized] = runtime;
-            StartAutoStopTimer(runtime);
             return BuildResponse(loaded, runtime);
         }
         finally
@@ -240,16 +237,6 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         }
     }
 
-    private static int ResolveTimeoutSeconds(int? requestedTimeoutSeconds)
-    {
-        if (requestedTimeoutSeconds is null)
-            return DefaultTimeoutSeconds;
-        if (requestedTimeoutSeconds < 0)
-            throw new InvalidOperationException("Preview timeoutSeconds must be zero or greater.");
-
-        return requestedTimeoutSeconds.Value;
-    }
-
     private static Dictionary<string, int> AllocatePorts(PreviewProfileConfig profile, IReadOnlyDictionary<string, int>? overrides)
     {
         var ports = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -336,8 +323,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 continue;
 
             var resolved = BuildResolvedStep(step, runtime, null);
-            var timeout = TimeSpan.FromSeconds(step.TimeoutSeconds <= 0 ? 600 : step.TimeoutSeconds);
-            var result = await RunCommandAsync(resolved.Command, resolved.WorkingDirectory, resolved.Environment, timeout, cancellationToken);
+            var result = await RunCommandAsync(resolved.Command, resolved.WorkingDirectory, resolved.Environment, cancellationToken);
 
             var builder = new StringBuilder();
             builder.AppendLine($"> {resolved.Command}");
@@ -389,8 +375,6 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     private async Task StopRuntimeAsync(PreviewRuntime runtime, CancellationToken cancellationToken)
     {
-        runtime.AutoStopCancellation.Cancel();
-
         foreach (var process in runtime.Processes)
         {
             try
@@ -425,46 +409,6 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         }
 
         runtime.Processes.Clear();
-    }
-
-    private void StartAutoStopTimer(PreviewRuntime runtime)
-    {
-        if (runtime.TimeoutSeconds == 0)
-            return;
-
-        runtime.AutoStopTask = Task.Run(async () =>
-        {
-            try
-            {
-                await Task.Delay(TimeSpan.FromSeconds(runtime.TimeoutSeconds), runtime.AutoStopCancellation.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
-
-            await _gate.WaitAsync();
-            try
-            {
-                if (!_runtimes.TryGetValue(runtime.WorktreePath, out var current)
-                    || !ReferenceEquals(current, runtime))
-                {
-                    return;
-                }
-
-                _logger.LogInformation(
-                    "Auto-stopping preview for {WorktreePath} after {TimeoutSeconds} seconds",
-                    runtime.WorktreePath,
-                    runtime.TimeoutSeconds);
-
-                _runtimes.TryRemove(runtime.WorktreePath, out _);
-                await StopRuntimeAsync(runtime, CancellationToken.None);
-            }
-            finally
-            {
-                _gate.Release();
-            }
-        });
     }
 
     private WorktreePreviewResponse BuildResponse(LoadedPreviewConfig loaded, PreviewRuntime runtime)
@@ -507,8 +451,6 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             ProfileName = runtime.ProfileName,
             PublicHost = runtime.PublicHost,
             StateDirectory = runtime.StateDirectory,
-            TimeoutSeconds = runtime.TimeoutSeconds,
-            AutoStopAt = runtime.AutoStopAt,
             Services = serviceResponses,
         };
     }
@@ -540,8 +482,6 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             ProfileName = resolvedProfileName,
             PublicHost = publicHost,
             StateDirectory = stateDirectory,
-            TimeoutSeconds = DefaultTimeoutSeconds,
-            AutoStopAt = null,
             Message = loaded.Message,
             Services = stoppedServices,
         };
@@ -722,12 +662,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         string command,
         string workingDirectory,
         IReadOnlyDictionary<string, string> environment,
-        TimeSpan timeout,
         CancellationToken cancellationToken)
     {
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(timeout);
-
         var psi = new ProcessStartInfo("/bin/sh")
         {
             UseShellExecute = false,
@@ -745,18 +681,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException($"Failed to start command '{command}'.");
 
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
-        var stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
+        var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
 
-        try
-        {
-            await process.WaitForExitAsync(timeoutCts.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            try { process.Kill(entireProcessTree: true); } catch { }
-            throw;
-        }
+        await process.WaitForExitAsync(cancellationToken);
 
         return new CommandResult(process.ExitCode, await stdoutTask, await stderrTask);
     }
@@ -775,7 +703,6 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             string stateDirectory,
             string publicHost,
             Dictionary<string, int> ports,
-            int timeoutSeconds,
             List<ManagedPreviewProcess> processes)
         {
             WorktreePath = worktreePath;
@@ -784,8 +711,6 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             StateDirectory = stateDirectory;
             PublicHost = publicHost;
             Ports = ports;
-            TimeoutSeconds = timeoutSeconds;
-            AutoStopAt = timeoutSeconds == 0 ? null : DateTimeOffset.UtcNow.AddSeconds(timeoutSeconds);
             Processes = processes;
         }
 
@@ -795,10 +720,6 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         public string StateDirectory { get; }
         public string PublicHost { get; }
         public Dictionary<string, int> Ports { get; }
-        public int TimeoutSeconds { get; }
-        public DateTimeOffset? AutoStopAt { get; }
-        public CancellationTokenSource AutoStopCancellation { get; } = new();
-        public Task? AutoStopTask { get; set; }
         public List<ManagedPreviewProcess> Processes { get; }
     }
 
@@ -853,7 +774,6 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         public string? Cwd { get; set; }
         public string Command { get; set; } = string.Empty;
         public Dictionary<string, string>? Env { get; set; }
-        public int TimeoutSeconds { get; set; } = 600;
     }
 
     private sealed class PreviewServiceConfig : PreviewCommandConfig

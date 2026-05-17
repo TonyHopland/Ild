@@ -36,7 +36,6 @@ public class AdapterConfigSchemaTests
 
         var names = adapter.ConfigSchema.Select(f => f.Name).ToList();
         Assert.DoesNotContain("binaryPath", names);
-        Assert.DoesNotContain("timeoutSeconds", names);
     }
 
     [Fact]

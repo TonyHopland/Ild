@@ -23,7 +23,7 @@ public class LoopEngineRetryPersistenceTests
         var runNodesForA = h.ReloadRunNodes().Where(rn => rn.LoopNodeId == aId).ToList();
 
         // PRD #003 Bug B: one row per node, not one per attempt
-        Assert.Equal(1, runNodesForA.Count());
+        Assert.Single(runNodesForA);
         Assert.Equal(2, runNodesForA[0].RetryCount);
         Assert.Equal(LoopRunNodeStatus.Failed, runNodesForA[0].Status);
     }
@@ -62,7 +62,7 @@ public class LoopEngineRetryPersistenceTests
 
         var aId = h.NodesById["a"].Id;
         var runNodesForA = h.ReloadRunNodes().Where(rn => rn.LoopNodeId == aId).ToList();
-        Assert.Equal(1, runNodesForA.Count());
+        Assert.Single(runNodesForA);
         Assert.Equal(0, runNodesForA[0].RetryCount);
     }
 }

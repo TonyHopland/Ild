@@ -6,13 +6,11 @@
         "install": [
           {
             "cwd": ".",
-            "command": "command -v vp >/dev/null 2>&1 || npm install -g vite-plus",
-            "timeoutSeconds": 600
+            "command": "command -v vp >/dev/null 2>&1 || npm install -g vite-plus"
           },
           {
             "cwd": "frontend",
-            "command": "[ -d node_modules ] || vp install",
-            "timeoutSeconds": 600
+            "command": "[ -d node_modules ] || vp install"
           }
         ],
         "services": [

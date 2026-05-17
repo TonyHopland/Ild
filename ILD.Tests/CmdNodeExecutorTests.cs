@@ -8,7 +8,7 @@ namespace ILD.Tests;
 
 public class CmdNodeExecutorTests
 {
-    private static NodeExecutionContext MakeContext(string command, int timeoutSeconds = 300)
+    private static NodeExecutionContext MakeContext(string command)
     {
         var node = new LoopNode
         {
@@ -16,7 +16,6 @@ public class CmdNodeExecutorTests
             Label = "n",
             NodeType = NodeType.Cmd,
             Config = $"{{\"command\":\"{command}\"}}",
-            TimeoutSeconds = timeoutSeconds,
         };
         var wi = new WorkItemView
         {
@@ -40,18 +39,6 @@ public class CmdNodeExecutorTests
 
         Assert.True(result.Success);
         Assert.Contains("hello", result.Output);
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_times_out_long_running_command()
-    {
-        var exec = new CmdNodeExecutor(new ProcessRunner());
-        var ctx = MakeContext("sleep 5", timeoutSeconds: 1);
-
-        var result = await exec.ExecuteAsync(ctx);
-
-        Assert.False(result.Success);
-        Assert.Contains("timed out", result.Error);
     }
 
     [Fact]

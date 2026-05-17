@@ -325,46 +325,7 @@ public class AINodeExecutorTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_times_out_when_adapter_exceeds_node_timeout()
-    {
-        var provider = new AiProvider
-        {
-            Id = Guid.NewGuid(),
-            Name = "my-provider",
-            Type = "test",
-            BaseUrl = "https://test.api",
-            Model = "test-model"
-        };
-
-        var providerStore = new Mock<IProviderStore>();
-        providerStore.Setup(s => s.GetAiProviderByNameAsync(It.IsAny<string>()))
-            .ReturnsAsync(provider);
-
-        var registry = new Mock<IAgentAdapterRegistry>();
-        registry.Setup(r => r.ResolveForProvider(It.IsAny<AiProvider>()))
-            .Returns(() => new SlowAdapter());
-
-        var sp = BuildServiceProvider(providerStore.Object, registry.Object);
-
-        var executor = new AINodeExecutor(sp);
-
-        var config = "{\"aiProviderId\":\"my-provider\",\"prompt\":\"test prompt\"}";
-        var ctx = new NodeExecutionContext(
-            Run: new LoopRun { Id = Guid.NewGuid() },
-            RunNode: new LoopRunNode { RetryCount = 0 },
-            Node: new LoopNode { Config = config, TimeoutSeconds = 1 },
-            WorkItem: new WorkItemView { Id = Guid.NewGuid().ToString(), Title = "test", Description = "desc" },
-            PreviousNodeOutput: null,
-            CancellationToken: CancellationToken.None);
-
-        var result = await executor.ExecuteAsync(ctx);
-
-        Assert.False(result.Success);
-        Assert.Contains("timed out", result.Error);
-    }
-
-    [Fact]
-    public async Task ExecuteAsync_succeeds_when_adapter_finishes_within_timeout()
+    public async Task ExecuteAsync_succeeds_when_adapter_finishes()
     {
         var provider = new AiProvider
         {
@@ -391,7 +352,7 @@ public class AINodeExecutorTests
         var ctx = new NodeExecutionContext(
             Run: new LoopRun { Id = Guid.NewGuid() },
             RunNode: new LoopRunNode { RetryCount = 0 },
-            Node: new LoopNode { Config = config, TimeoutSeconds = 300 },
+            Node: new LoopNode { Config = config },
             WorkItem: new WorkItemView { Id = Guid.NewGuid().ToString(), Title = "test", Description = "desc" },
             PreviousNodeOutput: null,
             CancellationToken: CancellationToken.None);

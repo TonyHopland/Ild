@@ -49,14 +49,10 @@ public class WorktreePreviewServiceTests : IDisposable
         Assert.Single(started.Services);
         Assert.False(string.IsNullOrEmpty(started.Services[0].PublicUrl));
         Assert.Equal(3100, started.Services[0].SuggestedPort);
-        Assert.Equal(600, started.TimeoutSeconds);
-        Assert.NotNull(started.AutoStopAt);
 
         var stopped = await svc.StopAsync(worktree);
         Assert.Equal("stopped", stopped.State);
         Assert.Equal(3100, stopped.Services[0].SuggestedPort);
-        Assert.Equal(600, stopped.TimeoutSeconds);
-        Assert.Null(stopped.AutoStopAt);
     }
 
     [Fact]
@@ -97,106 +93,9 @@ public class WorktreePreviewServiceTests : IDisposable
         var started = await svc.StartAsync(
             worktree,
             new ILD.Core.Services.Interfaces.WorktreePreviewStartOptions(
-                PortOverrides: new Dictionary<string, int> { ["frontend"] = requestedPort },
-                TimeoutSeconds: 120));
+                PortOverrides: new Dictionary<string, int> { ["frontend"] = requestedPort }));
         Assert.Single(started.Services);
         Assert.Equal(requestedPort, started.Services[0].Port);
-        Assert.Equal(120, started.TimeoutSeconds);
-
-        await svc.StopAsync(worktree);
-    }
-
-    [Fact]
-    public async Task StartAsync_auto_stops_after_timeout()
-    {
-        var worktree = CreateTempWorktree();
-        await File.WriteAllTextAsync(Path.Combine(worktree, "ild.config.json"), JsonSerializer.Serialize(new
-        {
-            preview = new
-            {
-                defaultProfile = "web",
-                profiles = new
-                {
-                    web = new
-                    {
-                        services = new[]
-                        {
-                            new
-                            {
-                                name = "app",
-                                cwd = ".",
-                                command = "node -e \"require('http').createServer((_,res)=>res.end('ok')).listen(${PORT}, '127.0.0.1')\"",
-                                port = "frontend",
-                                suggestedPort = 3100,
-                                healthUrl = "http://127.0.0.1:${PORT}/",
-                                @public = true
-                            }
-                        }
-                    }
-                }
-            }
-        }));
-
-        var svc = CreateService();
-
-        var started = await svc.StartAsync(
-            worktree,
-            new ILD.Core.Services.Interfaces.WorktreePreviewStartOptions(TimeoutSeconds: 1));
-
-        Assert.Equal("running", started.State);
-
-        await Task.Delay(TimeSpan.FromSeconds(2));
-
-        var status = await svc.GetStatusAsync(worktree);
-        Assert.Equal("stopped", status.State);
-        Assert.Equal(600, status.TimeoutSeconds);
-    }
-
-    [Fact]
-    public async Task StartAsync_keeps_running_when_timeout_is_zero()
-    {
-        var worktree = CreateTempWorktree();
-        await File.WriteAllTextAsync(Path.Combine(worktree, "ild.config.json"), JsonSerializer.Serialize(new
-        {
-            preview = new
-            {
-                defaultProfile = "web",
-                profiles = new
-                {
-                    web = new
-                    {
-                        services = new[]
-                        {
-                            new
-                            {
-                                name = "app",
-                                cwd = ".",
-                                command = "node -e \"require('http').createServer((_,res)=>res.end('ok')).listen(${PORT}, '127.0.0.1')\"",
-                                port = "frontend",
-                                suggestedPort = 3100,
-                                healthUrl = "http://127.0.0.1:${PORT}/",
-                                @public = true
-                            }
-                        }
-                    }
-                }
-            }
-        }));
-
-        var svc = CreateService();
-
-        var started = await svc.StartAsync(
-            worktree,
-            new ILD.Core.Services.Interfaces.WorktreePreviewStartOptions(TimeoutSeconds: 0));
-
-        Assert.Equal(0, started.TimeoutSeconds);
-        Assert.Null(started.AutoStopAt);
-
-        await Task.Delay(TimeSpan.FromSeconds(2));
-
-        var status = await svc.GetStatusAsync(worktree);
-        Assert.Equal("running", status.State);
-        Assert.Equal(0, status.TimeoutSeconds);
 
         await svc.StopAsync(worktree);
     }

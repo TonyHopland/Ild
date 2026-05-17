@@ -35,7 +35,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object, engine.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
-        Assert.Equal(1, result.Claimed.Count());
+        Assert.Single(result.Claimed);
         Assert.Contains(ready.Id, tracker.Snapshot());
     }
 
@@ -60,7 +60,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         var sut = new RemoteWorkItemCoordinator(client.Object, new InMemoryActiveWorkItemTracker(), resolver.Object, engine.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
-        Assert.Equal(1, result.EscalatedToHumanFeedback.Count());
+        Assert.Single(result.EscalatedToHumanFeedback);
         Assert.Equal(RemoteWorkItemStatus.HumanFeedback, captured!.TargetStatus);
         Assert.Contains("No loop", captured.Reason);
     }
@@ -86,7 +86,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         var sut = new RemoteWorkItemCoordinator(client.Object, new InMemoryActiveWorkItemTracker(), resolver.Object, engine.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
-        Assert.Equal(1, result.EscalatedToHumanFeedback.Count());
+        Assert.Single(result.EscalatedToHumanFeedback);
         Assert.Contains("Multiple loop templates", captured!.Reason);
     }
 
@@ -110,7 +110,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object, engine.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
-        Assert.Equal(1, result.Resumed.Count());
+        Assert.Single(result.Resumed);
     }
 
     [Fact]
@@ -134,7 +134,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object, engine.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1);
 
-        Assert.Equal(1, result.Claimed.Count());
+        Assert.Single(result.Claimed);
         Assert.Equal(1, tracker.Count);
     }
 

@@ -63,7 +63,7 @@ public class LoopTemplateArchiveTests
 
         await mgr.UnarchiveLoopTemplateAsync(id);
 
-        Assert.Equal(1, (await mgr.GetAllLoopTemplatesAsync()).Count());
+        Assert.Single(await mgr.GetAllLoopTemplatesAsync());
     }
 
     [Fact]

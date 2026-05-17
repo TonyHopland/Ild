@@ -10,10 +10,8 @@ interface NodeSettingsModalProps {
   labelError: string | null;
   nodeLabel: string;
   cmdCommand: string;
-  cmdTimeout: number;
   aiPrompt: string;
   aiProvider: string;
-  aiTimeout: number;
   aiTools: string[];
   aiRejectPattern: string;
   aiUseSession: boolean;
@@ -34,10 +32,8 @@ interface NodeSettingsModalProps {
   onValidateLabel: (value: string) => void;
   onNodeLabelChange: (value: string) => void;
   onCmdCommandChange: (value: string) => void;
-  onCmdTimeoutChange: (value: number) => void;
   onAiPromptChange: (value: string) => void;
   onAiProviderChange: (value: string) => void;
-  onAiTimeoutChange: (value: number) => void;
   onAiToolsChange: (value: string[]) => void;
   onAiRejectPatternChange: (value: string) => void;
   onAiUseSessionChange: (value: boolean) => void;
@@ -55,10 +51,8 @@ export function NodeSettingsModal({
   labelError,
   nodeLabel,
   cmdCommand,
-  cmdTimeout,
   aiPrompt,
   aiProvider,
-  aiTimeout,
   aiTools,
   aiRejectPattern,
   aiUseSession,
@@ -79,10 +73,8 @@ export function NodeSettingsModal({
   onValidateLabel,
   onNodeLabelChange,
   onCmdCommandChange,
-  onCmdTimeoutChange,
   onAiPromptChange,
   onAiProviderChange,
-  onAiTimeoutChange,
   onAiToolsChange,
   onAiRejectPatternChange,
   onAiUseSessionChange,
@@ -141,16 +133,6 @@ export function NodeSettingsModal({
                   onChange={(event) => onCmdCommandChange(event.target.value)}
                 />
               </div>
-              <div className="config-field">
-                <label htmlFor="cmd-timeout">Timeout (seconds)</label>
-                <input
-                  id="cmd-timeout"
-                  type="number"
-                  min={1}
-                  value={cmdTimeout}
-                  onChange={(event) => onCmdTimeoutChange(parseInt(event.target.value, 10) || 30)}
-                />
-              </div>
             </>
           )}
 
@@ -185,17 +167,6 @@ export function NodeSettingsModal({
                   onAiSessionPlaceholderChange={onAiSessionPlaceholderChange}
                 />
               )}
-
-              <div className="config-field">
-                <label htmlFor="ai-timeout">Timeout (seconds)</label>
-                <input
-                  id="ai-timeout"
-                  type="number"
-                  min={1}
-                  value={aiTimeout}
-                  onChange={(event) => onAiTimeoutChange(parseInt(event.target.value, 10) || 300)}
-                />
-              </div>
 
               <div className="config-field">
                 <label htmlFor="ai-provider">AI Provider</label>
