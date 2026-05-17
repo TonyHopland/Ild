@@ -201,7 +201,7 @@ public class AgentController : ControllerBase
 
         // We require a real repository here. The WorkItem entity has a
         // [Required] FK to Repository, so passing null/empty would surface
-        // as a "FOREIGN KEY constraint failed" SQLite error to the agent.
+        // as a "FOREIGN KEY constraint failed" database error to the agent.
         // Convert that into a clean 400 instead.
         if (!Guid.TryParse(request.RepositoryId, out var repositoryId))
             return BadRequest(new { error = "repositoryId is required. Call list_repositories first to obtain a valid id." });

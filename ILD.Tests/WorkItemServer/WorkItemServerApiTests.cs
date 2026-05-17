@@ -35,10 +35,11 @@ public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTest
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             Environment.SetEnvironmentVariable("WORKITEM_API_KEYS", ApiKey);
+            Environment.SetEnvironmentVariable("WORKITEM_DB_CONNECTION_STRING", null);
             builder.ConfigureServices(services =>
             {
-                var dbDescriptor = services.Single(d => d.ServiceType == typeof(DbContextOptions<WorkItemServerDbContext>));
-                services.Remove(dbDescriptor);
+                var dbDescriptor = services.FirstOrDefault(d => d.ServiceType == typeof(DbContextOptions<WorkItemServerDbContext>));
+                if (dbDescriptor != null) services.Remove(dbDescriptor);
                 services.AddDbContext<WorkItemServerDbContext>(opt =>
                 {
                     opt.UseSqlite(_conn);

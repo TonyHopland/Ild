@@ -61,7 +61,7 @@ ARG APP_GID=10001
 
 # Install base utilities and optional tools before copying source so Docker
 # layer caching skips tool installs when only source code changes.
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates gosu && \
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates gosu netcat-openbsd && \
     mkdir -p /usr/local/share/ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 

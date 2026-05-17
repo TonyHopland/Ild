@@ -1,4 +1,22 @@
 services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: ild-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   workitem-server:
     build:
       context: .
@@ -10,10 +28,14 @@ services:
       - "8081:8081"
     environment:
       - WORKITEM_DATA_PATH=/data
+      - WORKITEM_DB_CONNECTION_STRING=Host=postgres;Port=5432;Database=IldWorkitems;Username=ild_workitems;Password=ild_workitems_password
       - WORKITEM_API_KEYS=${WORKITEM_API_KEYS:-${WORKITEM_API_KEY:-test-api-key-123}}
       - ASPNETCORE_URLS=http://+:8081
     volumes:
       - workitem-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
   ild:
@@ -41,6 +63,7 @@ services:
       - ILD_PASSWORD=${ILD_PASSWORD}
       - ILD_DATA_PATH=/data
       - ILD_WORKTREES_PATH=/worktrees
+      - ILD_DB_CONNECTION_STRING=Host=postgres;Port=5432;Database=IldCore;Username=ild_core;Password=ild_core_password
       - ILD_LOG_LEVEL=${ILD_LOG_LEVEL:-Information}
       - ILD_API_URL=${ILD_API_URL:-http://localhost:8080}
       - ILD_WORKITEM_SERVER_URL=${ILD_WORKITEM_SERVER_URL:-http://workitem-server:8081}
@@ -51,10 +74,14 @@ services:
       - ild-worktrees:/worktrees
       - ${GIT_CONFIG:-~/.gitconfig}:/home/ild/.gitconfig:ro
     depends_on:
-      - workitem-server
+      postgres:
+        condition: service_healthy
+      workitem-server:
+        condition: service_started
     restart: unless-stopped
 
 volumes:
+  postgres-data:
   ild-data:
   ild-worktrees:
   workitem-data:

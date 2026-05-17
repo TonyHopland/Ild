@@ -113,7 +113,7 @@ public class WorkItemsController : ControllerBase
 
         // RepositoryId is a required FK on the WorkItem entity. Surface a
         // clean 400 instead of letting EF translate this into an opaque
-        // SQLite "FOREIGN KEY constraint failed" error.
+        // "FOREIGN KEY constraint failed" database error.
         if (!Guid.TryParse(request.RepositoryId, out var rGuid))
             return BadRequest(new { error = "repositoryId is required." });
         var repositoryId = (Guid?)rGuid;
