@@ -91,8 +91,7 @@ export interface WorktreePreview {
   profileName: string | null;
   publicHost: string | null;
   stateDirectory: string | null;
-  timeoutSeconds: number;
-  autoStopAt: string | null;
+
   message: string | null;
   services: WorktreePreviewService[];
 }
@@ -120,7 +119,6 @@ export interface LoopNode {
   config: Record<string, unknown>;
   maxTraversals: number | null;
   retryCount: number | null;
-  timeoutSeconds: number | null;
 }
 
 export interface LoopNodeEdge {

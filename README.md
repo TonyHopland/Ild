@@ -1,573 +1,307 @@
 # ILD — In-Loop Development
 
-> A containerized AI-assisted development platform that closes the loop between work items, code, tests, reviews, and merged pull requests.
+ILD is a containerized development orchestration system built around shared work items, loop templates, per-item git worktrees, and adapter-driven AI execution. A local ILD instance owns loop execution, repository operations, previews, and realtime UI; a standalone WorkItem Server owns the work-item source of truth so multiple ILD instances can coordinate safely.
 
-ILD turns the repetitive cycle of _plan → code → test → review → merge_ into a first-class, configurable workflow. You design loops as directed graphs of `Cmd`, `AI`, `Human`, `PR`, `Start`, and `Cleanup` nodes; ILD runs them autonomously inside per-work-item git worktrees, pauses for human review when needed, integrates with Forgejo / Gitea / GitHub / GitLab for pull requests, and persists execution state to a local SQLite database.
-
-Work items are managed by a standalone **WorkItem Server** that multiple ILD instances can share. Each ILD polls the server for ready work, claims it atomically, executes it locally, and returns feedback — enabling multi-developer coordination with a single source of truth.
-
----
-
-## Table of Contents
-
-- [What ILD Does](#what-ild-does)
-- [Architecture](#architecture)
-- [Quickstart](#quickstart)
-- [Configuration](#configuration)
-- [Domain Concepts](#domain-concepts)
-- [Project Layout](#project-layout)
-- [Development Workflow](#development-workflow)
-- [Testing](#testing)
-- [API Surface](#api-surface)
-- [Deployment](#deployment)
-- [Troubleshooting](#troubleshooting)
-
----
+The current product supports both autonomous polling from the shared server and explicit manual starts from the taskboard. AI nodes are adapter-based: some providers are plain OpenAI-compatible HTTP calls, while others run external agent CLIs such as OpenCode or Pi inside the worktree.
 
 ## What ILD Does
 
-- **WorkItem Server** — Standalone REST service that is the authoritative source for work items. Multiple ILD instances connect to the same server to coordinate work, claim items atomically, and resolve human feedback.
-- **Taskboard** — Backlog → Work Queue → Ready → Running → Human Feedback → Waiting For Ild → Done. Work items carry tags, dependencies, priority, and a full conversation history.
-- **Autonomous polling** — Each ILD instance polls the remote server on a configurable schedule. Ready items are claimed via `Transition(Running)` — first ILD to claim wins. No manual "start" button needed.
-- **Loop templates** — Versioned directed graphs you author visually. Every save creates an immutable `LoopTemplateVersion`; in-flight runs keep their pinned version.
-- **Loop engine** — Drives runs to completion with retries, `OnFailure` routing, `MaxTraversals` per edge, pause/resume, and crash recovery on startup.
-- **Node executors**:
-  - `Start` — creates / attaches a per-work-item git worktree and branch.
-  - `Cmd` — runs a shell command inside the worktree with a timeout.
-  - `AI` — renders a prompt template (with placeholders for work item, worktree files, previous output) and calls an OpenAI-compatible chat completions endpoint.
-  - `Human` — pauses the run and parks the work item in `HumanFeedback`.
-  - `PR` — creates a PR (or reuses existing), waits for webhook events, routes merge to success or rejection to failure.
-  - `Cleanup` — destroys the worktree.
-- **Tag-to-loop matching** — A work item's tags determine which loop template executes it. Tag name must match a loop template name on the ILD instance. No match or ambiguous match escalates to `HumanFeedback`.
-- **Grace period polling** — When a work item is in `HumanFeedback`, ILD polls at 5-second intervals until the user responds (transitions to `WaitingForIld`) or the configurable grace period expires.
-- **Startup reconciliation** — On restart, ILD queries the remote server for each locally-tracked work item's status, resumes running items, and cleans up completed ones.
-- **Repository integration** — git worktrees, branch creation, optional Forgejo / Gitea pull requests, webhook-driven merge sync.
-- **Real-time UI** — SignalR pushes node state changes, event log entries, and run state transitions to the React taskboard.
-- **Single-binary deploy** — One container, SQLite for local execution state, worktrees at `/worktrees`, basic auth via env vars.
+- Shared work-item coordination through a standalone WorkItem Server with atomic `Running` claims, heartbeat updates, stale reclaim, dependencies, tags, and conversation history.
+- A taskboard UI covering `Backlog`, `WorkQueue`, `Ready`, `Running`, `HumanFeedback`, `WaitingForIld`, and `Done`.
+- Visual, versioned loop-template editing with `Start`, `Cmd`, `AI`, `Human`, `PR`, and `Cleanup` nodes.
+- Loop execution with retries, `OnFailure` routing, pause/resume, crash recovery, and startup reconciliation.
+- Manual and automatic execution paths: users can start Ready items from the UI, and the background poller can claim Ready items from the shared server.
+- Adapter-driven AI execution with currently implemented provider types for `openai`, `opencode`, and `pi`.
+- QA preview orchestration for active worktrees, including start, stop, status, and public URL generation.
+- Runtime configuration of repositories, remote providers, AI providers, and backend log level from the UI.
+- Realtime updates over SignalR for run events, work-item changes, and node progress streaming.
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Browser (React)                           │
-│  Taskboard · WorkItemModal · LoopEditor · RemoteProviders        │
-│  ConversationView · EventLog (SignalR)                           │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │ /api/v1 + /hubs/* (SignalR)
-┌──────────────────────────────┴──────────────────────────────────┐
-│                         ILD.Api (ASP.NET Core 10)               │
-│  Controllers · AuthMiddleware · LoopRunHub · WorkItemHub        │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │ DI
-┌──────────────────────────────┴──────────────────────────────────┐
-│                         ILD.Core (services)                      │
-│  LoopEngine · NodeExecutors · WorkItemManager (remote-backed)    │
-│  RemoteWorkItemPoller · RemoteWorkItemCoordinator                │
-│  RemoteWorkItemStartupReconciler · ActiveWorkItemTracker         │
-│  RepositoryManager · AIProviderService · RemoteProvider          │
-│  PrSyncService · RecoveryManager · EventLogService               │
-└───┬────────────────────────────────────┬────────────────────────┘
-    │ IWorkItemServerClient (HTTP)       │ Store interfaces
-┌───┴──────────────────────────┐  ┌─────┴────────────────────────┐
-│   ILD.WorkItemServer         │  │     ILD.Data (EF Core)        │
-│   (standalone REST service)  │  │  AppDbContext · Entities      │
-│                              │  │  DTOs · Enums · Stores        │
-│   Work items (authoritative) │  └──────────┬───────────────────┘
-│   Tags · Dependencies        │             │ EF Core
-│   Conversation · Status      │  ┌──────────┴───────────────────┐
-│   Atomic claim on Running    │  │  SQLite (ild.db) + /worktrees │
-│   Heartbeat / stale reclaim  │  │  (local sidecar + worktrees)  │
-└──────────────────────────────┘  └───────────────────────────────┘
+```text
+Browser (React 19 + Vite+)
+  -> ILD.Api (/api/v1, /hubs/loop-run, /hubs/work-item)
+       -> ILD.Core services
+            - LoopEngine
+            - WorkItemManager (remote-backed)
+            - RepositoryManager
+            - RecoveryManager
+            - RemoteWorkItemPoller / Coordinator / StartupReconciler
+            - Adapter registry + AI node executors
+       -> ILD.Data (EF Core stores)
+       -> PostgreSQL in the supported compose stack
+       -> worktrees and local runtime files under /worktrees and /data
+
+ILD.Api <-> ILD.WorkItemServer (HTTP + API key)
+ILD.WorkItemServer -> PostgreSQL in the supported compose stack
+ILD.McpServer -> local ILD API for agent-facing work-item tools
 ```
 
-- **`ILD.WorkItemServer`** is the standalone WorkItem server. It owns the authoritative work item domain: Title, Description, Status, Priority, Tags, Dependencies, Conversation, CreatedBy. It exposes a REST API and enforces atomic claim on `Transition(Running)`.
-- **`ILD.Core`** owns all business services. The `WorkItemManager` is now remote-backed — every write hits the server first, then mirrors to a local sidecar row. The loop engine, poller, and reconciler are singletons.
-- **`ILD.Data`** owns the EF Core data layer. ILD keeps a local sidecar row that mirrors the server view and stores engine-only fields (worktree, branch, PR, current loop run).
-- **`ILD.Api`** is the ASP.NET Core host: controllers, SignalR hubs, auth middleware, DI composition, and startup template seeding + run recovery.
-- **`ILD.McpServer`** is the MCP server for AI agents. It proxies work item operations through the local ILD API.
-- **`ILD.Tests`** is the xUnit suite covering EventLogService, LoopTemplateValidator, LoopTemplateManager, WorkItemManager, LoopEngine, AuthService, RepositoryManager, and AIProviderService.
-- **`frontend/`** is a React 18 + Vite+ SPA proxied to the .NET API at dev time and served from `wwwroot/` in production.
+Key boundaries:
 
-`LoopEngine` and the node executors are registered as singletons. The engine injects `IServiceProvider` and creates scoped DB access per operation, allowing long-running runs to share a single engine instance while still using transient DB contexts. SignalR notifications flow through `IRunNotifier` → `SignalRRunNotifier` → `LoopRunHub` group `runId.ToString()`.
-
----
+- `ILD.WorkItemServer` is authoritative for work-item state, dependencies, tags, conversations, repository association, and claim semantics.
+- `ILD.Api` is the main host for auth, controllers, SignalR hubs, startup seeding, and recovery.
+- `ILD.Core` owns loop execution, repository operations, polling orchestration, preview control, metrics generation, and AI adapter selection.
+- `ILD.Data` stores loop runs, templates, repositories, providers, users, event logs, adapter session snapshots, and other ILD-local state.
+- `frontend/` is the SPA surfaced at runtime from `wwwroot/` and proxied through Vite+ during development.
 
 ## Quickstart
 
-### Option A — Docker (recommended)
+### Docker Compose
 
-Requires Docker + Docker Compose.
+The supported deployment path is the checked-in compose stack:
 
 ```bash
 git clone <this repo> ild && cd ild
-ILD_PASSWORD=letmein docker compose up --build
-```
-
-Then open <http://localhost:8080> and log in with `admin` / `letmein`.
-
-The containers persist state in three named volumes:
-
-| Volume          | Mounted at   | Purpose                               |
-| --------------- | ------------ | ------------------------------------- |
-| `ild-data`      | `/data`      | SQLite DB at `/data/ild.db` (sidecar) |
-| `ild-worktrees` | `/worktrees` | Per-work-item git worktrees           |
-| `workitem-data` | `/data`      | WorkItemServer SQLite DB              |
-
-Your host `~/.gitconfig` is mounted read-only into the ILD runtime user's home so commits inherit your name/email. Override with `GIT_CONFIG=/path/to/config docker compose up`.
-
-Certificate import is opt-in at build time. Set `WITH_CERTS=1` and place `.crt` or `.pem` files in `./certs` before `docker compose build` if you want those CA certificates baked into the ILD image.
-
-#### Container toolchain
-
-The ILD container can be built with additional tools needed to execute work items. Control which tools are installed via build args (env vars passed to `docker compose`):
-
-| Build arg         | Default | Installs                         | Needed for                       |
-| ----------------- | ------- | -------------------------------- | -------------------------------- |
-| `WITH_OPENCODE`   | `0`     | `opencode` CLI                   | AI agent execution               |
-| `WITH_NODE`       | `0`     | Node 22, npm, corepack (pnpm/vp) | TypeScript/JavaScript work items |
-| `WITH_DOTNET_SDK` | `0`     | .NET 10 SDK                      | .NET work items                  |
-| `WITH_CHROME`     | `0`     | Google Chrome stable             | Browser automation tests         |
-| `WITH_CERTS`      | `0`     | Build-time import of `./certs/*` | Custom internal CAs / TLS trust  |
-
-Example — build with all tools for full integration testing:
-
-```bash
-WITH_OPENCODE=1 WITH_NODE=1 WITH_DOTNET_SDK=1 ILD_PASSWORD=letmein docker compose up --build
-```
-
-Or use the `.env.example` template:
-
-```bash
 cp .env.example .env
-# Edit .env to set your password and desired toolchain
-ILD_PASSWORD=letmein docker compose up --build
+# set ILD_PASSWORD before continuing
+docker compose up --build
 ```
 
-### Option B — Local development (no container)
+The compose stack starts three services:
 
-Requires .NET 10 SDK, Node 22+, and [Vite+](https://vite.plus) (`vp`). Vite+ wraps the package manager — **don't run `pnpm`/`npm` directly** for installs.
+- `postgres` on port `5432`
+- `workitem-server` on port `8081`
+- `ild` on port `8080`
+
+Open <http://localhost:8080> and log in with `admin` and the `ILD_PASSWORD` value you supplied.
+
+Named volumes used by default:
+
+| Volume          | Purpose                                                |
+| --------------- | ------------------------------------------------------ |
+| `postgres-data` | PostgreSQL data for both ILD and the WorkItem Server   |
+| `ild-data`      | ILD runtime files under `/data`                        |
+| `ild-worktrees` | Per-work-item git worktrees                            |
+| `workitem-data` | Additional WorkItem Server runtime files under `/data` |
+
+Your host `~/.gitconfig` is mounted read-only into the ILD container so commits inherit your local name and email unless you override `GIT_CONFIG`.
+
+### Local Development
+
+Local development assumes the same split architecture: ILD API, WorkItem Server, and a PostgreSQL database. The easiest way to satisfy infrastructure locally is still `docker compose up postgres workitem-server` and then run the app/frontend from the host.
 
 ```bash
-# Backend
-dotnet build ILD.sln
-ILD_PASSWORD=letmein dotnet run --project ILD.Api
+# backend
+export ILD_PASSWORD=letmein
+export ILD_DB_CONNECTION_STRING='Host=localhost;Port=5432;Database=IldCore;Username=ild_core;Password=ild_core_password'
+dotnet run --project ILD.Api
 
-# Frontend (separate terminal — proxies /api → :5000)
+# frontend
 cd frontend
 vp install
 vp dev
 ```
 
-Backend listens on `http://localhost:5000` (configurable via `ASPNETCORE_URLS` or `ILD.Api/Properties/launchSettings.json`); frontend dev server on `http://localhost:3000` and proxies `/api` and `/hubs` to the backend.
-
-### First login & seed data
-
-On first startup the API:
-
-1. Creates `data/ild.db` with the EF schema.
-2. Bootstraps user `admin` whose password is the value of `ILD_PASSWORD` (PBKDF2-SHA256, 100k iterations).
-3. Seeds three loop templates: **Simple Code Change**, **AI-Assisted Feature**, **Plan**.
-4. Seeds a default `RemoteProvider` pointing at the WorkItem server (if no providers exist and `ILD_WORKITEM_SERVER_URL` is set).
-5. Best-effort recovers any `LoopRun` left in `Running` from a previous process.
-6. Runs startup reconciliation against the remote WorkItem server (if configured).
-
-To smoke-test the API directly:
+For the standalone WorkItem Server outside compose:
 
 ```bash
-TOKEN=$(curl -s -X POST http://localhost:5000/api/v1/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"letmein"}' \
-  | jq -r .token)
-
-curl -s http://localhost:5000/api/v1/looptemplates \
-  -H "Authorization: Bearer $TOKEN" | jq '.[].name'
+export WORKITEM_DB_CONNECTION_STRING='Host=localhost;Port=5432;Database=IldWorkitems;Username=ild_workitems;Password=ild_workitems_password'
+export WORKITEM_API_KEYS=test-api-key-123
+dotnet run --project ILD.WorkItemServer
 ```
 
----
+The frontend dev server runs on `http://localhost:3000` and proxies `/api` and `/hubs` to `http://localhost:5000` by default.
+
+### First Startup Behavior
+
+On first successful ILD startup:
+
+1. EF Core migrations are applied when a database connection string is configured.
+2. The bootstrap admin user is created on first login from `ILD_PASSWORD`.
+3. Seed loop templates are created: `Simple Code Change`, `AI-Assisted Feature`, and `Plan`.
+4. A default remote provider is auto-seeded when `ILD_WORKITEM_SERVER_URL` and `ILD_WORKITEM_SERVER_API_KEY` are present and no providers exist yet.
+5. Recoverable runs are inspected and recovery is attempted according to each run's policy.
 
 ## Configuration
 
-All configuration is via environment variables.
+Most important environment variables:
 
-| Variable                      | Default                       | Description                                                                                     |
-| ----------------------------- | ----------------------------- | ----------------------------------------------------------------------------------------------- |
-| `ILD_USERNAME`                | `admin`                       | Bootstrap username.                                                                             |
-| `ILD_PASSWORD`                | _(required)_                  | Plaintext password used the **first time** the user is created. After that, it's stored hashed. |
-| `ILD_DATA_PATH`               | `data` (`/data` in Docker)    | Where `ild.db` lives.                                                                           |
-| `ILD_WORKTREES_PATH`          | `worktrees` (`/worktrees`)    | Default base path for per-work-item worktrees.                                                  |
-| `ILD_LOG_LEVEL`               | `Information`                 | Serilog minimum level.                                                                          |
-| `ILD_WORKITEM_SERVER_URL`     | `http://workitem-server:8081` | WorkItemServer endpoint. Auto-seeds RemoteProvider on first run if no providers exist.          |
-| `ILD_WORKITEM_SERVER_API_KEY` | `test-api-key-123`            | API key for the WorkItemServer. Auto-seeds with the provider on first run.                      |
-| `ASPNETCORE_URLS`             | `http://+:8080`               | Listening URLs.                                                                                 |
-| `WORKITEM_API_KEY`            | `test-api-key-123`            | API key accepted by the WorkItemServer.                                                         |
+| Variable                        | Purpose                                                                                |
+| ------------------------------- | -------------------------------------------------------------------------------------- |
+| `ILD_PASSWORD`                  | Required bootstrap password for the `admin` user                                       |
+| `ILD_USERNAME`                  | Optional bootstrap username override; current auth flow still seeds `admin` by default |
+| `ILD_DB_CONNECTION_STRING`      | PostgreSQL connection string for ILD local state                                       |
+| `WORKITEM_DB_CONNECTION_STRING` | PostgreSQL connection string for the WorkItem Server                                   |
+| `ILD_DATA_PATH`                 | Base data directory for ILD runtime files                                              |
+| `ILD_WORKTREES_PATH`            | Base directory for per-item worktrees                                                  |
+| `ILD_LOG_LEVEL`                 | Initial Serilog level                                                                  |
+| `ILD_WORKITEM_SERVER_URL`       | URL used for remote-provider auto-seeding                                              |
+| `ILD_WORKITEM_SERVER_API_KEY`   | API key used for remote-provider auto-seeding                                          |
+| `WORKITEM_API_KEYS`             | Accepted bearer keys for the WorkItem Server                                           |
+| `ASPNETCORE_URLS`               | HTTP bind address for each .NET host                                                   |
 
-##### Build args (Docker only)
+Build-time container options from compose:
 
-| Build arg         | Default | Installs                         |
-| ----------------- | ------- | -------------------------------- |
-| `WITH_OPENCODE`   | `0`     | `opencode` CLI                   |
-| `WITH_NODE`       | `0`     | Node 22, npm, corepack (pnpm/vp) |
-| `WITH_DOTNET_SDK` | `0`     | .NET 10 SDK                      |
-| `WITH_CHROME`     | `0`     | Google Chrome stable             |
+| Build arg         | Purpose                                                   |
+| ----------------- | --------------------------------------------------------- |
+| `WITH_OPENCODE`   | Install the OpenCode CLI in the ILD image                 |
+| `WITH_PI`         | Install the Pi CLI in the ILD image                       |
+| `WITH_NODE`       | Install Node.js tooling in the ILD image                  |
+| `WITH_DOTNET_SDK` | Install the .NET SDK in the ILD image                     |
+| `WITH_CHROME`     | Install Chrome in the ILD image                           |
+| `WITH_CERTS`      | Import `.crt` or `.pem` files from `certs/` at build time |
 
-AI providers, remote git providers, and repositories are configured at runtime through the API / UI rather than environment variables.
+Remote providers, repositories, AI providers, and runtime polling settings are managed from the UI and persisted in the ILD database.
 
-The WorkItem server connection, polling schedule, grace period, and concurrency cap are configured through the **Remote Providers** settings page.
+## Domain Model
 
-> **Secrets policy.** No real credentials live in `appsettings.*.json` or any committed file. Auth is bootstrapped via `ILD_USERNAME` / `ILD_PASSWORD` at first run and then stored hashed. AI provider API keys live in `AiProvider.Config` (a JSON column on the `AiProvider` row) and are entered through the Settings UI; they must never be committed to source control. WorkItem server API keys are stored per-remote-provider and are never logged.
+| Concept                 | Meaning                                                       |
+| ----------------------- | ------------------------------------------------------------- |
+| `WorkItem`              | Shared remote unit of work stored on the WorkItem Server      |
+| `LoopTemplate`          | Named workflow definition with immutable saved versions       |
+| `LoopRun`               | One local execution of a template version against a work item |
+| `LoopRunNode`           | One visited node execution within a run                       |
+| `RemoteProvider`        | Git provider + WorkItem Server settings + poll cadence        |
+| `AiProvider`            | Adapter-resolved AI provider configuration                    |
+| `RecoveryPolicy`        | `AutoResume`, `NeedsReview`, or `Cancel` after restart        |
+| `ActiveWorkItemTracker` | Local set of items this ILD instance is actively heartbeating |
 
----
+Important behavior:
 
-## Domain Concepts
-
-| Concept                   | Summary                                                                                                        |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| **WorkItem**              | A unit of work on the remote server. Owns status, priority, tags, dependencies, and conversation history.      |
-| **WorkItemStatus**        | `Backlog` → `WorkQueue` → `Ready` → `Running` → `HumanFeedback` → `WaitingForIld` → `Done`.                    |
-| **Conversation**          | Array of `{ role, content, timestamp }` entries appended on transitions to response states.                    |
-| **Tags**                  | String labels on work items. Tag name must match a loop template name for execution.                           |
-| **LoopTemplate**          | Named workflow. Has many immutable `LoopTemplateVersion`s. Versioned on every save.                            |
-| **LoopNode / Edge**       | Graph payload owned by a `LoopTemplateVersion`. Edges carry `EdgeType` (`OnSuccess` / `OnFailure`).            |
-| **LoopRun**               | An execution of a template version against a work item. Tracks status, current node, traversals, recovery.     |
-| **LoopRunNode**           | One node execution in a run. Retries update the same record. Stores output and timing.                         |
-| **EventLog**              | Append-only audit stream per run (node started/completed, human feedback, etc).                                |
-| **RemoteProvider**        | Git provider connection + optional WorkItem server URL, API key, poll schedule, grace period, max concurrency. |
-| **AiProvider**            | OpenAI-compatible chat completions endpoint + API key.                                                         |
-| **RecoveryPolicy**        | What to do with `Running` runs after a restart: `AutoResume`, `NeedsReview`, or `Cancel`.                      |
-| **ActiveWorkItemTracker** | Local in-memory tracker of work items this ILD instance currently considers active.                            |
-
-### Polling & claim flow
-
-1. Poller sends active work item IDs as heartbeat to the remote server.
-2. Server returns status updates for active items + list of Ready items.
-3. Items in `WaitingForIld` are transitioned to `Running` (resume).
-4. Ready items are claimed via `Transition(Running)` — first ILD wins.
-5. Tag-to-template resolution happens before claim. No match or ambiguous match escalates to `HumanFeedback`.
-6. Claimed items are tracked locally and a `LoopRun` is created.
-
-### Grace period
-
-When at least one active work item is in `HumanFeedback`, the poller switches to a faster cadence (default 5s) so human responses propagate quickly. After the configurable grace period expires, the poller reverts to the normal schedule. If below max concurrency during grace, new Ready items are still claimed.
-
-### Startup reconciliation
-
-On startup, ILD queries the remote server for each locally-tracked work item's current status:
-
-- **Running** → resume execution via `LoopEngine`
-- **HumanFeedback / WaitingForIld** → add to active tracker (no resume, human needs to respond)
-- **Done / not found** → clean up locally
-
-### Loop validation rules
-
-A `LoopTemplateGraph` is rejected on save unless:
-
-- Exactly one `Start` node exists.
-- At least one `Cleanup` node exists.
-- All nodes are reachable from `Start`.
-- At least one path leads to a `Cleanup` node.
-- Every edge references existing nodes.
-- Prompt templates only reference known placeholders (`{{WorkItem.Title}}`, `{{WorkItem.Description}}`, `{{PreviousNodeOutput}}`, `{{WorkTree.File:relative/path}}`, …).
-
----
+- Work-item tags drive loop-template resolution.
+- Ready items can be claimed automatically by the poller or started manually from the UI.
+- Human feedback moves remote items through `HumanFeedback` and `WaitingForIld` before resuming execution.
+- ILD-local run state stores engine-only data such as worktree path, branch, PR URL, and current run ID.
+- The WorkItem Server also stores `RepositoryId`, `CreatedByLoopRunId`, and `HumanFeedbackActions` to round-trip execution context cleanly.
 
 ## Project Layout
 
-```
+```text
 ild/
-├── ILD.sln                       # .NET solution
-├── docker-compose.yml            # Single-container deployment
-├── Dockerfile                    # Multi-stage: frontend → backend → runtime
-├── PRD.md                        # Product requirements
-├── WorkitemServer-PRD.md         # WorkItem server architecture spec
-├── package.json                  # Vite+ workspace root
-├── pnpm-workspace.yaml
-├── vite.config.ts                # Vite+ root config (lint/fmt/check)
-├── ILD.Data/                     # EF Core data layer
-│   ├── AppDbContext.cs           # DbContext + model configuration
-│   ├── Entities/                 # EF entity models (WorkItem, LoopRun, etc.)
-│   ├── DTOs/                     # Wire types and request/response DTOs
-│   ├── Enums/                    # Status / type enums
-│   ├── Stores/                   # IWorkItemStore, ILoopRunStore, etc.
-│   └── ServiceCollectionExtensions.cs
-├── ILD.Core/                     # Business services (no EF Core dep)
-│   └── Services/
-│       ├── Interfaces/
-│       ├── Implementations/
-│       │   ├── Executors/        # Start/Cmd/AI/Human/PR/Cleanup node executors
-│       │   ├── LoopEngine.cs
-│       │   ├── WorkItemManager.cs  (remote-backed)
-│       │   ├── LoopTemplateManager.cs
-│       │   ├── RecoveryManager.cs
-│       │   └── ...
-│       └── Remote/               # Remote WorkItem server client & poller
-│           ├── WorkItemServerClient.cs
-│           ├── RemoteWorkItemPoller.cs
-│           ├── RemoteWorkItemCoordinator.cs
-│           ├── RemoteWorkItemStartupReconciler.cs
-│           ├── IActiveWorkItemTracker.cs
-│           └── ILoopTemplateResolver.cs
-├── ILD.Api/                      # ASP.NET Core host
-│   ├── Program.cs
-│   ├── Configuration/
-│   │   ├── ServiceCollectionExtensions.cs
-│   │   ├── SignalRRunNotifier.cs
-│   │   └── TemplateSeeder.cs
-│   ├── Controllers/              # Auth, WorkItems, LoopTemplates,
-│   │   │                         # LoopRuns, Repositories, RemoteProviders,
-│   │   │                         # AiProviders, Webhooks, Health, Agent
-│   ├── Hubs/                     # LoopRunHub, WorkItemHub
-│   └── Middleware/               # AuthMiddleware
-├── ILD.McpServer/                # MCP server for AI agents
-│   ├── IldClient.cs              # HTTP client to local ILD API
-│   └── Tools/                    # create_workitem, list_workitems, etc.
-├── ILD.WorkItemServer/           # Standalone WorkItem server
-│   ├── Domain/                   # WorkItem, WorkItemStatus, ConversationMessage
-│   ├── Controllers/              # REST API endpoints
-│   ├── Services/                 # WorkItemService, WorkItemMapper
-│   ├── Auth/                     # API key middleware
-│   ├── Hosting/                  # StaleWorkItemReclaimer
-│   └── Data/                     # EF Core context
-├── ILD.Tests/                    # xUnit + Moq
+├── ILD.sln
+├── README.md
+├── PRD.md
+├── docker-compose.yml
+├── Dockerfile
+├── Dockerfile.WorkItemServer
+├── ild.config.json
+├── ILD.Api/
+├── ILD.Core/
+├── ILD.Data/
+├── ILD.McpServer/
+├── ILD.WorkItemServer/
+├── ILD.Tests/
 └── frontend/
-    ├── package.json
-    ├── vite.config.ts            # Vite+ + jsdom for Vitest
-    └── src/
-        ├── components/           # Taskboard, WorkItemCard, WorkItemModal, …
-        ├── hooks/
-        ├── pages/                # Taskboard, LoopEditor, RemoteProviders, Settings
-        ├── services/             # api.ts, auth.ts, signalr client
-        ├── types/
-        └── utils/
 ```
 
----
+Notable source areas:
+
+- `ILD.Api/Controllers` for the HTTP surface.
+- `ILD.Core/Services/Implementations/Executors` for loop node execution.
+- `ILD.Core/Services/Implementations/Adapters` for AI provider implementations.
+- `ILD.Core/Services/Remote` for WorkItem Server polling and coordination.
+- `frontend/src/pages` for taskboard, settings, providers, repositories, and loop-run UI.
 
 ## Development Workflow
 
 ```bash
-# Backend
-dotnet build ILD.sln                                  # build
-dotnet test  ILD.Tests/ILD.Tests.csproj --no-build    # run xUnit suite
-dotnet run   --project ILD.Api                        # start API
+vp install
+dotnet build ILD.sln
+dotnet test ILD.Tests/ILD.Tests.csproj
 
-# Frontend (run inside frontend/)
-vp install      # restore deps via the wrapped package manager
-vp dev          # dev server with /api proxy
-vp test --run   # vitest in CI mode
-vp check        # format + lint + typecheck
-vp build        # production build → frontend/dist
+cd frontend
+vp check
+vp test --run
 ```
 
-Vite+ rules of thumb (see [AGENTS.md](AGENTS.md)):
+Vite+ notes:
 
-- Use `vp add` / `vp remove`, **never** `pnpm add` directly.
-- `vp test` runs the bundled Vitest. Don't install `vitest` as a dep.
-- `vp dev` / `vp build` run Vite, not your npm scripts.
+- Use `vp install`, `vp dev`, `vp check`, and `vp test`.
+- Do not use raw `pnpm` or `npm` installs in this repo.
 
-### QA Preview Config
+### QA Preview
 
-Repositories can opt into shared worktree QA previews by adding an `ild.config.json`
-file at the repository root. ILD reads the `preview.profiles` section to know how
-to install dependencies, start long-running services inside a worktree, wait for
-health checks, and expose a public QA URL. The current repository includes a
-working example in [ild.config.json](ild.config.json).
+If a repository defines `preview.profiles` in `ild.config.json`, ILD can start and manage long-running QA services inside a worktree. The work item modal exposes preview controls, and the same API surface is available to AI tools.
 
-When a work item has an active worktree, both the UI and AI tools call the same
-preview control plane to start, inspect, and stop the preview. The default UI
-entry point is the **QA Preview** section in the work item modal.
-
-Preview config and runtime behavior:
-
-- `install` steps run inside the ILD container before preview services start, so they can bootstrap repo-specific global tooling when needed.
-- Each preview service declares a required `port` alias such as `frontend` or `backend`.
-- `suggestedPort` is only a default presented to humans in the UI. ILD does **not** bind to that port automatically.
-- If no override is supplied when starting a preview, ILD picks a free port for each alias at runtime.
-- Humans can override ports in the **QA Preview** panel before starting the preview.
-- AI agents can override ports by passing `portOverrides` to `ild.preview_start`.
-- Preview sessions default to `600` seconds and auto-stop when that deadline is reached.
-- Setting `timeoutSeconds` to `0` disables auto-stop and keeps the preview running until it is explicitly stopped.
-
-Runtime notes:
-
-- Use `install` commands for uncommon global dependencies that should not be baked into the base ILD image, for example `command -v vp >/dev/null 2>&1 || npm install -g vite-plus`.
-- The UI shows the effective timeout and auto-stop deadline returned by the preview status endpoint.
-- In Docker, only container ports published in [docker-compose.yml](docker-compose.yml) are reachable from the host.
-- If you override a preview port to something other than a published host port, the preview still works inside the container for AI-driven QA, but it will not be reachable from the host browser.
-
-`POST /api/v1/workitems/{id}/preview/start` accepts an optional JSON body with:
-
-- `profileName`: select a non-default preview profile
-- `skipInstall`: skip the `install` steps
-- `publicHost`: override the host used when constructing public preview URLs
-- `portOverrides`: map of port alias to concrete port number, for example `{ "frontend": 3100, "backend": 5100 }`
-- `timeoutSeconds`: preview lifetime in seconds; defaults to `600`, use `0` to disable auto-stop
-
----
+`POST /api/v1/workitems/{id}/preview/start` accepts optional `profileName`, `skipInstall`, `publicHost`, `portOverrides`, and `timeoutSeconds` values.
 
 ## Testing
 
-| Suite           | Command                                             | Count   |
-| --------------- | --------------------------------------------------- | ------- |
-| Backend xUnit   | `dotnet test ILD.Tests/ILD.Tests.csproj --no-build` | **318** |
-| Frontend Vitest | `cd frontend && vp test --run`                      | **127** |
+Primary validation commands:
 
-Backend tests use:
+- `dotnet test ILD.Tests/ILD.Tests.csproj`
+- `cd frontend && vp test --run`
+- `cd frontend && vp check`
 
-- `Microsoft.EntityFrameworkCore.Sqlite` with a real in-memory SQLite database (`TestDb`), exercising the same store layer as production.
-- `xUnit` assertions for test expectations.
-- `Moq` for collaborator stubs.
-- `Microsoft.AspNetCore.Mvc.Testing` for any HTTP-level integration test.
-
-The `LoopEngine` tests in particular cover the trickiest behaviors: happy path, retries within `MaxRetries`, `OnFailure` routing, `MaxTraversals` cycle protection, cancellation, and human-pause handling.
-
----
+The test suite covers loop execution, recovery, polling, repository management, auth, provider adapters, metrics, schema validation, and frontend page/component behavior.
 
 ## API Surface
 
-All routes are prefixed with `/api/v1`. Auth: `Authorization: Bearer <token>` (token from `POST /auth/login`) or `?token=` query for SignalR.
+All ILD API routes are under `/api/v1/...`.
 
-| Method | Route                                               | Purpose                                |
-| ------ | --------------------------------------------------- | -------------------------------------- |
-| POST   | `/auth/login`                                       | Exchange username+password for a token |
-| POST   | `/auth/logout`                                      | Revoke the current session             |
-| GET    | `/health`                                           | Liveness + DB + disk checks            |
-| GET    | `/workitems`                                        | List work items                        |
-| POST   | `/workitems`                                        | Create work item                       |
-| GET    | `/workitems/{id}`                                   | Get work item with runs                |
-| PUT    | `/workitems/{id}`                                   | Update                                 |
-| POST   | `/workitems/{id}/start`                             | Trigger a loop run                     |
-| GET    | `/workitems/{id}/preview`                           | Inspect worktree preview status        |
-| POST   | `/workitems/{id}/preview/start`                     | Start the configured worktree preview  |
-| POST   | `/workitems/{id}/preview/stop`                      | Stop the active worktree preview       |
-| POST   | `/workitems/{id}/transition`                        | Manual status transition               |
-| GET    | `/looptemplates`                                    | List templates                         |
-| POST   | `/looptemplates`                                    | Create (validates graph)               |
-| PUT    | `/looptemplates/{id}`                               | Save (creates a new version)           |
-| POST   | `/looptemplates/validate`                           | Pre-flight validation                  |
-| POST   | `/looptemplates/{id}/clone?newName=…`               | Clone                                  |
-| GET    | `/looptemplates/{id}/versions`                      | Version history                        |
-| GET    | `/looprun/{id}`                                     | Run detail                             |
-| POST   | `/looprun/{id}/cancel`                              | Cancel a run                           |
-| GET    | `/repositories`, `/aiproviders`, `/remoteproviders` | CRUD over each resource                |
-| POST   | `/webhooks/forgejo`                                 | Forgejo / Gitea PR webhook ingress     |
-| GET    | `/agent/workitems`                                  | MCP agent: list work items             |
-| POST   | `/agent/workitems`                                  | MCP agent: create work item            |
+Selected ILD endpoints:
+
+| Method | Route                                  | Purpose                               |
+| ------ | -------------------------------------- | ------------------------------------- |
+| `POST` | `/api/v1/auth/login`                   | Create a session token                |
+| `POST` | `/api/v1/auth/logout`                  | Revoke the current session            |
+| `GET`  | `/api/v1/auth/me`                      | Return the authenticated user         |
+| `GET`  | `/api/v1/health`                       | Database and disk health summary      |
+| `PUT`  | `/api/v1/logging/level`                | Change backend log level at runtime   |
+| `GET`  | `/metrics`                             | Prometheus-style metrics snapshot     |
+| `GET`  | `/api/v1/workitems`                    | List work items                       |
+| `POST` | `/api/v1/workitems/{id}/start`         | Start a Ready work item manually      |
+| `POST` | `/api/v1/workitems/{id}/preview/start` | Start a QA preview                    |
+| `GET`  | `/api/v1/loopruns`                     | List loop runs                        |
+| `GET`  | `/api/v1/loopruns/{id}/events`         | Read run event logs                   |
+| `GET`  | `/api/v1/remoteproviders`              | Manage git + WorkItem Server settings |
+| `GET`  | `/api/v1/agent/workitems`              | Agent-facing work-item listing        |
 
 SignalR hubs:
 
-- `/hubs/looprun` — group `runId` receives `NodeStateChanged`, `EventLogged`, `LoopRunStateChanged`, `Paused`, `Resumed`.
-- `/hubs/workitem` — taskboard updates.
+- `/hubs/loop-run`
+- `/hubs/work-item`
 
-### WorkItem Server REST API
+Standalone WorkItem Server endpoints:
 
-The standalone WorkItem server exposes its own REST surface (separate from the ILD API):
+| Method | Route                        | Purpose                                           |
+| ------ | ---------------------------- | ------------------------------------------------- |
+| `GET`  | `/health`                    | Basic service liveness                            |
+| `GET`  | `/workitems`                 | List work items                                   |
+| `GET`  | `/workitems/poll`            | Heartbeat + ready-item polling                    |
+| `POST` | `/workitems/{id}/transition` | Atomic claim or permissive state change           |
+| `POST` | `/workitems/{id}/feedback`   | Append human feedback and move to `WaitingForIld` |
 
-| Method | Route                                  | Purpose                           |
-| ------ | -------------------------------------- | --------------------------------- |
-| POST   | `/workitems`                           | Create work item                  |
-| GET    | `/workitems`                           | List (filter by status, tags)     |
-| GET    | `/workitems/{id}`                      | Get single                        |
-| PUT    | `/workitems/{id}`                      | Update title/description/tags     |
-| POST   | `/workitems/{id}/transition`           | Transition status (claim, resume) |
-| POST   | `/workitems/{id}/dependencies`         | Add dependency                    |
-| DELETE | `/workitems/{id}/dependencies/{depId}` | Remove dependency                 |
-| POST   | `/workitems/{id}/feedback`             | Submit human feedback             |
-| DELETE | `/workitems/{id}`                      | Delete                            |
-| GET    | `/workitems/poll?activeIds=…`          | Poll + heartbeat                  |
-
-Auth: `Authorization: Bearer <api-key>` or `X-Api-Key` header.
-
----
+The WorkItem Server expects bearer API keys via `Authorization: Bearer <key>`.
 
 ## Deployment
 
-`docker compose up --build` is the supported path. Two containers are deployed:
+The supported deployment is the checked-in compose stack with PostgreSQL plus the two .NET services. ILD and the WorkItem Server both run migrations against PostgreSQL when connection strings are configured.
 
-- **`ild`** — the main ILD API + frontend on port 8080
-- **`ild-workitem-server`** — the WorkItem server on port 8081
+The main `Dockerfile` builds the frontend, publishes the .NET host, and optionally installs additional runtime tooling used by work-item execution. `Dockerfile.WorkItemServer` builds the separate WorkItem Server image.
 
-### Container images
-
-The `Dockerfile` is multi-stage:
-
-1. **frontend-build** — `node:22-alpine`, `npm ci && npm run build` → static files.
-2. **build** — `mcr.microsoft.com/dotnet/sdk:10.0`, `dotnet publish -c Release`.
-3. **final** — `mcr.microsoft.com/dotnet/aspnet:10.0` + `git`. Frontend assets land in `wwwroot/`. Container startup performs root-only setup, then drops to an unprivileged `ild` user before launching the application process.
-
-The `Dockerfile.WorkItemServer` is a simpler two-stage build for the WorkItem server.
-
-### Toolchain customization
-
-The ILD container can be built with additional tools via `ARG` parameters. This is useful when work items need to run build commands, tests, or AI agent execution:
-
-```yaml
-services:
-  ild:
-    build:
-      args:
-        WITH_OPENCODE: 1
-        WITH_NODE: 1
-        WITH_DOTNET_SDK: 1
-        WITH_CHROME: 0
-```
-
-Or via environment variables:
-
-```bash
-WITH_OPENCODE=1 WITH_NODE=1 docker compose build ild
-```
-
-### Bind-mount alternatives
-
-Instead of named volumes, bind-mount to host directories:
+For host bind mounts instead of named volumes:
 
 ```yaml
 volumes:
-  - ./.local/data:/data
-  - ./.local/worktrees:/worktrees
+  - ./.local/ild-data:/data
+  - ./.local/ild-worktrees:/worktrees
+  - ./.local/workitem-data:/data
 ```
-
-### First-run auto-seed
-
-On first startup, if no `RemoteProvider` exists, ILD auto-seeds one using `ILD_WORKITEM_SERVER_URL` and `ILD_WORKITEM_SERVER_API_KEY`. This connects ILD to the WorkItem server without manual UI configuration.
-
-For multi-tenant or HTTPS deployments, terminate TLS at a reverse proxy (Caddy, Traefik, nginx). ILD itself only speaks HTTP and assumes a single trusted user. The WorkItem server should be deployed behind the same reverse proxy with its own API key authentication.
-
----
 
 ## Troubleshooting
 
-**`Cannot resolve scoped service '…' from root provider`**
-A singleton (engine / executor) tried to inject a scoped service directly. Inject `IServiceProvider` and create a scope with `sp.CreateScope()`. The `LoopEngine` follows this pattern, resolving store interfaces from scoped services.
+**Login returns 401 even with the configured password**
 
-**`A possible object cycle was detected`**
-EF navigation properties make cycles. JSON output uses `ReferenceHandler.IgnoreCycles` — keep it that way when adding new endpoints.
+`ILD_PASSWORD` is only used when the bootstrap user is first created. After that, auth uses the stored PBKDF2 hash and a persisted session token.
 
-**Login returns 401 but I'm sure the password is right**
-The bootstrap password is _only_ used the first time the user is created. To reset, stop the container, delete `data/ild.db` (or the matching row), restart with the new `ILD_PASSWORD`.
+**The poller is not claiming work**
 
-**Loop run stuck in `Running` after a crash**
-On startup, `RecoveryManager` reads each run's `RecoveryPolicy`:
+Confirm at least one remote provider has `WorkItemServerUrl` configured, plus a valid WorkItem API key and poll settings. The poller remains effectively disabled until that configuration exists.
 
-- `AutoResume` — resumes via `LoopEngine.RunAsync`.
-- `NeedsReview` — moves the work item to `HumanFeedback`.
-- `Cancel` — cancels the run.
+**A work item is stuck in `Running` remotely**
 
-The `RemoteWorkItemStartupReconciler` also queries the remote server for each tracked work item's status and resumes, tracks, or cleans up accordingly.
+The WorkItem Server reclaims stale running items when heartbeats stop arriving. Check ILD is still tracking the item and that the poller is reaching the remote server.
 
-Set the policy you want on the **template**, not the run.
+**Webhook updates are not reaching ILD**
 
-**Webhook doesn't update PR status**
-Ensure the Forgejo / Gitea webhook posts to `POST /api/v1/webhooks/forgejo` with auth disabled for that path (it's in the `AuthOptions.ExcludedPaths` list). The work item is matched on `WorkItem.PrUrl`.
+The webhook route is not an anonymous bypass. Configure the expected bearer auth and HMAC settings together; a missing or mismatched secret causes rejection.
 
-**Work item stuck in `Running` on the remote server**
-The server's `StaleWorkItemReclaimer` detects items whose heartbeat hasn't been refreshed within the timeout (default 15 minutes) and auto-transitions them back to `Ready`. Check the poller is running and the remote provider is configured correctly.
+**Preview URLs are not reachable from the host**
 
-**Poller not picking up work**
-Verify the Remote Provider settings page has a valid WorkItem server URL and API key. Check the log for `Remote poll:` messages. The poller stays disabled until a RemoteProvider with a `WorkItemServerUrl` exists.
-
----
+Only ports published by compose are reachable from the host browser. An internal preview may still be valid for AI-driven checks even when it is not externally reachable.
 
 ## License
 
-See repository for license details.
+See the repository for license details.
