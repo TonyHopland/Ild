@@ -25,13 +25,23 @@ import {
   nodesToLoopNodes,
   edgesToLoopNodeEdges,
 } from "../../utils/loopGraphConverter";
+import {
+  serializeForExport,
+  downloadExport,
+  parseImportFile,
+  exportNodesToLoopNodes,
+  exportEdgesToLoopNodeEdges,
+} from "../../utils/loopTemplateExport";
 import { checkEdgeConstraints, buildEdge } from "../../utils/edgeUtils";
 import {
   type AiProvider,
   type ConfigFieldDescriptor,
-  EdgeType,
+  type LoopNode,
+  type LoopNodeEdge,
   type LoopTemplate,
+  EdgeType,
   NodeType,
+  RecoveryPolicy,
 } from "../../types";
 import { EdgePanels } from "./components/EdgePanels";
 import { LoopEditorHeader } from "./components/LoopEditorHeader";
@@ -104,6 +114,14 @@ export default function LoopEditor() {
   const [selectedTemplate, setSelectedTemplate] = useState<LoopTemplate | null>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges] = useEdgesState<Edge>([]);
+  const nodesRef = useRef<Node[]>([]);
+  const edgesRef = useRef<Edge[]>([]);
+
+  // Keep refs in sync so handleExport reads current graph without stale closures
+  useEffect(() => {
+    nodesRef.current = nodes;
+    edgesRef.current = edges;
+  }, [nodes, edges]);
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<Edge | null>(null);
   const [pendingConnection, setPendingConnection] = useState<Connection | null>(null);
@@ -148,9 +166,34 @@ export default function LoopEditor() {
   const [showArchived, setShowArchived] = useState(false);
   const [originalNodeConfig, setOriginalNodeConfig] = useState<NodeSettingsSnapshot | null>(null);
 
+  // Import state
+  const [importFeedback, setImportFeedback] = useState<
+    { filename: string; status: "success" | "error" | "skipped"; message: string }[]
+  >([]);
+  const [showImportFeedback, setShowImportFeedback] = useState(false);
+  const [importConflictTemplate, setImportConflictTemplate] = useState<LoopTemplate | null>(null);
+  const [importConflictData, setImportConflictData] = useState<{
+    filename: string;
+    name: string;
+    description: string;
+    recoveryPolicy: RecoveryPolicy;
+    maxNodeExecutions: number;
+    maxWallClockHours: number;
+    nodes: LoopNode[];
+    edges: LoopNodeEdge[];
+  } | null>(null);
+
+  // Refs for import queue — avoids window pollution and stale closures
+  const importQueueRef = useRef<{
+    remainingFiles: File[];
+    feedback: { filename: string; status: "success" | "error" | "skipped"; message: string }[];
+  } | null>(null);
+  const templatesRef = useRef<LoopTemplate[]>([]);
+
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const reactFlowInstance = useRef<any>(null);
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const importFileInputRef = useRef<HTMLInputElement>(null);
   const isNarrow = useMediaQuery("(max-width: 900px)");
 
   const sessionPlaceholderUsages = collectSessionPlaceholderUsages(nodes);
@@ -224,14 +267,15 @@ export default function LoopEditor() {
     [setEdges],
   );
 
-  const loadTemplates = async () => {
+  const loadTemplates = useCallback(async () => {
     try {
       const data = await loopTemplateService.getAll({ includeArchived: true });
       setTemplates(data);
+      templatesRef.current = data;
     } catch (error) {
       setErrorText(loadErrorMessage(error, "Failed to load loop templates."));
     }
-  };
+  }, []);
 
   const loadAiProviders = async () => {
     try {
@@ -349,6 +393,9 @@ export default function LoopEditor() {
         await loopTemplateService.create({
           name: newTemplateName,
           description: "",
+          recoveryPolicy: RecoveryPolicy.AutoResume,
+          maxNodeExecutions: 200,
+          maxWallClockHours: 24,
           nodes: loopNodes,
           edges: loopEdges,
         });
@@ -356,6 +403,9 @@ export default function LoopEditor() {
         await loopTemplateService.update(selectedTemplate.id, {
           name: selectedTemplate.name,
           description: selectedTemplate.description,
+          recoveryPolicy: selectedTemplate.recoveryPolicy,
+          maxNodeExecutions: selectedTemplate.maxNodeExecutions,
+          maxWallClockHours: selectedTemplate.maxWallClockHours,
           nodes: loopNodes,
           edges: loopEdges,
         });
@@ -450,6 +500,251 @@ export default function LoopEditor() {
     setEdges([]);
   };
 
+  // --- Export ---
+  // Issue #5: nodes/edges change on every React Flow interaction, so we read
+  // them from refs inside the handler instead of capturing in useCallback deps.
+  const handleExport = useCallback(() => {
+    // Read current graph from refs to avoid stale closures
+    const loopNodes = nodesToLoopNodes(nodesRef.current);
+    const loopEdges = edgesToLoopNodeEdges(edgesRef.current);
+
+    const exportTemplate: LoopTemplate = selectedTemplate
+      ? {
+          ...selectedTemplate,
+          nodes: loopNodes,
+          edges: loopEdges,
+        }
+      : {
+          id: "",
+          name: newTemplateName || "Untitled",
+          description: "",
+          version: 0,
+          recoveryPolicy: RecoveryPolicy.AutoResume,
+          maxNodeExecutions: 200,
+          maxWallClockHours: 24,
+          nodes: loopNodes,
+          edges: loopEdges,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          isArchived: false,
+        };
+
+    const exportData = serializeForExport(exportTemplate);
+    downloadExport(exportData, exportTemplate.name);
+  }, [selectedTemplate, newTemplateName]);
+
+  // --- Import ---
+  // Issue #1: useRef instead of window for import queue
+  // Issue #2: templatesRef instead of templates to avoid stale closures
+  // Issue #3: LoopNode[]/LoopNodeEdge[] instead of unknown[]
+  // Issue #4: discriminated union from parseImportFile
+  // Issue #6: store original filename in conflict data
+
+  const processSingleImportFile = useCallback(
+    async (
+      file: File,
+      accumulatedFeedback: {
+        filename: string;
+        status: "success" | "error" | "skipped";
+        message: string;
+      }[],
+    ): Promise<{
+      feedback: { filename: string; status: "success" | "error" | "skipped"; message: string }[];
+      haltedForConflict: boolean;
+    }> => {
+      try {
+        const raw = await file.text();
+        const result = parseImportFile(raw);
+
+        if (!result.ok) {
+          accumulatedFeedback.push({
+            filename: file.name,
+            status: "error",
+            message: result.error,
+          });
+          return { feedback: accumulatedFeedback, haltedForConflict: false };
+        }
+
+        const parsed = result.data;
+
+        // Validate graph via API
+        const loopNodes = exportNodesToLoopNodes(parsed.nodes);
+        const loopEdges = exportEdgesToLoopNodeEdges(parsed.edges);
+        const validationResult = await loopTemplateService.validate({
+          nodes: loopNodes,
+          edges: loopEdges,
+        });
+
+        if (!validationResult.valid) {
+          accumulatedFeedback.push({
+            filename: file.name,
+            status: "error",
+            message: `Graph validation failed: ${validationResult.errors.join(", ")}`,
+          });
+          return { feedback: accumulatedFeedback, haltedForConflict: false };
+        }
+
+        // Check for name conflicts — use ref to get fresh data
+        const existing = templatesRef.current.find(
+          (t) => t.name.toLowerCase() === parsed.name.toLowerCase(),
+        );
+
+        if (existing) {
+          // Conflict — store in state for dialog
+          setImportConflictTemplate(existing);
+          setImportConflictData({
+            filename: file.name, // Issue #6: store original filename
+            name: parsed.name,
+            description: parsed.description,
+            recoveryPolicy: parsed.recoveryPolicy,
+            maxNodeExecutions: parsed.maxNodeExecutions,
+            maxWallClockHours: parsed.maxWallClockHours,
+            nodes: loopNodes,
+            edges: loopEdges,
+          });
+          return { feedback: accumulatedFeedback, haltedForConflict: true };
+        }
+
+        // No conflict — create new template
+        await loopTemplateService.create({
+          name: parsed.name,
+          description: parsed.description,
+          recoveryPolicy: parsed.recoveryPolicy,
+          maxNodeExecutions: parsed.maxNodeExecutions,
+          maxWallClockHours: parsed.maxWallClockHours,
+          nodes: loopNodes,
+          edges: loopEdges,
+        });
+
+        accumulatedFeedback.push({
+          filename: file.name,
+          status: "success",
+          message: `Created "${parsed.name}" successfully.`,
+        });
+      } catch (err) {
+        accumulatedFeedback.push({
+          filename: file.name,
+          status: "error",
+          message: loadErrorMessage(err, "Failed to import."),
+        });
+      }
+
+      return { feedback: accumulatedFeedback, haltedForConflict: false };
+    },
+    [],
+  );
+
+  const processImportFiles = useCallback(
+    async (files: File[]) => {
+      // Preserve accumulated feedback from previous batch if continuing after conflict
+      const existingFeedback = importQueueRef.current?.feedback ?? [];
+      const feedback: {
+        filename: string;
+        status: "success" | "error" | "skipped";
+        message: string;
+      }[] = [...existingFeedback];
+
+      // Initialize queue ref for potential conflict continuation
+      importQueueRef.current = { remainingFiles: files, feedback };
+
+      for (const file of files) {
+        const { haltedForConflict } = await processSingleImportFile(file, feedback);
+        if (haltedForConflict) {
+          // Update queue with remaining files
+          const idx = files.indexOf(file);
+          importQueueRef.current = {
+            remainingFiles: files.slice(idx + 1),
+            feedback: [...feedback],
+          };
+          return;
+        }
+      }
+
+      // All files processed
+      importQueueRef.current = null;
+      setImportFeedback(feedback);
+      setShowImportFeedback(true);
+      await loadTemplates();
+    },
+    [processSingleImportFile, loadTemplates],
+  );
+
+  // Helper: after resolving a conflict, continue processing remaining files
+  const continueImportAfterConflict = useCallback(
+    async (extraFeedback: {
+      filename: string;
+      status: "success" | "error" | "skipped";
+      message: string;
+    }) => {
+      setImportConflictTemplate(null);
+      setImportConflictData(null);
+
+      const queue = importQueueRef.current;
+      if (queue && queue.remainingFiles.length > 0) {
+        queue.feedback.push(extraFeedback);
+        // Refresh templates before continuing so next conflict check is accurate
+        await loadTemplates();
+        await processImportFiles(queue.remainingFiles);
+      } else {
+        // Issue 2: preserve accumulated feedback even when queue is empty
+        const allFeedback = queue ? [...queue.feedback, extraFeedback] : [extraFeedback];
+        setImportFeedback(allFeedback);
+        setShowImportFeedback(true);
+        await loadTemplates();
+      }
+    },
+    [loadTemplates, processImportFiles],
+  );
+
+  const handleImportConflictUpdate = useCallback(async () => {
+    if (!importConflictTemplate || !importConflictData) return;
+
+    try {
+      await loopTemplateService.update(importConflictTemplate.id, {
+        name: importConflictData.name,
+        description: importConflictData.description,
+        recoveryPolicy: importConflictData.recoveryPolicy,
+        maxNodeExecutions: importConflictData.maxNodeExecutions,
+        maxWallClockHours: importConflictData.maxWallClockHours,
+        nodes: importConflictData.nodes,
+        edges: importConflictData.edges,
+      });
+
+      await continueImportAfterConflict({
+        filename: importConflictData.filename,
+        status: "success",
+        message: `Updated "${importConflictData.name}" successfully.`,
+      });
+    } catch (err) {
+      await continueImportAfterConflict({
+        filename: importConflictData.filename,
+        status: "error",
+        message: loadErrorMessage(err, "Failed to update template."),
+      });
+    }
+  }, [importConflictTemplate, importConflictData, continueImportAfterConflict]);
+
+  const handleImportConflictSkip = useCallback(async () => {
+    if (!importConflictData) return;
+
+    await continueImportAfterConflict({
+      filename: importConflictData.filename,
+      status: "skipped",
+      message: `Skipped "${importConflictData.name}" (already exists).`,
+    });
+  }, [importConflictData, continueImportAfterConflict]);
+
+  const triggerImportFilePicker = () => {
+    importFileInputRef.current?.click();
+  };
+
+  const handleImportFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+    void processImportFiles(Array.from(files));
+    event.target.value = ""; // reset so same file can be re-selected
+  };
+
   const onInit = useCallback((flow: any) => {
     reactFlowInstance.current = flow;
   }, []);
@@ -459,6 +754,17 @@ export default function LoopEditor() {
       event.preventDefault();
       event.stopPropagation();
 
+      // Check for JSON file drops first
+      const files = event.dataTransfer.files;
+      if (files && files.length > 0) {
+        const jsonFiles = Array.from(files).filter((f) => f.name.endsWith(".json"));
+        if (jsonFiles.length > 0) {
+          void processImportFiles(jsonFiles);
+          return;
+        }
+      }
+
+      // Fall back to node palette drop
       const nodeType = event.dataTransfer.getData("application/loop-node-type");
       if (!nodeType || !reactFlowWrapper.current || !reactFlowInstance.current) return;
 
@@ -480,12 +786,14 @@ export default function LoopEditor() {
 
       setNodes((currentNodes) => currentNodes.concat(newNode));
     },
-    [setNodes],
+    [setNodes, processImportFiles],
   );
 
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
+    // Show copy effect for file drops, move effect for node palette drops
+    const isFileDrop = event.dataTransfer.types.includes("Files");
+    event.dataTransfer.dropEffect = isFileDrop ? "copy" : "move";
   }, []);
 
   const onNodeClick = useCallback(
@@ -802,6 +1110,78 @@ export default function LoopEditor() {
     <div className="page-container">
       <ErrorBanner message={errorText} onDismiss={() => setErrorText("")} />
 
+      {/* Hidden file input for import */}
+      <input
+        ref={importFileInputRef}
+        type="file"
+        accept=".json,application/json"
+        multiple
+        style={{ display: "none" }}
+        onChange={handleImportFileChange}
+      />
+
+      {/* Import feedback panel */}
+      {showImportFeedback && importFeedback.length > 0 && (
+        <div className="import-feedback-panel">
+          <div className="import-feedback-header">
+            <span>Import Results</span>
+            <button className="import-feedback-close" onClick={() => setShowImportFeedback(false)}>
+              ✕
+            </button>
+          </div>
+          <div className="import-feedback-list">
+            {importFeedback.map((item, index) => (
+              <div key={index} className={`import-feedback-item import-feedback-${item.status}`}>
+                <span className="import-feedback-status-icon">
+                  {item.status === "success" ? "✓" : item.status === "error" ? "✗" : "−"}
+                </span>
+                <span className="import-feedback-filename">{item.filename}</span>
+                <span className="import-feedback-message">{item.message}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Import conflict dialog */}
+      {importConflictTemplate && importConflictData && (
+        <div className="modal-overlay" onClick={handleImportConflictSkip}>
+          <div
+            className="modal-content import-conflict-modal"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Import conflict"
+          >
+            <div className="modal-header">
+              <h2>Template Already Exists</h2>
+            </div>
+            <div className="modal-body">
+              <p>
+                A template named <strong>"{importConflictData.name}"</strong> already exists.
+              </p>
+              <p>What would you like to do?</p>
+            </div>
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={handleImportConflictSkip}
+              >
+                Skip
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleImportConflictUpdate}
+              >
+                Update
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <LoopEditorHeader readOnlyVersion={readOnlyVersion} onExitReadOnlyMode={exitReadOnlyMode} />
 
       <div
@@ -826,7 +1206,9 @@ export default function LoopEditor() {
             onToggleSidebar={() => setSidebarVisible(false)}
             onNewTemplateNameChange={setNewTemplateName}
             onSave={handleSave}
+            onExport={handleExport}
             onCreateTemplate={handleNewTemplate}
+            onImport={triggerImportFilePicker}
             onShowArchivedChange={setShowArchived}
             onSelectTemplate={selectTemplate}
             onStartClone={(template) => {

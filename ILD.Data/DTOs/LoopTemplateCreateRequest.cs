@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using ILD.Data.Enums;
 
 namespace ILD.Data.DTOs;
 
@@ -10,6 +11,12 @@ public class LoopTemplateCreateRequest
 
     [StringLength(8192)]
     public string Description { get; set; } = string.Empty;
+
+    public RecoveryPolicy RecoveryPolicy { get; set; } = RecoveryPolicy.AutoResume;
+
+    public int MaxNodeExecutions { get; set; } = 200;
+
+    public int MaxWallClockHours { get; set; } = 24;
 
     public List<LoopNodeDto> Nodes { get; set; } = new();
 
