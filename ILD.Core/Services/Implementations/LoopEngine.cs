@@ -84,10 +84,28 @@ public class LoopEngine : ILoopEngine
         {
             var manager = scope.ServiceProvider.GetRequiredService<IWorkItemManager>();
             var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+            var tracker = scope.ServiceProvider.GetRequiredService<IActiveWorkItemTracker>();
             var resolver = scope.ServiceProvider.GetRequiredService<Remote.ILoopTemplateResolver>();
 
             var wi = await manager.GetWorkItemAsync(workItemId)
                 ?? throw new InvalidOperationException($"WorkItem {workItemId} not found");
+
+            var existingRun = await loopRunStore.GetCurrentByWorkItemAsync(workItemId);
+            if (existingRun != null)
+            {
+                tracker.Add(workItemId);
+
+                if (existingRun.Status == LoopRunStatus.Running && wi.Status != RemoteWorkItemStatus.Running)
+                {
+                    await manager.TransitionAsync(
+                        workItemId,
+                        RemoteWorkItemStatus.Running,
+                        currentLoopRunId: existingRun.Id);
+                }
+
+                throw new InvalidOperationException(
+                    $"WorkItem {workItemId} already has a non-completed run ({existingRun.Id}) in status {existingRun.Status}.");
+            }
 
             // Resolve the loop template from the work item's tags. This is the
             // single source of truth per PRD §3.7 — users no longer pick a
@@ -127,6 +145,7 @@ public class LoopEngine : ILoopEngine
             };
             await loopRunStore.CreateRunAsync(run);
             await manager.TransitionAsync(workItemId, RemoteWorkItemStatus.Running, currentLoopRunId: run.Id);
+            tracker.Add(workItemId);
             runId = run.Id;
         }
 

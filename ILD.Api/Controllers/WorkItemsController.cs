@@ -143,8 +143,15 @@ public class WorkItemsController : ControllerBase
     [HttpPost("{id}/start")]
     public async Task<IActionResult> Start(string id)
     {
-        await _engine.StartRunAsync(id);
-        return Accepted();
+        try
+        {
+            await _engine.StartRunAsync(id);
+            return Accepted();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { error = ex.Message });
+        }
     }
 
     [HttpGet("{id}/preview")]
