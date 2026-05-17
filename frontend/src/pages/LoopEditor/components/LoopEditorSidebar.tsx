@@ -92,7 +92,7 @@ export function LoopEditorSidebar({
                 {isSaving ? "Saving..." : "Save"}
               </button>
               <button className="export-btn" onClick={onExport} title="Export template to JSON">
-                ⬇ Export
+                ⬆ Export
               </button>
             </>
           )}
@@ -101,7 +101,7 @@ export function LoopEditorSidebar({
               New Template
             </button>
             <button className="import-btn" onClick={onImport} title="Import template from JSON">
-              ⬆ Import
+              ⬇ Import
             </button>
           </div>
         </div>
