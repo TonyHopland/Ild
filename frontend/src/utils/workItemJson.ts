@@ -1,21 +1,12 @@
 import type { ConversationMessage, WorkItem } from "../types";
 
 /**
- * Parse a server-side `TagsJson` payload (a stringified JSON array of
- * strings) into a tag[]. Tolerates null/empty/invalid JSON by returning
- * an empty array — the UI never crashes if the server sends garbage.
+ * Get the tag list from a WorkItem. The API returns tags as a plain
+ * string array, so this is a simple safe accessor that tolerates
+ * null/missing data.
  */
-export function parseTags(workItem: Pick<WorkItem, "tagsJson">): string[] {
-  if (!workItem.tagsJson) return [];
-  try {
-    const parsed = JSON.parse(workItem.tagsJson);
-    if (Array.isArray(parsed)) {
-      return parsed.filter((t): t is string => typeof t === "string");
-    }
-  } catch {
-    // fall through
-  }
-  return [];
+export function parseTags(workItem: Pick<WorkItem, "tags">): string[] {
+  return workItem.tags?.filter((t): t is string => typeof t === "string") ?? [];
 }
 
 /**

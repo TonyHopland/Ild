@@ -15,7 +15,7 @@ function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
     description: "desc",
     status: WorkItemStatus.Backlog,
     priority: WorkItemPriority.Medium,
-    labels: [],
+    tags: [],
     loopTemplateId: "",
     loopTemplateVersion: "",
     repositoryId: "",
