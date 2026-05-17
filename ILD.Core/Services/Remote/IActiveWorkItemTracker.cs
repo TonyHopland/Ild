@@ -6,7 +6,7 @@ namespace ILD.Core.Services.Remote;
 /// Tracks the work items this ILD instance currently considers active
 /// (Running / HumanFeedback / WaitingForIld). Used as the heartbeat input on
 /// every poll and as the recovery seed on startup. The default
-/// implementation is in-memory; a SQLite-backed implementation lands when
+/// implementation is in-memory; a database-backed implementation lands when
 /// the hard switch removes the local WorkItemManager.
 /// </summary>
 public interface IActiveWorkItemTracker
