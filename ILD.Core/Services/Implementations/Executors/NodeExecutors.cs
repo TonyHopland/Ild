@@ -393,6 +393,7 @@ public sealed class CleanupNodeExecutor : INodeExecutor
     {
         using var scope = _sp.CreateScope();
         var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+        var previewService = scope.ServiceProvider.GetService<IWorktreePreviewService>();
 
         var run = await loopRunStore.GetByIdAsync(ctx.Run.Id);
         if (run == null) return new NodeOutcome.Failed("LoopRun not found");
@@ -400,15 +401,29 @@ public sealed class CleanupNodeExecutor : INodeExecutor
         string? worktreePath = run.WorktreePath;
         if (!string.IsNullOrEmpty(worktreePath) && Directory.Exists(worktreePath))
         {
+            // Stop any running QA preview to release ports before destroying the worktree.
+            if (previewService != null)
+            {
+                try
+                {
+                    await previewService.StopAsync(worktreePath, ctx.CancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    // Do NOT clear WorktreePath — the worktree still exists on disk and
+                    // may need to be cleaned up on retry or by an operator.
+                    return new NodeOutcome.Failed($"cleanup failed stopping preview: {ex.Message} (path: {worktreePath})");
+                }
+            }
+
             try
             {
                 await _repo.DestroyWorktreeAsync(worktreePath);
             }
             catch (Exception ex)
             {
-                run.WorktreePath = null;
-                await loopRunStore.UpdateRunAsync(run);
-                return new NodeOutcome.Terminal($"cleanup failed: {ex.Message} (path: {worktreePath})");
+                // Do NOT clear WorktreePath — the worktree still exists on disk.
+                return new NodeOutcome.Failed($"cleanup failed: {ex.Message} (path: {worktreePath})");
             }
             run.WorktreePath = null;
             await loopRunStore.UpdateRunAsync(run);
