@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
@@ -64,13 +63,13 @@ public class CleanupNodeExecutorTests
 
             var result = await executor.ExecuteAsync(ctx);
 
-            result.Success.Should().BeTrue();
-            result.Output.Should().Contain("destroyed");
-            result.Output.Should().Contain(worktreePath);
+            Assert.True(result.Success);
+            Assert.Contains("destroyed", result.Output);
+            Assert.Contains(worktreePath, result.Output);
             preview.Verify(p => p.StopAsync(worktreePath, It.IsAny<CancellationToken>()), Times.Once);
             repo.Verify(r => r.DestroyWorktreeAsync(worktreePath), Times.Once);
             var reloaded = db.Fresh().LoopRuns.AsNoTracking().First(r => r.Id == run.Id);
-            reloaded.WorktreePath.Should().BeNull("Cleanup must clear the WorktreePath after destroying the worktree");
+            Assert.Null(reloaded.WorktreePath);
         }
         finally
         {
@@ -125,8 +124,8 @@ public class CleanupNodeExecutorTests
 
             var result = await executor.ExecuteAsync(ctx);
 
-            result.Success.Should().BeTrue();
-            result.Output.Should().Contain("destroyed");
+            Assert.True(result.Success);
+            Assert.Contains("destroyed", result.Output);
             repo.Verify(r => r.DestroyWorktreeAsync(worktreePath), Times.Once);
         }
         finally
@@ -175,8 +174,8 @@ public class CleanupNodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
-        result.Output.Should().Contain("skipped");
+        Assert.True(result.Success);
+        Assert.Contains("skipped", result.Output);
         repo.Verify(r => r.DestroyWorktreeAsync(It.IsAny<string>()), Times.Never);
     }
 
@@ -231,11 +230,11 @@ public class CleanupNodeExecutorTests
 
             var result = await executor.ExecuteAsync(ctx);
 
-            result.Success.Should().BeFalse("cleanup failure must not be reported as success");
-            result.Error.Should().Contain("failed");
-            result.Error.Should().Contain("disk full");
+            Assert.False(result.Success);
+            Assert.Contains("failed", result.Error);
+            Assert.Contains("disk full", result.Error);
             var reloaded = db.Fresh().LoopRuns.AsNoTracking().First(r => r.Id == run.Id);
-            reloaded.WorktreePath.Should().Be(worktreePath, "WorktreePath must be preserved so the worktree can be recovered or cleaned up on retry");
+            Assert.Equal(worktreePath, reloaded.WorktreePath);
         }
         finally
         {
@@ -293,12 +292,12 @@ public class CleanupNodeExecutorTests
 
             var result = await executor.ExecuteAsync(ctx);
 
-            result.Success.Should().BeFalse("cleanup failure must not be reported as success");
-            result.Error.Should().Contain("failed");
-            result.Error.Should().Contain("preview stop failed");
+            Assert.False(result.Success);
+            Assert.Contains("failed", result.Error);
+            Assert.Contains("preview stop failed", result.Error);
             repo.Verify(r => r.DestroyWorktreeAsync(It.IsAny<string>()), Times.Never, "worktree destroy should not run if preview stop fails");
             var reloaded = db.Fresh().LoopRuns.AsNoTracking().First(r => r.Id == run.Id);
-            reloaded.WorktreePath.Should().Be(worktreePath, "WorktreePath must be preserved so the worktree can be recovered or cleaned up on retry");
+            Assert.Equal(worktreePath, reloaded.WorktreePath);
         }
         finally
         {

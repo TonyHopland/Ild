@@ -1,5 +1,4 @@
 using System.Linq;
-using FluentAssertions;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
@@ -35,8 +34,8 @@ public class LoopTemplateValidationTests
 
         var result = await manager.ValidateGraphAsync(g);
 
-        result.Valid.Should().BeTrue();
-        result.Errors.Should().BeEmpty();
+        Assert.True(result.Valid);
+        Assert.Empty(result.Errors);
     }
 
     [Fact]
@@ -55,10 +54,10 @@ public class LoopTemplateValidationTests
 
         var result = await manager.ValidateGraphAsync(g);
 
-        result.Valid.Should().BeFalse();
-        result.Errors.Should().NotBeEmpty();
-        result.Errors.Should().Contain(e => e.Contains("Bogus.Thing"));
-        result.Errors.Should().Contain(e => e.Contains("Unknown placeholder"));
+        Assert.False(result.Valid);
+        Assert.NotEmpty(result.Errors);
+        Assert.Contains(result.Errors, e => e.Contains("Bogus.Thing"));
+        Assert.Contains(result.Errors, e => e.Contains("Unknown placeholder"));
     }
 
     [Fact]
@@ -77,10 +76,10 @@ public class LoopTemplateValidationTests
 
         var result = await manager.ValidateGraphAsync(g);
 
-        result.Valid.Should().BeFalse();
-        result.Errors.Should().HaveCount(2);
-        result.Errors.Should().Contain(e => e.Contains("Bogus.One"));
-        result.Errors.Should().Contain(e => e.Contains("Bogus.Two"));
+        Assert.False(result.Valid);
+        Assert.Equal(2, result.Errors.Count());
+        Assert.Contains(result.Errors, e => e.Contains("Bogus.One"));
+        Assert.Contains(result.Errors, e => e.Contains("Bogus.Two"));
     }
 
     [Fact]
@@ -99,8 +98,8 @@ public class LoopTemplateValidationTests
 
         var result = await manager.ValidateGraphAsync(g);
 
-        result.Valid.Should().BeTrue();
-        result.Errors.Should().BeEmpty();
+        Assert.True(result.Valid);
+        Assert.Empty(result.Errors);
     }
 
     [Fact]
@@ -118,8 +117,8 @@ public class LoopTemplateValidationTests
 
         var result = await manager.ValidateGraphAsync(g);
 
-        result.Valid.Should().BeFalse();
-        result.Errors.Should().Contain(e => e.Contains("Start"));
+        Assert.False(result.Valid);
+        Assert.Contains(result.Errors, e => e.Contains("Start"));
     }
 
     [Fact]
@@ -137,7 +136,7 @@ public class LoopTemplateValidationTests
 
         var result = await manager.ValidateGraphAsync(g);
 
-        result.Valid.Should().BeFalse();
-        result.Errors.Should().Contain(e => e.Contains("Cleanup"));
+        Assert.False(result.Valid);
+        Assert.Contains(result.Errors, e => e.Contains("Cleanup"));
     }
 }

@@ -1,4 +1,3 @@
-using FluentAssertions;
 using System.Text.Json;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.DTOs;
@@ -19,9 +18,9 @@ public class PiAdapterTests
     {
         var adapter = new PiAdapter();
 
-        adapter.Name.Should().Be("Pi");
-        adapter.SupportedProviderTypes.Should().Contain("pi");
-        adapter.ConfigSchema.Should().BeEmpty();
+        Assert.Equal("Pi", adapter.Name);
+        Assert.Contains("pi", adapter.SupportedProviderTypes);
+        Assert.Empty(adapter.ConfigSchema);
     }
 
     [Fact]
@@ -33,8 +32,8 @@ public class PiAdapterTests
             binaryPath: "/nonexistent/pi",
             executionCount: 1));
 
-        result.Success.Should().BeFalse();
-        result.Error.Should().Contain("pi-error");
+        Assert.False(result.Success);
+        Assert.Contains("pi-error", result.Error);
     }
 
     [Fact]
@@ -67,11 +66,11 @@ public class PiAdapterTests
                     return Task.CompletedTask;
                 }));
 
-            result.Success.Should().BeTrue();
-            result.Output.Should().Be("hello world");
-            result.SessionId.Should().Be("pi-session-123");
-            progress.Should().Contain("hello ");
-            progress.Should().Contain("world");
+            Assert.True(result.Success);
+            Assert.Equal("hello world", result.Output);
+            Assert.Equal("pi-session-123", result.SessionId);
+            Assert.Contains("hello ", progress);
+            Assert.Contains("world", progress);
         }
         finally
         {
@@ -119,9 +118,9 @@ public class PiAdapterTests
                 ExecutionCount: 1,
                 Cancel: CancellationToken.None));
 
-            result.Success.Should().BeTrue();
-            result.Output.Should().Be("ok");
-            result.Error.Should().BeNull();
+            Assert.True(result.Success);
+            Assert.Equal("ok", result.Output);
+            Assert.Null(result.Error);
         }
         finally
         {
@@ -170,24 +169,24 @@ public class PiAdapterTests
 
         try
         {
-            result.Success.Should().BeTrue();
-            result.Output.Should().Contain("agent-dir=");
-            result.Output.Should().Contain("api-key=sk-local");
-            result.Output.Should().Contain("--provider");
-            result.Output.Should().Contain("ild-11111111111111111111111111111111");
-            result.Output.Should().Contain("--model");
-            result.Output.Should().Contain("default_model");
-            result.Output.Should().NotContain("--api-key");
-            result.Output.Should().NotContain("\n--\n");
+            Assert.True(result.Success);
+            Assert.Contains("agent-dir=", result.Output);
+            Assert.Contains("api-key=sk-local", result.Output);
+            Assert.Contains("--provider", result.Output);
+            Assert.Contains("ild-11111111111111111111111111111111", result.Output);
+            Assert.Contains("--model", result.Output);
+            Assert.Contains("default_model", result.Output);
+            Assert.DoesNotContain("--api-key", result.Output);
+            Assert.DoesNotContain("\n--\n", result.Output);
 
             var agentDir = Path.Combine(Path.GetTempPath(), "ild-pi-agent", runId.ToString("N"));
             var modelsJsonPath = Path.Combine(agentDir, "models.json");
-            File.Exists(modelsJsonPath).Should().BeTrue();
+            Assert.True(File.Exists(modelsJsonPath));
             var modelsJson = await File.ReadAllTextAsync(modelsJsonPath);
-            modelsJson.Should().Contain("http://192.168.1.5:1234/v1");
-            modelsJson.Should().Contain("default_model");
-            modelsJson.Should().Contain("openai-completions");
-            modelsJson.Should().Contain("ILD_PI_PROVIDER_API_KEY");
+            Assert.Contains("http://192.168.1.5:1234/v1", modelsJson);
+            Assert.Contains("default_model", modelsJson);
+            Assert.Contains("openai-completions", modelsJson);
+            Assert.Contains("ILD_PI_PROVIDER_API_KEY", modelsJson);
         }
         finally
         {
@@ -222,17 +221,17 @@ public class PiAdapterTests
                 executionCount: 1,
                 manageSession: true));
 
-            result.Success.Should().BeTrue();
-            result.Output.Should().Contain("--mode");
-            result.Output.Should().Contain("json");
-            result.Output.Should().Contain("--session-dir");
-            result.Output.Should().Contain("--session");
-            result.Output.Should().Contain("openai/gpt-5");
-            result.Output.Should().Contain("sk-test");
-            result.Output.Should().NotContain("\n--\n");
-            result.Output.Should().Contain("STDIN-BEGIN");
-            result.Output.Should().Contain("my prompt");
-            result.Output.Should().Contain("STDIN-END");
+            Assert.True(result.Success);
+            Assert.Contains("--mode", result.Output);
+            Assert.Contains("json", result.Output);
+            Assert.Contains("--session-dir", result.Output);
+            Assert.Contains("--session", result.Output);
+            Assert.Contains("openai/gpt-5", result.Output);
+            Assert.Contains("sk-test", result.Output);
+            Assert.DoesNotContain("\n--\n", result.Output);
+            Assert.Contains("STDIN-BEGIN", result.Output);
+            Assert.Contains("my prompt", result.Output);
+            Assert.Contains("STDIN-END", result.Output);
         }
         finally
         {
@@ -271,10 +270,10 @@ public class PiAdapterTests
                 executionCount: 1,
                 manageSession: true));
 
-            result.Success.Should().BeTrue();
+            Assert.True(result.Success);
             var restoredSessionPath = Path.Combine(Path.GetTempPath(), "ild-pi-sessions", runId.ToString("N"), "pi-session-restore.jsonl");
-            File.Exists(restoredSessionPath).Should().BeTrue();
-            (await File.ReadAllTextAsync(restoredSessionPath)).Should().Contain("pi-session-restore");
+            Assert.True(File.Exists(restoredSessionPath));
+            Assert.Contains("pi-session-restore", (await File.ReadAllTextAsync(restoredSessionPath)));
         }
         finally
         {
@@ -314,9 +313,9 @@ public class PiAdapterTests
                 executionCount: 1,
                 manageSession: true));
 
-            result.Success.Should().BeTrue();
-            result.Output.Should().Contain("--session");
-            result.Output.Should().Contain(actualSessionPath);
+            Assert.True(result.Success);
+            Assert.Contains("--session", result.Output);
+            Assert.Contains(actualSessionPath, result.Output);
         }
         finally
         {
@@ -347,12 +346,12 @@ public class PiAdapterTests
                 worktreePath: worktreeDir,
                 executionCount: 1));
 
-            result.Success.Should().BeTrue();
-            result.Output.Should().NotContain("Unknown option");
-            result.Output.Should().Contain("STDIN-BEGIN");
-            result.Output.Should().Contain("---");
-            result.Output.Should().Contain("name: to-issues");
-            result.Output.Should().Contain("STDIN-END");
+            Assert.True(result.Success);
+            Assert.DoesNotContain("Unknown option", result.Output);
+            Assert.Contains("STDIN-BEGIN", result.Output);
+            Assert.Contains("---", result.Output);
+            Assert.Contains("name: to-issues", result.Output);
+            Assert.Contains("STDIN-END", result.Output);
         }
         finally
         {
@@ -407,20 +406,20 @@ public class PiAdapterTests
 
             var agentDir = Path.Combine(Path.GetTempPath(), "ild-pi-agent", runId.ToString("N"));
             var extensionPath = Path.Combine(agentDir, "extensions", "ild.ts");
-            File.Exists(extensionPath).Should().BeTrue("extension file should be written to agent directory/extensions");
+            Assert.True(File.Exists(extensionPath));
 
             var extensionContent = await File.ReadAllTextAsync(extensionPath);
-            extensionContent.Should().Contain("ild_list_workitems");
-            extensionContent.Should().Contain("ild_get_workitem");
-            extensionContent.Should().Contain("ild_create_workitem");
-            extensionContent.Should().Contain("ild_list_repositories");
-            extensionContent.Should().Contain("ild_list_loop_templates");
-            extensionContent.Should().Contain("ild_list_loop_runs");
-            extensionContent.Should().Contain("http://ild-api.test:5000");
-            extensionContent.Should().Contain("ild-token");
-            extensionContent.Should().NotContain("http://192.168.1.5:1234/v1");
-            extensionContent.Should().NotContain("sk-local");
-            extensionContent.Should().Contain(runId.ToString());
+            Assert.Contains("ild_list_workitems", extensionContent);
+            Assert.Contains("ild_get_workitem", extensionContent);
+            Assert.Contains("ild_create_workitem", extensionContent);
+            Assert.Contains("ild_list_repositories", extensionContent);
+            Assert.Contains("ild_list_loop_templates", extensionContent);
+            Assert.Contains("ild_list_loop_runs", extensionContent);
+            Assert.Contains("http://ild-api.test:5000", extensionContent);
+            Assert.Contains("ild-token", extensionContent);
+            Assert.DoesNotContain("http://192.168.1.5:1234/v1", extensionContent);
+            Assert.DoesNotContain("sk-local", extensionContent);
+            Assert.Contains(runId.ToString(), extensionContent);
         }
         finally
         {
@@ -441,8 +440,8 @@ public class PiAdapterTests
             "sk-local\r\nnext-line",
             Guid.NewGuid().ToString());
 
-        extensionContent.Should().Contain("const API_TOKEN = \"sk-local\\r\\nnext-line\";");
-        extensionContent.Should().NotContain("sk-local\r\nnext-line");
+        Assert.Contains("const API_TOKEN = \"sk-local\\r\\nnext-line\";", extensionContent);
+        Assert.DoesNotContain("sk-local\r\nnext-line", extensionContent);
     }
 
     [Fact]
@@ -453,13 +452,13 @@ public class PiAdapterTests
             "Local",
             Guid.NewGuid().ToString());
 
-        extensionContent.Should().Contain("function joinApiUrl(base: string, path: string): string {");
-        extensionContent.Should().Contain("const url = joinApiUrl(API_BASE, path);");
-        extensionContent.Should().NotContain("const url = API_BASE + path;");
-        extensionContent.Should().Contain("if (params.status != null) qs.set(\"status\", params.status);");
-        extensionContent.Should().Contain("if (params.skip !== undefined) qs.set(\"skip\", String(params.skip));");
-        extensionContent.Should().Contain("const url = qs.toString() ? `api/v1/agent/workitems?${qs.toString()}` : \"api/v1/agent/workitems\";");
-        extensionContent.Should().NotContain("qs.set(\"\nstatus");
+        Assert.Contains("function joinApiUrl(base: string, path: string): string {", extensionContent);
+        Assert.Contains("const url = joinApiUrl(API_BASE, path);", extensionContent);
+        Assert.DoesNotContain("const url = API_BASE + path;", extensionContent);
+        Assert.Contains("if (params.status != null) qs.set(\"status\", params.status);", extensionContent);
+        Assert.Contains("if (params.skip !== undefined) qs.set(\"skip\", String(params.skip));", extensionContent);
+        Assert.Contains("const url = qs.toString() ? `api/v1/agent/workitems?${qs.toString()}` : \"api/v1/agent/workitems\";", extensionContent);
+        Assert.DoesNotContain("qs.set(\"\nstatus", extensionContent);
     }
 
     [Fact]
@@ -483,10 +482,10 @@ public class PiAdapterTests
                 runId: runId,
                 executionCount: 1));
 
-            result.Success.Should().BeTrue();
+            Assert.True(result.Success);
 
             var agentDir = Path.Combine(Path.GetTempPath(), "ild-pi-agent", runId.ToString("N"));
-            Directory.Exists(agentDir).Should().BeFalse("agent directory should not be created when no HTTP base URL");
+            Assert.False(Directory.Exists(agentDir));
         }
         finally
         {

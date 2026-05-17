@@ -1,5 +1,4 @@
 using System.Net;
-using FluentAssertions;
 
 namespace ILD.Tests.Integration;
 
@@ -17,7 +16,7 @@ public class EventLogIntegrationTests
         await using var factory = new ApiFactory();
         var client = factory.CreateClient();
         var response = await client.GetAsync("/api/v1/loopruns/" + Guid.NewGuid() + "/events");
-        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]
@@ -27,6 +26,6 @@ public class EventLogIntegrationTests
         var client = await factory.CreateAuthenticatedClientAsync();
         var response = await client.GetAsync("/api/v1/loopruns/" + Guid.NewGuid() + "/events");
         // Controller returns either 404 (no run) or 200 with empty page.
-        response.StatusCode.Should().BeOneOf(HttpStatusCode.OK, HttpStatusCode.NotFound);
+        Assert.Contains(response.StatusCode, new[] { HttpStatusCode.OK, HttpStatusCode.NotFound });
     }
 }

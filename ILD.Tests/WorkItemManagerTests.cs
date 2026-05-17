@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Core.Services.Remote;
 using ILD.Data.Enums;
 using ILD.Data.Entities;
@@ -58,7 +57,7 @@ public class WorkItemManagerTests
         var id = await mgr.CreateWorkItemAsync("title", "desc", repoId);
 
         var wi = await mgr.GetWorkItemAsync(id);
-        wi!.Status.Should().Be(RemoteWorkItemStatus.WorkQueue);
+        Assert.Equal(RemoteWorkItemStatus.WorkQueue, wi!.Status);
     }
 
     [Fact]
@@ -74,7 +73,7 @@ public class WorkItemManagerTests
         var id = await mgr.CreateWorkItemAsync("title", "desc", repoId);
 
         var wi = await mgr.GetWorkItemAsync(id);
-        wi!.Status.Should().Be(RemoteWorkItemStatus.Backlog);
+        Assert.Equal(RemoteWorkItemStatus.Backlog, wi!.Status);
     }
 
     [Fact]
@@ -88,12 +87,12 @@ public class WorkItemManagerTests
         await Task.Delay(5);
 
         var ok = await mgr.UpdateAsync(id, "new title", "new desc");
-        ok.Should().BeTrue();
+        Assert.True(ok);
 
         var reloaded = await mgr.GetWorkItemAsync(id);
-        reloaded!.Title.Should().Be("new title");
-        reloaded.Description.Should().Be("new desc");
-        reloaded.UpdatedAt.Should().NotBe(before);
+        Assert.Equal("new title", reloaded!.Title);
+        Assert.Equal("new desc", reloaded.Description);
+        Assert.NotEqual(before, reloaded.UpdatedAt);
     }
 
     [Fact]
@@ -102,7 +101,7 @@ public class WorkItemManagerTests
         var (mgr, db, _, _, _) = Setup();
         using var _ = db;
 
-        (await mgr.UpdateAsync(Guid.NewGuid().ToString(), "t", "d")).Should().BeFalse();
+        Assert.False((await mgr.UpdateAsync(Guid.NewGuid().ToString(), "t", "d")));
     }
 
     [Fact]
@@ -114,7 +113,7 @@ public class WorkItemManagerTests
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         await mgr.TransitionToWorkQueueAsync(id);
 
-        (await mgr.IsReadyAsync(id)).Should().BeTrue();
+        Assert.True((await mgr.IsReadyAsync(id)));
     }
 
     [Fact]
@@ -127,7 +126,7 @@ public class WorkItemManagerTests
         var child = await mgr.CreateWorkItemAsync("child", "", repoId);
         await mgr.AddDependencyAsync(child, dep);
 
-        (await mgr.IsReadyAsync(child)).Should().BeFalse();
+        Assert.False((await mgr.IsReadyAsync(child)));
     }
 
     [Fact]
@@ -148,7 +147,7 @@ public class WorkItemManagerTests
         await mgr.LinkPullRequestAsync(dep, "https://forgejo/pr/1");
         await mgr.ManuallyMarkMergedAsync(dep);
 
-        (await mgr.IsReadyAsync(child)).Should().BeTrue();
+        Assert.True((await mgr.IsReadyAsync(child)));
     }
 
     [Fact]
@@ -164,7 +163,7 @@ public class WorkItemManagerTests
         await mgr.LinkPullRequestAsync(dep, "https://forgejo/pr/1");
         await mgr.TransitionToHumanFeedbackAsync(dep, "Node Failed");
 
-        (await mgr.IsReadyAsync(child)).Should().BeFalse();
+        Assert.False((await mgr.IsReadyAsync(child)));
     }
 
     [Fact]
@@ -176,7 +175,7 @@ public class WorkItemManagerTests
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
 
         var act = async () => await mgr.AddDependencyAsync(id, id);
-        await act.Should().ThrowAsync<InvalidOperationException>();
+        await Assert.ThrowsAsync<InvalidOperationException>(act);
     }
 
     [Fact]
@@ -193,7 +192,8 @@ public class WorkItemManagerTests
         await mgr.AddDependencyAsync(c, b);
 
         var act = async () => await mgr.AddDependencyAsync(a, c);
-        await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*cycle*");
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(act);
+        Assert.Contains("cycle", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -208,9 +208,9 @@ public class WorkItemManagerTests
         await mgr.TransitionToWorkQueueAsync(child);
 
         var transitioned = await mgr.TransitionToReadyAsync(child);
-        transitioned.Should().BeFalse();
+        Assert.False(transitioned);
         var wi = await mgr.GetWorkItemAsync(child);
-        wi!.Status.Should().Be(RemoteWorkItemStatus.WorkQueue);
+        Assert.Equal(RemoteWorkItemStatus.WorkQueue, wi!.Status);
     }
 
     [Fact]
@@ -224,9 +224,9 @@ public class WorkItemManagerTests
 
         var result = await mgr.LinkPullRequestAsync(id, "https://forgejo/pr/42");
 
-        result.Should().BeTrue();
+        Assert.True(result);
         var wi = await mgr.GetWorkItemAsync(id);
-        wi!.PrUrl.Should().Be("https://forgejo/pr/42");
+        Assert.Equal("https://forgejo/pr/42", wi!.PrUrl);
     }
 
     [Fact]
@@ -246,8 +246,8 @@ public class WorkItemManagerTests
         await mgr.ManuallyMarkMergedAsync(id);
 
         var after = await mgr.GetWorkItemAsync(id);
-        after!.Status.Should().Be(RemoteWorkItemStatus.Done);
-        after.IsPrMerged.Should().BeTrue();
+        Assert.Equal(RemoteWorkItemStatus.Done, after!.Status);
+        Assert.True(after.IsPrMerged);
     }
 
     [Fact]
@@ -263,10 +263,10 @@ public class WorkItemManagerTests
 
         var ok = await mgr.TransitionToHumanFeedbackAsync(id, "PR Awaiting Merge");
 
-        ok.Should().BeTrue();
+        Assert.True(ok);
         var wi = await mgr.GetWorkItemAsync(id);
-        wi!.Status.Should().Be(RemoteWorkItemStatus.HumanFeedback);
-        wi.HumanFeedbackReason.Should().Be("PR Awaiting Merge");
+        Assert.Equal(RemoteWorkItemStatus.HumanFeedback, wi!.Status);
+        Assert.Equal("PR Awaiting Merge", wi.HumanFeedbackReason);
     }
 
     [Fact]
@@ -303,8 +303,8 @@ public class WorkItemManagerTests
         await mgr.ManuallyMarkMergedAsync(id);
 
         var after = await mgr.GetWorkItemAsync(id);
-        after!.IsPrMerged.Should().BeTrue();
-        after.Status.Should().NotBe(RemoteWorkItemStatus.Done);
+        Assert.True(after!.IsPrMerged);
+        Assert.NotEqual(RemoteWorkItemStatus.Done, after.Status);
     }
 
     [Fact]
@@ -342,8 +342,8 @@ public class WorkItemManagerTests
         await mgr.ManuallyMarkMergedAsync(id);
 
         var after = await mgr.GetWorkItemAsync(id);
-        after!.IsPrMerged.Should().BeTrue();
-        after.Status.Should().Be(RemoteWorkItemStatus.Done);
+        Assert.True(after!.IsPrMerged);
+        Assert.Equal(RemoteWorkItemStatus.Done, after.Status);
     }
 
     [Fact]
@@ -385,9 +385,9 @@ public class WorkItemManagerTests
 
         repoMgr.Verify(r => r.DestroyWorktreeAsync("/tmp/worktrees/test-wi"), Times.Once);
         var after = await mgr.GetWorkItemAsync(id);
-        after!.Status.Should().Be(RemoteWorkItemStatus.Done);
-        after.WorktreePath.Should().BeNullOrEmpty();
-        after.HumanFeedbackReason.Should().BeNullOrEmpty();
+        Assert.Equal(RemoteWorkItemStatus.Done, after!.Status);
+        Assert.True(string.IsNullOrEmpty(after.WorktreePath));
+        Assert.True(string.IsNullOrEmpty(after.HumanFeedbackReason));
     }
 
     [Fact]
@@ -431,11 +431,11 @@ public class WorkItemManagerTests
 
         repoMgr.Verify(r => r.DestroyWorktreeAsync("/tmp/worktrees/test-wi"), Times.Once);
         var after = await mgr.GetWorkItemAsync(id);
-        after!.Status.Should().Be(RemoteWorkItemStatus.Backlog);
-        after.WorktreePath.Should().BeNullOrEmpty();
-        after.HumanFeedbackReason.Should().BeNullOrEmpty();
-        after.CurrentLoopRunId.Should().BeNull();
-        after.BranchName.Should().BeNullOrEmpty();
+        Assert.Equal(RemoteWorkItemStatus.Backlog, after!.Status);
+        Assert.True(string.IsNullOrEmpty(after.WorktreePath));
+        Assert.True(string.IsNullOrEmpty(after.HumanFeedbackReason));
+        Assert.Null(after.CurrentLoopRunId);
+        Assert.True(string.IsNullOrEmpty(after.BranchName));
     }
 
     [Fact]
@@ -492,9 +492,9 @@ public class WorkItemManagerTests
         await mgr.SubmitHumanFeedbackInputAsync(id, "ship it");
 
         var finalized = await db.Fresh().LoopRunNodes.FindAsync(runNodeId);
-        finalized!.Status.Should().Be(LoopRunNodeStatus.Succeeded);
-        finalized.Output.Should().Be("ship it");
-        finalized.CompletedAt.Should().NotBeNull();
+        Assert.Equal(LoopRunNodeStatus.Succeeded, finalized!.Status);
+        Assert.Equal("ship it", finalized.Output);
+        Assert.NotNull(finalized.CompletedAt);
     }
 
     [Fact]
@@ -534,8 +534,8 @@ public class WorkItemManagerTests
 
         eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "proceed with the change", null), Times.Once);
         var after = await mgr.GetWorkItemAsync(id);
-        after!.Status.Should().Be(RemoteWorkItemStatus.Running);
-        after.HumanFeedbackReason.Should().BeNullOrEmpty();
+        Assert.Equal(RemoteWorkItemStatus.Running, after!.Status);
+        Assert.True(string.IsNullOrEmpty(after.HumanFeedbackReason));
     }
 
     [Fact]
@@ -548,8 +548,8 @@ public class WorkItemManagerTests
 
         var ok = await mgr.DeleteAsync(id);
 
-        ok.Should().BeTrue();
-        (await mgr.GetWorkItemAsync(id)).Should().BeNull();
+        Assert.True(ok);
+        Assert.Null((await mgr.GetWorkItemAsync(id)));
     }
 
     [Fact]
@@ -564,8 +564,8 @@ public class WorkItemManagerTests
 
         var ok = await mgr.DeleteAsync(child);
 
-        ok.Should().BeTrue();
-        (await mgr.GetWorkItemAsync(child)).Should().BeNull();
+        Assert.True(ok);
+        Assert.Null((await mgr.GetWorkItemAsync(child)));
         // Dependencies live on the WorkItemServer; delete propagates there.
     }
 
@@ -581,8 +581,8 @@ public class WorkItemManagerTests
 
         var ok = await mgr.DeleteAsync(dep);
 
-        ok.Should().BeTrue();
-        (await mgr.GetWorkItemAsync(dep)).Should().BeNull();
+        Assert.True(ok);
+        Assert.Null((await mgr.GetWorkItemAsync(dep)));
         // Dependencies live on the WorkItemServer; delete propagates there.
     }
 
@@ -592,7 +592,7 @@ public class WorkItemManagerTests
         var (mgr, db, _, _, _) = Setup();
         using var _ = db;
 
-        (await mgr.DeleteAsync(Guid.NewGuid().ToString())).Should().BeFalse();
+        Assert.False((await mgr.DeleteAsync(Guid.NewGuid().ToString())));
     }
 
     [Fact]
@@ -652,10 +652,10 @@ public class WorkItemManagerTests
 
         eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "rejected by user", null), Times.Once);
         var afterNode = await db.Context.LoopRunNodes.FindAsync(runNode.Id);
-        afterNode!.Status.Should().Be(LoopRunNodeStatus.Failed);
+        Assert.Equal(LoopRunNodeStatus.Failed, afterNode!.Status);
         var after = await mgr.GetWorkItemAsync(id);
-        after!.Status.Should().Be(RemoteWorkItemStatus.Running);
-        after.HumanFeedbackReason.Should().BeNullOrEmpty();
+        Assert.Equal(RemoteWorkItemStatus.Running, after!.Status);
+        Assert.True(string.IsNullOrEmpty(after.HumanFeedbackReason));
     }
 
     [Fact]
@@ -717,8 +717,8 @@ public class WorkItemManagerTests
             "rejected by user: looks wrong, try again with smaller scope",
             null), Times.Once);
         var afterNode = await db.Context.LoopRunNodes.FindAsync(runNode.Id);
-        afterNode!.Status.Should().Be(LoopRunNodeStatus.Failed);
-        afterNode.Output.Should().Be("looks wrong, try again with smaller scope");
+        Assert.Equal(LoopRunNodeStatus.Failed, afterNode!.Status);
+        Assert.Equal("looks wrong, try again with smaller scope", afterNode.Output);
     }
 
     [Fact]
@@ -777,11 +777,11 @@ public class WorkItemManagerTests
 
         eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "please revise the approach", null), Times.Once);
         var afterNode = await db.Context.LoopRunNodes.FindAsync(runNode.Id);
-        afterNode!.Status.Should().Be(LoopRunNodeStatus.Responded);
-        afterNode.Output.Should().Be("please revise the approach");
+        Assert.Equal(LoopRunNodeStatus.Responded, afterNode!.Status);
+        Assert.Equal("please revise the approach", afterNode.Output);
         var after = await mgr.GetWorkItemAsync(id);
-        after!.Status.Should().Be(RemoteWorkItemStatus.Running);
-        after.HumanFeedbackReason.Should().BeNullOrEmpty();
+        Assert.Equal(RemoteWorkItemStatus.Running, after!.Status);
+        Assert.True(string.IsNullOrEmpty(after.HumanFeedbackReason));
     }
 
     // ---- TransitionAsync (canonical generic transition) ------------------
@@ -792,7 +792,7 @@ public class WorkItemManagerTests
         var (mgr, db, _, _, _) = Setup();
         using var _ = db;
 
-        (await mgr.TransitionAsync(Guid.NewGuid().ToString(), RemoteWorkItemStatus.Done)).Should().BeFalse();
+        Assert.False((await mgr.TransitionAsync(Guid.NewGuid().ToString(), RemoteWorkItemStatus.Done)));
     }
 
     [Fact]
@@ -806,9 +806,9 @@ public class WorkItemManagerTests
         await mgr.TransitionAsync(id, RemoteWorkItemStatus.HumanFeedback, "Need approval", "[\"approve\",\"reject\"]");
 
         var wi = await mgr.GetWorkItemAsync(id);
-        wi!.Status.Should().Be(RemoteWorkItemStatus.HumanFeedback);
-        wi.HumanFeedbackReason.Should().Be("Need approval");
-        wi.HumanFeedbackActions.Should().Be("[\"approve\",\"reject\"]");
+        Assert.Equal(RemoteWorkItemStatus.HumanFeedback, wi!.Status);
+        Assert.Equal("Need approval", wi.HumanFeedbackReason);
+        Assert.Equal("[\"approve\",\"reject\"]", wi.HumanFeedbackActions);
     }
 
     [Fact]
@@ -822,9 +822,9 @@ public class WorkItemManagerTests
         await mgr.TransitionAsync(id, RemoteWorkItemStatus.Running);
 
         var wi = await mgr.GetWorkItemAsync(id);
-        wi!.Status.Should().Be(RemoteWorkItemStatus.Running);
-        wi.HumanFeedbackReason.Should().BeNull();
-        wi.HumanFeedbackActions.Should().BeNull();
+        Assert.Equal(RemoteWorkItemStatus.Running, wi!.Status);
+        Assert.Null(wi.HumanFeedbackReason);
+        Assert.Null(wi.HumanFeedbackActions);
     }
 
     [Fact]
@@ -839,7 +839,7 @@ public class WorkItemManagerTests
         await mgr.TransitionAsync(id, RemoteWorkItemStatus.Running, currentLoopRunId: null);
 
         var after = await mgr.GetWorkItemAsync(id);
-        after!.CurrentLoopRunId.Should().NotBeNull();
+        Assert.NotNull(after!.CurrentLoopRunId);
     }
 
     [Fact]
@@ -854,7 +854,7 @@ public class WorkItemManagerTests
         await mgr.TransitionAsync(id, RemoteWorkItemStatus.Done, currentLoopRunId: Guid.Empty);
 
         var after = await mgr.GetWorkItemAsync(id);
-        after!.Status.Should().Be(RemoteWorkItemStatus.Done);
+        Assert.Equal(RemoteWorkItemStatus.Done, after!.Status);
     }
 
     [Fact]
@@ -869,7 +869,7 @@ public class WorkItemManagerTests
         await mgr.TransitionAsync(id, RemoteWorkItemStatus.Running, currentLoopRunId: newRunId);
 
         var after = await mgr.GetWorkItemAsync(id);
-        after!.CurrentLoopRunId.Should().Be(newRunId);
+        Assert.Equal(newRunId, after!.CurrentLoopRunId);
     }
 
     [Fact]

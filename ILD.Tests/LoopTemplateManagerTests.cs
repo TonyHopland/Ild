@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Data.DTOs;
 using ILD.Data.Enums;
 using ILD.Core.Services.Implementations;
@@ -29,10 +28,10 @@ public class LoopTemplateManagerTests
         var id = await mgr.CreateLoopTemplateAsync("seed", "desc", MinimalGraph());
 
         var versions = await db.Context.LoopTemplateVersions.Where(v => v.LoopTemplateId == id).ToListAsync();
-        versions.Should().HaveCount(1);
-        versions[0].VersionNumber.Should().Be(1);
-        (await db.Context.LoopNodes.CountAsync()).Should().Be(3);
-        (await db.Context.LoopNodeEdges.CountAsync()).Should().Be(2);
+        Assert.Equal(1, versions.Count());
+        Assert.Equal(1, versions[0].VersionNumber);
+        Assert.Equal(3, (await db.Context.LoopNodes.CountAsync()));
+        Assert.Equal(2, (await db.Context.LoopNodeEdges.CountAsync()));
     }
 
     [Fact]
@@ -44,7 +43,7 @@ public class LoopTemplateManagerTests
         var bad = new LoopTemplateGraph(Guid.Empty, new() { new LoopNodeDto { Id = "x", NodeType = "Cmd", Label = "x" } }, new());
 
         var act = async () => await mgr.CreateLoopTemplateAsync("bad", "", bad);
-        await act.Should().ThrowAsync<InvalidOperationException>();
+        await Assert.ThrowsAsync<InvalidOperationException>(act);
     }
 
     [Fact]
@@ -58,7 +57,7 @@ public class LoopTemplateManagerTests
         await mgr.UpdateLoopTemplateAsync(id, "t", "v3", MinimalGraph());
 
         var versions = await mgr.GetVersionsAsync(id);
-        versions.Select(v => v.VersionNumber).Should().BeEquivalentTo(new[] { 1, 2, 3 });
+        Assert.Equal(new[] { 1, 2, 3 }, versions.Select(v => v.VersionNumber));
     }
 
     [Fact]
@@ -72,12 +71,12 @@ public class LoopTemplateManagerTests
 
         var cloneId = await mgr.CloneLoopTemplateAsync(srcId, "src-copy");
 
-        cloneId.Should().NotBe(srcId);
+        Assert.NotEqual(srcId, cloneId);
         var clone = await mgr.GetLoopTemplateAsync(cloneId);
-        clone!.Name.Should().Be("src-copy");
+        Assert.Equal("src-copy", clone!.Name);
         var versions = await mgr.GetVersionsAsync(cloneId);
-        versions.Should().HaveCount(1);
-        versions.Single().VersionNumber.Should().Be(1);
+        Assert.Equal(1, versions.Count());
+        Assert.Equal(1, versions.Single().VersionNumber);
     }
 
     [Fact]
@@ -106,13 +105,13 @@ public class LoopTemplateManagerTests
         // Check that the OnRespond edge was stored as OnRespond in the DB, not corrupted to OnSuccess
         var edges = await db.Context.LoopNodeEdges.ToListAsync();
         var respondEdge = edges.FirstOrDefault(e => e.EdgeType == EdgeType.OnRespond);
-        respondEdge.Should().NotBeNull("OnRespond edge should be persisted as EdgeType.OnRespond");
+        Assert.NotNull(respondEdge);
 
         // Verify round-trip through GetVersionGraph returns OnRespond
         var versions = await mgr.GetVersionsAsync(id);
         var loadedGraph = await mgr.GetVersionGraphAsync(id, versions.Max(v => v.VersionNumber));
-        loadedGraph.Should().NotBeNull();
+        Assert.NotNull(loadedGraph);
         var loadedRespondEdge = loadedGraph!.Edges.FirstOrDefault(e => e.EdgeType == "OnRespond");
-        loadedRespondEdge.Should().NotBeNull("Loaded template should contain an OnRespond edge");
+        Assert.NotNull(loadedRespondEdge);
     }
 }

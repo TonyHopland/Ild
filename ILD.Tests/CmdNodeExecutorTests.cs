@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
@@ -39,8 +38,8 @@ public class CmdNodeExecutorTests
 
         var result = await exec.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
-        result.Output.Should().Contain("hello");
+        Assert.True(result.Success);
+        Assert.Contains("hello", result.Output);
     }
 
     [Fact]
@@ -51,8 +50,8 @@ public class CmdNodeExecutorTests
 
         var result = await exec.ExecuteAsync(ctx);
 
-        result.Success.Should().BeFalse();
-        result.Error.Should().Contain("timed out");
+        Assert.False(result.Success);
+        Assert.Contains("timed out", result.Error);
     }
 
     [Fact]
@@ -63,7 +62,7 @@ public class CmdNodeExecutorTests
 
         var result = await exec.ExecuteAsync(ctx);
 
-        result.Success.Should().BeFalse();
-        result.Error.Should().Contain("exit=1");
+        Assert.False(result.Success);
+        Assert.Contains("exit=1", result.Error);
     }
 }

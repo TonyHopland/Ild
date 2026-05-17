@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
@@ -47,9 +46,9 @@ public class PromptNodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Should().BeOfType<NodeOutcome.Succeeded>();
-        result.Success.Should().BeTrue();
-        result.Output.Should().Be("Title: Plan work\nPrevious: Draft a task breakdown");
-        ((NodeOutcome.Succeeded)result).ResolvedPrompt.Should().Be("Title: Plan work\nPrevious: Draft a task breakdown");
+        Assert.IsType<NodeOutcome.Succeeded>(result);
+        Assert.True(result.Success);
+        Assert.Equal("Title: Plan work\nPrevious: Draft a task breakdown", result.Output);
+        Assert.Equal("Title: Plan work\nPrevious: Draft a task breakdown", ((NodeOutcome.Succeeded)result).ResolvedPrompt);
     }
 }

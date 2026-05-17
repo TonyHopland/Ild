@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
-using FluentAssertions;
 using ILD.WorkItemServer;
 using ILD.WorkItemServer.Domain;
 using ILD.WorkItemServer.Dtos;
@@ -9,6 +8,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 
@@ -36,8 +36,18 @@ public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTest
         {
             Environment.SetEnvironmentVariable("WORKITEM_API_KEYS", ApiKey);
             Environment.SetEnvironmentVariable("WORKITEM_DB_CONNECTION_STRING", null);
+            builder.UseEnvironment("Testing");
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["WorkItemServer:ApiKeys"] = ApiKey,
+                    ["Serilog:WriteToConsole"] = "false",
+                });
+            });
             builder.ConfigureServices(services =>
             {
+                services.RemoveHostedService<ILD.WorkItemServer.Hosting.StaleWorkItemReclaimer>();
                 var dbDescriptor = services.FirstOrDefault(d => d.ServiceType == typeof(DbContextOptions<WorkItemServerDbContext>));
                 if (dbDescriptor != null) services.Remove(dbDescriptor);
                 services.AddDbContext<WorkItemServerDbContext>(opt =>
@@ -70,7 +80,7 @@ public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTest
     {
         var c = _factory.CreateClient();
         var resp = await c.GetAsync("/health");
-        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
     }
 
     [Fact]
@@ -78,7 +88,7 @@ public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTest
     {
         var c = _factory.CreateClient();
         var resp = await c.GetAsync("/workitems");
-        resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        Assert.Equal(HttpStatusCode.Unauthorized, resp.StatusCode);
     }
 
     [Fact]
@@ -87,7 +97,7 @@ public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTest
         var c = _factory.CreateClient();
         c.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "wrong");
         var resp = await c.GetAsync("/workitems");
-        resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        Assert.Equal(HttpStatusCode.Unauthorized, resp.StatusCode);
     }
 
     [Fact]
@@ -99,13 +109,13 @@ public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTest
             Title = "round trip",
             Tags = new[] { "feature" },
         });
-        create.StatusCode.Should().Be(HttpStatusCode.Created);
+        Assert.Equal(HttpStatusCode.Created, create.StatusCode);
         var dto = await create.Content.ReadFromJsonAsync<WorkItemDto>();
-        dto.Should().NotBeNull();
+        Assert.NotNull(dto);
 
         var fetched = await c.GetFromJsonAsync<WorkItemDto>($"/workitems/{dto!.Id}");
-        fetched!.Title.Should().Be("round trip");
-        fetched.Tags.Should().ContainSingle().Which.Should().Be("feature");
+        Assert.Equal("round trip", fetched!.Title);
+        Assert.Equal("feature", Assert.Single(fetched.Tags));
     }
 
     [Fact]
@@ -119,10 +129,10 @@ public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTest
         {
             TargetStatus = WorkItemStatus.Running,
         });
-        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
         var body = (await resp.Content.ReadFromJsonAsync<TransitionResponse>())!;
-        body.Success.Should().BeTrue();
-        body.ActualStatus.Should().Be(WorkItemStatus.Running);
+        Assert.True(body.Success);
+        Assert.Equal(WorkItemStatus.Running, body.ActualStatus);
     }
 
     [Fact]
@@ -137,7 +147,7 @@ public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTest
         var dto = (await create.Content.ReadFromJsonAsync<WorkItemDto>())!;
 
         var resp = await c.GetFromJsonAsync<PollResponse>("/workitems/poll");
-        resp.Should().NotBeNull();
-        resp!.ReadyItems.Should().Contain(r => r.Id == dto.Id);
+        Assert.NotNull(resp);
+        Assert.Contains(resp!.ReadyItems, r => r.Id == dto.Id);
     }
 }

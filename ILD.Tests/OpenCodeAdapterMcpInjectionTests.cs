@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
@@ -49,8 +48,8 @@ public class OpenCodeAdapterMcpInjectionTests : IDisposable
     public void ResolveIldMcpServerDll_returns_override()
     {
         var resolved = OpenCodeAdapter.ResolveIldMcpServerDll();
-        resolved.Should().NotBeNull();
-        File.Exists(resolved).Should().BeTrue();
+        Assert.NotNull(resolved);
+        Assert.True(File.Exists(resolved));
     }
 
     [Fact]
@@ -68,18 +67,18 @@ public class OpenCodeAdapterMcpInjectionTests : IDisposable
             PreviousNodeOutput: null);
 
         var entry = OpenCodeAdapter.BuildIldMcpEntry(ctx);
-        entry.Should().NotBeNull();
+        Assert.NotNull(entry);
 
-        entry!["type"].Should().Be("local");
+        Assert.Equal("local", entry!["type"]);
 
         var command = (string[])entry["command"]!;
-        command[0].Should().Be("dotnet");
-        command[1].Should().EndWith("ild-mcp-server.dll");
+        Assert.Equal("dotnet", command[0]);
+        Assert.EndsWith("ild-mcp-server.dll", command[1]);
 
         var env = (Dictionary<string, object?>)entry["environment"]!;
-        env["ILD_API_URL"].Should().Be("http://api.invalid:1234");
-        env["ILD_API_TOKEN"].Should().Be("test-token");
-        env["ILD_LOOP_RUN_ID"].Should().Be(runId.ToString());
+        Assert.Equal("http://api.invalid:1234", env["ILD_API_URL"]);
+        Assert.Equal("test-token", env["ILD_API_TOKEN"]);
+        Assert.Equal(runId.ToString(), env["ILD_LOOP_RUN_ID"]);
     }
 
     [Fact]
@@ -94,8 +93,8 @@ public class OpenCodeAdapterMcpInjectionTests : IDisposable
         var entry = OpenCodeAdapter.BuildIldMcpEntry(runContext: null);
         if (entry == null) return; // No build artifact present anywhere — acceptable.
 
-        entry["type"].Should().Be("local");
+        Assert.Equal("local", entry["type"]);
         var env = (Dictionary<string, object?>)entry["environment"]!;
-        env.Should().NotContainKey("ILD_LOOP_RUN_ID");
+        Assert.False(env.ContainsKey("ILD_LOOP_RUN_ID"));
     }
 }

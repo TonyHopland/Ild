@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Data.DTOs;
 using ILD.Core.Services.Implementations;
 using Microsoft.EntityFrameworkCore;
@@ -31,8 +30,8 @@ public class LoopTemplateArchiveTests
         await mgr.ArchiveLoopTemplateAsync(archived);
 
         var all = await mgr.GetAllLoopTemplatesAsync();
-        all.Select(t => t.Id).Should().Contain(live);
-        all.Select(t => t.Id).Should().NotContain(archived);
+        Assert.Contains(live, all.Select(t => t.Id));
+        Assert.DoesNotContain(archived, all.Select(t => t.Id));
     }
 
     [Fact]
@@ -47,8 +46,8 @@ public class LoopTemplateArchiveTests
         await mgr.ArchiveLoopTemplateAsync(archived);
 
         var all = await mgr.GetAllLoopTemplatesAsync(includeArchived: true);
-        all.Select(t => t.Id).Should().Contain(live);
-        all.Select(t => t.Id).Should().Contain(archived);
+        Assert.Contains(live, all.Select(t => t.Id));
+        Assert.Contains(archived, all.Select(t => t.Id));
     }
 
     [Fact]
@@ -60,11 +59,11 @@ public class LoopTemplateArchiveTests
         var id = await mgr.CreateLoopTemplateAsync("t", "", MinimalGraph());
         await mgr.ArchiveLoopTemplateAsync(id);
 
-        (await mgr.GetAllLoopTemplatesAsync()).Should().BeEmpty();
+        Assert.Empty((await mgr.GetAllLoopTemplatesAsync()));
 
         await mgr.UnarchiveLoopTemplateAsync(id);
 
-        (await mgr.GetAllLoopTemplatesAsync()).Should().HaveCount(1);
+        Assert.Equal(1, (await mgr.GetAllLoopTemplatesAsync()).Count());
     }
 
     [Fact]
@@ -77,8 +76,8 @@ public class LoopTemplateArchiveTests
         await mgr.ArchiveLoopTemplateAsync(id);
 
         var template = await db.Context.LoopTemplates.FindAsync(id);
-        template.Should().NotBeNull();
-        template!.IsArchived.Should().BeTrue();
+        Assert.NotNull(template);
+        Assert.True(template!.IsArchived);
     }
 
     [Fact]
@@ -92,8 +91,8 @@ public class LoopTemplateArchiveTests
         await mgr.UnarchiveLoopTemplateAsync(id);
 
         var template = await db.Context.LoopTemplates.FindAsync(id);
-        template.Should().NotBeNull();
-        template!.IsArchived.Should().BeFalse();
+        Assert.NotNull(template);
+        Assert.False(template!.IsArchived);
     }
 
     [Fact]
@@ -103,7 +102,7 @@ public class LoopTemplateArchiveTests
         var mgr = new LoopTemplateManager(db.LoopTemplates);
 
         var act = () => mgr.ArchiveLoopTemplateAsync(Guid.NewGuid());
-        await act.Should().NotThrowAsync();
+        Assert.Null(await Record.ExceptionAsync(act));
     }
 
     [Fact]
@@ -113,6 +112,6 @@ public class LoopTemplateArchiveTests
         var mgr = new LoopTemplateManager(db.LoopTemplates);
 
         var act = () => mgr.UnarchiveLoopTemplateAsync(Guid.NewGuid());
-        await act.Should().NotThrowAsync();
+        Assert.Null(await Record.ExceptionAsync(act));
     }
 }

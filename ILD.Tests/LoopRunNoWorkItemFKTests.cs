@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores;
@@ -34,9 +33,9 @@ public class LoopRunNoWorkItemFKTests
         var freshStore = new LoopRunStore(db.Fresh());
         var result = await freshStore.GetByIdAsync(run.Id);
 
-        result.Should().NotBeNull();
-        result!.WorkItemId.Should().Be(run.WorkItemId);
-        result.WorktreePath.Should().Be("/tmp/worktrees/test");
-        result.BranchName.Should().Be("feature/branch");
+        Assert.NotNull(result);
+        Assert.Equal(run.WorkItemId, result!.WorkItemId);
+        Assert.Equal("/tmp/worktrees/test", result.WorktreePath);
+        Assert.Equal("feature/branch", result.BranchName);
     }
 }

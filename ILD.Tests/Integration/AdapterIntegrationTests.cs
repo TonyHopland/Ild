@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Text.Json;
-using FluentAssertions;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
@@ -53,7 +52,7 @@ public class AdapterIntegrationTests
         if (!string.IsNullOrEmpty(stderr))
             Console.WriteLine($"[adapter-integration] stderr={stderr.Trim()}");
 
-        proc.ExitCode.Should().Be(0, "the opencode binary should be reachable and return --version successfully");
+        Assert.Equal(0, proc.ExitCode);
     }
 
     #endregion
@@ -93,9 +92,9 @@ public class AdapterIntegrationTests
         if (!string.IsNullOrEmpty(result.Error))
             Console.WriteLine($"[adapter-integration] error={result.Error}");
 
-        result.Success.Should().BeTrue($"the adapter should succeed against a live provider", result.Error);
-        result.Output.Should().NotBeNullOrEmpty("the adapter should return non-empty output");
-        result.Output.Should().Contain("hello", "the model should have replied with the expected word");
+        Assert.True(result.Success);
+        Assert.False(string.IsNullOrEmpty(result.Output));
+        Assert.Contains("hello", result.Output);
     }
 
     #endregion
@@ -131,7 +130,7 @@ public class AdapterIntegrationTests
         if (!string.IsNullOrEmpty(result.Error))
             Console.WriteLine($"[adapter-integration] config-shape-test error={result.Error}");
 
-        result.Success.Should().BeTrue("opencode should accept the injected config shape", result.Error);
+        Assert.True(result.Success);
     }
 
     #endregion
@@ -172,8 +171,8 @@ public class AdapterIntegrationTests
         if (!string.IsNullOrEmpty(result.Error))
             Console.WriteLine($"[adapter-integration] openai-compat error={result.Error}");
 
-        result.Success.Should().BeTrue($"the adapter should succeed against a live provider", result.Error);
-        result.Output.Should().NotBeNullOrEmpty("the adapter should return non-empty output");
+        Assert.True(result.Success);
+        Assert.False(string.IsNullOrEmpty(result.Output));
     }
 
     #endregion

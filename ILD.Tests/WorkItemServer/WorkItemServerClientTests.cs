@@ -1,10 +1,10 @@
-using FluentAssertions;
 using ILD.Core.Services.Remote;
 using ILD.WorkItemServer;
 
-using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Data.Sqlite;
 
@@ -28,13 +28,23 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
         _conn = new SqliteConnection("DataSource=:memory:");
         _conn.Open();
 
+        Environment.SetEnvironmentVariable("WORKITEM_API_KEYS", ApiKey);
+        Environment.SetEnvironmentVariable("WORKITEM_DB_CONNECTION_STRING", null);
+
         _factory = new WebApplicationFactory<WorkItemServerProgram>().WithWebHostBuilder(b =>
         {
-            Environment.SetEnvironmentVariable("WORKITEM_API_KEYS", ApiKey);
-            Environment.SetEnvironmentVariable("WORKITEM_DB_CONNECTION_STRING", null);
-            b.UseSetting("WorkItemServer:ApiKeys", ApiKey);
+            b.UseEnvironment("Testing");
+            b.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["WorkItemServer:ApiKeys"] = ApiKey,
+                    ["Serilog:WriteToConsole"] = "false",
+                });
+            });
             b.ConfigureServices(services =>
             {
+                services.RemoveHostedService<ILD.WorkItemServer.Hosting.StaleWorkItemReclaimer>();
                 var existing = services.FirstOrDefault(d => d.ServiceType == typeof(DbContextOptions<WorkItemServerDbContext>));
                 if (existing != null) services.Remove(existing);
                 services.AddDbContext<WorkItemServerDbContext>(o =>
@@ -42,10 +52,6 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
                     o.UseSqlite(_conn);
                     o.ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning));
                 });
-                // Schema creation is handled by the server's own startup
-                // (Database.Migrate()). Calling EnsureCreated() here would
-                // create the tables first and then the migration step would
-                // fail with "table already exists".
             });
         });
 
@@ -71,19 +77,19 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
             Priority = RemoteWorkItemPriority.High,
         });
 
-        created.Title.Should().Be("client-roundtrip");
-        created.Tags.Should().BeEquivalentTo(new[] { "alpha", "beta" });
+        Assert.Equal("client-roundtrip", created.Title);
+        Assert.Equal(new[] { "alpha", "beta" }, created.Tags);
 
         var fetched = await _client.GetAsync(_opts, created.Id);
-        fetched.Should().NotBeNull();
-        fetched!.Status.Should().Be(RemoteWorkItemStatus.Backlog);
+        Assert.NotNull(fetched);
+        Assert.Equal(RemoteWorkItemStatus.Backlog, fetched!.Status);
     }
 
     [Fact]
     public async Task Get_returns_null_on_not_found()
     {
         var item = await _client.GetAsync(_opts, Guid.NewGuid().ToString());
-        item.Should().BeNull();
+        Assert.Null(item);
     }
 
     [Fact]
@@ -97,8 +103,8 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
         {
             TargetStatus = RemoteWorkItemStatus.Running,
         });
-        resp.Success.Should().BeTrue();
-        resp.ActualStatus.Should().Be(RemoteWorkItemStatus.Running);
+        Assert.True(resp.Success);
+        Assert.Equal(RemoteWorkItemStatus.Running, resp.ActualStatus);
     }
 
     [Fact]
@@ -116,8 +122,8 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
             new RemoteTransitionRequest { TargetStatus = RemoteWorkItemStatus.Running });
 
         var poll = await _client.PollAsync(_opts, new[] { running.Id });
-        poll.ReadyItems.Select(x => x.Id).Should().Contain(ready.Id);
-        poll.ActiveItems.Select(x => x.Id).Should().Contain(running.Id);
+        Assert.Contains(ready.Id, poll.ReadyItems.Select(x => x.Id));
+        Assert.Contains(running.Id, poll.ActiveItems.Select(x => x.Id));
     }
 
     [Fact]
@@ -127,6 +133,6 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
         await _client.CreateAsync(_opts, new RemoteCreateWorkItemRequest { Title = "b", ForceStatus = RemoteWorkItemStatus.Ready });
 
         var ready = await _client.ListAsync(_opts, RemoteWorkItemStatus.Ready, null);
-        ready.Should().OnlyContain(w => w.Status == RemoteWorkItemStatus.Ready);
+        Assert.All(ready, w => Assert.Equal(RemoteWorkItemStatus.Ready, w.Status));
     }
 }

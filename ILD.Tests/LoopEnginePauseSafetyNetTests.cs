@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Enums;
 
@@ -35,7 +34,7 @@ public class LoopEnginePauseSafetyNetTests
         var status = await task;
         sw.Stop();
 
-        status.Should().Be(LoopRunStatus.Cancelled);
-        sw.ElapsedMilliseconds.Should().BeLessThan(500, "cancellation should not wait for full Task.Delay tick");
+        Assert.Equal(LoopRunStatus.Cancelled, status);
+        Assert.True(sw.ElapsedMilliseconds < 500, "cancellation should not wait for full Task.Delay tick");
     }
 }

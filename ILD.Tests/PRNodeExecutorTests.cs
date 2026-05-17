@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Data.DTOs;
 using ILD.Data.Enums;
 using ILD.Data.Entities;
@@ -54,9 +53,9 @@ public class PRNodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
+        Assert.True(result.Success);
         var refreshed = db.Fresh().LoopRuns.First(r => r.Id == run.Id);
-        refreshed.PrUrl.Should().Be(prUrl);
+        Assert.Equal(prUrl, refreshed.PrUrl);
     }
 
     [Fact]
@@ -110,7 +109,7 @@ public class PRNodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
+        Assert.True(result.Success);
         mockRepoManager.Verify(r => r.GetDiffAsync(worktreePath), Times.Once);
         mockRepoManager.Verify(r => r.CommitAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
         mockRepoManager.Verify(r => r.PushAsync(
@@ -175,7 +174,7 @@ public class PRNodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
+        Assert.True(result.Success);
         mockRepoManager.Verify(r => r.GetDiffAsync(worktreePath), Times.Once);
         mockRepoManager.Verify(r => r.CommitAsync(worktreePath, "fix: do a thing"), Times.Once);
         mockRepoManager.Verify(r => r.PushAsync(worktreePath, "ild/test", CancellationToken.None, It.IsAny<GitAuthOptions?>()), Times.Once);
@@ -230,8 +229,8 @@ public class PRNodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeFalse();
-        result.Error.Should().Contain("no commits ahead");
+        Assert.False(result.Success);
+        Assert.Contains("no commits ahead", result.Error);
         mockRemote.Verify(r => r.CreatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Never);
 
         Directory.Delete(worktreePath, recursive: true);
@@ -275,8 +274,8 @@ public class PRNodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
-        result.Output.Should().Be(existingPrUrl);
+        Assert.True(result.Success);
+        Assert.Equal(existingPrUrl, result.Output);
         mockRemote.Verify(r => r.CreatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Never);
     }
 
@@ -332,10 +331,10 @@ public class PRNodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
-        capturedBody.Should().Contain("## Fix login bug");
-        capturedBody.Should().Contain("Original description");
-        capturedBody.Should().Contain("AI output here");
+        Assert.True(result.Success);
+        Assert.Contains("## Fix login bug", capturedBody);
+        Assert.Contains("Original description", capturedBody);
+        Assert.Contains("AI output here", capturedBody);
     }
 
     [Fact]
@@ -383,8 +382,8 @@ public class PRNodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
-        capturedBody.Should().Be("fallback description");
+        Assert.True(result.Success);
+        Assert.Equal("fallback description", capturedBody);
     }
 
     [Fact]
@@ -432,8 +431,8 @@ public class PRNodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeFalse();
-        result.Error.Should().Contain("Authentication failed");
+        Assert.False(result.Success);
+        Assert.Contains("Authentication failed", result.Error);
         mockRemote.Verify(r => r.CreatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Never);
 
         Directory.Delete(worktreePath, recursive: true);
@@ -492,7 +491,7 @@ public class PRNodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
+        Assert.True(result.Success);
         mockEventLog.Verify(e => e.AppendAsync(
             run.Id,
             PRNodeExecutor.PrPromptRenderedEvent,
@@ -545,7 +544,7 @@ public class PRNodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
+        Assert.True(result.Success);
         mockEventLog.Verify(e => e.AppendAsync(
             It.IsAny<Guid>(),
             PRNodeExecutor.PrPromptRenderedEvent,

@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Data.Enums;
 using ILD.Data.Entities;
 using ILD.Core.Services.Interfaces;
@@ -18,10 +17,10 @@ public class MetricsCollectorTests
 
         var snapshot = collector.Snapshot();
 
-        snapshot.Should().NotBeNullOrEmpty();
-        snapshot.Should().Contain("ild_loop_runs_total");
-        snapshot.Should().Contain("# HELP");
-        snapshot.Should().Contain("# TYPE");
+        Assert.False(string.IsNullOrEmpty(snapshot));
+        Assert.Contains("ild_loop_runs_total", snapshot);
+        Assert.Contains("# HELP", snapshot);
+        Assert.Contains("# TYPE", snapshot);
     }
 
     [Fact]
@@ -33,8 +32,8 @@ public class MetricsCollectorTests
 
         var result = controller.Get();
 
-        result.Should().BeOfType<ContentResult>();
-        ((ContentResult)result).ContentType.Should().Be("text/plain; version=0.0.4; charset=utf-8");
+        Assert.IsType<ContentResult>(result);
+        Assert.Equal("text/plain; version=0.0.4; charset=utf-8", ((ContentResult)result).ContentType);
     }
 
     [Fact]
@@ -47,10 +46,10 @@ public class MetricsCollectorTests
         var result = (ContentResult)controller.Get();
         var body = (string?)result.Content;
 
-        body.Should().Contain("ild_loop_runs_total");
-        body.Should().Contain("ild_node_execution_duration_seconds");
-        body.Should().Contain("ild_db_connection_healthy");
-        body.Should().Contain("ild_disk_space_bytes");
+        Assert.Contains("ild_loop_runs_total", body);
+        Assert.Contains("ild_node_execution_duration_seconds", body);
+        Assert.Contains("ild_db_connection_healthy", body);
+        Assert.Contains("ild_disk_space_bytes", body);
     }
 
     [Fact]
@@ -62,7 +61,7 @@ public class MetricsCollectorTests
         var collector = new MetricsCollector(db.Context);
         var snapshot = collector.Snapshot();
 
-        snapshot.Should().Contain("ild_loop_runs_total{status=\"completed\"} 1");
+        Assert.Contains("ild_loop_runs_total{status=\"completed\"} 1", snapshot);
     }
 
     [Fact]
@@ -74,7 +73,7 @@ public class MetricsCollectorTests
         var collector = new MetricsCollector(db.Context);
         var snapshot = collector.Snapshot();
 
-        snapshot.Should().Contain("ild_loop_runs_total{status=\"failed\"} 1");
+        Assert.Contains("ild_loop_runs_total{status=\"failed\"} 1", snapshot);
     }
 
     [Fact]
@@ -86,7 +85,7 @@ public class MetricsCollectorTests
         var collector = new MetricsCollector(db.Context);
         var snapshot = collector.Snapshot();
 
-        snapshot.Should().Contain("ild_loop_runs_total{status=\"cancelled\"} 1");
+        Assert.Contains("ild_loop_runs_total{status=\"cancelled\"} 1", snapshot);
     }
 
     private void SeedAndRun(TestDb db, LoopRunStatus status)
@@ -114,7 +113,7 @@ public class MetricsCollectorTests
 
         var snapshot = collector.Snapshot();
 
-        snapshot.Should().Contain("ild_db_connection_healthy 1");
+        Assert.Contains("ild_db_connection_healthy 1", snapshot);
     }
 
     [Fact]
@@ -125,10 +124,10 @@ public class MetricsCollectorTests
 
         var snapshot = collector.Snapshot();
 
-        snapshot.Should().Contain("ild_disk_space_bytes");
+        Assert.Contains("ild_disk_space_bytes", snapshot);
         var lines = snapshot.Split('\n');
         var diskLine = lines.FirstOrDefault(l => l.StartsWith("ild_disk_space_bytes "));
-        diskLine.Should().NotBeNull();
+        Assert.NotNull(diskLine);
     }
 
 }

@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
@@ -77,11 +76,11 @@ public class AINodeExecutorEventLogTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
-        testAdapter.CapturedContext.Should().NotBeNull();
-        testAdapter.CapturedContext!.EventLogSummary.Should().HaveCount(2);
-        testAdapter.CapturedContext.EventLogSummary.Should().Contain(e => e.Contains("NodeStarted"));
-        testAdapter.CapturedContext.EventLogSummary.Should().Contain(e => e.Contains("NodeCompleted"));
+        Assert.True(result.Success);
+        Assert.NotNull(testAdapter.CapturedContext);
+        Assert.Equal(2, testAdapter.CapturedContext!.EventLogSummary.Count());
+        Assert.Contains(testAdapter.CapturedContext.EventLogSummary, e => e.Contains("NodeStarted"));
+        Assert.Contains(testAdapter.CapturedContext.EventLogSummary, e => e.Contains("NodeCompleted"));
 
         // Verify the event log service was actually called
         eventLogService.Verify(s => s.GetByRunIdAsync(runId), Times.Once);
@@ -131,9 +130,9 @@ public class AINodeExecutorEventLogTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
-        testAdapter.CapturedContext.Should().NotBeNull();
-        testAdapter.CapturedContext!.EventLogSummary.Should().BeEmpty();
+        Assert.True(result.Success);
+        Assert.NotNull(testAdapter.CapturedContext);
+        Assert.Empty(testAdapter.CapturedContext!.EventLogSummary);
     }
 
     [Fact]
@@ -164,10 +163,10 @@ public class AINodeExecutorEventLogTests
             CancellationToken: CancellationToken.None);
 
         using var doc = JsonDocument.Parse(executor.DescribeInput(ctx));
-        doc.RootElement.GetProperty("prompt").GetString().Should().Be("{{PreviousNode.Output}}");
-        doc.RootElement.GetProperty("useSession").GetBoolean().Should().BeTrue();
-        doc.RootElement.GetProperty("sessionPlaceholder").GetString().Should().Be("plan");
-        doc.RootElement.TryGetProperty("context", out _).Should().BeFalse();
+        Assert.Equal("{{PreviousNode.Output}}", doc.RootElement.GetProperty("prompt").GetString());
+        Assert.True(doc.RootElement.GetProperty("useSession").GetBoolean());
+        Assert.Equal("plan", doc.RootElement.GetProperty("sessionPlaceholder").GetString());
+        Assert.False(doc.RootElement.TryGetProperty("context", out _));
     }
 
     private static IServiceProvider BuildServiceProvider(

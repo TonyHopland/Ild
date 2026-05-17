@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
@@ -41,9 +40,9 @@ public class OpenAiCompatibleAdapterTests
 
         var result = await adapter.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
-        capturedBodyJson.Should().Contain("\"temperature\":0.3");
-        capturedBodyJson.Should().Contain("\"maxTokens\":2048");
+        Assert.True(result.Success);
+        Assert.Contains("\"temperature\":0.3", capturedBodyJson);
+        Assert.Contains("\"maxTokens\":2048", capturedBodyJson);
     }
 
     [Fact]
@@ -75,9 +74,9 @@ public class OpenAiCompatibleAdapterTests
 
         var result = await adapter.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
-        capturedBodyJson.Should().Contain("\"temperature\":0.2");
-        capturedBodyJson.Should().Contain("\"maxTokens\":1024");
+        Assert.True(result.Success);
+        Assert.Contains("\"temperature\":0.2", capturedBodyJson);
+        Assert.Contains("\"maxTokens\":1024", capturedBodyJson);
     }
 
     [Fact]
@@ -112,9 +111,9 @@ public class OpenAiCompatibleAdapterTests
 
         var result = await adapter.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
-        capturedBodyJson.Should().Contain("\"temperature\":0.9");
-        capturedBodyJson.Should().Contain("\"maxTokens\":1024");
+        Assert.True(result.Success);
+        Assert.Contains("\"temperature\":0.9", capturedBodyJson);
+        Assert.Contains("\"maxTokens\":1024", capturedBodyJson);
     }
 
     [Fact]
@@ -145,9 +144,9 @@ public class OpenAiCompatibleAdapterTests
 
         var result = await adapter.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
-        capturedBodyJson.Should().Contain("\"temperature\":0.7");
-        capturedBodyJson.Should().Contain("\"maxTokens\":4096");
+        Assert.True(result.Success);
+        Assert.Contains("\"temperature\":0.7", capturedBodyJson);
+        Assert.Contains("\"maxTokens\":4096", capturedBodyJson);
     }
 
     static MemoryStream CreateSseResponseStream(string content)

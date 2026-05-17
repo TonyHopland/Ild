@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
@@ -70,7 +69,7 @@ public class StartNodeExecutorTests
 
             var result = await executor.ExecuteAsync(ctx);
 
-            result.Success.Should().BeTrue();
+            Assert.True(result.Success);
             // Pull was called on the base repo before worktree creation
             repoManager.Verify(r => r.PullAsync(
                 basePath,
@@ -147,7 +146,7 @@ public class StartNodeExecutorTests
 
             var result = await executor.ExecuteAsync(ctx);
 
-            result.Success.Should().BeTrue();
+            Assert.True(result.Success);
         }
         finally
         {
@@ -222,7 +221,7 @@ public class StartNodeExecutorTests
 
             var result = await executor.ExecuteAsync(ctx);
 
-            result.Success.Should().BeTrue();
+            Assert.True(result.Success);
             repoManager.Verify(r => r.ValidateWorktreeHealthAsync(brokenWorktreePath), Times.Once);
             repoManager.Verify(r => r.CreateWorktreeAsync(basePath, "ild/wi-17"), Times.Once);
         }

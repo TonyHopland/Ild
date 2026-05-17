@@ -20,11 +20,15 @@ public sealed class WorkItemServerProgram
     {
         var builder = WebApplication.CreateBuilder(args);
 
-        Log.Logger = new LoggerConfiguration()
-            .WriteTo.Console(new JsonFormatter())
-            .Enrich.FromLogContext()
-            .CreateLogger();
-        builder.Host.UseSerilog();
+        builder.Host.UseSerilog((context, _, loggerConfiguration) =>
+        {
+            loggerConfiguration.Enrich.FromLogContext();
+
+            if (context.Configuration.GetValue("Serilog:WriteToConsole", true))
+            {
+                loggerConfiguration.WriteTo.Console(new JsonFormatter());
+            }
+        });
 
         var dataPath = Environment.GetEnvironmentVariable("WORKITEM_DATA_PATH")
             ?? builder.Configuration["WorkItemServer:DataPath"]
@@ -61,10 +65,6 @@ public sealed class WorkItemServerProgram
 
         var app = builder.Build();
 
-        // Migrate (production PostgreSQL) or ensure created (integration-test SQLite).
-        // The DbContext is registered either by the AddDbContext call above
-        // (production) or by the test factory (tests). GetService returns null
-        // when neither is present, so we skip database work gracefully.
         using (var scope = app.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetService<WorkItemServerDbContext>();

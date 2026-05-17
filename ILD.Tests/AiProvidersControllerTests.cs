@@ -1,5 +1,4 @@
 using System.Text;
-using FluentAssertions;
 using ILD.Api.Controllers;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
@@ -46,11 +45,11 @@ public class AiProvidersControllerTests : IDisposable
         var controller = new AiProvidersController(Mock.Of<IAIProviderService>(), _db);
         var result = await controller.GetAll() as OkObjectResult;
 
-        result.Should().NotBeNull();
+        Assert.NotNull(result);
         var json = System.Text.Json.JsonSerializer.Serialize(result!.Value);
-        json.Should().NotContain("sk-secret");
-        json.Should().NotContain("apiKey\":\"sk");
-        json.Should().NotContain("\"config\":");
+        Assert.DoesNotContain("sk-secret", json);
+        Assert.DoesNotContain("apiKey\":\"sk", json);
+        Assert.DoesNotContain("\"config\":", json);
     }
 
     [Fact]
@@ -72,9 +71,9 @@ public class AiProvidersControllerTests : IDisposable
         var controller = new AiProvidersController(Mock.Of<IAIProviderService>(), _db);
         var result = await controller.GetById(id.ToString()) as OkObjectResult;
 
-        result.Should().NotBeNull();
+        Assert.NotNull(result);
         var json = System.Text.Json.JsonSerializer.Serialize(result!.Value);
-        json.Should().NotContain("sk-leaked");
+        Assert.DoesNotContain("sk-leaked", json);
     }
 
     [Fact]
@@ -96,8 +95,8 @@ public class AiProvidersControllerTests : IDisposable
         var controller = new AiProvidersController(Mock.Of<IAIProviderService>(), _db);
         var result = await controller.GetAll(skip: 0, take: 10000) as OkObjectResult;
 
-        result.Should().NotBeNull();
+        Assert.NotNull(result);
         var items = (System.Collections.IEnumerable)result!.Value!;
-        items.Cast<object>().Should().HaveCount(500);
+        Assert.Equal(500, items.Cast<object>().Count());
     }
 }

@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Data.Entities;
 using ILD.Core.Services.Implementations;
 
@@ -21,9 +20,9 @@ public class AuthServiceTests
 
         var result = await svc.LoginAsync("admin", "secret");
 
-        result.Success.Should().BeTrue();
-        result.SessionToken.Should().NotBeNullOrEmpty();
-        result.Username.Should().Be("admin");
+        Assert.True(result.Success);
+        Assert.False(string.IsNullOrEmpty(result.SessionToken));
+        Assert.Equal("admin", result.Username);
     }
 
     [Fact]
@@ -34,8 +33,8 @@ public class AuthServiceTests
 
         var result = await svc.LoginAsync("admin", "nope");
 
-        result.Success.Should().BeFalse();
-        result.SessionToken.Should().BeNull();
+        Assert.False(result.Success);
+        Assert.Null(result.SessionToken);
     }
 
     [Fact]
@@ -45,7 +44,7 @@ public class AuthServiceTests
         var svc = Make(db);
         var token = (await svc.LoginAsync("admin", "secret")).SessionToken!;
 
-        (await svc.ValidateSessionAsync(token)).Should().BeTrue();
+        Assert.True((await svc.ValidateSessionAsync(token)));
     }
 
     [Fact]
@@ -57,6 +56,6 @@ public class AuthServiceTests
 
         await svc.LogoutAsync(token);
 
-        (await svc.ValidateSessionAsync(token)).Should().BeFalse();
+        Assert.False((await svc.ValidateSessionAsync(token)));
     }
 }

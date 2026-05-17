@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Api.Configuration;
 using ILD.Api.Hubs;
 using ILD.Data.DTOs.SignalRPayloads;
@@ -37,13 +36,13 @@ public class SignalRRunNotifierTests
         var notifier = new SignalRRunNotifier(ctx.Object, logger.Object);
         await notifier.NodeStateChangedAsync(runId, nodeId, LoopRunNodeStatus.Pending, LoopRunNodeStatus.Running);
 
-        capturedArgs.Should().NotBeNull();
-        capturedArgs!.Should().HaveCount(1, "SignalR should receive one typed payload, not positional args");
-        var payload = capturedArgs[0].Should().BeOfType<NodeStateChangedPayload>().Subject;
-        payload.RunId.Should().Be(runId);
-        payload.NodeId.Should().Be(nodeId);
-        payload.OldStatus.Should().Be(LoopRunNodeStatus.Pending);
-        payload.NewStatus.Should().Be(LoopRunNodeStatus.Running);
+        Assert.NotNull(capturedArgs);
+        Assert.Single(capturedArgs!);
+        var payload = Assert.IsType<NodeStateChangedPayload>(capturedArgs[0]);
+        Assert.Equal(runId, payload.RunId);
+        Assert.Equal(nodeId, payload.NodeId);
+        Assert.Equal(LoopRunNodeStatus.Pending, payload.OldStatus);
+        Assert.Equal(LoopRunNodeStatus.Running, payload.NewStatus);
     }
 
     [Fact]
@@ -60,11 +59,11 @@ public class SignalRRunNotifierTests
         var notifier = new SignalRRunNotifier(ctx.Object, logger.Object);
         await notifier.RunStateChangedAsync(runId, LoopRunStatus.Running, LoopRunStatus.Completed);
 
-        capturedArgs.Should().NotBeNull();
-        capturedArgs!.Should().HaveCount(1);
-        var payload = capturedArgs[0].Should().BeOfType<LoopRunStateChangedPayload>().Subject;
-        payload.RunId.Should().Be(runId);
-        payload.NewStatus.Should().Be(LoopRunStatus.Completed);
+        Assert.NotNull(capturedArgs);
+        Assert.Equal(1, capturedArgs!.Count());
+        var payload = Assert.IsType<LoopRunStateChangedPayload>(capturedArgs[0]);
+        Assert.Equal(runId, payload.RunId);
+        Assert.Equal(LoopRunStatus.Completed, payload.NewStatus);
     }
 
     [Fact]
@@ -82,13 +81,13 @@ public class SignalRRunNotifierTests
         var nodeId = Guid.NewGuid();
         await notifier.EventLoggedAsync(runId, "hello", "NodeStarted", nodeId, null);
 
-        capturedArgs!.Should().HaveCount(1);
-        var payload = capturedArgs[0].Should().BeOfType<EventLoggedPayload>().Subject;
-        payload.RunId.Should().Be(runId);
-        payload.Message.Should().Be("hello");
-        payload.EventType.Should().Be("NodeStarted");
-        payload.NodeId.Should().Be(nodeId);
-        payload.RunNodeId.Should().BeNull();
+        Assert.Equal(1, capturedArgs!.Count());
+        var payload = Assert.IsType<EventLoggedPayload>(capturedArgs[0]);
+        Assert.Equal(runId, payload.RunId);
+        Assert.Equal("hello", payload.Message);
+        Assert.Equal("NodeStarted", payload.EventType);
+        Assert.Equal(nodeId, payload.NodeId);
+        Assert.Null(payload.RunNodeId);
     }
 
     [Fact]
@@ -107,11 +106,11 @@ public class SignalRRunNotifierTests
         var runNodeId = Guid.NewGuid();
         await notifier.EventLoggedAsync(runId, "AI Node started", "NodeStarted", nodeId, runNodeId);
 
-        capturedArgs!.Should().HaveCount(1);
-        var payload = capturedArgs[0].Should().BeOfType<EventLoggedPayload>().Subject;
-        payload.RunId.Should().Be(runId);
-        payload.NodeId.Should().Be(nodeId);
-        payload.RunNodeId.Should().Be(runNodeId);
+        Assert.Equal(1, capturedArgs!.Count());
+        var payload = Assert.IsType<EventLoggedPayload>(capturedArgs[0]);
+        Assert.Equal(runId, payload.RunId);
+        Assert.Equal(nodeId, payload.NodeId);
+        Assert.Equal(runNodeId, payload.RunNodeId);
     }
 
     [Fact]
@@ -129,11 +128,11 @@ public class SignalRRunNotifierTests
         var notifier = new SignalRRunNotifier(ctx.Object, logger.Object);
         await notifier.NodeProgressAsync(runId, nodeId, "thinking about the problem...");
 
-        capturedArgs.Should().NotBeNull();
-        capturedArgs!.Should().HaveCount(1, "SignalR should receive one typed payload, not positional args");
-        var payload = capturedArgs[0].Should().BeOfType<NodeProgressPayload>().Subject;
-        payload.RunId.Should().Be(runId);
-        payload.NodeId.Should().Be(nodeId);
-        payload.Line.Should().Be("thinking about the problem...");
+        Assert.NotNull(capturedArgs);
+        Assert.Single(capturedArgs!);
+        var payload = Assert.IsType<NodeProgressPayload>(capturedArgs[0]);
+        Assert.Equal(runId, payload.RunId);
+        Assert.Equal(nodeId, payload.NodeId);
+        Assert.Equal("thinking about the problem...", payload.Line);
     }
 }

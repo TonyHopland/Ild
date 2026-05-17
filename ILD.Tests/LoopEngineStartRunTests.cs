@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
@@ -22,8 +21,8 @@ public class LoopEngineStartRunTests
 
         await h.Engine.StartRunAsync(workItemId);
 
-        h.Tracker.Snapshot().Should().Contain(workItemId);
-        h.RunCount(workItemId).Should().Be(1);
+        Assert.Contains(workItemId, h.Tracker.Snapshot());
+        Assert.Equal(1, h.RunCount(workItemId));
     }
 
     [Fact]
@@ -35,10 +34,10 @@ public class LoopEngineStartRunTests
 
         var act = () => h.Engine.StartRunAsync(workItemId);
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage($"*WorkItem {workItemId} already has a non-completed run*");
-        h.Tracker.Snapshot().Should().Contain(workItemId);
-        h.RunCount(workItemId).Should().Be(1);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(act);
+        Assert.Contains($"WorkItem {workItemId} already has a non-completed run", ex.Message);
+        Assert.Contains(workItemId, h.Tracker.Snapshot());
+        Assert.Equal(1, h.RunCount(workItemId));
     }
 
     private sealed class ManualStartHarness : IAsyncDisposable
@@ -185,8 +184,7 @@ public class LoopEngineStartRunTests
 
         public int RunCount(string workItemId)
         {
-            using var fresh = _db.Fresh();
-            return fresh.LoopRuns.Count(r => r.WorkItemId == workItemId);
+            return _db.Context.LoopRuns.Count(r => r.WorkItemId == workItemId);
         }
 
         public void SeedRunningRun(string workItemId)

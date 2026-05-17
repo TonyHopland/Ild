@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Api.Controllers;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
@@ -32,10 +31,10 @@ public class AgentAdaptersControllerTests
 
         var result = controller.GetConfigSchema("mock");
 
-        result.Should().BeOfType<OkObjectResult>();
+        Assert.IsType<OkObjectResult>(result);
         var okResult = (OkObjectResult)result;
-        okResult.Value.Should().BeOfType<ConfigFieldDescriptor[]>();
-        ((ConfigFieldDescriptor[])okResult.Value!).First().Name.Should().Be("model");
+        Assert.IsType<ConfigFieldDescriptor[]>(okResult.Value);
+        Assert.Equal("model", ((ConfigFieldDescriptor[])okResult.Value!).First().Name);
     }
 
     [Fact]
@@ -49,7 +48,7 @@ public class AgentAdaptersControllerTests
 
         var result = controller.GetConfigSchema("nonexistent");
 
-        result.Should().BeOfType<NotFoundObjectResult>();
+        Assert.IsType<NotFoundObjectResult>(result);
     }
 
     [Fact]
@@ -63,11 +62,11 @@ public class AgentAdaptersControllerTests
 
         var result = controller.GetSupportedProviderTypes();
 
-        result.Should().BeOfType<OkObjectResult>();
+        Assert.IsType<OkObjectResult>(result);
         var okResult = (Microsoft.AspNetCore.Mvc.OkObjectResult)result;
         var types = (string[])okResult.Value!;
-        types.Should().Contain("openai");
-        types.Should().Contain("opencode");
-        types.Should().Contain("pi");
+        Assert.Contains("openai", types);
+        Assert.Contains("opencode", types);
+        Assert.Contains("pi", types);
     }
 }

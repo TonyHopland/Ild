@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using FluentAssertions;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 
@@ -48,10 +47,10 @@ public class RepositoryManagerTests : IDisposable
         var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
         var path = await mgr.CreateWorktreeAsync(_repo, "feature-x");
 
-        Directory.Exists(path).Should().BeTrue();
-        File.Exists(Path.Combine(path, "README.md")).Should().BeTrue();
+        Assert.True(Directory.Exists(path));
+        Assert.True(File.Exists(Path.Combine(path, "README.md")));
 
-        (await mgr.ValidateWorktreeHealthAsync(path)).Should().BeTrue();
+        Assert.True((await mgr.ValidateWorktreeHealthAsync(path)));
     }
 
     [Fact]
@@ -60,10 +59,10 @@ public class RepositoryManagerTests : IDisposable
         var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
         var path = await mgr.CreateWorktreeAsync(_repo, "ild/wi-11");
 
-        path.Should().EndWith(Path.Combine("ild", "wi-11"));
-        Directory.Exists(path).Should().BeTrue();
-        File.Exists(Path.Combine(path, "README.md")).Should().BeTrue();
-        (await mgr.ValidateWorktreeHealthAsync(path)).Should().BeTrue();
+        Assert.EndsWith(Path.Combine("ild", "wi-11"), path);
+        Assert.True(Directory.Exists(path));
+        Assert.True(File.Exists(Path.Combine(path, "README.md")));
+        Assert.True((await mgr.ValidateWorktreeHealthAsync(path)));
     }
 
     [Fact]
@@ -73,10 +72,10 @@ public class RepositoryManagerTests : IDisposable
         var path = await mgr.CreateWorktreeAsync(_repo, "feature-y");
         File.WriteAllText(Path.Combine(path, "new.txt"), "content\n");
 
-        (await mgr.CommitAsync(path, "add file")).Should().BeTrue();
+        Assert.True((await mgr.CommitAsync(path, "add file")));
 
         var diff = await mgr.GetDiffAsync(path);
-        diff.Should().NotBeNull();
+        Assert.NotNull(diff);
     }
 
     [Fact]
@@ -84,10 +83,10 @@ public class RepositoryManagerTests : IDisposable
     {
         var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
         var path = await mgr.CreateWorktreeAsync(_repo, "feature-z");
-        Directory.Exists(path).Should().BeTrue();
+        Assert.True(Directory.Exists(path));
 
         await mgr.DestroyWorktreeAsync(path);
-        Directory.Exists(path).Should().BeFalse();
+        Assert.False(Directory.Exists(path));
     }
 
     [Fact]
@@ -101,10 +100,10 @@ public class RepositoryManagerTests : IDisposable
         var mgr = new RepositoryManager(worktreesRoot: root);
         var path = await mgr.CreateWorktreeAsync(_repo, "ild/wi-11");
 
-        path.Should().Be(stalePath);
-        File.Exists(Path.Combine(path, "README.md")).Should().BeTrue();
-        File.Exists(Path.Combine(path, "leftover.txt")).Should().BeFalse();
-        (await mgr.ValidateWorktreeHealthAsync(path)).Should().BeTrue();
+        Assert.Equal(stalePath, path);
+        Assert.True(File.Exists(Path.Combine(path, "README.md")));
+        Assert.False(File.Exists(Path.Combine(path, "leftover.txt")));
+        Assert.True((await mgr.ValidateWorktreeHealthAsync(path)));
     }
 
     [Fact]
@@ -113,8 +112,8 @@ public class RepositoryManagerTests : IDisposable
         var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
         var path = await mgr.CreateWorktreeAsync(_repo, "feature-r");
 
-        (await mgr.ReadFileAsync(path, "README.md")).Should().Contain("hello");
-        (await mgr.ReadFileAsync(path, "../README.md")).Should().BeNull();
+        Assert.Contains("hello", (await mgr.ReadFileAsync(path, "README.md")));
+        Assert.Null((await mgr.ReadFileAsync(path, "../README.md")));
     }
 
     [Fact]
@@ -129,11 +128,11 @@ public class RepositoryManagerTests : IDisposable
             targetPath,
             auth: new GitAuthOptions("https://gitlab.example.com/group/repo.git", "token-123", "GitLab"));
 
-        runner.Calls.Should().ContainSingle();
-        runner.Calls[0].Environment.Should().NotBeNull();
-        runner.Calls[0].Environment!["GIT_ASKPASS"].Should().NotBeNullOrWhiteSpace();
-        runner.Calls[0].Environment!["ILD_GIT_USERNAME"].Should().Be("oauth2");
-        runner.Calls[0].Environment!["ILD_GIT_PASSWORD"].Should().Be("token-123");
+        Assert.Single(runner.Calls);
+        Assert.NotNull(runner.Calls[0].Environment);
+        Assert.False(string.IsNullOrWhiteSpace(runner.Calls[0].Environment!["GIT_ASKPASS"]));
+        Assert.Equal("oauth2", runner.Calls[0].Environment!["ILD_GIT_USERNAME"]);
+        Assert.Equal("token-123", runner.Calls[0].Environment!["ILD_GIT_PASSWORD"]);
     }
 
     [Fact]
@@ -147,10 +146,10 @@ public class RepositoryManagerTests : IDisposable
             "ild/wi-17",
             auth: new GitAuthOptions("https://git.kube/team/repo.git", "token-123", "Forgejo"));
 
-        runner.Calls.Should().ContainSingle();
-        runner.Calls[0].Environment.Should().NotBeNull();
-        runner.Calls[0].Environment!["ILD_GIT_USERNAME"].Should().Be("git");
-        runner.Calls[0].Environment!["ILD_GIT_PASSWORD"].Should().Be("token-123");
+        Assert.Single(runner.Calls);
+        Assert.NotNull(runner.Calls[0].Environment);
+        Assert.Equal("git", runner.Calls[0].Environment!["ILD_GIT_USERNAME"]);
+        Assert.Equal("token-123", runner.Calls[0].Environment!["ILD_GIT_PASSWORD"]);
     }
 
     private static void Git(string cwd, params string[] args)

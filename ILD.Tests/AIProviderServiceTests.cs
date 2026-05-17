@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Core.Services.Implementations;
@@ -23,7 +22,7 @@ public class AIProviderServiceTests
         var ctx = new LoopRunContext(Guid.NewGuid(), Guid.NewGuid().ToString(), "Title", "Desc", "/tmp/x", "feat", new List<string> { "a", "b" }, "prev");
         var rendered = await svc.RenderPromptAsync("T={{WorkItem.Title}} P={{PreviousNode.Output}}", ctx);
 
-        rendered.Should().Be("T=Title P=prev");
+        Assert.Equal("T=Title P=prev", rendered);
     }
 
     [Fact]
@@ -32,8 +31,8 @@ public class AIProviderServiceTests
         using var db = new TestDb();
         var svc = new AIProviderService(db.Providers, Mock.Of<IWorkItemManager>(), Mock.Of<IWorktreePreviewService>(), new HttpClient());
 
-        (await svc.ValidatePromptTemplateAsync("ok {{WorkItem.Title}}")).Should().BeTrue();
-        (await svc.ValidatePromptTemplateAsync("bad {{No.Such}}")).Should().BeFalse();
+        Assert.True((await svc.ValidatePromptTemplateAsync("ok {{WorkItem.Title}}")));
+        Assert.False((await svc.ValidatePromptTemplateAsync("bad {{No.Such}}")));
     }
 
     [Fact]
@@ -54,6 +53,6 @@ public class AIProviderServiceTests
         var svc = new AIProviderService(db.Providers, Mock.Of<IWorkItemManager>(), Mock.Of<IWorktreePreviewService>(), new HttpClient(new ErrorHandler()));
 
         var act = async () => await svc.CompleteAsync("hello");
-        await act.Should().ThrowAsync<AiProviderException>();
+        await Assert.ThrowsAsync<AiProviderException>(act);
     }
 }

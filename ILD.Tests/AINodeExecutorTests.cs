@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
@@ -48,8 +47,8 @@ public class AINodeExecutorTests
 
         var result = await executor.ExecuteAsync(BuildNodeExecutionContext("my-provider"));
 
-        result.Success.Should().BeTrue();
-        result.Output.Should().Be("adapter-result");
+        Assert.True(result.Success);
+        Assert.Equal("adapter-result", result.Output);
     }
 
     [Fact]
@@ -79,8 +78,8 @@ public class AINodeExecutorTests
 
         var result = await executor.ExecuteAsync(BuildNodeExecutionContext(providerId.ToString("D")));
 
-        result.Success.Should().BeTrue();
-        result.Output.Should().Be("adapter-result");
+        Assert.True(result.Success);
+        Assert.Equal("adapter-result", result.Output);
     }
 
     [Fact]
@@ -98,8 +97,8 @@ public class AINodeExecutorTests
 
         var result = await executor.ExecuteAsync(BuildNodeExecutionContext(null));
 
-        result.Success.Should().BeFalse();
-        result.Error.Should().Contain("No AI provider found");
+        Assert.False(result.Success);
+        Assert.Contains("No AI provider found", result.Error);
     }
 
     [Fact]
@@ -128,8 +127,8 @@ public class AINodeExecutorTests
 
         var result = await executor.ExecuteAsync(BuildNodeExecutionContext(null));
 
-        result.Success.Should().BeTrue();
-        result.Output.Should().Be("adapter-result");
+        Assert.True(result.Success);
+        Assert.Equal("adapter-result", result.Output);
     }
 
     [Fact]
@@ -147,8 +146,8 @@ public class AINodeExecutorTests
 
         var result = await executor.ExecuteAsync(BuildNodeExecutionContext("nonexistent"));
 
-        result.Success.Should().BeFalse();
-        result.Error.Should().Contain("No AI provider found");
+        Assert.False(result.Success);
+        Assert.Contains("No AI provider found", result.Error);
     }
 
     [Fact]
@@ -197,8 +196,8 @@ public class AINodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
-        testAdapter.CapturedPrompt.Should().Be("first prompt here");
+        Assert.True(result.Success);
+        Assert.Equal("first prompt here", testAdapter.CapturedPrompt);
     }
 
     [Fact]
@@ -244,8 +243,8 @@ public class AINodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
-        testAdapter.CapturedCount.Should().Be(2);
+        Assert.True(result.Success);
+        Assert.Equal(2, testAdapter.CapturedCount);
     }
 
     [Fact]
@@ -290,8 +289,8 @@ public class AINodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
-        testAdapter.CapturedCount.Should().Be(1);
+        Assert.True(result.Success);
+        Assert.Equal(1, testAdapter.CapturedCount);
         loopRunStore.Verify(s => s.GetRunNodesAsync(runId), Times.Once);
     }
 
@@ -321,8 +320,8 @@ public class AINodeExecutorTests
 
         var result = await executor.ExecuteAsync(BuildNodeExecutionContext("my-provider"));
 
-        result.Success.Should().BeFalse();
-        result.Error.Should().Be("something went wrong");
+        Assert.False(result.Success);
+        Assert.Equal("something went wrong", result.Error);
     }
 
     [Fact]
@@ -360,8 +359,8 @@ public class AINodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeFalse();
-        result.Error.Should().Contain("timed out");
+        Assert.False(result.Success);
+        Assert.Contains("timed out", result.Error);
     }
 
     [Fact]
@@ -399,8 +398,8 @@ public class AINodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
-        result.Output.Should().Be("adapter-result");
+        Assert.True(result.Success);
+        Assert.Equal("adapter-result", result.Output);
     }
 
     [Fact]
@@ -420,8 +419,8 @@ public class AINodeExecutorTests
 
         var result = await executor.ExecuteAsync(BuildNodeExecutionContext(null));
 
-        result.Success.Should().BeFalse();
-        result.Error.Should().Contain("No AI provider found");
+        Assert.False(result.Success);
+        Assert.Contains("No AI provider found", result.Error);
     }
 
     [Fact]
@@ -465,9 +464,9 @@ public class AINodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeFalse();
-        result.Error.Should().Contain("AI rejected");
-        result.Output.Should().Be("I cannot complete this task");
+        Assert.False(result.Success);
+        Assert.Contains("AI rejected", result.Error);
+        Assert.Equal("I cannot complete this task", result.Output);
     }
 
     [Fact]
@@ -511,8 +510,8 @@ public class AINodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
-        result.Output.Should().Be("adapter-result");
+        Assert.True(result.Success);
+        Assert.Equal("adapter-result", result.Output);
     }
 
     [Fact]
@@ -556,7 +555,7 @@ public class AINodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
+        Assert.True(result.Success);
     }
 
     [Fact]
@@ -613,9 +612,9 @@ public class AINodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
-        testAdapter.CapturedSessionId.Should().Be("selected-session-456");
-        testAdapter.CapturedIncomingSessionId.Should().Be("selected-session-456");
+        Assert.True(result.Success);
+        Assert.Equal("selected-session-456", testAdapter.CapturedSessionId);
+        Assert.Equal("selected-session-456", testAdapter.CapturedIncomingSessionId);
     }
 
     [Fact]
@@ -672,9 +671,9 @@ public class AINodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
-        testAdapter.CapturedPrompt.Should().Be("default prompt");
-        testAdapter.CapturedSessionId.Should().Be("bound-session");
+        Assert.True(result.Success);
+        Assert.Equal("default prompt", testAdapter.CapturedPrompt);
+        Assert.Equal("bound-session", testAdapter.CapturedSessionId);
     }
 
     [Fact]
@@ -725,9 +724,9 @@ public class AINodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
-        testAdapter.CapturedPrompt.Should().Be("default prompt");
-        testAdapter.CapturedSessionId.Should().BeNull();
+        Assert.True(result.Success);
+        Assert.Equal("default prompt", testAdapter.CapturedPrompt);
+        Assert.Null(testAdapter.CapturedSessionId);
     }
 
     [Fact]
@@ -777,7 +776,7 @@ public class AINodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
+        Assert.True(result.Success);
         loopRunStore.Verify(
             s => s.UpsertSessionBindingAsync(runId, "Capturing", "research", "new-session-from-adapter"),
             Times.Once);
@@ -830,7 +829,7 @@ public class AINodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
+        Assert.True(result.Success);
         loopRunStore.Verify(
             s => s.UpsertSessionBindingAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()),
             Times.Never);
@@ -885,8 +884,8 @@ public class AINodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
-        testAdapter.CapturedSessionId.Should().BeNull();
+        Assert.True(result.Success);
+        Assert.Null(testAdapter.CapturedSessionId);
         loopRunStore.Verify(
             s => s.UpsertSessionBindingAsync(runId, "Capturing", "research", "new-session-from-adapter"),
             Times.Once);
@@ -936,8 +935,8 @@ public class AINodeExecutorTests
 
         // First run: no incoming session, adapter returns "new-session-from-adapter".
         var first = await executor.ExecuteAsync(MakeCtx());
-        first.Success.Should().BeTrue();
-        testAdapter.CapturedSessionId.Should().BeNull("first run has no session yet");
+        Assert.True(first.Success);
+        Assert.Null(testAdapter.CapturedSessionId);
         loopRunStore.Verify(
             s => s.UpsertSessionBindingAsync(runId, "Capturing", "research", "new-session-from-adapter"),
             Times.Once);
@@ -952,10 +951,9 @@ public class AINodeExecutorTests
                 SessionId = "new-session-from-adapter"
             });
         var second = await executor.ExecuteAsync(MakeCtx());
-        second.Success.Should().BeTrue();
-        testAdapter.CapturedSessionId.Should().Be("new-session-from-adapter",
-            "the session written on the first execution must be readable on the next");
-        testAdapter.CapturedIncomingSessionId.Should().Be("new-session-from-adapter");
+        Assert.True(second.Success);
+        Assert.Equal("new-session-from-adapter", testAdapter.CapturedSessionId);
+        Assert.Equal("new-session-from-adapter", testAdapter.CapturedIncomingSessionId);
     }
 
     [Fact]
@@ -998,8 +996,8 @@ public class AINodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeFalse();
-        result.Error.Should().Contain("sessionPlaceholder");
+        Assert.False(result.Success);
+        Assert.Contains("sessionPlaceholder", result.Error);
     }
 
     [Fact]
@@ -1045,10 +1043,10 @@ public class AINodeExecutorTests
 
         var result = await executor.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
-        testAdapter.CapturedAdapterConfig.Should().NotBeNull();
-        testAdapter.CapturedAdapterConfig!["temperature"].Should().Be(0.5);
-        testAdapter.CapturedAdapterConfig!["maxTokens"].Should().Be(8192);
+        Assert.True(result.Success);
+        Assert.NotNull(testAdapter.CapturedAdapterConfig);
+        Assert.Equal(0.5, Convert.ToDouble(testAdapter.CapturedAdapterConfig!["temperature"]));
+        Assert.Equal(8192, Convert.ToInt32(testAdapter.CapturedAdapterConfig!["maxTokens"]));
     }
 
     private sealed class CapturingAdapter : IAgentAdapter

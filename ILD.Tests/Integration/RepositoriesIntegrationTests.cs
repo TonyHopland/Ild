@@ -1,6 +1,5 @@
 using System.Net;
 using System.Net.Http.Json;
-using FluentAssertions;
 
 namespace ILD.Tests.Integration;
 
@@ -13,7 +12,7 @@ public class RepositoriesIntegrationTests
         await using var factory = new ApiFactory();
         var client = factory.CreateClient();
         var response = await client.GetAsync("/api/v1/repositories");
-        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]
@@ -22,8 +21,8 @@ public class RepositoriesIntegrationTests
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var response = await client.GetAsync("/api/v1/repositories");
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var items = await response.Content.ReadFromJsonAsync<object[]>();
-        items!.Length.Should().Be(0);
+        Assert.Equal(0, items!.Length);
     }
 }

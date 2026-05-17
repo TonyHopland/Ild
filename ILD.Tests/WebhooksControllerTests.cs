@@ -1,6 +1,5 @@
 using System.Text;
 using System.Text.Json;
-using FluentAssertions;
 using ILD.Api.Controllers;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
@@ -59,7 +58,7 @@ public class WebhooksControllerTests : IDisposable
             new WebhookPayload("pull_request.merged", "r1", "1", "https://x/pr/1", null, "merged"));
         var result = await c.Forgejo();
 
-        result.Should().BeOfType<UnauthorizedResult>();
+        Assert.IsType<UnauthorizedResult>(result);
         prSync.Verify(s => s.HandleWebhookAsync(It.IsAny<WebhookPayload>()), Times.Never);
     }
 
@@ -73,7 +72,7 @@ public class WebhooksControllerTests : IDisposable
             new WebhookPayload("pull_request.merged", "r1", "1", "https://x/pr/1", null, "merged"));
         var result = await c.Forgejo();
 
-        result.Should().BeOfType<UnauthorizedResult>();
+        Assert.IsType<UnauthorizedResult>(result);
         prSync.Verify(s => s.HandleWebhookAsync(It.IsAny<WebhookPayload>()), Times.Never);
     }
 
@@ -91,7 +90,7 @@ public class WebhooksControllerTests : IDisposable
         var (c, prSync, _) = BuildRequest(_db, secret, sig, payload);
         var result = await c.Forgejo();
 
-        result.Should().BeOfType<OkResult>();
+        Assert.IsType<OkResult>(result);
         prSync.Verify(s => s.HandleWebhookAsync(It.IsAny<WebhookPayload>()), Times.Once);
     }
 }

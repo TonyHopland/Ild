@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Data.Enums;
 
 namespace ILD.Tests;
@@ -17,7 +16,7 @@ public class LoopEngineRunControlLifecycleTests
         await h.Engine.RunAsync(h.RunId);
 
         var active = await h.Engine.GetActiveRunIdsAsync();
-        active.Should().NotContain(h.RunId);
+        Assert.DoesNotContain(h.RunId, active);
     }
 
     [Fact]
@@ -34,7 +33,7 @@ public class LoopEngineRunControlLifecycleTests
         await h.Engine.RunAsync(h.RunId);
 
         var active = await h.Engine.GetActiveRunIdsAsync();
-        active.Should().NotContain(h.RunId);
+        Assert.DoesNotContain(h.RunId, active);
     }
 
     [Fact]
@@ -56,6 +55,6 @@ public class LoopEngineRunControlLifecycleTests
         await h.Engine.RunAsync(h.RunId);
 
         var active = await h.Engine.GetActiveRunIdsAsync();
-        active.Should().NotContain(h.RunId);
+        Assert.DoesNotContain(h.RunId, active);
     }
 }

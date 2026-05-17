@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Data.DTOs;
 using ILD.Core.Services.Implementations;
 
@@ -23,7 +22,7 @@ public class LoopTemplateValidatorTests
             new() { Node("a", "Cmd"), Node("c", "Cleanup") },
             new() { Edge("a", "c") });
         var errs = LoopTemplateValidator.Validate(g);
-        errs.Should().Contain(e => e.Contains("Start"));
+        Assert.Contains(errs, e => e.Contains("Start"));
     }
 
     [Fact]
@@ -33,7 +32,7 @@ public class LoopTemplateValidatorTests
             new() { Node("s", "Start"), Node("a", "Cmd") },
             new() { Edge("s", "a") });
         var errs = LoopTemplateValidator.Validate(g);
-        errs.Should().Contain(e => e.Contains("Cleanup"));
+        Assert.Contains(errs, e => e.Contains("Cleanup"));
     }
 
     [Fact]
@@ -43,7 +42,7 @@ public class LoopTemplateValidatorTests
             new() { Node("s", "Start"), Node("a", "Cmd"), Node("orphan", "Cmd"), Node("c", "Cleanup") },
             new() { Edge("s", "a"), Edge("a", "c") });
         var errs = LoopTemplateValidator.Validate(g);
-        errs.Should().Contain(e => e.ToLower().Contains("unreachable"));
+        Assert.Contains(errs, e => e.ToLower().Contains("unreachable"));
     }
 
     [Fact]
@@ -53,7 +52,7 @@ public class LoopTemplateValidatorTests
             new() { Node("s", "Start"), Node("a", "Cmd"), Node("c", "Cleanup") },
             new() { Edge("s", "a"), Edge("a", "s") }); // cleanup unreachable
         var errs = LoopTemplateValidator.Validate(g);
-        errs.Should().Contain(e => e.ToLower().Contains("cleanup"));
+        Assert.Contains(errs, e => e.ToLower().Contains("cleanup"));
     }
 
     [Fact]
@@ -63,7 +62,7 @@ public class LoopTemplateValidatorTests
             new() { Node("s", "Start"), Node("a", "Cmd"), Node("b", "Cmd"), Node("c", "Cleanup") },
             new() { Edge("s", "a"), Edge("s", "b"), Edge("a", "c"), Edge("b", "c") });
         var errs = LoopTemplateValidator.Validate(g);
-        errs.Should().Contain(e => e.ToLower().Contains("duplicate"));
+        Assert.Contains(errs, e => e.ToLower().Contains("duplicate"));
     }
 
     [Fact]
@@ -77,7 +76,7 @@ public class LoopTemplateValidatorTests
             },
             new() { Edge("s", "a"), Edge("a", "c") });
         var errs = LoopTemplateValidator.Validate(g);
-        errs.Should().Contain(e => e.Contains("Bogus"));
+        Assert.Contains(errs, e => e.Contains("Bogus"));
     }
 
     [Fact]
@@ -92,7 +91,7 @@ public class LoopTemplateValidatorTests
             new() { Edge("s", "a"), Edge("a", "c") });
 
         var errs = LoopTemplateValidator.Validate(g);
-        errs.Should().Contain(e => e.Contains("Bogus.Session"));
+        Assert.Contains(errs, e => e.Contains("Bogus.Session"));
     }
 
     [Fact]
@@ -110,7 +109,7 @@ public class LoopTemplateValidatorTests
             new() { Edge("s", "a"), Edge("a", "c") });
 
         var errs = LoopTemplateValidator.Validate(g);
-        errs.Should().Contain(e => e.Contains("sessionPlaceholder"));
+        Assert.Contains(errs, e => e.Contains("sessionPlaceholder"));
     }
 
     [Fact]
@@ -120,7 +119,7 @@ public class LoopTemplateValidatorTests
             new() { Node("s", "Start"), Node("a", "Cmd"), Node("c", "Cleanup") },
             new() { Edge("s", "a"), Edge("a", "c") });
         var errs = LoopTemplateValidator.Validate(g);
-        errs.Should().BeEmpty();
+        Assert.Empty(errs);
     }
 
     [Fact]
@@ -130,7 +129,7 @@ public class LoopTemplateValidatorTests
             new() { Node("s", "Start"), Node("a", "Cmd"), Node("c", "Cleanup") },
             new() { Edge("s", "a"), Edge("a", "c", "OnRespond") });
         var errs = LoopTemplateValidator.Validate(g);
-        errs.Should().Contain(e => e.Contains("OnRespond"));
+        Assert.Contains(errs, e => e.Contains("OnRespond"));
     }
 
     [Fact]
@@ -151,7 +150,7 @@ public class LoopTemplateValidatorTests
                 Edge("a", "c")
             });
         var errs = LoopTemplateValidator.Validate(g);
-        errs.Should().BeEmpty();
+        Assert.Empty(errs);
     }
 
     [Fact]
@@ -172,6 +171,6 @@ public class LoopTemplateValidatorTests
                 Edge("a", "c")
             });
         var errs = LoopTemplateValidator.Validate(g);
-        errs.Should().BeEmpty();
+        Assert.Empty(errs);
     }
 }

@@ -7,6 +7,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using System.Net.Http.Json;
 
 namespace ILD.Tests.Integration;
@@ -37,7 +38,6 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         Environment.SetEnvironmentVariable("ILD_PASSWORD", AdminPassword);
         Environment.SetEnvironmentVariable("ILD_DATA_PATH", null);
         Environment.SetEnvironmentVariable("ILD_WORKTREES_PATH", null);
-        // Clear so Program.cs skips UseNpgsql() — we register our own below.
         Environment.SetEnvironmentVariable("ILD_DB_CONNECTION_STRING", null);
     }
 
@@ -51,28 +51,36 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             {
                 ["Storage:DataRoot"] = _dataRoot,
                 ["Storage:WorktreesSubdir"] = "worktrees",
+                ["Serilog:WriteToConsole"] = "false",
             });
         });
 
         builder.ConfigureServices(services =>
         {
-            // Program.cs skipped AddDataLayer (no connection string), so register
-            // data stores and our own in-memory DbContext.
             services.AddDataStores();
-
             services.AddDbContext<AppDbContext>(options => options.UseSqlite(_connection,
                 sql => sql.MigrationsAssembly(typeof(AppDbContext).Assembly)));
 
-            // Replace the production WorkItemServer client + options resolver
-            // with the in-process fake so tests don't need a real WorkItemServer.
-            var stubs = services
-                .Where(d => d.ServiceType == typeof(IWorkItemServerClient)
-                    || d.ServiceType == typeof(IWorkItemServerOptionsResolver))
-                .ToList();
-            foreach (var d in stubs) services.Remove(d);
+            services.RemoveHostedService<ILD.Core.Services.Remote.RemoteWorkItemStartupReconciler>();
+            services.RemoveHostedService<ILD.Core.Services.Remote.RemoteWorkItemPoller>();
+            services.GuardExternalServices();
+
+            services.RemoveAll<IWorkItemServerClient>();
+            services.RemoveAll<IWorkItemServerOptionsResolver>();
             services.AddSingleton<IWorkItemServerClient>(_serverHarness.Client);
             services.AddSingleton<IWorkItemServerOptionsResolver>(_serverHarness.Options);
         });
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _connection.Dispose();
+            _serverHarness.Dispose();
+            try { Directory.Delete(_dataRoot, recursive: true); } catch { }
+        }
+        base.Dispose(disposing);
     }
 
     /// <summary>Logs in as the seeded admin user and returns an HttpClient with the bearer token attached.</summary>
@@ -88,15 +96,4 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     }
 
     private sealed record LoginBody(string Token, string Username);
-
-    protected override void Dispose(bool disposing)
-    {
-        if (disposing)
-        {
-            _connection.Dispose();
-            _serverHarness.Dispose();
-            try { Directory.Delete(_dataRoot, recursive: true); } catch { /* best effort */ }
-        }
-        base.Dispose(disposing);
-    }
 }

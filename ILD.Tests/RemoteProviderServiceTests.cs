@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
-using FluentAssertions;
 using ILD.Core.Services.Implementations;
 using ILD.Data.Entities;
 
@@ -57,9 +56,9 @@ public class RemoteProviderServiceTests
             "title",
             "body");
 
-        result.Error.Should().BeNull();
-        handler.Requests.Should().ContainSingle();
-        handler.Requests[0].Headers.Authorization.Should().BeEquivalentTo(new AuthenticationHeaderValue("token", "provider-key"));
+        Assert.Null(result.Error);
+        Assert.Single(handler.Requests);
+        Assert.Equal(new AuthenticationHeaderValue("token", "provider-key"), handler.Requests[0].Headers.Authorization);
     }
 
     [Fact]
@@ -91,8 +90,8 @@ public class RemoteProviderServiceTests
         await service.CreatePullRequestAsync("https://gitea.example/team/repo.git", "ild/one", "main", "title", "body");
         await service.CreatePullRequestAsync("https://forge.example/team/repo.git", "ild/two", "main", "title", "body");
 
-        handler.Requests.Should().HaveCount(2);
-        handler.Requests[0].Headers.Authorization.Should().BeEquivalentTo(new AuthenticationHeaderValue("token", "gitea-key"));
-        handler.Requests[1].Headers.Authorization.Should().BeEquivalentTo(new AuthenticationHeaderValue("token", "forge-key"));
+        Assert.Equal(2, handler.Requests.Count());
+        Assert.Equal(new AuthenticationHeaderValue("token", "gitea-key"), handler.Requests[0].Headers.Authorization);
+        Assert.Equal(new AuthenticationHeaderValue("token", "forge-key"), handler.Requests[1].Headers.Authorization);
     }
 }

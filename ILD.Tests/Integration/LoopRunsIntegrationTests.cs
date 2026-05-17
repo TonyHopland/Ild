@@ -1,6 +1,5 @@
 using System.Net;
 using System.Net.Http.Json;
-using FluentAssertions;
 
 namespace ILD.Tests.Integration;
 
@@ -15,10 +14,10 @@ public class LoopRunsIntegrationTests
         var response = await client.GetAsync("/api/v1/looprins");
         // Path is /api/v1/[controller] -> /api/v1/loopruns
         // Use the correct route below
-        response.StatusCode.Should().BeOneOf(HttpStatusCode.NotFound, HttpStatusCode.Unauthorized);
+        Assert.Contains(response.StatusCode, new[] { HttpStatusCode.NotFound, HttpStatusCode.Unauthorized });
 
         var actual = await client.GetAsync("/api/v1/loopruns");
-        actual.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        Assert.Equal(HttpStatusCode.Unauthorized, actual.StatusCode);
     }
 
     [Fact]
@@ -27,10 +26,10 @@ public class LoopRunsIntegrationTests
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var response = await client.GetAsync("/api/v1/loopruns");
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var items = await response.Content.ReadFromJsonAsync<object[]>();
-        items.Should().NotBeNull();
-        items!.Length.Should().Be(0);
+        Assert.NotNull(items);
+        Assert.Equal(0, items!.Length);
     }
 
     [Fact]
@@ -39,6 +38,6 @@ public class LoopRunsIntegrationTests
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var response = await client.GetAsync("/api/v1/loopruns/" + Guid.NewGuid());
-        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 }

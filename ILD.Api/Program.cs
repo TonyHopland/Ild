@@ -11,19 +11,21 @@ using Serilog.Formatting.Json;
 
 var loggingLevelSwitch = new LoggingLevelSwitch(LogEventLevel.Information);
 
-Log.Logger = new LoggerConfiguration()
-    .WriteTo.Console(new JsonFormatter())
-    .Enrich.FromLogContext()
-    .MinimumLevel.ControlledBy(loggingLevelSwitch)
-    .CreateBootstrapLogger();
-
 try
 {
-    Log.Information("Starting ILD API");
-
     var builder = WebApplication.CreateBuilder(args);
 
-    builder.Host.UseSerilog();
+    builder.Host.UseSerilog((context, _, loggerConfiguration) =>
+    {
+        loggerConfiguration
+            .Enrich.FromLogContext()
+            .MinimumLevel.ControlledBy(loggingLevelSwitch);
+
+        if (context.Configuration.GetValue("Serilog:WriteToConsole", true))
+        {
+            loggerConfiguration.WriteTo.Console(new JsonFormatter());
+        }
+    });
 
     var dataPath = Environment.GetEnvironmentVariable("ILD_DATA_PATH")
         ?? builder.Configuration["Storage:DataRoot"]
@@ -89,16 +91,8 @@ try
 
     var app = builder.Build();
 
-    // Force the agent auth token provider to materialize. Its constructor
-    // publishes the token into the process environment so the OpenCode adapter
-    // (and any spawned MCP child) can read it via ILD_API_TOKEN.
     _ = app.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>();
 
-    // Initialise the database: migrate (production PostgreSQL) or ensure created
-    // (integration-test SQLite). The DbContext is registered either by the
-    // AddDataLayer call above (production) or by the test factory (tests).
-    // When neither is present (e.g. a test that skips the data layer entirely)
-    // GetService returns null and we skip all database work.
     using (var scope = app.Services.CreateScope())
     {
         var dbContext = scope.ServiceProvider.GetService<AppDbContext>();
@@ -121,7 +115,6 @@ try
             var providerStore = scope.ServiceProvider.GetRequiredService<ILD.Data.Stores.Interfaces.IProviderStore>();
             await ILD.Api.Configuration.TemplateSeeder.SeedRemoteProviderAsync(providerStore);
 
-            // Best-effort recovery: any LoopRun left in Running across restart
             var recovery = scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Interfaces.IRecoveryManager>();
             foreach (var runId in await recovery.GetRecoverableRunIdsAsync())
             {
@@ -158,13 +151,7 @@ try
         app.MapFallbackToFile("index.html");
     }
 
-    Log.Information("ILD API started");
     await app.RunAsync();
-}
-catch (Exception ex)
-{
-    Log.Fatal(ex, "ILD API terminated unexpectedly");
-    throw;
 }
 finally
 {

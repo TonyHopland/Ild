@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Core.Services.Implementations;
@@ -39,9 +38,9 @@ public class EventLogServiceTests
         var s2 = await svc.AppendAsync(runId, "NodeCompleted", "second");
         var s3 = await svc.AppendAsync(runId, "NodeStarted", "third");
 
-        s1.Should().Be(1);
-        s2.Should().Be(2);
-        s3.Should().Be(3);
+        Assert.Equal(1, s1);
+        Assert.Equal(2, s2);
+        Assert.Equal(3, s3);
     }
 
     [Fact]
@@ -54,9 +53,9 @@ public class EventLogServiceTests
         await svc.AppendAsync(runId, "NodeCompleted", "b");
 
         var entries = (await svc.GetByRunIdAsync(runId)).ToList();
-        entries.Should().HaveCount(2);
-        entries[0].Data.Should().Be("a");
-        entries[1].Data.Should().Be("b");
+        Assert.Equal(2, entries.Count());
+        Assert.Equal("a", entries[0].Data);
+        Assert.Equal("b", entries[1].Data);
     }
 
     [Fact]
@@ -70,11 +69,11 @@ public class EventLogServiceTests
         await svc.AppendAsync(runId, "NodeStarted", bigMessage);
 
         var entry = (await svc.GetByRunIdAsync(runId)).Single();
-        entry.PayloadPath.Should().NotBeNullOrEmpty();
-        entry.PayloadPath!.Should().StartWith(dir);
-        File.Exists(entry.PayloadPath).Should().BeTrue();
-        (await File.ReadAllTextAsync(entry.PayloadPath)).Should().Be(bigMessage);
-        entry.Data.Should().BeEmpty();
+        Assert.False(string.IsNullOrEmpty(entry.PayloadPath));
+        Assert.StartsWith(dir, entry.PayloadPath!);
+        Assert.True(File.Exists(entry.PayloadPath));
+        Assert.Equal(bigMessage, (await File.ReadAllTextAsync(entry.PayloadPath)));
+        Assert.Empty(entry.Data);
 
         Directory.Delete(dir, recursive: true);
     }
@@ -98,9 +97,9 @@ public class EventLogServiceTests
 
         var removed = await svc.EnforceRetentionPolicyAsync(DateTimeOffset.UtcNow.AddDays(-1));
 
-        removed.Should().Be(1);
-        (await svc.GetByRunIdAsync(runId)).Should().BeEmpty();
-        (await svc.GetByRunIdAsync(failedRun.Id)).Should().HaveCount(1);
+        Assert.Equal(1, removed);
+        Assert.Empty((await svc.GetByRunIdAsync(runId)));
+        Assert.Equal(1, (await svc.GetByRunIdAsync(failedRun.Id)).Count());
     }
 
     [Fact]
@@ -113,24 +112,24 @@ public class EventLogServiceTests
             await svc.AppendAsync(runId, "NodeStarted", $"event-{i}");
 
         var page1 = await svc.GetByRunIdAfterCursorAsync(runId, cursor: 0, limit: 3);
-        page1.Entries.Should().HaveCount(3);
-        page1.Entries[0].Sequence.Should().Be(1);
-        page1.Entries[2].Sequence.Should().Be(3);
-        page1.HasMore.Should().BeTrue();
-        page1.NextCursor.Should().Be(3);
+        Assert.Equal(3, page1.Entries.Count());
+        Assert.Equal(1, page1.Entries[0].Sequence);
+        Assert.Equal(3, page1.Entries[2].Sequence);
+        Assert.True(page1.HasMore);
+        Assert.Equal(3, page1.NextCursor);
 
         var page2 = await svc.GetByRunIdAfterCursorAsync(runId, cursor: 3, limit: 3);
-        page2.Entries.Should().HaveCount(3);
-        page2.Entries[0].Sequence.Should().Be(4);
-        page2.Entries[2].Sequence.Should().Be(6);
-        page2.HasMore.Should().BeTrue();
-        page2.NextCursor.Should().Be(6);
+        Assert.Equal(3, page2.Entries.Count());
+        Assert.Equal(4, page2.Entries[0].Sequence);
+        Assert.Equal(6, page2.Entries[2].Sequence);
+        Assert.True(page2.HasMore);
+        Assert.Equal(6, page2.NextCursor);
 
         var page3 = await svc.GetByRunIdAfterCursorAsync(runId, cursor: 6, limit: 3);
-        page3.Entries.Should().HaveCount(1);
-        page3.Entries[0].Sequence.Should().Be(7);
-        page3.HasMore.Should().BeFalse();
-        page3.NextCursor.Should().Be(7);
+        Assert.Equal(1, page3.Entries.Count());
+        Assert.Equal(7, page3.Entries[0].Sequence);
+        Assert.False(page3.HasMore);
+        Assert.Equal(7, page3.NextCursor);
     }
 
     [Fact]
@@ -140,8 +139,8 @@ public class EventLogServiceTests
         using var _ = db;
 
         var page = await svc.GetByRunIdAfterCursorAsync(runId, cursor: 0, limit: 10);
-        page.Entries.Should().BeEmpty();
-        page.HasMore.Should().BeFalse();
-        page.NextCursor.Should().Be(0);
+        Assert.Empty(page.Entries);
+        Assert.False(page.HasMore);
+        Assert.Equal(0, page.NextCursor);
     }
 }

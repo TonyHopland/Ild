@@ -1,4 +1,3 @@
-using FluentAssertions;
 using Microsoft.AspNetCore.Mvc;
 using Serilog;
 using Serilog.Core;
@@ -21,15 +20,15 @@ public class StructuredLoggingTests
         logger.Information("Test message {RunId}", Guid.NewGuid());
 
         var events = sink.LogEvents.ToList();
-        events.Should().NotBeEmpty();
+        Assert.NotEmpty(events);
 
         var json = JsonSerializer.Serialize(events[0]);
-        json.Should().NotBeNullOrEmpty();
+        Assert.False(string.IsNullOrEmpty(json));
 
         var parsed = System.Text.Json.JsonDocument.Parse(json);
-        parsed.RootElement.TryGetProperty("Timestamp", out _).Should().BeTrue();
-        parsed.RootElement.TryGetProperty("Level", out _).Should().BeTrue();
-        parsed.RootElement.TryGetProperty("MessageTemplate", out _).Should().BeTrue();
+        Assert.True(parsed.RootElement.TryGetProperty("Timestamp", out _));
+        Assert.True(parsed.RootElement.TryGetProperty("Level", out _));
+        Assert.True(parsed.RootElement.TryGetProperty("MessageTemplate", out _));
     }
 
     [Fact]
@@ -40,8 +39,8 @@ public class StructuredLoggingTests
 
         var result = controller.SetLevel(new ILD.Api.Controllers.LoggingController.LogLevelRequest { Level = "Debug" });
 
-        result.Should().BeOfType<OkObjectResult>();
-        levelSwitch.MinimumLevel.Should().Be(LogEventLevel.Debug);
+        Assert.IsType<OkObjectResult>(result);
+        Assert.Equal(LogEventLevel.Debug, levelSwitch.MinimumLevel);
     }
 
     [Fact]
@@ -52,6 +51,6 @@ public class StructuredLoggingTests
 
         var result = controller.SetLevel(new ILD.Api.Controllers.LoggingController.LogLevelRequest { Level = "Invalid" });
 
-        result.Should().BeOfType<BadRequestObjectResult>();
+        Assert.IsType<BadRequestObjectResult>(result);
     }
 }

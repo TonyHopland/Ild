@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Api.Configuration;
 using ILD.Api.Hubs;
 using ILD.Core.Services.Remote;
@@ -35,11 +34,11 @@ public class SignalRWorkItemNotifierTests
         var notifier = new SignalRWorkItemNotifier(ctx.Object);
         await notifier.WorkItemStateChangedAsync(workItemId, RemoteWorkItemStatus.Backlog, RemoteWorkItemStatus.WorkQueue);
 
-        capturedArgs!.Should().HaveCount(1);
-        var payload = capturedArgs[0].Should().BeOfType<WorkItemStateChangedPayload>().Subject;
-        payload.WorkItemId.Should().Be(workItemId);
-        payload.OldStatus.Should().Be(WorkItemStatus.Backlog);
-        payload.NewStatus.Should().Be(WorkItemStatus.WorkQueue);
+        Assert.Equal(1, capturedArgs!.Count());
+        var payload = Assert.IsType<WorkItemStateChangedPayload>(capturedArgs[0]);
+        Assert.Equal(workItemId, payload.WorkItemId);
+        Assert.Equal(WorkItemStatus.Backlog, payload.OldStatus);
+        Assert.Equal(WorkItemStatus.WorkQueue, payload.NewStatus);
     }
 
     [Fact]
@@ -56,9 +55,9 @@ public class SignalRWorkItemNotifierTests
         var notifier = new SignalRWorkItemNotifier(ctx.Object);
         await notifier.HumanFeedbackRequiredAsync(workItemId, "Node failed");
 
-        capturedArgs!.Should().HaveCount(1);
-        var payload = capturedArgs[0].Should().BeOfType<HumanFeedbackRequiredPayload>().Subject;
-        payload.WorkItemId.Should().Be(workItemId);
-        payload.Reason.Should().Be("Node failed");
+        Assert.Equal(1, capturedArgs!.Count());
+        var payload = Assert.IsType<HumanFeedbackRequiredPayload>(capturedArgs[0]);
+        Assert.Equal(workItemId, payload.WorkItemId);
+        Assert.Equal("Node failed", payload.Reason);
     }
 }

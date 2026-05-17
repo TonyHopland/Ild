@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Data.Enums;
 
 namespace ILD.Tests;
@@ -14,9 +13,9 @@ public class LoopEngineWorkItemFailureTransitionTests
 
         var status = await h.Engine.RunAsync(h.RunId);
 
-        status.Should().Be(LoopRunStatus.Failed);
+        Assert.Equal(LoopRunStatus.Failed, status);
         var wi = h.ReloadServerWorkItem();
-        ((WorkItemStatus)(int)wi.Status).Should().Be(WorkItemStatus.HumanFeedback);
-        h.ReloadRun().HumanFeedbackReason.Should().NotBeNullOrEmpty();
+        Assert.Equal(WorkItemStatus.HumanFeedback, ((WorkItemStatus)(int)wi.Status));
+        Assert.False(string.IsNullOrEmpty(h.ReloadRun().HumanFeedbackReason));
     }
 }

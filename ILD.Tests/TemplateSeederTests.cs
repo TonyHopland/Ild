@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Api.Configuration;
 using ILD.Core.Services.Implementations;
 using System.Text.Json;
@@ -16,56 +15,56 @@ public class TemplateSeederTests
         await TemplateSeeder.SeedAsync(db.LoopTemplates, mgr);
 
         var templates = await db.LoopTemplates.GetAllAsync();
-        templates.Should().HaveCount(3);
+        Assert.Equal(3, templates.Count());
 
         var aiFeature = templates.Single(t => t.Name == "AI-Assisted Feature");
         var aiFeatureGraph = await mgr.GetVersionGraphAsync(aiFeature.Id, 1);
-        aiFeatureGraph.Should().NotBeNull();
+        Assert.NotNull(aiFeatureGraph);
         var implementConfig = aiFeatureGraph!.Nodes.Single(n => n.Label == "AI Implement").Config;
-        ReadBool(implementConfig, "useSession").Should().BeTrue();
-        ReadString(implementConfig, "prompt").Should().Be("{{PreviousNode.Output}}");
-        ReadString(implementConfig, "sessionPlaceholder").Should().Be("implementation");
-        implementConfig.Should().NotContainKey("initialPrompt");
-        implementConfig.Should().NotContainKey("sessionPrompt");
+        Assert.True(ReadBool(implementConfig, "useSession"));
+        Assert.Equal("{{PreviousNode.Output}}", ReadString(implementConfig, "prompt"));
+        Assert.Equal("implementation", ReadString(implementConfig, "sessionPlaceholder"));
+        Assert.False(implementConfig.ContainsKey("initialPrompt"));
+        Assert.False(implementConfig.ContainsKey("sessionPrompt"));
 
         var implementInitialConfig = aiFeatureGraph.Nodes.Single(n => n.Label == "Prompt implement initial").Config;
-        ReadString(implementInitialConfig, "prompt").Should().Contain("You are in charge of implementing this workitem");
+        Assert.Contains("You are in charge of implementing this workitem", ReadString(implementInitialConfig, "prompt"));
 
         var implementRetryConfig = aiFeatureGraph.Nodes.Single(n => n.Label == "Prompt implement retry").Config;
-        ReadString(implementRetryConfig, "prompt").Should().Contain("Your implementation was rejected");
+        Assert.Contains("Your implementation was rejected", ReadString(implementRetryConfig, "prompt"));
 
         var reviewConfig = aiFeatureGraph.Nodes.Single(n => n.Label == "AI Review").Config;
-        reviewConfig.Should().NotContainKey("useSession");
-        ReadString(reviewConfig, "prompt").Should().Contain("Do a thorough review of this change.");
-        reviewConfig.Should().NotContainKey("sessionPrompt");
-        reviewConfig.Should().NotContainKey("sessionPlaceholder");
+        Assert.False(reviewConfig.ContainsKey("useSession"));
+        Assert.Contains("Do a thorough review of this change.", ReadString(reviewConfig, "prompt"));
+        Assert.False(reviewConfig.ContainsKey("sessionPrompt"));
+        Assert.False(reviewConfig.ContainsKey("sessionPlaceholder"));
 
         var plan = templates.Single(t => t.Name == "Plan");
         var planGraph = await mgr.GetVersionGraphAsync(plan.Id, 1);
-        planGraph.Should().NotBeNull();
+        Assert.NotNull(planGraph);
 
         var grillConfig = planGraph!.Nodes.Single(n => n.Label == "AI Grill").Config;
-        ReadBool(grillConfig, "useSession").Should().BeTrue();
-        ReadString(grillConfig, "prompt").Should().Be("{{PreviousNode.Output}}");
-        ReadString(grillConfig, "sessionPlaceholder").Should().Be("plan");
-        grillConfig.Should().NotContainKey("initialPrompt");
-        grillConfig.Should().NotContainKey("sessionPrompt");
+        Assert.True(ReadBool(grillConfig, "useSession"));
+        Assert.Equal("{{PreviousNode.Output}}", ReadString(grillConfig, "prompt"));
+        Assert.Equal("plan", ReadString(grillConfig, "sessionPlaceholder"));
+        Assert.False(grillConfig.ContainsKey("initialPrompt"));
+        Assert.False(grillConfig.ContainsKey("sessionPrompt"));
 
         var grillInitialConfig = planGraph.Nodes.Single(n => n.Label == "Prompt grill initial").Config;
-        ReadString(grillInitialConfig, "prompt").Should().Contain("Interview me relentlessly");
+        Assert.Contains("Interview me relentlessly", ReadString(grillInitialConfig, "prompt"));
 
         var grillFollowupConfig = planGraph.Nodes.Single(n => n.Label == "Prompt grill followup").Config;
-        ReadString(grillFollowupConfig, "prompt").Should().Be("{{PreviousNode.Output}}");
+        Assert.Equal("{{PreviousNode.Output}}", ReadString(grillFollowupConfig, "prompt"));
 
         var promptCreateTasksConfig = planGraph.Nodes.Single(n => n.Label == "Prompt create tasks").Config;
-        ReadString(promptCreateTasksConfig, "prompt").Should().Contain("name: to-issues");
+        Assert.Contains("name: to-issues", ReadString(promptCreateTasksConfig, "prompt"));
 
         var createTasksConfig = planGraph.Nodes.Single(n => n.Label == "AI create tasks").Config;
-        ReadBool(createTasksConfig, "useSession").Should().BeTrue();
-        ReadString(createTasksConfig, "prompt").Should().Be("{{PreviousNode.Output}}");
-        ReadString(createTasksConfig, "sessionPlaceholder").Should().Be("plan");
-        createTasksConfig.Should().NotContainKey("initialPrompt");
-        createTasksConfig.Should().NotContainKey("sessionPrompt");
+        Assert.True(ReadBool(createTasksConfig, "useSession"));
+        Assert.Equal("{{PreviousNode.Output}}", ReadString(createTasksConfig, "prompt"));
+        Assert.Equal("plan", ReadString(createTasksConfig, "sessionPlaceholder"));
+        Assert.False(createTasksConfig.ContainsKey("initialPrompt"));
+        Assert.False(createTasksConfig.ContainsKey("sessionPrompt"));
     }
 
     private static bool ReadBool(Dictionary<string, object> config, string key)

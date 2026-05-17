@@ -1,6 +1,5 @@
 using System.Net;
 using System.Net.Http.Json;
-using FluentAssertions;
 
 namespace ILD.Tests.Integration;
 
@@ -19,11 +18,11 @@ public class AuthIntegrationTests
             password = factory.AdminPassword,
         });
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var jsonOptions = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
         var body = await response.Content.ReadFromJsonAsync<LoginResponseBody>(jsonOptions);
-        body!.Token.Should().NotBeNullOrWhiteSpace();
-        body.Username.Should().Be("admin");
+        Assert.False(string.IsNullOrWhiteSpace(body!.Token));
+        Assert.Equal("admin", body.Username);
     }
 
     [Fact]
@@ -38,7 +37,7 @@ public class AuthIntegrationTests
             password = "definitely-wrong",
         });
 
-        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]
@@ -49,7 +48,7 @@ public class AuthIntegrationTests
 
         var response = await client.GetAsync("/api/v1/auth/me");
 
-        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]
@@ -60,7 +59,7 @@ public class AuthIntegrationTests
 
         var response = await client.GetAsync("/api/v1/auth/me");
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     private sealed record LoginResponseBody(string Token, string Username);

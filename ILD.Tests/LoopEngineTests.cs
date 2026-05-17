@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Data.Enums;
 using ILD.Core.Services.Interfaces;
 
@@ -18,11 +17,11 @@ public class LoopEngineTests
         await h.Engine.RunAsync(h.RunId);
 
         var run = h.ReloadRun();
-        run.Status.Should().Be(LoopRunStatus.Completed);
+        Assert.Equal(LoopRunStatus.Completed, run.Status);
 
         var runNodes = h.ReloadRunNodes();
-        runNodes.Should().HaveCount(3);
-        runNodes.Select(n => n.Status).Should().AllBeEquivalentTo(LoopRunNodeStatus.Succeeded);
+        Assert.Equal(3, runNodes.Count());
+        Assert.All(runNodes.Select(n => n.Status), status => Assert.Equal(LoopRunNodeStatus.Succeeded, status));
     }
 
     [Fact]
@@ -38,8 +37,8 @@ public class LoopEngineTests
 
         await h.Engine.RunAsync(h.RunId);
 
-        h.ReloadRun().Status.Should().Be(LoopRunStatus.Failed);
-        ((WorkItemStatus)(int)h.ReloadServerWorkItem().Status).Should().Be(WorkItemStatus.HumanFeedback);
+        Assert.Equal(LoopRunStatus.Failed, h.ReloadRun().Status);
+        Assert.Equal(WorkItemStatus.HumanFeedback, ((WorkItemStatus)(int)h.ReloadServerWorkItem().Status));
     }
 
     [Fact]
@@ -66,8 +65,8 @@ public class LoopEngineTests
 
         await h.Engine.RunAsync(h.RunId);
 
-        h.ReloadRun().Status.Should().Be(LoopRunStatus.Completed);
-        attempts.Should().Be(2); // 'a' failed once + 'fix' succeeded; no retries on 'a'
+        Assert.Equal(LoopRunStatus.Completed, h.ReloadRun().Status);
+        Assert.Equal(2, attempts); // 'a' failed once + 'fix' succeeded; no retries on 'a'
     }
 
     [Fact]
@@ -89,8 +88,8 @@ public class LoopEngineTests
 
         await h.Engine.RunAsync(h.RunId);
 
-        h.ReloadRun().Status.Should().Be(LoopRunStatus.Completed);
-        attempts.Should().Be(3);
+        Assert.Equal(LoopRunStatus.Completed, h.ReloadRun().Status);
+        Assert.Equal(3, attempts);
     }
 
     [Fact]
@@ -104,8 +103,8 @@ public class LoopEngineTests
 
         await h.Engine.RunAsync(h.RunId);
 
-        h.ReloadRun().Status.Should().Be(LoopRunStatus.Failed);
-        h.Fakes[NodeType.Cmd].InvocationCount.Should().Be(4); // initial + 3 traversals
+        Assert.Equal(LoopRunStatus.Failed, h.ReloadRun().Status);
+        Assert.Equal(4, h.Fakes[NodeType.Cmd].InvocationCount); // initial + 3 traversals
     }
 
     [Fact]
@@ -127,7 +126,7 @@ public class LoopEngineTests
 
         await h.Engine.RunAsync(h.RunId, cts.Token);
 
-        h.ReloadRun().Status.Should().Be(LoopRunStatus.Cancelled);
+        Assert.Equal(LoopRunStatus.Cancelled, h.ReloadRun().Status);
     }
 
     [Fact]
@@ -144,9 +143,9 @@ public class LoopEngineTests
 
         await h.Engine.RunAsync(h.RunId);
 
-        ((WorkItemStatus)(int)h.ReloadServerWorkItem().Status).Should().Be(WorkItemStatus.HumanFeedback);
-        h.ReloadRun().HumanFeedbackReason.Should().Be(ILD.Data.Enums.HumanFeedbackReasons.HumanInputNeeded);
-        h.ReloadRunNodes().Should().Contain(n => n.Status == LoopRunNodeStatus.WaitingHuman);
+        Assert.Equal(WorkItemStatus.HumanFeedback, ((WorkItemStatus)(int)h.ReloadServerWorkItem().Status));
+        Assert.Equal(ILD.Data.Enums.HumanFeedbackReasons.HumanInputNeeded, h.ReloadRun().HumanFeedbackReason);
+        Assert.Contains(h.ReloadRunNodes(), n => n.Status == LoopRunNodeStatus.WaitingHuman);
     }
 
     [Fact]
@@ -163,8 +162,8 @@ public class LoopEngineTests
 
         await h.Engine.RunAsync(h.RunId);
 
-        ((WorkItemStatus)(int)h.ReloadServerWorkItem().Status).Should().Be(WorkItemStatus.HumanFeedback);
-        h.ReloadRun().HumanFeedbackReason.Should().Be(ILD.Data.Enums.HumanFeedbackReasons.PrAwaitingMerge);
+        Assert.Equal(WorkItemStatus.HumanFeedback, ((WorkItemStatus)(int)h.ReloadServerWorkItem().Status));
+        Assert.Equal(ILD.Data.Enums.HumanFeedbackReasons.PrAwaitingMerge, h.ReloadRun().HumanFeedbackReason);
     }
 
     [Fact]
@@ -180,16 +179,16 @@ public class LoopEngineTests
         h.Save();
 
         await h.Engine.RunAsync(h.RunId);
-        ((WorkItemStatus)(int)h.ReloadServerWorkItem().Status).Should().Be(WorkItemStatus.HumanFeedback);
+        Assert.Equal(WorkItemStatus.HumanFeedback, ((WorkItemStatus)(int)h.ReloadServerWorkItem().Status));
 
         var prNodeId = h.NodesById["pr"].Id;
         var prRunNode = h.ReloadRunNodes().First(n => n.LoopNodeId == prNodeId);
         await h.Engine.SignalNodeResultAsync(h.RunId, prRunNode.Id, NodeSignal.Succeeded());
         await h.Engine.RunAsync(h.RunId);
 
-        h.ReloadRun().Status.Should().Be(LoopRunStatus.Completed);
+        Assert.Equal(LoopRunStatus.Completed, h.ReloadRun().Status);
         var cleanupNodeId = h.NodesById["c"].Id;
-        h.ReloadRunNodes().Should().Contain(n => n.LoopNodeId == cleanupNodeId && n.Status == LoopRunNodeStatus.Succeeded);
+        Assert.Contains(h.ReloadRunNodes(), n => n.LoopNodeId == cleanupNodeId && n.Status == LoopRunNodeStatus.Succeeded);
     }
 
     [Fact]
@@ -208,16 +207,16 @@ public class LoopEngineTests
         h.Save();
 
         await h.Engine.RunAsync(h.RunId);
-        ((WorkItemStatus)(int)h.ReloadServerWorkItem().Status).Should().Be(WorkItemStatus.HumanFeedback);
+        Assert.Equal(WorkItemStatus.HumanFeedback, ((WorkItemStatus)(int)h.ReloadServerWorkItem().Status));
 
         var prNodeId = h.NodesById["pr"].Id;
         var prRunNode = h.ReloadRunNodes().First(n => n.LoopNodeId == prNodeId);
         await h.Engine.SignalNodeResultAsync(h.RunId, prRunNode.Id, NodeSignal.Failed("PR rejected"));
         await h.Engine.RunAsync(h.RunId);
 
-        h.ReloadRun().Status.Should().Be(LoopRunStatus.Completed);
+        Assert.Equal(LoopRunStatus.Completed, h.ReloadRun().Status);
         var fixNodeId = h.NodesById["fix"].Id;
-        h.ReloadRunNodes().Should().Contain(n => n.LoopNodeId == fixNodeId && n.Status == LoopRunNodeStatus.Succeeded);
+        Assert.Contains(h.ReloadRunNodes(), n => n.LoopNodeId == fixNodeId && n.Status == LoopRunNodeStatus.Succeeded);
     }
 
     [Fact]
@@ -234,10 +233,10 @@ public class LoopEngineTests
 
         var eventLogs = h.Db.Fresh().EventLogs.Where(e => e.LoopRunId == h.RunId).ToList();
         var cmdStarted = eventLogs.FirstOrDefault(e => e.EventType == EventType.NodeStarted && e.NodeId == h.NodesById["a"].Id);
-        cmdStarted.Should().NotBeNull("Cmd node should have NodeStarted event");
-        cmdStarted!.Data.Should().Contain("nodeType");
-        cmdStarted.Data.Should().Contain("Cmd");
-        cmdStarted.Data.Should().Contain("echo hello");
+        Assert.NotNull(cmdStarted);
+        Assert.Contains("nodeType", cmdStarted!.Data);
+        Assert.Contains("Cmd", cmdStarted.Data);
+        Assert.Contains("echo hello", cmdStarted.Data);
     }
 
     [Fact]
@@ -258,13 +257,13 @@ public class LoopEngineTests
 
         await h.Engine.RunAsync(h.RunId);
 
-        h.ReloadRun().Status.Should().Be(LoopRunStatus.Failed); // edge exceeded max traversals
+        Assert.Equal(LoopRunStatus.Failed, h.ReloadRun().Status); // edge exceeded max traversals
         var aId = h.NodesById["a"].Id;
         var runNodesForA = h.ReloadRunNodes().Where(rn => rn.LoopNodeId == aId).ToList();
 
         // Each visit to node A creates its own LoopRunNode row (at least 2, proving per-execution model)
-        runNodesForA.Count.Should().BeGreaterThanOrEqualTo(2);
-        runNodesForA.Should().AllSatisfy(n => n.Status.Should().Be(LoopRunNodeStatus.Succeeded));
+        Assert.True(runNodesForA.Count >= 2);
+        Assert.All(runNodesForA, n => Assert.Equal(LoopRunNodeStatus.Succeeded, n.Status));
     }
 
     [Fact]
@@ -279,16 +278,16 @@ public class LoopEngineTests
         await h.Engine.RunAsync(h.RunId);
 
         var runNodes = h.ReloadRunNodes();
-        runNodes.Should().HaveCount(3); // Start, Cmd, Cleanup
+        Assert.Equal(3, runNodes.Count); // Start, Cmd, Cleanup
 
         // Event log entries for node executions should reference the specific LoopRunNode
         var eventLogs = h.Db.Fresh().EventLogs.Where(e => e.LoopRunId == h.RunId).ToList();
         var nodeEvents = eventLogs.Where(e => e.EventType is EventType.NodeStarted or EventType.NodeCompleted).ToList();
-        nodeEvents.Should().NotBeEmpty();
-        nodeEvents.Should().AllSatisfy(e =>
+        Assert.NotEmpty(nodeEvents);
+        Assert.All(nodeEvents, e =>
         {
-            e.RunNodeId.Should().NotBeNull("event should reference a specific execution");
-            runNodes.Should().Contain(rn => rn.Id == e.RunNodeId);
+            Assert.NotNull(e.RunNodeId);
+            Assert.Contains(runNodes, rn => rn.Id == e.RunNodeId);
         });
     }
 
@@ -305,11 +304,11 @@ public class LoopEngineTests
 
         // GetRunNodeAsync should return the latest execution, not the first
         var latest = await h.Db.LoopRuns.GetRunNodeAsync(h.RunId, h.NodesById["a"].Id);
-        latest.Should().NotBeNull();
+        Assert.NotNull(latest);
         // There are 2 rows for node A; GetRunNodeAsync returns the most recent one
         var allForA = h.ReloadRunNodes().Where(rn => rn.LoopNodeId == h.NodesById["a"].Id).ToList();
-        allForA.Should().HaveCount(2);
-        latest.Id.Should().Be(allForA[1].Id); // latest is the second one
+        Assert.Equal(2, allForA.Count());
+        Assert.Equal(allForA[1].Id, latest!.Id); // latest is the second one
     }
 
     [Fact]
@@ -317,7 +316,7 @@ public class LoopEngineTests
     {
         using var h = new EngineHarness();
         var status = await h.Engine.GetRunStatusAsync(Guid.NewGuid());
-        status.Should().BeNull();
+        Assert.Null(status);
     }
 
     [Fact]
@@ -329,7 +328,7 @@ public class LoopEngineTests
         h.Save();
 
         var status = await h.Engine.GetRunStatusAsync(h.RunId);
-        status.Should().Be(LoopRunStatus.Running);
+        Assert.Equal(LoopRunStatus.Running, status);
     }
 
     [Fact]
@@ -346,7 +345,7 @@ public class LoopEngineTests
 
         // First run pauses at the human node.
         await h.Engine.RunAsync(h.RunId);
-        ((WorkItemStatus)(int)h.ReloadServerWorkItem().Status).Should().Be(WorkItemStatus.HumanFeedback);
+        Assert.Equal(WorkItemStatus.HumanFeedback, ((WorkItemStatus)(int)h.ReloadServerWorkItem().Status));
         var startInvocations = h.Fakes[NodeType.Start].InvocationCount;
 
         // Simulate server restart: RunAsync is called again.
@@ -354,9 +353,9 @@ public class LoopEngineTests
         await h.Engine.RunAsync(h.RunId);
 
         // Should return early without re-executing any nodes.
-        h.Fakes[NodeType.Start].InvocationCount.Should().Be(startInvocations);
-        h.ReloadRun().Status.Should().Be(LoopRunStatus.WaitingHuman);
-        ((WorkItemStatus)(int)h.ReloadServerWorkItem().Status).Should().Be(WorkItemStatus.HumanFeedback);
+        Assert.Equal(startInvocations, h.Fakes[NodeType.Start].InvocationCount);
+        Assert.Equal(LoopRunStatus.WaitingHuman, h.ReloadRun().Status);
+        Assert.Equal(WorkItemStatus.HumanFeedback, ((WorkItemStatus)(int)h.ReloadServerWorkItem().Status));
     }
 
     [Fact]
@@ -376,7 +375,7 @@ public class LoopEngineTests
         // First run pauses at the human node.
         await h.Engine.RunAsync(h.RunId);
         var humanRunNode = h.ReloadRunNodes().First(n => n.LoopNodeId == h.NodesById["ask"].Id);
-        humanRunNode.Status.Should().Be(ILD.Data.Enums.LoopRunNodeStatus.WaitingHuman);
+        Assert.Equal(ILD.Data.Enums.LoopRunNodeStatus.WaitingHuman, humanRunNode.Status);
 
         // Simulate the manager finalizing the run node with the human's input as output.
         // Update through the tracked context so the singleton store sees it.
@@ -395,8 +394,8 @@ public class LoopEngineTests
 
         await h.Engine.RunAsync(h.RunId);
 
-        h.ReloadRun().Status.Should().Be(LoopRunStatus.Completed);
-        observedPrevious.Should().Be("go ahead");
+        Assert.Equal(LoopRunStatus.Completed, h.ReloadRun().Status);
+        Assert.Equal("go ahead", observedPrevious);
     }
 
     [Fact]
@@ -424,9 +423,9 @@ public class LoopEngineTests
 
         await h.Engine.RunAsync(h.RunId);
 
-        h.ReloadRun().Status.Should().Be(LoopRunStatus.Completed);
+        Assert.Equal(LoopRunStatus.Completed, h.ReloadRun().Status);
         var fixNodeId = h.NodesById["fix"].Id;
-        h.ReloadRunNodes().Should().Contain(n => n.LoopNodeId == fixNodeId && n.Status == LoopRunNodeStatus.Succeeded);
+        Assert.Contains(h.ReloadRunNodes(), n => n.LoopNodeId == fixNodeId && n.Status == LoopRunNodeStatus.Succeeded);
     }
 
     [Fact]
@@ -445,12 +444,12 @@ public class LoopEngineTests
         var cleanupCompleted = logs.FirstOrDefault(e => e.EventType == EventType.CleanupCompleted);
         var runCompleted = logs.FirstOrDefault(e => e.EventType == EventType.LoopRunCompleted);
 
-        cleanupStarted.Should().NotBeNull("CleanupStarted event should be logged");
-        cleanupCompleted.Should().NotBeNull("CleanupCompleted event should be logged");
-        runCompleted.Should().NotBeNull("LoopRunCompleted event should be logged");
+        Assert.NotNull(cleanupStarted);
+        Assert.NotNull(cleanupCompleted);
+        Assert.NotNull(runCompleted);
 
-        cleanupStarted!.Sequence.Should().BeLessThan(cleanupCompleted!.Sequence, "CleanupStarted should precede CleanupCompleted");
-        cleanupCompleted.Sequence.Should().BeLessThan(runCompleted!.Sequence, "CleanupCompleted should precede LoopRunCompleted");
+        Assert.True(cleanupStarted!.Sequence < cleanupCompleted!.Sequence, "CleanupStarted should precede CleanupCompleted");
+        Assert.True(cleanupCompleted.Sequence < runCompleted!.Sequence, "CleanupCompleted should precede LoopRunCompleted");
     }
 
     [Fact]
@@ -471,7 +470,7 @@ public class LoopEngineTests
         // First run pauses at the human node.
         await h.Engine.RunAsync(h.RunId);
         var humanRunNode = h.ReloadRunNodes().First(n => n.LoopNodeId == h.NodesById["ask"].Id);
-        humanRunNode.Status.Should().Be(LoopRunNodeStatus.WaitingHuman);
+        Assert.Equal(LoopRunNodeStatus.WaitingHuman, humanRunNode.Status);
 
         // Simulate the manager finalizing the run node with Responded status.
         var trackedRn = h.Db.Context.LoopRunNodes.First(n => n.Id == humanRunNode.Id);
@@ -482,9 +481,9 @@ public class LoopEngineTests
 
         await h.Engine.RunAsync(h.RunId);
 
-        h.ReloadRun().Status.Should().Be(LoopRunStatus.Completed);
+        Assert.Equal(LoopRunStatus.Completed, h.ReloadRun().Status);
         var iterateNodeId = h.NodesById["iterate"].Id;
-        h.ReloadRunNodes().Should().Contain(n => n.LoopNodeId == iterateNodeId);
+        Assert.Contains(h.ReloadRunNodes(), n => n.LoopNodeId == iterateNodeId);
     }
 
     [Fact]
@@ -502,9 +501,9 @@ public class LoopEngineTests
         // Run until PR node enters WaitingHuman
         await h.Engine.RunAsync(h.RunId);
 
-        h.ReloadRun().Status.Should().Be(LoopRunStatus.WaitingHuman);
+        Assert.Equal(LoopRunStatus.WaitingHuman, h.ReloadRun().Status);
         var prRunNode = h.ReloadRunNodes().First(n => n.LoopNodeId == h.NodesById["pr"].Id);
-        prRunNode.Status.Should().Be(LoopRunNodeStatus.WaitingHuman);
+        Assert.Equal(LoopRunNodeStatus.WaitingHuman, prRunNode.Status);
 
         // Signal PR as merged (simulates mark-merged endpoint)
         await h.Engine.SignalNodeResultAsync(h.RunId, prRunNode.Id, NodeSignal.Succeeded());
@@ -513,10 +512,10 @@ public class LoopEngineTests
         await h.Engine.RunAsync(h.RunId);
 
         // Verify run completed with cleanup node
-        h.ReloadRun().Status.Should().Be(LoopRunStatus.Completed);
+        Assert.Equal(LoopRunStatus.Completed, h.ReloadRun().Status);
         var nodes = h.ReloadRunNodes();
         var cleanupNode = nodes.FirstOrDefault(n => n.LoopNodeId == h.NodesById["c"].Id);
-        cleanupNode.Should().NotBeNull("Cleanup node should have been executed after PR merge");
-        cleanupNode!.Status.Should().Be(LoopRunNodeStatus.Succeeded);
+        Assert.NotNull(cleanupNode);
+        Assert.Equal(LoopRunNodeStatus.Succeeded, cleanupNode!.Status);
     }
 }

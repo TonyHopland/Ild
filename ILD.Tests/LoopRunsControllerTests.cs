@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Api.Controllers;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
@@ -47,12 +46,12 @@ public class LoopRunsControllerTests
 
         var result = await controller.GetAll();
 
-        result.Should().BeOfType<OkObjectResult>();
+        Assert.IsType<OkObjectResult>(result);
         var ok = (OkObjectResult)result;
         var payload = ok.Value;
-        payload.Should().NotBeNull();
+        Assert.NotNull(payload);
         var items = (System.Collections.IEnumerable)payload!;
-        items.Cast<object>().Should().HaveCount(2);
+        Assert.Equal(2, items.Cast<object>().Count());
     }
 
     [Fact]
@@ -102,13 +101,13 @@ public class LoopRunsControllerTests
 
         var result = await controller.GetEvents(runId.ToString());
 
-        result.Should().BeOfType<OkObjectResult>();
+        Assert.IsType<OkObjectResult>(result);
         var ok = (OkObjectResult)result;
         var payload = ok.Value!;
         var entries = payload!.GetType().GetProperty("entries")!.GetValue(payload)!;
         var firstEntry = ((System.Collections.IEnumerable)entries).Cast<object>().First();
         var runNodeIdValue = firstEntry.GetType().GetProperty("runNodeId")?.GetValue(firstEntry);
-        runNodeIdValue.Should().BeEquivalentTo(runNodeId, "runNodeId should be projected from the event entity");
+        Assert.Equal(runNodeId, runNodeIdValue);
     }
 
     [Fact]
@@ -168,17 +167,17 @@ public class LoopRunsControllerTests
 
         var result = await controller.GetById(runId.ToString());
 
-        result.Should().BeOfType<OkObjectResult>();
+        Assert.IsType<OkObjectResult>(result);
         var ok = (OkObjectResult)result;
         var payload = ok.Value!;
         var sessions = (System.Collections.IEnumerable)payload.GetType().GetProperty("availableSessions")!.GetValue(payload)!;
         var items = sessions.Cast<object>().ToList();
-        items.Should().HaveCount(2);
+        Assert.Equal(2, items.Count());
 
         var current = items.Single(i => (string)i.GetType().GetProperty("sessionId")!.GetValue(i)! == "ses_current");
-        current.GetType().GetProperty("isCurrent")!.GetValue(current).Should().BeEquivalentTo(true);
+        Assert.Equal(true, current.GetType().GetProperty("isCurrent")!.GetValue(current));
         var placeholders = (System.Collections.IEnumerable)current.GetType().GetProperty("placeholders")!.GetValue(current)!;
-        placeholders.Cast<object>().Should().ContainSingle().Which.Should().Be("research");
+        Assert.Equal("research", Assert.Single(placeholders.Cast<object>()));
     }
 
     [Fact]
@@ -204,10 +203,9 @@ public class LoopRunsControllerTests
 
         var result = await controller.GetSessionPreview(runId.ToString(), "OpenCode", "ses_current");
 
-        result.Should().BeOfType<OkObjectResult>();
+        Assert.IsType<OkObjectResult>(result);
         var ok = (OkObjectResult)result;
-        ok.Value.Should().NotBeNull();
-        ok.Value!.GetType().GetProperty("sessionJson")!.GetValue(ok.Value)!
-            .Should().Be("{\"id\":\"ses_current\",\"messages\":[]}");
+        Assert.NotNull(ok.Value);
+        Assert.Equal("{\"id\":\"ses_current\",\"messages\":[]}", ok.Value!.GetType().GetProperty("sessionJson")!.GetValue(ok.Value));
     }
 }

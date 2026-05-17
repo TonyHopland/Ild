@@ -327,7 +327,7 @@ ild/
 │   ├── Auth/                     # API key middleware
 │   ├── Hosting/                  # StaleWorkItemReclaimer
 │   └── Data/                     # EF Core context
-├── ILD.Tests/                    # xUnit + FluentAssertions + Moq
+├── ILD.Tests/                    # xUnit + Moq
 └── frontend/
     ├── package.json
     ├── vite.config.ts            # Vite+ + jsdom for Vitest
@@ -414,7 +414,7 @@ Runtime notes:
 Backend tests use:
 
 - `Microsoft.EntityFrameworkCore.Sqlite` with a real in-memory SQLite database (`TestDb`), exercising the same store layer as production.
-- `FluentAssertions` for readable assertions.
+- `xUnit` assertions for test expectations.
 - `Moq` for collaborator stubs.
 - `Microsoft.AspNetCore.Mvc.Testing` for any HTTP-level integration test.
 

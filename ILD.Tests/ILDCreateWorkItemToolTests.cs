@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using Moq;
@@ -25,8 +24,8 @@ public class ILDCreateWorkItemToolTests
         var result = await svc.ExecuteToolAsync("ild.create_workitem", args, "/tmp/worktree");
 
         // Assert
-        result.Success.Should().BeTrue();
-        result.Output.Should().Contain(createdId.ToString());
+        Assert.True(result.Success);
+        Assert.Contains(createdId.ToString(), result.Output);
         workItemManager.Verify(m => m.CreateWorkItemAsync("Test feature", "Implement it", (Guid?)null), Times.Once);
     }
 
@@ -42,8 +41,8 @@ public class ILDCreateWorkItemToolTests
         var result = await svc.ExecuteToolAsync("ild.create_workitem", args, "/tmp/worktree");
 
         // Assert
-        result.Success.Should().BeFalse();
-        result.Error.Should().Contain("title");
+        Assert.False(result.Success);
+        Assert.Contains("title", result.Error);
     }
 
     [Fact]
@@ -57,6 +56,6 @@ public class ILDCreateWorkItemToolTests
         var result = await svc.ExecuteToolAsync("ild.create_workitem", "not-json", "/tmp/worktree");
 
         // Assert
-        result.Success.Should().BeFalse();
+        Assert.False(result.Success);
     }
 }

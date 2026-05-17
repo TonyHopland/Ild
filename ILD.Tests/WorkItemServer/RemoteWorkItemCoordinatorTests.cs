@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using Moq;
@@ -36,8 +35,8 @@ public sealed class RemoteWorkItemCoordinatorTests
         var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object, engine.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
-        result.Claimed.Should().HaveCount(1);
-        tracker.Snapshot().Should().Contain(ready.Id);
+        Assert.Equal(1, result.Claimed.Count());
+        Assert.Contains(ready.Id, tracker.Snapshot());
     }
 
     [Fact]
@@ -61,9 +60,9 @@ public sealed class RemoteWorkItemCoordinatorTests
         var sut = new RemoteWorkItemCoordinator(client.Object, new InMemoryActiveWorkItemTracker(), resolver.Object, engine.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
-        result.EscalatedToHumanFeedback.Should().HaveCount(1);
-        captured!.TargetStatus.Should().Be(RemoteWorkItemStatus.HumanFeedback);
-        captured.Reason.Should().Contain("No loop");
+        Assert.Equal(1, result.EscalatedToHumanFeedback.Count());
+        Assert.Equal(RemoteWorkItemStatus.HumanFeedback, captured!.TargetStatus);
+        Assert.Contains("No loop", captured.Reason);
     }
 
     [Fact]
@@ -87,8 +86,8 @@ public sealed class RemoteWorkItemCoordinatorTests
         var sut = new RemoteWorkItemCoordinator(client.Object, new InMemoryActiveWorkItemTracker(), resolver.Object, engine.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
-        result.EscalatedToHumanFeedback.Should().HaveCount(1);
-        captured!.Reason.Should().Contain("Multiple loop templates");
+        Assert.Equal(1, result.EscalatedToHumanFeedback.Count());
+        Assert.Contains("Multiple loop templates", captured!.Reason);
     }
 
     [Fact]
@@ -111,7 +110,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object, engine.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
-        result.Resumed.Should().HaveCount(1);
+        Assert.Equal(1, result.Resumed.Count());
     }
 
     [Fact]
@@ -135,8 +134,8 @@ public sealed class RemoteWorkItemCoordinatorTests
         var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object, engine.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1);
 
-        result.Claimed.Should().HaveCount(1);
-        tracker.Count.Should().Be(1);
+        Assert.Equal(1, result.Claimed.Count());
+        Assert.Equal(1, tracker.Count);
     }
 
     [Fact]
@@ -159,8 +158,8 @@ public sealed class RemoteWorkItemCoordinatorTests
         var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object, engine.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
-        result.Claimed.Should().BeEmpty();
-        tracker.Count.Should().Be(0);
+        Assert.Empty(result.Claimed);
+        Assert.Equal(0, tracker.Count);
     }
 
     [Fact]
@@ -179,7 +178,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object, engine.Object);
         await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
-        tracker.Snapshot().Should().NotContain(done.Id);
+        Assert.DoesNotContain(done.Id, tracker.Snapshot());
     }
 
     [Fact]
@@ -196,6 +195,6 @@ public sealed class RemoteWorkItemCoordinatorTests
         var sut = new RemoteWorkItemCoordinator(client.Object, new InMemoryActiveWorkItemTracker(), resolver.Object, engine.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
-        result.HasActiveHumanFeedback.Should().BeTrue();
+        Assert.True(result.HasActiveHumanFeedback);
     }
 }

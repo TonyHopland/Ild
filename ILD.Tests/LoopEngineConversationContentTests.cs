@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Enums;
 using ILD.WorkItemServer.Domain;
@@ -27,14 +26,14 @@ public class LoopEngineConversationContentTests
 
         // The server-side work item conversation should contain the AI's output
         var serverWi = h.ServerHarness.ServerDb.WorkItems.First(w => w.Id == h.WorkItemId);
-        serverWi.Status.Should().Be(ILD.WorkItemServer.Domain.WorkItemStatus.HumanFeedback);
+        Assert.Equal(ILD.WorkItemServer.Domain.WorkItemStatus.HumanFeedback, serverWi.Status);
         var jsonOpts = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
         var conversation = JsonSerializer.Deserialize<List<ConversationMessage>>(serverWi.ConversationJson, jsonOpts)
             ?? new List<ConversationMessage>();
-        conversation.Should().NotBeEmpty("conversation should have entries");
+        Assert.NotEmpty(conversation);
         var aiMessage = conversation.Last();
-        aiMessage.Role.Should().Be("ai");
-        aiMessage.Content.Should().Be("AI analyzed the code and found 3 issues to fix");
+        Assert.Equal("ai", aiMessage.Role);
+        Assert.Equal("AI analyzed the code and found 3 issues to fix", aiMessage.Content);
     }
 
     [Fact]
@@ -59,7 +58,7 @@ public class LoopEngineConversationContentTests
         var conversation = JsonSerializer.Deserialize<List<ConversationMessage>>(serverWi.ConversationJson, jsonOpts)
             ?? new List<ConversationMessage>();
         var content = conversation.Last().Content;
-        content.Should().Be("actual response content");
+        Assert.Equal("actual response content", content);
     }
 
     [Fact]
@@ -81,6 +80,6 @@ public class LoopEngineConversationContentTests
         // The LoopRun's HumanFeedbackReason must remain the base reason
         // so frontend exact-match checks (=== "Human Input Needed") still work
         var run = h.ReloadRun();
-        run.HumanFeedbackReason.Should().Be("Human Input Needed");
+        Assert.Equal("Human Input Needed", run.HumanFeedbackReason);
     }
 }

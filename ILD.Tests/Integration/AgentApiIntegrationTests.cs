@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
-using FluentAssertions;
 using ILD.Data;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -34,10 +33,10 @@ public class AgentApiIntegrationTests
             description = "from MCP",
             repositoryId = repoId.ToString(),
         });
-        resp.StatusCode.Should().Be(HttpStatusCode.Created);
+        Assert.Equal(HttpStatusCode.Created, resp.StatusCode);
 
         var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
-        doc.RootElement.GetProperty("status").GetString().Should().Be("Backlog");
+        Assert.Equal("Backlog", doc.RootElement.GetProperty("status").GetString());
     }
 
     [Fact]
@@ -55,11 +54,10 @@ public class AgentApiIntegrationTests
         req.Headers.Add("X-ILD-Run-Id", runId.ToString());
 
         var resp = await client.SendAsync(req);
-        resp.StatusCode.Should().Be(HttpStatusCode.Created);
+        Assert.Equal(HttpStatusCode.Created, resp.StatusCode);
 
         var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
-        doc.RootElement.GetProperty("createdByLoopRunId").GetString()
-            .Should().Be(runId.ToString());
+        Assert.Equal(runId.ToString(), doc.RootElement.GetProperty("createdByLoopRunId").GetString());
     }
 
     [Fact]
@@ -78,7 +76,7 @@ public class AgentApiIntegrationTests
         var resp = await client.GetAsync($"/api/v1/agent/workitems?createdByLoopRunId={runA}");
         resp.EnsureSuccessStatusCode();
         var arr = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
-        arr.GetArrayLength().Should().Be(2);
+        Assert.Equal(2, arr.GetArrayLength());
     }
 
     [Fact]
@@ -95,7 +93,7 @@ public class AgentApiIntegrationTests
             repositoryId = repoId.ToString(),
             dependencies = new[] { Guid.NewGuid().ToString() },
         });
-        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
     }
 
     [Fact]
@@ -113,14 +111,14 @@ public class AgentApiIntegrationTests
             repositoryId = repoId.ToString(),
             dependencies = new[] { depId.ToString() },
         });
-        resp.StatusCode.Should().Be(HttpStatusCode.Created);
+        Assert.Equal(HttpStatusCode.Created, resp.StatusCode);
 
         var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
         var newId = doc.RootElement.GetProperty("id").GetString();
-        newId.Should().NotBeNullOrWhiteSpace();
+        Assert.False(string.IsNullOrWhiteSpace(newId));
 
         var detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{newId}");
-        detail.GetProperty("dependencies").GetArrayLength().Should().Be(1);
+        Assert.Equal(1, detail.GetProperty("dependencies").GetArrayLength());
     }
 
     [Fact]
@@ -130,14 +128,12 @@ public class AgentApiIntegrationTests
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var startResp = await client.PostAsync("/api/v1/agent/workitems/" + Guid.NewGuid() + "/start", null);
-        startResp.StatusCode.Should().Be(HttpStatusCode.NotFound,
-            because: "agent surface intentionally has no start endpoint");
+        Assert.Equal(HttpStatusCode.NotFound, startResp.StatusCode);
 
         var trResp = await client.PostAsJsonAsync(
             "/api/v1/agent/workitems/" + Guid.NewGuid() + "/transition",
             new { targetStatus = "Ready" });
-        trResp.StatusCode.Should().Be(HttpStatusCode.NotFound,
-            because: "agent surface intentionally has no transition endpoint");
+        Assert.Equal(HttpStatusCode.NotFound, trResp.StatusCode);
     }
 
     private static async Task<string> CreateAsync(HttpClient client, string title, Guid? runId, Guid repositoryId)

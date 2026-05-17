@@ -1,4 +1,3 @@
-using FluentAssertions;
 using System.Text.Json;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.DTOs;
@@ -19,9 +18,9 @@ public class OpenCodeAdapterTests
     {
         var adapter = new OpenCodeAdapter();
 
-        adapter.Name.Should().Be("OpenCode");
-        adapter.SupportedProviderTypes.Should().Contain("opencode");
-        adapter.ConfigSchema.Should().BeEmpty();
+        Assert.Equal("OpenCode", adapter.Name);
+        Assert.Contains("opencode", adapter.SupportedProviderTypes);
+        Assert.Empty(adapter.ConfigSchema);
     }
 
     [Fact]
@@ -35,7 +34,7 @@ public class OpenCodeAdapterTests
 
         var result = await adapter.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
+        Assert.True(result.Success);
     }
 
     [Fact]
@@ -49,8 +48,8 @@ public class OpenCodeAdapterTests
 
         var result = await adapter.ExecuteAsync(ctx);
 
-        result.Success.Should().BeFalse();
-        result.Error.Should().Contain("opencode-error");
+        Assert.False(result.Success);
+        Assert.Contains("opencode-error", result.Error);
     }
 
     [Fact]
@@ -65,7 +64,7 @@ public class OpenCodeAdapterTests
 
         var result = await adapter.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
+        Assert.True(result.Success);
     }
 
     [Fact]
@@ -80,7 +79,7 @@ public class OpenCodeAdapterTests
 
         var result = await adapter.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
+        Assert.True(result.Success);
     }
 
     [Fact]
@@ -95,7 +94,7 @@ public class OpenCodeAdapterTests
 
         var result = await adapter.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
+        Assert.True(result.Success);
     }
 
     [Fact]
@@ -110,8 +109,8 @@ public class OpenCodeAdapterTests
 
         var result = await adapter.ExecuteAsync(ctx);
 
-        result.Success.Should().BeFalse();
-        result.Error.Should().Contain("exit=");
+        Assert.False(result.Success);
+        Assert.Contains("exit=", result.Error);
     }
 
     [Fact]
@@ -128,7 +127,7 @@ public class OpenCodeAdapterTests
 
         var result = await adapter.ExecuteAsync(ctx);
 
-        result.Success.Should().BeTrue();
+        Assert.True(result.Success);
     }
 
     [Fact]
@@ -151,7 +150,7 @@ public class OpenCodeAdapterTests
 
             var result = await adapter.ExecuteAsync(ctx);
 
-            result.Success.Should().BeTrue();
+            Assert.True(result.Success);
         }
         finally
         {
@@ -180,9 +179,9 @@ public class OpenCodeAdapterTests
 
             var result = await adapter.ExecuteAsync(ctx);
 
-            result.Success.Should().BeTrue();
-            result.Output.Should().Contain("--dir");
-            result.Output.Should().Contain(worktreeDir);
+            Assert.True(result.Success);
+            Assert.Contains("--dir", result.Output);
+            Assert.Contains(worktreeDir, result.Output);
         }
         finally
         {
@@ -209,8 +208,8 @@ public class OpenCodeAdapterTests
 
             var result = await adapter.ExecuteAsync(ctx);
 
-            result.Success.Should().BeFalse();
-            result.Error.Should().Contain("timed out");
+            Assert.False(result.Success);
+            Assert.Contains("timed out", result.Error);
         }
         finally
         {
@@ -245,13 +244,13 @@ public class OpenCodeAdapterTests
 
             var result = await adapter.ExecuteAsync(ctx);
 
-            result.Success.Should().BeTrue();
+            Assert.True(result.Success);
             // Progress lines should be extracted text, not raw JSON
-            progressLines.Should().Contain("thinking...");
-            progressLines.Should().Contain("analyzing code...");
-            progressLines.Should().Contain("done");
+            Assert.Contains("thinking...", progressLines);
+            Assert.Contains("analyzing code...", progressLines);
+            Assert.Contains("done", progressLines);
             // Verify no raw JSON leaked through
-            progressLines.Should().NotContain(l => l.Contains("{\"text\":"));
+            Assert.DoesNotContain(progressLines, l => l.Contains("{\"text\":"));
         }
         finally
         {
@@ -293,17 +292,17 @@ public class OpenCodeAdapterTests
 
             var result = await adapter.ExecuteAsync(ctx);
 
-            result.Success.Should().BeTrue();
+            Assert.True(result.Success);
             // Text lines should appear normally
-            progressLines.Should().Contain("reading file...");
+            Assert.Contains("reading file...", progressLines);
             // Step events should show as [step_start] and [step_finish]
-            progressLines.Should().Contain("[step_start]");
-            progressLines.Should().Contain("[step_finish]");
+            Assert.Contains("[step_start]", progressLines);
+            Assert.Contains("[step_finish]", progressLines);
             // Tool use should show as [tool: read]
-            progressLines.Should().Contain("[tool: read]");
+            Assert.Contains("[tool: read]", progressLines);
             // Empty text lines should NOT appear as blank entries
-            progressLines.Should().NotContain(string.Empty);
-            progressLines.Should().NotContain(l => string.IsNullOrWhiteSpace(l));
+            Assert.DoesNotContain(string.Empty, progressLines);
+            Assert.DoesNotContain(progressLines, l => string.IsNullOrWhiteSpace(l));
         }
         finally
         {
@@ -335,10 +334,10 @@ public class OpenCodeAdapterTests
 
             var result = await adapter.ExecuteAsync(ctx);
 
-            result.Success.Should().BeTrue();
-            progressLines.Should().Contain("line one");
-            progressLines.Should().Contain("line two");
-            progressLines.Should().Contain("line three");
+            Assert.True(result.Success);
+            Assert.Contains("line one", progressLines);
+            Assert.Contains("line two", progressLines);
+            Assert.Contains("line three", progressLines);
         }
         finally
         {
@@ -368,8 +367,8 @@ public class OpenCodeAdapterTests
 
             var result = await adapter.ExecuteAsync(ctx);
 
-            result.Success.Should().BeTrue();
-            result.Output.Should().Contain("test-secret-key-123");
+            Assert.True(result.Success);
+            Assert.Contains("test-secret-key-123", result.Output);
         }
         finally
         {
@@ -399,9 +398,9 @@ public class OpenCodeAdapterTests
 
             var result = await adapter.ExecuteAsync(ctx);
 
-            result.Success.Should().BeTrue();
-            result.Output.Should().Contain("--session");
-            result.Output.Should().Contain("test-session-abc");
+            Assert.True(result.Success);
+            Assert.Contains("--session", result.Output);
+            Assert.Contains("test-session-abc", result.Output);
         }
         finally
         {
@@ -431,8 +430,8 @@ public class OpenCodeAdapterTests
 
             var result = await adapter.ExecuteAsync(ctx);
 
-            result.Success.Should().BeTrue();
-            result.Output.Should().NotContain("--session");
+            Assert.True(result.Success);
+            Assert.DoesNotContain("--session", result.Output);
         }
         finally
         {
@@ -452,9 +451,10 @@ public class OpenCodeAdapterTests
             sessionId: "session-123",
             useWorktreeAsWorkingDirectory: false);
 
-        psi.WorkingDirectory.Should().BeNullOrEmpty();
-        psi.EnvironmentVariables["OPENCODE_CONFIG_CONTENT"].Should().Be("{\"config\":true}");
-        psi.ArgumentList.Should().Equal(
+        Assert.True(string.IsNullOrEmpty(psi.WorkingDirectory));
+        Assert.Equal("{\"config\":true}", psi.EnvironmentVariables["OPENCODE_CONFIG_CONTENT"]);
+        Assert.Equal(new[]
+        {
             "run",
             "--dir",
             "/tmp/worktree",
@@ -466,7 +466,8 @@ public class OpenCodeAdapterTests
             "session-123",
             "--dangerously-skip-permissions",
             "--",
-            "prompt text");
+            "prompt text",
+        }, psi.ArgumentList);
     }
 
     [Fact]
@@ -494,11 +495,11 @@ public class OpenCodeAdapterTests
                 worktreePath: worktreeDir,
                 executionCount: 1));
 
-            result.Success.Should().BeTrue();
+            Assert.True(result.Success);
             var args = File.ReadAllLines(argsPath);
             var separatorIndex = Array.IndexOf(args, "--");
-            separatorIndex.Should().BeGreaterThanOrEqualTo(0);
-            args.Skip(separatorIndex + 1).Should().Equal("---", "name: to-issues", "");
+            Assert.True(separatorIndex >= 0);
+            Assert.Equal(new[] { "---", "name: to-issues", "" }, args.Skip(separatorIndex + 1));
         }
         finally
         {
@@ -528,8 +529,8 @@ public class OpenCodeAdapterTests
 
             var result = await adapter.ExecuteAsync(ctx);
 
-            result.Success.Should().BeTrue();
-            result.SessionId.Should().Be("session-from-output");
+            Assert.True(result.Success);
+            Assert.Equal("session-from-output", result.SessionId);
         }
         finally
         {
@@ -562,8 +563,8 @@ public class OpenCodeAdapterTests
 
             var result = await adapter.ExecuteAsync(ctx);
 
-            result.Success.Should().BeTrue();
-            result.SessionId.Should().Be("nested-session");
+            Assert.True(result.Success);
+            Assert.Equal("nested-session", result.SessionId);
         }
         finally
         {
@@ -615,15 +616,15 @@ public class OpenCodeAdapterTests
                 runId: runId,
                 manageSession: true));
 
-            result.Success.Should().BeTrue();
-            result.SessionId.Should().Be("managed-session");
+            Assert.True(result.Success);
+            Assert.Equal("managed-session", result.SessionId);
 
             await using var verifyDb = harness.CreateDbContext();
             var snapshot = await verifyDb.AdapterSessionSnapshots.FindAsync(runId, "OpenCode", "managed-session");
-            snapshot.Should().NotBeNull();
-            snapshot!.SessionJson.Should().Be("{\"id\":\"managed-session\",\"messages\":[1]}");
+            Assert.NotNull(snapshot);
+            Assert.Equal("{\"id\":\"managed-session\",\"messages\":[1]}", snapshot!.SessionJson);
 
-            File.ReadAllText(logPath).Should().Contain("export managed-session");
+            Assert.Contains("export managed-session", File.ReadAllText(logPath));
         }
         finally
         {
@@ -699,16 +700,16 @@ public class OpenCodeAdapterTests
                 runId: runId,
                 manageSession: true));
 
-            result.Success.Should().BeTrue();
-            result.SessionId.Should().Be("large-session");
+            Assert.True(result.Success);
+            Assert.Equal("large-session", result.SessionId);
 
             await using var verifyDb = harness.CreateDbContext();
             var snapshot = await verifyDb.AdapterSessionSnapshots.FindAsync(runId, "OpenCode", "large-session");
-            snapshot.Should().NotBeNull();
-            snapshot!.SessionJson.Should().Be(exportJson);
-            snapshot.SessionJson.Length.Should().Be(exportJson.Length);
+            Assert.NotNull(snapshot);
+            Assert.Equal(exportJson, snapshot!.SessionJson);
+            Assert.Equal(exportJson.Length, snapshot.SessionJson.Length);
 
-            File.ReadAllText(logPath).Should().Contain("export large-session");
+            Assert.Contains("export large-session", File.ReadAllText(logPath));
         }
         finally
         {
@@ -762,13 +763,13 @@ public class OpenCodeAdapterTests
                 runId: runId,
                 manageSession: true));
 
-            result.Success.Should().BeTrue();
-            result.Output.Should().Be("hello");
-            result.SessionId.Should().Be("managed-session");
+            Assert.True(result.Success);
+            Assert.Equal("hello", result.Output);
+            Assert.Equal("managed-session", result.SessionId);
 
             await using var verifyDb = harness.CreateDbContext();
             var snapshot = await verifyDb.AdapterSessionSnapshots.FindAsync(runId, "OpenCode", "managed-session");
-            snapshot.Should().BeNull();
+            Assert.Null(snapshot);
         }
         finally
         {
@@ -832,19 +833,19 @@ public class OpenCodeAdapterTests
                 runId: runId,
                 manageSession: true));
 
-            result.Success.Should().BeTrue();
-            result.SessionId.Should().Be("resume-session");
-            File.ReadAllText(importedPath).Should().Be("{\"id\":\"resume-session\",\"messages\":[1]}");
+            Assert.True(result.Success);
+            Assert.Equal("resume-session", result.SessionId);
+            Assert.Equal("{\"id\":\"resume-session\",\"messages\":[1]}", File.ReadAllText(importedPath));
 
             var log = File.ReadAllText(logPath);
-            log.Should().Contain("import ");
-            log.Should().Contain("run --dir");
-            log.Should().Contain("--session resume-session");
-            log.Should().Contain("export resume-session");
+            Assert.Contains("import ", log);
+            Assert.Contains("run --dir", log);
+            Assert.Contains("--session resume-session", log);
+            Assert.Contains("export resume-session", log);
 
             await using var verifyDb = harness.CreateDbContext();
             var snapshot = await verifyDb.AdapterSessionSnapshots.FindAsync(runId, "OpenCode", "resume-session");
-            snapshot!.SessionJson.Should().Be("{\"id\":\"resume-session\",\"messages\":[2]}");
+            Assert.Equal("{\"id\":\"resume-session\",\"messages\":[2]}", snapshot!.SessionJson);
         }
         finally
         {
@@ -907,18 +908,18 @@ public class OpenCodeAdapterTests
                 runId: runId,
                 manageSession: true));
 
-            result.Success.Should().BeTrue();
-            result.SessionId.Should().Be("fresh-session");
+            Assert.True(result.Success);
+            Assert.Equal("fresh-session", result.SessionId);
 
             var log = File.ReadAllText(logPath);
-            log.Should().NotContain("import ");
-            log.Should().Contain("run --dir");
-            log.Should().NotContain("--session resume-session");
-            log.Should().Contain("export fresh-session");
+            Assert.DoesNotContain("import ", log);
+            Assert.Contains("run --dir", log);
+            Assert.DoesNotContain("--session resume-session", log);
+            Assert.Contains("export fresh-session", log);
 
             await using var verifyDb = harness.CreateDbContext();
             var snapshot = await verifyDb.AdapterSessionSnapshots.FindAsync(runId, "OpenCode", "fresh-session");
-            snapshot!.SessionJson.Should().Be("{\"id\":\"fresh-session\",\"messages\":[1]}");
+            Assert.Equal("{\"id\":\"fresh-session\",\"messages\":[1]}", snapshot!.SessionJson);
         }
         finally
         {
@@ -975,8 +976,8 @@ public class OpenCodeAdapterTests
                 runId: runId,
                 manageSession: true));
 
-            result.Success.Should().BeTrue();
-            result.Output.Should().Be("Recovered from session export.");
+            Assert.True(result.Success);
+            Assert.Equal("Recovered from session export.", result.Output);
         }
         finally
         {
@@ -1013,10 +1014,10 @@ public class OpenCodeAdapterTests
 
             var result = await adapter.ExecuteAsync(ctx);
 
-            result.Success.Should().BeTrue();
-            result.Output.Should().Be("final answer");
-            result.Output.Should().NotContain("step_start");
-            result.Output.Should().NotContain("step_finish");
+            Assert.True(result.Success);
+            Assert.Equal("final answer", result.Output);
+            Assert.DoesNotContain("step_start", result.Output);
+            Assert.DoesNotContain("step_finish", result.Output);
         }
         finally
         {
@@ -1053,11 +1054,11 @@ public class OpenCodeAdapterTests
 
             var result = await adapter.ExecuteAsync(ctx);
 
-            result.Success.Should().BeTrue();
-            result.Output.Should().NotContain("step_start");
-            result.Output.Should().NotContain("step_finish");
-            result.Output.Should().NotContain("\"type\":");
-            result.Output.Should().Contain("opencode");
+            Assert.True(result.Success);
+            Assert.DoesNotContain("step_start", result.Output);
+            Assert.DoesNotContain("step_finish", result.Output);
+            Assert.DoesNotContain("\"type\":", result.Output);
+            Assert.Contains("opencode", result.Output);
         }
         finally
         {
@@ -1092,8 +1093,8 @@ public class OpenCodeAdapterTests
 
             var result = await adapter.ExecuteAsync(ctx);
 
-            result.Success.Should().BeFalse();
-            result.Error.Should().Contain("invalid api key");
+            Assert.False(result.Success);
+            Assert.Contains("invalid api key", result.Error);
         }
         finally
         {

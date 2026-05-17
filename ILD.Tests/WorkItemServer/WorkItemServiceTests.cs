@@ -1,4 +1,3 @@
-using FluentAssertions;
 
 using ILD.WorkItemServer;
 using ILD.WorkItemServer.Domain;
@@ -55,10 +54,10 @@ public class WorkItemServiceTests : IAsyncLifetime
             Dependencies = new[] { dep.Id },
         });
 
-        dto.Status.Should().Be(WorkItemStatus.Backlog);
-        dto.Tags.Should().ContainSingle().Which.Should().Be("bug-fix");
-        dto.Dependencies.Should().ContainSingle().Which.Should().Be(dep.Id);
-        dto.Priority.Should().Be(WorkItemPriority.High);
+        Assert.Equal(WorkItemStatus.Backlog, dto.Status);
+        Assert.Equal("bug-fix", Assert.Single(dto.Tags));
+        Assert.Equal(dep.Id, Assert.Single(dto.Dependencies));
+        Assert.Equal(WorkItemPriority.High, dto.Priority);
     }
 
     [Fact]
@@ -70,7 +69,7 @@ public class WorkItemServiceTests : IAsyncLifetime
             ForceStatus = WorkItemStatus.Ready,
         });
 
-        dto.Status.Should().Be(WorkItemStatus.Ready);
+        Assert.Equal(WorkItemStatus.Ready, dto.Status);
     }
 
     [Fact]
@@ -80,8 +79,8 @@ public class WorkItemServiceTests : IAsyncLifetime
 
         var resp = await _svc.TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running });
 
-        resp.Success.Should().BeTrue();
-        resp.ActualStatus.Should().Be(WorkItemStatus.Running);
+        Assert.True(resp.Success);
+        Assert.Equal(WorkItemStatus.Running, resp.ActualStatus);
     }
 
     [Fact]
@@ -92,9 +91,9 @@ public class WorkItemServiceTests : IAsyncLifetime
 
         var second = await _svc.TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running });
 
-        second.Success.Should().BeFalse();
-        second.ActualStatus.Should().Be(WorkItemStatus.Running);
-        second.Reason.Should().Be("Already claimed");
+        Assert.False(second.Success);
+        Assert.Equal(WorkItemStatus.Running, second.ActualStatus);
+        Assert.Equal("Already claimed", second.Reason);
     }
 
     [Fact]
@@ -109,8 +108,8 @@ public class WorkItemServiceTests : IAsyncLifetime
 
         var resp = await _svc.TransitionAsync(child.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running });
 
-        resp.Success.Should().BeFalse();
-        resp.Reason.Should().Be("Dependencies not satisfied");
+        Assert.False(resp.Success);
+        Assert.Equal("Dependencies not satisfied", resp.Reason);
     }
 
     [Fact]
@@ -126,7 +125,7 @@ public class WorkItemServiceTests : IAsyncLifetime
 
         var resp = await _svc.TransitionAsync(child.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running });
 
-        resp.Success.Should().BeTrue();
+        Assert.True(resp.Success);
     }
 
     [Fact]
@@ -142,11 +141,11 @@ public class WorkItemServiceTests : IAsyncLifetime
         });
 
         var fresh = await _svc.GetAsync(dto.Id);
-        fresh!.Status.Should().Be(WorkItemStatus.HumanFeedback);
-        fresh.Conversation.Should().ContainSingle();
-        fresh.Conversation[0].Role.Should().Be("ai");
-        fresh.Conversation[0].Content.Should().Be("Need approval");
-        fresh.HumanFeedbackActions.Should().Be("[\"approve\",\"reject\"]");
+        Assert.Equal(WorkItemStatus.HumanFeedback, fresh!.Status);
+        Assert.Single(fresh.Conversation);
+        Assert.Equal("ai", fresh.Conversation[0].Role);
+        Assert.Equal("Need approval", fresh.Conversation[0].Content);
+        Assert.Equal("[\"approve\",\"reject\"]", fresh.HumanFeedbackActions);
     }
 
     [Fact]
@@ -161,7 +160,7 @@ public class WorkItemServiceTests : IAsyncLifetime
         });
 
         var fresh = await _svc.GetAsync(dto.Id);
-        fresh!.Conversation.Should().BeEmpty();
+        Assert.Empty(fresh!.Conversation);
     }
 
     [Fact]
@@ -177,10 +176,10 @@ public class WorkItemServiceTests : IAsyncLifetime
         await _svc.AppendFeedbackAsync(dto.Id, "approve please");
 
         var fresh = await _svc.GetAsync(dto.Id);
-        fresh!.Status.Should().Be(WorkItemStatus.WaitingForIld);
-        fresh.Conversation.Should().HaveCount(2);
-        fresh.Conversation[1].Role.Should().Be("human");
-        fresh.Conversation[1].Content.Should().Be("approve please");
+        Assert.Equal(WorkItemStatus.WaitingForIld, fresh!.Status);
+        Assert.Equal(2, fresh.Conversation.Count());
+        Assert.Equal("human", fresh.Conversation[1].Role);
+        Assert.Equal("approve please", fresh.Conversation[1].Content);
     }
 
     [Fact]
@@ -198,11 +197,11 @@ public class WorkItemServiceTests : IAsyncLifetime
         _clock.Now = _clock.Now.AddMinutes(5);
         var resp = await _svc.PollAsync(new[] { running.Id });
 
-        resp.ActiveItems.Should().ContainSingle().Which.Id.Should().Be(running.Id);
-        resp.ReadyItems.Should().ContainSingle().Which.Id.Should().Be(ready.Id);
+        Assert.Equal(running.Id, Assert.Single(resp.ActiveItems).Id);
+        Assert.Equal(ready.Id, Assert.Single(resp.ReadyItems).Id);
 
         var raw = await _db.WorkItems.AsNoTracking().FirstAsync(w => w.Id == running.Id);
-        raw.LastHeartbeatAt.Should().Be(_clock.Now);
+        Assert.Equal(_clock.Now, raw.LastHeartbeatAt);
     }
 
     [Fact]
@@ -215,9 +214,9 @@ public class WorkItemServiceTests : IAsyncLifetime
         _clock.Now = _clock.Now.AddMinutes(20);
         var n = await _svc.ReclaimStaleAsync(TimeSpan.FromMinutes(15));
 
-        n.Should().Be(1);
+        Assert.Equal(1, n);
         var fresh = await _svc.GetAsync(dto.Id);
-        fresh!.Status.Should().Be(WorkItemStatus.Ready);
+        Assert.Equal(WorkItemStatus.Ready, fresh!.Status);
     }
 
     [Fact]
@@ -232,9 +231,9 @@ public class WorkItemServiceTests : IAsyncLifetime
         _clock.Now = _clock.Now.AddMinutes(5);
         var n = await _svc.ReclaimStaleAsync(TimeSpan.FromMinutes(15));
 
-        n.Should().Be(0);
+        Assert.Equal(0, n);
         var fresh = await _svc.GetAsync(dto.Id);
-        fresh!.Status.Should().Be(WorkItemStatus.Running);
+        Assert.Equal(WorkItemStatus.Running, fresh!.Status);
     }
 
     [Fact]
@@ -252,9 +251,9 @@ public class WorkItemServiceTests : IAsyncLifetime
         _clock.Now = _clock.Now.AddMinutes(30);
         var n = await _svc.ReclaimStaleAsync(TimeSpan.FromMinutes(15));
 
-        n.Should().Be(0);
+        Assert.Equal(0, n);
         var fresh = await _svc.GetAsync(dto.Id);
-        fresh!.Status.Should().Be(WorkItemStatus.HumanFeedback);
+        Assert.Equal(WorkItemStatus.HumanFeedback, fresh!.Status);
     }
 
     [Fact]
@@ -262,8 +261,8 @@ public class WorkItemServiceTests : IAsyncLifetime
     {
         var a = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
 
-        (await _svc.AddDependencyAsync(a.Id, a.Id)).Should().BeFalse();
-        (await _svc.AddDependencyAsync(a.Id, Guid.NewGuid().ToString())).Should().BeFalse();
+        Assert.False((await _svc.AddDependencyAsync(a.Id, a.Id)));
+        Assert.False((await _svc.AddDependencyAsync(a.Id, Guid.NewGuid().ToString())));
     }
 
     [Fact]
@@ -271,7 +270,7 @@ public class WorkItemServiceTests : IAsyncLifetime
     {
         var a = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
 
-        (await _svc.RemoveDependencyAsync(a.Id, Guid.NewGuid().ToString())).Should().BeFalse();
+        Assert.False((await _svc.RemoveDependencyAsync(a.Id, Guid.NewGuid().ToString())));
     }
 
     [Fact]
@@ -283,6 +282,6 @@ public class WorkItemServiceTests : IAsyncLifetime
 
         var list = await _svc.ListAsync(WorkItemStatus.Ready, new[] { "feature" });
 
-        list.Should().ContainSingle().Which.Title.Should().Be("a");
+        Assert.Equal("a", Assert.Single(list).Title);
     }
 }

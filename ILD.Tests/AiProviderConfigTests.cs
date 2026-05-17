@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Data.Entities;
 
 namespace ILD.Tests;
@@ -24,8 +23,8 @@ public class AiProviderConfigTests
         await db.Providers.CreateAiProviderAsync(provider);
         var saved = await db.Providers.GetAiProviderByIdAsync(provider.Id);
 
-        saved.Should().NotBeNull();
-        saved!.Config.Should().Be("{\"customField\":\"value\"}");
+        Assert.NotNull(saved);
+        Assert.Equal("{\"customField\":\"value\"}", saved!.Config);
     }
 
     [Fact]
@@ -49,7 +48,7 @@ public class AiProviderConfigTests
         await db.Providers.UpdateAiProviderAsync(provider);
 
         var saved = await db.Providers.GetAiProviderByIdAsync(provider.Id);
-        saved!.Config.Should().Be("{\"updatedField\":\"newValue\"}");
+        Assert.Equal("{\"updatedField\":\"newValue\"}", saved!.Config);
     }
 
     [Fact]
@@ -70,6 +69,6 @@ public class AiProviderConfigTests
         await db.Providers.CreateAiProviderAsync(provider);
         var saved = await db.Providers.GetAiProviderByIdAsync(provider.Id);
 
-        saved!.Config.Should().BeNull();
+        Assert.Null(saved!.Config);
     }
 }

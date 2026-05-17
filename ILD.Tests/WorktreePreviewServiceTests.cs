@@ -1,5 +1,4 @@
 using System.Text.Json;
-using FluentAssertions;
 using ILD.Core.Services.Implementations;
 using ILD.Data.DTOs;
 using Microsoft.Extensions.Configuration;
@@ -45,19 +44,19 @@ public class WorktreePreviewServiceTests : IDisposable
         var svc = CreateService();
 
         var started = await svc.StartAsync(worktree);
-        started.Configured.Should().BeTrue();
-        started.State.Should().Be("running");
-        started.Services.Should().ContainSingle();
-        started.Services[0].PublicUrl.Should().NotBeNullOrEmpty();
-        started.Services[0].SuggestedPort.Should().Be(3100);
-        started.TimeoutSeconds.Should().Be(600);
-        started.AutoStopAt.Should().NotBeNull();
+        Assert.True(started.Configured);
+        Assert.Equal("running", started.State);
+        Assert.Single(started.Services);
+        Assert.False(string.IsNullOrEmpty(started.Services[0].PublicUrl));
+        Assert.Equal(3100, started.Services[0].SuggestedPort);
+        Assert.Equal(600, started.TimeoutSeconds);
+        Assert.NotNull(started.AutoStopAt);
 
         var stopped = await svc.StopAsync(worktree);
-        stopped.State.Should().Be("stopped");
-        stopped.Services[0].SuggestedPort.Should().Be(3100);
-        stopped.TimeoutSeconds.Should().Be(600);
-        stopped.AutoStopAt.Should().BeNull();
+        Assert.Equal("stopped", stopped.State);
+        Assert.Equal(3100, stopped.Services[0].SuggestedPort);
+        Assert.Equal(600, stopped.TimeoutSeconds);
+        Assert.Null(stopped.AutoStopAt);
     }
 
     [Fact]
@@ -100,9 +99,9 @@ public class WorktreePreviewServiceTests : IDisposable
             new ILD.Core.Services.Interfaces.WorktreePreviewStartOptions(
                 PortOverrides: new Dictionary<string, int> { ["frontend"] = requestedPort },
                 TimeoutSeconds: 120));
-        started.Services.Should().ContainSingle();
-        started.Services[0].Port.Should().Be(requestedPort);
-        started.TimeoutSeconds.Should().Be(120);
+        Assert.Single(started.Services);
+        Assert.Equal(requestedPort, started.Services[0].Port);
+        Assert.Equal(120, started.TimeoutSeconds);
 
         await svc.StopAsync(worktree);
     }
@@ -144,13 +143,13 @@ public class WorktreePreviewServiceTests : IDisposable
             worktree,
             new ILD.Core.Services.Interfaces.WorktreePreviewStartOptions(TimeoutSeconds: 1));
 
-        started.State.Should().Be("running");
+        Assert.Equal("running", started.State);
 
         await Task.Delay(TimeSpan.FromSeconds(2));
 
         var status = await svc.GetStatusAsync(worktree);
-        status.State.Should().Be("stopped");
-        status.TimeoutSeconds.Should().Be(600);
+        Assert.Equal("stopped", status.State);
+        Assert.Equal(600, status.TimeoutSeconds);
     }
 
     [Fact]
@@ -190,14 +189,14 @@ public class WorktreePreviewServiceTests : IDisposable
             worktree,
             new ILD.Core.Services.Interfaces.WorktreePreviewStartOptions(TimeoutSeconds: 0));
 
-        started.TimeoutSeconds.Should().Be(0);
-        started.AutoStopAt.Should().BeNull();
+        Assert.Equal(0, started.TimeoutSeconds);
+        Assert.Null(started.AutoStopAt);
 
         await Task.Delay(TimeSpan.FromSeconds(2));
 
         var status = await svc.GetStatusAsync(worktree);
-        status.State.Should().Be("running");
-        status.TimeoutSeconds.Should().Be(0);
+        Assert.Equal("running", status.State);
+        Assert.Equal(0, status.TimeoutSeconds);
 
         await svc.StopAsync(worktree);
     }

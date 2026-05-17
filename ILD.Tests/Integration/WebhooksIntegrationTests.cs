@@ -1,6 +1,5 @@
 using System.Net;
 using System.Net.Http.Json;
-using FluentAssertions;
 
 namespace ILD.Tests.Integration;
 
@@ -13,7 +12,7 @@ public class WebhooksIntegrationTests
         await using var factory = new ApiFactory();
         var client = factory.CreateClient();
         var response = await client.PostAsJsonAsync("/api/v1/webhooks/forgejo", new { });
-        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]
@@ -23,6 +22,6 @@ public class WebhooksIntegrationTests
         var client = await factory.CreateAuthenticatedClientAsync();
         // No RemoteProvider.WebhookSecret configured -> verifier rejects with 401.
         var response = await client.PostAsJsonAsync("/api/v1/webhooks/forgejo", new { });
-        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 }

@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores;
@@ -44,14 +43,14 @@ public class LoopRunEngineFieldsTests
         var freshStore = new LoopRunStore(db.Fresh());
         var result = await freshStore.GetByIdAsync(run.Id);
 
-        result.Should().NotBeNull();
-        result!.WorktreePath.Should().Be("/tmp/worktrees/test");
-        result.BranchName.Should().Be("feature/branch");
-        result.PrUrl.Should().Be("https://example/pulls/1");
-        result.IsPrMerged.Should().BeFalse();
-        result.RepositoryId.Should().Be(repo.Id);
-        result.HumanFeedbackReason.Should().Be("node failure");
-        result.CreatedByLoopRunId.Should().BeNull();
+        Assert.NotNull(result);
+        Assert.Equal("/tmp/worktrees/test", result!.WorktreePath);
+        Assert.Equal("feature/branch", result.BranchName);
+        Assert.Equal("https://example/pulls/1", result.PrUrl);
+        Assert.False(result.IsPrMerged);
+        Assert.Equal(repo.Id, result.RepositoryId);
+        Assert.Equal("node failure", result.HumanFeedbackReason);
+        Assert.Null(result.CreatedByLoopRunId);
     }
 
     [Fact]
@@ -84,13 +83,13 @@ public class LoopRunEngineFieldsTests
         var freshStore = new LoopRunStore(db.Fresh());
         var result = await freshStore.GetByIdAsync(run.Id);
 
-        result.Should().NotBeNull();
-        result!.WorktreePath.Should().BeNull();
-        result.BranchName.Should().BeNull();
-        result.PrUrl.Should().BeNull();
-        result.IsPrMerged.Should().BeFalse();
-        result.RepositoryId.Should().BeNull();
-        result.HumanFeedbackReason.Should().BeNull();
-        result.CreatedByLoopRunId.Should().BeNull();
+        Assert.NotNull(result);
+        Assert.Null(result!.WorktreePath);
+        Assert.Null(result.BranchName);
+        Assert.Null(result.PrUrl);
+        Assert.False(result.IsPrMerged);
+        Assert.Null(result.RepositoryId);
+        Assert.Null(result.HumanFeedbackReason);
+        Assert.Null(result.CreatedByLoopRunId);
     }
 }

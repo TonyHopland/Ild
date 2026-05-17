@@ -1,5 +1,4 @@
 using System.ComponentModel.DataAnnotations;
-using FluentAssertions;
 using ILD.Api.Controllers;
 using ILD.Data.DTOs;
 
@@ -22,69 +21,69 @@ public class DtoValidationTests
     public void RepositoryDto_missing_required_fields_produces_errors()
     {
         var dto = new RepositoryDto(); // all strings empty
-        Validate(dto).Should().NotBeEmpty();
+        Assert.NotEmpty(Validate(dto));
     }
 
     [Fact]
     public void RemoteProviderDto_missing_required_fields_produces_errors()
     {
         var dto = new RemoteProviderDto();
-        Validate(dto).Should().NotBeEmpty();
+        Assert.NotEmpty(Validate(dto));
     }
 
     [Fact]
     public void LoopTemplateCreateRequest_empty_name_produces_error()
     {
         var dto = new LoopTemplateCreateRequest { Name = "" };
-        Validate(dto).Should().Contain(r => r.MemberNames.Contains(nameof(LoopTemplateCreateRequest.Name)));
+        Assert.Contains(Validate(dto), r => r.MemberNames.Contains(nameof(LoopTemplateCreateRequest.Name)));
     }
 
     [Fact]
     public void WorkItemTransitionRequest_empty_target_produces_error()
     {
         var dto = new WorkItemTransitionRequest();
-        Validate(dto).Should().Contain(r => r.MemberNames.Contains(nameof(WorkItemTransitionRequest.TargetStatus)));
+        Assert.Contains(Validate(dto), r => r.MemberNames.Contains(nameof(WorkItemTransitionRequest.TargetStatus)));
     }
 
     [Fact]
     public void LoginRequest_missing_credentials_produces_errors()
     {
         var dto = new LoginRequest();
-        Validate(dto).Should().NotBeEmpty();
+        Assert.NotEmpty(Validate(dto));
     }
 
     [Fact]
     public void LinkPrRequest_invalid_url_produces_error()
     {
         var dto = new LinkPrRequest { PrUrl = "not-a-url" };
-        Validate(dto).Should().Contain(r => r.MemberNames.Contains(nameof(LinkPrRequest.PrUrl)));
+        Assert.Contains(Validate(dto), r => r.MemberNames.Contains(nameof(LinkPrRequest.PrUrl)));
     }
 
     [Fact]
     public void AddDependencyRequest_empty_id_produces_error()
     {
         var dto = new AddDependencyRequest();
-        Validate(dto).Should().NotBeEmpty();
+        Assert.NotEmpty(Validate(dto));
     }
 
     [Fact]
     public void HumanFeedbackInputRequest_empty_input_is_valid()
     {
         var dto = new HumanFeedbackInputRequest();
-        Validate(dto).Should().BeEmpty();
+        Assert.Empty(Validate(dto));
     }
 
     [Fact]
     public void HumanFeedbackInputRequest_overlong_input_produces_error()
     {
         var dto = new HumanFeedbackInputRequest { Input = new string('x', 8193) };
-        Validate(dto).Should().NotBeEmpty();
+        Assert.NotEmpty(Validate(dto));
     }
 
     [Fact]
     public void WebhookPayload_missing_required_fields_produces_errors()
     {
         var dto = new WebhookPayload(EventType: "", RepositoryId: "", PullRequestId: null, PullRequestUrl: null, Comment: null, MergeStatus: null);
-        Validate(dto).Should().NotBeEmpty();
+        Assert.NotEmpty(Validate(dto));
     }
 }

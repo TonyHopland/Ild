@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Data.Enums;
 using ILD.Data.Entities;
 using ILD.Data.Stores;
@@ -111,9 +110,9 @@ public class LoopEngineProgressTests
         await engine.RunAsync(run.Id);
 
         // Assert: notifier received the progress lines
-        progressLines.Should().Contain("thinking...");
-        progressLines.Should().Contain("analyzing code...");
-        progressLines.Should().Contain("done");
+        Assert.Contains("thinking...", progressLines);
+        Assert.Contains("analyzing code...", progressLines);
+        Assert.Contains("done", progressLines);
 
         // Verify the notifier was called with the correct runId and nodeId
         notifier.Verify(n => n.NodeProgressAsync(run.Id, aiNode.Id, "thinking..."), Times.Once);

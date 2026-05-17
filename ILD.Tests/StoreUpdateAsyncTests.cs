@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Data.Entities;
 using ILD.Data.Stores;
 
@@ -38,6 +37,6 @@ public class StoreUpdateAsyncTests
 
         using var verify = db.Fresh();
         var reloaded = await verify.RemoteProviders.FindAsync(id);
-        reloaded!.Name.Should().Be("new");
+        Assert.Equal("new", reloaded!.Name);
     }
 }

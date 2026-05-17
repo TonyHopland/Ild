@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
@@ -44,7 +43,7 @@ public class RecoveryManagerTests
 
         var ok = await mgr.RecoverRunAsync(runId);
 
-        ok.Should().BeTrue();
+        Assert.True(ok);
         engine.Verify(e => e.CancelRunAsync(runId), Times.Once);
     }
 
@@ -66,7 +65,7 @@ public class RecoveryManagerTests
 
         var ok = await mgr.RecoverRunAsync(runId);
 
-        ok.Should().BeTrue();
+        Assert.True(ok);
         wiMgr.Verify(m => m.TransitionAsync(wiId, RemoteWorkItemStatus.HumanFeedback, It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>()), Times.Once);
         engine.Verify(e => e.CancelRunAsync(It.IsAny<Guid>()), Times.Never);
     }
@@ -85,7 +84,7 @@ public class RecoveryManagerTests
 
         var ok = await mgr.RecoverRunAsync(runId);
 
-        ok.Should().BeTrue();
+        Assert.True(ok);
         engine.Verify(e => e.ResumeRecoveredRunAsync(runId), Times.Once);
     }
 
@@ -116,7 +115,7 @@ public class RecoveryManagerTests
 
         var ok = await mgr.RecoverRunAsync(runId);
 
-        ok.Should().BeTrue();
+        Assert.True(ok);
         wiMgr.Verify(m => m.TransitionAsync(
             wiId,
             RemoteWorkItemStatus.HumanFeedback,
@@ -133,7 +132,7 @@ public class RecoveryManagerTests
         var runId = Guid.NewGuid();
         runStore.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync((LoopRun?)null);
 
-        (await mgr.RecoverRunAsync(runId)).Should().BeFalse();
+        Assert.False((await mgr.RecoverRunAsync(runId)));
     }
 
     [Fact]
@@ -148,7 +147,7 @@ public class RecoveryManagerTests
             RecoveryPolicy = RecoveryPolicy.AutoResume,
         });
 
-        (await mgr.RecoverRunAsync(runId)).Should().BeFalse();
+        Assert.False((await mgr.RecoverRunAsync(runId)));
         engine.Verify(e => e.ResumeRecoveredRunAsync(It.IsAny<Guid>()), Times.Never);
     }
 
@@ -173,7 +172,7 @@ public class RecoveryManagerTests
         });
         repo.Setup(r => r.ValidateWorktreeHealthAsync("/tmp/wt")).ReturnsAsync(true);
 
-        (await mgr.ValidateWorktreeHealthAsync(runId)).Should().BeTrue();
+        Assert.True((await mgr.ValidateWorktreeHealthAsync(runId)));
     }
 
     [Fact]
@@ -197,7 +196,7 @@ public class RecoveryManagerTests
         });
         repo.Setup(r => r.ValidateWorktreeHealthAsync("/tmp/wt")).ReturnsAsync(false);
 
-        (await mgr.ValidateWorktreeHealthAsync(runId)).Should().BeFalse();
+        Assert.False((await mgr.ValidateWorktreeHealthAsync(runId)));
     }
 
     [Fact]
@@ -220,7 +219,7 @@ public class RecoveryManagerTests
             Description = "d",
         });
 
-        (await mgr.ValidateWorktreeHealthAsync(runId)).Should().BeFalse();
+        Assert.False((await mgr.ValidateWorktreeHealthAsync(runId)));
     }
 
     [Fact]
@@ -236,7 +235,7 @@ public class RecoveryManagerTests
             RecoveryPolicy = RecoveryPolicy.Cancel,
         });
 
-        (await mgr.GetRecoveryPolicyAsync(tid)).Should().Be(RecoveryPolicy.Cancel);
+        Assert.Equal(RecoveryPolicy.Cancel, (await mgr.GetRecoveryPolicyAsync(tid)));
     }
 
     [Fact]
@@ -246,7 +245,7 @@ public class RecoveryManagerTests
         var tid = Guid.NewGuid();
         tmpl.Setup(s => s.GetByIdAsync(tid)).ReturnsAsync((LoopTemplate?)null);
 
-        (await mgr.GetRecoveryPolicyAsync(tid)).Should().Be(RecoveryPolicy.AutoResume);
+        Assert.Equal(RecoveryPolicy.AutoResume, (await mgr.GetRecoveryPolicyAsync(tid)));
     }
 
     [Fact]
@@ -277,7 +276,7 @@ public class RecoveryManagerTests
 
         var ok = await mgr.RecoverRunAsync(runId);
 
-        ok.Should().BeTrue();
+        Assert.True(ok);
         engine.Verify(e => e.ResumeRecoveredRunAsync(It.IsAny<Guid>()), Times.Never);
         engine.Verify(e => e.CancelRunAsync(It.IsAny<Guid>()), Times.Never);
     }
@@ -298,7 +297,7 @@ public class RecoveryManagerTests
 
         await mgr.SetRecoveryPolicyAsync(tid, RecoveryPolicy.NeedsReview);
 
-        template.RecoveryPolicy.Should().Be(RecoveryPolicy.NeedsReview);
+        Assert.Equal(RecoveryPolicy.NeedsReview, template.RecoveryPolicy);
         tmpl.Verify(s => s.UpdateTemplateAsync(template), Times.Once);
     }
 }

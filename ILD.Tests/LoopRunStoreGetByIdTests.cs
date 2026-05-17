@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores;
@@ -45,10 +44,10 @@ public class LoopRunStoreGetByIdTests
         var freshStore = new LoopRunStore(db.Fresh());
         var result = await freshStore.GetByIdAsync(run.Id);
 
-        result.Should().NotBeNull();
-        result!.LoopTemplateVersion.Should().NotBeNull();
-        result.LoopTemplateVersion!.Id.Should().Be(ltv.Id);
-        result.LoopTemplateVersion.VersionNumber.Should().Be(1);
+        Assert.NotNull(result);
+        Assert.NotNull(result!.LoopTemplateVersion);
+        Assert.Equal(ltv.Id, result.LoopTemplateVersion!.Id);
+        Assert.Equal(1, result.LoopTemplateVersion.VersionNumber);
     }
 
     [Fact]
@@ -84,7 +83,7 @@ public class LoopRunStoreGetByIdTests
         var freshStore = new LoopRunStore(db.Fresh());
         var result = await freshStore.GetRunNodesAsync(run.Id);
 
-        result.Select(n => n.Id).Should().Equal(n1.Id, n2.Id, n3.Id);
+        Assert.Equal(new[] { n1.Id, n2.Id, n3.Id }, result.Select(n => n.Id));
     }
 
     [Fact]
@@ -133,10 +132,10 @@ public class LoopRunStoreGetByIdTests
         var freshStore = new LoopRunStore(db.Fresh());
         var deleted = await freshStore.DeleteAsync(run.Id);
 
-        deleted.Should().BeTrue();
+        Assert.True(deleted);
 
         using var verify = db.Fresh();
-        (await verify.LoopRuns.FindAsync(run.Id)).Should().BeNull();
-        (await verify.EventLogs.Where(e => e.LoopRunId == run.Id).CountAsync()).Should().Be(0);
+        Assert.Null((await verify.LoopRuns.FindAsync(run.Id)));
+        Assert.Equal(0, (await verify.EventLogs.Where(e => e.LoopRunId == run.Id).CountAsync()));
     }
 }

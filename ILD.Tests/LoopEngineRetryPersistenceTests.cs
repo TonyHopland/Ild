@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Enums;
 
@@ -24,9 +23,9 @@ public class LoopEngineRetryPersistenceTests
         var runNodesForA = h.ReloadRunNodes().Where(rn => rn.LoopNodeId == aId).ToList();
 
         // PRD #003 Bug B: one row per node, not one per attempt
-        runNodesForA.Should().HaveCount(1);
-        runNodesForA[0].RetryCount.Should().Be(2);
-        runNodesForA[0].Status.Should().Be(LoopRunNodeStatus.Failed);
+        Assert.Equal(1, runNodesForA.Count());
+        Assert.Equal(2, runNodesForA[0].RetryCount);
+        Assert.Equal(LoopRunNodeStatus.Failed, runNodesForA[0].Status);
     }
 
     [Fact]
@@ -59,11 +58,11 @@ public class LoopEngineRetryPersistenceTests
         await h.Engine.RunAsync(h.RunId);
 
         // PRD #003 Bug A: with on_failure edge, no retry on first failure
-        aAttempts.Should().Be(1);
+        Assert.Equal(1, aAttempts);
 
         var aId = h.NodesById["a"].Id;
         var runNodesForA = h.ReloadRunNodes().Where(rn => rn.LoopNodeId == aId).ToList();
-        runNodesForA.Should().HaveCount(1);
-        runNodesForA[0].RetryCount.Should().Be(0);
+        Assert.Equal(1, runNodesForA.Count());
+        Assert.Equal(0, runNodesForA[0].RetryCount);
     }
 }

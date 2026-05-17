@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Core.Services.Interfaces;
@@ -48,7 +47,7 @@ public class AgentAdapterRegistryTests
         var registry = sp.GetRequiredService<IAgentAdapterRegistry>();
         var factory = registry.ResolveForProvider(new AiProvider { Type = "openai" });
 
-        factory().Should().BeOfType<TestOpenAiAdapter>();
+        Assert.IsType<TestOpenAiAdapter>(factory());
     }
 
     [Fact]
@@ -62,11 +61,9 @@ public class AgentAdapterRegistryTests
 
         var registry = sp.GetRequiredService<IAgentAdapterRegistry>();
 
-        registry.ResolveForProvider(new AiProvider { Type = "openai" })()
-            .Should().BeOfType<TestOpenAiAdapter>();
+          Assert.IsType<TestOpenAiAdapter>(registry.ResolveForProvider(new AiProvider { Type = "openai" })());
 
-        registry.ResolveForProvider(new AiProvider { Type = "custom" })()
-            .Should().BeOfType<TestCustomAdapter>();
+          Assert.IsType<TestCustomAdapter>(registry.ResolveForProvider(new AiProvider { Type = "custom" })());
     }
 
     [Fact]
@@ -81,8 +78,8 @@ public class AgentAdapterRegistryTests
 
         var act = () => registry.ResolveForProvider(new AiProvider { Type = "unknown-type" })();
 
-        act.Should().Throw<InvalidOperationException>()
-            .WithMessage("*unknown-type*");
+        var ex = Assert.Throws<InvalidOperationException>(act);
+        Assert.Contains("unknown-type", ex.Message);
     }
 
     [Fact]
@@ -99,6 +96,6 @@ public class AgentAdapterRegistryTests
         var first = factory();
         var second = factory();
 
-        first.Should().NotBeSameAs(second);
+        Assert.NotSame(second, first);
     }
 }

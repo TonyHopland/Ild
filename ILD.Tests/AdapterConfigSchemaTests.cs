@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.DTOs;
 using Moq;
@@ -15,9 +14,9 @@ public class AdapterConfigSchemaTests
         var adapter = new OpenAiCompatibleAdapter(factory.Object);
 
         var names = adapter.ConfigSchema.Select(f => f.Name).ToList();
-        names.Should().NotContain("model", "model is a provider-level setting");
-        names.Should().NotContain("baseUrl", "baseUrl is a provider-level setting");
-        names.Should().NotContain("apiKey", "apiKey is a provider-level setting");
+        Assert.DoesNotContain("model", names);
+        Assert.DoesNotContain("baseUrl", names);
+        Assert.DoesNotContain("apiKey", names);
     }
 
     [Fact]
@@ -27,7 +26,7 @@ public class AdapterConfigSchemaTests
         var adapter = new OpenAiCompatibleAdapter(factory.Object);
 
         var names = adapter.ConfigSchema.Select(f => f.Name).ToList();
-        names.Should().BeEquivalentTo("temperature", "maxTokens");
+        Assert.Equal(new[] { "temperature", "maxTokens" }, names);
     }
 
     [Fact]
@@ -36,8 +35,8 @@ public class AdapterConfigSchemaTests
         var adapter = new OpenCodeAdapter();
 
         var names = adapter.ConfigSchema.Select(f => f.Name).ToList();
-        names.Should().NotContain("binaryPath", "binaryPath is a provider-level setting");
-        names.Should().NotContain("timeoutSeconds", "timeout is set on the AI node, not the adapter");
+        Assert.DoesNotContain("binaryPath", names);
+        Assert.DoesNotContain("timeoutSeconds", names);
     }
 
     [Fact]
@@ -45,7 +44,7 @@ public class AdapterConfigSchemaTests
     {
         var adapter = new OpenCodeAdapter();
 
-        adapter.ConfigSchema.Should().BeEmpty();
+        Assert.Empty(adapter.ConfigSchema);
     }
 
     [Fact]
@@ -54,10 +53,10 @@ public class AdapterConfigSchemaTests
         var adapter = new PiAdapter();
 
         var names = adapter.ConfigSchema.Select(f => f.Name).ToList();
-        names.Should().NotContain("binaryPath", "binaryPath is a provider-level setting");
-        names.Should().NotContain("provider", "provider routing is a provider-level setting");
-        names.Should().NotContain("model", "model is a provider-level setting");
-        names.Should().NotContain("apiKey", "apiKey is a provider-level setting");
+        Assert.DoesNotContain("binaryPath", names);
+        Assert.DoesNotContain("provider", names);
+        Assert.DoesNotContain("model", names);
+        Assert.DoesNotContain("apiKey", names);
     }
 
     [Fact]
@@ -65,6 +64,6 @@ public class AdapterConfigSchemaTests
     {
         var adapter = new PiAdapter();
 
-        adapter.ConfigSchema.Should().BeEmpty();
+        Assert.Empty(adapter.ConfigSchema);
     }
 }

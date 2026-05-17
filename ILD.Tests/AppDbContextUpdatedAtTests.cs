@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 
@@ -15,14 +14,14 @@ public class AppDbContextUpdatedAtTests
         await db.Context.SaveChangesAsync();
 
         // Initial UpdatedAt should be null (only set on modify, not on insert).
-        template.UpdatedAt.Should().BeNull();
+        Assert.Null(template.UpdatedAt);
 
         var before = DateTime.UtcNow;
         template.Name = "renamed";
         await db.Context.SaveChangesAsync();
 
         var reloaded = db.Fresh().LoopTemplates.First(t => t.Id == template.Id);
-        reloaded.UpdatedAt.Should().NotBeNull();
-        reloaded.UpdatedAt!.Value.Should().BeOnOrAfter(before.AddSeconds(-1));
+        Assert.NotNull(reloaded.UpdatedAt);
+        Assert.True(reloaded.UpdatedAt!.Value >= before.AddSeconds(-1));
     }
 }

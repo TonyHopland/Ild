@@ -1,4 +1,3 @@
-using FluentAssertions;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using Microsoft.Extensions.DependencyInjection;
@@ -45,12 +44,12 @@ public class AgentAdapterConfigSchemaTests
         var factory = registry.ResolveForProvider(new ILD.Data.Entities.AiProvider { Type = "test-schema" });
         var adapter = factory();
 
-        adapter.ConfigSchema.Should().HaveCount(5);
-        adapter.ConfigSchema[0].Name.Should().Be("model");
-        adapter.ConfigSchema[0].Type.Should().Be(ConfigFieldType.Text);
-        adapter.ConfigSchema[0].Required.Should().BeTrue();
-        adapter.ConfigSchema[0].DefaultValue.Should().Be("default-model");
-        adapter.ConfigSchema[4].Type.Should().Be(ConfigFieldType.Select);
-        adapter.ConfigSchema[4].Options.Should().Contain("us-east-1");
+        Assert.Equal(5, adapter.ConfigSchema.Count());
+        Assert.Equal("model", adapter.ConfigSchema[0].Name);
+        Assert.Equal(ConfigFieldType.Text, adapter.ConfigSchema[0].Type);
+        Assert.True(adapter.ConfigSchema[0].Required);
+        Assert.Equal("default-model", adapter.ConfigSchema[0].DefaultValue);
+        Assert.Equal(ConfigFieldType.Select, adapter.ConfigSchema[4].Type);
+        Assert.Contains("us-east-1", adapter.ConfigSchema[4].Options);
     }
 }
