@@ -83,6 +83,9 @@ internal static class TestHostServiceCollectionExtensions
 
         public Task<WorktreePreviewResponse> StopAsync(string worktreePath, CancellationToken cancellationToken = default)
             => throw Unexpected(nameof(IWorktreePreviewService));
+
+        public bool IsPreviewRunning(string worktreePath)
+            => false;
     }
 
     private sealed class ThrowingRemoteProvider : IRemoteProvider

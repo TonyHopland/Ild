@@ -93,12 +93,18 @@ export default function Taskboard() {
       delayedTimers.push(setTimeout(() => syncWorkItem(workItemId), 500));
     };
 
+    const onPreviewStateChanged = (message: TypedSignalRMessage<"PreviewStateChanged">) => {
+      syncWorkItem(message.payload.workItemId);
+    };
+
     on("HumanFeedbackRequired", onHumanFeedback);
     on("WorkItemStateChanged", onWorkItemStateChanged);
+    on("PreviewStateChanged", onPreviewStateChanged);
 
     return () => {
       off("HumanFeedbackRequired", onHumanFeedback);
       off("WorkItemStateChanged", onWorkItemStateChanged);
+      off("PreviewStateChanged", onPreviewStateChanged);
       for (const t of delayedTimers) clearTimeout(t);
     };
   }, [on, off]);

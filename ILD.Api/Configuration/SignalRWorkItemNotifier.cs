@@ -28,4 +28,8 @@ public class SignalRWorkItemNotifier : IWorkItemNotifier
     public Task DependencyResolvedAsync(string workItemId)
         => _hub.Clients.Group(WorkItemGroup)
             .SendAsync("DependencyResolved", new DependencyResolvedPayload(workItemId));
+
+    public Task PreviewStateChangedAsync(string workItemId)
+        => _hub.Clients.Group(WorkItemGroup)
+            .SendAsync("PreviewStateChanged", new PreviewStateChangedPayload(workItemId));
 }

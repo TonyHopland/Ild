@@ -17,6 +17,7 @@ import type {
   RunResumedPayload,
   DependencyResolvedPayload,
   NodeProgressPayload,
+  PreviewStateChangedPayload,
 } from "./index";
 
 export interface SignalREventPayloads {
@@ -29,6 +30,7 @@ export interface SignalREventPayloads {
   RunResumed: RunResumedPayload;
   DependencyResolved: DependencyResolvedPayload;
   NodeProgress: NodeProgressPayload;
+  PreviewStateChanged: PreviewStateChangedPayload;
 }
 
 export type SignalREventName = keyof SignalREventPayloads;

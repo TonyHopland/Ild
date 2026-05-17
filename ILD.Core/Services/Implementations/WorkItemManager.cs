@@ -21,6 +21,7 @@ public class WorkItemManager : IWorkItemManager
     private readonly IWorkItemNotifier _notifier;
     private readonly IWorkItemServerClient _server;
     private readonly IWorkItemServerOptionsResolver _options;
+    private readonly IWorktreePreviewService _previewService;
 
     public WorkItemManager(
         IRepositoryManager repoManager,
@@ -29,7 +30,8 @@ public class WorkItemManager : IWorkItemManager
         ILoopRunStore loopRunStore,
         IWorkItemServerClient server,
         IWorkItemServerOptionsResolver options,
-        IWorkItemNotifier? notifier = null)
+        IWorkItemNotifier? notifier = null,
+        IWorktreePreviewService? previewService = null)
     {
         _repoManager = repoManager;
         _providerStore = providerStore;
@@ -38,6 +40,7 @@ public class WorkItemManager : IWorkItemManager
         _server = server;
         _options = options;
         _notifier = notifier ?? new NoopWorkItemNotifier();
+        _previewService = previewService ?? new NoopPreviewService();
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -93,7 +96,7 @@ public class WorkItemManager : IWorkItemManager
                               .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
                               .FirstOrDefault();
 
-        return BuildView(remote, currentRun);
+        return BuildView(remote, currentRun, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty));
     }
 
     public async Task<IReadOnlyList<WorkItemView>> ListAsync(
@@ -127,7 +130,7 @@ public class WorkItemManager : IWorkItemManager
                                   .OrderByDescending(rn => rn.StartedAt ?? rn.CreatedAt)
                                   .FirstOrDefault();
             }
-            var view = BuildView(r, currentRun);
+            var view = BuildView(r, currentRun, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty));
             if (createdByLoopRunId.HasValue && view.CreatedByLoopRunId != createdByLoopRunId) continue;
             if (repositoryId.HasValue && view.RepositoryId != repositoryId) continue;
             views.Add(view);
@@ -140,7 +143,7 @@ public class WorkItemManager : IWorkItemManager
             .ToList();
     }
 
-    private static WorkItemView BuildView(RemoteWorkItem remote, LoopRun? run)
+    private static WorkItemView BuildView(RemoteWorkItem remote, LoopRun? run, bool isPreviewRunning)
     {
         return new WorkItemView
         {
@@ -163,6 +166,7 @@ public class WorkItemManager : IWorkItemManager
             IsPrMerged = run?.IsPrMerged == true,
             HumanFeedbackReason = run?.HumanFeedbackReason,
             CurrentLoopRunId = run?.Id,
+            IsPreviewRunning = isPreviewRunning,
         };
     }
 
@@ -320,7 +324,7 @@ public class WorkItemManager : IWorkItemManager
                 var runs = await _loopRunStore.GetAllByWorkItemAsync(id);
                 var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
                                ?? runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).FirstOrDefault();
-                views.Add(BuildView(remote, currentRun));
+                views.Add(BuildView(remote, currentRun, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty)));
             }
         }
         return views;
@@ -338,7 +342,7 @@ public class WorkItemManager : IWorkItemManager
                 var runs = await _loopRunStore.GetAllByWorkItemAsync(candidate.Id);
                 var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
                                ?? runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).FirstOrDefault();
-                views.Add(BuildView(candidate, currentRun));
+                views.Add(BuildView(candidate, currentRun, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty)));
             }
         }
         return views;

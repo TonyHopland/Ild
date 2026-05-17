@@ -67,6 +67,7 @@ export interface WorkItem {
   branchName?: string | null;
   dependencyIds: string[];
   dependentIds: string[];
+  isPreviewRunning?: boolean;
 }
 
 export interface WorktreePreviewService {
@@ -354,6 +355,10 @@ export interface NodeProgressPayload {
   runId: string;
   nodeId: string;
   line: string;
+}
+
+export interface PreviewStateChangedPayload {
+  workItemId: string;
 }
 
 export interface LoopTemplateVersion {

@@ -183,6 +183,7 @@ public class WorkItemsController : ControllerBase
                     request?.SkipInstall == true,
                     request?.PublicHost,
                     request?.PortOverrides));
+            await _notifier.PreviewStateChangedAsync(id);
             return Ok(response);
         }
         catch (InvalidOperationException ex)
@@ -198,7 +199,9 @@ public class WorkItemsController : ControllerBase
         if (error != null) return error;
         try
         {
-            return Ok(await _worktreePreviewService.StopAsync(workItem!.WorktreePath!));
+            var response = await _worktreePreviewService.StopAsync(workItem!.WorktreePath!);
+            await _notifier.PreviewStateChangedAsync(id);
+            return Ok(response);
         }
         catch (InvalidOperationException ex)
         {
