@@ -1,4 +1,5 @@
 import { NodeType } from "../../types";
+import MarkdownRenderer from "../MarkdownRenderer";
 
 interface NodeInputSectionProps {
   nodeType: NodeType;
@@ -36,10 +37,18 @@ export default function NodeInputSection({ nodeType, effectiveInput }: NodeInput
     content = defaults[nodeType] ?? "No input data";
   }
 
+  const isMarkdown = nodeType === NodeType.AI;
+
   return (
     <div className="node-detail-section node-input-section">
       <h4>Input</h4>
-      <pre className="node-input-content">{content}</pre>
+      {isMarkdown ? (
+        <div className="node-input-content">
+          <MarkdownRenderer content={content} />
+        </div>
+      ) : (
+        <pre className="node-input-content">{content}</pre>
+      )}
     </div>
   );
 }
