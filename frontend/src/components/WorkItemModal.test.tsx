@@ -58,7 +58,7 @@ function makeWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     description: "A test item",
     status: WorkItemStatus.Ready,
     priority: WorkItemPriority.Medium,
-    labels: [],
+    tags: [],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",
     repositoryId: "repo-1",

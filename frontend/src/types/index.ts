@@ -42,19 +42,14 @@ export interface WorkItem {
   description: string;
   status: WorkItemStatus;
   priority: WorkItemPriority;
-  labels: string[];
-  /**
-   * JSON-encoded string[] of tags mirrored from the WorkItemServer.
-   * Use {@link parseTags} to decode into a string[] for display.
-   */
-  tagsJson?: string | null;
+  tags: string[];
   /**
    * Array of {@link ConversationMessage} mirrored from the WorkItemServer.
    * Use {@link parseConversation} to safely read (handles null/missing).
    */
   conversation?: ConversationMessage[] | null;
   /**
-   * Deprecated: template is resolved from {@link tagsJson} at run start
+   * Deprecated: template is resolved from {@link tags} at run start
    * (PRD §3.7). The server may still return it for legacy reasons.
    */
   loopTemplateId?: string;

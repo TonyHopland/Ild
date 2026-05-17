@@ -29,7 +29,7 @@ function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
     description: "desc",
     status: WorkItemStatus.Ready,
     priority: WorkItemPriority.Medium,
-    labels: [],
+    tags: [],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",
     repositoryId: "repo-1",
