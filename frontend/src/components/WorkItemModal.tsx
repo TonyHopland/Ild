@@ -18,12 +18,14 @@ import {
   loopRunService,
 } from "../services/auth";
 import { useSignalR } from "../hooks/useSignalR";
+import useRenderedPrompt from "../hooks/useRenderedPrompt";
 import LiveStream from "./NodeTimeline/LiveStream";
 import ConfirmModal from "./ConfirmModal";
 import TagAutocomplete from "./TagAutocomplete";
 import { parseConversation, parseTags } from "../utils/workItemJson";
 import Accordion from "./Accordion";
 import MarkdownRenderer from "./MarkdownRenderer";
+import FeedbackActions from "./FeedbackActions";
 
 interface WorkItemModalProps {
   workItem: WorkItem | null;
@@ -59,7 +61,6 @@ export default function WorkItemModal({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [prUrlInput, setPrUrlInput] = useState("");
   const [feedbackInput, setFeedbackInput] = useState("");
-  const [humanPrompt, setHumanPrompt] = useState<string | null>(null);
   const [prCommentsLoading, setPrCommentsLoading] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -147,40 +148,27 @@ export default function WorkItemModal({
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  useEffect(() => {
-    if (
-      !workItem ||
-      workItem.status !== WorkItemStatus.HumanFeedback ||
-      workItem.humanFeedbackReason !== "Human Input Needed"
-    ) {
-      setHumanPrompt(null);
-      return;
-    }
-    const runId = (workItem as { currentLoopRunId?: string }).currentLoopRunId;
-    if (!runId) {
-      setHumanPrompt(null);
-      return;
-    }
-    let cancelled = false;
-    void (async () => {
-      try {
-        // Walk the event log backwards to find the prompt rendered for the
-        // currently-suspended Human node. Use a generous page size; humans
-        // pause infrequently relative to total events.
-        const page = await loopRunService.getEvents(runId, 0, 500);
-        if (cancelled) return;
-        const rendered = [...(page.entries || [])]
-          .reverse()
-          .find((e) => e.eventType === "HumanPromptRendered");
-        setHumanPrompt(rendered?.payload ?? null);
-      } catch {
-        if (!cancelled) setHumanPrompt(null);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [workItem?.id, workItem?.status, workItem?.humanFeedbackReason]);
+  // Fetch the rendered prompt for the currently-suspended node (Human or PR).
+  // The event type differs per node kind — "HumanPromptRendered" vs "PrPromptRendered".
+  // Hooks must be called unconditionally, so we always invoke the hook and
+  // filter the result at the JSX level based on the current feedback reason.
+  const runId = workItem?.currentLoopRunId
+    ? (workItem as { currentLoopRunId?: string }).currentLoopRunId
+    : undefined;
+  const humanPrompt = useRenderedPrompt(
+    workItem?.status === WorkItemStatus.HumanFeedback &&
+      workItem.humanFeedbackReason === "Human Input Needed"
+      ? runId
+      : undefined,
+    "HumanPromptRendered",
+  );
+  const prPrompt = useRenderedPrompt(
+    workItem?.status === WorkItemStatus.HumanFeedback &&
+      workItem.humanFeedbackReason === "PR Awaiting Merge"
+      ? runId
+      : undefined,
+    "PrPromptRendered",
+  );
 
   useEffect(() => {
     // When parked at a PR node, prefill the feedback textarea with any
@@ -601,42 +589,12 @@ export default function WorkItemModal({
                       placeholder="Optional input or context..."
                       rows={3}
                     />
-                    {(() => {
-                      const actions = workItem.humanFeedbackActions
-                        ? workItem.humanFeedbackActions.split(",").map((a) => a.trim())
-                        : ["OnSuccess", "OnFailure"];
-                      return (
-                        <div className="feedback-actions">
-                          {actions.includes("OnSuccess") && (
-                            <button
-                              type="button"
-                              className="btn btn-sm btn-primary"
-                              onClick={handleContinue}
-                            >
-                              Approve
-                            </button>
-                          )}
-                          {actions.includes("OnRespond") && (
-                            <button
-                              type="button"
-                              className="btn btn-sm btn-warning"
-                              onClick={handleRespond}
-                            >
-                              Respond
-                            </button>
-                          )}
-                          {actions.includes("OnFailure") && (
-                            <button
-                              type="button"
-                              className="btn btn-sm btn-danger"
-                              onClick={handleReject}
-                            >
-                              Reject
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })()}
+                    <FeedbackActions
+                      actions={workItem.humanFeedbackActions}
+                      onApprove={handleContinue}
+                      onReject={handleReject}
+                      onRespond={handleRespond}
+                    />
                   </div>
                 )}
               {workItem.status === WorkItemStatus.HumanFeedback &&
@@ -653,6 +611,11 @@ export default function WorkItemModal({
                         Open PR
                       </a>
                     )}
+                    {prPrompt && (
+                      <div className="feedback-prompt">
+                        <MarkdownRenderer content={prPrompt} />
+                      </div>
+                    )}
                     <textarea
                       className="feedback-textarea"
                       value={feedbackInput}
@@ -664,22 +627,12 @@ export default function WorkItemModal({
                       }
                       rows={5}
                     />
-                    <div className="feedback-actions">
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-primary"
-                        onClick={handleContinue}
-                      >
-                        Approve
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-danger"
-                        onClick={handleReject}
-                      >
-                        Reject
-                      </button>
-                    </div>
+                    <FeedbackActions
+                      actions={workItem.humanFeedbackActions}
+                      onApprove={handleContinue}
+                      onReject={handleReject}
+                      onRespond={handleRespond}
+                    />
                   </div>
                 )}
               {workItem.status === WorkItemStatus.HumanFeedback &&

@@ -25,6 +25,7 @@ public sealed class PRNodeExecutor : INodeExecutor
 
     public async Task<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
     {
+        var cfg = NodeConfig.Parse<NodeConfig.Pr>(ctx.Node.Config);
         using var scope = _sp.CreateScope();
         var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
         var providerStore = scope.ServiceProvider.GetRequiredService<IProviderStore>();
@@ -33,6 +34,36 @@ public sealed class PRNodeExecutor : INodeExecutor
         var run = await loopRunStore.GetByIdAsync(ctx.Run.Id);
         if (run == null)
             return new NodeOutcome.Failed("LoopRun not found");
+
+        // Surface the resolved prompt via the event log so the UI can
+        // display exactly what the human is being asked. We deliberately
+        // do NOT stash it on the run-node Output: that slot belongs to
+        // the human's eventual answer.
+        if (!string.IsNullOrEmpty(cfg.Prompt))
+        {
+            var rendering = scope.ServiceProvider.GetService<IPromptRenderingService>();
+            if (rendering != null)
+            {
+                var rendered = await rendering.RenderAsync(cfg.Prompt, ctx.Run.Id, wi, ctx.PreviousNodeOutput);
+                if (!string.IsNullOrEmpty(rendered))
+                {
+                    var eventLog = scope.ServiceProvider.GetService<IEventLogService>();
+                    if (eventLog != null)
+                    {
+                        try
+                        {
+                            await eventLog.AppendAsync(
+                                ctx.Run.Id,
+                                PrPromptRenderedEvent,
+                                rendered,
+                                ctx.Node.Id,
+                                runNodeId: ctx.RunNode.Id);
+                        }
+                        catch { /* best-effort observability */ }
+                    }
+                }
+            }
+        }
 
         string? prUrl = run.PrUrl;
         var repo = wi.RepositoryId != null ? await providerStore.GetRepositoryByIdAsync(wi.RepositoryId.Value) : null;
@@ -128,4 +159,6 @@ public sealed class PRNodeExecutor : INodeExecutor
             WorkItemDescription: wi.Description,
             PreviousNodeOutput: previousNodeOutput));
     }
+
+    public const string PrPromptRenderedEvent = "PrPromptRendered";
 }
