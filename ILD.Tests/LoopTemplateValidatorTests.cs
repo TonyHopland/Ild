@@ -153,4 +153,25 @@ public class LoopTemplateValidatorTests
         var errs = LoopTemplateValidator.Validate(g);
         errs.Should().BeEmpty();
     }
+
+    [Fact]
+    public void OnRespond_edge_on_pr_node_is_valid()
+    {
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() {
+                Node("s", "Start"),
+                Node("p", "PR"),
+                Node("a", "AI"),
+                Node("c", "Cleanup")
+            },
+            new() {
+                Edge("s", "p"),
+                Edge("p", "a", "OnRespond"),
+                Edge("p", "c", "OnSuccess"),
+                Edge("p", "c", "OnFailure"),
+                Edge("a", "c")
+            });
+        var errs = LoopTemplateValidator.Validate(g);
+        errs.Should().BeEmpty();
+    }
 }

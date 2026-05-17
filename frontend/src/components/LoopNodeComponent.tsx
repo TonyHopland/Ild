@@ -48,7 +48,7 @@ const handleStyles = {
 export default function LoopNodeComponent({ data }: NodeProps) {
   const nodeData = data as { label: string; type: string };
   const style = nodeStyles[nodeData.type] || nodeStyles[NodeType.Cmd];
-  const isHuman = nodeData.type === NodeType.Human;
+  const hasRespondHandle = nodeData.type === NodeType.Human || nodeData.type === NodeType.PR;
 
   return (
     <div
@@ -85,7 +85,7 @@ export default function LoopNodeComponent({ data }: NodeProps) {
         className="handle-fail"
         style={handleStyles.fail}
       />
-      {isHuman && (
+      {hasRespondHandle && (
         <Handle
           type="source"
           position={Position.Top}

@@ -14,7 +14,7 @@ public static class LoopTemplateValidator
         { "Cmd", new() { "OnSuccess", "OnFailure" } },
         { "AI", new() { "OnSuccess", "OnFailure" } },
         { "Prompt", new() { "OnSuccess", "OnFailure" } },
-        { "PR", new() { "OnSuccess", "OnFailure" } },
+        { "PR", new() { "OnSuccess", "OnFailure", "OnRespond" } },
         { "Cleanup", new() { "OnSuccess", "OnFailure" } },
     };
 
