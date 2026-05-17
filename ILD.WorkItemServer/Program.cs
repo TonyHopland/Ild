@@ -31,11 +31,18 @@ public sealed class WorkItemServerProgram
             ?? "data";
         if (!Directory.Exists(dataPath))
             Directory.CreateDirectory(dataPath);
-        var dbFile = builder.Configuration["WorkItemServer:DatabaseFile"] ?? "workitems.db";
-        var dbPath = Path.Combine(dataPath, dbFile);
 
-        builder.Services.AddDbContext<WorkItemServerDbContext>(opt =>
-            opt.UseSqlite($"Data Source={dbPath}"));
+        var connectionString = Environment.GetEnvironmentVariable("WORKITEM_DB_CONNECTION_STRING")
+            ?? builder.Configuration["WORKITEM_DB_CONNECTION_STRING"];
+
+        if (connectionString != null && connectionString.Length > 0)
+        {
+            builder.Services.AddDbContext<WorkItemServerDbContext>(opt =>
+                opt.UseNpgsql(connectionString, npg => npg.MigrationsHistoryTable("__EFMigrationsHistory", "public")));
+        }
+        // When no connection string is set (e.g. integration tests), skip registration
+        // so no Npgsql internal services are registered. The test factory substitutes
+        // its own DbContext in ConfigureServices.
 
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddScoped<IWorkItemService, WorkItemService>();
@@ -54,10 +61,24 @@ public sealed class WorkItemServerProgram
 
         var app = builder.Build();
 
+        // Migrate (production PostgreSQL) or ensure created (integration-test SQLite).
+        // The DbContext is registered either by the AddDbContext call above
+        // (production) or by the test factory (tests). GetService returns null
+        // when neither is present, so we skip database work gracefully.
         using (var scope = app.Services.CreateScope())
         {
-            var db = scope.ServiceProvider.GetRequiredService<WorkItemServerDbContext>();
-            db.Database.Migrate();
+            var db = scope.ServiceProvider.GetService<WorkItemServerDbContext>();
+            if (db != null)
+            {
+                if (connectionString != null && connectionString.Length > 0)
+                {
+                    db.Database.Migrate();
+                }
+                else
+                {
+                    db.Database.EnsureCreated();
+                }
+            }
         }
 
         app.MapGet("/health", () => Results.Ok(new { status = "ok" }));

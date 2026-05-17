@@ -37,6 +37,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         Environment.SetEnvironmentVariable("ILD_PASSWORD", AdminPassword);
         Environment.SetEnvironmentVariable("ILD_DATA_PATH", null);
         Environment.SetEnvironmentVariable("ILD_WORKTREES_PATH", null);
+        // Clear so Program.cs skips UseNpgsql() — we register our own below.
+        Environment.SetEnvironmentVariable("ILD_DB_CONNECTION_STRING", null);
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -48,22 +50,15 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             config.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Storage:DataRoot"] = _dataRoot,
-                ["Storage:DatabaseFile"] = "ild-test.db",
                 ["Storage:WorktreesSubdir"] = "worktrees",
             });
         });
 
         builder.ConfigureServices(services =>
         {
-            // Replace the production SQLite registration with our shared in-memory connection.
-            var dbDescriptors = services
-                .Where(d => d.ServiceType == typeof(DbContextOptions<AppDbContext>)
-                    || d.ServiceType == typeof(DbContextOptions))
-                .ToList();
-            foreach (var d in dbDescriptors)
-            {
-                services.Remove(d);
-            }
+            // Program.cs skipped AddDataLayer (no connection string), so register
+            // data stores and our own in-memory DbContext.
+            services.AddDataStores();
 
             services.AddDbContext<AppDbContext>(options => options.UseSqlite(_connection,
                 sql => sql.MigrationsAssembly(typeof(AppDbContext).Assembly)));

@@ -8,8 +8,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.7" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.7">
+    <!-- Npgsql.EntityFrameworkCore.PostgreSQL 10.0.1 targets EF Core 10.0.4.
+         Microsoft.EntityFrameworkCore.Design and Microsoft.EntityFrameworkCore.Sqlite
+         (in ILD.Tests) are pinned to 10.0.4 to match — mixing 10.0.4 and 10.0.7
+         triggers MSB3277 assembly version conflicts and CS1705 compile errors. -->
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.4">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>

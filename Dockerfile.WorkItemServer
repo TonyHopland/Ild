@@ -14,7 +14,7 @@ FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS final
 WORKDIR /app
 ARG APP_UID=10001
 ARG APP_GID=10001
-RUN apt-get update && apt-get install -y --no-install-recommends git gosu && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends git gosu netcat-openbsd && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/publish ./
 RUN existing_group="$(getent group "${APP_GID}" | cut -d: -f1 || true)" && \
 	if [ -n "$existing_group" ] && [ "$existing_group" != "ild" ]; then \

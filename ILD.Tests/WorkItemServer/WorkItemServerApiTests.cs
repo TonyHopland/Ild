@@ -37,8 +37,8 @@ public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTest
             Environment.SetEnvironmentVariable("WORKITEM_API_KEYS", ApiKey);
             builder.ConfigureServices(services =>
             {
-                var dbDescriptor = services.Single(d => d.ServiceType == typeof(DbContextOptions<WorkItemServerDbContext>));
-                services.Remove(dbDescriptor);
+                var dbDescriptor = services.FirstOrDefault(d => d.ServiceType == typeof(DbContextOptions<WorkItemServerDbContext>));
+                if (dbDescriptor != null) services.Remove(dbDescriptor);
                 services.AddDbContext<WorkItemServerDbContext>(opt =>
                 {
                     opt.UseSqlite(_conn);

@@ -29,13 +29,11 @@ try
         ?? builder.Configuration["Storage:DataRoot"]
         ?? "data";
     var worktreesSubdir = builder.Configuration["Storage:WorktreesSubdir"] ?? "worktrees";
-    var dbFile = builder.Configuration["Storage:DatabaseFile"] ?? "ild.db";
     var worktreesPath = Environment.GetEnvironmentVariable("ILD_WORKTREES_PATH")
         ?? Path.Combine(dataPath, worktreesSubdir);
 
     builder.Configuration["App:DataPath"] = dataPath;
     builder.Configuration["App:WorktreesPath"] = worktreesPath;
-    builder.Configuration["App:DatabaseFile"] = dbFile;
 
     if (!Directory.Exists(dataPath))
         Directory.CreateDirectory(dataPath);
@@ -43,11 +41,19 @@ try
     if (!Directory.Exists(worktreesPath))
         Directory.CreateDirectory(worktreesPath);
 
-    builder.Services.AddDataLayer(options =>
+    var connectionString = Environment.GetEnvironmentVariable("ILD_DB_CONNECTION_STRING")
+        ?? builder.Configuration["ILD_DB_CONNECTION_STRING"];
+
+    if (connectionString != null && connectionString.Length > 0)
     {
-        var dbPath = Path.Combine(dataPath, dbFile);
-        options.UseSqlite($"Data Source={dbPath}");
-    });
+        builder.Services.AddDataLayer(options =>
+        {
+            options.UseNpgsql(connectionString, npg => npg.MigrationsHistoryTable("__EFMigrationsHistory", "public"));
+        });
+    }
+    // When no connection string is set (e.g. integration tests), skip AddDataLayer
+    // so no Npgsql internal services are registered. The test factory substitutes
+    // its own DbContext + data stores in ConfigureServices.
 
     builder.Services.AddIldServices();
 
@@ -88,25 +94,40 @@ try
     // (and any spawned MCP child) can read it via ILD_API_TOKEN.
     _ = app.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>();
 
+    // Initialise the database: migrate (production PostgreSQL) or ensure created
+    // (integration-test SQLite). The DbContext is registered either by the
+    // AddDataLayer call above (production) or by the test factory (tests).
+    // When neither is present (e.g. a test that skips the data layer entirely)
+    // GetService returns null and we skip all database work.
     using (var scope = app.Services.CreateScope())
     {
-        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        dbContext.Database.Migrate();
-        Log.Information("Database migrated at {DataPath}", Path.Combine(dataPath, dbFile));
-
-        var templateStore = scope.ServiceProvider.GetRequiredService<ILD.Data.Stores.Interfaces.ILoopTemplateStore>();
-        var mgr = scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Interfaces.ILoopTemplateManager>();
-        await ILD.Api.Configuration.TemplateSeeder.SeedAsync(templateStore, mgr);
-
-        var providerStore = scope.ServiceProvider.GetRequiredService<ILD.Data.Stores.Interfaces.IProviderStore>();
-        await ILD.Api.Configuration.TemplateSeeder.SeedRemoteProviderAsync(providerStore);
-
-        // Best-effort recovery: any LoopRun left in Running across restart
-        var recovery = scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Interfaces.IRecoveryManager>();
-        foreach (var runId in await recovery.GetRecoverableRunIdsAsync())
+        var dbContext = scope.ServiceProvider.GetService<AppDbContext>();
+        if (dbContext != null)
         {
-            try { await recovery.RecoverRunAsync(runId); }
-            catch (Exception ex) { Log.Warning(ex, "Recovery failed for run {RunId}", runId); }
+            if (connectionString != null && connectionString.Length > 0)
+            {
+                dbContext.Database.Migrate();
+            }
+            else
+            {
+                dbContext.Database.EnsureCreated();
+            }
+            Log.Information("Database ready");
+
+            var templateStore = scope.ServiceProvider.GetRequiredService<ILD.Data.Stores.Interfaces.ILoopTemplateStore>();
+            var mgr = scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Interfaces.ILoopTemplateManager>();
+            await ILD.Api.Configuration.TemplateSeeder.SeedAsync(templateStore, mgr);
+
+            var providerStore = scope.ServiceProvider.GetRequiredService<ILD.Data.Stores.Interfaces.IProviderStore>();
+            await ILD.Api.Configuration.TemplateSeeder.SeedRemoteProviderAsync(providerStore);
+
+            // Best-effort recovery: any LoopRun left in Running across restart
+            var recovery = scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Interfaces.IRecoveryManager>();
+            foreach (var runId in await recovery.GetRecoverableRunIdsAsync())
+            {
+                try { await recovery.RecoverRunAsync(runId); }
+                catch (Exception ex) { Log.Warning(ex, "Recovery failed for run {RunId}", runId); }
+            }
         }
     }
 

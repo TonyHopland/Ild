@@ -33,8 +33,8 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
             b.UseSetting("WorkItemServer:ApiKeys", ApiKey);
             b.ConfigureServices(services =>
             {
-                var existing = services.Single(d => d.ServiceType == typeof(DbContextOptions<WorkItemServerDbContext>));
-                services.Remove(existing);
+                var existing = services.FirstOrDefault(d => d.ServiceType == typeof(DbContextOptions<WorkItemServerDbContext>));
+                if (existing != null) services.Remove(existing);
                 services.AddDbContext<WorkItemServerDbContext>(o =>
                 {
                     o.UseSqlite(_conn);
