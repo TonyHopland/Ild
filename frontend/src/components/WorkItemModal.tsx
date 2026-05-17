@@ -578,7 +578,7 @@ export default function WorkItemModal({
                   <div className="detail-section human-feedback-section">
                     <span className="detail-label">Human Feedback</span>
                     {humanPrompt && (
-                      <div className="feedback-prompt">
+                      <div className="markdown-container feedback-prompt">
                         <MarkdownRenderer content={humanPrompt} />
                       </div>
                     )}
@@ -612,7 +612,7 @@ export default function WorkItemModal({
                       </a>
                     )}
                     {prPrompt && (
-                      <div className="feedback-prompt">
+                      <div className="markdown-container feedback-prompt">
                         <MarkdownRenderer content={prPrompt} />
                       </div>
                     )}
@@ -667,9 +667,11 @@ export default function WorkItemModal({
               {/* Details Accordion */}
               <Accordion title="Details">
                 {workItem.description && (
-                  <div className="detail-row">
+                  <div className="detail-section">
                     <span className="detail-label">Description</span>
-                    <span className="detail-value">{workItem.description}</span>
+                    <div className="markdown-container detail-description">
+                      <MarkdownRenderer content={workItem.description} />
+                    </div>
                   </div>
                 )}
                 {(() => {
