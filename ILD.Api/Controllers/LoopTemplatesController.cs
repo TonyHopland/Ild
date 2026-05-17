@@ -74,7 +74,13 @@ public class LoopTemplatesController : ControllerBase
         try
         {
             var graph = new LoopTemplateGraph(Guid.Empty, request.Nodes, request.Edges);
-            var id = await _loopTemplateManager.CreateLoopTemplateAsync(request.Name, request.Description, graph);
+            var id = await _loopTemplateManager.CreateLoopTemplateAsync(
+                request.Name,
+                request.Description,
+                graph,
+                request.RecoveryPolicy,
+                request.MaxNodeExecutions,
+                request.MaxWallClockHours);
             return CreatedAtAction(nameof(GetById), new { id }, new { id });
         }
         catch (InvalidOperationException ex)
@@ -91,7 +97,14 @@ public class LoopTemplatesController : ControllerBase
         try
         {
             var graph = new LoopTemplateGraph(Guid.Empty, request.Nodes, request.Edges);
-            var newId = await _loopTemplateManager.UpdateLoopTemplateAsync(guid, request.Name, request.Description, graph);
+            var newId = await _loopTemplateManager.UpdateLoopTemplateAsync(
+                guid,
+                request.Name,
+                request.Description,
+                graph,
+                request.RecoveryPolicy,
+                request.MaxNodeExecutions,
+                request.MaxWallClockHours);
             return Ok(new { id = newId });
         }
         catch (InvalidOperationException ex)

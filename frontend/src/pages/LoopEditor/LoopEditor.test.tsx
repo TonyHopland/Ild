@@ -3,7 +3,7 @@ import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/re
 import type { Edge } from "@xyflow/react";
 import { MemoryRouter } from "react-router-dom";
 import { AuthContext } from "../../hooks/useAuth";
-import { NodeType, EdgeType } from "../../types";
+import { NodeType, EdgeType, RecoveryPolicy } from "../../types";
 import LoopEditor from "./index";
 
 beforeEach(() => {
@@ -64,6 +64,9 @@ const sampleTemplate = {
   name: "Dev Loop",
   description: "Standard development loop",
   version: 3,
+  recoveryPolicy: RecoveryPolicy.AutoResume,
+  maxNodeExecutions: 200,
+  maxWallClockHours: 24,
   nodes: [
     {
       id: "n-start",

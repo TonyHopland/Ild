@@ -130,16 +130,42 @@ export interface LoopNodeEdge {
   maxTraversals: number | null;
 }
 
+export enum RecoveryPolicy {
+  AutoResume = "AutoResume",
+  NeedsReview = "NeedsReview",
+  Cancel = "Cancel",
+}
+
 export interface LoopTemplate {
   id: string;
   name: string;
   description: string;
   version: number;
+  recoveryPolicy: RecoveryPolicy;
+  maxNodeExecutions: number;
+  maxWallClockHours: number;
   nodes: LoopNode[];
   edges: LoopNodeEdge[];
   createdAt: string;
   updatedAt: string;
   isArchived: boolean;
+}
+
+// Export file format (ild-loop-template/v1)
+// LoopNodeExportNode is LoopNode minus maxTraversals (not part of the export schema)
+export type LoopTemplateExportNode = Omit<LoopNode, "maxTraversals">;
+
+export type LoopTemplateExportEdge = Omit<LoopNodeEdge, "maxTraversals">;
+
+export interface LoopTemplateExport {
+  $schema: "ild-loop-template/v1";
+  name: string;
+  description: string;
+  recoveryPolicy: RecoveryPolicy;
+  maxNodeExecutions: number;
+  maxWallClockHours: number;
+  nodes: LoopTemplateExportNode[];
+  edges: LoopTemplateExportEdge[];
 }
 
 export enum LoopRunStatus {

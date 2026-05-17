@@ -19,7 +19,9 @@ interface LoopEditorSidebarProps {
   onToggleSidebar: () => void;
   onNewTemplateNameChange: (value: string) => void;
   onSave: () => void;
+  onExport: () => void;
   onCreateTemplate: () => void;
+  onImport: () => void;
   onShowArchivedChange: (value: boolean) => void;
   onSelectTemplate: (template: LoopTemplate) => void;
   onStartClone: (template: LoopTemplate) => void;
@@ -49,7 +51,9 @@ export function LoopEditorSidebar({
   onToggleSidebar,
   onNewTemplateNameChange,
   onSave,
+  onExport,
   onCreateTemplate,
+  onImport,
   onShowArchivedChange,
   onSelectTemplate,
   onStartClone,
@@ -83,13 +87,23 @@ export function LoopEditorSidebar({
       <div className="sidebar-actions-panel">
         <div className="sidebar-primary-actions">
           {canSave && readOnlyVersion === null && (
-            <button className="save-btn" onClick={onSave} disabled={isSaving}>
-              {isSaving ? "Saving..." : "Save"}
-            </button>
+            <>
+              <button className="save-btn" onClick={onSave} disabled={isSaving}>
+                {isSaving ? "Saving..." : "Save"}
+              </button>
+              <button className="export-btn" onClick={onExport} title="Export template to JSON">
+                ⬇ Export
+              </button>
+            </>
           )}
-          <button className="new-template-btn" onClick={onCreateTemplate}>
-            New Template
-          </button>
+          <div className="sidebar-secondary-actions">
+            <button className="new-template-btn" onClick={onCreateTemplate}>
+              New Template
+            </button>
+            <button className="import-btn" onClick={onImport} title="Import template from JSON">
+              ⬆ Import
+            </button>
+          </div>
         </div>
         {isNewTemplate && (
           <input
