@@ -438,4 +438,121 @@ public class PRNodeExecutorTests
 
         Directory.Delete(worktreePath, recursive: true);
     }
+
+    [Fact]
+    public async Task logs_prompt_to_event_log_when_prompt_is_configured()
+    {
+        using var db = new TestDb();
+
+        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://gitea.example" };
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://gitea.example/r.git", DefaultBranch = "main" };
+        var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume, MaxNodeExecutions = 200, MaxWallClockHours = 24 };
+        var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
+        var workItemId = Guid.NewGuid().ToString();
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = workItemId, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running, RepositoryId = repo.Id, BranchName = "ild/test" };
+        var node = new LoopNode
+        {
+            Id = Guid.NewGuid(),
+            LoopTemplateVersionId = version.Id,
+            NodeType = NodeType.PR,
+            Label = "pr",
+            Config = "{\"prompt\":\"Please review the PR for {{WorkItem.Title}}\"}",
+        };
+
+        db.Context.RemoteProviders.Add(remote);
+        db.Context.Repositories.Add(repo);
+        db.Context.LoopTemplates.Add(template);
+        db.Context.LoopTemplateVersions.Add(version);
+        db.Context.LoopRuns.Add(run);
+        db.Context.LoopNodes.Add(node);
+        db.Context.SaveChanges();
+
+        var prUrl = "https://gitea.example/r/pull/1";
+        var mockRemote = new Mock<IRemoteProvider>();
+        mockRemote.Setup(r => r.CreatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync(new RemotePrResult(prUrl, prUrl, RemotePrStatus.Open, null));
+        var mockEventLog = new Mock<IEventLogService>();
+        var mockRendering = new Mock<IPromptRenderingService>();
+        mockRendering.Setup(r => r.RenderAsync(It.IsAny<string>(), It.IsAny<Guid>(), It.IsAny<WorkItemView>(), It.IsAny<string>()))
+            .ReturnsAsync("Please review the PR for Fix login bug");
+
+        var services = new ServiceCollection();
+        services.AddSingleton(mockRemote.Object);
+        services.AddSingleton(mockEventLog.Object);
+        services.AddSingleton(mockRendering.Object);
+        services.AddSingleton((ILoopRunStore)db.LoopRuns);
+        services.AddSingleton((IProviderStore)db.Providers);
+        var sp = services.BuildServiceProvider();
+
+        var executor = new PRNodeExecutor(sp);
+
+        var runNode = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = run.Id, LoopNodeId = node.Id };
+        var wi = new WorkItemView { Id = workItemId, Title = "Fix login bug", RepositoryId = repo.Id };
+        var ctx = new NodeExecutionContext(run, runNode, node, wi, null, CancellationToken.None);
+
+        var result = await executor.ExecuteAsync(ctx);
+
+        result.Success.Should().BeTrue();
+        mockEventLog.Verify(e => e.AppendAsync(
+            run.Id,
+            PRNodeExecutor.PrPromptRenderedEvent,
+            It.Is<string>(s => s.Contains("Fix login bug")),
+            node.Id,
+            It.IsAny<string>(),
+            runNode.Id),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task does_not_log_prompt_to_event_log_when_prompt_is_not_configured()
+    {
+        using var db = new TestDb();
+
+        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://gitea.example" };
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://gitea.example/r.git", DefaultBranch = "main" };
+        var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume, MaxNodeExecutions = 200, MaxWallClockHours = 24 };
+        var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
+        var workItemId = Guid.NewGuid().ToString();
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = workItemId, LoopTemplateVersionId = version.Id, RecoveryPolicy = RecoveryPolicy.AutoResume, Status = LoopRunStatus.Running, RepositoryId = repo.Id, BranchName = "ild/test" };
+        var node = new LoopNode { Id = Guid.NewGuid(), LoopTemplateVersionId = version.Id, NodeType = NodeType.PR, Label = "pr" };
+
+        db.Context.RemoteProviders.Add(remote);
+        db.Context.Repositories.Add(repo);
+        db.Context.LoopTemplates.Add(template);
+        db.Context.LoopTemplateVersions.Add(version);
+        db.Context.LoopRuns.Add(run);
+        db.Context.LoopNodes.Add(node);
+        db.Context.SaveChanges();
+
+        var prUrl = "https://gitea.example/r/pull/1";
+        var mockRemote = new Mock<IRemoteProvider>();
+        mockRemote.Setup(r => r.CreatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync(new RemotePrResult(prUrl, prUrl, RemotePrStatus.Open, null));
+        var mockEventLog = new Mock<IEventLogService>();
+
+        var services = new ServiceCollection();
+        services.AddSingleton(mockRemote.Object);
+        services.AddSingleton(mockEventLog.Object);
+        services.AddSingleton((ILoopRunStore)db.LoopRuns);
+        services.AddSingleton((IProviderStore)db.Providers);
+        var sp = services.BuildServiceProvider();
+
+        var executor = new PRNodeExecutor(sp);
+
+        var runNode = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = run.Id, LoopNodeId = node.Id };
+        var wi = new WorkItemView { Id = workItemId, Title = "wi", RepositoryId = repo.Id };
+        var ctx = new NodeExecutionContext(run, runNode, node, wi, null, CancellationToken.None);
+
+        var result = await executor.ExecuteAsync(ctx);
+
+        result.Success.Should().BeTrue();
+        mockEventLog.Verify(e => e.AppendAsync(
+            It.IsAny<Guid>(),
+            PRNodeExecutor.PrPromptRenderedEvent,
+            It.IsAny<string>(),
+            It.IsAny<Guid>(),
+            It.IsAny<string>(),
+            It.IsAny<Guid>()),
+            Times.Never);
+    }
 }
