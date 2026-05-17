@@ -23,6 +23,6 @@ public class RepositoriesIntegrationTests
         var response = await client.GetAsync("/api/v1/repositories");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var items = await response.Content.ReadFromJsonAsync<object[]>();
-        Assert.Equal(0, items!.Length);
+        Assert.Empty(items!);
     }
 }

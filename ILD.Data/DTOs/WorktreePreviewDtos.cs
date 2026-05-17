@@ -6,7 +6,6 @@ public sealed class WorktreePreviewStartRequest
     public bool SkipInstall { get; set; }
     public string? PublicHost { get; set; }
     public Dictionary<string, int>? PortOverrides { get; set; }
-    public int? TimeoutSeconds { get; set; }
 }
 
 public sealed class WorktreePreviewResponse
@@ -18,8 +17,6 @@ public sealed class WorktreePreviewResponse
     public string? ProfileName { get; set; }
     public string? PublicHost { get; set; }
     public string? StateDirectory { get; set; }
-    public int TimeoutSeconds { get; set; }
-    public DateTimeOffset? AutoStopAt { get; set; }
     public string? Message { get; set; }
     public List<WorktreePreviewServiceResponse> Services { get; set; } = new();
 }

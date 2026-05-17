@@ -28,7 +28,7 @@ public class LoopTemplateManagerTests
         var id = await mgr.CreateLoopTemplateAsync("seed", "desc", MinimalGraph());
 
         var versions = await db.Context.LoopTemplateVersions.Where(v => v.LoopTemplateId == id).ToListAsync();
-        Assert.Equal(1, versions.Count());
+        Assert.Single(versions);
         Assert.Equal(1, versions[0].VersionNumber);
         Assert.Equal(3, (await db.Context.LoopNodes.CountAsync()));
         Assert.Equal(2, (await db.Context.LoopNodeEdges.CountAsync()));
@@ -75,7 +75,7 @@ public class LoopTemplateManagerTests
         var clone = await mgr.GetLoopTemplateAsync(cloneId);
         Assert.Equal("src-copy", clone!.Name);
         var versions = await mgr.GetVersionsAsync(cloneId);
-        Assert.Equal(1, versions.Count());
+        Assert.Single(versions);
         Assert.Equal(1, versions.Single().VersionNumber);
     }
 

@@ -158,7 +158,6 @@ public class LoopTemplateManager : ILoopTemplateManager
                 Label = string.IsNullOrEmpty(n.Label) ? n.Id : n.Label,
                 Config = System.Text.Json.JsonSerializer.Serialize(n.Config),
                 MaxRetries = n.RetryCount ?? 0,
-                TimeoutSeconds = n.TimeoutSeconds ?? 300,
             };
         }).ToList();
 
@@ -200,7 +199,6 @@ public class LoopTemplateManager : ILoopTemplateManager
                 ? new()
                 : (System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(n.Config) ?? new()),
             RetryCount = n.MaxRetries,
-            TimeoutSeconds = n.TimeoutSeconds,
         }).ToList();
 
         var edgeDtos = edges.Select(e => new LoopNodeEdgeDto

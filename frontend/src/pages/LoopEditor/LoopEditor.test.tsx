@@ -75,7 +75,6 @@ const sampleTemplate = {
       config: {},
       maxTraversals: null,
       retryCount: null,
-      timeoutSeconds: null,
     },
     {
       id: "n-ai",
@@ -84,7 +83,6 @@ const sampleTemplate = {
       config: {},
       maxTraversals: null,
       retryCount: null,
-      timeoutSeconds: null,
     },
     {
       id: "n-cmd",
@@ -93,7 +91,6 @@ const sampleTemplate = {
       config: {},
       maxTraversals: null,
       retryCount: null,
-      timeoutSeconds: null,
     },
     {
       id: "n-cleanup",
@@ -102,7 +99,6 @@ const sampleTemplate = {
       config: {},
       maxTraversals: null,
       retryCount: null,
-      timeoutSeconds: null,
     },
   ],
   edges: [
@@ -199,7 +195,6 @@ describe("Loop Editor canvas", () => {
           config: {},
           maxTraversals: null,
           retryCount: null,
-          timeoutSeconds: null,
         },
         {
           id: "n-cmd",
@@ -208,7 +203,6 @@ describe("Loop Editor canvas", () => {
           config: {},
           maxTraversals: null,
           retryCount: null,
-          timeoutSeconds: null,
         },
         {
           id: "n-ai",
@@ -217,7 +211,6 @@ describe("Loop Editor canvas", () => {
           config: {},
           maxTraversals: null,
           retryCount: null,
-          timeoutSeconds: null,
         },
         {
           id: "n-human",
@@ -226,7 +219,6 @@ describe("Loop Editor canvas", () => {
           config: {},
           maxTraversals: null,
           retryCount: null,
-          timeoutSeconds: null,
         },
         {
           id: "n-pr",
@@ -235,7 +227,6 @@ describe("Loop Editor canvas", () => {
           config: {},
           maxTraversals: null,
           retryCount: null,
-          timeoutSeconds: null,
         },
         {
           id: "n-cleanup",
@@ -244,7 +235,6 @@ describe("Loop Editor canvas", () => {
           config: {},
           maxTraversals: null,
           retryCount: null,
-          timeoutSeconds: null,
         },
       ],
     };

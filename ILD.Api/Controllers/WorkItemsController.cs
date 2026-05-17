@@ -182,8 +182,7 @@ public class WorkItemsController : ControllerBase
                     request?.ProfileName,
                     request?.SkipInstall == true,
                     request?.PublicHost,
-                    request?.PortOverrides,
-                    request?.TimeoutSeconds));
+                    request?.PortOverrides));
             return Ok(response);
         }
         catch (InvalidOperationException ex)

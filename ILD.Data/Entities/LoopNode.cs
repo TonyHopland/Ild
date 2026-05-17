@@ -23,8 +23,6 @@ public class LoopNode
 
     public int MaxRetries { get; set; } = 0;
 
-    public double TimeoutSeconds { get; set; } = 300;
-
     public DateTime CreatedAt { get; set; }
 
     [ForeignKey(nameof(LoopTemplateVersionId))]

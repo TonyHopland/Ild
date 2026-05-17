@@ -207,7 +207,6 @@ public class AIProviderService : IAIProviderService
             bool skipInstall = false;
             string? publicHost = null;
             Dictionary<string, int>? portOverrides = null;
-            int? timeoutSeconds = null;
 
             if (!string.IsNullOrWhiteSpace(arguments))
             {
@@ -228,17 +227,11 @@ public class AIProviderService : IAIProviderService
                             portOverrides[property.Name] = port;
                     }
                 }
-                if (root.TryGetProperty("timeoutSeconds", out var timeoutProp)
-                    && timeoutProp.ValueKind == JsonValueKind.Number
-                    && timeoutProp.TryGetInt32(out var parsedTimeout))
-                {
-                    timeoutSeconds = parsedTimeout;
-                }
             }
 
             var status = await _worktreePreviewService.StartAsync(
                 worktreePath,
-                new WorktreePreviewStartOptions(profileName, skipInstall, publicHost, portOverrides, timeoutSeconds));
+                new WorktreePreviewStartOptions(profileName, skipInstall, publicHost, portOverrides));
             return new ToolExecutionResult(true, JsonSerializer.Serialize(status), null);
         }
         catch (Exception ex)

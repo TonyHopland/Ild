@@ -34,8 +34,8 @@ public class SignalRWorkItemNotifierTests
         var notifier = new SignalRWorkItemNotifier(ctx.Object);
         await notifier.WorkItemStateChangedAsync(workItemId, RemoteWorkItemStatus.Backlog, RemoteWorkItemStatus.WorkQueue);
 
-        Assert.Equal(1, capturedArgs!.Count());
-        var payload = Assert.IsType<WorkItemStateChangedPayload>(capturedArgs[0]);
+        Assert.Single(capturedArgs!);
+        var payload = Assert.IsType<WorkItemStateChangedPayload>(capturedArgs![0]);
         Assert.Equal(workItemId, payload.WorkItemId);
         Assert.Equal(WorkItemStatus.Backlog, payload.OldStatus);
         Assert.Equal(WorkItemStatus.WorkQueue, payload.NewStatus);
@@ -55,8 +55,8 @@ public class SignalRWorkItemNotifierTests
         var notifier = new SignalRWorkItemNotifier(ctx.Object);
         await notifier.HumanFeedbackRequiredAsync(workItemId, "Node failed");
 
-        Assert.Equal(1, capturedArgs!.Count());
-        var payload = Assert.IsType<HumanFeedbackRequiredPayload>(capturedArgs[0]);
+        Assert.Single(capturedArgs!);
+        var payload = Assert.IsType<HumanFeedbackRequiredPayload>(capturedArgs![0]);
         Assert.Equal(workItemId, payload.WorkItemId);
         Assert.Equal("Node failed", payload.Reason);
     }

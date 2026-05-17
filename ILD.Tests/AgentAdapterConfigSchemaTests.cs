@@ -50,6 +50,6 @@ public class AgentAdapterConfigSchemaTests
         Assert.True(adapter.ConfigSchema[0].Required);
         Assert.Equal("default-model", adapter.ConfigSchema[0].DefaultValue);
         Assert.Equal(ConfigFieldType.Select, adapter.ConfigSchema[4].Type);
-        Assert.Contains("us-east-1", adapter.ConfigSchema[4].Options);
+        Assert.Contains("us-east-1", adapter.ConfigSchema[4].Options!);
     }
 }

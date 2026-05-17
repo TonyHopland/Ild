@@ -28,7 +28,6 @@ export function serializeForExport(template: LoopTemplate): LoopTemplateExport {
       label: n.label,
       config: n.config,
       retryCount: n.retryCount,
-      timeoutSeconds: n.timeoutSeconds,
     })),
     edges: template.edges.map((e) => ({
       id: e.id,
@@ -162,7 +161,6 @@ export function exportNodesToLoopNodes(nodes: LoopTemplateExportNode[]): LoopNod
     config: n.config,
     maxTraversals: null,
     retryCount: n.retryCount,
-    timeoutSeconds: n.timeoutSeconds,
   }));
 }
 

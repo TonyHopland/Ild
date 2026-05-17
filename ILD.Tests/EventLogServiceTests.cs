@@ -99,7 +99,7 @@ public class EventLogServiceTests
 
         Assert.Equal(1, removed);
         Assert.Empty((await svc.GetByRunIdAsync(runId)));
-        Assert.Equal(1, (await svc.GetByRunIdAsync(failedRun.Id)).Count());
+        Assert.Single((await svc.GetByRunIdAsync(failedRun.Id)));
     }
 
     [Fact]
@@ -126,7 +126,7 @@ public class EventLogServiceTests
         Assert.Equal(6, page2.NextCursor);
 
         var page3 = await svc.GetByRunIdAfterCursorAsync(runId, cursor: 6, limit: 3);
-        Assert.Equal(1, page3.Entries.Count());
+        Assert.Single(page3.Entries);
         Assert.Equal(7, page3.Entries[0].Sequence);
         Assert.False(page3.HasMore);
         Assert.Equal(7, page3.NextCursor);

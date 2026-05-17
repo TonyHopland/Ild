@@ -8,10 +8,8 @@ export interface SessionPlaceholderUsage {
 export interface NodeSettingsSnapshot {
   label: string;
   cmdCommand: string;
-  cmdTimeout: number;
   aiPrompt: string;
   aiProvider: string;
-  aiTimeout: number;
   aiTools: string[];
   aiRejectPattern: string;
   aiUseSession: boolean;

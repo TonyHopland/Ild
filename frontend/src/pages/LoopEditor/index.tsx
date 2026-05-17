@@ -132,10 +132,8 @@ export default function LoopEditor() {
   const [showNodeSettingsModal, setShowNodeSettingsModal] = useState(false);
   const [nodeLabel, setNodeLabel] = useState("");
   const [cmdCommand, setCmdCommand] = useState("");
-  const [cmdTimeout, setCmdTimeout] = useState(30);
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiProvider, setAiProvider] = useState("");
-  const [aiTimeout, setAiTimeout] = useState(300);
   const [aiTools, setAiTools] = useState<string[]>([]);
   const [aiRejectPattern, setAiRejectPattern] = useState("");
   const [aiUseSession, setAiUseSession] = useState(false);
@@ -813,10 +811,8 @@ export default function LoopEditor() {
 
       setNodeLabel(data.label || "");
       setCmdCommand((config.command as string) || "");
-      setCmdTimeout((config.timeout as number) ?? 30);
       setAiPrompt((config.prompt as string) || "");
       setAiProvider((config.aiProviderId as string) || "");
-      setAiTimeout((config.timeout as number) ?? 300);
       setAiTools((config.toolAllowlist as string[]) || []);
       setAiRejectPattern((config.rejectPattern as string) || "");
       setAiUseSession((config.useSession as boolean | undefined) ?? false);
@@ -838,10 +834,8 @@ export default function LoopEditor() {
       setOriginalNodeConfig({
         label: data.label || "",
         cmdCommand: (config.command as string) || "",
-        cmdTimeout: (config.timeout as number) ?? 30,
         aiPrompt: (config.prompt as string) || "",
         aiProvider: (config.aiProviderId as string) || "",
-        aiTimeout: (config.timeout as number) ?? 300,
         aiTools: (config.toolAllowlist as string[]) || [],
         aiRejectPattern: (config.rejectPattern as string) || "",
         aiUseSession: (config.useSession as boolean | undefined) ?? false,
@@ -878,12 +872,10 @@ export default function LoopEditor() {
     const config: Record<string, unknown> = {};
     if (selectedNodeType === NodeType.Cmd) {
       config.command = cmdCommand;
-      config.timeout = cmdTimeout;
     } else if (selectedNodeType === NodeType.AI) {
       config.prompt = aiPrompt;
       config.useSession = aiUseSession;
       config.aiProviderId = aiProvider;
-      config.timeout = aiTimeout;
       config.toolAllowlist = aiTools;
       config.adapterConfig = { ...adapterConfigValues };
       if (aiRejectPattern) config.rejectPattern = aiRejectPattern;
@@ -926,12 +918,10 @@ export default function LoopEditor() {
     aiPrompt,
     aiRejectPattern,
     aiSessionPlaceholder,
-    aiTimeout,
     aiTools,
     aiUseSession,
     adapterConfigValues,
     cmdCommand,
-    cmdTimeout,
     humanInputLabel,
     humanPrompt,
     nodeLabel,
@@ -945,10 +935,8 @@ export default function LoopEditor() {
     if (originalNodeConfig) {
       setNodeLabel(originalNodeConfig.label);
       setCmdCommand(originalNodeConfig.cmdCommand);
-      setCmdTimeout(originalNodeConfig.cmdTimeout);
       setAiPrompt(originalNodeConfig.aiPrompt);
       setAiProvider(originalNodeConfig.aiProvider);
-      setAiTimeout(originalNodeConfig.aiTimeout);
       setAiTools(originalNodeConfig.aiTools);
       setAiRejectPattern(originalNodeConfig.aiRejectPattern);
       setAiUseSession(originalNodeConfig.aiUseSession);
@@ -1306,10 +1294,8 @@ export default function LoopEditor() {
                     labelError={labelError}
                     nodeLabel={nodeLabel}
                     cmdCommand={cmdCommand}
-                    cmdTimeout={cmdTimeout}
                     aiPrompt={aiPrompt}
                     aiProvider={aiProvider}
-                    aiTimeout={aiTimeout}
                     aiTools={aiTools}
                     aiRejectPattern={aiRejectPattern}
                     aiUseSession={aiUseSession}
@@ -1330,10 +1316,8 @@ export default function LoopEditor() {
                     onValidateLabel={validateLabel}
                     onNodeLabelChange={setNodeLabel}
                     onCmdCommandChange={setCmdCommand}
-                    onCmdTimeoutChange={setCmdTimeout}
                     onAiPromptChange={setAiPrompt}
                     onAiProviderChange={handleAiProviderChange}
-                    onAiTimeoutChange={setAiTimeout}
                     onAiToolsChange={setAiTools}
                     onAiRejectPatternChange={setAiRejectPattern}
                     onAiUseSessionChange={setAiUseSession}

@@ -6,8 +6,7 @@ public sealed record WorktreePreviewStartOptions(
     string? ProfileName = null,
     bool SkipInstall = false,
     string? PublicHost = null,
-    IReadOnlyDictionary<string, int>? PortOverrides = null,
-    int? TimeoutSeconds = null);
+    IReadOnlyDictionary<string, int>? PortOverrides = null);
 
 public interface IWorktreePreviewService
 {
