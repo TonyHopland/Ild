@@ -3,11 +3,6 @@
   "scripts": {
     "prepare": "vp config"
   },
-  "dependencies": {
-    "@xyflow/react": "^12.10.2",
-    "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1"
-  },
   "devDependencies": {
     "vite-plus": "catalog:"
   },
