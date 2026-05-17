@@ -23,6 +23,7 @@ import ConfirmModal from "./ConfirmModal";
 import TagAutocomplete from "./TagAutocomplete";
 import { parseConversation, parseTags } from "../utils/workItemJson";
 import Accordion from "./Accordion";
+import MarkdownRenderer from "./MarkdownRenderer";
 
 interface WorkItemModalProps {
   workItem: WorkItem | null;
@@ -588,7 +589,11 @@ export default function WorkItemModal({
                 workItem.humanFeedbackReason === "Human Input Needed" && (
                   <div className="detail-section human-feedback-section">
                     <span className="detail-label">Human Feedback</span>
-                    {humanPrompt && <pre className="feedback-prompt">{humanPrompt}</pre>}
+                    {humanPrompt && (
+                      <div className="feedback-prompt">
+                        <MarkdownRenderer content={humanPrompt} />
+                      </div>
+                    )}
                     <textarea
                       className="feedback-textarea"
                       value={feedbackInput}
@@ -1007,7 +1012,9 @@ export default function WorkItemModal({
                             <strong className="conversation-message-role">{m.role}</strong>
                             <span>{new Date(m.timestamp).toLocaleString()}</span>
                           </div>
-                          <div className="conversation-message-content">{m.content}</div>
+                          <div className="conversation-message-content">
+                            <MarkdownRenderer content={m.content} />
+                          </div>
                         </div>
                       ))}
                     </div>

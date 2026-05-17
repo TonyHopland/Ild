@@ -682,7 +682,11 @@ export default function EventLogViewer() {
                   <>
                     <NodeInputSection nodeType={templateNodeType} effectiveInput={effectiveInput} />
                     <NodeEventsSection events={nodeEvents} />
-                    <NodeOutputSection output={rn.output} error={rn.error} />
+                    <NodeOutputSection
+                      output={rn.output}
+                      error={rn.error}
+                      nodeType={templateNodeType}
+                    />
                   </>
                 )}
               </NodeItem>

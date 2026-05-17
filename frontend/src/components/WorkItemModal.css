@@ -458,6 +458,16 @@
   white-space: pre-wrap;
 }
 
+/* When markdown is rendered inside conversation messages, the markdown-body
+   styles override the pre-wrap defaults for proper typography. */
+.conversation-message-content .markdown-body {
+  white-space: normal;
+}
+
+.feedback-prompt .markdown-body {
+  white-space: normal;
+}
+
 .preview-summary {
   display: flex;
   justify-content: space-between;
