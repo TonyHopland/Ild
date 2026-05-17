@@ -60,4 +60,23 @@ public class SignalRWorkItemNotifierTests
         Assert.Equal(workItemId, payload.WorkItemId);
         Assert.Equal("Node failed", payload.Reason);
     }
+
+    [Fact]
+    public async Task PreviewStateChangedAsync_sends_a_single_typed_payload()
+    {
+        var workItemId = Guid.NewGuid().ToString();
+        var (ctx, proxy) = BuildHubContext();
+
+        object?[]? capturedArgs = null;
+        proxy.Setup(p => p.SendCoreAsync("PreviewStateChanged", It.IsAny<object?[]>(), It.IsAny<CancellationToken>()))
+            .Callback<string, object?[], CancellationToken>((_, args, _) => capturedArgs = args)
+            .Returns(Task.CompletedTask);
+
+        var notifier = new SignalRWorkItemNotifier(ctx.Object);
+        await notifier.PreviewStateChangedAsync(workItemId);
+
+        Assert.Single(capturedArgs!);
+        var payload = Assert.IsType<PreviewStateChangedPayload>(capturedArgs![0]);
+        Assert.Equal(workItemId, payload.WorkItemId);
+    }
 }

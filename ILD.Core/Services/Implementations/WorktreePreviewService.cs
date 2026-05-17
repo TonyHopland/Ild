@@ -160,6 +160,15 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         }
     }
 
+    public bool IsPreviewRunning(string worktreePath)
+    {
+        if (string.IsNullOrWhiteSpace(worktreePath))
+            return false;
+
+        var normalized = Path.GetFullPath(worktreePath);
+        return _runtimes.ContainsKey(normalized);
+    }
+
     public void Dispose()
     {
         foreach (var runtime in _runtimes.Values)

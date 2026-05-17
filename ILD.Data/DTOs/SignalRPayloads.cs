@@ -18,4 +18,6 @@ public record DependencyResolvedPayload(string WorkItemId);
 
 public record HumanFeedbackRequiredPayload(string WorkItemId, string Reason);
 
+public record PreviewStateChangedPayload(string WorkItemId);
+
 public record NodeProgressPayload(Guid RunId, Guid NodeId, string Line);

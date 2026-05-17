@@ -55,6 +55,9 @@ export default function WorkItemCard({ workItem, onClick, onMove }: WorkItemCard
       tabIndex={0}
       aria-label={`${workItem.title}, status ${workItem.status}. Use left and right arrow keys to move between columns.`}
     >
+      {workItem.isPreviewRunning && (
+        <span className="qa-active-dot" aria-label="QA preview is active" />
+      )}
       <div className="work-item-id">#{workItem.id}</div>
       <h4 className="work-item-title">{workItem.title}</h4>
       {reasonStyle && workItem.humanFeedbackReason && (
@@ -133,6 +136,17 @@ export default function WorkItemCard({ workItem, onClick, onMove }: WorkItemCard
           background-color: #2d2d44;
           border-radius: 0.25rem;
           color: #a0a0b0;
+        }
+
+        .qa-active-dot {
+          position: absolute;
+          top: 0.5rem;
+          right: 0.5rem;
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          background-color: #22c55e;
+          box-shadow: 0 0 4px rgba(34, 197, 94, 0.6);
         }
 
       `}</style>

@@ -100,6 +100,56 @@ public class WorktreePreviewServiceTests : IDisposable
         await svc.StopAsync(worktree);
     }
 
+    [Fact]
+    public void IsPreviewRunning_returns_false_when_no_preview_active()
+    {
+        var svc = CreateService();
+        Assert.False(svc.IsPreviewRunning("/nonexistent/path"));
+        Assert.False(svc.IsPreviewRunning(string.Empty));
+        Assert.False(svc.IsPreviewRunning(null!));
+    }
+
+    [Fact]
+    public async Task IsPreviewRunning_returns_true_after_start()
+    {
+        var worktree = CreateTempWorktree();
+        await File.WriteAllTextAsync(Path.Combine(worktree, "ild.config.json"), JsonSerializer.Serialize(new
+        {
+            preview = new
+            {
+                defaultProfile = "web",
+                profiles = new
+                {
+                    web = new
+                    {
+                        services = new[]
+                        {
+                            new
+                            {
+                                name = "app",
+                                cwd = ".",
+                                command = "node -e \"require('http').createServer((_,res)=>res.end('ok')).listen(${PORT}, '127.0.0.1')\"",
+                                port = "frontend",
+                                suggestedPort = 3100,
+                                healthUrl = "http://127.0.0.1:${PORT}/",
+                                @public = true
+                            }
+                        }
+                    }
+                }
+            }
+        }));
+
+        var svc = CreateService();
+        Assert.False(svc.IsPreviewRunning(worktree));
+
+        await svc.StartAsync(worktree);
+        Assert.True(svc.IsPreviewRunning(worktree));
+
+        await svc.StopAsync(worktree);
+        Assert.False(svc.IsPreviewRunning(worktree));
+    }
+
     public void Dispose()
     {
         foreach (var dir in _tempDirs)

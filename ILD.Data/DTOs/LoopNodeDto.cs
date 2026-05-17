@@ -16,6 +16,4 @@ public class LoopNodeDto
     public int? MaxTraversals { get; set; }
 
     public int? RetryCount { get; set; }
-
-
 }

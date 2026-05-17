@@ -29,4 +29,5 @@ public sealed class WorkItemView
     public bool IsPrMerged { get; set; }
     public string? HumanFeedbackReason { get; set; }
     public Guid? CurrentLoopRunId { get; set; }
+    public bool IsPreviewRunning { get; set; }
 }
