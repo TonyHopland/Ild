@@ -1,4 +1,4 @@
-ARG NODE_VERSION=22-alpine
+ARG NODE_VERSION=24-alpine
 ARG DOTNET_VERSION=10.0
 
 FROM node:${NODE_VERSION} AS frontend-build

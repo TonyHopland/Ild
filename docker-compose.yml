@@ -43,7 +43,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        NODE_VERSION: ${NODE_VERSION:-22-alpine}
+        NODE_VERSION: ${NODE_VERSION:-24-alpine}
         DOTNET_VERSION: ${DOTNET_VERSION:-10.0}
         NODE_RUNTIME_VERSION: ${NODE_RUNTIME_VERSION:-24.15.0}
         DOTNET_SDK_CHANNEL: ${DOTNET_SDK_CHANNEL:-10.0}
