@@ -128,6 +128,11 @@ public sealed class PRNodeExecutor : INodeExecutor
             await loopRunStore.UpdateRunAsync(run);
             prUrl = run.PrUrl;
         }
+        else
+        {
+            // PR already exists — add a comment using the configured template (if any).
+            await TryAddPrCommentAsync(scope.ServiceProvider, ctx.Node.Config, ctx.Run.Id, wi, ctx.PreviousNodeOutput, repo, prUrl);
+        }
 
         // PR exists; suspend until the webhook signals merge or rejection.
         return new NodeOutcome.Suspended(
@@ -144,11 +149,17 @@ public sealed class PRNodeExecutor : INodeExecutor
         if (string.IsNullOrEmpty(template))
             return wi.Description ?? "";
 
-        // Prefer the DI-registered service so all rendering shares the same
-        // event-log lookup and resolver instance. Fall back to a direct
-        // construction so unit tests that don't wire the full service graph
-        // (e.g. PRNodeExecutorTests) keep working: rendering without an
-        // event log just produces an empty {{EventLog.*}} expansion.
+        return await RenderTemplateAsync(sp, template, runId, wi, previousNodeOutput);
+    }
+
+    /// <summary>
+    /// Shared rendering pipeline for PR templates. Tries the DI-registered
+    /// <see cref="IPromptRenderingService"/> first (which has event-log access),
+    /// then falls back to a bare <see cref="IPromptTemplateResolver"/> so unit
+    /// tests that don't wire the full service graph still work.
+    /// </summary>
+    static async Task<string> RenderTemplateAsync(IServiceProvider sp, string template, Guid runId, WorkItemView wi, string? previousNodeOutput)
+    {
         var rendering = sp.GetService<IPromptRenderingService>();
         if (rendering != null)
             return await rendering.RenderAsync(template, runId, wi, previousNodeOutput);
@@ -158,6 +169,46 @@ public sealed class PRNodeExecutor : INodeExecutor
             WorkItemTitle: wi.Title,
             WorkItemDescription: wi.Description,
             PreviousNodeOutput: previousNodeOutput));
+    }
+
+    static async Task TryAddPrCommentAsync(IServiceProvider sp, string? nodeConfig, Guid runId, WorkItemView wi, string? previousNodeOutput, Repository repo, string prUrl)
+    {
+        var cfg = NodeConfig.Parse<NodeConfig.Pr>(nodeConfig);
+        if (string.IsNullOrEmpty(cfg.PrCommentTemplate))
+            return;
+
+        var commentBody = await RenderTemplateAsync(sp, cfg.PrCommentTemplate, runId, wi, previousNodeOutput);
+        if (string.IsNullOrEmpty(commentBody))
+            return;
+
+        var remote = sp.GetRequiredService<IRemoteProvider>();
+        var prNumber = ExtractPrNumber(prUrl);
+        if (prNumber == null)
+            return;
+
+        _ = await remote.CreatePullRequestCommentAsync(repo.CloneUrl, prNumber, commentBody);
+    }
+
+    /// <summary>
+    /// Extract the PR number from a PR URL. Works for both Forgejo
+    /// (<c>/pulls/{n}</c>) and GitHub (<c>/pull/{n}</c>) URL schemes.
+    /// </summary>
+    static string? ExtractPrNumber(string prUrl)
+    {
+        // Try "/pulls/{number}" (Forgejo) first, then "/pull/{number}" (GitHub)
+        foreach (var segment in new[] { "/pulls/", "/pull/" })
+        {
+            var idx = prUrl.IndexOf(segment, StringComparison.OrdinalIgnoreCase);
+            if (idx >= 0)
+            {
+                var remainder = prUrl[(idx + segment.Length)..];
+                // Take everything up to the next slash or query string
+                var trimmed = remainder.Split('/', '?')[0];
+                if (int.TryParse(trimmed, out _))
+                    return trimmed;
+            }
+        }
+        return null;
     }
 
     public const string PrPromptRenderedEvent = "PrPromptRendered";

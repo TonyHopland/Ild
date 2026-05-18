@@ -110,6 +110,9 @@ internal static class TestHostServiceCollectionExtensions
 
         public Task<bool> DeleteBranchAsync(string repoUrl, string branchName)
             => throw Unexpected(nameof(IRemoteProvider));
+
+        public Task<bool> CreatePullRequestCommentAsync(string repoUrl, string prNumber, string body)
+            => throw Unexpected(nameof(IRemoteProvider));
     }
 
     private sealed class ThrowingAgentAdapterRegistry : IAgentAdapterRegistry

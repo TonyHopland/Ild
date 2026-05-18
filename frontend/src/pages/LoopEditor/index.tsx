@@ -143,6 +143,7 @@ export default function LoopEditor() {
   const [humanPrompt, setHumanPrompt] = useState("");
   const [promptNodePrompt, setPromptNodePrompt] = useState("");
   const [prDescriptionTemplate, setPrDescriptionTemplate] = useState("");
+  const [prCommentTemplate, setPrCommentTemplate] = useState("");
   const [labelError, setLabelError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
@@ -822,6 +823,7 @@ export default function LoopEditor() {
       setHumanPrompt((config.prompt as string) || "");
       setPromptNodePrompt((config.prompt as string) || "");
       setPrDescriptionTemplate((config.prDescriptionTemplate as string) || "");
+      setPrCommentTemplate((config.prCommentTemplate as string) || "");
       setAdapterConfigValues(initialAdapterValues);
 
       if (data.type === NodeType.AI) {
@@ -845,6 +847,7 @@ export default function LoopEditor() {
         humanPrompt: (config.prompt as string) || "",
         promptNodePrompt: (config.prompt as string) || "",
         prDescriptionTemplate: (config.prDescriptionTemplate as string) || "",
+        prCommentTemplate: (config.prCommentTemplate as string) || "",
         adapterConfigValues: initialAdapterValues,
       });
       setShowNodeSettingsModal(true);
@@ -889,6 +892,7 @@ export default function LoopEditor() {
       if (promptNodePrompt) config.prompt = promptNodePrompt;
     } else if (selectedNodeType === NodeType.PR) {
       if (prDescriptionTemplate) config.prDescriptionTemplate = prDescriptionTemplate;
+      if (prCommentTemplate) config.prCommentTemplate = prCommentTemplate;
     }
 
     setNodes((currentNodes) =>
@@ -926,6 +930,7 @@ export default function LoopEditor() {
     humanPrompt,
     nodeLabel,
     prDescriptionTemplate,
+    prCommentTemplate,
     promptNodePrompt,
     setNodes,
     startCreateWorktree,
@@ -946,6 +951,7 @@ export default function LoopEditor() {
       setHumanPrompt(originalNodeConfig.humanPrompt);
       setPromptNodePrompt(originalNodeConfig.promptNodePrompt);
       setPrDescriptionTemplate(originalNodeConfig.prDescriptionTemplate);
+      setPrCommentTemplate(originalNodeConfig.prCommentTemplate);
       setAdapterConfigValues(originalNodeConfig.adapterConfigValues);
     }
 
@@ -1305,6 +1311,7 @@ export default function LoopEditor() {
                     humanPrompt={humanPrompt}
                     promptNodePrompt={promptNodePrompt}
                     prDescriptionTemplate={prDescriptionTemplate}
+                    prCommentTemplate={prCommentTemplate}
                     aiProviders={aiProviders}
                     adapterConfigSchema={adapterConfigSchema}
                     adapterConfigValues={adapterConfigValues}
@@ -1327,6 +1334,7 @@ export default function LoopEditor() {
                     onHumanPromptChange={setHumanPrompt}
                     onPromptNodePromptChange={setPromptNodePrompt}
                     onPrDescriptionTemplateChange={setPrDescriptionTemplate}
+                    onPrCommentTemplateChange={setPrCommentTemplate}
                     onAdapterConfigChange={(name, value) =>
                       setAdapterConfigValues((current) => ({ ...current, [name]: value }))
                     }
