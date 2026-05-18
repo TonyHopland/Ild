@@ -13,4 +13,5 @@ public interface IRemoteProvider
     Task UnregisterWebhookAsync(string repoUrl, string callbackUrl);
     Task<RemotePrStatus> GetPullRequestStatusAsync(string repoUrl, string prNumber);
     Task<bool> DeleteBranchAsync(string repoUrl, string branchName);
+    Task<bool> CreatePullRequestCommentAsync(string repoUrl, string prNumber, string body);
 }

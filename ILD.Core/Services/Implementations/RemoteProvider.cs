@@ -84,6 +84,14 @@ public class RemoteProviderService : IRemoteProvider
         catch { return false; }
     }
 
+    public async Task<bool> CreatePullRequestCommentAsync(string repoUrl, string prNumber, string body)
+    {
+        var resolved = await ResolveAsync(repoUrl);
+        if (resolved == null) return false;
+        try { return await resolved.Adapter.CreatePullRequestCommentAsync(_http, resolved, prNumber, body); }
+        catch { return false; }
+    }
+
     private async Task<ResolvedRemoteRepository?> ResolveAsync(string repoUrl)
     {
         if (!Uri.TryCreate(repoUrl, UriKind.Absolute, out var repoUri))

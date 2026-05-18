@@ -21,6 +21,7 @@ interface NodeSettingsModalProps {
   humanPrompt: string;
   promptNodePrompt: string;
   prDescriptionTemplate: string;
+  prCommentTemplate: string;
   aiProviders: AiProvider[];
   adapterConfigSchema: ConfigFieldDescriptor[];
   adapterConfigValues: Record<string, AdapterConfigValue>;
@@ -43,6 +44,7 @@ interface NodeSettingsModalProps {
   onHumanPromptChange: (value: string) => void;
   onPromptNodePromptChange: (value: string) => void;
   onPrDescriptionTemplateChange: (value: string) => void;
+  onPrCommentTemplateChange: (value: string) => void;
   onAdapterConfigChange: (name: string, value: AdapterConfigValue) => void;
 }
 
@@ -62,6 +64,7 @@ export function NodeSettingsModal({
   humanPrompt,
   promptNodePrompt,
   prDescriptionTemplate,
+  prCommentTemplate,
   aiProviders,
   adapterConfigSchema,
   adapterConfigValues,
@@ -84,6 +87,7 @@ export function NodeSettingsModal({
   onHumanPromptChange,
   onPromptNodePromptChange,
   onPrDescriptionTemplateChange,
+  onPrCommentTemplateChange,
   onAdapterConfigChange,
 }: NodeSettingsModalProps) {
   const selectedNodeType = (selectedNode.data as { type: NodeType }).type;
@@ -279,15 +283,26 @@ export function NodeSettingsModal({
           )}
 
           {selectedNodeType === NodeType.PR && (
-            <div className="config-field">
-              <label htmlFor="pr-description-template">PR Description Template</label>
-              <PromptEditor
-                id="pr-description-template"
-                rows={4}
-                value={prDescriptionTemplate}
-                onChange={onPrDescriptionTemplateChange}
-              />
-            </div>
+            <>
+              <div className="config-field">
+                <label htmlFor="pr-description-template">PR Description Template</label>
+                <PromptEditor
+                  id="pr-description-template"
+                  rows={4}
+                  value={prDescriptionTemplate}
+                  onChange={onPrDescriptionTemplateChange}
+                />
+              </div>
+              <div className="config-field">
+                <label htmlFor="pr-comment-template">PR Comment Template</label>
+                <PromptEditor
+                  id="pr-comment-template"
+                  rows={4}
+                  value={prCommentTemplate}
+                  onChange={onPrCommentTemplateChange}
+                />
+              </div>
+            </>
           )}
         </div>
         <div className="node-settings-modal-footer">

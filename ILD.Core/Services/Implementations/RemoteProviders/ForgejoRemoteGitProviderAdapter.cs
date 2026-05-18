@@ -117,6 +117,9 @@ public sealed class ForgejoRemoteGitProviderAdapter : IRemoteGitProviderAdapter
         return resp.IsSuccessStatusCode;
     }
 
+    public Task<bool> CreatePullRequestCommentAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string body)
+        => PrCommentHelper.CreatePullRequestCommentAsync(http, repo, prNumber, body, ApplyHeaders);
+
     public bool VerifyWebhookSignature(string body, IReadOnlyDictionary<string, string> headers, string secret)
         => VerifyHmacSha256(body, GetHeader(headers, "X-Forgejo-Signature"), secret);
 

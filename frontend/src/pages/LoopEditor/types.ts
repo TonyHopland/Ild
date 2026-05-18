@@ -19,6 +19,7 @@ export interface NodeSettingsSnapshot {
   humanPrompt: string;
   promptNodePrompt: string;
   prDescriptionTemplate: string;
+  prCommentTemplate: string;
   adapterConfigValues: Record<string, AdapterConfigValue>;
 }
 
