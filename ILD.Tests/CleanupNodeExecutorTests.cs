@@ -12,6 +12,8 @@ namespace ILD.Tests;
 
 public class CleanupNodeExecutorTests
 {
+    private const string BranchName = "ild/wi-test-branch";
+
     [Fact]
     public async Task ExecuteAsync_stops_preview_then_destroys_worktree_and_clears_WorktreePath()
     {
@@ -302,6 +304,154 @@ public class CleanupNodeExecutorTests
         finally
         {
             if (Directory.Exists(worktreePath)) Directory.Delete(worktreePath, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_deletes_local_and_remote_branches_after_destroying_worktree()
+    {
+        using var db = new TestDb();
+        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
+        var repoEntity = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/r.git" };
+        var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume };
+        var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
+        db.Context.RemoteProviders.Add(remote);
+        db.Context.Repositories.Add(repoEntity);
+        db.Context.LoopTemplates.Add(template);
+        db.Context.LoopTemplateVersions.Add(version);
+
+        var worktreePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        var baseRepoPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        Directory.CreateDirectory(worktreePath);
+        Directory.CreateDirectory(baseRepoPath);
+        try
+        {
+            var run = new LoopRun
+            {
+                Id = Guid.NewGuid(),
+                WorkItemId = Guid.NewGuid().ToString(),
+                LoopTemplateVersionId = version.Id,
+                RecoveryPolicy = RecoveryPolicy.AutoResume,
+                Status = LoopRunStatus.Running,
+                RepositoryId = repoEntity.Id,
+                WorktreePath = worktreePath,
+                BranchName = BranchName,
+            };
+            db.Context.LoopRuns.Add(run);
+            db.Context.SaveChanges();
+
+            var repo = new Mock<IRepositoryManager>();
+            repo.Setup(r => r.ResolveBaseRepoPathAsync(worktreePath)).ReturnsAsync(baseRepoPath);
+            repo.Setup(r => r.DestroyWorktreeAsync(worktreePath)).Returns(Task.CompletedTask);
+            repo.Setup(r => r.DeleteLocalBranchAsync(baseRepoPath, BranchName)).ReturnsAsync(true);
+
+            var remoteProvider = new Mock<IRemoteProvider>();
+            remoteProvider.Setup(r => r.DeleteBranchAsync(repoEntity.CloneUrl, BranchName)).ReturnsAsync(true);
+
+            var preview = new Mock<IWorktreePreviewService>();
+            preview.Setup(p => p.StopAsync(worktreePath, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new WorktreePreviewResponse { State = "stopped", Configured = false });
+
+            var services = new ServiceCollection();
+            services.AddSingleton((ILoopRunStore)db.LoopRuns);
+            services.AddSingleton((IProviderStore)db.Providers);
+            services.AddSingleton(preview.Object);
+            services.AddSingleton(remoteProvider.Object);
+            var sp = services.BuildServiceProvider();
+
+            var executor = new CleanupNodeExecutor(repo.Object, sp);
+            var node = new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.Cleanup, Label = "cleanup" };
+            var runNode = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = run.Id, LoopNodeId = node.Id };
+            var wi = new WorkItemView { Id = run.WorkItemId, Title = "wi" };
+            var ctx = new NodeExecutionContext(run, runNode, node, wi, null, default);
+
+            var result = await executor.ExecuteAsync(ctx);
+
+            Assert.True(result.Success);
+            Assert.Contains("destroyed", result.Output);
+            repo.Verify(r => r.ResolveBaseRepoPathAsync(worktreePath), Times.Once);
+            repo.Verify(r => r.DestroyWorktreeAsync(worktreePath), Times.Once);
+            repo.Verify(r => r.DeleteLocalBranchAsync(baseRepoPath, BranchName), Times.Once);
+            remoteProvider.Verify(r => r.DeleteBranchAsync(repoEntity.CloneUrl, BranchName), Times.Once);
+        }
+        finally
+        {
+            if (Directory.Exists(worktreePath)) Directory.Delete(worktreePath, true);
+            if (Directory.Exists(baseRepoPath)) Directory.Delete(baseRepoPath, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_continues_cleanup_when_branch_deletion_fails()
+    {
+        using var db = new TestDb();
+        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
+        var repoEntity = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/r.git" };
+        var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume };
+        var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
+        db.Context.RemoteProviders.Add(remote);
+        db.Context.Repositories.Add(repoEntity);
+        db.Context.LoopTemplates.Add(template);
+        db.Context.LoopTemplateVersions.Add(version);
+
+        var worktreePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        var baseRepoPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        Directory.CreateDirectory(worktreePath);
+        Directory.CreateDirectory(baseRepoPath);
+        try
+        {
+            var run = new LoopRun
+            {
+                Id = Guid.NewGuid(),
+                WorkItemId = Guid.NewGuid().ToString(),
+                LoopTemplateVersionId = version.Id,
+                RecoveryPolicy = RecoveryPolicy.AutoResume,
+                Status = LoopRunStatus.Running,
+                RepositoryId = repoEntity.Id,
+                WorktreePath = worktreePath,
+                BranchName = BranchName,
+            };
+            db.Context.LoopRuns.Add(run);
+            db.Context.SaveChanges();
+
+            var repo = new Mock<IRepositoryManager>();
+            repo.Setup(r => r.ResolveBaseRepoPathAsync(worktreePath)).ReturnsAsync(baseRepoPath);
+            repo.Setup(r => r.DestroyWorktreeAsync(worktreePath)).Returns(Task.CompletedTask);
+            // Both branch deletions throw — cleanup should still succeed
+            repo.Setup(r => r.DeleteLocalBranchAsync(baseRepoPath, BranchName)).ThrowsAsync(new InvalidOperationException("local branch delete failed"));
+
+            var remoteProvider = new Mock<IRemoteProvider>();
+            remoteProvider.Setup(r => r.DeleteBranchAsync(repoEntity.CloneUrl, BranchName)).ThrowsAsync(new InvalidOperationException("remote branch delete failed"));
+
+            var preview = new Mock<IWorktreePreviewService>();
+            preview.Setup(p => p.StopAsync(worktreePath, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new WorktreePreviewResponse { State = "stopped", Configured = false });
+
+            var services = new ServiceCollection();
+            services.AddSingleton((ILoopRunStore)db.LoopRuns);
+            services.AddSingleton((IProviderStore)db.Providers);
+            services.AddSingleton(preview.Object);
+            services.AddSingleton(remoteProvider.Object);
+            var sp = services.BuildServiceProvider();
+
+            var executor = new CleanupNodeExecutor(repo.Object, sp);
+            var node = new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.Cleanup, Label = "cleanup" };
+            var runNode = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = run.Id, LoopNodeId = node.Id };
+            var wi = new WorkItemView { Id = run.WorkItemId, Title = "wi" };
+            var ctx = new NodeExecutionContext(run, runNode, node, wi, null, default);
+
+            var result = await executor.ExecuteAsync(ctx);
+
+            // Cleanup still succeeds despite branch deletion failures
+            Assert.True(result.Success);
+            Assert.Contains("destroyed", result.Output);
+            var reloaded = db.Fresh().LoopRuns.AsNoTracking().First(r => r.Id == run.Id);
+            Assert.Null(reloaded.WorktreePath);
+        }
+        finally
+        {
+            if (Directory.Exists(worktreePath)) Directory.Delete(worktreePath, true);
+            if (Directory.Exists(baseRepoPath)) Directory.Delete(baseRepoPath, true);
         }
     }
 }

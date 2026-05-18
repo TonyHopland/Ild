@@ -26,4 +26,15 @@ public interface IRepositoryManager
     Task<string?> GetDiffAsync(string worktreePath);
     Task<int> GetCommitsAheadCountAsync(string worktreePath, string targetBranch);
     Task<string?> ReadFileAsync(string worktreePath, string relativePath);
+
+    /// <summary>
+    /// Delete a local branch from the repository at <paramref name="repoPath"/>.
+    /// </summary>
+    Task<bool> DeleteLocalBranchAsync(string repoPath, string branchName);
+
+    /// <summary>
+    /// Resolve the base (main) repository path from a worktree path.
+    /// Returns null if the worktree is not a valid git worktree.
+    /// </summary>
+    Task<string?> ResolveBaseRepoPathAsync(string worktreePath);
 }

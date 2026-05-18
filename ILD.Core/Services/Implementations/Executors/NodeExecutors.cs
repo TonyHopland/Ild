@@ -81,6 +81,19 @@ public sealed class StartNodeExecutor : INodeExecutor
             var path = await _repo.CreateWorktreeAsync(basePath, branch);
             run.WorktreePath = path;
             run.BranchName = branch;
+
+            // Fetch latest refs and rebase onto updated default branch to avoid stale branches
+            var defaultBranch = repo.DefaultBranch ?? "main";
+            await _repo.FetchAsync(path, ctx.CancellationToken, gitAuth);
+            try
+            {
+                await _repo.RebaseAsync(path, $"origin/{defaultBranch}", ctx.CancellationToken);
+            }
+            catch
+            {
+                // Rebase failure is non-fatal — continue
+            }
+
             await loopRunStore.UpdateRunAsync(run);
         }
         if (string.IsNullOrEmpty(run.WorktreePath) || !Directory.Exists(run.WorktreePath))
@@ -411,6 +424,10 @@ public sealed class CleanupNodeExecutor : INodeExecutor
                 }
             }
 
+            // Resolve base repo path BEFORE destroying the worktree (needs the worktree to be valid)
+            var baseRepoPath = await _repo.ResolveBaseRepoPathAsync(worktreePath);
+            var branchName = run.BranchName;
+
             try
             {
                 await _repo.DestroyWorktreeAsync(worktreePath);
@@ -420,6 +437,20 @@ public sealed class CleanupNodeExecutor : INodeExecutor
                 // Do NOT clear WorktreePath — the worktree still exists on disk.
                 return new NodeOutcome.Failed($"cleanup failed: {ex.Message} (path: {worktreePath})");
             }
+
+            // Best-effort branch cleanup — don't fail the run if these fail.
+            if (baseRepoPath != null && !string.IsNullOrEmpty(branchName))
+            {
+                try
+                {
+                    await _repo.DeleteLocalBranchAsync(baseRepoPath, branchName);
+                }
+                catch { /* best-effort */ }
+            }
+
+            // Delete remote branch via remote provider (best-effort)
+            await TryDeleteRemoteBranchAsync(scope.ServiceProvider, run, branchName);
+
             run.WorktreePath = null;
             await loopRunStore.UpdateRunAsync(run);
             return new NodeOutcome.Terminal($"worktree destroyed: {worktreePath}");
@@ -428,5 +459,27 @@ public sealed class CleanupNodeExecutor : INodeExecutor
         run.WorktreePath = null;
         await loopRunStore.UpdateRunAsync(run);
         return new NodeOutcome.Terminal("cleanup skipped: no worktree");
+    }
+
+    private static async Task TryDeleteRemoteBranchAsync(IServiceProvider sp, ILD.Data.Entities.LoopRun run, string? branchName)
+    {
+        if (string.IsNullOrEmpty(branchName)) return;
+        if (run.RepositoryId == null) return;
+
+        try
+        {
+            var providerStore = sp.GetRequiredService<IProviderStore>();
+            var repo = await providerStore.GetRepositoryByIdAsync(run.RepositoryId.Value);
+            if (repo == null) return;
+
+            var remoteProvider = await providerStore.GetRemoteProviderByIdAsync(repo.RemoteProviderId);
+            if (remoteProvider == null) return;
+
+            var remoteService = sp.GetService<IRemoteProvider>();
+            if (remoteService == null) return;
+
+            await remoteService.DeleteBranchAsync(repo.CloneUrl, branchName);
+        }
+        catch { /* best-effort — never fail cleanup on branch deletion */ }
     }
 }
