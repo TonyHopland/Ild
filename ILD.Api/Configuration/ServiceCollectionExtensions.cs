@@ -2,6 +2,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Implementations.Adapters;
+using ILD.Core.Services.Implementations.RemoteProviders;
 using ILD.Core.Services.Remote;
 using ILD.Api.Middleware;
 using ILD.Api.Services;
@@ -38,6 +39,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IPromptTemplateResolver, PromptTemplateResolver>();
         services.AddScoped<IPromptRenderingService, PromptRenderingService>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
+        services.AddSingleton<IRemoteGitProviderAdapter, ForgejoRemoteGitProviderAdapter>();
+        services.AddSingleton<IRemoteGitProviderAdapter, GitHubRemoteGitProviderAdapter>();
+        services.AddSingleton<IRemoteProviderTypeCatalog, RemoteProviderTypeCatalog>();
         services.AddScoped<IRemoteProvider, RemoteProviderService>();
         services.AddHttpClient<IAIProviderService, AIProviderService>();
         services.AddSingleton<IWorktreePreviewService, WorktreePreviewService>();

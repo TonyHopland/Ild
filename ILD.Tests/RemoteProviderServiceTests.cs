@@ -2,12 +2,24 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using ILD.Core.Services.Implementations;
+using ILD.Core.Services.Implementations.RemoteProviders;
+using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 
 namespace ILD.Tests;
 
 public class RemoteProviderServiceTests
 {
+    private static RemoteProviderService CreateService(TestDb db, HttpMessageHandler handler)
+        => new(
+            db.Providers,
+            new IRemoteGitProviderAdapter[]
+            {
+                new ForgejoRemoteGitProviderAdapter(),
+                new GitHubRemoteGitProviderAdapter(),
+            },
+            new HttpClient(handler));
+
     private sealed class RecordingHandler : HttpMessageHandler
     {
         public List<HttpRequestMessage> Requests { get; } = new();
@@ -47,7 +59,7 @@ public class RemoteProviderServiceTests
         db.Context.SaveChanges();
 
         var handler = new RecordingHandler();
-        var service = new RemoteProviderService(db.Providers, new HttpClient(handler));
+        var service = CreateService(db, handler);
 
         var result = await service.CreatePullRequestAsync(
             "https://gitea.example/team/repo.git",
@@ -85,7 +97,7 @@ public class RemoteProviderServiceTests
         db.Context.SaveChanges();
 
         var handler = new RecordingHandler();
-        var service = new RemoteProviderService(db.Providers, new HttpClient(handler));
+        var service = CreateService(db, handler);
 
         await service.CreatePullRequestAsync("https://gitea.example/team/repo.git", "ild/one", "main", "title", "body");
         await service.CreatePullRequestAsync("https://forge.example/team/repo.git", "ild/two", "main", "title", "body");
@@ -93,5 +105,66 @@ public class RemoteProviderServiceTests
         Assert.Equal(2, handler.Requests.Count());
         Assert.Equal(new AuthenticationHeaderValue("token", "gitea-key"), handler.Requests[0].Headers.Authorization);
         Assert.Equal(new AuthenticationHeaderValue("token", "forge-key"), handler.Requests[1].Headers.Authorization);
+    }
+
+    [Fact]
+    public async Task CreatePullRequestAsync_uses_github_api_base_and_headers()
+    {
+        using var db = new TestDb();
+        db.Context.RemoteProviders.Add(new RemoteProvider
+        {
+            Id = Guid.NewGuid(),
+            Name = "github",
+            Type = "GitHub",
+            Url = "https://github.com",
+            ApiKey = "github-key",
+        });
+        db.Context.SaveChanges();
+
+        var handler = new RecordingHandler();
+        var service = CreateService(db, handler);
+
+        var result = await service.CreatePullRequestAsync(
+            "https://github.com/team/repo.git",
+            "ild/test",
+            "main",
+            "title",
+            "body");
+
+        Assert.Null(result.Error);
+        Assert.Single(handler.Requests);
+        Assert.Equal("https://api.github.com/repos/team/repo/pulls", handler.Requests[0].RequestUri?.ToString());
+        Assert.Equal(new AuthenticationHeaderValue("Bearer", "github-key"), handler.Requests[0].Headers.Authorization);
+        Assert.Contains(handler.Requests[0].Headers.Accept, h => h.MediaType == "application/vnd.github+json");
+        Assert.Contains(handler.Requests[0].Headers.UserAgent, h => h.Product?.Name == "ILD");
+    }
+
+    [Fact]
+    public async Task CreatePullRequestAsync_matches_github_repo_urls_when_provider_uses_api_host()
+    {
+        using var db = new TestDb();
+        db.Context.RemoteProviders.Add(new RemoteProvider
+        {
+            Id = Guid.NewGuid(),
+            Name = "github",
+            Type = "GitHub",
+            Url = "https://api.github.com",
+            ApiKey = "github-key",
+        });
+        db.Context.SaveChanges();
+
+        var handler = new RecordingHandler();
+        var service = CreateService(db, handler);
+
+        var result = await service.CreatePullRequestAsync(
+            "https://github.com/team/repo.git",
+            "ild/test",
+            "main",
+            "title",
+            "body");
+
+        Assert.Null(result.Error);
+        Assert.Single(handler.Requests);
+        Assert.Equal("https://api.github.com/repos/team/repo/pulls", handler.Requests[0].RequestUri?.ToString());
     }
 }

@@ -1,11 +1,24 @@
 import { useState, useEffect } from "react";
-import { RemoteProvider } from "../../types";
+import { RemoteProvider, RemoteProviderTypeOption } from "../../types";
 import { remoteProviderService } from "../../services/auth";
 
-const REMOTE_PROVIDER_TYPES = ["Forgejo", "GitHub", "GitLab"];
+function generateWebhookSecret(): string {
+  const bytes = new Uint8Array(32);
+
+  if (typeof globalThis.crypto?.getRandomValues === "function") {
+    globalThis.crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i += 1) {
+      bytes[i] = Math.floor(Math.random() * 256);
+    }
+  }
+
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 export default function RemoteProviders() {
   const [providers, setProviders] = useState<RemoteProvider[]>([]);
+  const [providerTypes, setProviderTypes] = useState<RemoteProviderTypeOption[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingProvider, setEditingProvider] = useState<RemoteProvider | null>(null);
@@ -26,8 +39,12 @@ export default function RemoteProviders() {
 
   const loadData = async () => {
     try {
-      const result = await remoteProviderService.getAll();
-      setProviders(result);
+      const [providersResult, typesResult] = await Promise.all([
+        remoteProviderService.getAll(),
+        remoteProviderService.getAvailableTypes(),
+      ]);
+      setProviders(providersResult);
+      setProviderTypes(typesResult);
     } catch (error) {
       console.error("Failed to load remote providers:", error);
     } finally {
@@ -40,6 +57,8 @@ export default function RemoteProviders() {
     setName(provider.name);
     setType(provider.type);
     setBaseUrl(provider.baseUrl);
+    setApiKey("");
+    setWebhookSecret("");
     setWorkItemServerUrl(provider.workItemServerUrl ?? "");
     setWorkItemApiKey("");
     setPollIntervalSeconds(provider.pollIntervalSeconds ?? 60);
@@ -55,7 +74,7 @@ export default function RemoteProviders() {
     setType("");
     setBaseUrl("");
     setApiKey("");
-    setWebhookSecret("");
+    setWebhookSecret(generateWebhookSecret());
     setWorkItemServerUrl("");
     setWorkItemApiKey("");
     setPollIntervalSeconds(60);
@@ -96,6 +115,11 @@ export default function RemoteProviders() {
     setShowModal(false);
     setEditingProvider(null);
   };
+
+  const selectableProviderTypes =
+    type && !providerTypes.some((option) => option.type === type)
+      ? [{ type }, ...providerTypes]
+      : providerTypes;
 
   if (isLoading) {
     return (
@@ -181,9 +205,9 @@ export default function RemoteProviders() {
                 <label htmlFor="rpType">Type</label>
                 <select id="rpType" value={type} onChange={(e) => setType(e.target.value)} required>
                   <option value="">Select type...</option>
-                  {REMOTE_PROVIDER_TYPES.map((t) => (
-                    <option key={t} value={t}>
-                      {t}
+                  {selectableProviderTypes.map((option) => (
+                    <option key={option.type} value={option.type}>
+                      {option.type}
                     </option>
                   ))}
                 </select>
@@ -200,21 +224,34 @@ export default function RemoteProviders() {
               </div>
               <div className="form-group">
                 <label htmlFor="rpApiKey">API Key</label>
-                <input
-                  id="rpApiKey"
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                />
+                <div className="rp-secret-input-row">
+                  <input
+                    id="rpApiKey"
+                    type="password"
+                    placeholder={editingProvider?.hasApiKey ? "(unchanged)" : ""}
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                  />
+                </div>
               </div>
               <div className="form-group">
                 <label htmlFor="rpWebhookSecret">Webhook Secret</label>
-                <input
-                  id="rpWebhookSecret"
-                  type="password"
-                  value={webhookSecret}
-                  onChange={(e) => setWebhookSecret(e.target.value)}
-                />
+                <div className="rp-secret-input-row">
+                  <input
+                    id="rpWebhookSecret"
+                    type="password"
+                    placeholder={editingProvider?.webhookSecret ? "(unchanged)" : ""}
+                    value={webhookSecret}
+                    onChange={(e) => setWebhookSecret(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-small"
+                    onClick={() => setWebhookSecret(generateWebhookSecret())}
+                  >
+                    {editingProvider ? "Regenerate" : "Generate"}
+                  </button>
+                </div>
               </div>
               <h3 className="rp-section-heading">WorkItem Server</h3>
               <div className="form-group">
@@ -364,6 +401,17 @@ export default function RemoteProviders() {
         .rp-masked {
           letter-spacing: 0.125rem;
           user-select: none;
+        }
+
+        .rp-secret-input-row {
+          display: flex;
+          gap: 0.5rem;
+          align-items: center;
+        }
+
+        .rp-secret-input-row input {
+          flex: 1;
+          min-width: 0;
         }
 
         .btn {

@@ -11,12 +11,14 @@ public class PrSyncService : IPrSyncService
     private readonly ILoopRunStore _loopRunStore;
     private readonly IEventLogStore _eventLogStore;
     private readonly IWorkItemManager _workItems;
+    private readonly ILoopEngine _loopEngine;
 
-    public PrSyncService(ILoopRunStore loopRunStore, IEventLogStore eventLogStore, IWorkItemManager workItems)
+    public PrSyncService(ILoopRunStore loopRunStore, IEventLogStore eventLogStore, IWorkItemManager workItems, ILoopEngine loopEngine)
     {
         _loopRunStore = loopRunStore;
         _eventLogStore = eventLogStore;
         _workItems = workItems;
+        _loopEngine = loopEngine;
     }
 
     public async Task HandleWebhookAsync(WebhookPayload payload)
@@ -24,15 +26,6 @@ public class PrSyncService : IPrSyncService
         if (payload == null || string.IsNullOrEmpty(payload.PullRequestUrl)) return;
         var run = await _loopRunStore.GetByPrUrlAsync(payload.PullRequestUrl);
         if (run == null) return;
-
-        if (string.Equals(payload.MergeStatus, "merged", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(payload.EventType, "pull_request.merged", StringComparison.OrdinalIgnoreCase))
-        {
-            run.IsPrMerged = true;
-            run.UpdatedAt = DateTime.UtcNow;
-            await _loopRunStore.UpdateRunAsync(run);
-            await _workItems.ManuallyMarkMergedAsync(run.WorkItemId);
-        }
 
         if (!string.IsNullOrEmpty(payload.Comment))
         {
@@ -45,6 +38,24 @@ public class PrSyncService : IPrSyncService
                 Timestamp = DateTime.UtcNow,
             });
         }
+
+        var signal = GetSignal(payload);
+        if (signal == null)
+            return;
+
+        if (signal.Success)
+        {
+            run.IsPrMerged = true;
+            run.UpdatedAt = DateTime.UtcNow;
+            await _loopRunStore.UpdateRunAsync(run);
+            await _workItems.ManuallyMarkMergedAsync(run.WorkItemId);
+        }
+
+        var runNode = await ResolveRunNodeAsync(run);
+        if (runNode == null)
+            return;
+
+        await _loopEngine.SignalNodeResultAsync(run.Id, runNode.Id, signal);
     }
 
     public Task<bool> IsPullRequestMergedAsync(string prUrl) => Task.FromResult(false);
@@ -64,5 +75,36 @@ public class PrSyncService : IPrSyncService
     {
         var run = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
         return run?.PrUrl;
+    }
+
+    private static NodeSignal? GetSignal(WebhookPayload payload)
+    {
+        if (string.Equals(payload.MergeStatus, "merged", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(payload.EventType, "pull_request.merged", StringComparison.OrdinalIgnoreCase))
+            return NodeSignal.Succeeded();
+
+        if (string.Equals(payload.EventType, "pull_request.rejected", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(payload.MergeStatus, "closed", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(payload.MergeStatus, "changes_requested", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(payload.MergeStatus, "rejected", StringComparison.OrdinalIgnoreCase))
+            return NodeSignal.Failed(payload.Comment ?? "PR rejected");
+
+        return null;
+    }
+
+    private async Task<LoopRunNode?> ResolveRunNodeAsync(LoopRun run)
+    {
+        if (run.CurrentNodeId.HasValue)
+        {
+            var current = await _loopRunStore.GetRunNodeAsync(run.Id, run.CurrentNodeId.Value);
+            if (current != null && (current.Status == LoopRunNodeStatus.WaitingHuman || current.Status == LoopRunNodeStatus.Failed))
+                return current;
+        }
+
+        var runNodes = await _loopRunStore.GetRunNodesAsync(run.Id);
+        return runNodes
+            .Where(node => node.Status == LoopRunNodeStatus.WaitingHuman || node.Status == LoopRunNodeStatus.Failed)
+            .OrderByDescending(node => node.StartedAt ?? node.CreatedAt)
+            .FirstOrDefault();
     }
 }

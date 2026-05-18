@@ -264,6 +264,7 @@ export interface RemoteProvider {
   type: string;
   baseUrl: string;
   apiKey: string;
+  hasApiKey?: boolean;
   webhookSecret: string;
   workItemServerUrl?: string | null;
   workItemApiKey?: string | null;
@@ -272,6 +273,10 @@ export interface RemoteProvider {
   graceIntervalSeconds?: number;
   maxConcurrentWorkItems?: number;
   createdAt: string;
+}
+
+export interface RemoteProviderTypeOption {
+  type: string;
 }
 
 export interface PrComment {

@@ -11,10 +11,12 @@ namespace ILD.Api.Controllers;
 public class RemoteProvidersController : ControllerBase
 {
     private readonly AppDbContext _db;
+    private readonly IRemoteProviderTypeCatalog _providerTypes;
 
-    public RemoteProvidersController(AppDbContext db)
+    public RemoteProvidersController(AppDbContext db, IRemoteProviderTypeCatalog providerTypes)
     {
         _db = db;
+        _providerTypes = providerTypes;
     }
 
     private static object ToResponse(ILD.Data.Entities.RemoteProvider p) => new
@@ -47,6 +49,10 @@ public class RemoteProvidersController : ControllerBase
         return Ok(items.Select(ToResponse));
     }
 
+    [HttpGet("types")]
+    public IActionResult GetTypes()
+        => Ok(_providerTypes.GetAvailableTypes().Select(type => new { type }));
+
     [HttpGet("{id}")]
     public async Task<IActionResult> GetById(string id)
     {
@@ -60,6 +66,9 @@ public class RemoteProvidersController : ControllerBase
     {
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
+
+        if (!_providerTypes.IsSupported(request.Type))
+            return BadRequest(new { error = $"Unsupported remote provider type '{request.Type}'." });
 
         var p = new ILD.Data.Entities.RemoteProvider
         {
@@ -88,6 +97,8 @@ public class RemoteProvidersController : ControllerBase
         if (!Guid.TryParse(id, out var guid)) return BadRequest();
         var p = await _db.RemoteProviders.FindAsync(guid);
         if (p == null) return NotFound();
+        if (!_providerTypes.IsSupported(request.Type))
+            return BadRequest(new { error = $"Unsupported remote provider type '{request.Type}'." });
         p.Name = request.Name;
         p.Type = request.Type;
         p.Url = request.BaseUrl;

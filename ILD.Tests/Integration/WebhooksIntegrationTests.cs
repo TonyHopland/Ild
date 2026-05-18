@@ -24,4 +24,21 @@ public class WebhooksIntegrationTests
         var response = await client.PostAsJsonAsync("/api/v1/webhooks/forgejo", new { });
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
+
+    [Fact]
+    public async Task GitHub_with_token_but_no_secret_configured_returns_401()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/webhooks/github")
+        {
+            Content = JsonContent.Create(new { }),
+        };
+        request.Headers.Add("X-GitHub-Event", "pull_request");
+        request.Headers.Add("X-Hub-Signature-256", "sha256=deadbeef");
+
+        var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
 }

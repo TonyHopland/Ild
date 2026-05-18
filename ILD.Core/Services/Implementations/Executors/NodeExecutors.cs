@@ -6,6 +6,7 @@ using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Implementations;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 
 namespace ILD.Core.Services.Implementations.Executors;
 
@@ -58,7 +59,12 @@ public sealed class StartNodeExecutor : INodeExecutor
             var cloned = false;
             if (string.IsNullOrWhiteSpace(basePath) || !Directory.Exists(Path.Combine(basePath, ".git")))
             {
-                basePath = Path.GetFullPath(Path.Combine("data", "repos", repo.Id.ToString("N")));
+                var config = scope.ServiceProvider.GetService<IConfiguration>();
+                var dataPath = config?["App:DataPath"];
+                basePath = Path.GetFullPath(Path.Combine(
+                    string.IsNullOrWhiteSpace(dataPath) ? "data" : dataPath,
+                    "repos",
+                    repo.Id.ToString("N")));
                 Directory.CreateDirectory(Path.GetDirectoryName(basePath)!);
                 if (!Directory.Exists(Path.Combine(basePath, ".git")))
                 {

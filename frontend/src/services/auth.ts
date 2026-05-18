@@ -6,6 +6,7 @@ import {
   LoopRun,
   Repository,
   RemoteProvider,
+  RemoteProviderTypeOption,
   AiProvider,
   LoopTemplateVersion,
   EventLogPage,
@@ -350,6 +351,10 @@ export const repositoryService = {
 export const remoteProviderService = {
   getAll: async (opts?: { skip?: number; take?: number }): Promise<RemoteProvider[]> => {
     return api.get<RemoteProvider[]>(`/remoteproviders${pageQuery(opts)}`);
+  },
+
+  getAvailableTypes: async (): Promise<RemoteProviderTypeOption[]> => {
+    return api.get<RemoteProviderTypeOption[]>("/remoteproviders/types");
   },
 
   getById: async (id: string): Promise<RemoteProvider> => {
