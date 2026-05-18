@@ -322,6 +322,241 @@ public class StartNodeExecutorTests
         }
     }
 
+    [Fact]
+    public async Task ExecuteAsync_fetches_and_rebases_after_worktree_creation()
+    {
+        var workItemId = Guid.NewGuid().ToString();
+        var repoId = Guid.NewGuid();
+        var worktreePath = Path.Combine(Path.GetTempPath(), $"ild-test-{workItemId:N}");
+        var basePath = Path.Combine(Path.GetTempPath(), $"ild-base-{repoId:N}");
+
+        try
+        {
+            Directory.CreateDirectory(worktreePath);
+            Directory.CreateDirectory(Path.Combine(basePath, ".git"));
+
+            var workItem = new WorkItemView
+            {
+                Id = workItemId,
+                RepositoryId = repoId,
+                Title = "test",
+                Description = "test",
+            };
+
+            var repository = new Repository
+            {
+                Id = repoId,
+                Name = "test-repo",
+                RemoteProviderId = Guid.NewGuid(),
+                CloneUrl = "https://example.com/test.git",
+                WorktreesPath = basePath,
+            };
+            var remoteProvider = new RemoteProvider { Id = repository.RemoteProviderId, Name = "provider", Type = "Forgejo", Url = "https://example.com", ApiKey = "token-123" };
+
+            var providerStore = new Mock<IProviderStore>();
+            providerStore.Setup(s => s.GetRepositoryByIdAsync(repoId))
+                .ReturnsAsync(repository);
+            providerStore.Setup(s => s.GetRemoteProviderByIdAsync(repository.RemoteProviderId))
+                .ReturnsAsync(remoteProvider);
+
+            var repoManager = new Mock<IRepositoryManager>();
+            repoManager.Setup(r => r.PullAsync(basePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()))
+                .ReturnsAsync(true);
+            repoManager.Setup(r => r.CreateWorktreeAsync(basePath, It.IsAny<string>()))
+                .ReturnsAsync(worktreePath);
+            repoManager.Setup(r => r.FetchAsync(worktreePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()))
+                .ReturnsAsync(true);
+            repoManager.Setup(r => r.RebaseAsync(worktreePath, "origin/main", CancellationToken.None))
+                .ReturnsAsync(true);
+
+            var runId = Guid.NewGuid();
+            var loopRunStore = new Mock<ILoopRunStore>();
+            loopRunStore.Setup(s => s.GetByIdAsync(runId))
+                .ReturnsAsync(new ILD.Data.Entities.LoopRun { Id = runId, WorktreePath = null });
+
+            var sp = BuildServiceProvider(providerStore.Object, repoManager.Object, loopRunStore.Object);
+
+            var executor = new StartNodeExecutor(repoManager.Object, sp);
+
+            var ctx = new NodeExecutionContext(
+                Run: new ILD.Data.Entities.LoopRun { Id = runId },
+                RunNode: new ILD.Data.Entities.LoopRunNode { RetryCount = 0 },
+                Node: new ILD.Data.Entities.LoopNode { Id = Guid.NewGuid() },
+                WorkItem: workItem,
+                PreviousNodeOutput: null,
+                CancellationToken: CancellationToken.None);
+
+            var result = await executor.ExecuteAsync(ctx);
+
+            Assert.True(result.Success);
+            repoManager.Verify(r => r.FetchAsync(worktreePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()), Times.Once);
+            repoManager.Verify(r => r.RebaseAsync(worktreePath, "origin/main", CancellationToken.None), Times.Once);
+        }
+        finally
+        {
+            try { Directory.Delete(worktreePath, true); } catch { }
+            try { Directory.Delete(basePath, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_continues_when_rebase_fails()
+    {
+        var workItemId = Guid.NewGuid().ToString();
+        var repoId = Guid.NewGuid();
+        var worktreePath = Path.Combine(Path.GetTempPath(), $"ild-test-{workItemId:N}");
+        var basePath = Path.Combine(Path.GetTempPath(), $"ild-base-{repoId:N}");
+
+        try
+        {
+            Directory.CreateDirectory(worktreePath);
+            Directory.CreateDirectory(Path.Combine(basePath, ".git"));
+
+            var workItem = new WorkItemView
+            {
+                Id = workItemId,
+                RepositoryId = repoId,
+                Title = "test",
+                Description = "test",
+            };
+
+            var repository = new Repository
+            {
+                Id = repoId,
+                Name = "test-repo",
+                RemoteProviderId = Guid.NewGuid(),
+                CloneUrl = "https://example.com/test.git",
+                WorktreesPath = basePath,
+            };
+            var remoteProvider = new RemoteProvider { Id = repository.RemoteProviderId, Name = "provider", Type = "Forgejo", Url = "https://example.com", ApiKey = "token-123" };
+
+            var providerStore = new Mock<IProviderStore>();
+            providerStore.Setup(s => s.GetRepositoryByIdAsync(repoId))
+                .ReturnsAsync(repository);
+            providerStore.Setup(s => s.GetRemoteProviderByIdAsync(repository.RemoteProviderId))
+                .ReturnsAsync(remoteProvider);
+
+            var repoManager = new Mock<IRepositoryManager>();
+            repoManager.Setup(r => r.PullAsync(basePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()))
+                .ReturnsAsync(true);
+            repoManager.Setup(r => r.CreateWorktreeAsync(basePath, It.IsAny<string>()))
+                .ReturnsAsync(worktreePath);
+            repoManager.Setup(r => r.FetchAsync(worktreePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()))
+                .ReturnsAsync(true);
+            // Rebase throws — should be swallowed
+            repoManager.Setup(r => r.RebaseAsync(worktreePath, "origin/main", CancellationToken.None))
+                .ThrowsAsync(new InvalidOperationException("rebase conflict"));
+
+            var runId = Guid.NewGuid();
+            var loopRunStore = new Mock<ILoopRunStore>();
+            loopRunStore.Setup(s => s.GetByIdAsync(runId))
+                .ReturnsAsync(new ILD.Data.Entities.LoopRun { Id = runId, WorktreePath = null });
+
+            var sp = BuildServiceProvider(providerStore.Object, repoManager.Object, loopRunStore.Object);
+
+            var executor = new StartNodeExecutor(repoManager.Object, sp);
+
+            var ctx = new NodeExecutionContext(
+                Run: new ILD.Data.Entities.LoopRun { Id = runId },
+                RunNode: new ILD.Data.Entities.LoopRunNode { RetryCount = 0 },
+                Node: new ILD.Data.Entities.LoopNode { Id = Guid.NewGuid() },
+                WorkItem: workItem,
+                PreviousNodeOutput: null,
+                CancellationToken: CancellationToken.None);
+
+            var result = await executor.ExecuteAsync(ctx);
+
+            // Node still succeeds despite rebase failure
+            Assert.True(result.Success);
+            repoManager.Verify(r => r.FetchAsync(worktreePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()), Times.Once);
+            repoManager.Verify(r => r.RebaseAsync(worktreePath, "origin/main", CancellationToken.None), Times.Once);
+        }
+        finally
+        {
+            try { Directory.Delete(worktreePath, true); } catch { }
+            try { Directory.Delete(basePath, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_rebase_uses_repo_DefaultBranch()
+    {
+        var workItemId = Guid.NewGuid().ToString();
+        var repoId = Guid.NewGuid();
+        var worktreePath = Path.Combine(Path.GetTempPath(), $"ild-test-{workItemId:N}");
+        var basePath = Path.Combine(Path.GetTempPath(), $"ild-base-{repoId:N}");
+
+        try
+        {
+            Directory.CreateDirectory(worktreePath);
+            Directory.CreateDirectory(Path.Combine(basePath, ".git"));
+
+            var workItem = new WorkItemView
+            {
+                Id = workItemId,
+                RepositoryId = repoId,
+                Title = "test",
+                Description = "test",
+            };
+
+            var repository = new Repository
+            {
+                Id = repoId,
+                Name = "test-repo",
+                RemoteProviderId = Guid.NewGuid(),
+                CloneUrl = "https://example.com/test.git",
+                WorktreesPath = basePath,
+                DefaultBranch = "master", // non-main default branch
+            };
+            var remoteProvider = new RemoteProvider { Id = repository.RemoteProviderId, Name = "provider", Type = "Forgejo", Url = "https://example.com", ApiKey = "token-123" };
+
+            var providerStore = new Mock<IProviderStore>();
+            providerStore.Setup(s => s.GetRepositoryByIdAsync(repoId))
+                .ReturnsAsync(repository);
+            providerStore.Setup(s => s.GetRemoteProviderByIdAsync(repository.RemoteProviderId))
+                .ReturnsAsync(remoteProvider);
+
+            var repoManager = new Mock<IRepositoryManager>();
+            repoManager.Setup(r => r.PullAsync(basePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()))
+                .ReturnsAsync(true);
+            repoManager.Setup(r => r.CreateWorktreeAsync(basePath, It.IsAny<string>()))
+                .ReturnsAsync(worktreePath);
+            repoManager.Setup(r => r.FetchAsync(worktreePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()))
+                .ReturnsAsync(true);
+            repoManager.Setup(r => r.RebaseAsync(worktreePath, "origin/master", CancellationToken.None))
+                .ReturnsAsync(true);
+
+            var runId = Guid.NewGuid();
+            var loopRunStore = new Mock<ILoopRunStore>();
+            loopRunStore.Setup(s => s.GetByIdAsync(runId))
+                .ReturnsAsync(new ILD.Data.Entities.LoopRun { Id = runId, WorktreePath = null });
+
+            var sp = BuildServiceProvider(providerStore.Object, repoManager.Object, loopRunStore.Object);
+
+            var executor = new StartNodeExecutor(repoManager.Object, sp);
+
+            var ctx = new NodeExecutionContext(
+                Run: new ILD.Data.Entities.LoopRun { Id = runId },
+                RunNode: new ILD.Data.Entities.LoopRunNode { RetryCount = 0 },
+                Node: new ILD.Data.Entities.LoopNode { Id = Guid.NewGuid() },
+                WorkItem: workItem,
+                PreviousNodeOutput: null,
+                CancellationToken: CancellationToken.None);
+
+            var result = await executor.ExecuteAsync(ctx);
+
+            Assert.True(result.Success);
+            // Rebase uses origin/master from repo.DefaultBranch, not hardcoded origin/main
+            repoManager.Verify(r => r.RebaseAsync(worktreePath, "origin/master", CancellationToken.None), Times.Once);
+            repoManager.Verify(r => r.RebaseAsync(worktreePath, "origin/main", It.IsAny<CancellationToken>()), Times.Never);
+        }
+        finally
+        {
+            try { Directory.Delete(worktreePath, true); } catch { }
+            try { Directory.Delete(basePath, true); } catch { }
+        }
+    }
+
     private static IServiceProvider BuildServiceProvider(
         IProviderStore providerStore,
         IRepositoryManager repoManager,

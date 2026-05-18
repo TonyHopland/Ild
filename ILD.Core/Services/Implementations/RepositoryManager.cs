@@ -150,6 +150,15 @@ public class RepositoryManager : IRepositoryManager
         return await File.ReadAllTextAsync(full);
     }
 
+    public async Task<bool> DeleteLocalBranchAsync(string repoPath, string branchName)
+    {
+        var (code, _, _) = await RunAsync(repoPath, "branch", "-D", branchName);
+        return code == 0;
+    }
+
+    public Task<string?> ResolveBaseRepoPathAsync(string worktreePath)
+        => ResolveMainRepoPathAsync(worktreePath);
+
     private async Task<string?> ResolveMainRepoPathAsync(string worktreePath)
     {
         var (code, stdout, _) = await RunAsync(worktreePath, "rev-parse", "--git-common-dir");

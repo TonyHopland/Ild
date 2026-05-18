@@ -152,6 +152,55 @@ public class RepositoryManagerTests : IDisposable
         Assert.Equal("token-123", runner.Calls[0].Environment!["ILD_GIT_PASSWORD"]);
     }
 
+    [Fact]
+    public async Task DeleteLocalBranchAsync_deletes_existing_branch()
+    {
+        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        // Create a branch to delete
+        Git(_repo, "branch", "to-delete");
+
+        var success = await mgr.DeleteLocalBranchAsync(_repo, "to-delete");
+        Assert.True(success);
+
+        // Verify branch is gone
+        var listResult = GitOutput(_repo, "branch", "--list", "to-delete");
+        Assert.Empty(listResult.Trim());
+    }
+
+    [Fact]
+    public async Task DeleteLocalBranchAsync_calls_git_branch_D_with_correct_args()
+    {
+        var runner = new RecordingRunner();
+        var mgr = new RepositoryManager(runner, worktreesRoot: Path.Combine(_tmp, "wt"));
+
+        await mgr.DeleteLocalBranchAsync(_repo, "does-not-exist");
+
+        Assert.Single(runner.Calls);
+        Assert.Equal("git", runner.Calls[0].FileName);
+        Assert.Contains("-D", runner.Calls[0].Args);
+        Assert.Contains("does-not-exist", runner.Calls[0].Args);
+    }
+
+    [Fact]
+    public async Task ResolveBaseRepoPathAsync_returns_base_repo_from_worktree()
+    {
+        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var wtPath = await mgr.CreateWorktreeAsync(_repo, "resolve-test");
+
+        var basePath = await mgr.ResolveBaseRepoPathAsync(wtPath);
+        Assert.NotNull(basePath);
+        Assert.Equal(_repo, Path.GetFullPath(basePath));
+    }
+
+    private static string GitOutput(string cwd, params string[] args)
+    {
+        var psi = new ProcessStartInfo("git") { WorkingDirectory = cwd, UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var p = Process.Start(psi)!;
+        p.WaitForExit();
+        return p.StandardOutput.ReadToEnd();
+    }
+
     private static void Git(string cwd, params string[] args)
     {
         var psi = new ProcessStartInfo("git") { WorkingDirectory = cwd, UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true };
