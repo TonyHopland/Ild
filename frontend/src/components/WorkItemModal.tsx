@@ -532,10 +532,10 @@ export default function WorkItemModal({
   return (
     <>
       {workItem && !editMode ? (
-        <div className="modal-overlay" onClick={onClose}>
+        <div className="modal-overlay" onMouseDown={onClose}>
           <div
             className="modal-content modal-content-detail"
-            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
             aria-label="Work item details"
@@ -976,10 +976,10 @@ export default function WorkItemModal({
           </div>
         </div>
       ) : (
-        <div className="modal-overlay" onClick={onClose}>
+        <div className="modal-overlay" onMouseDown={onClose}>
           <div
             className="modal-content"
-            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
             aria-label={workItem ? "Edit work item" : "New work item"}
