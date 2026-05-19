@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, test } from "vite-plus/test";
-import { render, screen, cleanup } from "@testing-library/react";
+import { afterEach, describe, expect, test, vi } from "vite-plus/test";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import TaskboardColumn from "./TaskboardColumn";
 import WorkItemCard from "./WorkItemCard";
 import { WorkItem, WorkItemPriority, WorkItemStatus } from "../types";
+import * as authServices from "../services/auth";
 
 afterEach(() => {
   cleanup();
@@ -63,6 +64,33 @@ describe("TaskboardColumn", () => {
 
     expect(screen.getByText("Done")).toBeTruthy();
     expect(screen.getByText("0")).toBeTruthy();
+  });
+
+  test("does not call transition when dropping work item into the same column", () => {
+    const transitionSpy = vi
+      .spyOn(authServices.workItemService, "transition")
+      .mockResolvedValue(undefined as unknown as void);
+
+    const item = makeItem({ id: "1", status: WorkItemStatus.Backlog });
+    render(
+      <TaskboardColumn
+        status={WorkItemStatus.Backlog}
+        label="Backlog"
+        workItems={[item]}
+        onWorkItemUpdate={() => {}}
+      />,
+    );
+
+    const column = screen.getByText("Backlog").closest("div");
+    expect(column).toBeTruthy();
+
+    // Simulate dropping the same work item into its own column
+    fireEvent.drop(column!, {
+      dataTransfer: { getData: () => "1" },
+    } as unknown as DragEvent);
+
+    // transition should NOT have been called
+    expect(transitionSpy).not.toHaveBeenCalled();
   });
 });
 
