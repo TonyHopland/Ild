@@ -39,13 +39,14 @@ public sealed class PRNodeExecutor : INodeExecutor
         // display exactly what the human is being asked. We deliberately
         // do NOT stash it on the run-node Output: that slot belongs to
         // the human's eventual answer.
+        string? renderedPrompt = null;
         if (!string.IsNullOrEmpty(cfg.Prompt))
         {
             var rendering = scope.ServiceProvider.GetService<IPromptRenderingService>();
             if (rendering != null)
             {
-                var rendered = await rendering.RenderAsync(cfg.Prompt, ctx.Run.Id, wi, ctx.PreviousNodeOutput);
-                if (!string.IsNullOrEmpty(rendered))
+                renderedPrompt = await rendering.RenderAsync(cfg.Prompt, ctx.Run.Id, wi, ctx.PreviousNodeOutput);
+                if (!string.IsNullOrEmpty(renderedPrompt))
                 {
                     var eventLog = scope.ServiceProvider.GetService<IEventLogService>();
                     if (eventLog != null)
@@ -55,7 +56,7 @@ public sealed class PRNodeExecutor : INodeExecutor
                             await eventLog.AppendAsync(
                                 ctx.Run.Id,
                                 PrPromptRenderedEvent,
-                                rendered,
+                                renderedPrompt,
                                 ctx.Node.Id,
                                 runNodeId: ctx.RunNode.Id);
                         }
@@ -138,7 +139,8 @@ public sealed class PRNodeExecutor : INodeExecutor
         return new NodeOutcome.Suspended(
             "PR awaiting merge",
             SuspendKind.ExternalSignal,
-            prUrl);
+            prUrl,
+            renderedPrompt);
     }
 
     static async Task<string> ResolvePrDescriptionAsync(IServiceProvider sp, string? nodeConfig, Guid runId, WorkItemView wi, string? previousNodeOutput)
