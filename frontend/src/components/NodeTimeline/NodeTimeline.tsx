@@ -1,7 +1,8 @@
-import { useRef, useEffect, useCallback, useState } from "react";
+import { useRef, useEffect, useCallback } from "react";
 import { LoopRunNode, LoopRunNodeStatus, NodeType, LoopNode, EdgeType } from "../../types";
 import NodeItem from "./NodeItem";
 import EdgeArrow from "./EdgeArrow";
+import { useNodeExpansion } from "../../hooks/useNodeExpansion";
 
 interface NodeTimelineProps {
   runNodes: LoopRunNode[];
@@ -18,10 +19,7 @@ function mapNodeType(templateNodes: LoopNode[], nodeId: string): NodeType {
 export default function NodeTimeline({ runNodes, templateNodes }: NodeTimelineProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = useRef(true);
-  const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
-
-  const runningNode = runNodes.find((n) => n.status === LoopRunNodeStatus.Running);
-  const runningNodeId = runningNode?.id ?? null;
+  const { expandedNodeIds, handleToggleNode, runningNodeId } = useNodeExpansion(runNodes);
 
   const handleScroll = useCallback(() => {
     const el = containerRef.current;
@@ -36,16 +34,6 @@ export default function NodeTimeline({ runNodes, templateNodes }: NodeTimelinePr
       el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
     }
   }, [runNodes.length, runningNodeId]);
-
-  const handleToggleNode = useCallback((nodeId: string) => {
-    setExpandedNodeId((prev) => (prev === nodeId ? null : nodeId));
-  }, []);
-
-  useEffect(() => {
-    if (runningNode && expandedNodeId !== runningNode.id) {
-      setExpandedNodeId(runningNode.id);
-    }
-  }, [runNodes, expandedNodeId, runningNode]);
 
   let newNodesCount = 0;
   const showIndicator = !isAtBottomRef.current && runNodes.length > 0;
@@ -79,7 +67,7 @@ export default function NodeTimeline({ runNodes, templateNodes }: NodeTimelinePr
                 templateNodeType={templateNodeType}
                 templateNodeLabel={templateNode?.label}
                 isRunning={isRunning}
-                isExpanded={expandedNodeId === runNode.id}
+                isExpanded={expandedNodeIds.includes(runNode.id)}
                 onToggle={() => handleToggleNode(runNode.id)}
               />
             </div>

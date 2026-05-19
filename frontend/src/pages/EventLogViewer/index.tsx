@@ -15,6 +15,7 @@ import {
 import type { TypedSignalRMessage } from "../../types/signalr";
 import { loopRunService, loopTemplateService } from "../../services/auth";
 import { useSignalR } from "../../hooks/useSignalR";
+import { useNodeExpansion } from "../../hooks/useNodeExpansion";
 import ErrorBanner from "../../components/ErrorBanner";
 import {
   NodeItem,
@@ -115,7 +116,7 @@ export default function EventLogViewer() {
   const [isLoading, setIsLoading] = useState(true);
   const [errorText, setErrorText] = useState("");
   const [progressText, setProgressText] = useState<string>("");
-  const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
+  const { expandedNodeIds, handleToggleNode, runningNodeId } = useNodeExpansion(runNodes);
   const [selectedSessionPreview, setSelectedSessionPreview] =
     useState<LoopRunSessionPreview | null>(null);
   const [isSessionPreviewLoading, setIsSessionPreviewLoading] = useState(false);
@@ -164,35 +165,23 @@ export default function EventLogViewer() {
     }
   }, [runId]);
 
-  const handleToggleNode = useCallback((nodeId: string) => {
-    setExpandedNodeId((prev) => (prev === nodeId ? null : nodeId));
-  }, []);
-
   const handleTimelineScroll = useCallback(() => {
     const el = timelineContainerRef.current;
     if (!el) return;
     isAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
   }, []);
 
-  const runningNode = runNodes.find((n) => n.status === LoopRunNodeStatus.Running);
   const scrollToBottom = useCallback(() => {
     const el = timelineContainerRef.current;
     if (!el) return;
-    if (isAtBottomRef.current || runningNode) {
+    if (isAtBottomRef.current || runningNodeId) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [runningNode]);
+  }, [runningNodeId]);
 
   useEffect(() => {
     scrollToBottom();
   }, [runNodes.length, scrollToBottom]);
-
-  useEffect(() => {
-    const runningNode = runNodes.find((n) => n.status === LoopRunNodeStatus.Running);
-    if (runningNode && expandedNodeId !== runningNode.id) {
-      setExpandedNodeId(runningNode.id);
-    }
-  }, [runNodes, expandedNodeId]);
 
   useEffect(() => {
     void loadRun();
@@ -608,7 +597,7 @@ export default function EventLogViewer() {
                 templateNodeType={templateNodeType}
                 templateNodeLabel={templateNode?.label}
                 isRunning={isRunning}
-                isExpanded={expandedNodeId === rn.id}
+                isExpanded={expandedNodeIds.includes(rn.id)}
                 onToggle={() => handleToggleNode(rn.id)}
                 onRetry={handleRetryFromNode}
                 retryDisabled={run.status === LoopRunStatus.Running && !run.isPaused}
