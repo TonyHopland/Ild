@@ -102,15 +102,16 @@ public class RepositoryManager : IRepositoryManager
         return code == 0;
     }
 
-    public async Task<bool> PullAsync(string worktreePath, CancellationToken cancellationToken = default, GitAuthOptions? auth = null)
-    {
-        var (code, _, _) = await RunAsync(worktreePath, new[] { "pull", "--ff-only" }, cancellationToken, auth);
-        return code == 0;
-    }
 
     public async Task<bool> RebaseAsync(string worktreePath, string upstreamBranch, CancellationToken cancellationToken = default)
     {
         var (code, _, _) = await RunAsync(worktreePath, new[] { "rebase", upstreamBranch }, cancellationToken);
+        return code == 0;
+    }
+
+    public async Task<bool> ResetHardAsync(string worktreePath, string revision, CancellationToken cancellationToken = default)
+    {
+        var (code, _, _) = await RunAsync(worktreePath, new[] { "reset", "--hard", revision }, cancellationToken);
         return code == 0;
     }
 

@@ -11,7 +11,7 @@ namespace ILD.Tests;
 public class StartNodeExecutorTests
 {
     [Fact]
-    public async Task ExecuteAsync_runs_pull_on_existing_base_repo_before_worktree_creation()
+    public async Task ExecuteAsync_runs_fetch_and_reset_hard_on_existing_base_repo_before_worktree_creation()
     {
         var workItemId = Guid.NewGuid().ToString();
         var repoId = Guid.NewGuid();
@@ -48,8 +48,16 @@ public class StartNodeExecutorTests
                 .ReturnsAsync(remoteProvider);
 
             var repoManager = new Mock<IRepositoryManager>();
+            repoManager.Setup(r => r.FetchAsync(basePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()))
+                .ReturnsAsync(true);
+            repoManager.Setup(r => r.ResetHardAsync(basePath, "origin/main", CancellationToken.None))
+                .ReturnsAsync(true);
             repoManager.Setup(r => r.CreateWorktreeAsync(basePath, It.IsAny<string>()))
                 .ReturnsAsync(worktreePath);
+            repoManager.Setup(r => r.FetchAsync(worktreePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()))
+                .ReturnsAsync(true);
+            repoManager.Setup(r => r.RebaseAsync(worktreePath, "origin/main", CancellationToken.None))
+                .ReturnsAsync(true);
 
             var runId = Guid.NewGuid();
             var loopRunStore = new Mock<ILoopRunStore>();
@@ -71,11 +79,15 @@ public class StartNodeExecutorTests
             var result = await executor.ExecuteAsync(ctx);
 
             Assert.True(result.Success);
-            // Pull was called on the base repo before worktree creation
-            repoManager.Verify(r => r.PullAsync(
+            // Fetch + ResetHard were called on the base repo before worktree creation (replaces pull --ff-only)
+            repoManager.Verify(r => r.FetchAsync(
                 basePath,
                 CancellationToken.None,
                 It.Is<GitAuthOptions>(a => a.ApiKey == "token-123" && a.ProviderType == "Forgejo")), Times.Once);
+            repoManager.Verify(r => r.ResetHardAsync(
+                basePath,
+                "origin/main",
+                CancellationToken.None), Times.Once);
             repoManager.Verify(r => r.CreateWorktreeAsync(basePath, It.IsAny<string>()), Times.Once);
         }
         finally
@@ -86,7 +98,7 @@ public class StartNodeExecutorTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_pull_failure_does_not_fail_node()
+    public async Task ExecuteAsync_base_repo_sync_failure_does_not_fail_node()
     {
         var workItemId = Guid.NewGuid().ToString();
         var repoId = Guid.NewGuid();
@@ -123,10 +135,15 @@ public class StartNodeExecutorTests
                 .ReturnsAsync(remoteProvider);
 
             var repoManager = new Mock<IRepositoryManager>();
-            repoManager.Setup(r => r.PullAsync(basePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()))
-                .ReturnsAsync(false);
+            // Fetch on base repo throws — should be swallowed (best-effort)
+            repoManager.Setup(r => r.FetchAsync(basePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()))
+                .ThrowsAsync(new InvalidOperationException("network error"));
             repoManager.Setup(r => r.CreateWorktreeAsync(basePath, It.IsAny<string>()))
                 .ReturnsAsync(worktreePath);
+            repoManager.Setup(r => r.FetchAsync(worktreePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()))
+                .ReturnsAsync(true);
+            repoManager.Setup(r => r.RebaseAsync(worktreePath, "origin/main", CancellationToken.None))
+                .ReturnsAsync(true);
 
             var runId = Guid.NewGuid();
             var loopRunStore = new Mock<ILoopRunStore>();
@@ -198,10 +215,16 @@ public class StartNodeExecutorTests
             var repoManager = new Mock<IRepositoryManager>();
             repoManager.Setup(r => r.ValidateWorktreeHealthAsync(brokenWorktreePath))
                 .ReturnsAsync(false);
-            repoManager.Setup(r => r.PullAsync(basePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()))
+            repoManager.Setup(r => r.FetchAsync(basePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()))
+                .ReturnsAsync(true);
+            repoManager.Setup(r => r.ResetHardAsync(basePath, "origin/main", CancellationToken.None))
                 .ReturnsAsync(true);
             repoManager.Setup(r => r.CreateWorktreeAsync(basePath, "ild/wi-17"))
                 .ReturnsAsync(recreatedWorktreePath);
+            repoManager.Setup(r => r.FetchAsync(recreatedWorktreePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()))
+                .ReturnsAsync(true);
+            repoManager.Setup(r => r.RebaseAsync(recreatedWorktreePath, "origin/main", CancellationToken.None))
+                .ReturnsAsync(true);
 
             var runId = Guid.NewGuid();
             var loopRunStore = new Mock<ILoopRunStore>();
@@ -280,6 +303,10 @@ public class StartNodeExecutorTests
                 .ReturnsAsync((true, null));
             repoManager.Setup(r => r.CreateWorktreeAsync(expectedBasePath, It.IsAny<string>()))
                 .ReturnsAsync(worktreePath);
+            repoManager.Setup(r => r.FetchAsync(worktreePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()))
+                .ReturnsAsync(true);
+            repoManager.Setup(r => r.RebaseAsync(worktreePath, "origin/main", CancellationToken.None))
+                .ReturnsAsync(true);
 
             var runId = Guid.NewGuid();
             var loopRunStore = new Mock<ILoopRunStore>();
@@ -360,7 +387,9 @@ public class StartNodeExecutorTests
                 .ReturnsAsync(remoteProvider);
 
             var repoManager = new Mock<IRepositoryManager>();
-            repoManager.Setup(r => r.PullAsync(basePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()))
+            repoManager.Setup(r => r.FetchAsync(basePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()))
+                .ReturnsAsync(true);
+            repoManager.Setup(r => r.ResetHardAsync(basePath, "origin/main", CancellationToken.None))
                 .ReturnsAsync(true);
             repoManager.Setup(r => r.CreateWorktreeAsync(basePath, It.IsAny<string>()))
                 .ReturnsAsync(worktreePath);
@@ -400,7 +429,7 @@ public class StartNodeExecutorTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_continues_when_rebase_fails()
+    public async Task ExecuteAsync_fails_when_rebase_returns_false()
     {
         var workItemId = Guid.NewGuid().ToString();
         var repoId = Guid.NewGuid();
@@ -437,13 +466,95 @@ public class StartNodeExecutorTests
                 .ReturnsAsync(remoteProvider);
 
             var repoManager = new Mock<IRepositoryManager>();
-            repoManager.Setup(r => r.PullAsync(basePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()))
+            repoManager.Setup(r => r.FetchAsync(basePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()))
+                .ReturnsAsync(true);
+            repoManager.Setup(r => r.ResetHardAsync(basePath, "origin/main", CancellationToken.None))
                 .ReturnsAsync(true);
             repoManager.Setup(r => r.CreateWorktreeAsync(basePath, It.IsAny<string>()))
                 .ReturnsAsync(worktreePath);
             repoManager.Setup(r => r.FetchAsync(worktreePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()))
                 .ReturnsAsync(true);
-            // Rebase throws — should be swallowed
+            // Rebase returns false — should fail the node
+            repoManager.Setup(r => r.RebaseAsync(worktreePath, "origin/main", CancellationToken.None))
+                .ReturnsAsync(false);
+
+            var runId = Guid.NewGuid();
+            var loopRunStore = new Mock<ILoopRunStore>();
+            loopRunStore.Setup(s => s.GetByIdAsync(runId))
+                .ReturnsAsync(new ILD.Data.Entities.LoopRun { Id = runId, WorktreePath = null });
+
+            var sp = BuildServiceProvider(providerStore.Object, repoManager.Object, loopRunStore.Object);
+
+            var executor = new StartNodeExecutor(repoManager.Object, sp);
+
+            var ctx = new NodeExecutionContext(
+                Run: new ILD.Data.Entities.LoopRun { Id = runId },
+                RunNode: new ILD.Data.Entities.LoopRunNode { RetryCount = 0 },
+                Node: new ILD.Data.Entities.LoopNode { Id = Guid.NewGuid() },
+                WorkItem: workItem,
+                PreviousNodeOutput: null,
+                CancellationToken: CancellationToken.None);
+
+            var result = await executor.ExecuteAsync(ctx);
+
+            Assert.False(result.Success);
+            Assert.Contains("rebase", result.Error?.ToLowerInvariant());
+            Assert.Contains("stale", result.Error?.ToLowerInvariant());
+        }
+        finally
+        {
+            try { Directory.Delete(worktreePath, true); } catch { }
+            try { Directory.Delete(basePath, true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_fails_when_rebase_throws()
+    {
+        var workItemId = Guid.NewGuid().ToString();
+        var repoId = Guid.NewGuid();
+        var worktreePath = Path.Combine(Path.GetTempPath(), $"ild-test-{workItemId:N}");
+        var basePath = Path.Combine(Path.GetTempPath(), $"ild-base-{repoId:N}");
+
+        try
+        {
+            Directory.CreateDirectory(worktreePath);
+            Directory.CreateDirectory(Path.Combine(basePath, ".git"));
+
+            var workItem = new WorkItemView
+            {
+                Id = workItemId,
+                RepositoryId = repoId,
+                Title = "test",
+                Description = "test",
+            };
+
+            var repository = new Repository
+            {
+                Id = repoId,
+                Name = "test-repo",
+                RemoteProviderId = Guid.NewGuid(),
+                CloneUrl = "https://example.com/test.git",
+                WorktreesPath = basePath,
+            };
+            var remoteProvider = new RemoteProvider { Id = repository.RemoteProviderId, Name = "provider", Type = "Forgejo", Url = "https://example.com", ApiKey = "token-123" };
+
+            var providerStore = new Mock<IProviderStore>();
+            providerStore.Setup(s => s.GetRepositoryByIdAsync(repoId))
+                .ReturnsAsync(repository);
+            providerStore.Setup(s => s.GetRemoteProviderByIdAsync(repository.RemoteProviderId))
+                .ReturnsAsync(remoteProvider);
+
+            var repoManager = new Mock<IRepositoryManager>();
+            repoManager.Setup(r => r.FetchAsync(basePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()))
+                .ReturnsAsync(true);
+            repoManager.Setup(r => r.ResetHardAsync(basePath, "origin/main", CancellationToken.None))
+                .ReturnsAsync(true);
+            repoManager.Setup(r => r.CreateWorktreeAsync(basePath, It.IsAny<string>()))
+                .ReturnsAsync(worktreePath);
+            repoManager.Setup(r => r.FetchAsync(worktreePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()))
+                .ReturnsAsync(true);
+            // Rebase throws — should fail the node
             repoManager.Setup(r => r.RebaseAsync(worktreePath, "origin/main", CancellationToken.None))
                 .ThrowsAsync(new InvalidOperationException("rebase conflict"));
 
@@ -466,10 +577,9 @@ public class StartNodeExecutorTests
 
             var result = await executor.ExecuteAsync(ctx);
 
-            // Node still succeeds despite rebase failure
-            Assert.True(result.Success);
-            repoManager.Verify(r => r.FetchAsync(worktreePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()), Times.Once);
-            repoManager.Verify(r => r.RebaseAsync(worktreePath, "origin/main", CancellationToken.None), Times.Once);
+            Assert.False(result.Success);
+            Assert.Contains("rebase", result.Error?.ToLowerInvariant());
+            Assert.Contains("stale", result.Error?.ToLowerInvariant());
         }
         finally
         {
@@ -517,7 +627,9 @@ public class StartNodeExecutorTests
                 .ReturnsAsync(remoteProvider);
 
             var repoManager = new Mock<IRepositoryManager>();
-            repoManager.Setup(r => r.PullAsync(basePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()))
+            repoManager.Setup(r => r.FetchAsync(basePath, CancellationToken.None, It.IsAny<GitAuthOptions?>()))
+                .ReturnsAsync(true);
+            repoManager.Setup(r => r.ResetHardAsync(basePath, "origin/master", CancellationToken.None))
                 .ReturnsAsync(true);
             repoManager.Setup(r => r.CreateWorktreeAsync(basePath, It.IsAny<string>()))
                 .ReturnsAsync(worktreePath);
@@ -546,8 +658,10 @@ public class StartNodeExecutorTests
             var result = await executor.ExecuteAsync(ctx);
 
             Assert.True(result.Success);
-            // Rebase uses origin/master from repo.DefaultBranch, not hardcoded origin/main
+            // ResetHard and Rebase use origin/master from repo.DefaultBranch, not hardcoded origin/main
+            repoManager.Verify(r => r.ResetHardAsync(basePath, "origin/master", CancellationToken.None), Times.Once);
             repoManager.Verify(r => r.RebaseAsync(worktreePath, "origin/master", CancellationToken.None), Times.Once);
+            repoManager.Verify(r => r.ResetHardAsync(basePath, "origin/main", It.IsAny<CancellationToken>()), Times.Never);
             repoManager.Verify(r => r.RebaseAsync(worktreePath, "origin/main", It.IsAny<CancellationToken>()), Times.Never);
         }
         finally

@@ -192,6 +192,47 @@ public class RepositoryManagerTests : IDisposable
         Assert.Equal(_repo, Path.GetFullPath(basePath));
     }
 
+    [Fact]
+    public async Task ResetHardAsync_calls_git_reset_hard_with_revision()
+    {
+        var runner = new RecordingRunner();
+        var mgr = new RepositoryManager(runner, worktreesRoot: Path.Combine(_tmp, "wt"));
+
+        var success = await mgr.ResetHardAsync(_repo, "origin/main");
+        Assert.True(success);
+
+        Assert.Single(runner.Calls);
+        Assert.Equal("git", runner.Calls[0].FileName);
+        Assert.Contains("reset", runner.Calls[0].Args);
+        Assert.Contains("--hard", runner.Calls[0].Args);
+        Assert.Contains("origin/main", runner.Calls[0].Args);
+    }
+
+    [Fact]
+    public async Task ResetHardAsync_resets_working_tree_to_revision()
+    {
+        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+
+        // Create a commit to have something to reset from
+        File.WriteAllText(Path.Combine(_repo, "file-a.txt"), "content a\n");
+        Git(_repo, "add", "-A");
+        Git(_repo, "commit", "-m", "add file-a");
+        var commitA = GitOutput(_repo, "rev-parse", "HEAD").Trim();
+
+        // Create another commit
+        File.WriteAllText(Path.Combine(_repo, "file-b.txt"), "content b\n");
+        Git(_repo, "add", "-A");
+        Git(_repo, "commit", "-m", "add file-b");
+
+        // Reset back to first commit
+        var success = await mgr.ResetHardAsync(_repo, commitA);
+        Assert.True(success);
+
+        // file-b.txt should be gone after reset --hard
+        Assert.False(File.Exists(Path.Combine(_repo, "file-b.txt")));
+        Assert.True(File.Exists(Path.Combine(_repo, "file-a.txt")));
+    }
+
     private static string GitOutput(string cwd, params string[] args)
     {
         var psi = new ProcessStartInfo("git") { WorkingDirectory = cwd, UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true };
