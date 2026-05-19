@@ -163,9 +163,11 @@ public class WorktreePreviewServiceTests : IDisposable
                 // Best effort cleanup.
             }
         }
+
+        GC.SuppressFinalize(this);
     }
 
-    private WorktreePreviewService CreateService()
+    private static WorktreePreviewService CreateService()
     {
         var config = new ConfigurationBuilder().Build();
         return new WorktreePreviewService(new TestHttpClientFactory(), config, NullLogger<WorktreePreviewService>.Instance);

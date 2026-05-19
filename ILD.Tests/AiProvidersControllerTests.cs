@@ -27,7 +27,12 @@ public class AiProvidersControllerTests : IDisposable
         _registry.Setup(r => r.GetAllSupportedProviderTypes()).Returns(["opencode", "pi"]);
     }
 
-    public void Dispose() { _db.Dispose(); _conn.Dispose(); }
+    public void Dispose()
+    {
+        _db.Dispose();
+        _conn.Dispose();
+        GC.SuppressFinalize(this);
+    }
 
     private AiProvidersController CreateController()
         => new(Mock.Of<IAIProviderService>(), _registry.Object, _db);

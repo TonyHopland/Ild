@@ -42,6 +42,7 @@ public class OpenCodeAdapterMcpInjectionTests : IDisposable
         Environment.SetEnvironmentVariable("ILD_API_URL", string.IsNullOrEmpty(_previousApiUrl) ? null : _previousApiUrl);
         Environment.SetEnvironmentVariable("ILD_API_TOKEN", string.IsNullOrEmpty(_previousApiToken) ? null : _previousApiToken);
         try { Directory.Delete(_tempDir, recursive: true); } catch { /* best effort */ }
+        GC.SuppressFinalize(this);
     }
 
     [Fact]

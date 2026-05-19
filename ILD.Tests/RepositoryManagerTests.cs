@@ -39,6 +39,7 @@ public class RepositoryManagerTests : IDisposable
     public void Dispose()
     {
         try { Directory.Delete(_tmp, recursive: true); } catch { }
+        GC.SuppressFinalize(this);
     }
 
     [Fact]
