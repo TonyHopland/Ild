@@ -73,25 +73,33 @@ public sealed class StartNodeExecutor : INodeExecutor
                     cloned = true;
                 }
             }
-            // Pull existing base repo to ensure it's up to date (best-effort, skip if just cloned)
+            // Sync base repo to latest origin/<defaultBranch> via fetch + reset --hard
+            // (pull --ff-only fails on repos with merge commits, leaving base repo stale)
+            var defaultBranch = repo.DefaultBranch ?? "main";
             if (!cloned)
             {
-                try { await _repo.PullAsync(basePath, ctx.CancellationToken, gitAuth); } catch { }
+                try
+                {
+                    await _repo.FetchAsync(basePath, ctx.CancellationToken, gitAuth);
+                    await _repo.ResetHardAsync(basePath, $"origin/{defaultBranch}", ctx.CancellationToken);
+                }
+                catch { /* best-effort — continue even if sync fails */ }
             }
             var path = await _repo.CreateWorktreeAsync(basePath, branch);
             run.WorktreePath = path;
             run.BranchName = branch;
 
             // Fetch latest refs and rebase onto updated default branch to avoid stale branches
-            var defaultBranch = repo.DefaultBranch ?? "main";
             await _repo.FetchAsync(path, ctx.CancellationToken, gitAuth);
             try
             {
-                await _repo.RebaseAsync(path, $"origin/{defaultBranch}", ctx.CancellationToken);
+                var rebaseOk = await _repo.RebaseAsync(path, $"origin/{defaultBranch}", ctx.CancellationToken);
+                if (!rebaseOk)
+                    return new NodeOutcome.Failed($"rebase onto origin/{defaultBranch} failed — worktree may be stale");
             }
-            catch
+            catch (Exception ex)
             {
-                // Rebase failure is non-fatal — continue
+                return new NodeOutcome.Failed($"rebase onto origin/{defaultBranch} failed: {ex.Message} — worktree may be stale");
             }
 
             await loopRunStore.UpdateRunAsync(run);

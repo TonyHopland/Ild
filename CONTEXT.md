@@ -29,7 +29,7 @@ _Avoid_: workspace, checkout
 ### Node Types
 
 **Start Node**:
-The entry point of a loop graph. Optionally creates a worktree and branch. If the base git repository is missing at `repo.WorktreesPath` (or fallback `data/repos/{repo-id}`), it is cloned on demand. If the base repository already exists, `git pull --ff-only` runs before worktree creation to ensure the latest state (best-effort; pull failure does not fail the node).
+The entry point of a loop graph. Optionally creates a worktree and branch. If the base git repository is missing at `repo.WorktreesPath` (or fallback `data/repos/{repo-id}`), it is cloned on demand. If the base repository already exists, `git fetch origin` + `git reset --hard origin/<defaultBranch>` runs before worktree creation to ensure the latest state (best-effort; sync failure does not fail the node). After worktree creation, the branch is rebased onto `origin/<defaultBranch>` — rebase failure fails the node to prevent stale worktrees.
 _Avoid_: init, setup
 
 **Cmd Node**:

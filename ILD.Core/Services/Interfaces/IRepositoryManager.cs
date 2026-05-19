@@ -19,8 +19,13 @@ public interface IRepositoryManager
     Task<bool> ValidateWorktreeHealthAsync(string worktreePath);
     Task<bool> CheckoutBranchAsync(string worktreePath, string branchName);
     Task<bool> FetchAsync(string worktreePath, CancellationToken cancellationToken = default, GitAuthOptions? auth = null);
-    Task<bool> PullAsync(string worktreePath, CancellationToken cancellationToken = default, GitAuthOptions? auth = null);
     Task<bool> RebaseAsync(string worktreePath, string upstreamBranch, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Hard-reset the working tree to <paramref name="revision"/> (e.g. <c>origin/main</c>).
+    /// Useful for syncing a base repo without merging — works regardless of merge history.
+    /// </summary>
+    Task<bool> ResetHardAsync(string worktreePath, string revision, CancellationToken cancellationToken = default);
     Task<bool> CommitAsync(string worktreePath, string message);
     Task<(bool Success, string? Error)> PushAsync(string worktreePath, string branchName, CancellationToken cancellationToken = default, GitAuthOptions? auth = null);
     Task<string?> GetDiffAsync(string worktreePath);
