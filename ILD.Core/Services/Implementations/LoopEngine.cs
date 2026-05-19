@@ -698,6 +698,8 @@ public class LoopEngine : ILoopEngine
                     runNode.Status = LoopRunNodeStatus.WaitingHuman;
                     runNode.Output = s.Output ?? runNode.Output;
                     runNode.CompletedAt = DateTime.UtcNow;
+                    if (!string.IsNullOrEmpty(s.ResolvedPrompt))
+                        runNode.EffectiveInput = MergeResolvedPrompt(runNode.EffectiveInput, s.ResolvedPrompt);
                     await UpdateRunNodeAsync(runNode);
                     await NotifyAsync(() => _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.WaitingHuman));
                     await LogEventAsync(run.Id, "HumanFeedbackRequested", $"{node.Label}: {s.Reason}", node.Id, runNodeId: runNode.Id);
@@ -772,12 +774,27 @@ public class LoopEngine : ILoopEngine
     {
         try
         {
-            var properties = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>?>(existing ?? "{}");
-            properties ??= new Dictionary<string, object>();
-            properties["resolvedPrompt"] = resolvedPrompt;
-            return System.Text.Json.JsonSerializer.Serialize(properties);
+            string result;
+            using (var ms = new System.IO.MemoryStream())
+            {
+                using (var writer = new System.Text.Json.Utf8JsonWriter(ms))
+                {
+                    writer.WriteStartObject();
+                    using var doc = System.Text.Json.JsonDocument.Parse(existing ?? "{}");
+                    foreach (var prop in doc.RootElement.EnumerateObject())
+                    {
+                        if (prop.Name != "resolvedPrompt")
+                            prop.WriteTo(writer);
+                    }
+                    writer.WriteString("resolvedPrompt", resolvedPrompt);
+                    writer.WriteEndObject();
+                    writer.Flush();
+                }
+                result = System.Text.Encoding.UTF8.GetString(ms.ToArray());
+            }
+            return result;
         }
-        catch
+        catch (System.Text.Json.JsonException)
         {
             return System.Text.Json.JsonSerializer.Serialize(new { nodeType = "unknown", resolvedPrompt });
         }

@@ -53,7 +53,7 @@ public abstract record NodeOutcome(string? Output = null)
     /// Node is paused awaiting an external event. The run is parked at this node
     /// until <c>ILoopEngine.SignalNodeResultAsync</c> is called.
     /// </summary>
-    public sealed record Suspended(string Reason, SuspendKind Kind, string? Output = null) : NodeOutcome(Output);
+    public sealed record Suspended(string Reason, SuspendKind Kind, string? Output = null, string? ResolvedPrompt = null) : NodeOutcome(Output);
 
     /// <summary>
     /// Terminal node: the run is complete on success of this node. There is no

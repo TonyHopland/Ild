@@ -361,7 +361,8 @@ public sealed class HumanNodeExecutor : INodeExecutor
         }
         return new NodeOutcome.Suspended(
             "Human node awaiting input",
-            SuspendKind.HumanInput);
+            SuspendKind.HumanInput,
+            ResolvedPrompt: rendered);
     }
 
     public const string HumanPromptRenderedEvent = "HumanPromptRendered";

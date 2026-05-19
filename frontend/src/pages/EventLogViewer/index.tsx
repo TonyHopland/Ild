@@ -237,27 +237,14 @@ export default function EventLogViewer() {
       setProgressText((prev) => prev + line);
     };
 
-    const onEventLogged = async (message: TypedSignalRMessage<"EventLogged">) => {
-      const { runId: msgRunId, eventType } = message.payload;
-      if (msgRunId !== runId) return;
-      // NodeStarted and NodeCompleted are when EffectiveInput / Output /
-      // CompletedAt / Error get persisted. Refresh so the timeline reflects
-      // them without waiting for the user to refresh the page manually.
-      if (eventType === "NodeStarted" || eventType === "NodeCompleted") {
-        void loadRun();
-      }
-    };
-
     on("LoopRunStateChanged", onLoopRunStateChanged);
     on("NodeStateChanged", onNodeStateChanged);
     on("NodeProgress", onNodeProgress);
-    on("EventLogged", onEventLogged);
 
     return () => {
       off("LoopRunStateChanged", onLoopRunStateChanged);
       off("NodeStateChanged", onNodeStateChanged);
       off("NodeProgress", onNodeProgress);
-      off("EventLogged", onEventLogged);
     };
   }, [on, off, runId, loadRun]);
 
