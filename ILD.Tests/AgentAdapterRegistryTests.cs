@@ -55,15 +55,15 @@ public class AgentAdapterRegistryTests
     {
         var sp = BuildServiceProvider(s =>
         {
-                        s.AddSingleton<IAgentAdapter, TestOpenCodeAdapter>();
+            s.AddSingleton<IAgentAdapter, TestOpenCodeAdapter>();
             s.AddSingleton<IAgentAdapter, TestCustomAdapter>();
         });
 
         var registry = sp.GetRequiredService<IAgentAdapterRegistry>();
 
-                    Assert.IsType<TestOpenCodeAdapter>(registry.ResolveForProvider(new AiProvider { Type = "opencode" })());
+        Assert.IsType<TestOpenCodeAdapter>(registry.ResolveForProvider(new AiProvider { Type = "opencode" })());
 
-          Assert.IsType<TestCustomAdapter>(registry.ResolveForProvider(new AiProvider { Type = "custom" })());
+        Assert.IsType<TestCustomAdapter>(registry.ResolveForProvider(new AiProvider { Type = "custom" })());
     }
 
     [Fact]

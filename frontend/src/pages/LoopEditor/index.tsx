@@ -1,5 +1,5 @@
 import "./LoopEditor.css";
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   ReactFlow,
   Background,
@@ -229,8 +229,10 @@ export default function LoopEditor() {
   const selectedPlaceholderUsage = sessionPlaceholderUsages.find(
     (entry) => entry.name === aiSessionPlaceholder.trim(),
   );
-  const availableAiTools: AiToolDefinition[] =
-    resolveActiveAiProvider(aiProviders, aiProvider)?.supportedTools ?? [];
+  const availableAiTools: AiToolDefinition[] = useMemo(
+    () => resolveActiveAiProvider(aiProviders, aiProvider)?.supportedTools ?? [],
+    [aiProviders, aiProvider],
+  );
 
   const loadAdapterSchema = useCallback(
     async (providerId: string, initialAdapterConfig: Record<string, unknown> = {}) => {

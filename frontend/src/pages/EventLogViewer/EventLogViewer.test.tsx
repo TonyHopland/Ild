@@ -182,6 +182,85 @@ const mockTemplateGraphAI = {
   edges: [],
 };
 
+const mockRunWithMultipleNodes = {
+  id: "test-run-multi",
+  workItemId: "work-1",
+  loopTemplateId: "template-1",
+  templateVersion: 1,
+  status: "Running",
+  currentNodeId: "node-2",
+  isPaused: false,
+  nodeExecutionCount: 2,
+  startedAt: "2025-01-01T00:00:00Z",
+  completedAt: null,
+  availableSessions: [],
+  nodes: [
+    {
+      id: "run-node-1",
+      nodeId: "node-1",
+      nodeLabel: "Start Node",
+      status: "Succeeded",
+      output: "start output",
+      error: null,
+      startedAt: "2025-01-01T00:00:00Z",
+      completedAt: "2025-01-01T00:01:00Z",
+      executionCount: 1,
+    },
+    {
+      id: "run-node-2",
+      nodeId: "node-2",
+      nodeLabel: "Cmd Node",
+      status: "Running",
+      output: null,
+      error: null,
+      startedAt: "2025-01-01T00:01:00Z",
+      completedAt: null,
+      executionCount: 1,
+    },
+    {
+      id: "run-node-3",
+      nodeId: "node-3",
+      nodeLabel: "AI Node",
+      status: "Pending",
+      output: null,
+      error: null,
+      startedAt: null,
+      completedAt: null,
+      executionCount: 0,
+    },
+  ],
+};
+
+const mockTemplateGraphMulti = {
+  nodes: [
+    {
+      id: "node-1",
+      type: "Start",
+      label: "Start Node",
+      config: {},
+      maxTraversals: null,
+      retryCount: null,
+    },
+    {
+      id: "node-2",
+      type: "Cmd",
+      label: "Cmd Node",
+      config: {},
+      maxTraversals: null,
+      retryCount: null,
+    },
+    {
+      id: "node-3",
+      type: "AI",
+      label: "AI Node",
+      config: {},
+      maxTraversals: null,
+      retryCount: null,
+    },
+  ],
+  edges: [],
+};
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -379,6 +458,94 @@ describe("EventLogViewer", () => {
     fireEvent.click(screen.getByText("AI Node"));
     await waitFor(() => {
       expect(screen.queryByText(/--- Context ---/)).toBeNull();
+    });
+  });
+
+  describe("multi-node expansion", () => {
+    function renderMultiNodeViewer() {
+      (loopRunService.getById as ReturnType<typeof vi.fn>).mockResolvedValue(
+        mockRunWithMultipleNodes,
+      );
+      (loopRunService.getEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+        entries: [],
+        nextCursor: 0,
+        hasMore: false,
+      });
+      (loopTemplateService.getVersionGraph as ReturnType<typeof vi.fn>).mockResolvedValue(
+        mockTemplateGraphMulti,
+      );
+
+      render(
+        <MemoryRouter initialEntries={["/loop-runs/test-run-multi/events"]}>
+          <Routes>
+            <Route path="/loop-runs/:runId/events" element={<EventLogViewer />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+    }
+
+    test("allows multiple nodes to be expanded simultaneously", async () => {
+      renderMultiNodeViewer();
+
+      await waitFor(() => {
+        expect(screen.getByText("Start Node")).toBeTruthy();
+        expect(screen.getByText("Cmd Node")).toBeTruthy();
+      });
+
+      // Cmd Node is Running so it auto-expands showing Live Output
+      await waitFor(() => {
+        expect(screen.getByText("Live Output")).toBeTruthy();
+      });
+
+      // Click Start Node to expand it too
+      fireEvent.click(screen.getByText("Start Node"));
+      await waitFor(() => {
+        expect(screen.getByText("start output")).toBeTruthy();
+      });
+
+      // Cmd Node (running) should still be expanded
+      expect(screen.getByText("Live Output")).toBeTruthy();
+    });
+
+    test("running node stays expanded when clicked", async () => {
+      renderMultiNodeViewer();
+
+      await waitFor(() => {
+        expect(screen.getByText("Cmd Node")).toBeTruthy();
+      });
+
+      // Cmd Node is Running so it auto-expands showing Live Output
+      await waitFor(() => {
+        expect(screen.getByText("Live Output")).toBeTruthy();
+      });
+
+      // Click running node — should stay expanded (no-op)
+      fireEvent.click(screen.getByText("Cmd Node"));
+      await waitFor(() => {
+        expect(screen.getByText("Live Output")).toBeTruthy();
+      });
+    });
+
+    test("auto-expanding running node preserves other expanded nodes", async () => {
+      renderMultiNodeViewer();
+
+      await waitFor(() => {
+        expect(screen.getByText("Start Node")).toBeTruthy();
+      });
+
+      // Cmd Node is Running so it auto-expands on mount
+      await waitFor(() => {
+        expect(screen.getByText("Live Output")).toBeTruthy();
+      });
+
+      // Expand Start Node
+      fireEvent.click(screen.getByText("Start Node"));
+      await waitFor(() => {
+        expect(screen.getByText("start output")).toBeTruthy();
+      });
+
+      // Running node should still be expanded (not replaced)
+      expect(screen.getByText("Live Output")).toBeTruthy();
     });
   });
 });
