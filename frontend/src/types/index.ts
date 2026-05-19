@@ -190,6 +190,7 @@ export interface LoopRunNode {
   nodeId: string;
   nodeLabel: string;
   status: LoopRunNodeStatus;
+  effectiveInput: string | null;
   output: string | null;
   error: string | null;
   startedAt: string | null;

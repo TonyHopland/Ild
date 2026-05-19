@@ -115,7 +115,6 @@ export default function EventLogViewer() {
   const [isLoading, setIsLoading] = useState(true);
   const [errorText, setErrorText] = useState("");
   const [progressText, setProgressText] = useState<string>("");
-  const [effectiveInputs, setEffectiveInputs] = useState<Record<string, EffectiveInput>>({});
   const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
   const [selectedSessionPreview, setSelectedSessionPreview] =
     useState<LoopRunSessionPreview | null>(null);
@@ -160,37 +159,6 @@ export default function EventLogViewer() {
     try {
       const page = await loopRunService.getEvents(runId, 0, 200);
       setEvents(page.entries);
-
-      const inputs: Record<string, EffectiveInput> = {};
-      for (const entry of page.entries) {
-        if (entry.eventType === "NodeStarted" && entry.runNodeId) {
-          const jsonMatch = entry.payload.match(/\{[\s\S]*\}$/);
-          if (jsonMatch) {
-            try {
-              inputs[entry.runNodeId] = JSON.parse(jsonMatch[0]) as EffectiveInput;
-            } catch {
-              // ignore parse errors
-            }
-          }
-        }
-        if (entry.eventType === "NodeCompleted" && entry.runNodeId) {
-          const jsonMatch = entry.payload.match(/\{[\s\S]*\}$/);
-          if (jsonMatch) {
-            try {
-              const data = JSON.parse(jsonMatch[0]);
-              if (data.resolvedPrompt) {
-                inputs[entry.runNodeId] = {
-                  ...inputs[entry.runNodeId],
-                  resolvedPrompt: data.resolvedPrompt,
-                };
-              }
-            } catch {
-              // ignore parse errors
-            }
-          }
-        }
-      }
-      setEffectiveInputs(inputs);
     } catch (error) {
       console.error("Failed to load events:", error);
     }
@@ -270,37 +238,12 @@ export default function EventLogViewer() {
     };
 
     const onEventLogged = async (message: TypedSignalRMessage<"EventLogged">) => {
-      const { runId: msgRunId, eventType, runNodeId, message: eventMessage } = message.payload;
+      const { runId: msgRunId, eventType } = message.payload;
       if (msgRunId !== runId) return;
-      if (eventType === "NodeStarted" && runNodeId) {
-        const jsonMatch = eventMessage.match(/\{[\s\S]*\}$/);
-        if (jsonMatch) {
-          try {
-            const input = JSON.parse(jsonMatch[0]) as EffectiveInput;
-            setEffectiveInputs((prev) => ({ ...prev, [runNodeId]: input }));
-          } catch {
-            // ignore parse errors
-          }
-        }
-      }
-      if (eventType === "NodeCompleted" && runNodeId) {
-        const jsonMatch = eventMessage.match(/\{[\s\S]*\}$/);
-        if (jsonMatch) {
-          try {
-            const data = JSON.parse(jsonMatch[0]);
-            if (data.resolvedPrompt) {
-              setEffectiveInputs((prev) => ({
-                ...prev,
-                [runNodeId]: { ...prev[runNodeId], resolvedPrompt: data.resolvedPrompt },
-              }));
-            }
-          } catch {
-            // ignore parse errors
-          }
-        }
-        // NodeCompleted is when Output / CompletedAt / Error get persisted.
-        // Refresh so the timeline reflects them without waiting for the
-        // user to refresh the page manually.
+      // NodeStarted and NodeCompleted are when EffectiveInput / Output /
+      // CompletedAt / Error get persisted. Refresh so the timeline reflects
+      // them without waiting for the user to refresh the page manually.
+      if (eventType === "NodeStarted" || eventType === "NodeCompleted") {
         void loadRun();
       }
     };
@@ -392,7 +335,13 @@ export default function EventLogViewer() {
   };
 
   const getEffectiveInputForRunNode = (runNodeId: string): EffectiveInput | undefined => {
-    return effectiveInputs[runNodeId];
+    const runNode = runNodes.find((n) => n.id === runNodeId);
+    if (!runNode?.effectiveInput) return undefined;
+    try {
+      return JSON.parse(runNode.effectiveInput) as EffectiveInput;
+    } catch {
+      return undefined;
+    }
   };
 
   const formatTimestamp = (ts: string) => new Date(ts).toLocaleString();

@@ -667,6 +667,12 @@ public class LoopEngine : ILoopEngine
 
             var effectiveInput = SafeDescribeInput(executor, BuildContext(run, runNode, node, wi, prevOutput, ct));
 
+            // Persist the effective input (template-level description) so the UI
+            // has something to show immediately. It is updated with resolved data
+            // after execution below.
+            runNode.EffectiveInput = effectiveInput;
+            await UpdateRunNodeAsync(runNode);
+
             await NotifyAsync(() => _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Pending, LoopRunNodeStatus.Running));
             await LogEventAsync(run.Id, "NodeStarted", $"{node.Label} started", node.Id, effectiveInput, runNode.Id);
 
@@ -710,6 +716,9 @@ public class LoopEngine : ILoopEngine
                     runNode.Status = LoopRunNodeStatus.Succeeded;
                     runNode.Output = ok.Output;
                     runNode.CompletedAt = DateTime.UtcNow;
+                    // Update effective input with resolved prompt (after template transformation)
+                    if (!string.IsNullOrEmpty(ok.ResolvedPrompt))
+                        runNode.EffectiveInput = MergeResolvedPrompt(runNode.EffectiveInput, ok.ResolvedPrompt);
                     await UpdateRunNodeAsync(runNode);
                     await NotifyAsync(() => _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Succeeded));
                     await LogEventAsync(run.Id, "NodeCompleted", $"{node.Label} succeeded", node.Id, BuildCompletedPayload(ok), runNode.Id);
@@ -751,6 +760,27 @@ public class LoopEngine : ILoopEngine
     {
         if (string.IsNullOrEmpty(ok.ResolvedPrompt)) return ok.Output;
         return System.Text.Json.JsonSerializer.Serialize(new { output = ok.Output, resolvedPrompt = ok.ResolvedPrompt });
+    }
+
+    /// <summary>
+    /// Merge a resolved prompt into an effective-input JSON payload.
+    /// Parses the existing JSON (from <c>DescribeInput</c>), adds
+    /// <c>resolvedPrompt</c>, and re-serialises. If the input is not valid
+    /// JSON falls back to a plain object with the resolved prompt.
+    /// </summary>
+    private static string MergeResolvedPrompt(string? existing, string resolvedPrompt)
+    {
+        try
+        {
+            var properties = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>?>(existing ?? "{}");
+            properties ??= new Dictionary<string, object>();
+            properties["resolvedPrompt"] = resolvedPrompt;
+            return System.Text.Json.JsonSerializer.Serialize(properties);
+        }
+        catch
+        {
+            return System.Text.Json.JsonSerializer.Serialize(new { nodeType = "unknown", resolvedPrompt });
+        }
     }
 
     // ---- Persistence helpers ---------------------------------------------
