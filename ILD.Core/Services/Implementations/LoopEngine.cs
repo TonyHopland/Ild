@@ -269,8 +269,6 @@ public class LoopEngine : ILoopEngine
         var control = _runs.GetOrAdd(runId, _ => new RunControl());
 
         var maxNodeExecs = template.MaxNodeExecutions > 0 ? template.MaxNodeExecutions : 200;
-        var maxWallHours = template.MaxWallClockHours > 0 ? template.MaxWallClockHours : 24;
-        var deadline = DateTime.UtcNow.AddHours(maxWallHours);
 
         control.Task = Task.Run(async () =>
         {
@@ -287,7 +285,7 @@ public class LoopEngine : ILoopEngine
                 await ExecuteRunLoopAsync(
                     runId, run, workItem, nodes, edges, targetTemplateNode,
                     seedOutputs, new Dictionary<Guid, int>(),
-                    control, deadline, maxNodeExecs,
+                    control, maxNodeExecs,
                     initialIncomingSource: seedIncomingSource, linkedCts.Token);
             }
             catch (OperationCanceledException) { /* expected on cancel */ }
@@ -359,8 +357,6 @@ public class LoopEngine : ILoopEngine
         var (run, workItem, template, nodes, edges) = loaded.Value;
 
         var maxNodeExecs = template.MaxNodeExecutions > 0 ? template.MaxNodeExecutions : 200;
-        var maxWallHours = template.MaxWallClockHours > 0 ? template.MaxWallClockHours : 24;
-        var deadline = (run.StartedAt ?? DateTime.UtcNow).AddHours(maxWallHours);
 
         // outputBySource[nodeId] = output of the most recent execution of that
         // template node. Routing into a successor reads the source's slot, so
@@ -420,7 +416,7 @@ public class LoopEngine : ILoopEngine
 
         return await ExecuteRunLoopAsync(
             runId, run, workItem, nodes, edges, current,
-            outputBySource, traversalCounts, control, deadline, maxNodeExecs,
+            outputBySource, traversalCounts, control, maxNodeExecs,
             initialIncomingSource: incomingSource, ct);
     }
 
@@ -443,7 +439,6 @@ public class LoopEngine : ILoopEngine
         Dictionary<Guid, string?> outputBySource,
         Dictionary<Guid, int> traversalCounts,
         RunControl control,
-        DateTime deadline,
         int maxNodeExecs,
         Guid? initialIncomingSource,
         CancellationToken ct)
@@ -458,16 +453,12 @@ public class LoopEngine : ILoopEngine
                 ct.ThrowIfCancellationRequested();
                 if (control.IsPaused)
                 {
-                    if (DateTime.UtcNow > deadline)
-                        return await FailRunAsync(runId, $"Exceeded MaxWallClockHours");
                     try { await Task.Delay(50, ct); } catch (OperationCanceledException) { }
                     continue;
                 }
 
                 if (++executed > maxNodeExecs)
                     return await FailRunAsync(runId, $"Exceeded MaxNodeExecutions={maxNodeExecs}");
-                if (DateTime.UtcNow > deadline)
-                    return await FailRunAsync(runId, $"Exceeded MaxWallClockHours");
 
                 // Refresh workitem (other nodes may have mutated worktree path etc.)
                 workItem = await RefreshWorkItemAsync(workItem.Id) ?? workItem;

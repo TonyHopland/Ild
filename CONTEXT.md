@@ -105,7 +105,7 @@ _Avoid_: draft, planned
 - `AiProvider.Config` is a free-form JSON blob; each adapter reads what it needs
 - Rebase happens only at loop start, not before each node
 - Failed/cancelled WorkItems: "Done" destroys worktree and discards; "Backlog" fully resets for re-planning
-- Safety net (max node execs + wall clock): finishes current node, then cancels the run
+- Safety net (max node execs): finishes current node, then cancels the run
 
 ## Example Dialogue
 

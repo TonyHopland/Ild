@@ -21,7 +21,6 @@ export function serializeForExport(template: LoopTemplate): LoopTemplateExport {
     description: template.description,
     recoveryPolicy: template.recoveryPolicy,
     maxNodeExecutions: template.maxNodeExecutions,
-    maxWallClockHours: template.maxWallClockHours,
     nodes: template.nodes.map((n) => ({
       id: n.id,
       type: n.type,
@@ -107,13 +106,6 @@ export function parseImportFile(raw: string): ParseImportResult {
     };
   }
 
-  if (typeof obj.maxWallClockHours !== "number" || obj.maxWallClockHours <= 0) {
-    return {
-      ok: false,
-      error: "Invalid format — 'maxWallClockHours' must be a positive number.",
-    };
-  }
-
   if (!Array.isArray(obj.nodes) || obj.nodes.length === 0) {
     return { ok: false, error: "Invalid format — 'nodes' must be a non-empty array." };
   }
@@ -142,7 +134,6 @@ export function parseImportFile(raw: string): ParseImportResult {
       description: obj.description,
       recoveryPolicy: obj.recoveryPolicy as RecoveryPolicy,
       maxNodeExecutions: obj.maxNodeExecutions,
-      maxWallClockHours: obj.maxWallClockHours,
       nodes: obj.nodes as LoopTemplateExportNode[],
       edges: obj.edges as LoopTemplateExportEdge[],
     },

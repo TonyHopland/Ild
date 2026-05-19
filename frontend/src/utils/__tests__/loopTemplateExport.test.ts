@@ -16,7 +16,6 @@ describe("loopTemplateExport", () => {
     version: 3,
     recoveryPolicy: RecoveryPolicy.AutoResume,
     maxNodeExecutions: 200,
-    maxWallClockHours: 24,
     nodes: [
       {
         id: "n-start",
@@ -58,7 +57,6 @@ describe("loopTemplateExport", () => {
       expect(exportData.description).toBe("Standard development loop");
       expect(exportData.recoveryPolicy).toBe(RecoveryPolicy.AutoResume);
       expect(exportData.maxNodeExecutions).toBe(200);
-      expect(exportData.maxWallClockHours).toBe(24);
     });
 
     test("excludes instance-specific fields (id, createdAt, updatedAt, isArchived)", () => {
@@ -152,7 +150,6 @@ describe("loopTemplateExport", () => {
           description: "",
           recoveryPolicy: "AutoResume",
           maxNodeExecutions: 200,
-          maxWallClockHours: 24,
           nodes: [],
           edges: [],
         }),
@@ -169,7 +166,6 @@ describe("loopTemplateExport", () => {
           description: "",
           recoveryPolicy: "InvalidPolicy",
           maxNodeExecutions: 200,
-          maxWallClockHours: 24,
           nodes: [],
           edges: [],
         }),
@@ -186,7 +182,6 @@ describe("loopTemplateExport", () => {
           description: "",
           recoveryPolicy: "AutoResume",
           maxNodeExecutions: 200,
-          maxWallClockHours: 24,
           edges: [],
         }),
       );
@@ -202,7 +197,6 @@ describe("loopTemplateExport", () => {
           description: "",
           recoveryPolicy: "AutoResume",
           maxNodeExecutions: 200,
-          maxWallClockHours: 24,
           nodes: [{ id: "n1" }],
           edges: [],
         }),
@@ -224,7 +218,6 @@ describe("loopTemplateExport", () => {
             description: "",
             recoveryPolicy: policy,
             maxNodeExecutions: 200,
-            maxWallClockHours: 24,
             nodes: [
               {
                 id: "n1",
@@ -248,7 +241,6 @@ describe("loopTemplateExport", () => {
           description: "",
           recoveryPolicy: "AutoResume",
           maxNodeExecutions: 200,
-          maxWallClockHours: 24,
           nodes: [
             {
               id: "n1",
