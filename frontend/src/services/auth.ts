@@ -16,6 +16,7 @@ import {
   PrComment,
   LoopRunSessionPreview,
   WorktreePreview,
+  AppSetting,
 } from "../types";
 
 interface BackendLoginResponse {
@@ -284,10 +285,6 @@ export const loopRunService = {
     return api.get<LoopRun>(`/loopruns/${id}`);
   },
 
-  trigger: async (workItemId: string): Promise<LoopRun> => {
-    return api.post<LoopRun>(`/workitems/${workItemId}/start`, {});
-  },
-
   cancel: async (id: string): Promise<void> => {
     return api.post<void>(`/loopruns/${id}/cancel`, {});
   },
@@ -404,5 +401,22 @@ export const agentAdapterService = {
   },
   getConfigSchema: async (providerType: string): Promise<ConfigFieldDescriptor[]> => {
     return api.get<ConfigFieldDescriptor[]>(`/AgentAdapters/${providerType}/config-schema`);
+  },
+};
+
+export const SchedulerSettingKeys = {
+  MaxConcurrent: "scheduler.maxConcurrent",
+  IsPaused: "scheduler.isPaused",
+} as const;
+
+export const settingsService = {
+  getAll: async (): Promise<AppSetting[]> => {
+    return api.get<AppSetting[]>("/settings");
+  },
+  get: async (key: string): Promise<AppSetting> => {
+    return api.get<AppSetting>(`/settings/${key}`);
+  },
+  put: async (key: string, value: string): Promise<AppSetting> => {
+    return api.put<AppSetting>(`/settings/${key}`, { value });
   },
 };

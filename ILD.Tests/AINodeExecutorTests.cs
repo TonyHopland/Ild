@@ -1085,6 +1085,8 @@ public class AINodeExecutorTests
             .ReturnsAsync(Array.Empty<EventLogEntry>());
         services.AddSingleton(eventLogService.Object);
 
+        services.AddSingleton<IAiProviderConcurrencyTracker, AiProviderConcurrencyTracker>();
+
         return services.BuildServiceProvider();
     }
 

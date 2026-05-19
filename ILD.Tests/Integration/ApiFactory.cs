@@ -63,7 +63,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
                 sql => sql.MigrationsAssembly(typeof(AppDbContext).Assembly)));
 
             services.RemoveHostedService<ILD.Core.Services.Remote.RemoteWorkItemStartupReconciler>();
-            services.RemoveHostedService<ILD.Core.Services.Remote.RemoteWorkItemPoller>();
+            services.RemoveHostedService<ILD.Core.Services.Remote.WorkItemScheduler>();
             services.GuardExternalServices();
             services.ReplaceSingleton<IAgentAdapterRegistry>(new FixedAgentAdapterRegistry());
 

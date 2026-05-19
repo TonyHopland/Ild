@@ -180,6 +180,7 @@ public class AINodeExecutorEventLogTests
         services.AddSingleton(registry);
         services.AddSingleton(loopRunStore);
         services.AddSingleton(eventLogService);
+        services.AddSingleton<IAiProviderConcurrencyTracker, AiProviderConcurrencyTracker>();
         return services.BuildServiceProvider();
     }
 

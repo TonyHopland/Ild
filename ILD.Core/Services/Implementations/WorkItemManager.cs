@@ -22,6 +22,7 @@ public class WorkItemManager : IWorkItemManager
     private readonly IWorkItemServerClient _server;
     private readonly IWorkItemServerOptionsResolver _options;
     private readonly IWorktreePreviewService _previewService;
+    private readonly IWorkItemScheduler? _scheduler;
 
     public WorkItemManager(
         IRepositoryManager repoManager,
@@ -31,7 +32,8 @@ public class WorkItemManager : IWorkItemManager
         IWorkItemServerClient server,
         IWorkItemServerOptionsResolver options,
         IWorkItemNotifier? notifier = null,
-        IWorktreePreviewService? previewService = null)
+        IWorktreePreviewService? previewService = null,
+        IWorkItemScheduler? scheduler = null)
     {
         _repoManager = repoManager;
         _providerStore = providerStore;
@@ -41,6 +43,7 @@ public class WorkItemManager : IWorkItemManager
         _options = options;
         _notifier = notifier ?? new NoopWorkItemNotifier();
         _previewService = previewService ?? new NoopPreviewService();
+        _scheduler = scheduler;
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -280,6 +283,13 @@ public class WorkItemManager : IWorkItemManager
 
         if (actual == RemoteWorkItemStatus.HumanFeedback && reason != null)
             await _notifier.HumanFeedbackRequiredAsync(workItemId, reason);
+
+        // Wake the scheduler when a slot may have freed up (Done) or when a
+        // run parked waiting for capacity might now be runnable.
+        if (_scheduler != null && (actual == RemoteWorkItemStatus.Done
+            || actual == RemoteWorkItemStatus.WaitingForIld
+            || actual == RemoteWorkItemStatus.Ready))
+            _scheduler.Pulse();
 
         return true;
     }

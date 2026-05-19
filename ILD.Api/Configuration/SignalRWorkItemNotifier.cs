@@ -32,4 +32,8 @@ public class SignalRWorkItemNotifier : IWorkItemNotifier
     public Task PreviewStateChangedAsync(string workItemId)
         => _hub.Clients.Group(WorkItemGroup)
             .SendAsync("PreviewStateChanged", new PreviewStateChangedPayload(workItemId));
+
+    public Task SchedulerStateChangedAsync(bool isPaused, int maxConcurrent)
+        => _hub.Clients.Group(WorkItemGroup)
+            .SendAsync("SchedulerStateChanged", new SchedulerStateChangedPayload(isPaused, maxConcurrent));
 }

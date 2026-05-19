@@ -24,4 +24,7 @@ public static class HumanFeedbackReasons
 
     /// <summary>Default for manual transitions / unspecified callers.</summary>
     public const string Manual = "manual";
+
+    /// <summary>Run is parked because the AI provider for the current node is at capacity.</summary>
+    public const string AiProviderThrottled = "AI Provider Throttled";
 }

@@ -3,6 +3,7 @@ using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Remote;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -375,6 +376,9 @@ public class LoopEngine : ILoopEngine
             case ResumePoint.StartFromEntry e:
                 current = e.Node;
                 break;
+            case ResumePoint.ReexecuteCurrent rc:
+                current = rc.Node;
+                break;
             case ResumePoint.RouteFrom rf:
                 outputBySource[rf.Node.Id] = rf.Output;
                 if (rf.EdgeType == EdgeType.OnSuccess && IsTerminal(rf.Node))
@@ -517,6 +521,16 @@ public class LoopEngine : ILoopEngine
                         incomingSource = current.Id;
                         current = nodes.First(n => n.Id == nextFail.NextNode.Id);
                         break;
+
+                    case NodeOutcome.Throttled th:
+                        // Park the work item in WaitingForIld; the scheduler
+                        // will resume the run once provider capacity frees up.
+                        // CurrentNodeId was already set on the run by the
+                        // inner retry loop, so resume re-executes this node.
+                        await TransitionWorkItemAsync(workItem.Id, RemoteWorkItemStatus.WaitingForIld,
+                            th.Reason, humanFeedbackReason: HumanFeedbackReasons.AiProviderThrottled);
+                        await TransitionRunAsync(runId, LoopRunStatus.WaitingHuman);
+                        return LoopRunStatus.WaitingHuman;
                 }
             }
         }
@@ -535,6 +549,12 @@ public class LoopEngine : ILoopEngine
         public sealed record StartFromEntry(LoopNode Node) : ResumePoint;
         public sealed record RouteFrom(LoopNode Node, EdgeType EdgeType, string? Output) : ResumePoint;
         public sealed record StillWaiting : ResumePoint;
+        /// <summary>
+        /// The run is parked at <see cref="Node"/> after being throttled (or
+        /// otherwise interrupted mid-execution). Resume by re-executing the
+        /// node from the top; no edge has been traversed yet.
+        /// </summary>
+        public sealed record ReexecuteCurrent(LoopNode Node) : ResumePoint;
         public sealed record NoEntry : ResumePoint;
     }
 
@@ -557,6 +577,17 @@ public class LoopEngine : ILoopEngine
                     if (rn.Status == LoopRunNodeStatus.Succeeded) return new ResumePoint.RouteFrom(current, EdgeType.OnSuccess, rn.Output);
                     if (rn.Status == LoopRunNodeStatus.Failed) return new ResumePoint.RouteFrom(current, EdgeType.OnFailure, rn.Output);
                     if (rn.Status == LoopRunNodeStatus.Responded) return new ResumePoint.RouteFrom(current, EdgeType.OnRespond, rn.Output);
+                    // Pending/Running run-node means the previous attempt was
+                    // interrupted (e.g. throttled before adapter call, process
+                    // restart mid-execution). Re-run the node from the top.
+                    if (rn.Status == LoopRunNodeStatus.Pending || rn.Status == LoopRunNodeStatus.Running)
+                        return new ResumePoint.ReexecuteCurrent(current);
+                }
+                else
+                {
+                    // CurrentNodeId is set but no run-node exists yet (e.g.
+                    // throttled before the runnode was created). Re-execute.
+                    return new ResumePoint.ReexecuteCurrent(current);
                 }
             }
         }
@@ -623,6 +654,27 @@ public class LoopEngine : ILoopEngine
 
     private async Task<NodeOutcome> ExecuteNodeWithRetryAsync(LoopRun run, WorkItemView wi, LoopNode node, string? prevOutput, IReadOnlyList<LoopNodeEdge> edges, CancellationToken ct)
     {
+        // Per-provider parallelism precheck for AI nodes. Without this, every
+        // resume of a throttled run would create a fresh LoopRunNode and emit
+        // NodeStarted/NodeThrottled events, spamming the run log. The actual
+        // slot acquisition still happens atomically inside the executor.
+        if (node.NodeType == NodeType.AI)
+        {
+            var precheck = await PrecheckAiThrottledAsync(node);
+            if (precheck != null)
+            {
+                using var scope = _sp.CreateScope();
+                var store = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+                var entity = await store.GetByIdAsync(run.Id);
+                if (entity != null && entity.CurrentNodeId != node.Id)
+                {
+                    entity.CurrentNodeId = node.Id;
+                    await store.UpdateRunAsync(entity);
+                }
+                return precheck;
+            }
+        }
+
         // PRD: error edge → follow immediately on failure; no error edge → auto-retry N times.
         var hasFailureEdge = edges.Any(e => e.SourceNodeId == node.Id && e.EdgeType == EdgeType.OnFailure);
         var maxRetries = hasFailureEdge ? 0 : node.MaxRetries;
@@ -729,6 +781,14 @@ public class LoopEngine : ILoopEngine
                     if (hasFailureEdge) return outcome;
                     if (attempt > maxRetries) return outcome;
                     break; // retry
+
+                case NodeOutcome.Throttled th:
+                    // Leave the runNode in Running status so the resume path
+                    // takes ReexecuteCurrent next time. Bubble up unchanged so
+                    // the outer loop can transition the work item to
+                    // WaitingForIld without consuming a retry.
+                    await LogEventAsync(run.Id, "NodeThrottled", $"{node.Label} throttled: {th.Reason}", node.Id, runNodeId: runNode.Id);
+                    return outcome;
             }
         }
     }
@@ -957,5 +1017,33 @@ public class LoopEngine : ILoopEngine
         using var scope = _sp.CreateScope();
         var manager = scope.ServiceProvider.GetRequiredService<IWorkItemManager>();
         await manager.TransitionAsync(workItemId, next, reason, actions, humanFeedbackReason: humanFeedbackReason);
+    }
+
+    private async Task<NodeOutcome.Throttled?> PrecheckAiThrottledAsync(LoopNode node)
+    {
+        try
+        {
+            var cfg = NodeConfig.Parse<NodeConfig.Ai>(node.Config);
+            using var scope = _sp.CreateScope();
+            var providerStore = scope.ServiceProvider.GetRequiredService<IProviderStore>();
+            var tracker = scope.ServiceProvider.GetRequiredService<IAiProviderConcurrencyTracker>();
+            AiProvider? provider;
+            if (string.IsNullOrEmpty(cfg.AiProviderId))
+                provider = await providerStore.GetDefaultAiProviderAsync();
+            else if (Guid.TryParse(cfg.AiProviderId, out var id))
+                provider = await providerStore.GetAiProviderByIdAsync(id);
+            else
+                provider = await providerStore.GetAiProviderByNameAsync(cfg.AiProviderId);
+
+            if (provider == null || provider.Parallelism <= 0) return null;
+            if (tracker.HasCapacity(provider.Id, provider.Parallelism)) return null;
+            return new NodeOutcome.Throttled(
+                $"AI provider {provider.Name} at capacity ({tracker.ActiveCount(provider.Id)}/{provider.Parallelism})",
+                provider.Id);
+        }
+        catch
+        {
+            return null;
+        }
     }
 }

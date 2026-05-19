@@ -61,6 +61,13 @@ public abstract record NodeOutcome(string? Output = null)
     /// </summary>
     public sealed record Terminal(string? Output = null) : NodeOutcome(Output);
 
+    /// <summary>
+    /// Node could not execute because a resource (e.g. an AI provider) is at
+    /// capacity. The engine parks the work item in <c>WaitingForIld</c>; the
+    /// scheduler resumes it when capacity frees up.
+    /// </summary>
+    public sealed record Throttled(string Reason, Guid ProviderId) : NodeOutcome;
+
     public static NodeOutcome FromResult(NodeExecutionResult r)
         => r.Success
             ? new Succeeded(r.Output, r.ResolvedPrompt, r.SessionId, r.IncomingSessionId)

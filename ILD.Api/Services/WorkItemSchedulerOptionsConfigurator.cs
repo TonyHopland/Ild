@@ -4,18 +4,19 @@ using Microsoft.Extensions.Options;
 namespace ILD.Api.Services;
 
 /// <summary>
-/// Configures <see cref="RemoteWorkItemPollerOptions"/> from the first
+/// Configures <see cref="WorkItemSchedulerOptions"/> from the first
 /// configured <see cref="ILD.Data.Entities.RemoteProvider"/> that carries a
-/// non-empty <c>WorkItemServerUrl</c>. Resolved at startup; rebooting ILD
-/// picks up provider changes.
+/// non-empty <c>WorkItemServerUrl</c>. User-tunable scheduler knobs (max
+/// concurrent runs, paused) are no longer mirrored here \u2014 the scheduler
+/// reads them live from the AppSettings table.
 /// </summary>
-public sealed class RemoteWorkItemPollerOptionsConfigurator : IConfigureOptions<RemoteWorkItemPollerOptions>
+public sealed class WorkItemSchedulerOptionsConfigurator : IConfigureOptions<WorkItemSchedulerOptions>
 {
     private readonly IServiceProvider _sp;
 
-    public RemoteWorkItemPollerOptionsConfigurator(IServiceProvider sp) => _sp = sp;
+    public WorkItemSchedulerOptionsConfigurator(IServiceProvider sp) => _sp = sp;
 
-    public void Configure(RemoteWorkItemPollerOptions options)
+    public void Configure(WorkItemSchedulerOptions options)
     {
         using var scope = _sp.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<ILD.Data.Entities.AppDbContext>();
@@ -32,6 +33,5 @@ public sealed class RemoteWorkItemPollerOptionsConfigurator : IConfigureOptions<
         options.ApiKey = provider.WorkItemApiKey ?? string.Empty;
         options.PollInterval = TimeSpan.FromSeconds(Math.Max(1, provider.PollIntervalSeconds));
         options.GracePollInterval = TimeSpan.FromSeconds(Math.Max(1, provider.GraceIntervalSeconds));
-        options.MaxConcurrent = Math.Max(1, provider.MaxConcurrentWorkItems);
     }
 }

@@ -136,7 +136,7 @@ describe("WorkItemModal", () => {
     expect(screen.getByText("my-repo")).toBeTruthy();
   });
 
-  test("detail view shows Start button when WorkItem status is Ready", async () => {
+  test("detail view does not show a Start button — scheduler picks up Ready items automatically", async () => {
     const workItem = makeWorkItem({ status: WorkItemStatus.Ready });
 
     const fetchMock = mockFetch([]);
@@ -152,103 +152,7 @@ describe("WorkItemModal", () => {
 
     expect(screen.getByText(workItem.title)).toBeTruthy();
     expect(screen.getByText("Ready")).toBeTruthy();
-    expect(screen.getByText("Start")).toBeTruthy();
-  });
-
-  test("clicking Start calls the start API endpoint", async () => {
-    const workItem = makeWorkItem({ status: WorkItemStatus.Ready });
-    const startedWorkItem = makeWorkItem({
-      status: WorkItemStatus.Running,
-      startedAt: "2025-03-01T00:00:00Z",
-    });
-
-    const fetchMock = mockFetch(null);
-    // Initial fetches for repositories, templates, runs, dependencies, allWorkItems
-    fetchMock
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify([])),
-          json: () => Promise.resolve([]),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify([])),
-          json: () => Promise.resolve([]),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify([])),
-          json: () => Promise.resolve([]),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify([])),
-          json: () => Promise.resolve([]),
-        }),
-      )
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify([])),
-          json: () => Promise.resolve([]),
-        }),
-      )
-      // Start API call
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 202,
-          text: () => Promise.resolve(JSON.stringify({})),
-          json: () => Promise.resolve({}),
-        }),
-      )
-      // Get updated work item
-      .mockReturnValueOnce(
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(startedWorkItem)),
-          json: () => Promise.resolve(startedWorkItem),
-        }),
-      );
-
-    vi.stubGlobal("fetch", fetchMock);
-
-    const onClose = vi.fn();
-    const onSave = vi.fn();
-
-    await renderWithEffectsSettled(
-      <MemoryRouter>
-        <WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />
-      </MemoryRouter>,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("Start")).toBeTruthy();
-    });
-
-    fireEvent.click(screen.getByText("Start"));
-
-    await waitFor(() => {
-      expect(onSave).toHaveBeenCalledWith(startedWorkItem);
-    });
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/workitems/wi-1/start"),
-      expect.objectContaining({ method: "POST" }),
-    );
+    expect(screen.queryByRole("button", { name: "Start" })).toBeNull();
   });
 
   test("detail view shows dependency list with clickable IDs", async () => {
