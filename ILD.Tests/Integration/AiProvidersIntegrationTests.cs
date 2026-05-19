@@ -25,4 +25,22 @@ public class AiProvidersIntegrationTests
         var items = await response.Content.ReadFromJsonAsync<object[]>();
         Assert.Empty(items!);
     }
+
+    [Fact]
+    public async Task Create_with_unsupported_type_returns_400()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+
+        var response = await client.PostAsJsonAsync("/api/v1/aiproviders", new
+        {
+            name = "legacy-openai",
+            type = "openai",
+            baseUrl = "https://api.example.com",
+            model = "gpt-4",
+            isDefault = false,
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
 }

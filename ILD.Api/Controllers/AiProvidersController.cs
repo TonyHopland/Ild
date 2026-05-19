@@ -12,11 +12,14 @@ namespace ILD.Api.Controllers;
 public class AiProvidersController : ControllerBase
 {
     private readonly IAIProviderService _aiProviderService;
+    private readonly HashSet<string> _supportedProviderTypes;
     private readonly AppDbContext _db;
 
-    public AiProvidersController(IAIProviderService aiProviderService, AppDbContext db)
+    public AiProvidersController(IAIProviderService aiProviderService, IAgentAdapterRegistry adapterRegistry, AppDbContext db)
     {
         _aiProviderService = aiProviderService;
+        _supportedProviderTypes = adapterRegistry.GetAllSupportedProviderTypes()
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         _db = db;
     }
 
@@ -59,6 +62,8 @@ public class AiProvidersController : ControllerBase
     {
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
+        if (!_supportedProviderTypes.Contains(request.Type))
+            return BadRequest(new { error = $"Unsupported AI provider type '{request.Type}'." });
 
         var p = new AiProvider
         {
@@ -83,6 +88,8 @@ public class AiProvidersController : ControllerBase
         if (!Guid.TryParse(id, out var guid)) return BadRequest();
         var p = await _db.AiProviders.FindAsync(guid);
         if (p == null) return NotFound();
+        if (!_supportedProviderTypes.Contains(request.Type))
+            return BadRequest(new { error = $"Unsupported AI provider type '{request.Type}'." });
         p.Name = request.Name;
         p.Type = request.Type;
         p.BaseUrl = request.BaseUrl;

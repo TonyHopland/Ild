@@ -110,11 +110,15 @@ function sanitizeAdapterConfigValues(
   return values;
 }
 
-function resolveActiveAiProvider(aiProviders: AiProvider[], providerId: string): AiProvider | null {
+function resolveActiveAiProvider(
+  aiProviders: AiProvider[] | null | undefined,
+  providerId: string,
+): AiProvider | null {
+  const providers = Array.isArray(aiProviders) ? aiProviders : [];
   return (
-    aiProviders.find((provider) => provider.id === providerId) ??
-    aiProviders.find((provider) => provider.isDefault) ??
-    aiProviders[0] ??
+    providers.find((provider) => provider.id === providerId) ??
+    providers.find((provider) => provider.isDefault) ??
+    providers[0] ??
     null
   );
 }
@@ -307,7 +311,7 @@ export default function LoopEditor() {
   const loadAiProviders = async () => {
     try {
       const data = await aiProviderService.getAll();
-      setAiProviders(data);
+      setAiProviders(Array.isArray(data) ? data : []);
     } catch (error) {
       setErrorText(loadErrorMessage(error, "Failed to load AI providers."));
     }

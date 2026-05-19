@@ -55,11 +55,11 @@ _Avoid_: teardown, end node
 ### Execution & Recovery
 
 **Agent Adapter**:
-A pluggable component implementing `IAgentAdapter` that handles full AI node execution. Each adapter declares `SupportedProviderTypes` and is auto-registered via DI. Adapter instance is scoped per AI node per `LoopRun` — sibling AI nodes in the same loop do not share state. The OpenAI-compatible adapter is the default.
+A pluggable component implementing `IAgentAdapter` that handles full AI node execution. Each adapter declares `SupportedProviderTypes` and is auto-registered via DI. Adapter instance is scoped per AI node per `LoopRun` — sibling AI nodes in the same loop do not share state. Currently only the CLI-backed `opencode` and `pi` provider types are registered; there is no implicit default adapter type.
 _Avoid_: LLM provider, model driver
 
 **Tool Autonomy**:
-Adapters have full autonomy over tool execution. Tools are declared by the adapter, not the engine. (Per-node tool allowlists are a future enhancement.)
+Adapters have full autonomy over tool execution, but the engine now passes a per-node tool allowlist to the adapter runtime. Adapters still decide how to map those categories onto their own tool and permission systems.
 _Avoid_: tool sandbox, tool permissions
 
 **Event Log**:
