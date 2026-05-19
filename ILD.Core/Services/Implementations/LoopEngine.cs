@@ -30,6 +30,13 @@ public class LoopEngine : ILoopEngine
         public CancellationTokenSource Cts { get; } = new();
         public bool IsPaused { get; set; }
         public Task? Task { get; set; }
+        // Serializes RunAsync invocations for a single run so concurrent
+        // triggers (e.g. user responding to HumanFeedback while the scheduler
+        // simultaneously resumes the same run from WaitingForIld) cannot race
+        // and produce duplicate LoopRunNodes / ghost executions. Not disposed
+        // explicitly — letting GC reclaim it avoids racing a queued waiter
+        // against ReleaseRunControl on terminal status.
+        public SemaphoreSlim Gate { get; } = new(1, 1);
         private int _disposed;
         public void Dispose()
         {
@@ -352,6 +359,27 @@ public class LoopEngine : ILoopEngine
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(externalCt, control.Cts.Token);
         var ct = linkedCts.Token;
 
+        // Serialize concurrent RunAsync calls per run. A second caller (e.g.
+        // human response + scheduler resume firing together) waits until the
+        // in-flight loop returns, then re-resolves state from the DB so any
+        // events that occurred while it queued are picked up.
+        try { await control.Gate.WaitAsync(ct); }
+        catch (OperationCanceledException) { return LoopRunStatus.Cancelled; }
+        catch (ObjectDisposedException) { return LoopRunStatus.Cancelled; }
+
+        try
+        {
+            return await RunAsyncCore(runId, control, ct);
+        }
+        finally
+        {
+            try { control.Gate.Release(); } catch (ObjectDisposedException) { }
+            catch (SemaphoreFullException) { }
+        }
+    }
+
+    private async Task<LoopRunStatus> RunAsyncCore(Guid runId, RunControl control, CancellationToken ct)
+    {
         var loaded = await LoadRunStateAsync(runId);
         if (loaded == null) return await FailRunAsync(runId, $"Run {runId} not found or template missing");
 
