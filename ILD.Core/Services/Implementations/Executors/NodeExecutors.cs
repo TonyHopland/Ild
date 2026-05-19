@@ -177,15 +177,16 @@ public sealed class AINodeExecutor : INodeExecutor
             if (provider == null) return new NodeOutcome.Failed("No AI provider found");
 
             // Per-provider capacity gate. Parallelism=0 means unlimited.
+            // TryEnter is atomic so two concurrent nodes cannot both pass the
+            // gate when only one slot is free.
             var tracker = scope.ServiceProvider.GetRequiredService<IAiProviderConcurrencyTracker>();
-            if (!tracker.HasCapacity(provider.Id, provider.Parallelism))
+            if (!tracker.TryEnter(provider.Id, provider.Parallelism))
             {
                 return new NodeOutcome.Throttled(
                     $"AI provider {provider.Name} at capacity ({tracker.ActiveCount(provider.Id)}/{provider.Parallelism})",
                     provider.Id);
             }
 
-            tracker.Enter(provider.Id);
             try
             {
                 return await ExecuteWithProviderAsync(ctx, cfg, provider, scope);

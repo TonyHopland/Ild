@@ -1,5 +1,3 @@
-using System.Collections.Concurrent;
-
 namespace ILD.Core.Services.Interfaces;
 
 /// <summary>
@@ -8,28 +6,38 @@ namespace ILD.Core.Services.Interfaces;
 /// </summary>
 public interface IAiProviderConcurrencyTracker
 {
+    /// <summary>Non-mutating capacity peek for callers that don't claim a slot (e.g. resume gating).</summary>
     bool HasCapacity(Guid providerId, int parallelism);
-    void Enter(Guid providerId);
+
+    /// <summary>Atomically check capacity and claim a slot. Returns false if at capacity.</summary>
+    bool TryEnter(Guid providerId, int parallelism);
+
     void Exit(Guid providerId);
     int ActiveCount(Guid providerId);
 }
 
 public sealed class AiProviderConcurrencyTracker : IAiProviderConcurrencyTracker
 {
-    private readonly ConcurrentDictionary<Guid, int> _active = new();
+    private readonly Dictionary<Guid, int> _active = new();
     private readonly object _lock = new();
 
     public bool HasCapacity(Guid providerId, int parallelism)
     {
         if (parallelism <= 0) return true;
-        return _active.GetValueOrDefault(providerId) < parallelism;
+        lock (_lock)
+        {
+            return _active.TryGetValue(providerId, out var cur) ? cur < parallelism : true;
+        }
     }
 
-    public void Enter(Guid providerId)
+    public bool TryEnter(Guid providerId, int parallelism)
     {
         lock (_lock)
         {
-            _active[providerId] = _active.GetValueOrDefault(providerId) + 1;
+            var cur = _active.TryGetValue(providerId, out var v) ? v : 0;
+            if (parallelism > 0 && cur >= parallelism) return false;
+            _active[providerId] = cur + 1;
+            return true;
         }
     }
 
@@ -37,11 +45,17 @@ public sealed class AiProviderConcurrencyTracker : IAiProviderConcurrencyTracker
     {
         lock (_lock)
         {
-            var cur = _active.GetValueOrDefault(providerId);
-            if (cur <= 1) _active.TryRemove(providerId, out _);
+            if (!_active.TryGetValue(providerId, out var cur)) return;
+            if (cur <= 1) _active.Remove(providerId);
             else _active[providerId] = cur - 1;
         }
     }
 
-    public int ActiveCount(Guid providerId) => _active.GetValueOrDefault(providerId);
+    public int ActiveCount(Guid providerId)
+    {
+        lock (_lock)
+        {
+            return _active.TryGetValue(providerId, out var v) ? v : 0;
+        }
+    }
 }
