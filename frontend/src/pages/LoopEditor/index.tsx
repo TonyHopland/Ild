@@ -1172,10 +1172,10 @@ export default function LoopEditor() {
 
       {/* Import conflict dialog */}
       {importConflictTemplate && importConflictData && (
-        <div className="modal-overlay" onClick={handleImportConflictSkip}>
+        <div className="modal-overlay" onMouseDown={handleImportConflictSkip}>
           <div
             className="modal-content import-conflict-modal"
-            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
             aria-label="Import conflict"

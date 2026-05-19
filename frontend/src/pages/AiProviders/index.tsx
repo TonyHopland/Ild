@@ -137,12 +137,12 @@ export default function AiProviders() {
       {showModal && (
         <div
           className="modal-overlay"
-          onClick={() => {
+          onMouseDown={() => {
             setShowModal(false);
             setEditingProvider(null);
           }}
         >
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-content" onMouseDown={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h2>{editingProvider ? "Edit Provider" : "New Provider"}</h2>
               <button

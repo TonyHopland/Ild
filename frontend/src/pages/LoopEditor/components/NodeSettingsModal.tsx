@@ -102,12 +102,12 @@ export function NodeSettingsModal({
   return (
     <div
       className="node-settings-modal-overlay"
-      onClick={onClose}
+      onMouseDown={onClose}
       role="dialog"
       aria-modal="true"
       aria-label="Node Settings"
     >
-      <div className="node-settings-modal" onClick={(event) => event.stopPropagation()}>
+      <div className="node-settings-modal" onMouseDown={(event) => event.stopPropagation()}>
         <div className="node-settings-modal-header">
           <h2>Node Settings</h2>
           <button className="node-settings-modal-close" onClick={onClose} aria-label="Close">

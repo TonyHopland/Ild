@@ -459,7 +459,7 @@ export default function EventLogViewer() {
       )}
       {selectedSessionPreview && (
         <div
-          onClick={() => setSelectedSessionPreview(null)}
+          onMouseDown={() => setSelectedSessionPreview(null)}
           role="dialog"
           aria-modal="true"
           aria-label="Session preview"
@@ -474,7 +474,7 @@ export default function EventLogViewer() {
           }}
         >
           <div
-            onClick={(event) => event.stopPropagation()}
+            onMouseDown={(event) => event.stopPropagation()}
             style={{
               width: "min(920px, 100%)",
               maxHeight: "85vh",

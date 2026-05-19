@@ -169,13 +169,13 @@ export default function Repositories() {
       {(showModal || confirmDelete !== null) && (
         <div
           className="modal-overlay"
-          onClick={() => {
+          onMouseDown={() => {
             setShowModal(false);
             setEditingRepo(null);
             setConfirmDelete(null);
           }}
         >
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-content" onMouseDown={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h2>{editingRepo ? "Edit Repository" : "New Repository"}</h2>
               <button

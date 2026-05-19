@@ -29,10 +29,10 @@ export default function ConfirmModal({
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay" onClick={onCancel}>
+    <div className="modal-overlay" onMouseDown={onCancel}>
       <div
         className="modal-content confirm-modal-content"
-        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-label={title}
