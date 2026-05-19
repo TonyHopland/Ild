@@ -40,6 +40,10 @@ export default function TaskboardColumn({
     const workItemId = e.dataTransfer.getData("text/plain");
     if (!workItemId) return;
 
+    // Ignore drops into the same column — nothing to do
+    const existingItem = workItems.find((item) => item.id === workItemId);
+    if (existingItem?.status === status) return;
+
     try {
       await workItemService.transition(workItemId, status);
       const updated = await workItemService.getById(workItemId);
