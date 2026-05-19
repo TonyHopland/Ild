@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using ILD.Core.Services.Interfaces;
+using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Stores.Interfaces;
@@ -52,7 +53,7 @@ public class OpenCodeAdapter : IAgentAdapter
                 sessionIdToUse = restoreResult.SessionIdToUse;
             }
 
-            var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, ctx.RunContext);
+            var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist);
 
             Process? proc = null;
             try
@@ -347,7 +348,6 @@ public class OpenCodeAdapter : IAgentAdapter
             psi.ArgumentList.Add("--session");
             psi.ArgumentList.Add(sessionId);
         }
-        psi.ArgumentList.Add("--dangerously-skip-permissions");
         psi.ArgumentList.Add("--");
         psi.ArgumentList.Add(renderedPrompt);
         return psi;
@@ -624,10 +624,12 @@ public class OpenCodeAdapter : IAgentAdapter
         return binaryPath;
     }
 
-    private static (string ModelRef, string ConfigJson) BuildOpenCodeConfig(AiProvider provider, LoopRunContext? runContext = null)
+    private static (string ModelRef, string ConfigJson) BuildOpenCodeConfig(AiProvider provider, LoopRunContext? runContext = null, IReadOnlyList<string>? selectedToolKeys = null)
     {
         var providerId = SanitizeProviderId(provider.Name);
         var modelId = provider.Model;
+        var enabledToolKeys = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, selectedToolKeys);
+        var enabled = new HashSet<string>(enabledToolKeys, StringComparer.OrdinalIgnoreCase);
 
         var baseUrl = provider.BaseUrl.TrimEnd('/');
 
@@ -650,6 +652,7 @@ public class OpenCodeAdapter : IAgentAdapter
                     },
                 },
             },
+            ["permission"] = BuildPermissions(enabled),
         };
 
         // Inject the ILD MCP server entry so agents can list/create work items
@@ -657,7 +660,9 @@ public class OpenCodeAdapter : IAgentAdapter
         // *own* config via OPENCODE_CONFIG_CONTENT, which means the user's
         // ~/.config/opencode/opencode.json (and any mcp entries it contains) is
         // ignored — we have to add the entry here ourselves.
-        var ildMcp = BuildIldMcpEntry(runContext);
+        var ildMcp = enabled.Contains(AiToolCatalog.Ild)
+            ? BuildIldMcpEntry(runContext)
+            : null;
         if (ildMcp != null)
         {
             config["mcp"] = new Dictionary<string, object?>
@@ -670,6 +675,24 @@ public class OpenCodeAdapter : IAgentAdapter
         var modelRef = $"{providerId}/{modelId}";
         return (modelRef, configJson);
     }
+
+    private static Dictionary<string, object?> BuildPermissions(HashSet<string> enabled)
+        => new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["read"] = enabled.Contains(AiToolCatalog.Read) ? "allow" : "deny",
+            ["glob"] = enabled.Contains(AiToolCatalog.Read) ? "allow" : "deny",
+            ["grep"] = enabled.Contains(AiToolCatalog.Read) ? "allow" : "deny",
+            ["lsp"] = enabled.Contains(AiToolCatalog.Read) ? "allow" : "deny",
+            ["edit"] = enabled.Contains(AiToolCatalog.Write) ? "allow" : "deny",
+            ["bash"] = enabled.Contains(AiToolCatalog.Execute) ? "allow" : "deny",
+            ["task"] = "deny",
+            ["skill"] = "deny",
+            ["question"] = "deny",
+            ["webfetch"] = "deny",
+            ["websearch"] = "deny",
+            ["external_directory"] = "deny",
+            ["doom_loop"] = "deny",
+        };
 
     /// <summary>
     /// Build the opencode <c>mcp.ild</c> entry pointing at the ILD MCP server.

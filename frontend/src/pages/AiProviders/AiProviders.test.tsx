@@ -42,9 +42,9 @@ describe("AI Providers page", () => {
     const providers = [
       {
         id: "ai-1",
-        name: "OpenAI",
-        type: "OpenAI",
-        baseUrl: "https://api.openai.com",
+        name: "Pi",
+        type: "pi",
+        baseUrl: "http://pi.local",
         apiKey: "sk-secret",
         model: "gpt-4",
         isDefault: true,
@@ -52,9 +52,9 @@ describe("AI Providers page", () => {
       },
       {
         id: "ai-2",
-        name: "Anthropic",
-        type: "Anthropic",
-        baseUrl: "https://api.anthropic.com",
+        name: "OpenCode",
+        type: "opencode",
+        baseUrl: "http://opencode.local",
         apiKey: "sk-secret-2",
         model: "claude-3",
         isDefault: false,
@@ -74,7 +74,7 @@ describe("AI Providers page", () => {
       Promise.resolve({
         ok: true,
         status: 200,
-        text: () => Promise.resolve(JSON.stringify(["openai", "opencode", "pi"])),
+        text: () => Promise.resolve(JSON.stringify(["opencode", "pi"])),
       }),
     );
 
@@ -86,16 +86,16 @@ describe("AI Providers page", () => {
 
     expect(screen.getByText("gpt-4")).toBeTruthy();
     expect(screen.getByText("claude-3")).toBeTruthy();
-    expect(screen.getByText("https://api.openai.com")).toBeTruthy();
+    expect(screen.getByText("http://pi.local")).toBeTruthy();
   });
 
   test("API key is masked in the list view", async () => {
     const providers = [
       {
         id: "ai-1",
-        name: "OpenAI",
-        type: "OpenAI",
-        baseUrl: "https://api.openai.com",
+        name: "Pi",
+        type: "pi",
+        baseUrl: "http://pi.local",
         apiKey: "sk-super-secret-key",
         model: "gpt-4",
         isDefault: true,
@@ -115,7 +115,7 @@ describe("AI Providers page", () => {
       Promise.resolve({
         ok: true,
         status: 200,
-        text: () => Promise.resolve(JSON.stringify(["openai", "opencode", "pi"])),
+        text: () => Promise.resolve(JSON.stringify(["opencode", "pi"])),
       }),
     );
 
@@ -134,8 +134,8 @@ describe("AI Providers page", () => {
 
     const createdProvider = {
       id: "ai-new-1",
-      name: "Gemini",
-      type: "Google",
+      name: "Pi Local",
+      type: "pi",
       baseUrl: "https://generativelanguage.googleapis.com",
       apiKey: "new-key",
       model: "gemini-pro",
@@ -155,7 +155,7 @@ describe("AI Providers page", () => {
       Promise.resolve({
         ok: true,
         status: 200,
-        text: () => Promise.resolve(JSON.stringify(["openai", "opencode", "pi"])),
+        text: () => Promise.resolve(JSON.stringify(["opencode", "pi"])),
       }),
     );
 
@@ -173,12 +173,12 @@ describe("AI Providers page", () => {
 
     // Fill in required fields
     fireEvent.change(screen.getByLabelText("Name"), {
-      target: { value: "Gemini" },
+      target: { value: "Pi Local" },
     });
 
     const typeSelect = screen.getByLabelText("Type");
     fireEvent.change(typeSelect, {
-      target: { value: "openai" },
+      target: { value: "pi" },
     });
 
     fireEvent.change(screen.getByLabelText("Base URL"), {
@@ -209,7 +209,7 @@ describe("AI Providers page", () => {
         Promise.resolve({
           ok: true,
           status: 200,
-          text: () => Promise.resolve(JSON.stringify(["openai", "opencode", "pi"])),
+          text: () => Promise.resolve(JSON.stringify(["opencode", "pi"])),
         }),
       );
 
@@ -230,9 +230,9 @@ describe("AI Providers page", () => {
     const providers = [
       {
         id: "ai-1",
-        name: "OpenAI",
-        type: "OpenAI",
-        baseUrl: "https://api.openai.com",
+        name: "Pi",
+        type: "pi",
+        baseUrl: "http://pi.local",
         apiKey: "old-key",
         model: "gpt-4",
         isDefault: true,
@@ -242,7 +242,7 @@ describe("AI Providers page", () => {
 
     const updatedProvider = {
       ...providers[0],
-      name: "OpenAI Updated",
+      name: "Pi Updated",
     };
 
     const fetchMock = mockFetch(null);
@@ -257,7 +257,7 @@ describe("AI Providers page", () => {
       Promise.resolve({
         ok: true,
         status: 200,
-        text: () => Promise.resolve(JSON.stringify(["openai", "opencode", "pi"])),
+        text: () => Promise.resolve(JSON.stringify(["opencode", "pi"])),
       }),
     );
 
@@ -275,11 +275,11 @@ describe("AI Providers page", () => {
 
     // Form should be pre-filled
     const nameInput = screen.getByLabelText("Name");
-    expect((nameInput as HTMLInputElement).value).toBe("OpenAI");
+    expect((nameInput as HTMLInputElement).value).toBe("Pi");
 
     // Change name
     fireEvent.change(nameInput, {
-      target: { value: "OpenAI Updated" },
+      target: { value: "Pi Updated" },
     });
 
     // Mock the PUT and subsequent reload
@@ -302,7 +302,7 @@ describe("AI Providers page", () => {
         Promise.resolve({
           ok: true,
           status: 200,
-          text: () => Promise.resolve(JSON.stringify(["openai", "opencode", "pi"])),
+          text: () => Promise.resolve(JSON.stringify(["opencode", "pi"])),
         }),
       );
 
@@ -323,9 +323,9 @@ describe("AI Providers page", () => {
     const providers = [
       {
         id: "ai-1",
-        name: "OpenAI",
-        type: "OpenAI",
-        baseUrl: "https://api.openai.com",
+        name: "Pi",
+        type: "pi",
+        baseUrl: "http://pi.local",
         apiKey: "key",
         model: "gpt-4",
         isDefault: true,
@@ -333,9 +333,9 @@ describe("AI Providers page", () => {
       },
       {
         id: "ai-2",
-        name: "Anthropic",
-        type: "Anthropic",
-        baseUrl: "https://api.anthropic.com",
+        name: "OpenCode",
+        type: "opencode",
+        baseUrl: "http://opencode.local",
         apiKey: "key",
         model: "claude-3",
         isDefault: false,
@@ -355,7 +355,7 @@ describe("AI Providers page", () => {
       Promise.resolve({
         ok: true,
         status: 200,
-        text: () => Promise.resolve(JSON.stringify(["openai", "opencode", "pi"])),
+        text: () => Promise.resolve(JSON.stringify(["opencode", "pi"])),
       }),
     );
 

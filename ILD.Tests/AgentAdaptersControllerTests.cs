@@ -56,7 +56,7 @@ public class AgentAdaptersControllerTests
     {
         var registry = new Mock<IAgentAdapterRegistry>();
         registry.Setup(r => r.GetAllSupportedProviderTypes())
-            .Returns(new[] { "openai", "opencode", "pi" });
+            .Returns(new[] { "opencode", "pi" });
 
         var controller = new AgentAdaptersController(registry.Object);
 
@@ -65,7 +65,6 @@ public class AgentAdaptersControllerTests
         Assert.IsType<OkObjectResult>(result);
         var okResult = (Microsoft.AspNetCore.Mvc.OkObjectResult)result;
         var types = (string[])okResult.Value!;
-        Assert.Contains("openai", types);
         Assert.Contains("opencode", types);
         Assert.Contains("pi", types);
     }

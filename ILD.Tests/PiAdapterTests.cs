@@ -226,6 +226,8 @@ public class PiAdapterTests
             Assert.Contains("json", result.Output);
             Assert.Contains("--session-dir", result.Output);
             Assert.Contains("--session", result.Output);
+            Assert.Contains("--tools", result.Output);
+            Assert.Contains("read,grep,find,ls,edit,write,bash,ild_list_workitems,ild_get_workitem,ild_create_workitem,ild_list_repositories,ild_list_loop_templates,ild_list_loop_runs", result.Output);
             Assert.Contains("openai/gpt-5", result.Output);
             Assert.Contains("sk-test", result.Output);
             Assert.DoesNotContain("\n--\n", result.Output);
@@ -462,6 +464,30 @@ public class PiAdapterTests
     }
 
     [Fact]
+    public void ExecuteAsync_filters_ild_extension_tools_when_requested()
+    {
+        var generatorType = typeof(PiAdapter).Assembly
+            .GetType("ILD.Core.Services.Implementations.Adapters.PiExtensionGenerator", throwOnError: true)!;
+        var generateMethod = generatorType.GetMethod(
+            "Generate",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public,
+            binder: null,
+            types: [typeof(string), typeof(string), typeof(string), typeof(IReadOnlyCollection<string>)],
+            modifiers: null)!;
+
+        var extensionContent = (string)generateMethod.Invoke(null, [
+            "http://192.168.1.5:1234/v1",
+            "Local",
+            Guid.NewGuid().ToString(),
+            new[] { "ild_get_workitem" }
+        ])!;
+
+        Assert.Contains("ild_get_workitem", extensionContent);
+        Assert.DoesNotContain("ild_list_workitems", extensionContent);
+        Assert.DoesNotContain("ild_create_workitem", extensionContent);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_does_not_write_ild_extension_when_no_http_base_url()
     {
         var runId = Guid.NewGuid();
@@ -549,7 +575,10 @@ public class PiAdapterTests
             .GetType("ILD.Core.Services.Implementations.Adapters.PiExtensionGenerator", throwOnError: true)!;
         var generateMethod = generatorType.GetMethod(
             "Generate",
-            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public)!;
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public,
+            binder: null,
+            types: [typeof(string), typeof(string), typeof(string)],
+            modifiers: null)!;
 
         return (string)generateMethod.Invoke(null, [apiUrl, apiToken, loopRunId])!;
     }

@@ -72,7 +72,7 @@ public class LoopEngineProgressTests
         db.Context.LoopNodes.Add(aiNode);
         db.Context.LoopNodes.Add(cleanupNode);
 
-        var aiProvider = new AiProvider { Id = Guid.NewGuid(), Name = "test-ai", Type = "openai", BaseUrl = "http://localhost", ApiKey = "key", Model = "gpt-4" };
+        var aiProvider = new AiProvider { Id = Guid.NewGuid(), Name = "test-ai", Type = "pi", BaseUrl = "http://localhost", ApiKey = "key", Model = "gpt-4" };
         db.Context.AiProviders.Add(aiProvider);
 
         db.Context.LoopNodeEdges.Add(new LoopNodeEdge { Id = Guid.NewGuid(), SourceNodeId = startNode.Id, TargetNodeId = aiNode.Id, EdgeType = EdgeType.OnSuccess });

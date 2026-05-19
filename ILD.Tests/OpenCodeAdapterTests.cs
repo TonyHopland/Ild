@@ -464,10 +464,49 @@ public class OpenCodeAdapterTests
             "json",
             "--session",
             "session-123",
-            "--dangerously-skip-permissions",
             "--",
             "prompt text",
         }, psi.ArgumentList);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_writes_permission_config_from_tool_allowlist()
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-perms-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
+        File.WriteAllText(scriptPath, "#!/bin/sh\nprintenv OPENCODE_CONFIG_CONTENT\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var adapter = new OpenCodeAdapter();
+            var result = await adapter.ExecuteAsync(new AgentExecutionContext(
+                Provider: new AiProvider
+                {
+                    Name = "test-provider",
+                    Type = "opencode",
+                    BaseUrl = "https://api.example.test/v1",
+                    Model = "gpt-5",
+                    Config = JsonSerializer.Serialize(new { binaryPath = scriptPath }),
+                },
+                Prompt: "prompt",
+                RunContext: new LoopRunContext(Guid.NewGuid(), Guid.NewGuid().ToString(), "Task", "Desc", worktreeDir, "main", new List<string>(), null),
+                ExecutionCount: 1,
+                Cancel: CancellationToken.None,
+                ToolAllowlist: ["read", "ild"]));
+
+            Assert.True(result.Success);
+            Assert.Contains("\"read\":\"allow\"", result.Output);
+            Assert.Contains("\"grep\":\"allow\"", result.Output);
+            Assert.Contains("\"edit\":\"deny\"", result.Output);
+            Assert.Contains("\"bash\":\"deny\"", result.Output);
+            Assert.Contains("\"mcp\"", result.Output);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
     }
 
     [Fact]

@@ -13,7 +13,7 @@ public class AiProviderConfigTests
         {
             Id = Guid.NewGuid(),
             Name = "test-provider",
-            Type = "openai",
+            Type = "pi",
             BaseUrl = "https://api.example.com",
             Model = "gpt-4",
             Config = "{\"customField\":\"value\"}",
@@ -36,7 +36,7 @@ public class AiProviderConfigTests
         {
             Id = Guid.NewGuid(),
             Name = "test-provider",
-            Type = "openai",
+            Type = "pi",
             BaseUrl = "https://api.example.com",
             Model = "gpt-4",
             CreatedAt = DateTime.UtcNow,
@@ -60,7 +60,7 @@ public class AiProviderConfigTests
         {
             Id = Guid.NewGuid(),
             Name = "test-provider",
-            Type = "openai",
+            Type = "pi",
             BaseUrl = "https://api.example.com",
             Model = "gpt-4",
             CreatedAt = DateTime.UtcNow,

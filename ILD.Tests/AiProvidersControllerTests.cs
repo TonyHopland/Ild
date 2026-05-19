@@ -99,4 +99,29 @@ public class AiProvidersControllerTests : IDisposable
         var items = (System.Collections.IEnumerable)result!.Value!;
         Assert.Equal(500, items.Cast<object>().Count());
     }
+
+    [Fact]
+    public async Task GetAll_includes_supported_tools_from_backend_catalog()
+    {
+        _db.AiProviders.Add(new AiProvider
+        {
+            Id = Guid.NewGuid(),
+            Name = "pi-default",
+            Type = "pi",
+            BaseUrl = "https://x",
+            Model = "m",
+        });
+        await _db.SaveChangesAsync();
+
+        var controller = new AiProvidersController(Mock.Of<IAIProviderService>(), _db);
+        var result = await controller.GetAll() as OkObjectResult;
+
+        Assert.NotNull(result);
+        var json = System.Text.Json.JsonSerializer.Serialize(result!.Value);
+        Assert.Contains("supportedTools", json);
+        Assert.Contains("\"Key\":\"read\"", json);
+        Assert.Contains("\"Key\":\"write\"", json);
+        Assert.Contains("\"Key\":\"execute\"", json);
+        Assert.Contains("\"Key\":\"ild\"", json);
+    }
 }

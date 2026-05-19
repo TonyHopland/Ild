@@ -1,4 +1,5 @@
 using ILD.Core.Services.Interfaces;
+using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using Microsoft.AspNetCore.Mvc;
@@ -30,6 +31,7 @@ public class AiProvidersController : ControllerBase
         apiKey = string.IsNullOrEmpty(p.ApiKey) ? null : "***",
         hasApiKey = !string.IsNullOrEmpty(p.ApiKey),
         hasConfig = !string.IsNullOrEmpty(p.Config),
+        supportedTools = AiToolCatalog.GetSupportedToolsForProviderType(p.Type),
         createdAt = p.CreatedAt,
         updatedAt = p.UpdatedAt,
     };

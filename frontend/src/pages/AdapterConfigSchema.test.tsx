@@ -125,9 +125,9 @@ const sampleSchema = [
 const sampleProviders = [
   {
     id: "prov-1",
-    name: "My OpenAI",
-    type: "openai",
-    baseUrl: "https://api.openai.com",
+    name: "My Pi",
+    type: "pi",
+    baseUrl: "http://pi.local",
     apiKey: "",
     model: "gpt-4o",
     isDefault: true,
@@ -307,9 +307,9 @@ describe("Adapter config schema", () => {
     const sampleProvidersMulti = [
       {
         id: "prov-1",
-        name: "My OpenAI",
-        type: "openai",
-        baseUrl: "https://api.openai.com",
+        name: "My Pi",
+        type: "pi",
+        baseUrl: "http://pi.local",
         apiKey: "",
         model: "gpt-4o",
         isDefault: true,
@@ -317,9 +317,9 @@ describe("Adapter config schema", () => {
       },
       {
         id: "prov-2",
-        name: "My Anthropic",
-        type: "anthropic",
-        baseUrl: "https://api.anthropic.com",
+        name: "My OpenCode",
+        type: "opencode",
+        baseUrl: "http://opencode.local",
         apiKey: "",
         model: "claude-3",
         isDefault: false,
@@ -362,7 +362,7 @@ describe("Adapter config schema", () => {
 
       if (method === "GET" && url.includes("AgentAdapters")) {
         schemaCalls.push(url);
-        if (url.includes("anthropic")) {
+        if (url.includes("opencode")) {
           return {
             ok: true,
             status: 200,
@@ -395,14 +395,14 @@ describe("Adapter config schema", () => {
     // Click the AI node
     fireEvent.click(screen.getByText("Code"));
 
-    // Change provider to Anthropic
+    // Change provider to OpenCode
     const select = screen.getByLabelText("AI Provider");
     fireEvent.change(select, { target: { value: "prov-2" } });
 
-    // Verify a schema fetch was made for the anthropic type
+    // Verify a schema fetch was made for the opencode type
     await waitFor(() => {
-      const anthropicCall = schemaCalls.find((c) => c.includes("anthropic"));
-      expect(anthropicCall).toBeTruthy();
+      const opencodeCall = schemaCalls.find((c) => c.includes("opencode"));
+      expect(opencodeCall).toBeTruthy();
     });
   });
 
@@ -445,13 +445,13 @@ describe("Adapter config schema", () => {
     // Click the AI node
     fireEvent.click(screen.getByText("Code"));
 
-    // The AI provider dropdown should show "My OpenAI"
+    // The AI provider dropdown should show "My Pi"
     await waitFor(() => {
       const select = screen.getByLabelText("AI Provider");
       expect(select).toBeTruthy();
       const options = (select as HTMLSelectElement).options;
       const providerLabels = Array.from(options).map((o) => o.label);
-      expect(providerLabels).toContain("My OpenAI");
+      expect(providerLabels).toContain("My Pi");
     });
   });
 
