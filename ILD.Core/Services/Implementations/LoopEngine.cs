@@ -3,6 +3,7 @@ using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Remote;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -653,6 +654,27 @@ public class LoopEngine : ILoopEngine
 
     private async Task<NodeOutcome> ExecuteNodeWithRetryAsync(LoopRun run, WorkItemView wi, LoopNode node, string? prevOutput, IReadOnlyList<LoopNodeEdge> edges, CancellationToken ct)
     {
+        // Per-provider parallelism precheck for AI nodes. Without this, every
+        // resume of a throttled run would create a fresh LoopRunNode and emit
+        // NodeStarted/NodeThrottled events, spamming the run log. The actual
+        // slot acquisition still happens atomically inside the executor.
+        if (node.NodeType == NodeType.AI)
+        {
+            var precheck = await PrecheckAiThrottledAsync(node);
+            if (precheck != null)
+            {
+                using var scope = _sp.CreateScope();
+                var store = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+                var entity = await store.GetByIdAsync(run.Id);
+                if (entity != null && entity.CurrentNodeId != node.Id)
+                {
+                    entity.CurrentNodeId = node.Id;
+                    await store.UpdateRunAsync(entity);
+                }
+                return precheck;
+            }
+        }
+
         // PRD: error edge → follow immediately on failure; no error edge → auto-retry N times.
         var hasFailureEdge = edges.Any(e => e.SourceNodeId == node.Id && e.EdgeType == EdgeType.OnFailure);
         var maxRetries = hasFailureEdge ? 0 : node.MaxRetries;
@@ -995,5 +1017,33 @@ public class LoopEngine : ILoopEngine
         using var scope = _sp.CreateScope();
         var manager = scope.ServiceProvider.GetRequiredService<IWorkItemManager>();
         await manager.TransitionAsync(workItemId, next, reason, actions, humanFeedbackReason: humanFeedbackReason);
+    }
+
+    private async Task<NodeOutcome.Throttled?> PrecheckAiThrottledAsync(LoopNode node)
+    {
+        try
+        {
+            var cfg = NodeConfig.Parse<NodeConfig.Ai>(node.Config);
+            using var scope = _sp.CreateScope();
+            var providerStore = scope.ServiceProvider.GetRequiredService<IProviderStore>();
+            var tracker = scope.ServiceProvider.GetRequiredService<IAiProviderConcurrencyTracker>();
+            AiProvider? provider;
+            if (string.IsNullOrEmpty(cfg.AiProviderId))
+                provider = await providerStore.GetDefaultAiProviderAsync();
+            else if (Guid.TryParse(cfg.AiProviderId, out var id))
+                provider = await providerStore.GetAiProviderByIdAsync(id);
+            else
+                provider = await providerStore.GetAiProviderByNameAsync(cfg.AiProviderId);
+
+            if (provider == null || provider.Parallelism <= 0) return null;
+            if (tracker.HasCapacity(provider.Id, provider.Parallelism)) return null;
+            return new NodeOutcome.Throttled(
+                $"AI provider {provider.Name} at capacity ({tracker.ActiveCount(provider.Id)}/{provider.Parallelism})",
+                provider.Id);
+        }
+        catch
+        {
+            return null;
+        }
     }
 }
