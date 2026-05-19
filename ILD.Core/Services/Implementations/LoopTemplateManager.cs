@@ -15,7 +15,7 @@ public class LoopTemplateManager : ILoopTemplateManager
         _store = store;
     }
 
-    public async Task<Guid> CreateLoopTemplateAsync(string name, string description, LoopTemplateGraph graph, RecoveryPolicy recoveryPolicy = RecoveryPolicy.AutoResume, int maxNodeExecutions = 200, int maxWallClockHours = 24)
+    public async Task<Guid> CreateLoopTemplateAsync(string name, string description, LoopTemplateGraph graph, RecoveryPolicy recoveryPolicy = RecoveryPolicy.AutoResume, int maxNodeExecutions = 200)
     {
         var errors = LoopTemplateValidator.Validate(graph);
         if (errors.Count > 0)
@@ -28,7 +28,6 @@ public class LoopTemplateManager : ILoopTemplateManager
             Description = description,
             RecoveryPolicy = recoveryPolicy,
             MaxNodeExecutions = maxNodeExecutions,
-            MaxWallClockHours = maxWallClockHours,
         };
         await _store.CreateTemplateAsync(template);
 
@@ -47,7 +46,7 @@ public class LoopTemplateManager : ILoopTemplateManager
     public async Task<IEnumerable<LoopTemplate>> GetAllLoopTemplatesAsync(int skip = 0, int take = 100, bool includeArchived = false)
         => await _store.GetAllAsync(skip, take, includeArchived);
 
-    public async Task<Guid> UpdateLoopTemplateAsync(Guid templateId, string name, string description, LoopTemplateGraph graph, RecoveryPolicy? recoveryPolicy = null, int? maxNodeExecutions = null, int? maxWallClockHours = null)
+    public async Task<Guid> UpdateLoopTemplateAsync(Guid templateId, string name, string description, LoopTemplateGraph graph, RecoveryPolicy? recoveryPolicy = null, int? maxNodeExecutions = null)
     {
         var errors = LoopTemplateValidator.Validate(graph);
         if (errors.Count > 0)
@@ -60,7 +59,6 @@ public class LoopTemplateManager : ILoopTemplateManager
         template.Description = description;
         if (recoveryPolicy.HasValue) template.RecoveryPolicy = recoveryPolicy.Value;
         if (maxNodeExecutions.HasValue) template.MaxNodeExecutions = maxNodeExecutions.Value;
-        if (maxWallClockHours.HasValue) template.MaxWallClockHours = maxWallClockHours.Value;
         template.UpdatedAt = DateTime.UtcNow;
         await _store.UpdateTemplateAsync(template);
 

@@ -207,7 +207,6 @@ export default function LoopEditor() {
     description: string;
     recoveryPolicy: RecoveryPolicy;
     maxNodeExecutions: number;
-    maxWallClockHours: number;
     nodes: LoopNode[];
     edges: LoopNodeEdge[];
   } | null>(null);
@@ -428,7 +427,6 @@ export default function LoopEditor() {
           description: "",
           recoveryPolicy: RecoveryPolicy.AutoResume,
           maxNodeExecutions: 200,
-          maxWallClockHours: 24,
           nodes: loopNodes,
           edges: loopEdges,
         });
@@ -438,7 +436,6 @@ export default function LoopEditor() {
           description: selectedTemplate.description,
           recoveryPolicy: selectedTemplate.recoveryPolicy,
           maxNodeExecutions: selectedTemplate.maxNodeExecutions,
-          maxWallClockHours: selectedTemplate.maxWallClockHours,
           nodes: loopNodes,
           edges: loopEdges,
         });
@@ -554,7 +551,6 @@ export default function LoopEditor() {
           version: 0,
           recoveryPolicy: RecoveryPolicy.AutoResume,
           maxNodeExecutions: 200,
-          maxWallClockHours: 24,
           nodes: loopNodes,
           edges: loopEdges,
           createdAt: new Date().toISOString(),
@@ -631,7 +627,6 @@ export default function LoopEditor() {
             description: parsed.description,
             recoveryPolicy: parsed.recoveryPolicy,
             maxNodeExecutions: parsed.maxNodeExecutions,
-            maxWallClockHours: parsed.maxWallClockHours,
             nodes: loopNodes,
             edges: loopEdges,
           });
@@ -644,7 +639,6 @@ export default function LoopEditor() {
           description: parsed.description,
           recoveryPolicy: parsed.recoveryPolicy,
           maxNodeExecutions: parsed.maxNodeExecutions,
-          maxWallClockHours: parsed.maxWallClockHours,
           nodes: loopNodes,
           edges: loopEdges,
         });
@@ -738,7 +732,6 @@ export default function LoopEditor() {
         description: importConflictData.description,
         recoveryPolicy: importConflictData.recoveryPolicy,
         maxNodeExecutions: importConflictData.maxNodeExecutions,
-        maxWallClockHours: importConflictData.maxWallClockHours,
         nodes: importConflictData.nodes,
         edges: importConflictData.edges,
       });

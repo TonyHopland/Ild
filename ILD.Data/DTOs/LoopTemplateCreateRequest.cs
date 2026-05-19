@@ -16,8 +16,6 @@ public class LoopTemplateCreateRequest
 
     public int MaxNodeExecutions { get; set; } = 200;
 
-    public int MaxWallClockHours { get; set; } = 24;
-
     public List<LoopNodeDto> Nodes { get; set; } = new();
 
     public List<LoopNodeEdgeDto> Edges { get; set; } = new();

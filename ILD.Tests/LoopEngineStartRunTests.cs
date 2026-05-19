@@ -75,7 +75,6 @@ public class LoopEngineStartRunTests
                 Description = "d",
                 RecoveryPolicy = RecoveryPolicy.AutoResume,
                 MaxNodeExecutions = 100,
-                MaxWallClockHours = 24,
             };
             _version = new LoopTemplateVersion
             {

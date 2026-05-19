@@ -26,8 +26,6 @@ public class LoopTemplate : IHasUpdatedAt
 
     public int MaxNodeExecutions { get; set; }
 
-    public int MaxWallClockHours { get; set; }
-
     public DateTime CreatedAt { get; set; }
 
     public DateTime? UpdatedAt { get; set; }

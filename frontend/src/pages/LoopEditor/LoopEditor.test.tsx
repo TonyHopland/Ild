@@ -66,7 +66,6 @@ const sampleTemplate = {
   version: 3,
   recoveryPolicy: RecoveryPolicy.AutoResume,
   maxNodeExecutions: 200,
-  maxWallClockHours: 24,
   nodes: [
     {
       id: "n-start",
