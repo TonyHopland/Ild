@@ -8,13 +8,13 @@ namespace ILD.Tests;
 
 public class AgentAdapterRegistryTests
 {
-    private sealed class TestOpenAiAdapter : IAgentAdapter
+    private sealed class TestOpenCodeAdapter : IAgentAdapter
     {
-        public string Name => "TestOpenAi";
-        public string[] SupportedProviderTypes => ["openai"];
+        public string Name => "TestOpenCode";
+        public string[] SupportedProviderTypes => ["opencode"];
         public ConfigFieldDescriptor[] ConfigSchema => [];
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
-            => Task.FromResult(NodeExecutionResult.Ok("openai"));
+            => Task.FromResult(NodeExecutionResult.Ok("opencode"));
     }
 
     private sealed class TestCustomAdapter : IAgentAdapter
@@ -41,13 +41,13 @@ public class AgentAdapterRegistryTests
     {
         var sp = BuildServiceProvider(s =>
         {
-            s.AddSingleton<IAgentAdapter, TestOpenAiAdapter>();
+            s.AddSingleton<IAgentAdapter, TestOpenCodeAdapter>();
         });
 
         var registry = sp.GetRequiredService<IAgentAdapterRegistry>();
-        var factory = registry.ResolveForProvider(new AiProvider { Type = "openai" });
+        var factory = registry.ResolveForProvider(new AiProvider { Type = "opencode" });
 
-        Assert.IsType<TestOpenAiAdapter>(factory());
+        Assert.IsType<TestOpenCodeAdapter>(factory());
     }
 
     [Fact]
@@ -55,13 +55,13 @@ public class AgentAdapterRegistryTests
     {
         var sp = BuildServiceProvider(s =>
         {
-            s.AddSingleton<IAgentAdapter, TestOpenAiAdapter>();
+                        s.AddSingleton<IAgentAdapter, TestOpenCodeAdapter>();
             s.AddSingleton<IAgentAdapter, TestCustomAdapter>();
         });
 
         var registry = sp.GetRequiredService<IAgentAdapterRegistry>();
 
-          Assert.IsType<TestOpenAiAdapter>(registry.ResolveForProvider(new AiProvider { Type = "openai" })());
+                    Assert.IsType<TestOpenCodeAdapter>(registry.ResolveForProvider(new AiProvider { Type = "opencode" })());
 
           Assert.IsType<TestCustomAdapter>(registry.ResolveForProvider(new AiProvider { Type = "custom" })());
     }
@@ -71,7 +71,7 @@ public class AgentAdapterRegistryTests
     {
         var sp = BuildServiceProvider(s =>
         {
-            s.AddSingleton<IAgentAdapter, TestOpenAiAdapter>();
+            s.AddSingleton<IAgentAdapter, TestOpenCodeAdapter>();
         });
 
         var registry = sp.GetRequiredService<IAgentAdapterRegistry>();
@@ -87,11 +87,11 @@ public class AgentAdapterRegistryTests
     {
         var sp = BuildServiceProvider(s =>
         {
-            s.AddSingleton<IAgentAdapter, TestOpenAiAdapter>();
+            s.AddSingleton<IAgentAdapter, TestOpenCodeAdapter>();
         });
 
         var registry = sp.GetRequiredService<IAgentAdapterRegistry>();
-        var factory = registry.ResolveForProvider(new AiProvider { Type = "openai" });
+        var factory = registry.ResolveForProvider(new AiProvider { Type = "opencode" });
 
         var first = factory();
         var second = factory();

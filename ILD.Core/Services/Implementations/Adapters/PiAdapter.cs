@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ILD.Core.Services.Interfaces;
+using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Stores.Interfaces;
@@ -33,7 +34,7 @@ public sealed class PiAdapter : IAgentAdapter
         try
         {
             var rendered = await RenderPromptAsync(ctx.Prompt, ctx.RunContext);
-            var settings = ResolveSettings(ctx.Provider, ctx.RunContext.LoopRunId);
+            var settings = ResolveSettings(ctx.Provider, ctx.RunContext.LoopRunId, ctx.ToolAllowlist);
 
             if (string.IsNullOrWhiteSpace(settings.BinaryPath))
                 return NodeExecutionResult.Fail("[pi-error] binaryPath is not configured");
@@ -163,6 +164,12 @@ public sealed class PiAdapter : IAgentAdapter
         psi.ArgumentList.Add("json");
         psi.ArgumentList.Add("--session-dir");
         psi.ArgumentList.Add(sessionDirectory);
+
+        if (settings.ToolNames.Count > 0)
+        {
+            psi.ArgumentList.Add("--tools");
+            psi.ArgumentList.Add(string.Join(',', settings.ToolNames));
+        }
 
         if (!string.IsNullOrWhiteSpace(settings.Provider))
         {
@@ -450,7 +457,7 @@ public sealed class PiAdapter : IAgentAdapter
         }
     }
 
-    private static PiAdapterSettings ResolveSettings(AiProvider provider, Guid loopRunId)
+    private static PiAdapterSettings ResolveSettings(AiProvider provider, Guid loopRunId, IReadOnlyList<string>? selectedToolKeys)
     {
         var binaryPath = "pi";
         var apiKey = provider.ApiKey;
@@ -458,6 +465,8 @@ public sealed class PiAdapter : IAgentAdapter
         var model = provider.Model;
         var api = "openai-completions";
         var hasAbsoluteBaseUrl = Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out _);
+        var enabledToolKeys = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, selectedToolKeys);
+        var toolNames = BuildPiToolNames(enabledToolKeys);
 
         if (!string.IsNullOrWhiteSpace(provider.Config))
         {
@@ -516,7 +525,30 @@ public sealed class PiAdapter : IAgentAdapter
             agentDirectory,
             modelsJsonContent,
             apiKeyEnvironmentVariableName,
-            BuildIldExtensionContent(hasAbsoluteBaseUrl, loopRunId));
+            BuildIldExtensionContent(hasAbsoluteBaseUrl, loopRunId, enabledToolKeys),
+            toolNames);
+    }
+
+    private static IReadOnlyList<string> BuildPiToolNames(IReadOnlyList<string> enabledToolKeys)
+    {
+        var enabled = new HashSet<string>(enabledToolKeys, StringComparer.OrdinalIgnoreCase);
+        var toolNames = new List<string>();
+
+        if (enabled.Contains(AiToolCatalog.Read))
+            toolNames.AddRange(["read", "grep", "find", "ls"]);
+
+        if (enabled.Contains(AiToolCatalog.Write))
+            toolNames.AddRange(["edit", "write"]);
+
+        if (enabled.Contains(AiToolCatalog.Execute))
+            toolNames.Add("bash");
+
+        if (enabled.Contains(AiToolCatalog.Ild))
+            toolNames.AddRange(ToolDescriptors.All.Select(tool => tool.Name));
+
+        return toolNames
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private static string StripProviderPrefix(string? model, string? providerName)
@@ -585,9 +617,9 @@ public sealed class PiAdapter : IAgentAdapter
     /// Delegates to <see cref="PiExtensionGenerator"/> which reads from the shared
     /// <see cref="ILD.Data.ToolDescriptors"/> to avoid duplicating tool definitions.
     /// </summary>
-    private static string? BuildIldExtensionContent(bool shouldGenerate, Guid loopRunId)
+    private static string? BuildIldExtensionContent(bool shouldGenerate, Guid loopRunId, IReadOnlyList<string> enabledToolKeys)
     {
-        if (!shouldGenerate)
+        if (!shouldGenerate || !enabledToolKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase))
             return null;
 
         var apiUrl = Environment.GetEnvironmentVariable("ILD_API_URL")
@@ -595,7 +627,11 @@ public sealed class PiAdapter : IAgentAdapter
         var apiToken = Environment.GetEnvironmentVariable("ILD_API_TOKEN")
             ?? string.Empty;
 
-        return PiExtensionGenerator.Generate(apiUrl, apiToken, loopRunId.ToString());
+        return PiExtensionGenerator.Generate(
+            apiUrl,
+            apiToken,
+            loopRunId.ToString(),
+            ToolDescriptors.All.Select(tool => tool.Name).ToArray());
     }
 
     private static Task<string> RenderPromptAsync(string template, LoopRunContext context)
@@ -615,7 +651,8 @@ public sealed class PiAdapter : IAgentAdapter
         string? AgentDirectory,
         string? ModelsJsonContent,
         string? ApiKeyEnvironmentVariableName,
-        string? IldExtensionContent);
+        string? IldExtensionContent,
+        IReadOnlyList<string> ToolNames);
 
     private sealed record PiExecutionOutput(string RawStdout, string Content, string? SessionId, bool SawJsonEvents);
 

@@ -8,6 +8,7 @@ public record AgentExecutionContext(
     CancellationToken Cancel,
     Func<string, Task>? ProgressCallback = null,
     Dictionary<string, object?>? AdapterConfig = null,
+    IReadOnlyList<string>? ToolAllowlist = null,
     string? SessionId = null,
     string? IncomingSessionId = null,
     bool ManageSession = false

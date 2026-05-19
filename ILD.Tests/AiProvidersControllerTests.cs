@@ -16,6 +16,7 @@ public class AiProvidersControllerTests : IDisposable
 {
     private readonly SqliteConnection _conn = new("Filename=:memory:");
     private readonly AppDbContext _db;
+    private readonly Mock<IAgentAdapterRegistry> _registry = new();
 
     public AiProvidersControllerTests()
     {
@@ -23,9 +24,13 @@ public class AiProvidersControllerTests : IDisposable
         var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(_conn).Options;
         _db = new AppDbContext(options);
         _db.Database.EnsureCreated();
+        _registry.Setup(r => r.GetAllSupportedProviderTypes()).Returns(["opencode", "pi"]);
     }
 
     public void Dispose() { _db.Dispose(); _conn.Dispose(); }
+
+    private AiProvidersController CreateController()
+        => new(Mock.Of<IAIProviderService>(), _registry.Object, _db);
 
     [Fact]
     public async Task GetAll_redacts_ApiKey_and_Config()
@@ -42,7 +47,7 @@ public class AiProvidersControllerTests : IDisposable
         });
         await _db.SaveChangesAsync();
 
-        var controller = new AiProvidersController(Mock.Of<IAIProviderService>(), _db);
+        var controller = CreateController();
         var result = await controller.GetAll() as OkObjectResult;
 
         Assert.NotNull(result);
@@ -68,7 +73,7 @@ public class AiProvidersControllerTests : IDisposable
         });
         await _db.SaveChangesAsync();
 
-        var controller = new AiProvidersController(Mock.Of<IAIProviderService>(), _db);
+        var controller = CreateController();
         var result = await controller.GetById(id.ToString()) as OkObjectResult;
 
         Assert.NotNull(result);
@@ -92,11 +97,84 @@ public class AiProvidersControllerTests : IDisposable
         }
         await _db.SaveChangesAsync();
 
-        var controller = new AiProvidersController(Mock.Of<IAIProviderService>(), _db);
+        var controller = CreateController();
         var result = await controller.GetAll(skip: 0, take: 10000) as OkObjectResult;
 
         Assert.NotNull(result);
         var items = (System.Collections.IEnumerable)result!.Value!;
         Assert.Equal(500, items.Cast<object>().Count());
+    }
+
+    [Fact]
+    public async Task GetAll_includes_supported_tools_from_backend_catalog()
+    {
+        _db.AiProviders.Add(new AiProvider
+        {
+            Id = Guid.NewGuid(),
+            Name = "pi-default",
+            Type = "pi",
+            BaseUrl = "https://x",
+            Model = "m",
+        });
+        await _db.SaveChangesAsync();
+
+        var controller = CreateController();
+        var result = await controller.GetAll() as OkObjectResult;
+
+        Assert.NotNull(result);
+        var json = System.Text.Json.JsonSerializer.Serialize(result!.Value);
+        Assert.Contains("supportedTools", json);
+        Assert.Contains("\"Key\":\"read\"", json);
+        Assert.Contains("\"Key\":\"write\"", json);
+        Assert.Contains("\"Key\":\"execute\"", json);
+        Assert.Contains("\"Key\":\"ild\"", json);
+    }
+
+    [Fact]
+    public async Task Create_rejects_unsupported_provider_type()
+    {
+        var controller = CreateController();
+
+        var result = await controller.Create(new AiProviderDto
+        {
+            Name = "legacy-openai",
+            Type = "openai",
+            BaseUrl = "https://api.example.com",
+            Model = "gpt-4",
+        });
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+        var json = System.Text.Json.JsonSerializer.Serialize(badRequest.Value);
+        Assert.Contains("Unsupported AI provider type", json);
+    }
+
+    [Fact]
+    public async Task Update_rejects_unsupported_provider_type()
+    {
+        var id = Guid.NewGuid();
+        _db.AiProviders.Add(new AiProvider
+        {
+            Id = id,
+            Name = "pi-default",
+            Type = "pi",
+            BaseUrl = "https://x",
+            Model = "m",
+        });
+        await _db.SaveChangesAsync();
+
+        var controller = CreateController();
+
+        var result = await controller.Update(id.ToString(), new AiProviderDto
+        {
+            Id = id.ToString(),
+            Name = "legacy-openai",
+            Type = "openai",
+            BaseUrl = "https://api.example.com",
+            Model = "gpt-4",
+        });
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+        var json = System.Text.Json.JsonSerializer.Serialize(badRequest.Value);
+        Assert.Contains("Unsupported AI provider type", json);
     }
 }

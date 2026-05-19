@@ -295,7 +295,15 @@ export interface AiProvider {
   apiKey: string;
   model: string;
   isDefault: boolean;
+  supportedTools?: AiToolDefinition[];
   createdAt: string;
+}
+
+export interface AiToolDefinition {
+  key: string;
+  label: string;
+  description: string;
+  defaultEnabled: boolean;
 }
 
 export interface ApiError {

@@ -1,7 +1,12 @@
 import type { Node } from "@xyflow/react";
 import AdapterConfigFields from "../../../components/AdapterConfigFields";
 import PromptEditor from "../../../components/PromptEditor";
-import { NodeType, type AiProvider, type ConfigFieldDescriptor } from "../../../types";
+import {
+  NodeType,
+  type AiProvider,
+  type AiToolDefinition,
+  type ConfigFieldDescriptor,
+} from "../../../types";
 import { AiSessionControls } from "./AiSessionControls";
 import type { AdapterConfigValue, SessionPlaceholderUsage } from "../types";
 
@@ -23,6 +28,7 @@ interface NodeSettingsModalProps {
   prDescriptionTemplate: string;
   prCommentTemplate: string;
   aiProviders: AiProvider[];
+  availableAiTools: AiToolDefinition[];
   adapterConfigSchema: ConfigFieldDescriptor[];
   adapterConfigValues: Record<string, AdapterConfigValue>;
   sessionPlaceholderUsages: SessionPlaceholderUsage[];
@@ -66,6 +72,7 @@ export function NodeSettingsModal({
   prDescriptionTemplate,
   prCommentTemplate,
   aiProviders,
+  availableAiTools,
   adapterConfigSchema,
   adapterConfigValues,
   sessionPlaceholderUsages,
@@ -199,19 +206,19 @@ export function NodeSettingsModal({
               <div className="config-field">
                 <label>Tool Allowlist</label>
                 <div className="tool-checklist">
-                  {["read", "write", "execute"].map((tool) => (
-                    <label key={tool} className="checkbox-label">
+                  {availableAiTools.map((tool) => (
+                    <label key={tool.key} className="checkbox-label" title={tool.description}>
                       <input
                         type="checkbox"
-                        checked={aiTools.includes(tool)}
+                        checked={aiTools.includes(tool.key)}
                         onChange={(event) => {
                           const nextTools = event.target.checked
-                            ? [...aiTools, tool]
-                            : aiTools.filter((value) => value !== tool);
+                            ? [...aiTools, tool.key]
+                            : aiTools.filter((value) => value !== tool.key);
                           onAiToolsChange(nextTools);
                         }}
                       />
-                      {tool}
+                      {tool.label}
                     </label>
                   ))}
                 </div>

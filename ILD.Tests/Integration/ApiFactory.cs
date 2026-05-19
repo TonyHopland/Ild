@@ -1,4 +1,5 @@
 using ILD.Core.Services.Remote;
+using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.Entities;
 using Microsoft.AspNetCore.Hosting;
@@ -64,6 +65,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             services.RemoveHostedService<ILD.Core.Services.Remote.RemoteWorkItemStartupReconciler>();
             services.RemoveHostedService<ILD.Core.Services.Remote.RemoteWorkItemPoller>();
             services.GuardExternalServices();
+            services.ReplaceSingleton<IAgentAdapterRegistry>(new FixedAgentAdapterRegistry());
 
             services.RemoveAll<IWorkItemServerClient>();
             services.RemoveAll<IWorkItemServerOptionsResolver>();
@@ -96,4 +98,13 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     }
 
     private sealed record LoginBody(string Token, string Username);
+
+    private sealed class FixedAgentAdapterRegistry : IAgentAdapterRegistry
+    {
+        public Func<IAgentAdapter> ResolveForProvider(AiProvider provider)
+            => throw new InvalidOperationException("Integration tests using ApiFactory should not execute AI adapters.");
+
+        public string[] GetAllSupportedProviderTypes()
+            => ["opencode", "pi"];
+    }
 }

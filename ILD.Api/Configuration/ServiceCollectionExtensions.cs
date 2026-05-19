@@ -63,7 +63,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ILoopEngine, LoopEngine>();
         services.AddScoped<IMetricsCollector, MetricsCollector>();
         services.AddSingleton<IAgentAdapterRegistry, AgentAdapterRegistry>();
-        services.AddSingleton<IAgentAdapter, OpenAiCompatibleAdapter>();
         services.AddSingleton<IAgentAdapter, OpenCodeAdapter>();
         services.AddSingleton<IAgentAdapter, PiAdapter>();
 

@@ -34,6 +34,7 @@ import {
 } from "../../utils/loopTemplateExport";
 import { checkEdgeConstraints, buildEdge } from "../../utils/edgeUtils";
 import {
+  type AiToolDefinition,
   type AiProvider,
   type ConfigFieldDescriptor,
   type LoopNode,
@@ -107,6 +108,35 @@ function sanitizeAdapterConfigValues(
   }
 
   return values;
+}
+
+function resolveActiveAiProvider(
+  aiProviders: AiProvider[] | null | undefined,
+  providerId: string,
+): AiProvider | null {
+  const providers = Array.isArray(aiProviders) ? aiProviders : [];
+  return (
+    providers.find((provider) => provider.id === providerId) ??
+    providers.find((provider) => provider.isDefault) ??
+    providers[0] ??
+    null
+  );
+}
+
+function resolveToolSelection(provider: AiProvider | null, configuredTools: unknown): string[] {
+  const supportedTools = provider?.supportedTools ?? [];
+  if (supportedTools.length === 0) return [];
+
+  const supportedToolKeys = new Set(supportedTools.map((tool) => tool.key));
+  const explicitTools = Array.isArray(configuredTools)
+    ? configuredTools.filter(
+        (tool): tool is string => typeof tool === "string" && supportedToolKeys.has(tool),
+      )
+    : [];
+
+  if (explicitTools.length > 0) return explicitTools;
+
+  return supportedTools.filter((tool) => tool.defaultEnabled).map((tool) => tool.key);
 }
 
 export default function LoopEditor() {
@@ -199,6 +229,8 @@ export default function LoopEditor() {
   const selectedPlaceholderUsage = sessionPlaceholderUsages.find(
     (entry) => entry.name === aiSessionPlaceholder.trim(),
   );
+  const availableAiTools: AiToolDefinition[] =
+    resolveActiveAiProvider(aiProviders, aiProvider)?.supportedTools ?? [];
 
   const loadAdapterSchema = useCallback(
     async (providerId: string, initialAdapterConfig: Record<string, unknown> = {}) => {
@@ -279,7 +311,7 @@ export default function LoopEditor() {
   const loadAiProviders = async () => {
     try {
       const data = await aiProviderService.getAll();
-      setAiProviders(data);
+      setAiProviders(Array.isArray(data) ? data : []);
     } catch (error) {
       setErrorText(loadErrorMessage(error, "Failed to load AI providers."));
     }
@@ -809,12 +841,17 @@ export default function LoopEditor() {
       const config = data.config || {};
       const adapterConfig = (config.adapterConfig as Record<string, unknown>) || {};
       const initialAdapterValues = sanitizeAdapterConfigValues(adapterConfig);
+      const activeProvider = resolveActiveAiProvider(
+        aiProviders,
+        (config.aiProviderId as string) || "",
+      );
+      const resolvedAiTools = resolveToolSelection(activeProvider, config.toolAllowlist);
 
       setNodeLabel(data.label || "");
       setCmdCommand((config.command as string) || "");
       setAiPrompt((config.prompt as string) || "");
       setAiProvider((config.aiProviderId as string) || "");
-      setAiTools((config.toolAllowlist as string[]) || []);
+      setAiTools(resolvedAiTools);
       setAiRejectPattern((config.rejectPattern as string) || "");
       setAiUseSession((config.useSession as boolean | undefined) ?? false);
       setAiSessionPlaceholder((config.sessionPlaceholder as string) || "");
@@ -838,7 +875,7 @@ export default function LoopEditor() {
         cmdCommand: (config.command as string) || "",
         aiPrompt: (config.prompt as string) || "",
         aiProvider: (config.aiProviderId as string) || "",
-        aiTools: (config.toolAllowlist as string[]) || [],
+        aiTools: resolvedAiTools,
         aiRejectPattern: (config.rejectPattern as string) || "",
         aiUseSession: (config.useSession as boolean | undefined) ?? false,
         aiSessionPlaceholder: (config.sessionPlaceholder as string) || "",
@@ -852,15 +889,16 @@ export default function LoopEditor() {
       });
       setShowNodeSettingsModal(true);
     },
-    [loadAdapterSchema],
+    [aiProviders, loadAdapterSchema],
   );
 
   const handleAiProviderChange = useCallback(
     (providerId: string) => {
       setAiProvider(providerId);
+      setAiTools(resolveToolSelection(resolveActiveAiProvider(aiProviders, providerId), []));
       void loadAdapterSchema(providerId);
     },
-    [loadAdapterSchema],
+    [aiProviders, loadAdapterSchema],
   );
 
   const handleSaveNodeSettings = useCallback(() => {
@@ -1313,6 +1351,7 @@ export default function LoopEditor() {
                     prDescriptionTemplate={prDescriptionTemplate}
                     prCommentTemplate={prCommentTemplate}
                     aiProviders={aiProviders}
+                    availableAiTools={availableAiTools}
                     adapterConfigSchema={adapterConfigSchema}
                     adapterConfigValues={adapterConfigValues}
                     sessionPlaceholderUsages={sessionPlaceholderUsages}

@@ -135,48 +135,6 @@ public class AdapterIntegrationTests
 
     #endregion
 
-    #region OpenAI Compatible Adapter — real LLM smoke test
-
-    [ExplicitFact]
-    public async Task OpenAiCompatibleAdapter_smoke_test_against_real_llm()
-    {
-        var baseUrl = ReadEnv("ILD_INTEGRATION_LLM_BASE_URL");
-        var apiKey = ReadEnv("ILD_INTEGRATION_LLM_API_KEY");
-        var model = ReadEnv("ILD_INTEGRATION_LLM_MODEL");
-
-        var adapter = new OpenAiCompatibleAdapter(new TestHttpClientFactory());
-
-        var provider = new AiProvider
-        {
-            Name = "integration-test-openai",
-            Type = "openai",
-            BaseUrl = baseUrl,
-            ApiKey = apiKey,
-            Model = model,
-            Config = JsonSerializer.Serialize(new
-            {
-                baseUrl,
-                apiKey,
-                model,
-                maxTokens = 256
-            })
-        };
-
-        var ctx = BuildContext(provider, "Reply with exactly the word hello and nothing else.");
-
-        var result = await adapter.ExecuteAsync(ctx);
-
-        Console.WriteLine($"[adapter-integration] openai-compat success={result.Success}");
-        Console.WriteLine($"[adapter-integration] openai-compat output={result.Output}");
-        if (!string.IsNullOrEmpty(result.Error))
-            Console.WriteLine($"[adapter-integration] openai-compat error={result.Error}");
-
-        Assert.True(result.Success);
-        Assert.False(string.IsNullOrEmpty(result.Output));
-    }
-
-    #endregion
-
     #region Helpers
 
     static string ReadEnv(string name)
@@ -204,10 +162,4 @@ public class AdapterIntegrationTests
     }
 
     #endregion
-}
-
-/// <summary>Minimal HttpClientFactory impl for the OpenAI-compatible adapter test.</summary>
-sealed class TestHttpClientFactory : IHttpClientFactory
-{
-    public HttpClient CreateClient(string? name = null) => new();
 }

@@ -15,8 +15,14 @@ internal static class PiExtensionGenerator
     /// Generate the full TypeScript extension content.
     /// </summary>
     public static string Generate(string apiUrl, string apiToken, string loopRunId)
+        => Generate(apiUrl, apiToken, loopRunId, allowedToolNames: null);
+
+    public static string Generate(string apiUrl, string apiToken, string loopRunId, IReadOnlyCollection<string>? allowedToolNames)
     {
         var sb = new StringBuilder();
+        var allowedToolNameSet = allowedToolNames == null
+            ? null
+            : new HashSet<string>(allowedToolNames, StringComparer.OrdinalIgnoreCase);
 
         // Header
         sb.AppendLine("// ILD Platform Extension for Pi");
@@ -46,6 +52,9 @@ internal static class PiExtensionGenerator
 
         foreach (var tool in ToolDescriptors.All)
         {
+            if (allowedToolNameSet != null && !allowedToolNameSet.Contains(tool.Name))
+                continue;
+
             AppendToolRegistration(sb, tool);
             sb.AppendLine();
         }

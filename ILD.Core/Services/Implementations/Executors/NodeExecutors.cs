@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -230,6 +231,7 @@ public sealed class AINodeExecutor : INodeExecutor
                 ctx.PreviousNodeOutput);
 
             var prompt = cfg.Prompt ?? "";
+            var enabledTools = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, cfg.ToolAllowlist);
 
             var agentCtx = new AgentExecutionContext(
                 provider,
@@ -239,6 +241,7 @@ public sealed class AINodeExecutor : INodeExecutor
                 ctx.CancellationToken,
                 ctx.ProgressCallback,
                 ExtractAdapterConfig(cfg.AdapterConfig),
+                enabledTools,
                 sessionId,
                 incomingSessionId,
                 ManageSession: useSession);
