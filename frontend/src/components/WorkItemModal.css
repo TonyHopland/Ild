@@ -362,7 +362,7 @@
 }
 
 .feedback-prompt {
-  max-height: 12rem;
+  max-height: 20rem;
   overflow: auto;
 }
 
@@ -468,7 +468,7 @@
 }
 
 .detail-description {
-  max-height: 12rem;
+  max-height: 20rem;
   overflow: auto;
 }
 
