@@ -13,6 +13,7 @@ public interface IWorkItemNotifier
     Task HumanFeedbackRequiredAsync(string workItemId, string reason);
     Task DependencyResolvedAsync(string workItemId);
     Task PreviewStateChangedAsync(string workItemId);
+    Task SchedulerStateChangedAsync(bool isPaused, int maxConcurrent);
 }
 
 public sealed class NoopWorkItemNotifier : IWorkItemNotifier
@@ -21,4 +22,5 @@ public sealed class NoopWorkItemNotifier : IWorkItemNotifier
     public Task HumanFeedbackRequiredAsync(string workItemId, string reason) => Task.CompletedTask;
     public Task DependencyResolvedAsync(string workItemId) => Task.CompletedTask;
     public Task PreviewStateChangedAsync(string workItemId) => Task.CompletedTask;
+    public Task SchedulerStateChangedAsync(bool isPaused, int maxConcurrent) => Task.CompletedTask;
 }

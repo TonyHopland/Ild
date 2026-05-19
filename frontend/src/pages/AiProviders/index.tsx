@@ -14,6 +14,7 @@ export default function AiProviders() {
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("");
   const [isDefault, setIsDefault] = useState(false);
+  const [parallelism, setParallelism] = useState<number>(0);
 
   useEffect(() => {
     void loadData();
@@ -41,6 +42,7 @@ export default function AiProviders() {
     setBaseUrl(provider.baseUrl);
     setModel(provider.model);
     setIsDefault(provider.isDefault);
+    setParallelism(provider.parallelism ?? 0);
     setShowModal(true);
   };
 
@@ -53,6 +55,7 @@ export default function AiProviders() {
     setApiKey("");
     setModel("");
     setIsDefault(false);
+    setParallelism(0);
   };
 
   const handleSave = async () => {
@@ -62,6 +65,7 @@ export default function AiProviders() {
       baseUrl,
       model,
       isDefault,
+      parallelism,
     };
 
     if (editingProvider) {
@@ -204,6 +208,17 @@ export default function AiProviders() {
                   type="password"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
+                />
+              </div>
+              <div className="form-group">
+                <label htmlFor="apParallelism">Parallelism (0 = unlimited)</label>
+                <input
+                  id="apParallelism"
+                  type="number"
+                  min={0}
+                  max={1000}
+                  value={parallelism}
+                  onChange={(e) => setParallelism(parseInt(e.target.value, 10) || 0)}
                 />
               </div>
               <div className="form-group form-checkbox">

@@ -31,6 +31,7 @@ public class AiProvidersController : ControllerBase
         baseUrl = p.BaseUrl,
         model = p.Model,
         isDefault = p.IsDefault,
+        parallelism = p.Parallelism,
         apiKey = string.IsNullOrEmpty(p.ApiKey) ? null : "***",
         hasApiKey = !string.IsNullOrEmpty(p.ApiKey),
         hasConfig = !string.IsNullOrEmpty(p.Config),
@@ -74,6 +75,7 @@ public class AiProvidersController : ControllerBase
             Model = request.Model,
             ApiKey = string.IsNullOrEmpty(request.ApiKey) ? null : request.ApiKey,
             IsDefault = request.IsDefault,
+            Parallelism = request.Parallelism,
             Config = request.Config,
             CreatedAt = DateTime.UtcNow,
         };
@@ -96,6 +98,7 @@ public class AiProvidersController : ControllerBase
         p.Model = request.Model;
         if (!string.IsNullOrEmpty(request.ApiKey)) p.ApiKey = request.ApiKey;
         p.IsDefault = request.IsDefault;
+        p.Parallelism = request.Parallelism;
         p.Config = request.Config;
         p.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();

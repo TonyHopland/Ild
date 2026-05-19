@@ -293,6 +293,7 @@ export interface AiProvider {
   apiKey: string;
   model: string;
   isDefault: boolean;
+  parallelism: number;
   supportedTools?: AiToolDefinition[];
   createdAt: string;
 }
@@ -369,6 +370,16 @@ export interface NodeProgressPayload {
 
 export interface PreviewStateChangedPayload {
   workItemId: string;
+}
+
+export interface SchedulerStateChangedPayload {
+  isPaused: boolean;
+  maxConcurrent: number;
+}
+
+export interface AppSetting {
+  key: string;
+  value: string;
 }
 
 export interface LoopTemplateVersion {

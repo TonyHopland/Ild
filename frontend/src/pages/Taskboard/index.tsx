@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { WorkItem, WorkItemStatus } from "../../types";
 import type { TypedSignalRMessage } from "../../types/signalr";
-import { workItemService } from "../../services/auth";
+import { workItemService, settingsService, SchedulerSettingKeys } from "../../services/auth";
 import TaskboardColumn from "../../components/TaskboardColumn";
 import WorkItemModal from "../../components/WorkItemModal";
 import ErrorBanner from "../../components/ErrorBanner";
@@ -22,10 +22,16 @@ export default function Taskboard() {
   const editingItemIdRef = useRef<string | null>(null);
   editingItemIdRef.current = editingItem?.id ?? null;
   const [errorText, setErrorText] = useState("");
+  const [isPaused, setIsPaused] = useState(false);
+  const [pauseBusy, setPauseBusy] = useState(false);
   const { on, off } = useSignalR();
 
   useEffect(() => {
     void loadWorkItems();
+    void settingsService
+      .get(SchedulerSettingKeys.IsPaused)
+      .then((s) => setIsPaused(s.value === "true"))
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -97,14 +103,20 @@ export default function Taskboard() {
       syncWorkItem(message.payload.workItemId);
     };
 
+    const onSchedulerStateChanged = (message: TypedSignalRMessage<"SchedulerStateChanged">) => {
+      setIsPaused(message.payload.isPaused);
+    };
+
     on("HumanFeedbackRequired", onHumanFeedback);
     on("WorkItemStateChanged", onWorkItemStateChanged);
     on("PreviewStateChanged", onPreviewStateChanged);
+    on("SchedulerStateChanged", onSchedulerStateChanged);
 
     return () => {
       off("HumanFeedbackRequired", onHumanFeedback);
       off("WorkItemStateChanged", onWorkItemStateChanged);
       off("PreviewStateChanged", onPreviewStateChanged);
+      off("SchedulerStateChanged", onSchedulerStateChanged);
       for (const t of delayedTimers) clearTimeout(t);
     };
   }, [on, off]);
@@ -182,9 +194,35 @@ export default function Taskboard() {
     <div className="page-container">
       <div className="taskboard-header">
         <h1 className="page-title">Taskboard</h1>
-        <button className="btn btn-primary" onClick={openCreateModal}>
-          + New Item
-        </button>
+        <div className="taskboard-header-actions">
+          <label
+            className="scheduler-pause-toggle"
+            title="Pause the scheduler — Ready items stay queued until resumed."
+          >
+            <input
+              type="checkbox"
+              checked={isPaused}
+              disabled={pauseBusy}
+              aria-label="Pause scheduler"
+              onChange={async (e) => {
+                const next = e.target.checked;
+                setPauseBusy(true);
+                try {
+                  await settingsService.put(SchedulerSettingKeys.IsPaused, next ? "true" : "false");
+                  setIsPaused(next);
+                } catch (err) {
+                  setErrorText(errorMessage(err, "Failed to update scheduler state."));
+                } finally {
+                  setPauseBusy(false);
+                }
+              }}
+            />
+            {isPaused ? "Paused" : "Running"}
+          </label>
+          <button className="btn btn-primary" onClick={openCreateModal}>
+            + New Item
+          </button>
+        </div>
       </div>
       <ErrorBanner message={errorText} onDismiss={() => setErrorText("")} />
       <div role="status" aria-live="polite" className="taskboard-live-region">
@@ -220,6 +258,21 @@ export default function Taskboard() {
           justify-content: space-between;
           align-items: center;
           margin-bottom: 1rem;
+        }
+
+        .taskboard-header-actions {
+          display: flex;
+          align-items: center;
+          gap: 1rem;
+        }
+
+        .scheduler-pause-toggle {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.4rem;
+          font-size: 0.9rem;
+          color: var(--text-secondary, #555);
+          cursor: pointer;
         }
 
         .taskboard-live-region {

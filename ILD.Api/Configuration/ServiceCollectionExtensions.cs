@@ -77,10 +77,14 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ILoopTemplateResolver, DbLoopTemplateResolver>();
         services.AddScoped<IWorkItemServerOptionsResolver, DbWorkItemServerOptionsResolver>();
         services.AddScoped<IRemoteWorkItemCoordinator, RemoteWorkItemCoordinator>();
-        services.AddSingleton<IConfigureOptions<RemoteWorkItemPollerOptions>, RemoteWorkItemPollerOptionsConfigurator>();
+        services.AddSingleton<IConfigureOptions<WorkItemSchedulerOptions>, WorkItemSchedulerOptionsConfigurator>();
         services.AddSingleton(TimeProvider.System);
+        services.AddSingleton<IAiProviderConcurrencyTracker, AiProviderConcurrencyTracker>();
+        services.AddScoped<ISchedulerSettingsService, SchedulerSettingsService>();
+        services.AddSingleton<WorkItemScheduler>();
+        services.AddSingleton<IWorkItemScheduler>(sp => sp.GetRequiredService<WorkItemScheduler>());
+        services.AddHostedService(sp => sp.GetRequiredService<WorkItemScheduler>());
         services.AddHostedService<RemoteWorkItemStartupReconciler>();
-        services.AddHostedService<RemoteWorkItemPoller>();
 
         return services;
     }

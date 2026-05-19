@@ -11,12 +11,7 @@ import {
   WorktreePreview,
 } from "../types";
 import type { TypedSignalRMessage } from "../types/signalr";
-import {
-  workItemService,
-  repositoryService,
-  loopTemplateService,
-  loopRunService,
-} from "../services/auth";
+import { workItemService, repositoryService, loopTemplateService } from "../services/auth";
 import { useSignalR } from "../hooks/useSignalR";
 import useRenderedPrompt from "../hooks/useRenderedPrompt";
 import LiveStream from "./NodeTimeline/LiveStream";
@@ -310,17 +305,6 @@ export default function WorkItemModal({
   }, [shouldStream, runOn, runOff, workItem?.currentLoopRunId, refetchWorkItem]);
 
   if (!isOpen) return null;
-
-  const handleStart = async () => {
-    if (!workItem) return;
-    try {
-      await loopRunService.trigger(workItem.id);
-      const updated = await workItemService.getById(workItem.id);
-      onSave(updated);
-    } catch (error) {
-      console.error("Failed to start work item:", error);
-    }
-  };
 
   const handleLinkPr = async () => {
     if (!workItem || !prUrlInput.trim()) return;
@@ -980,11 +964,6 @@ export default function WorkItemModal({
 
             {/* Footer */}
             <div className="modal-footer">
-              {workItem.status === WorkItemStatus.Ready && (
-                <button type="button" className="btn btn-primary" onClick={handleStart}>
-                  Start
-                </button>
-              )}
               {workItem.prUrl && (
                 <button type="button" className="btn btn-success" onClick={handleMarkMerged}>
                   Mark Merged

@@ -29,6 +29,12 @@ public class AiProvider : IHasUpdatedAt
 
     public bool IsDefault { get; set; }
 
+    /// <summary>
+    /// Max concurrent AI node executions allowed against this provider.
+    /// 0 means unlimited.
+    /// </summary>
+    public int Parallelism { get; set; }
+
     public string? Config { get; set; }
 
     public DateTime CreatedAt { get; set; }

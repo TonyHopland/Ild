@@ -21,6 +21,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IEventLogStore, Stores.EventLogStore>();
         services.AddScoped<IAuthStore, Stores.AuthStore>();
         services.AddScoped<IProviderStore, Stores.ProviderStore>();
+        services.AddScoped<IAppSettingStore, Stores.AppSettingStore>();
         return services;
     }
 }

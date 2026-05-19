@@ -24,6 +24,7 @@ public class AppDbContext : DbContext
     public DbSet<EventLog> EventLogs => Set<EventLog>();
     public DbSet<AiProvider> AiProviders => Set<AiProvider>();
     public DbSet<User> Users => Set<User>();
+    public DbSet<AppSetting> AppSettings => Set<AppSetting>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -127,6 +128,11 @@ public class AppDbContext : DbContext
         {
             e.HasIndex(u => u.Username).IsUnique();
             e.HasIndex(u => u.SessionToken);
+        });
+
+        modelBuilder.Entity<AppSetting>(e =>
+        {
+            e.HasIndex(s => s.Key).IsUnique();
         });
     }
 

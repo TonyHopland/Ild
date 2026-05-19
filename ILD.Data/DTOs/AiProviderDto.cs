@@ -27,6 +27,11 @@ public class AiProviderDto
     public string? ApiKey { get; set; }
 
     public bool IsDefault { get; set; }
+
+    /// <summary>0 = unlimited.</summary>
+    [Range(0, 1000)]
+    public int Parallelism { get; set; }
+
     public string? Config { get; set; }
     public DateTime CreatedAt { get; set; }
 }

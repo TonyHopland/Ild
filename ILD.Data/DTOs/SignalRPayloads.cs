@@ -21,3 +21,5 @@ public record HumanFeedbackRequiredPayload(string WorkItemId, string Reason);
 public record PreviewStateChangedPayload(string WorkItemId);
 
 public record NodeProgressPayload(Guid RunId, Guid NodeId, string Line);
+
+public record SchedulerStateChangedPayload(bool IsPaused, int MaxConcurrent);

@@ -19,12 +19,12 @@ namespace ILD.Core.Services.Remote;
 public sealed class RemoteWorkItemStartupReconciler : IHostedService
 {
     private readonly IServiceScopeFactory _scopes;
-    private readonly IOptionsMonitor<RemoteWorkItemPollerOptions> _options;
+    private readonly IOptionsMonitor<WorkItemSchedulerOptions> _options;
     private readonly ILogger<RemoteWorkItemStartupReconciler> _log;
 
     public RemoteWorkItemStartupReconciler(
         IServiceScopeFactory scopes,
-        IOptionsMonitor<RemoteWorkItemPollerOptions> options,
+        IOptionsMonitor<WorkItemSchedulerOptions> options,
         ILogger<RemoteWorkItemStartupReconciler> log)
     {
         _scopes = scopes;

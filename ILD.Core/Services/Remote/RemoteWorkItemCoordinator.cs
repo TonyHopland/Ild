@@ -1,6 +1,8 @@
 namespace ILD.Core.Services.Remote;
 
+using System.Text.Json;
 using ILD.Core.Services.Interfaces;
+using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.Logging;
 
 /// <summary>
@@ -29,6 +31,9 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
     private readonly IActiveWorkItemTracker _tracker;
     private readonly ILoopTemplateResolver _resolver;
     private readonly ILoopEngine _engine;
+    private readonly ILoopRunStore? _loopRunStore;
+    private readonly IProviderStore? _providerStore;
+    private readonly IAiProviderConcurrencyTracker? _aiTracker;
     private readonly ILogger<RemoteWorkItemCoordinator>? _logger;
 
     public RemoteWorkItemCoordinator(
@@ -36,12 +41,18 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
         IActiveWorkItemTracker tracker,
         ILoopTemplateResolver resolver,
         ILoopEngine engine,
+        ILoopRunStore? loopRunStore = null,
+        IProviderStore? providerStore = null,
+        IAiProviderConcurrencyTracker? aiTracker = null,
         ILogger<RemoteWorkItemCoordinator>? logger = null)
     {
         _client = client;
         _tracker = tracker;
         _resolver = resolver;
         _engine = engine;
+        _loopRunStore = loopRunStore;
+        _providerStore = providerStore;
+        _aiTracker = aiTracker;
         _logger = logger;
     }
 
@@ -53,15 +64,34 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
         var resumed = new List<RemoteWorkItem>();
         var escalated = new List<RemoteWorkItem>();
 
-        // 1. Resume anything the server has flipped to WaitingForIld — it
-        //    means a human responded and the engine should pick the run back
-        //    up. Server transitions are permissive, so a Running re-claim
-        //    succeeds without a dependency check.
+        // 1. Resume anything in WaitingForIld — but only if the run's current
+        //    AI node has provider capacity (parallelism gate). The blocking
+        //    provider is re-evaluated dynamically each pass: settings can
+        //    change and a once-blocked item may now be unblocked.
         foreach (var w in poll.ActiveItems.Where(w => w.Status == RemoteWorkItemStatus.WaitingForIld))
         {
+            if (!await HasProviderCapacityForResumeAsync(w.Id, ct)) continue;
+
             var resp = await _client.TransitionAsync(opts, w.Id,
                 new RemoteTransitionRequest { TargetStatus = RemoteWorkItemStatus.Running }, ct);
-            if (resp.Success) resumed.Add(w);
+            if (!resp.Success) continue;
+            resumed.Add(w);
+
+            // Kick the local engine to pick the run back up. Reuse the
+            // recovery entry point — it's exactly the "resume a parked run
+            // from its current node" semantics we need here.
+            try
+            {
+                if (_loopRunStore != null)
+                {
+                    var run = await _loopRunStore.GetCurrentByWorkItemAsync(w.Id);
+                    if (run != null) await _engine.ResumeRecoveredRunAsync(run.Id);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Failed to resume run for work item {WorkItemId}", w.Id);
+            }
         }
 
         // 2. Drop any active item the server now reports as Done so the
@@ -134,5 +164,56 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
             EscalatedToHumanFeedback = escalated,
             HasActiveHumanFeedback = hasActiveHumanFeedback,
         };
+    }
+
+    /// <summary>
+    /// True if the run associated with <paramref name="workItemId"/> is not
+    /// parked on an AI node, or its AI provider currently has spare capacity.
+    /// Re-evaluated each poll so changes to provider parallelism settings
+    /// take effect without restart.
+    /// </summary>
+    private async Task<bool> HasProviderCapacityForResumeAsync(string workItemId, CancellationToken ct)
+    {
+        if (_loopRunStore == null || _providerStore == null || _aiTracker == null) return true;
+        try
+        {
+            var run = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
+            if (run?.CurrentNodeId is not { } currentNodeId) return true;
+
+            var nodes = await _loopRunStore.GetNodesForVersionAsync(run.LoopTemplateVersionId);
+            var node = nodes.FirstOrDefault(n => n.Id == currentNodeId);
+            if (node == null || node.NodeType != ILD.Data.Enums.NodeType.AI) return true;
+
+            var providerId = TryReadAiProviderId(node.Config);
+            if (providerId == null) return true; // no provider configured \u2192 default; let the engine decide
+
+            var provider = await _providerStore.GetAiProviderByIdAsync(providerId.Value);
+            if (provider == null) return true;
+
+            return _aiTracker.HasCapacity(provider.Id, provider.Parallelism);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Provider capacity check failed for work item {WorkItemId}", workItemId);
+            return true; // be permissive on errors so we don't strand work items
+        }
+    }
+
+    private static Guid? TryReadAiProviderId(string? configJson)
+    {
+        if (string.IsNullOrWhiteSpace(configJson)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(configJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return null;
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                if (!string.Equals(prop.Name, "aiProviderId", StringComparison.OrdinalIgnoreCase)) continue;
+                if (prop.Value.ValueKind == JsonValueKind.String &&
+                    Guid.TryParse(prop.Value.GetString(), out var g)) return g;
+            }
+        }
+        catch { /* malformed config \u2192 treat as no provider */ }
+        return null;
     }
 }

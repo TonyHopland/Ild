@@ -176,8 +176,33 @@ public sealed class AINodeExecutor : INodeExecutor
             var provider = await ResolveProviderAsync(providerStore, cfg.AiProviderId);
             if (provider == null) return new NodeOutcome.Failed("No AI provider found");
 
-            var registry = scope.ServiceProvider.GetRequiredService<IAgentAdapterRegistry>();
-            var adapter = registry.ResolveForProvider(provider)();
+            // Per-provider capacity gate. Parallelism=0 means unlimited.
+            var tracker = scope.ServiceProvider.GetRequiredService<IAiProviderConcurrencyTracker>();
+            if (!tracker.HasCapacity(provider.Id, provider.Parallelism))
+            {
+                return new NodeOutcome.Throttled(
+                    $"AI provider {provider.Name} at capacity ({tracker.ActiveCount(provider.Id)}/{provider.Parallelism})",
+                    provider.Id);
+            }
+
+            tracker.Enter(provider.Id);
+            try
+            {
+                return await ExecuteWithProviderAsync(ctx, cfg, provider, scope);
+            }
+            finally
+            {
+                tracker.Exit(provider.Id);
+            }
+        }
+        catch (OperationCanceledException) { return new NodeOutcome.Failed("AI node cancelled"); }
+        catch (Exception ex) { return new NodeOutcome.Failed(ex.Message); }
+    }
+
+    private async Task<NodeOutcome> ExecuteWithProviderAsync(NodeExecutionContext ctx, NodeConfig.Ai cfg, AiProvider provider, IServiceScope scope)
+    {
+        var registry = scope.ServiceProvider.GetRequiredService<IAgentAdapterRegistry>();
+        var adapter = registry.ResolveForProvider(provider)();
 
             var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
             var run = await loopRunStore.GetByIdAsync(ctx.Run.Id);
@@ -278,9 +303,6 @@ public sealed class AINodeExecutor : INodeExecutor
             }
 
             return NodeOutcome.FromResult(result);
-        }
-        catch (OperationCanceledException) { return new NodeOutcome.Failed("AI node cancelled"); }
-        catch (Exception ex) { return new NodeOutcome.Failed(ex.Message); }
     }
 
     public const string AiSessionResolvedEvent = "AiSessionResolved";

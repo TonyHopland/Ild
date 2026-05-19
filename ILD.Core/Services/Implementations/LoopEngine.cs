@@ -375,6 +375,9 @@ public class LoopEngine : ILoopEngine
             case ResumePoint.StartFromEntry e:
                 current = e.Node;
                 break;
+            case ResumePoint.ReexecuteCurrent rc:
+                current = rc.Node;
+                break;
             case ResumePoint.RouteFrom rf:
                 outputBySource[rf.Node.Id] = rf.Output;
                 if (rf.EdgeType == EdgeType.OnSuccess && IsTerminal(rf.Node))
@@ -517,6 +520,16 @@ public class LoopEngine : ILoopEngine
                         incomingSource = current.Id;
                         current = nodes.First(n => n.Id == nextFail.NextNode.Id);
                         break;
+
+                    case NodeOutcome.Throttled th:
+                        // Park the work item in WaitingForIld; the scheduler
+                        // will resume the run once provider capacity frees up.
+                        // CurrentNodeId was already set on the run by the
+                        // inner retry loop, so resume re-executes this node.
+                        await TransitionWorkItemAsync(workItem.Id, RemoteWorkItemStatus.WaitingForIld,
+                            th.Reason, humanFeedbackReason: HumanFeedbackReasons.AiProviderThrottled);
+                        await TransitionRunAsync(runId, LoopRunStatus.WaitingHuman);
+                        return LoopRunStatus.WaitingHuman;
                 }
             }
         }
@@ -535,6 +548,12 @@ public class LoopEngine : ILoopEngine
         public sealed record StartFromEntry(LoopNode Node) : ResumePoint;
         public sealed record RouteFrom(LoopNode Node, EdgeType EdgeType, string? Output) : ResumePoint;
         public sealed record StillWaiting : ResumePoint;
+        /// <summary>
+        /// The run is parked at <see cref="Node"/> after being throttled (or
+        /// otherwise interrupted mid-execution). Resume by re-executing the
+        /// node from the top; no edge has been traversed yet.
+        /// </summary>
+        public sealed record ReexecuteCurrent(LoopNode Node) : ResumePoint;
         public sealed record NoEntry : ResumePoint;
     }
 
@@ -557,6 +576,17 @@ public class LoopEngine : ILoopEngine
                     if (rn.Status == LoopRunNodeStatus.Succeeded) return new ResumePoint.RouteFrom(current, EdgeType.OnSuccess, rn.Output);
                     if (rn.Status == LoopRunNodeStatus.Failed) return new ResumePoint.RouteFrom(current, EdgeType.OnFailure, rn.Output);
                     if (rn.Status == LoopRunNodeStatus.Responded) return new ResumePoint.RouteFrom(current, EdgeType.OnRespond, rn.Output);
+                    // Pending/Running run-node means the previous attempt was
+                    // interrupted (e.g. throttled before adapter call, process
+                    // restart mid-execution). Re-run the node from the top.
+                    if (rn.Status == LoopRunNodeStatus.Pending || rn.Status == LoopRunNodeStatus.Running)
+                        return new ResumePoint.ReexecuteCurrent(current);
+                }
+                else
+                {
+                    // CurrentNodeId is set but no run-node exists yet (e.g.
+                    // throttled before the runnode was created). Re-execute.
+                    return new ResumePoint.ReexecuteCurrent(current);
                 }
             }
         }
@@ -729,6 +759,14 @@ public class LoopEngine : ILoopEngine
                     if (hasFailureEdge) return outcome;
                     if (attempt > maxRetries) return outcome;
                     break; // retry
+
+                case NodeOutcome.Throttled th:
+                    // Leave the runNode in Running status so the resume path
+                    // takes ReexecuteCurrent next time. Bubble up unchanged so
+                    // the outer loop can transition the work item to
+                    // WaitingForIld without consuming a retry.
+                    await LogEventAsync(run.Id, "NodeThrottled", $"{node.Label} throttled: {th.Reason}", node.Id, runNodeId: runNode.Id);
+                    return outcome;
             }
         }
     }

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "../../hooks/useAuth";
-import { loggingService } from "../../services/auth";
+import { loggingService, settingsService, SchedulerSettingKeys } from "../../services/auth";
 
 const LOG_LEVELS = ["Debug", "Information", "Warning", "Error"] as const;
 
@@ -8,13 +8,45 @@ export default function Settings() {
   const { user } = useAuth();
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [logLevel, setLogLevel] = useState("Information");
+  const [maxConcurrent, setMaxConcurrent] = useState<number>(5);
+  const [maxConcurrentInput, setMaxConcurrentInput] = useState<string>("5");
+  const [maxConcurrentError, setMaxConcurrentError] = useState<string | null>(null);
+  const [savingMaxConcurrent, setSavingMaxConcurrent] = useState(false);
 
   useEffect(() => {
     const stored = localStorage.getItem("ild_notifications_enabled");
     if (stored !== null) {
       setNotificationsEnabled(stored !== "false");
     }
+    void settingsService
+      .get(SchedulerSettingKeys.MaxConcurrent)
+      .then((s) => {
+        const n = parseInt(s.value, 10);
+        if (!Number.isNaN(n)) {
+          setMaxConcurrent(n);
+          setMaxConcurrentInput(String(n));
+        }
+      })
+      .catch(() => {});
   }, []);
+
+  const saveMaxConcurrent = async () => {
+    const n = parseInt(maxConcurrentInput, 10);
+    if (Number.isNaN(n) || n < 1 || n > 1000) {
+      setMaxConcurrentError("Must be an integer between 1 and 1000.");
+      return;
+    }
+    setMaxConcurrentError(null);
+    setSavingMaxConcurrent(true);
+    try {
+      await settingsService.put(SchedulerSettingKeys.MaxConcurrent, String(n));
+      setMaxConcurrent(n);
+    } catch (err) {
+      setMaxConcurrentError(err instanceof Error ? err.message : "Failed to save.");
+    } finally {
+      setSavingMaxConcurrent(false);
+    }
+  };
 
   const handleLogLevelChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     const newLevel = e.target.value;
@@ -66,6 +98,41 @@ export default function Settings() {
               />{" "}
               Enable browser notifications
             </label>
+          </div>
+        </div>
+
+        <div className="settings-section">
+          <h2 className="settings-section-title">Scheduler</h2>
+          <div className="form-group">
+            <label htmlFor="maxConcurrent">Max concurrent running work items</label>
+            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+              <input
+                id="maxConcurrent"
+                type="number"
+                min={1}
+                max={1000}
+                value={maxConcurrentInput}
+                onChange={(e) => setMaxConcurrentInput(e.target.value)}
+                style={{ width: "6rem" }}
+              />
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={saveMaxConcurrent}
+                disabled={savingMaxConcurrent || maxConcurrentInput === String(maxConcurrent)}
+              >
+                Save
+              </button>
+            </div>
+            {maxConcurrentError && (
+              <div className="form-error" style={{ color: "#f87171", marginTop: "0.25rem" }}>
+                {maxConcurrentError}
+              </div>
+            )}
+            <p className="settings-about-desc" style={{ marginTop: "0.5rem" }}>
+              Caps how many work items the scheduler will run at once. Per-provider parallelism is
+              configured on each AI provider.
+            </p>
           </div>
         </div>
 

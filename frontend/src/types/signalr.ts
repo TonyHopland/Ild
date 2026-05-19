@@ -18,6 +18,7 @@ import type {
   DependencyResolvedPayload,
   NodeProgressPayload,
   PreviewStateChangedPayload,
+  SchedulerStateChangedPayload,
 } from "./index";
 
 export interface SignalREventPayloads {
@@ -31,6 +32,7 @@ export interface SignalREventPayloads {
   DependencyResolved: DependencyResolvedPayload;
   NodeProgress: NodeProgressPayload;
   PreviewStateChanged: PreviewStateChangedPayload;
+  SchedulerStateChanged: SchedulerStateChangedPayload;
 }
 
 export type SignalREventName = keyof SignalREventPayloads;
