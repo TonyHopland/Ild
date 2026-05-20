@@ -119,6 +119,16 @@ public sealed class PiAdapter : IAgentAdapter
                     response = "[pi] no assistant text response from model";
             }
 
+            // Pi sometimes exits 0 mid-turn (e.g. provider closed the stream
+            // early) leaving the assistant message truncated. Without a
+            // message_end/turn_end marker we cannot trust the partial text as
+            // the final response; surface it as a retryable failure rather
+            // than letting downstream nodes consume half a sentence.
+            if (process.ExitCode == 0 && stdout.SawJsonEvents && !stdout.SawTurnEnd)
+                return NodeExecutionResult.Fail(
+                    "pi stream ended before message_end/turn_end (assistant turn was truncated)",
+                    response);
+
             return process.ExitCode == 0
                 ? NodeExecutionResult.Ok(response, rendered, effectiveSessionId, ctx.IncomingSessionId)
                 : NodeExecutionResult.Fail($"exit={process.ExitCode} stderr={stderr}", response);
@@ -247,6 +257,7 @@ public sealed class PiAdapter : IAgentAdapter
         string? sessionId = null;
         string? completedAssistantText = null;
         var sawJsonEvents = false;
+        var sawTurnEnd = false;
 
         while (await reader.ReadLineAsync(ct).ConfigureAwait(false) is { } line)
         {
@@ -283,13 +294,15 @@ public sealed class PiAdapter : IAgentAdapter
 
                 if (hasEventType
                     && (string.Equals(eventType, "message_end", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(eventType, "turn_end", StringComparison.OrdinalIgnoreCase))
-                    && root.TryGetProperty("message", out var message)
-                    && IsAssistantMessage(message))
+                    || string.Equals(eventType, "turn_end", StringComparison.OrdinalIgnoreCase)))
                 {
-                    var assistantText = ExtractAssistantText(message);
-                    if (!string.IsNullOrWhiteSpace(assistantText))
-                        completedAssistantText = assistantText;
+                    sawTurnEnd = true;
+                    if (root.TryGetProperty("message", out var message) && IsAssistantMessage(message))
+                    {
+                        var assistantText = ExtractAssistantText(message);
+                        if (!string.IsNullOrWhiteSpace(assistantText))
+                            completedAssistantText = assistantText;
+                    }
                 }
             }
         }
@@ -298,7 +311,7 @@ public sealed class PiAdapter : IAgentAdapter
             ? content.ToString()
             : completedAssistantText ?? string.Empty;
 
-        return new PiExecutionOutput(raw.ToString(), finalContent, sessionId, sawJsonEvents);
+        return new PiExecutionOutput(raw.ToString(), finalContent, sessionId, sawJsonEvents, sawTurnEnd);
     }
 
     private static string? ExtractAssistantText(JsonElement message)
@@ -654,7 +667,7 @@ public sealed class PiAdapter : IAgentAdapter
         string? IldExtensionContent,
         IReadOnlyList<string> ToolNames);
 
-    private sealed record PiExecutionOutput(string RawStdout, string Content, string? SessionId, bool SawJsonEvents);
+    private sealed record PiExecutionOutput(string RawStdout, string Content, string? SessionId, bool SawJsonEvents, bool SawTurnEnd);
 
     private sealed record ManagedSessionRestoreResult(string? SessionIdToUse, string? SessionPathToUse)
     {

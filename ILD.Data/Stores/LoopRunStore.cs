@@ -152,6 +152,14 @@ public class LoopRunStore : ILoopRunStore
         await _db.SaveChangesAsync();
     }
 
+    public async Task DeleteRunNodeAsync(Guid runNodeId)
+    {
+        var existing = await _db.LoopRunNodes.FindAsync(runNodeId);
+        if (existing == null) return;
+        _db.LoopRunNodes.Remove(existing);
+        await _db.SaveChangesAsync();
+    }
+
     public async Task PersistEdgeTraversalAsync(Guid runId, Guid edgeId, int count)
     {
         var existing = await _db.LoopRunEdgeTraversals

@@ -406,6 +406,13 @@ public class LoopEngine : ILoopEngine
                 break;
             case ResumePoint.ReexecuteCurrent rc:
                 current = rc.Node;
+                // Reconstruct {{PreviousNode.Output}} from the most recent
+                // prior runnode on an incoming edge. Without this, a resume
+                // after a throttled / interrupted attempt would re-run the
+                // node with an empty PreviousNode.Output, breaking AI prompts
+                // that depend on the predecessor's text.
+                (incomingSource, var seededPrevOutput) = await SeedPreviousOutputForReexecuteAsync(run.Id, rc.Node, edges);
+                if (incomingSource is { } seededSrc) outputBySource[seededSrc] = seededPrevOutput;
                 break;
             case ResumePoint.RouteFrom rf:
                 outputBySource[rf.Node.Id] = rf.Output;
@@ -623,6 +630,29 @@ public class LoopEngine : ILoopEngine
         return start == null ? new ResumePoint.NoEntry() : new ResumePoint.StartFromEntry(start);
     }
 
+    // For ReexecuteCurrent resumes (throttle, crash mid-node), recover the
+    // predecessor output that the node would have seen had the original
+    // attempt completed. Looks at incoming edges, finds the most recent
+    // prior LoopRunNode whose LoopNodeId is one of those sources, and
+    // returns its (source-node-id, output).
+    private async Task<(Guid? IncomingSource, string? PrevOutput)> SeedPreviousOutputForReexecuteAsync(
+        Guid runId, LoopNode targetNode, IReadOnlyList<LoopNodeEdge> edges)
+    {
+        var incomingSourceIds = edges
+            .Where(e => e.TargetNodeId == targetNode.Id)
+            .Select(e => e.SourceNodeId)
+            .ToHashSet();
+        if (incomingSourceIds.Count == 0) return (null, null);
+        using var scope = _sp.CreateScope();
+        var store = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+        var allRunNodes = await store.GetRunNodesAsync(runId);
+        var predecessor = allRunNodes
+            .Where(rn => incomingSourceIds.Contains(rn.LoopNodeId))
+            .OrderByDescending(rn => rn.CreatedAt)
+            .FirstOrDefault();
+        return predecessor == null ? (null, null) : (predecessor.LoopNodeId, predecessor.Output);
+    }
+
     private static bool IsTerminal(LoopNode node) => node.NodeType == NodeType.Cleanup;
 
     /// <summary>
@@ -811,11 +841,18 @@ public class LoopEngine : ILoopEngine
                     break; // retry
 
                 case NodeOutcome.Throttled th:
-                    // Leave the runNode in Running status so the resume path
-                    // takes ReexecuteCurrent next time. Bubble up unchanged so
-                    // the outer loop can transition the work item to
-                    // WaitingForIld without consuming a retry.
+                    // Throttled means the executor never did any work (the
+                    // provider capacity gate rejected entry). Delete the
+                    // runnode we speculatively created so the resume path
+                    // sees "CurrentNodeId set, no runnode" and re-executes
+                    // cleanly via the precheck. Without this, the row stays
+                    // in Running forever and shows up as a ghost node.
                     await LogEventAsync(run.Id, "NodeThrottled", $"{node.Label} throttled: {th.Reason}", node.Id, runNodeId: runNode.Id);
+                    using (var scope = _sp.CreateScope())
+                    {
+                        var store = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+                        await store.DeleteRunNodeAsync(runNode.Id);
+                    }
                     return outcome;
             }
         }

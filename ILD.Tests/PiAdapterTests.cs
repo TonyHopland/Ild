@@ -79,6 +79,37 @@ public class PiAdapterTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_fails_when_stream_ends_before_turn_end()
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-pi-truncated-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "cat >/dev/null\n" +
+            "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-session-trunc\",\"cwd\":\"$PWD\"}'\n" +
+            "echo '{\"type\":\"message_update\",\"message\":{\"role\":\"assistant\",\"content\":[]},\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"partial response\"}}'\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var result = await new PiAdapter().ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                prompt: "ignored",
+                worktreePath: worktreeDir,
+                executionCount: 1));
+
+            Assert.False(result.Success);
+            Assert.Contains("truncated", result.Error);
+            Assert.Equal("partial response", result.Output);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ignores_http_base_url_when_binary_path_is_not_configured()
     {
         var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-pi-baseurl-{Guid.NewGuid():N}");

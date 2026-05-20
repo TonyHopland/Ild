@@ -194,6 +194,11 @@ public sealed class AINodeExecutor : INodeExecutor
             finally
             {
                 tracker.Exit(provider.Id);
+                // Wake the scheduler so any work item parked in WaitingForIld
+                // for this provider's capacity resumes promptly, instead of
+                // waiting for the next polling tick.
+                var scheduler = scope.ServiceProvider.GetService<IWorkItemScheduler>();
+                scheduler?.Pulse();
             }
         }
         catch (OperationCanceledException) { return new NodeOutcome.Failed("AI node cancelled"); }

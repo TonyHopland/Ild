@@ -23,6 +23,7 @@ public interface ILoopRunStore
     Task UpdateRunAsync(LoopRun run);
     Task CreateRunNodeAsync(LoopRunNode runNode);
     Task UpdateRunNodeAsync(LoopRunNode runNode);
+    Task DeleteRunNodeAsync(Guid runNodeId);
     Task PersistEdgeTraversalAsync(Guid runId, Guid edgeId, int count);
     Task<LoopNode?> GetStartNodeAsync(Guid versionId);
     Task<IReadOnlyList<LoopNode>> GetNodesForVersionAsync(Guid versionId);
