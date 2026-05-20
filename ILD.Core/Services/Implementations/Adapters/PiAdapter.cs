@@ -129,6 +129,13 @@ public sealed class PiAdapter : IAgentAdapter
                     "pi stream ended before message_end/turn_end (assistant turn was truncated)",
                     response);
 
+            // Turn completed cleanly but model produced no text — e.g. the
+            // provider silently dropped the request. Treat as retryable failure
+            // so the on_failure edge can recover rather than propagating the
+            // error string as real AI output.
+            if (process.ExitCode == 0 && stdout.SawJsonEvents && string.IsNullOrWhiteSpace(stdout.Content))
+                return NodeExecutionResult.Fail(response);
+
             return process.ExitCode == 0
                 ? NodeExecutionResult.Ok(response, rendered, effectiveSessionId, ctx.IncomingSessionId)
                 : NodeExecutionResult.Fail($"exit={process.ExitCode} stderr={stderr}", response);

@@ -147,6 +147,10 @@ public class OpenCodeAdapter : IAgentAdapter
                 response = ExtractLatestAssistantTextFromSessionJson(exportedSessionJson!);
             }
 
+            // Snapshot before applying fallback error strings so we can tell below whether
+            // the model actually produced text.
+            var modelProducedText = !string.IsNullOrEmpty(response);
+
             if (string.IsNullOrEmpty(response))
             {
                 if (!string.IsNullOrEmpty(jsonError))
@@ -161,6 +165,12 @@ public class OpenCodeAdapter : IAgentAdapter
 
             if (p.ExitCode == 0 && !string.IsNullOrEmpty(jsonError))
                 return NodeExecutionResult.Fail($"opencode session error: {jsonError}", response);
+
+            // Model produced no text despite a clean exit — treat as retryable
+            // failure so the on_failure edge can recover instead of propagating
+            // the error string as real AI output.
+            if (p.ExitCode == 0 && sawJsonEvents && !modelProducedText)
+                return NodeExecutionResult.Fail(response);
 
             return p.ExitCode == 0
                 ? NodeExecutionResult.Ok(response, rendered, effectiveSessionId, ctx.IncomingSessionId)

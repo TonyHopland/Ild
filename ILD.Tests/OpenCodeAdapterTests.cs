@@ -1093,11 +1093,12 @@ public class OpenCodeAdapterTests
 
             var result = await adapter.ExecuteAsync(ctx);
 
-            Assert.True(result.Success);
-            Assert.DoesNotContain("step_start", result.Output);
-            Assert.DoesNotContain("step_finish", result.Output);
-            Assert.DoesNotContain("\"type\":", result.Output);
-            Assert.Contains("opencode", result.Output);
+            // Model produced only tool calls, no assistant text — should be a
+            // retryable failure, not a success that passes the error string downstream.
+            Assert.False(result.Success);
+            Assert.Contains("opencode", result.Error ?? result.Output ?? "");
+            Assert.DoesNotContain("step_start", result.Error ?? result.Output ?? "");
+            Assert.DoesNotContain("\"type\":", result.Error ?? result.Output ?? "");
         }
         finally
         {
