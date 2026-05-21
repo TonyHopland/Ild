@@ -108,7 +108,6 @@ export function nodesToLoopNodes(nodes: Node[]): LoopNode[] {
       label: data.label,
       config: config as Record<string, unknown>,
       maxTraversals: null,
-      retryCount: ((config as Record<string, unknown>).maxRetries as number) ?? null,
     };
   });
 }

@@ -15,101 +15,70 @@ public sealed record NodeExecutionResult(bool Success, string? Output = null, st
 }
 
 /// <summary>
-/// Why a node has been suspended pending an external event. The engine treats
-/// every <see cref="SuspendKind"/> the same (write WaitingHuman, surface human
-/// feedback), but the kind is exposed for observability and future routing.
+/// Discriminated union of node-execution outcomes streamed by an
+/// <see cref="INodeExecutor"/>. The engine routes purely on this type and
+/// never inspects the underlying <c>NodeType</c>.
 /// </summary>
-public enum SuspendKind
+public abstract record NodeOutcome
 {
-    /// <summary>Awaiting input collected via the Human-feedback API.</summary>
-    HumanInput = 0,
-    /// <summary>Awaiting an asynchronous webhook / signal (e.g. PR merge).</summary>
-    ExternalSignal = 1,
+    /// <summary>
+    /// Node is about to commit to executing. The engine creates a
+    /// <c>LoopRunNode</c> row with <paramref name="EffectiveInput"/> as the
+    /// recorded input. Must be yielded before any Success/Fail/Terminal.
+    /// </summary>
+    public sealed record NodeStarting(string? EffectiveInput = null) : NodeOutcome;
+
+    /// <summary>Node finished successfully; engine follows the named edge.</summary>
+    public sealed record Success(EdgeType Edge, string? Output = null) : NodeOutcome;
+
+    /// <summary>Node failed; engine follows the named edge.</summary>
+    public sealed record Fail(EdgeType Edge, string Reason, string? Output = null) : NodeOutcome;
+
+    /// <summary>
+    /// Node is awaiting an external action (human response, webhook). The
+    /// engine parks the run in <c>WaitingHuman</c> and the work item in
+    /// <c>HumanFeedback</c>. When the signal arrives the engine re-enters
+    /// the node and the node consumes <c>Run.ExternalActionResult</c>.
+    /// </summary>
+    public sealed record WaitingAction(string Reason, string? Output = null) : NodeOutcome;
+
+    /// <summary>
+    /// Node could not proceed because an internal resource (e.g. AI provider
+    /// capacity) is unavailable. The engine parks the work item in
+    /// <c>WaitingForIld</c>; the scheduler resumes when the resource frees.
+    /// The run stays <c>Running</c> from the user's perspective.
+    /// </summary>
+    public sealed record WaitingIld(string Reason) : NodeOutcome;
+
+    /// <summary>
+    /// Terminal node: the run is complete. No outgoing edge is followed.
+    /// </summary>
+    public sealed record Terminal(string? Output = null) : NodeOutcome;
 }
 
 /// <summary>
-/// Discriminated union of node-execution outcomes produced by an
-/// <see cref="INodeExecutor"/>. The engine routes purely on this type and never
-/// inspects the underlying <c>NodeType</c>.
+/// Slim execution context. The node resolves its own dependencies via the
+/// service provider and reads run state directly from <see cref="Run"/>.
 /// </summary>
-/// <summary>
-/// Discriminated union of node-execution outcomes produced by an
-/// <see cref="INodeExecutor"/>. The engine routes purely on this type and never
-/// inspects the underlying <c>NodeType</c>.
-///
-/// The base record carries the common <c>Output</c> slot; case-specific data
-/// (resolved prompt on success, reject reason on failure, etc.) lives on the
-/// derived records.
-/// </summary>
-public abstract record NodeOutcome(string? Output = null)
-{
-    /// <summary>Node finished successfully; engine follows an <c>OnSuccess</c> edge.</summary>
-    public sealed record Succeeded(string? Output = null, string? ResolvedPrompt = null, string? SessionId = null, string? IncomingSessionId = null) : NodeOutcome(Output);
-
-    /// <summary>Node failed; engine retries (no failure edge) or follows <c>OnFailure</c>.</summary>
-    public sealed record Failed(string Reason, string? Output = null) : NodeOutcome(Output);
-
-    /// <summary>
-    /// Node is paused awaiting an external event. The run is parked at this node
-    /// until <c>ILoopEngine.SignalNodeResultAsync</c> is called.
-    /// </summary>
-    public sealed record Suspended(string Reason, SuspendKind Kind, string? Output = null, string? ResolvedPrompt = null) : NodeOutcome(Output);
-
-    /// <summary>
-    /// Terminal node: the run is complete on success of this node. There is no
-    /// outgoing edge.
-    /// </summary>
-    public sealed record Terminal(string? Output = null) : NodeOutcome(Output);
-
-    /// <summary>
-    /// Node could not execute because a resource (e.g. an AI provider) is at
-    /// capacity. The engine parks the work item in <c>WaitingForIld</c>; the
-    /// scheduler resumes it when capacity frees up.
-    /// </summary>
-    public sealed record Throttled(string Reason, Guid ProviderId) : NodeOutcome;
-
-    public static NodeOutcome FromResult(NodeExecutionResult r)
-        => r.Success
-            ? new Succeeded(r.Output, r.ResolvedPrompt, r.SessionId, r.IncomingSessionId)
-            : new Failed(r.Error ?? "node failed", r.Output);
-
-    // ---- Convenience accessors (test ergonomics) -------------------------
-
-    /// <summary>True for non-failed outcomes (<see cref="Succeeded"/>, <see cref="Terminal"/>, <see cref="Suspended"/>).</summary>
-    public bool Success => this is not Failed;
-
-    /// <summary>The error message, set only on <see cref="Failed"/>.</summary>
-    public string? Error => this is Failed f ? f.Reason : null;
-}
-
 public sealed record NodeExecutionContext(
     LoopRun Run,
-    LoopRunNode RunNode,
     LoopNode Node,
-    WorkItemView WorkItem,
-    string? PreviousNodeOutput,
+    IServiceProvider Services,
     CancellationToken CancellationToken,
     Func<string, Task>? ProgressCallback = null);
 
+/// <summary>
+/// Stateful generator interface. The engine iterates the returned
+/// <see cref="IAsyncEnumerable{NodeOutcome}"/>; each yielded outcome drives a
+/// state transition. Implementations must be free of persistence side
+/// effects — they read context, optionally call adapters/processes, and
+/// yield outcomes. The engine is responsible for all DB writes, event log
+/// entries, SignalR notifications, and routing.
+/// </summary>
 public interface INodeExecutor
 {
     NodeType NodeType { get; }
-
-    /// <summary>
-    /// Execute the node. Implementations should not mutate run/runnode/workitem
-    /// state directly — return a <see cref="NodeOutcome"/> and let the engine
-    /// persist the transition.
-    /// </summary>
-    Task<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx);
-
-    /// <summary>
-    /// Build the JSON payload describing the effective input the node will run
-    /// with (resolved command, prompt, etc.). Used by the engine for the
-    /// <c>NodeStarted</c> event-log entry. Default implementation returns just
-    /// the node type.
-    /// </summary>
-    string DescribeInput(NodeExecutionContext ctx)
-        => System.Text.Json.JsonSerializer.Serialize(new { nodeType = NodeType.ToString() });
+    IAsyncEnumerable<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx);
 }
 
 public interface INodeExecutorRegistry

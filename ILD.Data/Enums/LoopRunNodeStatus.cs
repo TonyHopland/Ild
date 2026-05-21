@@ -8,5 +8,7 @@ public enum LoopRunNodeStatus
     Failed = 3,
     Skipped = 4,
     WaitingHuman = 5,
-    Responded = 6
+    // Previous attempt was interrupted (process restart, throttle cancel)
+    // before reaching a terminal outcome.
+    Interrupted = 6,
 }

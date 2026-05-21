@@ -63,11 +63,11 @@ Adapters have full autonomy over tool execution, but the engine now passes a per
 _Avoid_: tool sandbox, tool permissions
 
 **Event Log**:
-Append-only audit stream per LoopRun. Serves as AI context and observability. Large payloads (>10KB) stored on disk; DB stores path reference. Retained for 7 days after successful completion; failed runs preserved until manually closed. Edge traversal counts are persisted to `LoopRunEdgeTraversal` rows.
+Append-only audit stream per LoopRun. Serves as AI context and observability. Large payloads (>10KB) stored on disk; DB stores path reference. Retained for 7 days after successful completion; failed runs preserved until manually closed. Edge traversal counts are enforced in-memory by the engine (`DefaultMaxTraversals`) rather than persisted.
 _Avoid_: audit trail, log
 
 **Recovery Policy**:
-Per-LoopTemplate setting controlling crash recovery behavior: AutoResume, NeedsReview, or Cancel. On recovery, in-flight nodes are re-executed. AutoResume does not resume runs at Human or PR nodes in `WaitingHuman` state — those require explicit human action.
+Per-LoopTemplate setting controlling crash recovery behavior: AutoResume, NeedsReview, or Cancel. On recovery, stale `LoopRunNode` rows with `Status = Running` are transitioned to `Interrupted` and the engine re-enters the loop at `CurrentNodeId`; the node's `ExecuteAsync` is invoked fresh and re-checks its own preconditions. AutoResume does not resume runs at Human or PR nodes in `WaitingHuman` state — those require explicit human action.
 _Avoid_: restart policy, failover
 
 **Best-Effort Guarantees**:

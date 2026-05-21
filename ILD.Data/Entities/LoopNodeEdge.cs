@@ -28,7 +28,4 @@ public class LoopNodeEdge
 
     [ForeignKey(nameof(TargetNodeId))]
     public LoopNode TargetNode { get; set; } = null!;
-
-    [InverseProperty("Edge")]
-    public ICollection<LoopRunEdgeTraversal> Traversals { get; set; } = new List<LoopRunEdgeTraversal>();
 }

@@ -37,5 +37,13 @@ public interface ILoopEngine
     /// time it started. Fails if the run is currently executing.
     /// </summary>
     Task RetryFromNodeAsync(Guid runId, Guid runNodeId);
+
+    /// <summary>
+    /// Execute the template's Cleanup node once (out-of-band), regardless of
+    /// the current node, then leave the run state untouched. Used when a run
+    /// is abandoned but external resources (worktrees, etc.) still need
+    /// teardown. No-op if the template has no Cleanup node.
+    /// </summary>
+    Task CleanupRunAsync(Guid runId);
 }
 

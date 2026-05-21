@@ -31,7 +31,7 @@ function normalizeNodeStatus(value: unknown): LoopRunNodeStatus {
       3: LoopRunNodeStatus.Failed,
       4: LoopRunNodeStatus.Skipped,
       5: LoopRunNodeStatus.WaitingHuman,
-      6: LoopRunNodeStatus.Responded,
+      6: LoopRunNodeStatus.Interrupted,
     };
     return map[value] ?? LoopRunNodeStatus.Pending;
   }
@@ -179,7 +179,7 @@ export default function LoopRunMonitor() {
     [LoopRunNodeStatus.Failed]: "#ef4444",
     [LoopRunNodeStatus.Skipped]: "#4b5563",
     [LoopRunNodeStatus.WaitingHuman]: "#f59e0b",
-    [LoopRunNodeStatus.Responded]: "#f59e0b",
+    [LoopRunNodeStatus.Interrupted]: "#a855f7",
   };
 
   const nodeTypeIcons: Record<string, string> = {

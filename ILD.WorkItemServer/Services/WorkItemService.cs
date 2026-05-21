@@ -180,7 +180,6 @@ public sealed class WorkItemService : IWorkItemService
 
     private static bool IsResponseState(WorkItemStatus s)
         => s == WorkItemStatus.HumanFeedback
-        || s == WorkItemStatus.WaitingForIld
         || s == WorkItemStatus.Done;
 
     public async Task<bool> AddDependencyAsync(string id, string dependencyId, CancellationToken ct = default)

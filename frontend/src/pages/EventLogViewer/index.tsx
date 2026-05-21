@@ -61,7 +61,7 @@ function normalizeNodeStatus(value: unknown): LoopRunNodeStatus {
       3: LoopRunNodeStatus.Failed,
       4: LoopRunNodeStatus.Skipped,
       5: LoopRunNodeStatus.WaitingHuman,
-      6: LoopRunNodeStatus.Responded,
+      6: LoopRunNodeStatus.Interrupted,
     };
     return map[value] ?? LoopRunNodeStatus.Pending;
   }
@@ -578,12 +578,16 @@ export default function EventLogViewer() {
             if (isRetryBoundary) {
               edgeType = EdgeType.OnSuccess;
               edgeVariant = "retry";
-            } else if (prevNode.status === LoopRunNodeStatus.Succeeded) {
-              edgeType = EdgeType.OnSuccess;
-            } else if (prevNode.status === LoopRunNodeStatus.Responded) {
-              edgeType = EdgeType.OnRespond;
             } else {
-              edgeType = EdgeType.OnFailure;
+              const prevType = getTemplateNodeType(prevNode.nodeId);
+              const prevHuman = prevType === NodeType.Human;
+              if (prevNode.status === LoopRunNodeStatus.Succeeded) {
+                edgeType = prevHuman ? EdgeType.OnRespond : EdgeType.OnSuccess;
+              } else if (prevNode.status === LoopRunNodeStatus.Failed) {
+                edgeType = prevHuman ? EdgeType.OnReject : EdgeType.OnFailure;
+              } else {
+                edgeType = EdgeType.OnFailure;
+              }
             }
           }
 

@@ -73,7 +73,6 @@ const sampleTemplate = {
       label: "Initialize",
       config: {},
       maxTraversals: null,
-      retryCount: null,
     },
     {
       id: "n-ai",
@@ -81,7 +80,6 @@ const sampleTemplate = {
       label: "Code",
       config: {},
       maxTraversals: null,
-      retryCount: null,
     },
     {
       id: "n-cmd",
@@ -89,7 +87,6 @@ const sampleTemplate = {
       label: "Test",
       config: {},
       maxTraversals: null,
-      retryCount: null,
     },
     {
       id: "n-cleanup",
@@ -97,7 +94,6 @@ const sampleTemplate = {
       label: "Tidy Up",
       config: {},
       maxTraversals: null,
-      retryCount: null,
     },
   ],
   edges: [
@@ -193,7 +189,6 @@ describe("Loop Editor canvas", () => {
           label: "Start Node",
           config: {},
           maxTraversals: null,
-          retryCount: null,
         },
         {
           id: "n-cmd",
@@ -201,7 +196,6 @@ describe("Loop Editor canvas", () => {
           label: "Cmd Node",
           config: {},
           maxTraversals: null,
-          retryCount: null,
         },
         {
           id: "n-ai",
@@ -209,7 +203,6 @@ describe("Loop Editor canvas", () => {
           label: "AI Node",
           config: {},
           maxTraversals: null,
-          retryCount: null,
         },
         {
           id: "n-human",
@@ -217,7 +210,6 @@ describe("Loop Editor canvas", () => {
           label: "Human Node",
           config: {},
           maxTraversals: null,
-          retryCount: null,
         },
         {
           id: "n-pr",
@@ -225,7 +217,6 @@ describe("Loop Editor canvas", () => {
           label: "PR Node",
           config: {},
           maxTraversals: null,
-          retryCount: null,
         },
         {
           id: "n-cleanup",
@@ -233,7 +224,6 @@ describe("Loop Editor canvas", () => {
           label: "Cleanup Node",
           config: {},
           maxTraversals: null,
-          retryCount: null,
         },
       ],
     };

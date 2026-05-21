@@ -23,7 +23,6 @@ describe("loopTemplateExport", () => {
         label: "Initialize",
         config: { createWorktree: true, __pos: { x: 100, y: 80 } },
         maxTraversals: null,
-        retryCount: 0,
       },
       {
         id: "n-cleanup",
@@ -31,7 +30,6 @@ describe("loopTemplateExport", () => {
         label: "Tidy Up",
         config: { __pos: { x: 100, y: 220 } },
         maxTraversals: null,
-        retryCount: null,
       },
     ],
     edges: [
@@ -74,16 +72,6 @@ describe("loopTemplateExport", () => {
 
       const startNode = exportData.nodes.find((n) => n.id === "n-start");
       expect(startNode?.config.__pos).toEqual({ x: 100, y: 80 });
-    });
-
-    test("includes retryCount on nodes", () => {
-      const exportData = serializeForExport(sampleTemplate);
-
-      const startNode = exportData.nodes.find((n) => n.id === "n-start");
-      expect(startNode?.retryCount).toBe(0);
-
-      const cleanupNode = exportData.nodes.find((n) => n.id === "n-cleanup");
-      expect(cleanupNode?.retryCount).toBeNull();
     });
 
     test("serializes edges correctly", () => {
@@ -268,14 +256,6 @@ describe("loopTemplateExport", () => {
       expect(loopNodes[0].id).toBe("n-start");
       expect(loopNodes[0].type).toBe(NodeType.Start);
       expect(loopNodes[0].config.__pos).toEqual({ x: 100, y: 80 });
-    });
-
-    test("preserves retryCount", () => {
-      const exportData = serializeForExport(sampleTemplate);
-      const loopNodes = exportNodesToLoopNodes(exportData.nodes);
-
-      const startNode = loopNodes.find((n) => n.id === "n-start");
-      expect(startNode?.retryCount).toBe(0);
     });
   });
 

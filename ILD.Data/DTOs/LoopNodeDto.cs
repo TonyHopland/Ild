@@ -14,6 +14,4 @@ public class LoopNodeDto
     public Dictionary<string, object> Config { get; set; } = new();
 
     public int? MaxTraversals { get; set; }
-
-    public int? RetryCount { get; set; }
 }

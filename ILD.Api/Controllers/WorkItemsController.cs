@@ -44,12 +44,11 @@ public class WorkItemsController : ControllerBase
 
     private void RunInBackground(Guid runId)
     {
-        if (_engine is not ILD.Core.Services.Implementations.LoopEngine le) return;
         _ = Task.Run(async () =>
         {
             try
             {
-                await le.RunAsync(runId);
+                await _engine.ResumeRecoveredRunAsync(runId);
             }
             catch (Exception ex)
             {
