@@ -144,7 +144,7 @@ export default function WorkItemModal({
   }, [onClose]);
 
   // Fetch the rendered prompt for the currently-suspended node (Human or PR).
-  // The event type differs per node kind — "HumanPromptRendered" vs "PrPromptRendered".
+  // NodeStarted is universal and carries the rendered prompt as its payload.
   // Hooks must be called unconditionally, so we always invoke the hook and
   // filter the result at the JSX level based on the current feedback reason.
   const runId = workItem?.currentLoopRunId
@@ -155,14 +155,14 @@ export default function WorkItemModal({
       workItem.humanFeedbackReason === "Human Input Needed"
       ? runId
       : undefined,
-    "HumanPromptRendered",
+    "NodeStarted",
   );
   const prPrompt = useRenderedPrompt(
     workItem?.status === WorkItemStatus.HumanFeedback &&
       workItem.humanFeedbackReason === "PR Awaiting Merge"
       ? runId
       : undefined,
-    "PrPromptRendered",
+    "NodeStarted",
   );
 
   useEffect(() => {

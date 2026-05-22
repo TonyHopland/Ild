@@ -15,6 +15,5 @@ public enum EventType
     RecoveryTriggered = 10,
     Error = 11,
     CleanupStarted = 12,
-    CleanupCompleted = 13,
-    HumanPromptRendered = 14
+    CleanupCompleted = 13
 }
