@@ -1,5 +1,4 @@
 using ILD.Data.Enums;
-using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
 using System.Diagnostics;
@@ -16,7 +15,6 @@ public sealed class CmdNodeExecutor : INodeExecutor
         var cfg = NodeConfig.Parse<NodeConfig.Cmd>(ctx.Node.Config);
         var command = cfg.Command;
         var workItems = ctx.Services.GetRequiredService<IWorkItemManager>();
-        var loopRunStore = ctx.Services.GetRequiredService<ILoopRunStore>();
 
         if (string.IsNullOrWhiteSpace(command))
         {
@@ -25,8 +23,7 @@ public sealed class CmdNodeExecutor : INodeExecutor
             yield break;
         }
 
-        var run = await loopRunStore.GetByIdAsync(ctx.Run.Id) ?? ctx.Run;
-        var worktree = run.WorktreePath;
+        var worktree = ctx.Run.WorktreePath;
         if (string.IsNullOrEmpty(worktree) || !Directory.Exists(worktree))
         {
             yield return new NodeOutcome.NodeStarting(command);

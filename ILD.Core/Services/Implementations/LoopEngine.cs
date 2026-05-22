@@ -105,7 +105,7 @@ public sealed class LoopEngine : ILoopEngine
                     LoopRunNodeStatus.Running, LoopRunNodeStatus.Interrupted);
             }
         }
-        _ = LaunchAsync(runId);
+        _ = LaunchAfterAwaitAsync(runId);
     }
 
     public async Task ResumeRunAsync(Guid runId)
@@ -120,7 +120,7 @@ public sealed class LoopEngine : ILoopEngine
         await loopRunStore.UpdateRunAsync(run);
         await _notifier.ResumedAsync(runId);
         if (run.Status == LoopRunStatus.Running)
-            _ = LaunchAsync(runId);
+            _ = LaunchAfterAwaitAsync(runId);
     }
 
     public async Task PauseRunAsync(Guid runId)
@@ -179,13 +179,22 @@ public sealed class LoopEngine : ILoopEngine
             _logger.LogWarning("SignalNodeResult rejected: run {RunId} not WaitingHuman (status={Status})", runId, run.Status);
             return;
         }
+
+        // Validate that the target run node belongs to this run and is in WaitingHuman status.
+        var targetNode = await loopRunStore.GetRunNodeByIdAsync(runNodeId);
+        if (targetNode is null || targetNode.LoopRunId != runId || targetNode.Status != LoopRunNodeStatus.WaitingHuman)
+        {
+            _logger.LogWarning("SignalNodeResult rejected: runNode {RunNodeId} not a WaitingHuman node for run {RunId}", runNodeId, runId);
+            return;
+        }
+
         run.ExternalActionResult = signal.Output ?? signal.Error ?? string.Empty;
-        run.ExternalActionResultRejected = !signal.Success;
+        run.ExternalActionResultType = signal.Type;
         var old = run.Status;
         run.Status = LoopRunStatus.Running;
         await loopRunStore.UpdateRunAsync(run);
         await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.Running);
-        _ = LaunchAsync(runId);
+        _ = LaunchAfterAwaitAsync(runId);
     }
 
     public async Task RetryFromNodeAsync(Guid runId, Guid runNodeId)
@@ -209,11 +218,11 @@ public sealed class LoopEngine : ILoopEngine
         run.CurrentNodeId = target.LoopNodeId;
         run.PreviousNodeOutput = prevOutput;
         run.ExternalActionResult = null;
-        run.ExternalActionResultRejected = false;
+        run.ExternalActionResultType = ExternalActionResultType.Success;
         run.Status = LoopRunStatus.Running;
         run.IsPaused = false;
         await loopRunStore.UpdateRunAsync(run);
-        _ = LaunchAsync(runId);
+        _ = LaunchAfterAwaitAsync(runId);
     }
 
     public async Task CleanupRunAsync(Guid runId)
@@ -234,10 +243,35 @@ public sealed class LoopEngine : ILoopEngine
 
     // ----- Core loop -----
 
+    private async Task LaunchAfterAwaitAsync(Guid runId)
+    {
+        // If a previous loop is still finalising (e.g. a Pause→Resume race or
+        // a webhook firing on the trailing edge of a parked run), wait for it
+        // to exit before starting a new one. This avoids duplicate LoopRunNode
+        // rows when two loops would otherwise race on the same run.
+        if (_runTasks.TryGetValue(runId, out var existing) && !existing.IsCompleted)
+        {
+            try { await existing.ConfigureAwait(false); } catch { }
+        }
+        await LaunchAsync(runId).ConfigureAwait(false);
+    }
+
     private Task LaunchAsync(Guid runId)
     {
+        // Idempotency: if a background loop is already driving this run we
+        // must not start a second one. Two concurrent loops on the same run
+        // produce duplicated LoopRunNode rows and corrupt visit counts.
+        if (_runTasks.TryGetValue(runId, out var inflight) && !inflight.IsCompleted)
+        {
+            _logger.LogDebug("LaunchAsync skipped for run {RunId}: already active", runId);
+            return Task.CompletedTask;
+        }
         var cts = new CancellationTokenSource();
-        _runCts[runId] = cts;
+        if (!_runCts.TryAdd(runId, cts))
+        {
+            cts.Dispose();
+            return Task.CompletedTask;
+        }
         var task = Task.Run(async () =>
         {
             try { await RunUntilParkAsync(runId, cts.Token); }
@@ -247,6 +281,7 @@ public sealed class LoopEngine : ILoopEngine
             {
                 _runCts.TryRemove(runId, out _);
                 _runTasks.TryRemove(runId, out _);
+                cts.Dispose();
             }
         });
         _runTasks[runId] = task;
@@ -294,7 +329,16 @@ public sealed class LoopEngine : ILoopEngine
         var workItems = sp.GetRequiredService<IWorkItemManager>();
         var eventLog = sp.GetService<IEventLogService>();
         var executor = _registry.Get(node.NodeType);
+        // On re-entry after signal (ExternalActionResult set), reuse the existing
+        // WaitingHuman run node so CompleteRunNodeAsync updates it instead of
+        // silently skipping (runNodeId == null).
         Guid? runNodeId = null;
+        if (run.ExternalActionResult is not null)
+        {
+            var existing = (await loopRunStore.GetRunNodesAsync(run.Id))
+                .FirstOrDefault(rn => rn.LoopNodeId == node.Id && rn.Status == LoopRunNodeStatus.WaitingHuman);
+            runNodeId = existing?.Id;
+        }
 
         var ctx = new NodeExecutionContext(run, node, sp, ct,
             line => _notifier.NodeProgressAsync(run.Id, node.Id, line));
@@ -346,7 +390,7 @@ public sealed class LoopEngine : ILoopEngine
                         await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.Succeeded, ok.Output, null);
                         run.PreviousNodeOutput = ok.Output;
                         run.ExternalActionResult = null;
-                        run.ExternalActionResultRejected = false;
+                        run.ExternalActionResultType = ExternalActionResultType.Success;
                         await loopRunStore.UpdateRunAsync(run);
                         await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Succeeded);
                         if (eventLog is not null && runNodeId is Guid id)
@@ -362,7 +406,7 @@ public sealed class LoopEngine : ILoopEngine
                         await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.Failed, f.Output, f.Reason);
                         run.PreviousNodeOutput = f.Output ?? f.Reason;
                         run.ExternalActionResult = null;
-                        run.ExternalActionResultRejected = false;
+                        run.ExternalActionResultType = ExternalActionResultType.Success;
                         await loopRunStore.UpdateRunAsync(run);
                         await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Failed);
                         if (eventLog is not null && runNodeId is Guid id)
@@ -386,8 +430,14 @@ public sealed class LoopEngine : ILoopEngine
                         await loopRunStore.UpdateRunAsync(run);
                         await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.WaitingHuman);
                         await _notifier.RunStateChangedAsync(run.Id, oldStatus, LoopRunStatus.WaitingHuman);
+                        var outEdges = await loopRunStore.GetEdgesForNodeIdsAsync(new[] { node.Id });
+                        var actions = string.Join(",", outEdges
+                            .Where(e => e.SourceNodeId == node.Id)
+                            .Select(e => e.EdgeType.ToString())
+                            .Distinct());
                         await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
-                            reason: wa.Reason, humanFeedbackReason: wa.Reason, currentLoopRunId: run.Id);
+                            reason: wa.Reason, actions: string.IsNullOrEmpty(actions) ? null : actions,
+                            humanFeedbackReason: wa.Reason, currentLoopRunId: run.Id);
                         return ParkResult.Stop;
                     }
                     case NodeOutcome.WaitingIld wi:
@@ -403,6 +453,31 @@ public sealed class LoopEngine : ILoopEngine
                         await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Succeeded);
                         await CompleteRunAsync(run, loopRunStore, workItems, t.Output);
                         return ParkResult.Stop;
+                    }
+                    case NodeOutcome.WorktreeReady wr:
+                    {
+                        run.WorktreePath = wr.WorktreePath;
+                        run.BranchName = wr.BranchName;
+                        await loopRunStore.UpdateRunAsync(run);
+                        break;
+                    }
+                    case NodeOutcome.PrCreated pc:
+                    {
+                        run.PrUrl = pc.PrUrl;
+                        await loopRunStore.UpdateRunAsync(run);
+                        break;
+                    }
+                    case NodeOutcome.WorktreeDestroyed _:
+                    {
+                        run.WorktreePath = null;
+                        run.BranchName = null;
+                        await loopRunStore.UpdateRunAsync(run);
+                        break;
+                    }
+                    case NodeOutcome.SessionBound sb:
+                    {
+                        try { await loopRunStore.UpsertSessionBindingAsync(run.Id, node.NodeType.ToString(), sb.SessionPlaceholder, sb.SessionId); } catch { }
+                        break;
                     }
                 }
             }

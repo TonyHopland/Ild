@@ -60,8 +60,8 @@ public class LoopRun : IHasUpdatedAt
     // while the run was parked at a waiting node.
     public string? ExternalActionResult { get; set; }
 
-    // True when ExternalActionResult is a rejection (human "no", PR closed).
-    public bool ExternalActionResultRejected { get; set; }
+    // Discriminates which action the external actor took.
+    public ExternalActionResultType ExternalActionResultType { get; set; }
 
     public DateTime CreatedAt { get; set; }
 

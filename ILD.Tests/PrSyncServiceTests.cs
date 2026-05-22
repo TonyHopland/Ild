@@ -42,7 +42,7 @@ public class PrSyncServiceTests
 
         loopRuns.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.IsPrMerged)), Times.Once);
         workItems.Verify(s => s.ManuallyMarkMergedAsync(run.WorkItemId), Times.Once);
-        engine.Verify(s => s.SignalNodeResultAsync(run.Id, runNode.Id, It.Is<NodeSignal>(signal => signal.Success)), Times.Once);
+        engine.Verify(s => s.SignalNodeResultAsync(run.Id, runNode.Id, It.Is<NodeSignal>(signal => signal.Type == ExternalActionResultType.Success)), Times.Once);
     }
 
     [Fact]
@@ -77,6 +77,6 @@ public class PrSyncServiceTests
 
         events.Verify(s => s.AppendAsync(It.Is<EventLog>(e => e.Data == "needs work")), Times.Once);
         workItems.Verify(s => s.ManuallyMarkMergedAsync(It.IsAny<string>()), Times.Never);
-        engine.Verify(s => s.SignalNodeResultAsync(run.Id, runNode.Id, It.Is<NodeSignal>(signal => !signal.Success && signal.Error == "needs work")), Times.Once);
+        engine.Verify(s => s.SignalNodeResultAsync(run.Id, runNode.Id, It.Is<NodeSignal>(signal => signal.Type == ExternalActionResultType.Reject && signal.Error == "needs work")), Times.Once);
     }
 }

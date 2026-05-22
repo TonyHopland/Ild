@@ -1,5 +1,4 @@
 using ILD.Data.Enums;
-using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
 using System.Text.Json;
@@ -12,26 +11,23 @@ public sealed class CleanupNodeExecutor : INodeExecutor
 
     public async IAsyncEnumerable<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
     {
-        var loopRunStore = ctx.Services.GetRequiredService<ILoopRunStore>();
         var repoManager = ctx.Services.GetRequiredService<IRepositoryManager>();
-        var run = await loopRunStore.GetByIdAsync(ctx.Run.Id) ?? ctx.Run;
 
         yield return new NodeOutcome.NodeStarting(JsonSerializer.Serialize(new { nodeType = "Cleanup" }));
 
         var summary = "no worktree to clean";
-        if (!string.IsNullOrEmpty(run.WorktreePath) && Directory.Exists(run.WorktreePath))
+        if (!string.IsNullOrEmpty(ctx.Run.WorktreePath) && Directory.Exists(ctx.Run.WorktreePath))
         {
             try
             {
-                await repoManager.DestroyWorktreeAsync(run.WorktreePath);
-                summary = $"worktree removed: {run.WorktreePath}";
+                await repoManager.DestroyWorktreeAsync(ctx.Run.WorktreePath);
+                summary = $"worktree removed: {ctx.Run.WorktreePath}";
             }
             catch (Exception ex)
             {
                 summary = $"cleanup failed: {ex.Message}";
             }
-            run.WorktreePath = null;
-            await loopRunStore.UpdateRunAsync(run);
+            yield return new NodeOutcome.WorktreeDestroyed();
         }
 
         yield return new NodeOutcome.Terminal(summary);

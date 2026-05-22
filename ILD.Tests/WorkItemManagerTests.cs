@@ -447,9 +447,9 @@ public class WorkItemManagerTests
     }
 
     [Fact]
-    public async Task SubmitHumanFeedbackInput_finalizes_latest_Human_run_node_with_input_as_output()
+    public async Task SubmitHumanFeedbackInput_signals_engine_with_success_and_logs_event()
     {
-        var (mgr, db, repoId, _, _) = Setup();
+        var (mgr, db, repoId, _, eventLog) = SetupWithEngine(out var engine);
         using var _ = db;
 
         var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
@@ -484,29 +484,28 @@ public class WorkItemManagerTests
             NodeType = NodeType.Human,
             Label = "ask-human",
         });
-        var runNodeId = Guid.NewGuid();
-        db.Context.LoopRunNodes.Add(new LoopRunNode
+        var runNode = new LoopRunNode
         {
-            Id = runNodeId,
+            Id = Guid.NewGuid(),
             LoopRunId = runId,
             LoopNodeId = humanNodeId,
             Status = LoopRunNodeStatus.WaitingHuman,
-        });
+        };
+        db.Context.LoopRunNodes.Add(runNode);
 
-        await mgr.TransitionToHumanFeedbackAsync(id, "Human Input Needed");
+        await mgr.TransitionToHumanFeedbackAsync(id, HumanFeedbackReasons.HumanInputNeeded);
         run.CurrentNodeId = humanNodeId;
         await db.Context.SaveChangesAsync();
 
         await mgr.SubmitHumanFeedbackInputAsync(id, "ship it");
 
-        var finalized = await db.Fresh().LoopRunNodes.FindAsync(runNodeId);
-        Assert.Equal(LoopRunNodeStatus.Succeeded, finalized!.Status);
-        Assert.Equal("ship it", finalized.Output);
-        Assert.NotNull(finalized.CompletedAt);
+        eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "ship it", null), Times.Once);
+        engine.Verify(eng => eng.SignalNodeResultAsync(runId, runNode.Id,
+            It.Is<NodeSignal>(s => s.Type == ExternalActionResultType.Success && s.Output == "ship it")), Times.Once);
     }
 
     [Fact]
-    public async Task SubmitHumanFeedbackInput_appends_to_event_log_and_resumes_run()
+    public async Task SubmitHumanFeedbackInput_without_engine_does_not_throw()
     {
         var (mgr, db, repoId, _, eventLog) = Setup();
         using var _ = db;
@@ -525,25 +524,37 @@ public class WorkItemManagerTests
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         var runId = Guid.NewGuid();
-        var run = new LoopRun
+        var nodeId = Guid.NewGuid();
+        db.Context.LoopRuns.Add(new LoopRun
         {
             Id = runId,
             WorkItemId = id,
             LoopTemplateVersionId = ltv.Id,
-            Status = LoopRunStatus.Running,
+            Status = LoopRunStatus.WaitingHuman,
             StartedAt = DateTime.UtcNow,
-        };
-        db.Context.LoopRuns.Add(run);
-
-        await mgr.TransitionToHumanFeedbackAsync(id, "Human Input Needed");
+            CurrentNodeId = nodeId,
+        });
+        db.Context.LoopNodes.Add(new LoopNode
+        {
+            Id = nodeId,
+            LoopTemplateVersionId = ltv.Id,
+            NodeType = NodeType.Human,
+            Label = "h",
+        });
+        db.Context.LoopRunNodes.Add(new LoopRunNode
+        {
+            Id = Guid.NewGuid(),
+            LoopRunId = runId,
+            LoopNodeId = nodeId,
+            Status = LoopRunNodeStatus.WaitingHuman,
+        });
+        await mgr.TransitionToHumanFeedbackAsync(id, HumanFeedbackReasons.HumanInputNeeded);
         await db.Context.SaveChangesAsync();
 
-        await mgr.SubmitHumanFeedbackInputAsync(id, "proceed with the change");
-
-        eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "proceed with the change", null), Times.Once);
-        var after = await mgr.GetWorkItemAsync(id);
-        Assert.Equal(RemoteWorkItemStatus.Running, after!.Status);
-        Assert.True(string.IsNullOrEmpty(after.HumanFeedbackReason));
+        // Should not throw even without engine wired up
+        var result = await mgr.SubmitHumanFeedbackInputAsync(id, "proceed");
+        Assert.True(result);
+        eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "proceed", null), Times.Once);
     }
 
     [Fact]
@@ -660,7 +671,7 @@ public class WorkItemManagerTests
 
         eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "rejected by user", null), Times.Once);
         engine.Verify(eng => eng.SignalNodeResultAsync(runId, runNode.Id,
-            It.Is<NodeSignal>(s => s.Success == false)), Times.Once);
+            It.Is<NodeSignal>(s => s.Type == ExternalActionResultType.Reject)), Times.Once);
     }
 
     [Fact]
@@ -722,7 +733,7 @@ public class WorkItemManagerTests
             "rejected by user: looks wrong, try again with smaller scope",
             null), Times.Once);
         engine.Verify(eng => eng.SignalNodeResultAsync(runId, runNode.Id,
-            It.Is<NodeSignal>(s => s.Success == false && s.Output == "looks wrong, try again with smaller scope")), Times.Once);
+            It.Is<NodeSignal>(s => s.Type == ExternalActionResultType.Reject && s.Output == "looks wrong, try again with smaller scope")), Times.Once);
     }
 
     [Fact]
@@ -781,7 +792,7 @@ public class WorkItemManagerTests
 
         eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "please revise the approach", null), Times.Once);
         engine.Verify(eng => eng.SignalNodeResultAsync(runId, runNode.Id,
-            It.Is<NodeSignal>(s => s.Success == true && s.Output == "please revise the approach")), Times.Once);
+            It.Is<NodeSignal>(s => s.Type == ExternalActionResultType.Respond && s.Output == "please revise the approach")), Times.Once);
     }
 
     // ---- TransitionAsync (canonical generic transition) ------------------

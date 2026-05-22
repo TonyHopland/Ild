@@ -54,6 +54,29 @@ public abstract record NodeOutcome
     /// Terminal node: the run is complete. No outgoing edge is followed.
     /// </summary>
     public sealed record Terminal(string? Output = null) : NodeOutcome;
+
+    /// <summary>
+    /// Start node successfully created or validated a worktree.
+    /// The engine persists the path and branch name on LoopRun.
+    /// </summary>
+    public sealed record WorktreeReady(string WorktreePath, string BranchName) : NodeOutcome;
+
+    /// <summary>
+    /// PR node successfully created a pull request.
+    /// The engine persists the URL on LoopRun.
+    /// </summary>
+    public sealed record PrCreated(string PrUrl) : NodeOutcome;
+
+    /// <summary>
+    /// Cleanup node destroyed the worktree.
+    /// The engine clears WorktreePath on LoopRun.
+    /// </summary>
+    public sealed record WorktreeDestroyed() : NodeOutcome;
+
+    /// <summary>
+    /// AI node bound a session. The engine persists the binding.
+    /// </summary>
+    public sealed record SessionBound(string SessionPlaceholder, string SessionId) : NodeOutcome;
 }
 
 /// <summary>

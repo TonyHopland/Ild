@@ -314,7 +314,7 @@ public class WorkItemsController : ControllerBase
                     }
                     else
                     {
-                        await _engine.SignalNodeResultAsync(currentRun.Id, prRunNode.Id, NodeSignal.Succeeded());
+                        await _engine.SignalNodeResultAsync(currentRun.Id, prRunNode.Id, NodeSignal.Success());
 
                         // SignalNodeResultAsync re-enters the run loop itself;
                         // calling RunInBackground here would race a second runner.
@@ -334,11 +334,9 @@ public class WorkItemsController : ControllerBase
         var ok = await _workItemManager.SubmitHumanFeedbackInputAsync(id, request.Input ?? string.Empty);
         if (!ok) return NotFound();
 
-        // Resume the engine
-        var wi = await _workItemManager.GetWorkItemAsync(id);
-        if (wi?.CurrentLoopRunId != null)
-            RunInBackground(wi.CurrentLoopRunId.Value);
-
+        // SubmitHumanFeedbackInputAsync signals the engine which re-launches the
+        // run loop. Calling RunInBackground here would race a second runner and
+        // produce duplicate LoopRunNode rows / Interrupted in-flight nodes.
         return Ok();
     }
 
@@ -352,11 +350,8 @@ public class WorkItemsController : ControllerBase
         var ok = await _workItemManager.RejectHumanFeedbackAsync(id, request?.Input);
         if (!ok) return NotFound();
 
-        // Resume the engine to route failure edge
-        var wi = await _workItemManager.GetWorkItemAsync(id);
-        if (wi?.CurrentLoopRunId != null)
-            RunInBackground(wi.CurrentLoopRunId.Value);
-
+        // RejectHumanFeedbackAsync signals the engine which re-launches the run
+        // loop along the failure edge. See note on HumanFeedbackInput.
         return Ok();
     }
 
@@ -369,11 +364,8 @@ public class WorkItemsController : ControllerBase
         var ok = await _workItemManager.SubmitHumanFeedbackRespondAsync(id, request.Input ?? string.Empty);
         if (!ok) return NotFound();
 
-        // Resume the engine to route respond edge
-        var wi = await _workItemManager.GetWorkItemAsync(id);
-        if (wi?.CurrentLoopRunId != null)
-            RunInBackground(wi.CurrentLoopRunId.Value);
-
+        // SubmitHumanFeedbackRespondAsync signals the engine which re-launches
+        // the run loop along the respond edge. See note on HumanFeedbackInput.
         return Ok();
     }
 

@@ -516,28 +516,10 @@ public class WorkItemManager : IWorkItemManager
 
         var runId = wi.CurrentLoopRunId.Value;
         var run = await _loopRunStore.GetByIdAsync(runId);
-        if (run != null)
-        {
-            var nodes = await _loopRunStore.GetRunNodesAsync(runId);
-            var humanRunNode = FindWaitingHumanNode(nodes, run.CurrentNodeId);
-            if (humanRunNode != null)
-            {
-                humanRunNode.Status = LoopRunNodeStatus.Succeeded;
-                humanRunNode.Output = input;
-                humanRunNode.CompletedAt = DateTime.UtcNow;
-                await _loopRunStore.UpdateRunNodeAsync(humanRunNode);
+        if (run == null) return false;
 
-                if (await IsPrNodeAsync(run, humanRunNode.LoopNodeId))
-                    run.IsPrMerged = true;
-            }
-
-            if (run.Status == LoopRunStatus.WaitingHuman)
-            {
-                run.Status = LoopRunStatus.Running;
-                run.UpdatedAt = DateTime.UtcNow;
-                await _loopRunStore.UpdateRunAsync(run);
-            }
-        }
+        var nodes = await _loopRunStore.GetRunNodesAsync(runId);
+        var humanRunNode = FindWaitingHumanNode(nodes, run.CurrentNodeId);
 
         await _eventLog.AppendAsync(runId, "HumanFeedbackReceived", input);
 
@@ -552,11 +534,10 @@ public class WorkItemManager : IWorkItemManager
         }
         catch (InvalidOperationException) { /* No remote — local only. */ }
 
-        if (run != null)
+        if (_engine is not null && humanRunNode is not null)
         {
-            run.HumanFeedbackReason = null;
-            run.UpdatedAt = DateTime.UtcNow;
-            await _loopRunStore.UpdateRunAsync(run);
+            await _engine.SignalNodeResultAsync(runId, humanRunNode.Id,
+                NodeSignal.Success(input));
         }
         return true;
     }
@@ -611,7 +592,7 @@ public class WorkItemManager : IWorkItemManager
         if (_engine is not null && currentRunNode is not null)
         {
             await _engine.SignalNodeResultAsync(run.Id, currentRunNode.Id,
-                new NodeSignal(Success: false, Output: input, Error: "Rejected by user"));
+                NodeSignal.Reject("Rejected by user", input));
         }
         return true;
     }
@@ -644,7 +625,7 @@ public class WorkItemManager : IWorkItemManager
         if (_engine is not null && humanRunNode is not null)
         {
             await _engine.SignalNodeResultAsync(runId, humanRunNode.Id,
-                new NodeSignal(Success: true, Output: input));
+                NodeSignal.Respond(input));
         }
         return true;
     }

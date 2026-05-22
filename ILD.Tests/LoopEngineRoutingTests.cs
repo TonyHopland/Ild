@@ -160,7 +160,7 @@ public class LoopEngineRoutingTests
 
         // Engine.SignalNodeResultAsync re-enters Human on success.
         await h.Engine.SignalNodeResultAsync(h.RunId, waitingNode.Id,
-            new NodeSignal(Success: true, Output: "user-text"));
+            new NodeSignal(ExternalActionResultType.Respond, Output: "user-text"));
 
         // SignalNodeResultAsync launches the run via Task.Run; drain it.
         await WaitUntilAsync(() => h.ReloadRun().Status != LoopRunStatus.Running, TimeSpan.FromSeconds(5));
@@ -199,7 +199,7 @@ public class LoopEngineRoutingTests
 
         var waitingNode = h.ReloadRunNodes().Single(rn => rn.Status == LoopRunNodeStatus.WaitingHuman);
         await h.Engine.SignalNodeResultAsync(h.RunId, waitingNode.Id,
-            new NodeSignal(Success: false, Error: "Rejected"));
+            new NodeSignal(ExternalActionResultType.Reject, Error: "Rejected"));
         await WaitUntilAsync(() => h.ReloadRun().Status != LoopRunStatus.Running, TimeSpan.FromSeconds(5));
 
         var nodes = h.ReloadRunNodes().OrderBy(n => n.StartedAt).ToList();

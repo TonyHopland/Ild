@@ -7,10 +7,11 @@ namespace ILD.Core.Services.Interfaces;
 /// <summary>
 /// Result of an external event for a node parked in <c>WaitingHuman</c>.
 /// </summary>
-public sealed record NodeSignal(bool Success, string? Output = null, string? Error = null)
+public sealed record NodeSignal(ExternalActionResultType Type, string? Output = null, string? Error = null)
 {
-    public static NodeSignal Succeeded(string? output = null) => new(true, output);
-    public static NodeSignal Failed(string error, string? output = null) => new(false, output, error);
+    public static NodeSignal Success(string? output = null) => new(ExternalActionResultType.Success, output);
+    public static NodeSignal Reject(string error, string? output = null) => new(ExternalActionResultType.Reject, output, error);
+    public static NodeSignal Respond(string? output = null) => new(ExternalActionResultType.Respond, output);
 }
 
 public interface ILoopEngine

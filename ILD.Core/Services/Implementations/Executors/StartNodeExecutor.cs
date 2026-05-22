@@ -14,7 +14,6 @@ public sealed class StartNodeExecutor : INodeExecutor
     public async IAsyncEnumerable<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
     {
         var sp = ctx.Services;
-        var loopRunStore = sp.GetRequiredService<ILoopRunStore>();
         var providerStore = sp.GetRequiredService<IProviderStore>();
         var workItems = sp.GetRequiredService<IWorkItemManager>();
         var repoManager = sp.GetRequiredService<IRepositoryManager>();
@@ -41,43 +40,34 @@ public sealed class StartNodeExecutor : INodeExecutor
             ? null
             : new GitAuthOptions(repo.CloneUrl, remoteProvider.ApiKey, remoteProvider.Type);
 
-        var run = await loopRunStore.GetByIdAsync(ctx.Run.Id);
-        if (run is null)
-        {
-            yield return new NodeOutcome.NodeStarting("{\"nodeType\":\"Start\"}");
-            yield return new NodeOutcome.Fail(EdgeType.OnFailure, "LoopRun not found");
-            yield break;
-        }
-
         yield return new NodeOutcome.NodeStarting(
             System.Text.Json.JsonSerializer.Serialize(new { nodeType = "Start", message = "initialized" }));
 
-        var hasHealthyWorktree = !string.IsNullOrEmpty(run.WorktreePath)
-            && Directory.Exists(run.WorktreePath)
-            && await repoManager.ValidateWorktreeHealthAsync(run.WorktreePath);
+        var hasHealthyWorktree = !string.IsNullOrEmpty(ctx.Run.WorktreePath)
+            && Directory.Exists(ctx.Run.WorktreePath)
+            && await repoManager.ValidateWorktreeHealthAsync(ctx.Run.WorktreePath);
 
         if (!hasHealthyWorktree)
         {
-            var (ok, error) = await EnsureWorktreeAsync(ctx, sp, repoManager, run, repo, wi, gitAuth);
+            var (ok, path, branch, error) = await EnsureWorktreeAsync(ctx, sp, repoManager, ctx.Run, repo, wi, gitAuth);
             if (!ok)
             {
                 yield return new NodeOutcome.Fail(EdgeType.OnFailure, error ?? "worktree setup failed");
                 yield break;
             }
-            await loopRunStore.UpdateRunAsync(run);
+            yield return new NodeOutcome.WorktreeReady(path!, branch!);
         }
-
-        if (string.IsNullOrEmpty(run.WorktreePath) || !Directory.Exists(run.WorktreePath))
+        else
         {
-            yield return new NodeOutcome.Fail(EdgeType.OnFailure,
-                $"Failed to materialize worktree for WorkItem {wi.Id}; refusing to continue.");
-            yield break;
+            yield return new NodeOutcome.WorktreeReady(
+                ctx.Run.WorktreePath ?? string.Empty,
+                ctx.Run.BranchName ?? string.Empty);
         }
 
-        yield return new NodeOutcome.Success(EdgeType.OnSuccess, $"worktree={run.WorktreePath}");
+        yield return new NodeOutcome.Success(EdgeType.OnSuccess, $"worktree={ctx.Run.WorktreePath}");
     }
 
-    private static async Task<(bool Ok, string? Error)> EnsureWorktreeAsync(
+    private static async Task<(bool Ok, string? Path, string? Branch, string? Error)> EnsureWorktreeAsync(
         NodeExecutionContext ctx, IServiceProvider sp, IRepositoryManager repoManager,
         LoopRun run, Repository repo, WorkItemView wi, GitAuthOptions? gitAuth)
     {
@@ -95,7 +85,7 @@ public sealed class StartNodeExecutor : INodeExecutor
             if (!Directory.Exists(Path.Combine(basePath, ".git")))
             {
                 var result = await repoManager.CloneAsync(repo.CloneUrl, basePath, ctx.CancellationToken, gitAuth);
-                if (!result.Success) return (false, $"git clone failed: {result.Error}");
+                if (!result.Success) return (false, null, null, $"git clone failed: {result.Error}");
                 cloned = true;
             }
         }
@@ -110,18 +100,16 @@ public sealed class StartNodeExecutor : INodeExecutor
             catch { /* best-effort */ }
         }
         var path = await repoManager.CreateWorktreeAsync(basePath, branch);
-        run.WorktreePath = path;
-        run.BranchName = branch;
         await repoManager.FetchAsync(path, ctx.CancellationToken, gitAuth);
         try
         {
             var rebaseOk = await repoManager.RebaseAsync(path, $"origin/{defaultBranch}", ctx.CancellationToken);
-            if (!rebaseOk) return (false, $"rebase onto origin/{defaultBranch} failed — worktree may be stale");
+            if (!rebaseOk) return (false, null, null, $"rebase onto origin/{defaultBranch} failed — worktree may be stale");
         }
         catch (Exception ex)
         {
-            return (false, $"rebase onto origin/{defaultBranch} failed: {ex.Message}");
+            return (false, null, null, $"rebase onto origin/{defaultBranch} failed: {ex.Message}");
         }
-        return (true, null);
+        return (true, path, branch, null);
     }
 }
