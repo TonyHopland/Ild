@@ -95,7 +95,7 @@ public sealed class AINodeExecutor : INodeExecutor
             var agentCtx = new AgentExecutionContext(
                 provider, rendered, runContext, 0, ctx.CancellationToken,
                 ctx.ProgressCallback, adapterConfigDict, cfg.ToolAllowlist,
-                SessionId: null, IncomingSessionId: incomingSessionId,
+                SessionId: incomingSessionId, IncomingSessionId: incomingSessionId,
                 ManageSession: manageSession);
             result = await adapter.ExecuteAsync(agentCtx);
         }
