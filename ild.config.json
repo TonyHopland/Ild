@@ -53,6 +53,14 @@
             },
             "healthUrl": "http://127.0.0.1:${PORT}/",
             "public": true
+          },
+          {
+            "name": "chrome",
+            "cwd": ".",
+            "command": "pkill -f \"google-chrome.*--remote-debugging-port=${PORT}\" 2>/dev/null; sleep 1; google-chrome --headless --no-sandbox --disable-gpu --remote-debugging-port=${PORT} --disable-extensions",
+            "port": "chrome",
+            "suggestedPort": 9222,
+            "healthUrl": "http://127.0.0.1:${PORT}/json/version"
           }
         ]
       }

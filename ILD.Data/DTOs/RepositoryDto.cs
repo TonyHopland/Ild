@@ -18,6 +18,9 @@ public class RepositoryDto
     [StringLength(256)]
     public string DefaultBranch { get; set; } = "main";
 
+    [StringLength(1024)]
+    public string? WorktreesPath { get; set; }
+
     [Required]
     public string RemoteProviderId { get; set; } = string.Empty;
 

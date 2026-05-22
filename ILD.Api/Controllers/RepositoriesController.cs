@@ -47,6 +47,7 @@ public class RepositoriesController : ControllerBase
             Name = request.Name,
             CloneUrl = request.CloneUrl,
             DefaultBranch = request.DefaultBranch,
+            WorktreesPath = request.WorktreesPath,
             RemoteProviderId = providerId,
             DefaultIntakeStatus = request.DefaultIntakeStatus,
             CreatedAt = DateTime.UtcNow,
@@ -65,6 +66,7 @@ public class RepositoriesController : ControllerBase
         repo.Name = request.Name;
         repo.CloneUrl = request.CloneUrl;
         repo.DefaultBranch = request.DefaultBranch;
+        repo.WorktreesPath = request.WorktreesPath;
         repo.DefaultIntakeStatus = request.DefaultIntakeStatus;
         repo.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();

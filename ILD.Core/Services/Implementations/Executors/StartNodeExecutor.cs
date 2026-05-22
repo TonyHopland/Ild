@@ -92,12 +92,10 @@ public sealed class StartNodeExecutor : INodeExecutor
         var defaultBranch = repo.DefaultBranch ?? "main";
         if (!cloned)
         {
-            try
-            {
-                await repoManager.FetchAsync(basePath, ctx.CancellationToken, gitAuth);
-                await repoManager.ResetHardAsync(basePath, $"origin/{defaultBranch}", ctx.CancellationToken);
-            }
-            catch { /* best-effort */ }
+            await repoManager.FetchAsync(basePath, ctx.CancellationToken, gitAuth);
+            var resetOk = await repoManager.ResetHardAsync(basePath, $"origin/{defaultBranch}", ctx.CancellationToken);
+            if (!resetOk)
+                return (false, null, null, $"failed to reset base repo to origin/{defaultBranch}");
         }
         var path = await repoManager.CreateWorktreeAsync(basePath, branch);
         await repoManager.FetchAsync(path, ctx.CancellationToken, gitAuth);
