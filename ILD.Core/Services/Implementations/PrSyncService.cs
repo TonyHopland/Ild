@@ -43,7 +43,7 @@ public class PrSyncService : IPrSyncService
         if (signal == null)
             return;
 
-        if (signal.Success)
+        if (signal.Type == ExternalActionResultType.Success)
         {
             run.IsPrMerged = true;
             run.UpdatedAt = DateTime.UtcNow;
@@ -81,13 +81,13 @@ public class PrSyncService : IPrSyncService
     {
         if (string.Equals(payload.MergeStatus, "merged", StringComparison.OrdinalIgnoreCase)
             || string.Equals(payload.EventType, "pull_request.merged", StringComparison.OrdinalIgnoreCase))
-            return NodeSignal.Succeeded();
+            return NodeSignal.Success();
 
         if (string.Equals(payload.EventType, "pull_request.rejected", StringComparison.OrdinalIgnoreCase)
             || string.Equals(payload.MergeStatus, "closed", StringComparison.OrdinalIgnoreCase)
             || string.Equals(payload.MergeStatus, "changes_requested", StringComparison.OrdinalIgnoreCase)
             || string.Equals(payload.MergeStatus, "rejected", StringComparison.OrdinalIgnoreCase))
-            return NodeSignal.Failed(payload.Comment ?? "PR rejected");
+            return NodeSignal.Reject(payload.Comment ?? "PR rejected");
 
         return null;
     }

@@ -21,8 +21,6 @@ public class LoopNode
 
     public string? Config { get; set; }
 
-    public int MaxRetries { get; set; } = 0;
-
     public DateTime CreatedAt { get; set; }
 
     [ForeignKey(nameof(LoopTemplateVersionId))]

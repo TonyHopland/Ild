@@ -26,11 +26,6 @@ public class LoopRun : IHasUpdatedAt
 
     public int NodeExecutionCount { get; set; }
 
-    /// <summary>
-    /// Monotonic per-run sequence counter for <see cref="EventLog"/> writes.
-    /// Persisted on the run rather than computed via <c>MAX(Sequence)+1</c> so
-    /// event-log appends do one round-trip and don't need a global lock.
-    /// </summary>
     public int NextEventSeq { get; set; }
 
     public DateTime? StartedAt { get; set; }
@@ -57,6 +52,17 @@ public class LoopRun : IHasUpdatedAt
     [MaxLength(512)]
     public string? HumanFeedbackReason { get; set; }
 
+    // Output of the node on the most recently traversed incoming edge.
+    // Source of truth for {{PreviousNode.Output}} in prompt rendering.
+    public string? PreviousNodeOutput { get; set; }
+
+    // Payload supplied by an external actor (human response, webhook signal)
+    // while the run was parked at a waiting node.
+    public string? ExternalActionResult { get; set; }
+
+    // Discriminates which action the external actor took.
+    public ExternalActionResultType ExternalActionResultType { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     public DateTime? UpdatedAt { get; set; }
@@ -66,9 +72,6 @@ public class LoopRun : IHasUpdatedAt
 
     [InverseProperty("LoopRun")]
     public ICollection<LoopRunNode> RunNodes { get; set; } = new List<LoopRunNode>();
-
-    [InverseProperty("LoopRun")]
-    public ICollection<LoopRunEdgeTraversal> EdgeTraversals { get; set; } = new List<LoopRunEdgeTraversal>();
 
     [InverseProperty("LoopRun")]
     public ICollection<EventLog> EventLogs { get; set; } = new List<EventLog>();

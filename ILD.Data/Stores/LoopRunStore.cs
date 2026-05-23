@@ -160,27 +160,6 @@ public class LoopRunStore : ILoopRunStore
         await _db.SaveChangesAsync();
     }
 
-    public async Task PersistEdgeTraversalAsync(Guid runId, Guid edgeId, int count)
-    {
-        var existing = await _db.LoopRunEdgeTraversals
-            .FirstOrDefaultAsync(t => t.LoopRunId == runId && t.EdgeId == edgeId);
-        if (existing == null)
-        {
-            _db.LoopRunEdgeTraversals.Add(new LoopRunEdgeTraversal
-            {
-                Id = Guid.NewGuid(),
-                LoopRunId = runId,
-                EdgeId = edgeId,
-                TraversalCount = count,
-            });
-        }
-        else
-        {
-            existing.TraversalCount = count;
-        }
-        await _db.SaveChangesAsync();
-    }
-
     public async Task<LoopNode?> GetStartNodeAsync(Guid versionId)
         => await _db.LoopNodes.FirstOrDefaultAsync(n => n.LoopTemplateVersionId == versionId && n.NodeType == NodeType.Start);
 

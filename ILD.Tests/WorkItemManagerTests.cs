@@ -30,6 +30,12 @@ public class WorkItemManagerTests
     }
 
     private static (WorkItemManager mgr, TestDb db, Guid repoId, Mock<IRepositoryManager> repoMgr, Mock<IEventLogService> eventLog) Setup()
+        => SetupCore(out _);
+
+    private static (WorkItemManager mgr, TestDb db, Guid repoId, Mock<IRepositoryManager> repoMgr, Mock<IEventLogService> eventLog) SetupWithEngine(out Mock<ILoopEngine> engine)
+        => SetupCore(out engine);
+
+    private static (WorkItemManager mgr, TestDb db, Guid repoId, Mock<IRepositoryManager> repoMgr, Mock<IEventLogService> eventLog) SetupCore(out Mock<ILoopEngine> engine)
     {
         var db = new TestDb();
         var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
@@ -41,7 +47,9 @@ public class WorkItemManagerTests
         var eventLog = new Mock<IEventLogService>();
         eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<string>()))
             .ReturnsAsync(1L);
-        return (new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions), db, repo.Id, repoMgr, eventLog);
+        engine = new Mock<ILoopEngine>();
+        return (new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions,
+            engine: engine.Object), db, repo.Id, repoMgr, eventLog);
     }
 
     [Fact]
@@ -439,9 +447,9 @@ public class WorkItemManagerTests
     }
 
     [Fact]
-    public async Task SubmitHumanFeedbackInput_finalizes_latest_Human_run_node_with_input_as_output()
+    public async Task SubmitHumanFeedbackInput_signals_engine_with_success_and_logs_event()
     {
-        var (mgr, db, repoId, _, _) = Setup();
+        var (mgr, db, repoId, _, eventLog) = SetupWithEngine(out var engine);
         using var _ = db;
 
         var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
@@ -476,29 +484,28 @@ public class WorkItemManagerTests
             NodeType = NodeType.Human,
             Label = "ask-human",
         });
-        var runNodeId = Guid.NewGuid();
-        db.Context.LoopRunNodes.Add(new LoopRunNode
+        var runNode = new LoopRunNode
         {
-            Id = runNodeId,
+            Id = Guid.NewGuid(),
             LoopRunId = runId,
             LoopNodeId = humanNodeId,
             Status = LoopRunNodeStatus.WaitingHuman,
-        });
+        };
+        db.Context.LoopRunNodes.Add(runNode);
 
-        await mgr.TransitionToHumanFeedbackAsync(id, "Human Input Needed");
+        await mgr.TransitionToHumanFeedbackAsync(id, HumanFeedbackReasons.HumanInputNeeded);
         run.CurrentNodeId = humanNodeId;
         await db.Context.SaveChangesAsync();
 
         await mgr.SubmitHumanFeedbackInputAsync(id, "ship it");
 
-        var finalized = await db.Fresh().LoopRunNodes.FindAsync(runNodeId);
-        Assert.Equal(LoopRunNodeStatus.Succeeded, finalized!.Status);
-        Assert.Equal("ship it", finalized.Output);
-        Assert.NotNull(finalized.CompletedAt);
+        eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "ship it", null), Times.Once);
+        engine.Verify(eng => eng.SignalNodeResultAsync(runId, runNode.Id,
+            It.Is<NodeSignal>(s => s.Type == ExternalActionResultType.Success && s.Output == "ship it")), Times.Once);
     }
 
     [Fact]
-    public async Task SubmitHumanFeedbackInput_appends_to_event_log_and_resumes_run()
+    public async Task SubmitHumanFeedbackInput_without_engine_does_not_throw()
     {
         var (mgr, db, repoId, _, eventLog) = Setup();
         using var _ = db;
@@ -517,25 +524,37 @@ public class WorkItemManagerTests
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         var runId = Guid.NewGuid();
-        var run = new LoopRun
+        var nodeId = Guid.NewGuid();
+        db.Context.LoopRuns.Add(new LoopRun
         {
             Id = runId,
             WorkItemId = id,
             LoopTemplateVersionId = ltv.Id,
-            Status = LoopRunStatus.Running,
+            Status = LoopRunStatus.WaitingHuman,
             StartedAt = DateTime.UtcNow,
-        };
-        db.Context.LoopRuns.Add(run);
-
-        await mgr.TransitionToHumanFeedbackAsync(id, "Human Input Needed");
+            CurrentNodeId = nodeId,
+        });
+        db.Context.LoopNodes.Add(new LoopNode
+        {
+            Id = nodeId,
+            LoopTemplateVersionId = ltv.Id,
+            NodeType = NodeType.Human,
+            Label = "h",
+        });
+        db.Context.LoopRunNodes.Add(new LoopRunNode
+        {
+            Id = Guid.NewGuid(),
+            LoopRunId = runId,
+            LoopNodeId = nodeId,
+            Status = LoopRunNodeStatus.WaitingHuman,
+        });
+        await mgr.TransitionToHumanFeedbackAsync(id, HumanFeedbackReasons.HumanInputNeeded);
         await db.Context.SaveChangesAsync();
 
-        await mgr.SubmitHumanFeedbackInputAsync(id, "proceed with the change");
-
-        eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "proceed with the change", null), Times.Once);
-        var after = await mgr.GetWorkItemAsync(id);
-        Assert.Equal(RemoteWorkItemStatus.Running, after!.Status);
-        Assert.True(string.IsNullOrEmpty(after.HumanFeedbackReason));
+        // Should not throw even without engine wired up
+        var result = await mgr.SubmitHumanFeedbackInputAsync(id, "proceed");
+        Assert.True(result);
+        eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "proceed", null), Times.Once);
     }
 
     [Fact]
@@ -596,9 +615,9 @@ public class WorkItemManagerTests
     }
 
     [Fact]
-    public async Task RejectHumanFeedback_fails_current_node_and_resumes_run()
+    public async Task RejectHumanFeedback_signals_engine_with_failure_and_logs_event()
     {
-        var (mgr, db, repoId, _, eventLog) = Setup();
+        var (mgr, db, repoId, _, eventLog) = SetupWithEngine(out var engine);
         using var _ = db;
 
         var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
@@ -651,17 +670,14 @@ public class WorkItemManagerTests
         await mgr.RejectHumanFeedbackAsync(id);
 
         eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "rejected by user", null), Times.Once);
-        var afterNode = await db.Context.LoopRunNodes.FindAsync(runNode.Id);
-        Assert.Equal(LoopRunNodeStatus.Failed, afterNode!.Status);
-        var after = await mgr.GetWorkItemAsync(id);
-        Assert.Equal(RemoteWorkItemStatus.Running, after!.Status);
-        Assert.True(string.IsNullOrEmpty(after.HumanFeedbackReason));
+        engine.Verify(eng => eng.SignalNodeResultAsync(runId, runNode.Id,
+            It.Is<NodeSignal>(s => s.Type == ExternalActionResultType.Reject)), Times.Once);
     }
 
     [Fact]
-    public async Task RejectHumanFeedback_with_input_writes_text_to_run_node_output_and_event_log()
+    public async Task RejectHumanFeedback_with_input_includes_text_in_signal_output_and_event_log()
     {
-        var (mgr, db, repoId, _, eventLog) = Setup();
+        var (mgr, db, repoId, _, eventLog) = SetupWithEngine(out var engine);
         using var _ = db;
 
         var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
@@ -716,15 +732,14 @@ public class WorkItemManagerTests
             runId, "HumanFeedbackReceived",
             "rejected by user: looks wrong, try again with smaller scope",
             null), Times.Once);
-        var afterNode = await db.Context.LoopRunNodes.FindAsync(runNode.Id);
-        Assert.Equal(LoopRunNodeStatus.Failed, afterNode!.Status);
-        Assert.Equal("looks wrong, try again with smaller scope", afterNode.Output);
+        engine.Verify(eng => eng.SignalNodeResultAsync(runId, runNode.Id,
+            It.Is<NodeSignal>(s => s.Type == ExternalActionResultType.Reject && s.Output == "looks wrong, try again with smaller scope")), Times.Once);
     }
 
     [Fact]
-    public async Task SubmitHumanFeedbackRespond_sets_responded_status_and_resumes_run()
+    public async Task SubmitHumanFeedbackRespond_signals_engine_with_success_and_logs_event()
     {
-        var (mgr, db, repoId, _, eventLog) = Setup();
+        var (mgr, db, repoId, _, eventLog) = SetupWithEngine(out var engine);
         using var _ = db;
 
         var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
@@ -776,12 +791,8 @@ public class WorkItemManagerTests
         await mgr.SubmitHumanFeedbackRespondAsync(id, "please revise the approach");
 
         eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "please revise the approach", null), Times.Once);
-        var afterNode = await db.Context.LoopRunNodes.FindAsync(runNode.Id);
-        Assert.Equal(LoopRunNodeStatus.Responded, afterNode!.Status);
-        Assert.Equal("please revise the approach", afterNode.Output);
-        var after = await mgr.GetWorkItemAsync(id);
-        Assert.Equal(RemoteWorkItemStatus.Running, after!.Status);
-        Assert.True(string.IsNullOrEmpty(after.HumanFeedbackReason));
+        engine.Verify(eng => eng.SignalNodeResultAsync(runId, runNode.Id,
+            It.Is<NodeSignal>(s => s.Type == ExternalActionResultType.Respond && s.Output == "please revise the approach")), Times.Once);
     }
 
     // ---- TransitionAsync (canonical generic transition) ------------------

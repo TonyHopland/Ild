@@ -56,7 +56,7 @@ public class LoopRunsController : ControllerBase
                 error = rn.Error,
                 startedAt = rn.StartedAt,
                 completedAt = rn.CompletedAt,
-                executionCount = rn.RetryCount,
+                executionCount = 0,
             }).ToList(),
         }).ToList();
 
@@ -117,7 +117,7 @@ public class LoopRunsController : ControllerBase
                 error = rn.Error,
                 startedAt = rn.StartedAt,
                 completedAt = rn.CompletedAt,
-                executionCount = rn.RetryCount,
+                executionCount = 0,
             }).ToList(),
         });
     }

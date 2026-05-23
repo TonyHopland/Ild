@@ -41,7 +41,6 @@ const sampleTemplate = {
       label: "Initialize",
       config: {},
       maxTraversals: null,
-      retryCount: null,
     },
     {
       id: "n-cleanup",
@@ -49,7 +48,6 @@ const sampleTemplate = {
       label: "Tidy Up",
       config: {},
       maxTraversals: null,
-      retryCount: null,
     },
   ],
   edges: [
@@ -255,7 +253,6 @@ describe("Loop Editor save existing template (regression)", () => {
           label: "Start",
           config: {},
           maxTraversals: null,
-          retryCount: null,
         },
         {
           id: "n-ai",
@@ -263,7 +260,6 @@ describe("Loop Editor save existing template (regression)", () => {
           label: "AI Implement",
           config: {},
           maxTraversals: null,
-          retryCount: null,
         },
         {
           id: "n-build",
@@ -271,7 +267,6 @@ describe("Loop Editor save existing template (regression)", () => {
           label: "Build",
           config: {},
           maxTraversals: null,
-          retryCount: null,
         },
         {
           id: "n-cleanup",
@@ -279,7 +274,6 @@ describe("Loop Editor save existing template (regression)", () => {
           label: "Cleanup",
           config: {},
           maxTraversals: null,
-          retryCount: null,
         },
       ],
       edges: [

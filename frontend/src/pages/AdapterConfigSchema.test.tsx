@@ -62,7 +62,6 @@ const sampleTemplate = {
       label: "Initialize",
       config: {},
       maxTraversals: null,
-      retryCount: null,
     },
     {
       id: "n-ai",
@@ -70,7 +69,6 @@ const sampleTemplate = {
       label: "Code",
       config: {},
       maxTraversals: null,
-      retryCount: null,
     },
     {
       id: "n-cleanup",
@@ -78,7 +76,6 @@ const sampleTemplate = {
       label: "Tidy Up",
       config: {},
       maxTraversals: null,
-      retryCount: null,
     },
   ],
   edges: [

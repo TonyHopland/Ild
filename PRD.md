@@ -47,8 +47,8 @@ The product should let a developer:
 
 - Templates are versioned on each save and runs pin the version they started with.
 - Validation must enforce exactly one `Start` node, at least one `Cleanup` node, reachability from `Start`, and at least one path to cleanup.
-- The loop engine remains sequential per run.
-- Failure routing is graph-driven: `OnFailure` edges take precedence; otherwise node retries apply.
+- The loop engine remains sequential per run and acts as the sole state machine: node executors yield `NodeOutcome` values (`NodeStarting`, `Success(EdgeType)`, `Fail(EdgeType)`, `WaitingAction`, `WaitingIld`, `Terminal`) and the engine performs all persistence, routing, and status transitions.
+- Failure routing is graph-driven: `Fail` outcomes carry an `EdgeType` (typically `OnFailure`; Human nodes use `OnReject`). There are no automatic per-node retries — retry is modeled with `OnFailure`/`OnReject` edges back to the same node and bounded by `DefaultMaxTraversals`.
 - Pause and cancellation must be cooperative so commands and long-running adapters can stop safely.
 
 ### AI Execution Model

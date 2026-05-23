@@ -18,7 +18,6 @@ public class AppDbContext : DbContext
 
     public DbSet<LoopRun> LoopRuns => Set<LoopRun>();
     public DbSet<LoopRunNode> LoopRunNodes => Set<LoopRunNode>();
-    public DbSet<LoopRunEdgeTraversal> LoopRunEdgeTraversals => Set<LoopRunEdgeTraversal>();
     public DbSet<AdapterSessionSnapshot> AdapterSessionSnapshots => Set<AdapterSessionSnapshot>();
     public DbSet<LoopRunSessionBinding> LoopRunSessionBindings => Set<LoopRunSessionBinding>();
     public DbSet<EventLog> EventLogs => Set<EventLog>();
@@ -96,11 +95,6 @@ public class AppDbContext : DbContext
             e.HasIndex(l => l.Status);
         });
 
-        modelBuilder.Entity<LoopRunEdgeTraversal>(e =>
-        {
-            e.HasIndex(l => new { l.LoopRunId, l.EdgeId });
-        });
-
         modelBuilder.Entity<AdapterSessionSnapshot>(e =>
         {
             e.HasKey(s => new { s.LoopRunId, s.AdapterName, s.SessionId });
@@ -169,11 +163,6 @@ public class AppDbContext : DbContext
         });
 
         modelBuilder.Entity<LoopRun>(e =>
-        {
-            e.Property(l => l.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
-        });
-
-        modelBuilder.Entity<LoopRunEdgeTraversal>(e =>
         {
             e.Property(l => l.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
         });

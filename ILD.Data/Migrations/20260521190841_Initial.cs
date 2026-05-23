@@ -22,6 +22,7 @@ namespace ILD.Data.Migrations
                     ApiKey = table.Column<string>(type: "character varying(1024)", maxLength: 1024, nullable: true),
                     Model = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: false),
                     IsDefault = table.Column<bool>(type: "boolean", nullable: false),
+                    Parallelism = table.Column<int>(type: "integer", nullable: false),
                     Config = table.Column<string>(type: "text", nullable: true),
                     CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false, defaultValueSql: "CURRENT_TIMESTAMP"),
                     UpdatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true)
@@ -29,6 +30,20 @@ namespace ILD.Data.Migrations
                 constraints: table =>
                 {
                     table.PrimaryKey("PK_AiProviders", x => x.Id);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "AppSettings",
+                columns: table => new
+                {
+                    Id = table.Column<Guid>(type: "uuid", nullable: false),
+                    Key = table.Column<string>(type: "character varying(64)", maxLength: 64, nullable: false),
+                    Value = table.Column<string>(type: "character varying(4096)", maxLength: 4096, nullable: false),
+                    UpdatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_AppSettings", x => x.Id);
                 });
 
             migrationBuilder.CreateTable(
@@ -42,7 +57,6 @@ namespace ILD.Data.Migrations
                     IsArchived = table.Column<bool>(type: "boolean", nullable: false),
                     RecoveryPolicy = table.Column<string>(type: "character varying(128)", maxLength: 128, nullable: false),
                     MaxNodeExecutions = table.Column<int>(type: "integer", nullable: false),
-                    MaxWallClockHours = table.Column<int>(type: "integer", nullable: false),
                     CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false, defaultValueSql: "CURRENT_TIMESTAMP"),
                     UpdatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true)
                 },
@@ -145,8 +159,6 @@ namespace ILD.Data.Migrations
                     NodeType = table.Column<int>(type: "integer", nullable: false),
                     Label = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: false),
                     Config = table.Column<string>(type: "text", nullable: true),
-                    MaxRetries = table.Column<int>(type: "integer", nullable: false),
-                    TimeoutSeconds = table.Column<double>(type: "double precision", nullable: false),
                     CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false, defaultValueSql: "CURRENT_TIMESTAMP")
                 },
                 constraints: table =>
@@ -182,6 +194,9 @@ namespace ILD.Data.Migrations
                     RepositoryId = table.Column<Guid>(type: "uuid", nullable: true),
                     CreatedByLoopRunId = table.Column<Guid>(type: "uuid", nullable: true),
                     HumanFeedbackReason = table.Column<string>(type: "character varying(512)", maxLength: 512, nullable: true),
+                    PreviousNodeOutput = table.Column<string>(type: "text", nullable: true),
+                    ExternalActionResult = table.Column<string>(type: "text", nullable: true),
+                    ExternalActionResultRejected = table.Column<bool>(type: "boolean", nullable: false),
                     CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false, defaultValueSql: "CURRENT_TIMESTAMP"),
                     UpdatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true)
                 },
@@ -281,7 +296,8 @@ namespace ILD.Data.Migrations
                     Status = table.Column<int>(type: "integer", nullable: false),
                     Output = table.Column<string>(type: "text", nullable: true),
                     Error = table.Column<string>(type: "text", nullable: true),
-                    RetryCount = table.Column<int>(type: "integer", nullable: false),
+                    EffectiveInput = table.Column<string>(type: "text", nullable: true),
+                    PreviousNodeId = table.Column<Guid>(type: "uuid", nullable: true),
                     StartedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
                     CompletedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
                     CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
@@ -325,33 +341,6 @@ namespace ILD.Data.Migrations
                         onDelete: ReferentialAction.Cascade);
                 });
 
-            migrationBuilder.CreateTable(
-                name: "LoopRunEdgeTraversals",
-                columns: table => new
-                {
-                    Id = table.Column<Guid>(type: "uuid", nullable: false),
-                    LoopRunId = table.Column<Guid>(type: "uuid", nullable: false),
-                    EdgeId = table.Column<Guid>(type: "uuid", nullable: false),
-                    TraversalCount = table.Column<int>(type: "integer", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false, defaultValueSql: "CURRENT_TIMESTAMP")
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_LoopRunEdgeTraversals", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_LoopRunEdgeTraversals_LoopNodeEdges_EdgeId",
-                        column: x => x.EdgeId,
-                        principalTable: "LoopNodeEdges",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                    table.ForeignKey(
-                        name: "FK_LoopRunEdgeTraversals_LoopRuns_LoopRunId",
-                        column: x => x.LoopRunId,
-                        principalTable: "LoopRuns",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                });
-
             migrationBuilder.CreateIndex(
                 name: "IX_AdapterSessionSnapshots_LoopRunId_AdapterName",
                 table: "AdapterSessionSnapshots",
@@ -361,6 +350,12 @@ namespace ILD.Data.Migrations
                 name: "IX_AiProviders_Name",
                 table: "AiProviders",
                 column: "Name");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_AppSettings_Key",
+                table: "AppSettings",
+                column: "Key",
+                unique: true);
 
             migrationBuilder.CreateIndex(
                 name: "IX_EventLogs_LoopRunId_Sequence",
@@ -386,16 +381,6 @@ namespace ILD.Data.Migrations
                 name: "IX_LoopNodes_LoopTemplateVersionId",
                 table: "LoopNodes",
                 column: "LoopTemplateVersionId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_LoopRunEdgeTraversals_EdgeId",
-                table: "LoopRunEdgeTraversals",
-                column: "EdgeId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_LoopRunEdgeTraversals_LoopRunId_EdgeId",
-                table: "LoopRunEdgeTraversals",
-                columns: new[] { "LoopRunId", "EdgeId" });
 
             migrationBuilder.CreateIndex(
                 name: "IX_LoopRunNodes_LoopNodeId",
@@ -485,10 +470,13 @@ namespace ILD.Data.Migrations
                 name: "AiProviders");
 
             migrationBuilder.DropTable(
+                name: "AppSettings");
+
+            migrationBuilder.DropTable(
                 name: "EventLogs");
 
             migrationBuilder.DropTable(
-                name: "LoopRunEdgeTraversals");
+                name: "LoopNodeEdges");
 
             migrationBuilder.DropTable(
                 name: "LoopRunNodes");
@@ -503,16 +491,13 @@ namespace ILD.Data.Migrations
                 name: "Users");
 
             migrationBuilder.DropTable(
-                name: "LoopNodeEdges");
+                name: "LoopNodes");
 
             migrationBuilder.DropTable(
                 name: "LoopRuns");
 
             migrationBuilder.DropTable(
                 name: "RemoteProviders");
-
-            migrationBuilder.DropTable(
-                name: "LoopNodes");
 
             migrationBuilder.DropTable(
                 name: "LoopTemplateVersions");

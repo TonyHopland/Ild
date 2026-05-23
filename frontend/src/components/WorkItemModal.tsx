@@ -106,7 +106,7 @@ export default function WorkItemModal({
       const result = await workItemService.getPreview(workItem.id);
       setPreview(result);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to load preview status.";
+      const message = (error as { message?: string })?.message ?? "Failed to load preview status.";
       setPreviewError(message);
       setPreview(null);
     } finally {
@@ -144,7 +144,7 @@ export default function WorkItemModal({
   }, [onClose]);
 
   // Fetch the rendered prompt for the currently-suspended node (Human or PR).
-  // The event type differs per node kind — "HumanPromptRendered" vs "PrPromptRendered".
+  // NodeStarted is universal and carries the rendered prompt as its payload.
   // Hooks must be called unconditionally, so we always invoke the hook and
   // filter the result at the JSX level based on the current feedback reason.
   const runId = workItem?.currentLoopRunId
@@ -155,14 +155,14 @@ export default function WorkItemModal({
       workItem.humanFeedbackReason === "Human Input Needed"
       ? runId
       : undefined,
-    "HumanPromptRendered",
+    "NodeStarted",
   );
   const prPrompt = useRenderedPrompt(
     workItem?.status === WorkItemStatus.HumanFeedback &&
       workItem.humanFeedbackReason === "PR Awaiting Merge"
       ? runId
       : undefined,
-    "PrPromptRendered",
+    "NodeStarted",
   );
 
   useEffect(() => {
@@ -410,7 +410,7 @@ export default function WorkItemModal({
       });
       setPreview(result);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to start preview.";
+      const message = (error as { message?: string })?.message ?? "Failed to start preview.";
       setPreviewError(message);
     } finally {
       setPreviewLoading(false);
@@ -425,7 +425,7 @@ export default function WorkItemModal({
       const result = await workItemService.stopPreview(workItem.id);
       setPreview(result);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to stop preview.";
+      const message = (error as { message?: string })?.message ?? "Failed to stop preview.";
       setPreviewError(message);
     } finally {
       setPreviewLoading(false);
@@ -447,7 +447,7 @@ export default function WorkItemModal({
       onDelete?.(workItem.id);
       onClose();
     } catch (error) {
-      const msg = error instanceof Error ? error.message : "Failed to delete work item";
+      const msg = (error as { message?: string })?.message ?? "Failed to delete work item";
       setDeleteError(msg);
     } finally {
       setShowDeleteConfirm(false);
@@ -523,7 +523,9 @@ export default function WorkItemModal({
       }
     } catch (error) {
       console.error("Failed to save work item:", error);
-      setSubmitError(`Failed to save: ${error instanceof Error ? error.message : "Unknown error"}`);
+      setSubmitError(
+        `Failed to save: ${(error as { message?: string })?.message ?? "Unknown error"}`,
+      );
     } finally {
       setSubmitting(false);
     }

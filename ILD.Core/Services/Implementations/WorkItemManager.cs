@@ -23,6 +23,7 @@ public class WorkItemManager : IWorkItemManager
     private readonly IWorkItemServerOptionsResolver _options;
     private readonly IWorktreePreviewService _previewService;
     private readonly IWorkItemScheduler? _scheduler;
+    private readonly ILoopEngine? _engine;
 
     public WorkItemManager(
         IRepositoryManager repoManager,
@@ -33,7 +34,8 @@ public class WorkItemManager : IWorkItemManager
         IWorkItemServerOptionsResolver options,
         IWorkItemNotifier? notifier = null,
         IWorktreePreviewService? previewService = null,
-        IWorkItemScheduler? scheduler = null)
+        IWorkItemScheduler? scheduler = null,
+        ILoopEngine? engine = null)
     {
         _repoManager = repoManager;
         _providerStore = providerStore;
@@ -44,6 +46,7 @@ public class WorkItemManager : IWorkItemManager
         _notifier = notifier ?? new NoopWorkItemNotifier();
         _previewService = previewService ?? new NoopPreviewService();
         _scheduler = scheduler;
+        _engine = engine;
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -513,28 +516,10 @@ public class WorkItemManager : IWorkItemManager
 
         var runId = wi.CurrentLoopRunId.Value;
         var run = await _loopRunStore.GetByIdAsync(runId);
-        if (run != null)
-        {
-            var nodes = await _loopRunStore.GetRunNodesAsync(runId);
-            var humanRunNode = FindWaitingHumanNode(nodes, run.CurrentNodeId);
-            if (humanRunNode != null)
-            {
-                humanRunNode.Status = LoopRunNodeStatus.Succeeded;
-                humanRunNode.Output = input;
-                humanRunNode.CompletedAt = DateTime.UtcNow;
-                await _loopRunStore.UpdateRunNodeAsync(humanRunNode);
+        if (run == null) return false;
 
-                if (await IsPrNodeAsync(run, humanRunNode.LoopNodeId))
-                    run.IsPrMerged = true;
-            }
-
-            if (run.Status == LoopRunStatus.WaitingHuman)
-            {
-                run.Status = LoopRunStatus.Running;
-                run.UpdatedAt = DateTime.UtcNow;
-                await _loopRunStore.UpdateRunAsync(run);
-            }
-        }
+        var nodes = await _loopRunStore.GetRunNodesAsync(runId);
+        var humanRunNode = FindWaitingHumanNode(nodes, run.CurrentNodeId);
 
         await _eventLog.AppendAsync(runId, "HumanFeedbackReceived", input);
 
@@ -549,11 +534,10 @@ public class WorkItemManager : IWorkItemManager
         }
         catch (InvalidOperationException) { /* No remote — local only. */ }
 
-        if (run != null)
+        if (_engine is not null && humanRunNode is not null)
         {
-            run.HumanFeedbackReason = null;
-            run.UpdatedAt = DateTime.UtcNow;
-            await _loopRunStore.UpdateRunAsync(run);
+            await _engine.SignalNodeResultAsync(runId, humanRunNode.Id,
+                NodeSignal.Success(input));
         }
         return true;
     }
@@ -590,24 +574,8 @@ public class WorkItemManager : IWorkItemManager
         var nodes = await _loopRunStore.GetRunNodesAsync(run.Id);
         var currentRunNode = FindWaitingHumanNode(nodes, run.CurrentNodeId);
 
-        if (currentRunNode != null)
-        {
-            currentRunNode.Status = LoopRunNodeStatus.Failed;
-            if (!string.IsNullOrEmpty(input))
-                currentRunNode.Output = input;
-            currentRunNode.CompletedAt = DateTime.UtcNow;
-            await _loopRunStore.UpdateRunNodeAsync(currentRunNode);
-        }
-
         var logMessage = string.IsNullOrEmpty(input) ? "rejected by user" : $"rejected by user: {input}";
         await _eventLog.AppendAsync(run.Id, "HumanFeedbackReceived", logMessage);
-
-        if (run.Status == LoopRunStatus.WaitingHuman)
-        {
-            run.Status = LoopRunStatus.Running;
-            run.UpdatedAt = DateTime.UtcNow;
-            await _loopRunStore.UpdateRunAsync(run);
-        }
 
         try
         {
@@ -621,9 +589,11 @@ public class WorkItemManager : IWorkItemManager
         }
         catch (InvalidOperationException) { /* No remote — local only. */ }
 
-        run.HumanFeedbackReason = null;
-        run.UpdatedAt = DateTime.UtcNow;
-        await _loopRunStore.UpdateRunAsync(run);
+        if (_engine is not null && currentRunNode is not null)
+        {
+            await _engine.SignalNodeResultAsync(run.Id, currentRunNode.Id,
+                NodeSignal.Reject("Rejected by user", input));
+        }
         return true;
     }
 
@@ -634,25 +604,10 @@ public class WorkItemManager : IWorkItemManager
 
         var runId = wi.CurrentLoopRunId.Value;
         var run = await _loopRunStore.GetByIdAsync(runId);
-        if (run != null)
-        {
-            var nodes = await _loopRunStore.GetRunNodesAsync(runId);
-            var humanRunNode = FindWaitingHumanNode(nodes, run.CurrentNodeId);
-            if (humanRunNode != null)
-            {
-                humanRunNode.Status = LoopRunNodeStatus.Responded;
-                humanRunNode.Output = input;
-                humanRunNode.CompletedAt = DateTime.UtcNow;
-                await _loopRunStore.UpdateRunNodeAsync(humanRunNode);
-            }
+        if (run == null) return false;
 
-            if (run.Status == LoopRunStatus.WaitingHuman)
-            {
-                run.Status = LoopRunStatus.Running;
-                run.UpdatedAt = DateTime.UtcNow;
-                await _loopRunStore.UpdateRunAsync(run);
-            }
-        }
+        var nodes = await _loopRunStore.GetRunNodesAsync(runId);
+        var humanRunNode = FindWaitingHumanNode(nodes, run.CurrentNodeId);
 
         await _eventLog.AppendAsync(runId, "HumanFeedbackReceived", input);
 
@@ -667,11 +622,10 @@ public class WorkItemManager : IWorkItemManager
         }
         catch (InvalidOperationException) { /* No remote — local only. */ }
 
-        if (run != null)
+        if (_engine is not null && humanRunNode is not null)
         {
-            run.HumanFeedbackReason = null;
-            run.UpdatedAt = DateTime.UtcNow;
-            await _loopRunStore.UpdateRunAsync(run);
+            await _engine.SignalNodeResultAsync(runId, humanRunNode.Id,
+                NodeSignal.Respond(input));
         }
         return true;
     }

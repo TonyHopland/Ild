@@ -25,15 +25,10 @@ public class LoopRunNode
 
     public string? Error { get; set; }
 
-    /// <summary>
-    /// JSON describing the effective input the node ran with, after template
-    /// transformation (e.g. resolved prompt with placeholders substituted).
-    /// Set by the engine before execution from <c>DescribeInput</c> and updated
-    /// after execution with resolved data from the outcome.
-    /// </summary>
     public string? EffectiveInput { get; set; }
 
-    public int RetryCount { get; set; }
+    // Previous LoopRunNode in this run; nullable for the entry node.
+    public Guid? PreviousNodeId { get; set; }
 
     public DateTime? StartedAt { get; set; }
 

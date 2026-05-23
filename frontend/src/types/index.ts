@@ -110,6 +110,7 @@ export enum EdgeType {
   OnSuccess = "OnSuccess",
   OnFailure = "OnFailure",
   OnRespond = "OnRespond",
+  OnReject = "OnReject",
 }
 
 export interface LoopNode {
@@ -118,7 +119,6 @@ export interface LoopNode {
   label: string;
   config: Record<string, unknown>;
   maxTraversals: number | null;
-  retryCount: number | null;
 }
 
 export interface LoopNodeEdge {
@@ -180,7 +180,7 @@ export enum LoopRunNodeStatus {
   Failed = "Failed",
   Skipped = "Skipped",
   WaitingHuman = "WaitingHuman",
-  Responded = "Responded",
+  Interrupted = "Interrupted",
 }
 
 export interface LoopRunNode {

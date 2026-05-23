@@ -12,8 +12,8 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace ILD.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20260519154840_AddEffectiveInputToLoopRunNode")]
-    partial class AddEffectiveInputToLoopRunNode
+    [Migration("20260521190841_Initial")]
+    partial class Initial
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -93,6 +93,9 @@ namespace ILD.Data.Migrations
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
 
+                    b.Property<int>("Parallelism")
+                        .HasColumnType("integer");
+
                     b.Property<string>("Type")
                         .IsRequired()
                         .HasMaxLength(128)
@@ -106,6 +109,33 @@ namespace ILD.Data.Migrations
                     b.HasIndex("Name");
 
                     b.ToTable("AiProviders");
+                });
+
+            modelBuilder.Entity("ILD.Data.Entities.AppSetting", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Value")
+                        .IsRequired()
+                        .HasMaxLength(4096)
+                        .HasColumnType("character varying(4096)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Key")
+                        .IsUnique();
+
+                    b.ToTable("AppSettings");
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.EventLog", b =>
@@ -169,9 +199,6 @@ namespace ILD.Data.Migrations
 
                     b.Property<Guid>("LoopTemplateVersionId")
                         .HasColumnType("uuid");
-
-                    b.Property<int>("MaxRetries")
-                        .HasColumnType("integer");
 
                     b.Property<int>("NodeType")
                         .HasColumnType("integer");
@@ -239,6 +266,12 @@ namespace ILD.Data.Migrations
                     b.Property<Guid?>("CurrentNodeId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("ExternalActionResult")
+                        .HasColumnType("text");
+
+                    b.Property<bool>("ExternalActionResultRejected")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("HumanFeedbackReason")
                         .HasMaxLength(512)
                         .HasColumnType("character varying(512)");
@@ -261,6 +294,9 @@ namespace ILD.Data.Migrations
                     b.Property<string>("PrUrl")
                         .HasMaxLength(2048)
                         .HasColumnType("character varying(2048)");
+
+                    b.Property<string>("PreviousNodeOutput")
+                        .HasColumnType("text");
 
                     b.Property<string>("RecoveryPolicy")
                         .IsRequired()
@@ -300,35 +336,6 @@ namespace ILD.Data.Migrations
                     b.ToTable("LoopRuns");
                 });
 
-            modelBuilder.Entity("ILD.Data.Entities.LoopRunEdgeTraversal", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("timestamp with time zone")
-                        .HasDefaultValueSql("CURRENT_TIMESTAMP");
-
-                    b.Property<Guid>("EdgeId")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("LoopRunId")
-                        .HasColumnType("uuid");
-
-                    b.Property<int>("TraversalCount")
-                        .HasColumnType("integer");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("EdgeId");
-
-                    b.HasIndex("LoopRunId", "EdgeId");
-
-                    b.ToTable("LoopRunEdgeTraversals");
-                });
-
             modelBuilder.Entity("ILD.Data.Entities.LoopRunNode", b =>
                 {
                     b.Property<Guid>("Id")
@@ -359,8 +366,8 @@ namespace ILD.Data.Migrations
                     b.Property<string>("Output")
                         .HasColumnType("text");
 
-                    b.Property<int>("RetryCount")
-                        .HasColumnType("integer");
+                    b.Property<Guid?>("PreviousNodeId")
+                        .HasColumnType("uuid");
 
                     b.Property<DateTime?>("StartedAt")
                         .HasColumnType("timestamp with time zone");
@@ -434,9 +441,6 @@ namespace ILD.Data.Migrations
                         .HasColumnType("boolean");
 
                     b.Property<int>("MaxNodeExecutions")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("MaxWallClockHours")
                         .HasColumnType("integer");
 
                     b.Property<string>("Name")
@@ -694,25 +698,6 @@ namespace ILD.Data.Migrations
                     b.Navigation("LoopTemplateVersion");
                 });
 
-            modelBuilder.Entity("ILD.Data.Entities.LoopRunEdgeTraversal", b =>
-                {
-                    b.HasOne("ILD.Data.Entities.LoopNodeEdge", "Edge")
-                        .WithMany("Traversals")
-                        .HasForeignKey("EdgeId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("ILD.Data.Entities.LoopRun", "LoopRun")
-                        .WithMany("EdgeTraversals")
-                        .HasForeignKey("LoopRunId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Edge");
-
-                    b.Navigation("LoopRun");
-                });
-
             modelBuilder.Entity("ILD.Data.Entities.LoopRunNode", b =>
                 {
                     b.HasOne("ILD.Data.Entities.LoopNode", "LoopNode")
@@ -774,15 +759,8 @@ namespace ILD.Data.Migrations
                     b.Navigation("RunNodes");
                 });
 
-            modelBuilder.Entity("ILD.Data.Entities.LoopNodeEdge", b =>
-                {
-                    b.Navigation("Traversals");
-                });
-
             modelBuilder.Entity("ILD.Data.Entities.LoopRun", b =>
                 {
-                    b.Navigation("EdgeTraversals");
-
                     b.Navigation("EventLogs");
 
                     b.Navigation("RunNodes");
