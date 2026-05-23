@@ -119,7 +119,7 @@ public sealed class AINodeExecutor : INodeExecutor
             if (!string.IsNullOrWhiteSpace(cfg.RejectPattern) && !string.IsNullOrEmpty(result.Output)
                 && System.Text.RegularExpressions.Regex.IsMatch(result.Output, cfg.RejectPattern))
             {
-                yield return new NodeOutcome.Fail(EdgeType.OnReject, "Reject pattern matched", result.Output);
+                yield return new NodeOutcome.Success(EdgeType.OnFailure, result.Output);
                 yield break;
             }
             yield return new NodeOutcome.Success(EdgeType.OnSuccess, result.Output);
