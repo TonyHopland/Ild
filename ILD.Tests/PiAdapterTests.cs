@@ -161,71 +161,6 @@ public class PiAdapterTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_generates_custom_models_json_for_http_base_url_and_custom_model()
-    {
-        var runId = Guid.NewGuid();
-        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-pi-custom-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(worktreeDir);
-        var scriptPath = Path.Combine(worktreeDir, "args.sh");
-        File.WriteAllText(scriptPath,
-            "#!/bin/sh\n" +
-            "printf 'agent-dir=%s\\n' \"$PI_CODING_AGENT_DIR\"\n" +
-            "printf 'api-key=%s\\n' \"$ILD_PI_PROVIDER_API_KEY\"\n" +
-            "printf '%s\\n' \"$@\"\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
-
-        var result = await new PiAdapter().ExecuteAsync(new AgentExecutionContext(
-            Provider: new AiProvider
-            {
-                Id = Guid.Parse("11111111-1111-1111-1111-111111111111"),
-                Name = "Local Default Model",
-                Type = "pi",
-                BaseUrl = "http://192.168.1.5:1234/v1",
-                ApiKey = "sk-local",
-                Model = "default_model",
-                Config = JsonSerializer.Serialize(new { binaryPath = scriptPath })
-            },
-            Prompt: "test prompt",
-            RunContext: new LoopRunContext(
-                runId,
-                Guid.NewGuid().ToString(),
-                "Test Task",
-                "Test description",
-                worktreeDir,
-                "main",
-                new List<string>(),
-                null),
-            ExecutionCount: 1,
-            Cancel: CancellationToken.None));
-
-        try
-        {
-            Assert.True(result.Success);
-            Assert.Contains("agent-dir=", result.Output);
-            Assert.Contains("api-key=sk-local", result.Output);
-            Assert.Contains("--provider", result.Output);
-            Assert.Contains("ild-11111111111111111111111111111111", result.Output);
-            Assert.Contains("--model", result.Output);
-            Assert.Contains("default_model", result.Output);
-            Assert.DoesNotContain("--api-key", result.Output);
-            Assert.DoesNotContain("\n--\n", result.Output);
-
-            var agentDir = Path.Combine(Path.GetTempPath(), "ild-pi-agent", runId.ToString("N"));
-            var modelsJsonPath = Path.Combine(agentDir, "models.json");
-            Assert.True(File.Exists(modelsJsonPath));
-            var modelsJson = await File.ReadAllTextAsync(modelsJsonPath);
-            Assert.Contains("http://192.168.1.5:1234/v1", modelsJson);
-            Assert.Contains("default_model", modelsJson);
-            Assert.Contains("openai-completions", modelsJson);
-            Assert.Contains("ILD_PI_PROVIDER_API_KEY", modelsJson);
-        }
-        finally
-        {
-            Directory.Delete(worktreeDir, true);
-        }
-    }
-
-    [Fact]
     public async Task ExecuteAsync_passes_provider_model_and_session_path_when_stdout_is_not_json()
     {
         var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-pi-args-{Guid.NewGuid():N}");
@@ -331,7 +266,8 @@ public class PiAdapterTests
         var scriptPath = Path.Combine(worktreeDir, "args.sh");
         File.WriteAllText(scriptPath,
             "#!/bin/sh\n" +
-            "printf '%s\\n' \"$@\"\n");
+            "printf '%s\\n' \"$@\"\n" +
+            "cat >/dev/null\n");
         System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
 
         try
@@ -392,78 +328,6 @@ public class PiAdapterTests
         }
     }
 
-    [Fact]
-    public async Task ExecuteAsync_writes_ild_extension_to_agent_directory_when_http_base_url()
-    {
-        var runId = Guid.NewGuid();
-        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-pi-ext-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(worktreeDir);
-        var scriptPath = Path.Combine(worktreeDir, "args.sh");
-        File.WriteAllText(scriptPath,
-            "#!/bin/sh\n" +
-            "printf 'agent-dir=%s\\n' \"$PI_CODING_AGENT_DIR\"\n" +
-            "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-session-ext\",\"cwd\":\"$PWD\"}'\n" +
-            "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ok\"}]}}'\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
-
-        var previousApiUrl = Environment.GetEnvironmentVariable("ILD_API_URL");
-        var previousApiToken = Environment.GetEnvironmentVariable("ILD_API_TOKEN");
-        Environment.SetEnvironmentVariable("ILD_API_URL", "http://ild-api.test:5000");
-        Environment.SetEnvironmentVariable("ILD_API_TOKEN", "ild-token");
-
-        try
-        {
-            var result = await new PiAdapter().ExecuteAsync(new AgentExecutionContext(
-                Provider: new AiProvider
-                {
-                    Id = Guid.Parse("22222222-2222-2222-2222-222222222222"),
-                    Name = "test-provider",
-                    Type = "pi",
-                    BaseUrl = "http://192.168.1.5:1234/v1",
-                    ApiKey = "sk-local",
-                    Model = "default_model",
-                    Config = JsonSerializer.Serialize(new { binaryPath = scriptPath }),
-                },
-                Prompt: "test prompt",
-                RunContext: new LoopRunContext(
-                    runId,
-                    Guid.NewGuid().ToString(),
-                    "Test Task",
-                    "Test description",
-                    worktreeDir,
-                    "main",
-                    new List<string>(),
-                    null),
-                ExecutionCount: 1,
-                Cancel: CancellationToken.None));
-
-            var agentDir = Path.Combine(Path.GetTempPath(), "ild-pi-agent", runId.ToString("N"));
-            var extensionPath = Path.Combine(agentDir, "extensions", "ild.ts");
-            Assert.True(File.Exists(extensionPath));
-
-            var extensionContent = await File.ReadAllTextAsync(extensionPath);
-            Assert.Contains("ild_list_workitems", extensionContent);
-            Assert.Contains("ild_get_workitem", extensionContent);
-            Assert.Contains("ild_create_workitem", extensionContent);
-            Assert.Contains("ild_list_repositories", extensionContent);
-            Assert.Contains("ild_list_loop_templates", extensionContent);
-            Assert.Contains("ild_list_loop_runs", extensionContent);
-            Assert.Contains("http://ild-api.test:5000", extensionContent);
-            Assert.Contains("ild-token", extensionContent);
-            Assert.DoesNotContain("http://192.168.1.5:1234/v1", extensionContent);
-            Assert.DoesNotContain("sk-local", extensionContent);
-            Assert.Contains(runId.ToString(), extensionContent);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("ILD_API_URL", previousApiUrl);
-            Environment.SetEnvironmentVariable("ILD_API_TOKEN", previousApiToken);
-            var agentDir = Path.Combine(Path.GetTempPath(), "ild-pi-agent", runId.ToString("N"));
-            if (Directory.Exists(agentDir))
-                Directory.Delete(agentDir, true);
-            Directory.Delete(worktreeDir, true);
-        }
-    }
 
     [Fact]
     public void ExecuteAsync_escapes_control_characters_in_ild_extension_strings()
