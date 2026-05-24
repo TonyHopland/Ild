@@ -1,5 +1,6 @@
 using System.Text;
 using ILD.Api.Controllers;
+using ILD.Api.Services;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
@@ -8,6 +9,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
 namespace ILD.Tests;
@@ -35,7 +37,11 @@ public class AiProvidersControllerTests : IDisposable
     }
 
     private AiProvidersController CreateController()
-        => new(Mock.Of<IAIProviderService>(), _registry.Object, _db);
+        => new(
+            Mock.Of<IAIProviderService>(),
+            _registry.Object,
+            _db,
+            new InteractiveProviderSessionService(NullLogger<InteractiveProviderSessionService>.Instance));
 
     [Fact]
     public async Task GetAll_redacts_ApiKey_and_Config()

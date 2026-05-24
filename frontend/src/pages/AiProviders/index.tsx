@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { AiProvider } from "../../types";
 import { aiProviderService, agentAdapterService } from "../../services/auth";
+import ProviderTerminal from "../../components/ProviderTerminal";
 
 export default function AiProviders() {
   const [providers, setProviders] = useState<AiProvider[]>([]);
@@ -8,6 +9,7 @@ export default function AiProviders() {
   const [isLoading, setIsLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingProvider, setEditingProvider] = useState<AiProvider | null>(null);
+  const [terminalProvider, setTerminalProvider] = useState<AiProvider | null>(null);
   const [name, setName] = useState("");
   const [type, setType] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
@@ -109,6 +111,13 @@ export default function AiProviders() {
                 {provider.isDefault && <span className="ap-default-badge">Default</span>}
               </div>
               <div className="ap-actions">
+                <button
+                  className="btn btn-secondary btn-small"
+                  onClick={() => setTerminalProvider(provider)}
+                  title="Open an interactive terminal session with this provider"
+                >
+                  Open terminal
+                </button>
                 <button className="btn btn-secondary btn-small" onClick={() => openEdit(provider)}>
                   Edit
                 </button>
@@ -137,6 +146,14 @@ export default function AiProviders() {
           </div>
         ))}
       </div>
+
+      {terminalProvider && (
+        <ProviderTerminal
+          providerId={terminalProvider.id}
+          providerName={terminalProvider.name}
+          onClose={() => setTerminalProvider(null)}
+        />
+      )}
 
       {showModal && (
         <div

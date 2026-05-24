@@ -1,3 +1,4 @@
+using ILD.Api.Services;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
@@ -14,13 +15,19 @@ public class AiProvidersController : ControllerBase
     private readonly IAIProviderService _aiProviderService;
     private readonly HashSet<string> _supportedProviderTypes;
     private readonly AppDbContext _db;
+    private readonly InteractiveProviderSessionService _interactiveSessions;
 
-    public AiProvidersController(IAIProviderService aiProviderService, IAgentAdapterRegistry adapterRegistry, AppDbContext db)
+    public AiProvidersController(
+        IAIProviderService aiProviderService,
+        IAgentAdapterRegistry adapterRegistry,
+        AppDbContext db,
+        InteractiveProviderSessionService interactiveSessions)
     {
         _aiProviderService = aiProviderService;
         _supportedProviderTypes = adapterRegistry.GetAllSupportedProviderTypes()
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         _db = db;
+        _interactiveSessions = interactiveSessions;
     }
 
     private static object ToResponse(AiProvider p) => new
@@ -82,6 +89,22 @@ public class AiProvidersController : ControllerBase
         _db.AiProviders.Add(p);
         await _db.SaveChangesAsync();
         return CreatedAtAction(nameof(GetById), new { id = p.Id }, ToResponse(p));
+    }
+
+    [HttpGet("{id}/interactive")]
+    public async Task<IActionResult> OpenInteractiveSession(string id, [FromQuery] int cols = 120, [FromQuery] int rows = 30)
+    {
+        if (!HttpContext.WebSockets.IsWebSocketRequest)
+            return BadRequest(new { error = "Expected WebSocket upgrade request." });
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest();
+
+        var provider = await _db.AiProviders.AsNoTracking().FirstOrDefaultAsync(p => p.Id == guid);
+        if (provider is null) return NotFound();
+
+        using var socket = await HttpContext.WebSockets.AcceptWebSocketAsync();
+        await _interactiveSessions.RunAsync(socket, provider, cols, rows, HttpContext.RequestAborted);
+        return new EmptyResult();
     }
 
     [HttpPut("{id}")]

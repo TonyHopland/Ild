@@ -139,6 +139,7 @@ try
         app.UseStaticFiles();
     }
 
+    app.UseWebSockets();
     app.UseMiddleware<AuthMiddleware>();
     app.UseRouting();
 
