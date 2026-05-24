@@ -197,4 +197,87 @@ public sealed class RemoteWorkItemCoordinatorTests
 
         Assert.True(result.HasActiveHumanFeedback);
     }
+
+    [Fact]
+    public async Task Notifies_signalr_when_claiming_ready_item()
+    {
+        var ready = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.Ready, "build");
+
+        var client = new Mock<IWorkItemServerClient>();
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+              .ReturnsAsync(new RemotePollResponse { ReadyItems = new[] { ready } });
+        client.Setup(c => c.TransitionAsync(Opts, ready.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<CancellationToken>()))
+              .ReturnsAsync(new RemoteTransitionResponse { Success = true, ActualStatus = RemoteWorkItemStatus.Running });
+
+        var engine = new Mock<ILoopEngine>();
+        var resolver = new Mock<ILoopTemplateResolver>();
+        resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
+                .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Single, Guid.NewGuid(), Array.Empty<string>()));
+
+        var notifier = new Mock<IWorkItemNotifier>();
+        var sut = new RemoteWorkItemCoordinator(
+            client.Object, new InMemoryActiveWorkItemTracker(), resolver.Object, engine.Object,
+            workItemNotifier: notifier.Object);
+
+        await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
+
+        notifier.Verify(n => n.WorkItemStateChangedAsync(
+            ready.Id, RemoteWorkItemStatus.Ready, RemoteWorkItemStatus.Running), Times.Once);
+    }
+
+    [Fact]
+    public async Task Notifies_signalr_when_resuming_waiting_for_ild_item()
+    {
+        var waiting = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.WaitingForIld);
+        var tracker = new InMemoryActiveWorkItemTracker();
+        tracker.Add(waiting.Id);
+
+        var client = new Mock<IWorkItemServerClient>();
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+              .ReturnsAsync(new RemotePollResponse { ActiveItems = new[] { waiting } });
+        client.Setup(c => c.TransitionAsync(Opts, waiting.Id,
+                It.Is<RemoteTransitionRequest>(r => r.TargetStatus == RemoteWorkItemStatus.Running),
+                It.IsAny<CancellationToken>()))
+              .ReturnsAsync(new RemoteTransitionResponse { Success = true, ActualStatus = RemoteWorkItemStatus.Running });
+
+        var engine = new Mock<ILoopEngine>();
+        var resolver = new Mock<ILoopTemplateResolver>();
+
+        var notifier = new Mock<IWorkItemNotifier>();
+        var sut = new RemoteWorkItemCoordinator(
+            client.Object, tracker, resolver.Object, engine.Object,
+            workItemNotifier: notifier.Object);
+
+        await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
+
+        notifier.Verify(n => n.WorkItemStateChangedAsync(
+            waiting.Id, RemoteWorkItemStatus.WaitingForIld, RemoteWorkItemStatus.Running), Times.Once);
+    }
+
+    [Fact]
+    public async Task Does_not_notify_when_claim_fails()
+    {
+        var ready = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.Ready, "build");
+
+        var client = new Mock<IWorkItemServerClient>();
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+              .ReturnsAsync(new RemotePollResponse { ReadyItems = new[] { ready } });
+        client.Setup(c => c.TransitionAsync(Opts, ready.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<CancellationToken>()))
+              .ReturnsAsync(new RemoteTransitionResponse { Success = false, ActualStatus = RemoteWorkItemStatus.Ready });
+
+        var engine = new Mock<ILoopEngine>();
+        var resolver = new Mock<ILoopTemplateResolver>();
+        resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
+                .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Single, Guid.NewGuid(), Array.Empty<string>()));
+
+        var notifier = new Mock<IWorkItemNotifier>();
+        var sut = new RemoteWorkItemCoordinator(
+            client.Object, new InMemoryActiveWorkItemTracker(), resolver.Object, engine.Object,
+            workItemNotifier: notifier.Object);
+
+        await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
+
+        notifier.Verify(n => n.WorkItemStateChangedAsync(
+            It.IsAny<string>(), It.IsAny<RemoteWorkItemStatus>(), It.IsAny<RemoteWorkItemStatus>()), Times.Never);
+    }
 }

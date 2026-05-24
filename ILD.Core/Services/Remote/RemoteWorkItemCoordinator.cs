@@ -34,6 +34,7 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
     private readonly ILoopRunStore? _loopRunStore;
     private readonly IProviderStore? _providerStore;
     private readonly IAiProviderConcurrencyTracker? _aiTracker;
+    private readonly IWorkItemNotifier _workItemNotifier;
     private readonly ILogger<RemoteWorkItemCoordinator>? _logger;
 
     public RemoteWorkItemCoordinator(
@@ -44,6 +45,7 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
         ILoopRunStore? loopRunStore = null,
         IProviderStore? providerStore = null,
         IAiProviderConcurrencyTracker? aiTracker = null,
+        IWorkItemNotifier? workItemNotifier = null,
         ILogger<RemoteWorkItemCoordinator>? logger = null)
     {
         _client = client;
@@ -53,6 +55,7 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
         _loopRunStore = loopRunStore;
         _providerStore = providerStore;
         _aiTracker = aiTracker;
+        _workItemNotifier = workItemNotifier ?? new NoopWorkItemNotifier();
         _logger = logger;
     }
 
@@ -76,6 +79,13 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
                 new RemoteTransitionRequest { TargetStatus = RemoteWorkItemStatus.Running }, ct);
             if (!resp.Success) continue;
             resumed.Add(w);
+
+            // The raw client call above bypasses WorkItemManager, so the
+            // SignalR notifier never fires for this transition. Emit it
+            // explicitly so the taskboard reflects the move without a
+            // page refresh.
+            await _workItemNotifier.WorkItemStateChangedAsync(
+                w.Id, RemoteWorkItemStatus.WaitingForIld, RemoteWorkItemStatus.Running);
 
             // Kick the local engine to pick the run back up. Reuse the
             // recovery entry point — it's exactly the "resume a parked run
@@ -136,6 +146,14 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
             {
                 _tracker.Add(ready.Id);
                 claimed.Add(ready);
+
+                // The raw client claim above bypasses WorkItemManager, and
+                // the engine's subsequent transition is a no-op (prev ==
+                // actual == Running) so its notifier is suppressed. Emit
+                // the SignalR event here so the taskboard sees the move
+                // out of Ready without a page refresh.
+                await _workItemNotifier.WorkItemStateChangedAsync(
+                    ready.Id, RemoteWorkItemStatus.Ready, RemoteWorkItemStatus.Running);
 
                 // Per PRD §3.2 step 4: a successful claim must "create a local
                 // LoopRun, kick off LoopEngine". The engine resolves the
