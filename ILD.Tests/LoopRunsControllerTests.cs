@@ -1,9 +1,11 @@
 using ILD.Api.Controllers;
+using ILD.Api.Services;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
 namespace ILD.Tests;
@@ -42,7 +44,7 @@ public class LoopRunsControllerTests
 
         var engine = new Mock<ILoopEngine>();
         var events = new Mock<IEventLogService>();
-        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object);
+        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance));
 
         var result = await controller.GetAll();
 
@@ -97,7 +99,7 @@ public class LoopRunsControllerTests
             RunNodes = new List<LoopRunNode>(),
         });
 
-        var controller = new LoopRunsController(engine.Object, eventLogService.Object, store.Object, snapshots.Object);
+        var controller = new LoopRunsController(engine.Object, eventLogService.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance));
 
         var result = await controller.GetEvents(runId.ToString());
 
@@ -163,7 +165,7 @@ public class LoopRunsControllerTests
         var engine = new Mock<ILoopEngine>();
         var events = new Mock<IEventLogService>();
         var snapshots = new Mock<IAdapterSessionSnapshotStore>();
-        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object);
+        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance));
 
         var result = await controller.GetById(runId.ToString());
 
@@ -199,7 +201,7 @@ public class LoopRunsControllerTests
 
         var engine = new Mock<ILoopEngine>();
         var events = new Mock<IEventLogService>();
-        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object);
+        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance));
 
         var result = await controller.GetSessionPreview(runId.ToString(), "OpenCode", "ses_current");
 

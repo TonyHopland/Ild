@@ -3,14 +3,14 @@ import TerminalView from "./TerminalView";
 const API_BASE: string = (import.meta.env?.VITE_API_BASE as string | undefined) ?? "/api/v1";
 
 interface Props {
-  providerId: string;
-  providerName: string;
+  loopRunId: string;
+  title: string;
   onClose: () => void;
 }
 
-function buildWebSocketUrl(providerId: string, cols: number, rows: number): string {
+function buildWebSocketUrl(loopRunId: string, cols: number, rows: number): string {
   const apiBase = API_BASE.startsWith("http") ? API_BASE : `${window.location.origin}${API_BASE}`;
-  const url = new URL(`${apiBase}/aiproviders/${providerId}/interactive`);
+  const url = new URL(`${apiBase}/loopruns/${loopRunId}/terminal`);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.searchParams.set("cols", String(cols));
   url.searchParams.set("rows", String(rows));
@@ -19,14 +19,14 @@ function buildWebSocketUrl(providerId: string, cols: number, rows: number): stri
   return url.toString();
 }
 
-export default function ProviderTerminal({ providerId, providerName, onClose }: Props) {
+export default function LoopRunTerminal({ loopRunId, title, onClose }: Props) {
   return (
     <TerminalView
-      connectionKey={providerId}
-      buildWsUrl={(cols, rows) => buildWebSocketUrl(providerId, cols, rows)}
-      title={providerName}
-      errorHint="Connection error. Check that the provider binary is installed and on PATH."
-      ariaLabel={`Interactive terminal for ${providerName}`}
+      connectionKey={loopRunId}
+      buildWsUrl={(cols, rows) => buildWebSocketUrl(loopRunId, cols, rows)}
+      title={title}
+      errorHint="Connection error. The worktree may have been cleaned up."
+      ariaLabel={`Worktree terminal for ${title}`}
       onClose={onClose}
     />
   );

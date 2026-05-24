@@ -16,6 +16,7 @@ import { useSignalR } from "../hooks/useSignalR";
 import useRenderedPrompt from "../hooks/useRenderedPrompt";
 import LiveStream from "./NodeTimeline/LiveStream";
 import ConfirmModal from "./ConfirmModal";
+import LoopRunTerminal from "./LoopRunTerminal";
 import TagAutocomplete from "./TagAutocomplete";
 import { parseConversation, parseTags } from "../utils/workItemJson";
 import Accordion from "./Accordion";
@@ -64,6 +65,7 @@ export default function WorkItemModal({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewPortInputs, setPreviewPortInputs] = useState<Record<string, string>>({});
+  const [showTerminal, setShowTerminal] = useState(false);
 
   useEffect(() => {
     repositoryService
@@ -558,6 +560,22 @@ export default function WorkItemModal({
               </button>
             </div>
             <div className="modal-body">
+              {/* Worktree terminal — only while parked at human feedback with a live worktree */}
+              {workItem.status === WorkItemStatus.HumanFeedback &&
+                workItem.currentLoopRunId &&
+                workItem.worktreePath && (
+                  <div className="detail-section worktree-terminal-row">
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-secondary"
+                      onClick={() => setShowTerminal(true)}
+                      title={`Open a shell in ${workItem.worktreePath}`}
+                    >
+                      Open Terminal
+                    </button>
+                  </div>
+                )}
+
               {/* Human Feedback — always visible when applicable */}
               {workItem.status === WorkItemStatus.HumanFeedback &&
                 workItem.humanFeedbackReason === "Human Input Needed" && (
@@ -1111,6 +1129,13 @@ export default function WorkItemModal({
         onConfirm={handleDeleteConfirm}
         onCancel={() => setShowDeleteConfirm(false)}
       />
+      {showTerminal && workItem?.currentLoopRunId && (
+        <LoopRunTerminal
+          loopRunId={workItem.currentLoopRunId}
+          title={`#${workItem.id} — ${workItem.title}`}
+          onClose={() => setShowTerminal(false)}
+        />
+      )}
     </>
   );
 }

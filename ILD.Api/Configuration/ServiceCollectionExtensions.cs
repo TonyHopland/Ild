@@ -81,6 +81,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<IAiProviderConcurrencyTracker, AiProviderConcurrencyTracker>();
         services.AddSingleton<InteractiveProviderSessionService>();
+        services.AddSingleton<InteractiveShellSessionService>();
         services.AddScoped<ISchedulerSettingsService, SchedulerSettingsService>();
         services.AddSingleton<WorkItemScheduler>();
         services.AddSingleton<IWorkItemScheduler>(sp => sp.GetRequiredService<WorkItemScheduler>());

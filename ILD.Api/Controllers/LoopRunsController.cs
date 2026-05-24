@@ -1,3 +1,4 @@
+using ILD.Api.Services;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using ILD.Data.Stores.Interfaces;
@@ -13,17 +14,20 @@ public class LoopRunsController : ControllerBase
     private readonly IEventLogService _eventLogService;
     private readonly ILoopRunStore _loopRunStore;
     private readonly IAdapterSessionSnapshotStore _sessionSnapshotStore;
+    private readonly InteractiveShellSessionService _shellSessions;
 
     public LoopRunsController(
         ILoopEngine loopEngine,
         IEventLogService eventLogService,
         ILoopRunStore loopRunStore,
-        IAdapterSessionSnapshotStore sessionSnapshotStore)
+        IAdapterSessionSnapshotStore sessionSnapshotStore,
+        InteractiveShellSessionService shellSessions)
     {
         _loopEngine = loopEngine;
         _eventLogService = eventLogService;
         _loopRunStore = loopRunStore;
         _sessionSnapshotStore = sessionSnapshotStore;
+        _shellSessions = shellSessions;
     }
 
     [HttpGet]
@@ -259,5 +263,25 @@ public class LoopRunsController : ControllerBase
             updatedAt = snapshot.UpdatedAt,
             sessionJson = snapshot.SessionJson,
         });
+    }
+
+    [HttpGet("{id}/terminal")]
+    public async Task<IActionResult> OpenWorktreeTerminal(string id, [FromQuery] int cols = 120, [FromQuery] int rows = 30)
+    {
+        if (!HttpContext.WebSockets.IsWebSocketRequest)
+            return BadRequest(new { error = "Expected WebSocket upgrade request." });
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+
+        var run = await _loopRunStore.GetByIdAsync(guid);
+        if (run is null) return NotFound();
+        if (run.Status != ILD.Data.Enums.LoopRunStatus.WaitingHuman)
+            return BadRequest(new { error = "Terminal is only available while the run is awaiting human feedback." });
+        if (string.IsNullOrWhiteSpace(run.WorktreePath) || !Directory.Exists(run.WorktreePath))
+            return BadRequest(new { error = "Run has no live worktree." });
+
+        using var socket = await HttpContext.WebSockets.AcceptWebSocketAsync();
+        await _shellSessions.RunAsync(socket, run.WorktreePath, run.Id.ToString("N"), cols, rows, HttpContext.RequestAborted);
+        return new EmptyResult();
     }
 }
