@@ -114,9 +114,15 @@ public sealed class WorkItemScheduler : BackgroundService, IWorkItemScheduler
         var pulse = _pulse.WaitAsync(linked.Token);
         try
         {
-            var done = await Task.WhenAny(timer, pulse);
-            if (done == pulse) linked.Cancel(); // stop the timer
+            await Task.WhenAny(timer, pulse);
         }
-        catch (OperationCanceledException) { }
+        finally
+        {
+            // Always cancel so the loser unwinds. Without this, a timer-win
+            // leaves the WaitAsync parked in the semaphore's FIFO queue, and
+            // the next Pulse() is consumed by that orphan instead of waking
+            // the next iteration's waiter.
+            try { linked.Cancel(); } catch (ObjectDisposedException) { }
+        }
     }
 }
