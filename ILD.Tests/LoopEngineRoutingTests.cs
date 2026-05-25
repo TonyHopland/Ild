@@ -249,8 +249,8 @@ public class LoopEngineRoutingTests
         h.AddEdge("a", "a", EdgeType.OnSuccess);
 
         var infinite = new ScriptedExecutor(NodeType.Cmd);
-        // Seed enough scripts to exceed DefaultMaxTraversals (=100).
-        for (int i = 0; i < 110; i++)
+        // Seed enough scripts to exceed DefaultMaxEdgeTraversals (=50).
+        for (int i = 0; i < 60; i++)
         {
             infinite.Then(
                 new NodeOutcome.NodeStarting($"i{i}"),

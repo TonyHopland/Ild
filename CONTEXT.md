@@ -15,7 +15,7 @@ A named, versioned workflow definition expressed as a directed graph of nodes (S
 _Avoid_: workflow, pipeline, template (without "loop")
 
 **LoopTemplateVersion**:
-An immutable snapshot of a LoopTemplate's graph at a point in time. Created on every save. WorkItems pin a version at first run start.
+An immutable snapshot of a LoopTemplate's graph at a point in time. Created on every save. A LoopRun pins a specific version (resolved as the template's latest at the moment the run starts); subsequent runs on the same WorkItem re-resolve and may pick a newer version.
 _Avoid_: template revision, template snapshot
 
 **LoopRun**:
@@ -67,8 +67,12 @@ Adapters have full autonomy over tool execution, but the engine now passes a per
 _Avoid_: tool sandbox, tool permissions
 
 **Event Log**:
-Append-only audit stream per LoopRun. Serves as AI context and observability. Large payloads (>10KB) stored on disk; DB stores path reference. A background `EventLogRetentionSweeper` deletes entries older than `EventLogOptions.RetentionPeriod` (default 7 days) once per `RetentionSweepInterval` (default 24h), but **only** for runs whose linked WorkItem is in `Done` status — events for runs whose WorkItem is still Running/HumanFeedback/Backlog/etc. are preserved indefinitely. Edge traversal counts are enforced in-memory by the engine (`DefaultMaxTraversals`) rather than persisted.
+Append-only audit stream per LoopRun. Serves as AI context and observability. Large payloads (>10KB) stored on disk; DB stores path reference. A background `EventLogRetentionSweeper` deletes entries older than `EventLogOptions.RetentionPeriod` (default 7 days) once per `RetentionSweepInterval` (default 24h), but **only** for runs whose linked WorkItem is in `Done` status — events for runs whose WorkItem is still Running/HumanFeedback/Backlog/etc. are preserved indefinitely.
 _Avoid_: audit trail, log
+
+**Edge Traversal Limits**:
+The engine's runaway-graph safety net is **per edge**, not per node. Each edge's traversal count is tracked in-memory per run; if it exceeds the edge's `MaxTraversals` (or `LoopEngine.DefaultMaxEdgeTraversals = 50` when the edge leaves it null), the run is failed. There is no template-level execution cap.
+_Avoid_: max node execs, run iteration limit
 
 **Recovery Policy**:
 Per-LoopTemplate setting controlling crash recovery behavior: AutoResume, NeedsReview, or Cancel. On recovery, stale `LoopRunNode` rows with `Status = Running` are transitioned to `Interrupted` and the engine re-enters the loop at `CurrentNodeId`; the node's `ExecuteAsync` is invoked fresh and re-checks its own preconditions. AutoResume does not resume runs at Human or PR nodes in `WaitingHuman` state — those require explicit human action.
@@ -102,7 +106,7 @@ _Avoid_: draft, planned
 
 - A **WorkItem** has zero or more **LoopRun**s, but at most one active run at a time
 - A **LoopRun** executes exactly one pinned **LoopTemplateVersion**. Status is `Running` until Cleanup executes, then `Completed`. PR merge/rejection is handled by a **PR Node** in the graph, not implicit.
-- A **WorkItem** references a **LoopTemplate** directly. `LoopTemplateVersionId` is null ("Latest") until the first run starts, then pinned forever
+- A **WorkItem** is _not_ directly linked to a **LoopTemplate**. At run start the engine resolves a template from `WorkItem.Tags` via `ILoopTemplateResolver`; tags must match exactly one template (zero or multiple matches → HumanFeedback). The matched template's latest version is then pinned on the new **LoopRun** row via `LoopTemplateVersionId`. Each subsequent run resolves again, so a template edited between runs takes effect on the next run.
 - A **WorkItem** may have dependencies on other **WorkItem**s; it becomes ready when all dependencies reach `Done` status
 - New **WorkItem**s land in either Backlog or Work Queue based on a per-**Repository** gating setting (Backlog = requires human approval to proceed, Work Queue = auto-flows)
 - A **WorkItem** is optionally associated with a **Repository** (Plan-type items may not need one)
@@ -113,7 +117,7 @@ _Avoid_: draft, planned
 - `AiProvider.Config` is a free-form JSON blob; each adapter reads what it needs
 - Rebase happens only at loop start, not before each node
 - Failed/cancelled WorkItems: "Done" destroys worktree and discards; "Backlog" fully resets for re-planning
-- Safety net (max node execs): finishes current node, then cancels the run
+- Safety net (max edge traversals): when an edge is traversed more than its `MaxTraversals` (default 50 via `LoopEngine.DefaultMaxEdgeTraversals`), the engine fails the run with "Max traversals exceeded for edge …"
 
 ## Example Dialogue
 
@@ -121,7 +125,7 @@ _Avoid_: draft, planned
 > **Domain expert:** "No — it lands in Backlog or Work Queue depending on the repository's gating setting. If it has no dependencies and lands in Work Queue, it auto-transitions to Ready. You still need to click Start."
 
 > **Dev:** "Can I change the loop template for a running work item?"
-> **Domain expert:** "No — the LoopTemplateVersion is pinned at first run start. Unstarted work items float to the latest version. Only after the first run does the version stay fixed."
+> **Domain expert:** "Not for the in-flight run — every LoopRun pins the template version it started with, so editing the template mid-run won't disturb it. But the next run on the same WorkItem will re-resolve from tags and pick the latest version, including any edits."
 
 > **Dev:** "What happens if the container crashes mid-loop?"
 > **Domain expert:** "Recovery policy determines the action. With AutoResume, the in-flight node re-executes. Human node input is preserved. The safety net bounds how many times nodes can re-run."
@@ -130,7 +134,7 @@ _Avoid_: draft, planned
 
 - "WorkItem" covers both code changes and non-code work (planning) — confirmed intentional. `WorktreePath` and `BranchName` are nullable to support this.
 - Dependency readiness trigger is `Done` status (not `IsPrMerged`) — works for all WorkItem types
-- "Latest" template version is resolved at first run start, not at WorkItem creation
+- Template choice is resolved per LoopRun (not stored on the WorkItem) by matching `WorkItem.Tags` against templates; the matched template's latest version is pinned on the LoopRun at run start
 - PR lifecycle is explicit in the graph via **PR Node**, not implicit engine behavior
 - `WorkItem.Type` field is redundant — removed. Template assignment determines work type.
 - Backlog vs Work Queue landing is per-Repository, not global or per-WorkItem

@@ -206,7 +206,6 @@ export default function LoopEditor() {
     name: string;
     description: string;
     recoveryPolicy: RecoveryPolicy;
-    maxNodeExecutions: number;
     nodes: LoopNode[];
     edges: LoopNodeEdge[];
   } | null>(null);
@@ -426,7 +425,6 @@ export default function LoopEditor() {
           name: newTemplateName,
           description: "",
           recoveryPolicy: RecoveryPolicy.AutoResume,
-          maxNodeExecutions: 200,
           nodes: loopNodes,
           edges: loopEdges,
         });
@@ -435,7 +433,6 @@ export default function LoopEditor() {
           name: selectedTemplate.name,
           description: selectedTemplate.description,
           recoveryPolicy: selectedTemplate.recoveryPolicy,
-          maxNodeExecutions: selectedTemplate.maxNodeExecutions,
           nodes: loopNodes,
           edges: loopEdges,
         });
@@ -550,7 +547,6 @@ export default function LoopEditor() {
           description: "",
           version: 0,
           recoveryPolicy: RecoveryPolicy.AutoResume,
-          maxNodeExecutions: 200,
           nodes: loopNodes,
           edges: loopEdges,
           createdAt: new Date().toISOString(),
@@ -626,7 +622,6 @@ export default function LoopEditor() {
             name: parsed.name,
             description: parsed.description,
             recoveryPolicy: parsed.recoveryPolicy,
-            maxNodeExecutions: parsed.maxNodeExecutions,
             nodes: loopNodes,
             edges: loopEdges,
           });
@@ -638,7 +633,6 @@ export default function LoopEditor() {
           name: parsed.name,
           description: parsed.description,
           recoveryPolicy: parsed.recoveryPolicy,
-          maxNodeExecutions: parsed.maxNodeExecutions,
           nodes: loopNodes,
           edges: loopEdges,
         });
@@ -731,7 +725,6 @@ export default function LoopEditor() {
         name: importConflictData.name,
         description: importConflictData.description,
         recoveryPolicy: importConflictData.recoveryPolicy,
-        maxNodeExecutions: importConflictData.maxNodeExecutions,
         nodes: importConflictData.nodes,
         edges: importConflictData.edges,
       });

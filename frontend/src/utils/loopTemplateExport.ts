@@ -20,7 +20,6 @@ export function serializeForExport(template: LoopTemplate): LoopTemplateExport {
     name: template.name,
     description: template.description,
     recoveryPolicy: template.recoveryPolicy,
-    maxNodeExecutions: template.maxNodeExecutions,
     nodes: template.nodes.map((n) => ({
       id: n.id,
       type: n.type,
@@ -98,13 +97,6 @@ export function parseImportFile(raw: string): ParseImportResult {
     };
   }
 
-  if (typeof obj.maxNodeExecutions !== "number" || obj.maxNodeExecutions <= 0) {
-    return {
-      ok: false,
-      error: "Invalid format — 'maxNodeExecutions' must be a positive number.",
-    };
-  }
-
   if (!Array.isArray(obj.nodes) || obj.nodes.length === 0) {
     return { ok: false, error: "Invalid format — 'nodes' must be a non-empty array." };
   }
@@ -132,7 +124,6 @@ export function parseImportFile(raw: string): ParseImportResult {
       name: obj.name.trim(),
       description: obj.description,
       recoveryPolicy: obj.recoveryPolicy as RecoveryPolicy,
-      maxNodeExecutions: obj.maxNodeExecutions,
       nodes: obj.nodes as LoopTemplateExportNode[],
       edges: obj.edges as LoopTemplateExportEdge[],
     },

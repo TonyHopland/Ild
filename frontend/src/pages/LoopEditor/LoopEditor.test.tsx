@@ -65,7 +65,6 @@ const sampleTemplate = {
   description: "Standard development loop",
   version: 3,
   recoveryPolicy: RecoveryPolicy.AutoResume,
-  maxNodeExecutions: 200,
   nodes: [
     {
       id: "n-start",

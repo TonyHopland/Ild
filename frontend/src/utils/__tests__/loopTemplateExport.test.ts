@@ -15,7 +15,6 @@ describe("loopTemplateExport", () => {
     description: "Standard development loop",
     version: 3,
     recoveryPolicy: RecoveryPolicy.AutoResume,
-    maxNodeExecutions: 200,
     nodes: [
       {
         id: "n-start",
@@ -54,7 +53,6 @@ describe("loopTemplateExport", () => {
       expect(exportData.name).toBe("Dev Loop");
       expect(exportData.description).toBe("Standard development loop");
       expect(exportData.recoveryPolicy).toBe(RecoveryPolicy.AutoResume);
-      expect(exportData.maxNodeExecutions).toBe(200);
     });
 
     test("excludes instance-specific fields (id, createdAt, updatedAt, isArchived)", () => {
@@ -137,7 +135,6 @@ describe("loopTemplateExport", () => {
           name: "",
           description: "",
           recoveryPolicy: "AutoResume",
-          maxNodeExecutions: 200,
           nodes: [],
           edges: [],
         }),
@@ -153,7 +150,6 @@ describe("loopTemplateExport", () => {
           name: "Test",
           description: "",
           recoveryPolicy: "InvalidPolicy",
-          maxNodeExecutions: 200,
           nodes: [],
           edges: [],
         }),
@@ -169,7 +165,6 @@ describe("loopTemplateExport", () => {
           name: "Test",
           description: "",
           recoveryPolicy: "AutoResume",
-          maxNodeExecutions: 200,
           edges: [],
         }),
       );
@@ -184,7 +179,6 @@ describe("loopTemplateExport", () => {
           name: "Test",
           description: "",
           recoveryPolicy: "AutoResume",
-          maxNodeExecutions: 200,
           nodes: [{ id: "n1" }],
           edges: [],
         }),
@@ -205,7 +199,6 @@ describe("loopTemplateExport", () => {
             name: "Test",
             description: "",
             recoveryPolicy: policy,
-            maxNodeExecutions: 200,
             nodes: [
               {
                 id: "n1",
@@ -228,7 +221,6 @@ describe("loopTemplateExport", () => {
           name: "  Trimmed Name  ",
           description: "",
           recoveryPolicy: "AutoResume",
-          maxNodeExecutions: 200,
           nodes: [
             {
               id: "n1",

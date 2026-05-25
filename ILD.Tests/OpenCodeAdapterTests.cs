@@ -1255,7 +1255,6 @@ public class OpenCodeAdapterTests
                 Id = templateId,
                 Name = $"template-{runId:N}",
                 RecoveryPolicy = RecoveryPolicy.AutoResume,
-                MaxNodeExecutions = 1,
             });
 
             db.LoopTemplateVersions.Add(new LoopTemplateVersion

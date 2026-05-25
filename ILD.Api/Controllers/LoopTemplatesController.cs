@@ -28,7 +28,6 @@ public class LoopTemplatesController : ControllerBase
             description = t.Description ?? string.Empty,
             isDefault = t.IsDefault,
             recoveryPolicy = t.RecoveryPolicy.ToString(),
-            maxNodeExecutions = t.MaxNodeExecutions,
             version = versionNumber,
             nodes = graph?.Nodes ?? new List<LoopNodeDto>(),
             edges = graph?.Edges ?? new List<LoopNodeEdgeDto>(),
@@ -77,8 +76,7 @@ public class LoopTemplatesController : ControllerBase
                 request.Name,
                 request.Description,
                 graph,
-                request.RecoveryPolicy,
-                request.MaxNodeExecutions);
+                request.RecoveryPolicy);
             return CreatedAtAction(nameof(GetById), new { id }, new { id });
         }
         catch (InvalidOperationException ex)
@@ -100,8 +98,7 @@ public class LoopTemplatesController : ControllerBase
                 request.Name,
                 request.Description,
                 graph,
-                request.RecoveryPolicy,
-                request.MaxNodeExecutions);
+                request.RecoveryPolicy);
             return Ok(new { id = newId });
         }
         catch (InvalidOperationException ex)

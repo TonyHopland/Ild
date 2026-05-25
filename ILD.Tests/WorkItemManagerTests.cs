@@ -12,7 +12,7 @@ public class WorkItemManagerTests
 {
     private static Guid SeedLoopRun(TestDb db, string workItemId)
     {
-        var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume, MaxNodeExecutions = 100 };
+        var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume };
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
         db.Context.LoopTemplates.Add(template);
         db.Context.LoopTemplateVersions.Add(version);

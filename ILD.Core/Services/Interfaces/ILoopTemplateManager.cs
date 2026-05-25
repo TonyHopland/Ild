@@ -6,13 +6,13 @@ namespace ILD.Core.Services.Interfaces;
 
 public interface ILoopTemplateManager
 {
-    Task<Guid> CreateLoopTemplateAsync(string name, string description, LoopTemplateGraph graph, RecoveryPolicy recoveryPolicy = RecoveryPolicy.AutoResume, int maxNodeExecutions = 200);
+    Task<Guid> CreateLoopTemplateAsync(string name, string description, LoopTemplateGraph graph, RecoveryPolicy recoveryPolicy = RecoveryPolicy.AutoResume);
     Task<LoopTemplate?> GetLoopTemplateAsync(Guid templateId);
     Task<LoopTemplate?> GetLatestVersionAsync(Guid templateId);
     Task<IEnumerable<LoopTemplate>> GetAllLoopTemplatesAsync(int skip = 0, int take = 100, bool includeArchived = false);
     Task ArchiveLoopTemplateAsync(Guid templateId);
     Task UnarchiveLoopTemplateAsync(Guid templateId);
-    Task<Guid> UpdateLoopTemplateAsync(Guid templateId, string name, string description, LoopTemplateGraph graph, RecoveryPolicy? recoveryPolicy = null, int? maxNodeExecutions = null);
+    Task<Guid> UpdateLoopTemplateAsync(Guid templateId, string name, string description, LoopTemplateGraph graph, RecoveryPolicy? recoveryPolicy = null);
     Task<Guid> CloneLoopTemplateAsync(Guid sourceTemplateId, string newName);
     Task<LoopTemplateVersion> GetVersionAsync(Guid templateId, int version);
     Task<IEnumerable<LoopTemplateVersion>> GetVersionsAsync(Guid templateId);

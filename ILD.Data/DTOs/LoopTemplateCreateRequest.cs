@@ -14,8 +14,6 @@ public class LoopTemplateCreateRequest
 
     public RecoveryPolicy RecoveryPolicy { get; set; } = RecoveryPolicy.AutoResume;
 
-    public int MaxNodeExecutions { get; set; } = 200;
-
     public List<LoopNodeDto> Nodes { get; set; } = new();
 
     public List<LoopNodeEdgeDto> Edges { get; set; } = new();

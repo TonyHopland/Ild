@@ -140,7 +140,6 @@ export interface LoopTemplate {
   description: string;
   version: number;
   recoveryPolicy: RecoveryPolicy;
-  maxNodeExecutions: number;
   nodes: LoopNode[];
   edges: LoopNodeEdge[];
   createdAt: string;
@@ -159,7 +158,6 @@ export interface LoopTemplateExport {
   name: string;
   description: string;
   recoveryPolicy: RecoveryPolicy;
-  maxNodeExecutions: number;
   nodes: LoopTemplateExportNode[];
   edges: LoopTemplateExportEdge[];
 }
