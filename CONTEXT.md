@@ -11,7 +11,7 @@ A unit of work — code change, planning session, or any task type. May or may n
 _Avoid_: task, ticket, issue, story
 
 **LoopTemplate**:
-A named, versioned workflow definition expressed as a directed graph of nodes (Start, Cmd, AI, Human, PR, Cleanup). Auto-versioned on every save.
+A named, versioned workflow definition expressed as a directed graph of nodes (Start, Cmd, AI, Human, Prompt, PR, Cleanup). Auto-versioned on every save.
 _Avoid_: workflow, pipeline, template (without "loop")
 
 **LoopTemplateVersion**:
@@ -33,16 +33,20 @@ The entry point of a loop graph. Optionally creates a worktree and branch. If th
 _Avoid_: init, setup
 
 **Cmd Node**:
-Executes a shell command in the worktree with a configurable timeout. Succeeds on exit code 0. Default timeout is 300 seconds.
+Executes a shell command in the worktree. Succeeds on exit code 0. Bounded by run-scoped cancellation only — no per-node timeout.
 _Avoid_: shell, command
 
 **AI Node**:
-Delegates execution to an `IAgentAdapter` resolved by `AiProvider.Type`. The adapter controls the full execution lifecycle including multi-turn loops, tool use, and internal state. Has a single `prompt` field regardless of whether the node starts fresh or resumes a bound session. If the graph needs different first-turn and follow-up prompts, model that explicitly with upstream `Prompt` nodes. If `provider` config specifies a provider that doesn't exist, the node fails (no fallback to default or first provider). Supports `rejectPattern` — a regex that, when matched against the AI output, causes the node to fail and route to the `on_failure` edge. Default timeout is 300 seconds.
+Delegates execution to an `IAgentAdapter` resolved by `AiProvider.Type`. The adapter controls the full execution lifecycle including multi-turn loops, tool use, and internal state. Has a single `prompt` field regardless of whether the node starts fresh or resumes a bound session. If the graph needs different first-turn and follow-up prompts, model that explicitly with upstream `Prompt` nodes. If `provider` config specifies a provider that doesn't exist, the node fails (no fallback to default or first provider). Supports `rejectPattern` — a regex that, when matched against the AI output, causes the node to fail and route to the `on_failure` edge. Bounded by run-scoped cancellation only — no per-node timeout.
 _Avoid_: LLM node, model node
 
 **Human Node**:
 A pause point that awaits human input. The input becomes `{{PreviousNode.Output}}` for downstream nodes. Can form conversational loops with AI nodes (e.g., grill-me planning).
 _Avoid_: approval gate, review step
+
+**Prompt Node**:
+Renders a templated text payload using the prompt placeholder pipeline (`{{WorkItem.*}}`, `{{PreviousNode.Output}}`, `{{EventLog.*}}`, etc.) and emits the result as its Output. Always routes to `on_success`. Used to compose the prompt that a downstream AI node will consume — especially when first-turn vs. follow-up prompts need to differ (see the AI Node entry).
+_Avoid_: template node, text node
 
 **PR Node**:
 Creates a pull request (or reuses existing one via `WorkItem.PrUrl`). Before PR creation, automatically commits any uncommitted changes, pushes the branch, fetches the remote, and verifies the branch has commits ahead of the target branch — if the branch has 0 commits ahead, the node fails (no-changes guard). Waits for webhook events: merge routes to `on_success`, rejection routes to `on_failure`. Supports `prDescriptionTemplate` config field with placeholder resolution (`{{WorkItem.Title}}`, `{{WorkItem.Description}}`, `{{PreviousNode.Output}}`); falls back to `WorkItem.Description` if unset. Makes the PR lifecycle explicit in the graph.
@@ -55,7 +59,7 @@ _Avoid_: teardown, end node
 ### Execution & Recovery
 
 **Agent Adapter**:
-A pluggable component implementing `IAgentAdapter` that handles full AI node execution. Each adapter declares `SupportedProviderTypes` and is auto-registered via DI. Adapter instance is scoped per AI node per `LoopRun` — sibling AI nodes in the same loop do not share state. Currently only the CLI-backed `opencode` and `pi` provider types are registered; there is no implicit default adapter type.
+A pluggable component implementing `IAgentAdapter` that handles full AI node execution. Each adapter declares `SupportedProviderTypes` and is auto-registered via DI. Adapter instance is scoped per AI node per `LoopRun` — sibling AI nodes in the same loop do not share state. Currently the CLI-backed `opencode`, `pi`, and `claude-code` provider types are registered; there is no implicit default adapter type.
 _Avoid_: LLM provider, model driver
 
 **Tool Autonomy**:
@@ -63,7 +67,7 @@ Adapters have full autonomy over tool execution, but the engine now passes a per
 _Avoid_: tool sandbox, tool permissions
 
 **Event Log**:
-Append-only audit stream per LoopRun. Serves as AI context and observability. Large payloads (>10KB) stored on disk; DB stores path reference. Retained for 7 days after successful completion; failed runs preserved until manually closed. Edge traversal counts are enforced in-memory by the engine (`DefaultMaxTraversals`) rather than persisted.
+Append-only audit stream per LoopRun. Serves as AI context and observability. Large payloads (>10KB) stored on disk; DB stores path reference. A background `EventLogRetentionSweeper` deletes entries older than `EventLogOptions.RetentionPeriod` (default 7 days) once per `RetentionSweepInterval` (default 24h), but **only** for runs whose linked WorkItem is in `Done` status — events for runs whose WorkItem is still Running/HumanFeedback/Backlog/etc. are preserved indefinitely. Edge traversal counts are enforced in-memory by the engine (`DefaultMaxTraversals`) rather than persisted.
 _Avoid_: audit trail, log
 
 **Recovery Policy**:
@@ -79,8 +83,12 @@ The engine refreshes the WorkItem from the store before each node execution, ens
 ### Work Item Lifecycle
 
 **Human Feedback**:
-A single WorkItem status for all cases requiring human attention: PR awaiting merge, node failure exhaustion, rebase conflicts, Human node input. Distinguished by `HumanFeedbackReason` string. When a Human node receives input, the input is appended to the event log. When a Human node receives a reject, the current node is marked as Failed.
+The WorkItem status for cases requiring **human** attention: PR awaiting merge, node failure exhaustion, rebase conflicts, Human node input. Distinguished by `HumanFeedbackReason` string. When a Human node receives input, the input is appended to the event log. When a Human node receives a reject, the current node is marked as Failed and the engine follows the `on_failure` edge (a Respond signal follows `on_respond`). Internal-resource waits (e.g. AI provider throttling) use `WaitingForIld` instead.
 _Avoid_: paused, blocked, stalled
+
+**WaitingForIld**:
+WorkItem status used when a node cannot proceed because an internal resource (currently AI provider capacity) is unavailable. The LoopRun stays `Running` from the user's perspective; the scheduler (`RemoteWorkItemCoordinator`) automatically resumes the work item when the resource frees. Distinct from Human Feedback — no human action is required. Set via the `NodeOutcome.WaitingIld(reason)` outcome and paired with `HumanFeedbackReasons.AiProviderThrottled` on the WorkItem.
+_Avoid_: throttled, queued, backpressure
 
 **Ready**:
 WorkItem status meaning all dependencies are Done and the work item can begin execution.
@@ -100,7 +108,7 @@ _Avoid_: draft, planned
 - A **WorkItem** is optionally associated with a **Repository** (Plan-type items may not need one)
 - A **Worktree** is created on first run, destroyed on Cleanup. Re-starting a WorkItem creates a fresh worktree
 - `{{PreviousNode.Output}}` resolves to the source node of the incoming edge, not the chronologically previous execution
-- `{{EventLog.LastN}}` defaults to N=10, capped at 50
+- `{{EventLog.LastN}}` returns the last 10 event-log summary entries (fixed — not parameterizable)
 - AI node always uses its single `prompt`; graph structure controls prompt variation across turns
 - `AiProvider.Config` is a free-form JSON blob; each adapter reads what it needs
 - Rebase happens only at loop start, not before each node
@@ -138,27 +146,27 @@ See the [Architecture](#architecture) section below for how the API layer compos
 ### API surface
 
 - All controllers live under `ILD.Api/Controllers` and inherit `[Route("api/v1/...")]`. There is no implicit versioning middleware — see [API Versioning Policy](#api-versioning-policy).
-- Auth is enforced by `ILD.Api/Middleware/AuthMiddleware.cs` via bearer-token session cookies/headers. Excluded paths: `/api/v1/auth/login`, `/api/v1/health`, `/api/v1/logging`, `/metrics`. The webhook endpoint (`/api/v1/webhooks/forgejo`) is **not** excluded; external callers must additionally pass HMAC verification (`WebhookSignatureVerifier`) on top of bearer auth.
+- Auth is enforced by `ILD.Api/Middleware/AuthMiddleware.cs` via bearer-token session cookies/headers. Excluded paths: `/api/v1/auth/login`, `/api/v1/health`, `/api/v1/logging`, `/metrics`. The webhook endpoints (`/api/v1/webhooks/forgejo` and `/api/v1/webhooks/github`) are **not** excluded; external callers must additionally pass HMAC verification via `IRemoteGitProviderAdapter.VerifyWebhookSignature` (the relevant adapter owns the check) on top of bearer auth.
 - `AuthService.LoginAsync` auto-seeds the `admin` user the first time it sees a login attempt with the username `admin` and a non-empty `ILD_PASSWORD` env var.
 - Webhook routes verify HMAC against `RemoteProvider.WebhookSecret` values; if no provider has a secret configured, all webhook calls are rejected with 401.
-- `EventLog` query routes live on `LoopRunsController` (`GET /api/v1/loopruns/{id}/events`, `GET /api/v1/loopruns/{id}/events/{seq}`) — there is no separate `EventLogController`.
-- `HttpClient` instances for AI providers and remote providers are obtained from `IHttpClientFactory` with named clients (`"openai"`, `"forgejo"`); failures surface as `AiProviderException` with cause-preserving inner exceptions.
+- `EventLog` query routes live on `LoopRunsController` (`GET /api/v1/loopruns/{id}/events?cursor=&limit=` for the cursor-paginated list, `GET /api/v1/loopruns/{id}/events/payload?sequence=N` for the spilled large-payload fetch) — there is no separate `EventLogController`.
+- `HttpClient` instances for AI providers and the work-item server are registered as **typed clients** via `AddHttpClient<TInterface, TImpl>` (no named clients). Failures from AI calls surface as `AiProviderException` with cause-preserving inner exceptions.
 
 ### Storage layout
 
-Storage paths come from configuration in this precedence order (highest first):
+**Database (production):** PostgreSQL via Npgsql. The connection string is read from the `ILD_DB_CONNECTION_STRING` env var (or the same-named configuration key as a fallback). When a connection string is configured, `dbContext.Database.Migrate()` runs on startup. When unset (e.g. integration tests) the host skips data-layer registration and the test factory substitutes its own `DbContext` + stores, calling `EnsureCreated()` instead.
+
+**Filesystem paths.** The data root is resolved in this precedence order (highest first):
 
 1. `ILD_DATA_PATH` env var (overrides everything; integration tests clear it explicitly)
-2. `Storage:DataRoot` config value (default `./data`)
-3. Falls back to `Path.GetFullPath("data")` if neither is set
+2. `Storage:DataRoot` configuration value
+3. The literal default `"data"` (relative to the host's working directory)
 
-Within `DataRoot`:
+`Storage:WorktreesSubdir` (default `"worktrees"`) is appended to `DataRoot` to compose the worktrees root, **unless** `ILD_WORKTREES_PATH` is set, which overrides the worktrees path outright. Each `Worktree` row's `Path` is rooted under the resolved worktrees path.
 
-- `Storage:DatabaseFile` (default `ild.db`) — SQLite file. EF Core migrations run on startup via `dbContext.Database.Migrate()`.
-- `Storage:WorktreesSubdir` (default `worktrees`) — root for per-WorkItem git worktrees. Each `Worktree` row's `Path` is rooted here.
-- Event log payloads >10KB spill to `events/{looprrun-id}/{seq}.json`; DB rows store the relative path.
+Event log payloads larger than `EventLogOptions.LargePayloadThresholdBytes` (default 10 KB) spill to `EventLogOptions.PayloadDirectory` (default `data/payloads`) at `{run-id}/{sequence}.json`; the DB row stores the relative path.
 
-Tests must not share `DataRoot`. Integration tests use `ILD.Tests/Integration/ApiFactory.cs`, which generates a per-instance temp directory and an in-memory SQLite connection. Unit tests use `ILD.Tests/TestDb.cs`, whose XML doc comment describes the per-test isolation guarantees.
+**Database (tests).** Integration tests use `ILD.Tests/Integration/ApiFactory.cs`, which generates a per-instance temp directory and an in-memory SQLite connection. Unit tests use `ILD.Tests/TestDb.cs`, whose XML doc comment describes the per-test isolation guarantees. SQLite is **only** used in tests; production deployments must point at Postgres.
 
 ### SignalR realtime channel
 

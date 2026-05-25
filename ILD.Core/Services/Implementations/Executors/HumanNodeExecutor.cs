@@ -38,7 +38,7 @@ public sealed class HumanNodeExecutor : INodeExecutor
         switch (ctx.Run.ExternalActionResultType)
         {
             case ExternalActionResultType.Reject:
-                yield return new NodeOutcome.Fail(EdgeType.OnReject, "Rejected", ctx.Run.ExternalActionResult);
+                yield return new NodeOutcome.Fail(EdgeType.OnFailure, "Rejected", ctx.Run.ExternalActionResult);
                 yield break;
             case ExternalActionResultType.Respond:
                 yield return new NodeOutcome.Success(EdgeType.OnRespond, ctx.Run.ExternalActionResult);

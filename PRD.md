@@ -48,15 +48,14 @@ The product should let a developer:
 - Templates are versioned on each save and runs pin the version they started with.
 - Validation must enforce exactly one `Start` node, at least one `Cleanup` node, reachability from `Start`, and at least one path to cleanup.
 - The loop engine remains sequential per run and acts as the sole state machine: node executors yield `NodeOutcome` values (`NodeStarting`, `Success(EdgeType)`, `Fail(EdgeType)`, `WaitingAction`, `WaitingIld`, `Terminal`) and the engine performs all persistence, routing, and status transitions.
-- Failure routing is graph-driven: `Fail` outcomes carry an `EdgeType` (typically `OnFailure`; Human nodes use `OnReject`). There are no automatic per-node retries — retry is modeled with `OnFailure`/`OnReject` edges back to the same node and bounded by `DefaultMaxTraversals`.
+- Failure routing is graph-driven: `Fail` outcomes carry an `EdgeType` — typically `OnFailure`. Human and PR nodes also fail via `OnFailure` when an external reject signal arrives. There are no automatic per-node retries — retry is modeled with `OnFailure` edges back to the same node and bounded by `DefaultMaxTraversals`.
 - Pause and cancellation must be cooperative so commands and long-running adapters can stop safely.
 
 ### AI Execution Model
 
 - AI nodes resolve an `IAgentAdapter` from the configured `AiProvider.Type`.
-- The currently supported provider types are `openai`, `opencode`, and `pi`.
-- OpenAI-compatible providers use HTTP chat completion calls.
-- OpenCode and Pi providers execute external CLIs inside the worktree.
+- The currently supported provider types are `opencode`, `pi`, and `claude-code`.
+- All three providers are CLI-backed: the adapter spawns the provider's CLI inside the worktree and reads structured output.
 - The adapter, not the node executor, owns the provider-specific execution lifecycle.
 - Prompt templates remain single-field per AI node and support ILD placeholder expansion.
 - Session-aware adapters may persist and restore session snapshots across node visits.

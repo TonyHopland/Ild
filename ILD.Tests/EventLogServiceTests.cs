@@ -6,7 +6,7 @@ namespace ILD.Tests;
 
 public class EventLogServiceTests
 {
-    private static (EventLogService svc, TestDb db, Guid runId) Setup(string? payloadDir = null)
+    private static (EventLogService svc, TestDb db, Guid runId, string workItemId) Setup(string? payloadDir = null)
     {
         var db = new TestDb();
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume };
@@ -25,13 +25,13 @@ public class EventLogServiceTests
 
         var opts = payloadDir != null ? new EventLogOptions { PayloadDirectory = payloadDir } : null;
         var svc = new EventLogService(db.EventLogs, db.LoopRuns, opts);
-        return (svc, db, run.Id);
+        return (svc, db, run.Id, workItemId);
     }
 
     [Fact]
     public async Task Append_returns_monotonically_increasing_sequence_per_run()
     {
-        var (svc, db, runId) = Setup();
+        var (svc, db, runId, _) = Setup();
         using var _ = db;
 
         var s1 = await svc.AppendAsync(runId, "NodeStarted", "first");
@@ -46,7 +46,7 @@ public class EventLogServiceTests
     [Fact]
     public async Task GetByRunId_returns_events_in_sequence_order()
     {
-        var (svc, db, runId) = Setup();
+        var (svc, db, runId, _) = Setup();
         using var _ = db;
 
         await svc.AppendAsync(runId, "NodeStarted", "a");
@@ -62,7 +62,7 @@ public class EventLogServiceTests
     public async Task Large_messages_are_spilled_to_disk_under_payload_directory()
     {
         var dir = Path.Combine(Path.GetTempPath(), "ild-test-" + Guid.NewGuid());
-        var (svc, db, runId) = Setup(dir);
+        var (svc, db, runId, _) = Setup(dir);
         using var _ = db;
 
         var bigMessage = new string('x', 20_000);
@@ -79,33 +79,50 @@ public class EventLogServiceTests
     }
 
     [Fact]
-    public async Task EnforceRetentionPolicy_removes_old_entries_but_preserves_failed_runs()
+    public async Task EnforceRetentionPolicy_deletes_only_events_for_eligible_runs()
     {
-        var (svc, db, runId) = Setup();
+        var (svc, db, runIdA, _) = Setup();
         using var _ = db;
 
-        var failedRun = new LoopRun { Id = Guid.NewGuid(), WorkItemId = Guid.NewGuid().ToString(), LoopTemplateVersionId = db.Context.LoopTemplateVersions.First().Id, RecoveryPolicy = RecoveryPolicy.Cancel, Status = LoopRunStatus.Failed };
-        db.Context.LoopRuns.Add(failedRun);
+        var runB = new LoopRun { Id = Guid.NewGuid(), WorkItemId = Guid.NewGuid().ToString(), LoopTemplateVersionId = db.Context.LoopTemplateVersions.First().Id, RecoveryPolicy = RecoveryPolicy.Cancel };
+        db.Context.LoopRuns.Add(runB);
         db.Context.SaveChanges();
 
-        await svc.AppendAsync(runId, "NodeStarted", "succ");
-        await svc.AppendAsync(failedRun.Id, "NodeFailed", "boom");
+        await svc.AppendAsync(runIdA, "NodeStarted", "eligible");
+        await svc.AppendAsync(runB.Id, "NodeStarted", "preserved");
 
         foreach (var e in db.Context.EventLogs)
             e.Timestamp = DateTime.UtcNow.AddDays(-30);
         db.Context.SaveChanges();
 
-        var removed = await svc.EnforceRetentionPolicyAsync(DateTimeOffset.UtcNow.AddDays(-1));
+        var removed = await svc.EnforceRetentionPolicyAsync(DateTimeOffset.UtcNow.AddDays(-1), new HashSet<Guid> { runIdA });
 
         Assert.Equal(1, removed);
-        Assert.Empty((await svc.GetByRunIdAsync(runId)));
-        Assert.Single((await svc.GetByRunIdAsync(failedRun.Id)));
+        Assert.Empty((await svc.GetByRunIdAsync(runIdA)));
+        Assert.Single((await svc.GetByRunIdAsync(runB.Id)));
+    }
+
+    [Fact]
+    public async Task EnforceRetentionPolicy_with_empty_eligible_set_deletes_nothing()
+    {
+        var (svc, db, runId, _) = Setup();
+        using var _d = db;
+
+        await svc.AppendAsync(runId, "NodeStarted", "anything");
+        foreach (var e in db.Context.EventLogs)
+            e.Timestamp = DateTime.UtcNow.AddDays(-30);
+        db.Context.SaveChanges();
+
+        var removed = await svc.EnforceRetentionPolicyAsync(DateTimeOffset.UtcNow.AddDays(-1), new HashSet<Guid>());
+
+        Assert.Equal(0, removed);
+        Assert.Single((await svc.GetByRunIdAsync(runId)));
     }
 
     [Fact]
     public async Task CursorPagination_returns_pages_in_sequence_order_with_correct_cursor()
     {
-        var (svc, db, runId) = Setup();
+        var (svc, db, runId, _) = Setup();
         using var _ = db;
 
         for (var i = 1; i <= 7; i++)
@@ -135,7 +152,7 @@ public class EventLogServiceTests
     [Fact]
     public async Task CursorPagination_empty_run_returns_empty_page()
     {
-        var (svc, db, runId) = Setup();
+        var (svc, db, runId, _) = Setup();
         using var _ = db;
 
         var page = await svc.GetByRunIdAfterCursorAsync(runId, cursor: 0, limit: 10);

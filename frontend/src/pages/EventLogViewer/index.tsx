@@ -583,8 +583,6 @@ export default function EventLogViewer() {
               const prevHuman = prevType === NodeType.Human;
               if (prevNode.status === LoopRunNodeStatus.Succeeded) {
                 edgeType = prevHuman ? EdgeType.OnRespond : EdgeType.OnSuccess;
-              } else if (prevNode.status === LoopRunNodeStatus.Failed) {
-                edgeType = prevHuman ? EdgeType.OnReject : EdgeType.OnFailure;
               } else {
                 edgeType = EdgeType.OnFailure;
               }

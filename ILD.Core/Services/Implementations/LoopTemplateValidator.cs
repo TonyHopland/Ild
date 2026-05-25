@@ -9,12 +9,12 @@ public static class LoopTemplateValidator
 {
     private static readonly Dictionary<string, HashSet<string>> AllowedEdgeTypes = new(StringComparer.OrdinalIgnoreCase)
     {
-        { "Human", new() { "OnSuccess", "OnFailure", "OnRespond", "OnReject" } },
+        { "Human", new() { "OnSuccess", "OnFailure", "OnRespond" } },
         { "Start", new() { "OnSuccess", "OnFailure" } },
         { "Cmd", new() { "OnSuccess", "OnFailure" } },
         { "AI", new() { "OnSuccess", "OnFailure" } },
         { "Prompt", new() { "OnSuccess", "OnFailure" } },
-        { "PR", new() { "OnSuccess", "OnFailure", "OnRespond", "OnReject" } },
+        { "PR", new() { "OnSuccess", "OnFailure", "OnRespond" } },
         { "Cleanup", new() { "OnSuccess", "OnFailure" } },
     };
 

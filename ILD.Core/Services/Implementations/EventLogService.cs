@@ -98,15 +98,13 @@ public class EventLogService : IEventLogService
         return entry == null ? null : new EventLogEntry(entry.LoopRunId, entry.EventType.ToString(), entry.Data ?? string.Empty, entry.PayloadPath, entry.RunNodeId);
     }
 
-    public async Task<int> EnforceRetentionPolicyAsync(DateTimeOffset before)
+    public async Task<int> EnforceRetentionPolicyAsync(DateTimeOffset before, ISet<Guid> eligibleRunIds)
     {
-        var cutoff = before.UtcDateTime;
-
-        var failedRunIds = (await _loopRunStore.GetFailedRunIdsAsync()).ToHashSet();
+        if (eligibleRunIds.Count == 0) return 0;
 
         var older = await _eventLogStore.GetOlderThanAsync(before);
         var toRemove = older
-            .Where(e => e.LoopRunId == null || !failedRunIds.Contains(e.LoopRunId.Value))
+            .Where(e => e.LoopRunId.HasValue && eligibleRunIds.Contains(e.LoopRunId.Value))
             .ToList();
 
         foreach (var entry in toRemove)

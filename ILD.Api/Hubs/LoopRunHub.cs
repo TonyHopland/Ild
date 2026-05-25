@@ -38,13 +38,13 @@ public class LoopRunHub : Hub
 
     public async Task NotifyPaused(Guid runId)
     {
-        await Clients.Group(runId.ToString()).SendAsync("Paused",
+        await Clients.Group(runId.ToString()).SendAsync("RunPaused",
             new ILD.Data.DTOs.SignalRPayloads.RunPausedPayload(runId));
     }
 
     public async Task NotifyResumed(Guid runId)
     {
-        await Clients.Group(runId.ToString()).SendAsync("Resumed",
+        await Clients.Group(runId.ToString()).SendAsync("RunResumed",
             new ILD.Data.DTOs.SignalRPayloads.RunResumedPayload(runId));
     }
 

@@ -110,7 +110,6 @@ export enum EdgeType {
   OnSuccess = "OnSuccess",
   OnFailure = "OnFailure",
   OnRespond = "OnRespond",
-  OnReject = "OnReject",
 }
 
 export interface LoopNode {

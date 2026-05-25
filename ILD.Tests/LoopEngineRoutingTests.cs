@@ -176,19 +176,19 @@ public class LoopEngineRoutingTests
     }
 
     [Fact]
-    public async Task SignalNodeResult_with_reject_routes_via_OnReject_edge()
+    public async Task SignalNodeResult_with_reject_routes_via_OnFailure_edge()
     {
         using var h = new LoopEngineHarness();
         h.AddNode("h", NodeType.Human);
         h.AddNode("reject_branch", NodeType.Cmd);
-        h.AddEdge("h", "reject_branch", EdgeType.OnReject);
+        h.AddEdge("h", "reject_branch", EdgeType.OnFailure);
 
         var humanExec = new ScriptedExecutor(NodeType.Human,
             new NodeOutcome.NodeStarting("ask"),
             new NodeOutcome.WaitingAction("Awaiting input", "prompt"));
         humanExec.Then(
             new NodeOutcome.NodeStarting("ask"),
-            new NodeOutcome.Fail(EdgeType.OnReject, "Rejected", "human-said-no"));
+            new NodeOutcome.Fail(EdgeType.OnFailure, "Rejected", "human-said-no"));
         h.Registry.Register(humanExec);
         h.Registry.Register(new ScriptedExecutor(NodeType.Cmd,
             new NodeOutcome.NodeStarting("rb"),
