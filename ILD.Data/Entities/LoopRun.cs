@@ -34,6 +34,13 @@ public class LoopRun : IHasUpdatedAt
 
     public Guid? CurrentNodeId { get; set; }
 
+    // Transient bridge: the LoopNodeEdge the engine just traversed to reach
+    // CurrentNodeId. Set by the engine when it follows an outgoing edge, then
+    // consumed and cleared when the destination node's first LoopRunNode row
+    // is created. Persisted so that a crash between edge-resolution and
+    // run-node creation doesn't lose the edge attribution.
+    public Guid? IncomingEdgeId { get; set; }
+
     [MaxLength(1024)]
     public string? WorktreePath { get; set; }
 

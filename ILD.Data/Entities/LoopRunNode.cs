@@ -30,6 +30,12 @@ public class LoopRunNode
     // Previous LoopRunNode in this run; nullable for the entry node.
     public Guid? PreviousNodeId { get; set; }
 
+    // The LoopNodeEdge the engine traversed to enter this node visit; null
+    // for the entry visit. Used to rebuild per-edge traversal counts after
+    // server restart so the edge-traversal safety net stays accurate across
+    // recovery boundaries.
+    public Guid? IncomingEdgeId { get; set; }
+
     public DateTime? StartedAt { get; set; }
 
     public DateTime? CompletedAt { get; set; }

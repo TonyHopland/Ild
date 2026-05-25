@@ -19,7 +19,7 @@ An immutable snapshot of a LoopTemplate's graph at a point in time. Created on e
 _Avoid_: template revision, template snapshot
 
 **LoopRun**:
-A single execution of a pinned LoopTemplateVersion against a WorkItem. Tracks node states, edge traversals, and timing.
+A single execution of a pinned LoopTemplateVersion against a WorkItem. Tracks node states (via `LoopRunNode` rows), timing, and per-edge traversal attribution — each `LoopRunNode.IncomingEdgeId` records which edge brought the engine to that visit, letting the safety net rebuild traversal counts after a process restart.
 _Avoid_: execution, run, instance
 
 **Worktree**:
@@ -71,7 +71,7 @@ Append-only audit stream per LoopRun. Serves as AI context and observability. La
 _Avoid_: audit trail, log
 
 **Edge Traversal Limits**:
-The engine's runaway-graph safety net is **per edge**, not per node. Each edge's traversal count is tracked in-memory per run; if it exceeds the edge's `MaxTraversals` (or `LoopEngine.DefaultMaxEdgeTraversals = 50` when the edge leaves it null), the run is failed. There is no template-level execution cap.
+The engine's runaway-graph safety net is **per edge**, not per node. Each edge's traversal count is tracked per run; if it exceeds the edge's `MaxTraversals` (or `LoopEngine.DefaultMaxEdgeTraversals = 50` when the edge leaves it null), the run is failed. Counts are kept in memory while the run is active, but every edge traversal is also persisted on the destination `LoopRunNode.IncomingEdgeId` so the engine can rebuild the count dictionary on recovery (the in-memory state survives a process restart). There is no template-level execution cap.
 _Avoid_: max node execs, run iteration limit
 
 **Recovery Policy**:
@@ -81,8 +81,8 @@ _Avoid_: restart policy, failover
 **Best-Effort Guarantees**:
 Event log writes and SignalR notifications are best-effort — failures in these side effects never cause node execution to fail.
 
-**Node Refresh**:
-The engine refreshes the WorkItem from the store before each node execution, ensuring the latest state is used.
+**Run Refresh**:
+The engine reloads the `LoopRun` row from the store at the top of every iteration of `RunUntilParkAsync`, ensuring the latest run state (status, pause flag, current node) is used. Individual executors that need WorkItem state (`Start`, `Human`, `PR`) call `IWorkItemManager.GetWorkItemAsync` directly; there is no engine-level per-iteration WorkItem refresh.
 
 ### Work Item Lifecycle
 

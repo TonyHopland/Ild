@@ -295,7 +295,7 @@ public sealed class LoopEngine : ILoopEngine
         var sp = scope.ServiceProvider;
         var loopRunStore = sp.GetRequiredService<ILoopRunStore>();
         var templateStore = sp.GetRequiredService<ILoopTemplateStore>();
-        var edgeTraversalCount = new Dictionary<Guid, int>();
+        var edgeTraversalCount = await RebuildEdgeTraversalCountsAsync(loopRunStore, runId);
 
         while (!ct.IsCancellationRequested)
         {
@@ -368,10 +368,12 @@ public sealed class LoopEngine : ILoopEngine
                             StartedAt = DateTime.UtcNow,
                             EffectiveInput = ns.EffectiveInput,
                             PreviousNodeId = await FindPreviousRunNodeIdAsync(loopRunStore, run.Id),
+                            IncomingEdgeId = run.IncomingEdgeId,
                         };
                         await loopRunStore.CreateRunNodeAsync(rn);
                         runNodeId = rn.Id;
                         run.CurrentNodeId = node.Id;
+                        run.IncomingEdgeId = null;
                         run.NodeExecutionCount++;
                         await loopRunStore.UpdateRunAsync(run);
                         await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Pending, LoopRunNodeStatus.Running);
@@ -394,6 +396,7 @@ public sealed class LoopEngine : ILoopEngine
                         if (await TraversalLimitExceededAsync(run, successEdge, edgeTraversalCount, loopRunStore, sp))
                             return ParkResult.Stop;
                         run.CurrentNodeId = successEdge.TargetNodeId;
+                        run.IncomingEdgeId = successEdge.Id;
                         await loopRunStore.UpdateRunAsync(run);
                         return ParkResult.Continue;
                     }
@@ -416,6 +419,7 @@ public sealed class LoopEngine : ILoopEngine
                         if (await TraversalLimitExceededAsync(run, failEdge, edgeTraversalCount, loopRunStore, sp))
                             return ParkResult.Stop;
                         run.CurrentNodeId = failEdge.TargetNodeId;
+                        run.IncomingEdgeId = failEdge.Id;
                         await loopRunStore.UpdateRunAsync(run);
                         return ParkResult.Continue;
                     }
@@ -512,6 +516,18 @@ public sealed class LoopEngine : ILoopEngine
     {
         var edges = await runStore.GetEdgesForNodeIdsAsync(new[] { fromNodeId });
         return edges.FirstOrDefault(e => e.SourceNodeId == fromNodeId && e.EdgeType == edge);
+    }
+
+    private static async Task<Dictionary<Guid, int>> RebuildEdgeTraversalCountsAsync(ILoopRunStore store, Guid runId)
+    {
+        var counts = new Dictionary<Guid, int>();
+        var nodes = await store.GetRunNodesAsync(runId);
+        foreach (var rn in nodes)
+        {
+            if (rn.IncomingEdgeId is Guid eid)
+                counts[eid] = counts.GetValueOrDefault(eid) + 1;
+        }
+        return counts;
     }
 
     private async Task<bool> TraversalLimitExceededAsync(

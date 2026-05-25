@@ -267,6 +267,55 @@ public class LoopEngineRoutingTests
     }
 
     [Fact]
+    public async Task EdgeTraversalCounts_persist_across_restart()
+    {
+        // Simulate a process restart by pre-seeding LoopRunNode rows that
+        // already used a self-loop edge 48 times. After restart, only 3 more
+        // traversals should fit before the default 50-cap fails the run.
+        using var h = new LoopEngineHarness();
+        h.AddNode("a", NodeType.Cmd);
+        h.AddEdge("a", "a", EdgeType.OnSuccess);
+
+        var nodeAId = h.NodesById["a"].Id;
+        var edgeId = h.Db.Context.LoopNodeEdges.First(e => e.SourceNodeId == nodeAId).Id;
+        var run = h.SeedRun("a");
+
+        for (int i = 0; i < 48; i++)
+        {
+            h.Db.Context.LoopRunNodes.Add(new ILD.Data.Entities.LoopRunNode
+            {
+                Id = Guid.NewGuid(),
+                LoopRunId = run.Id,
+                LoopNodeId = nodeAId,
+                NodeLabel = "a",
+                Status = LoopRunNodeStatus.Succeeded,
+                StartedAt = DateTime.UtcNow.AddSeconds(i),
+                CompletedAt = DateTime.UtcNow.AddSeconds(i),
+                IncomingEdgeId = edgeId,
+            });
+        }
+        h.Db.Context.SaveChanges();
+
+        var scripted = new ScriptedExecutor(NodeType.Cmd);
+        for (int i = 0; i < 10; i++)
+        {
+            scripted.Then(
+                new NodeOutcome.NodeStarting($"i{i}"),
+                new NodeOutcome.Success(EdgeType.OnSuccess, $"out-{i}"));
+        }
+        h.Registry.Register(scripted);
+
+        await h.RunAsync();
+
+        var reloaded = h.ReloadRun();
+        Assert.Equal(LoopRunStatus.Failed, reloaded.Status);
+        Assert.Contains("Max traversals", reloaded.HumanFeedbackReason ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        // 48 pre-existing + 2 fresh edge-traversals before the 51st trips the cap.
+        var totalEdgeNodes = h.ReloadRunNodes().Count(rn => rn.IncomingEdgeId == edgeId);
+        Assert.Equal(50, totalEdgeNodes);
+    }
+
+    [Fact]
     public async Task RetryFromNodeAsync_reseeds_PreviousNodeOutput_from_predecessor()
     {
         using var h = new LoopEngineHarness();
