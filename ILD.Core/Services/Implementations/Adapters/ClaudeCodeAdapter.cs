@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ILD.Core.Services.Interfaces;
+using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Stores.Interfaces;
@@ -38,6 +39,7 @@ public sealed class ClaudeCodeAdapter : IAgentAdapter
 
     public async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
+        string? mcpConfigPath = null;
         try
         {
             var rendered = await RenderPromptAsync(ctx.Prompt, ctx.RunContext);
@@ -47,6 +49,13 @@ public sealed class ClaudeCodeAdapter : IAgentAdapter
             if (string.IsNullOrEmpty(worktreePath) || !Directory.Exists(worktreePath))
                 return NodeExecutionResult.Fail(
                     "[claude-code-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
+
+            // Inject the ILD MCP server entry so the headless `claude` process
+            // can call list/create tools through the agent-scoped API. The CLI
+            // accepts a JSON config via `--mcp-config <file>`, which we merge
+            // with whatever the user has installed in their config — there is
+            // no replace-only mode required here.
+            mcpConfigPath = TryWriteIldMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist);
 
             // Before invoking claude, if a managed session is in play and the
             // turn JSONL is missing from $HOME/.claude/projects, materialize
@@ -58,7 +67,7 @@ public sealed class ClaudeCodeAdapter : IAgentAdapter
             Process? proc;
             try
             {
-                proc = Process.Start(BuildRunProcessStartInfo(binaryPath, worktreePath, rendered, ctx.SessionId));
+                proc = Process.Start(BuildRunProcessStartInfo(binaryPath, worktreePath, rendered, ctx.SessionId, mcpConfigPath));
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
@@ -131,13 +140,21 @@ public sealed class ClaudeCodeAdapter : IAgentAdapter
         {
             return NodeExecutionResult.Fail($"[claude-code-error] {ex.Message}");
         }
+        finally
+        {
+            if (!string.IsNullOrEmpty(mcpConfigPath))
+            {
+                try { File.Delete(mcpConfigPath); } catch { /* best effort */ }
+            }
+        }
     }
 
     public static ProcessStartInfo BuildRunProcessStartInfo(
         string binaryPath,
         string worktreePath,
         string renderedPrompt,
-        string? sessionId)
+        string? sessionId,
+        string? mcpConfigPath = null)
     {
         var psi = new ProcessStartInfo(binaryPath)
         {
@@ -158,6 +175,12 @@ public sealed class ClaudeCodeAdapter : IAgentAdapter
         psi.ArgumentList.Add("--permission-mode");
         psi.ArgumentList.Add("bypassPermissions");
 
+        if (!string.IsNullOrWhiteSpace(mcpConfigPath))
+        {
+            psi.ArgumentList.Add("--mcp-config");
+            psi.ArgumentList.Add(mcpConfigPath);
+        }
+
         if (!string.IsNullOrWhiteSpace(sessionId))
         {
             psi.ArgumentList.Add("--resume");
@@ -166,6 +189,75 @@ public sealed class ClaudeCodeAdapter : IAgentAdapter
 
         psi.ArgumentList.Add(renderedPrompt);
         return psi;
+    }
+
+    /// <summary>
+    /// Build the <c>mcpServers.ild</c> entry pointing at the ILD MCP server,
+    /// in the shape Claude Code's <c>--mcp-config</c> file expects:
+    /// <c>{ "command": "dotnet", "args": ["…/ild-mcp-server.dll"], "env": {…} }</c>.
+    /// Returns <c>null</c> when no server DLL can be located, in which case
+    /// the entry is omitted (failing open rather than poisoning the config).
+    /// </summary>
+    public static Dictionary<string, object?>? BuildIldMcpEntry(LoopRunContext? runContext)
+    {
+        var dllPath = OpenCodeAdapter.ResolveIldMcpServerDll();
+        if (dllPath == null) return null;
+
+        var apiUrl = Environment.GetEnvironmentVariable("ILD_API_URL")
+            ?? "http://localhost:5000";
+
+        var env = new Dictionary<string, object?>
+        {
+            ["ILD_API_URL"] = apiUrl,
+        };
+
+        var apiToken = Environment.GetEnvironmentVariable("ILD_API_TOKEN");
+        if (!string.IsNullOrEmpty(apiToken))
+            env["ILD_API_TOKEN"] = apiToken;
+
+        if (runContext != null)
+            env["ILD_LOOP_RUN_ID"] = runContext.LoopRunId.ToString();
+
+        return new Dictionary<string, object?>
+        {
+            ["command"] = "dotnet",
+            ["args"] = new[] { dllPath },
+            ["env"] = env,
+        };
+    }
+
+    /// <summary>
+    /// Serialize the ILD MCP config to a temp JSON file the caller can pass to
+    /// <c>claude --mcp-config</c>. Returns <c>null</c> when the <c>ild</c>
+    /// tool isn't in the allowlist, when no server DLL can be located, or when
+    /// the temp file can't be written.
+    /// </summary>
+    public static string? TryWriteIldMcpConfig(AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? toolAllowlist)
+    {
+        var enabledKeys = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, toolAllowlist);
+        if (!enabledKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase))
+            return null;
+
+        var entry = BuildIldMcpEntry(runContext);
+        if (entry == null) return null;
+
+        var config = new Dictionary<string, object?>
+        {
+            ["mcpServers"] = new Dictionary<string, object?>
+            {
+                ["ild"] = entry,
+            },
+        };
+
+        var json = JsonSerializer.Serialize(config);
+        var path = Path.Combine(Path.GetTempPath(), $"ild-claude-mcp-{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllText(path, json);
+            return path;
+        }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
     }
 
     private static string ResolveBinaryPath(AiProvider provider)
