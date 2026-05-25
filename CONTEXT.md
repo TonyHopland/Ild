@@ -29,7 +29,7 @@ _Avoid_: workspace, checkout
 ### Node Types
 
 **Start Node**:
-The entry point of a loop graph. Optionally creates a worktree and branch. If the base git repository is missing at `repo.WorktreesPath` (or fallback `data/repos/{repo-id}`), it is cloned on demand. If the base repository already exists, `git fetch origin` + `git reset --hard origin/<defaultBranch>` runs before worktree creation to ensure the latest state (best-effort; sync failure does not fail the node). After worktree creation, the branch is rebased onto `origin/<defaultBranch>` — rebase failure fails the node to prevent stale worktrees.
+The entry point of a loop graph. Optionally creates a worktree and branch. If the base git repository is missing at `repo.WorktreesPath` (or fallback `{DataRoot}/repos/{repo-id}`), it is cloned on demand. If the base repository already exists, `git fetch origin` is run (best-effort — fetch failure is swallowed) followed by `git reset --hard origin/<defaultBranch>`. Reset failure **does** fail the node, enforcing the run-isolation invariant that every run must start from a clean origin base. After worktree creation, the branch is rebased onto `origin/<defaultBranch>` — rebase failure also fails the node to prevent stale worktrees.
 _Avoid_: init, setup
 
 **Cmd Node**:
@@ -37,7 +37,7 @@ Executes a shell command in the worktree. Succeeds on exit code 0. Bounded by ru
 _Avoid_: shell, command
 
 **AI Node**:
-Delegates execution to an `IAgentAdapter` resolved by `AiProvider.Type`. The adapter controls the full execution lifecycle including multi-turn loops, tool use, and internal state. Has a single `prompt` field regardless of whether the node starts fresh or resumes a bound session. If the graph needs different first-turn and follow-up prompts, model that explicitly with upstream `Prompt` nodes. If `provider` config specifies a provider that doesn't exist, the node fails (no fallback to default or first provider). Supports `rejectPattern` — a regex that, when matched against the AI output, causes the node to fail and route to the `on_failure` edge. Bounded by run-scoped cancellation only — no per-node timeout.
+Delegates execution to an `IAgentAdapter` resolved by `AiProvider.Type`. The adapter controls the full execution lifecycle including multi-turn loops, tool use, and internal state. Has a single `prompt` field regardless of whether the node starts fresh or resumes a bound session. If the graph needs different first-turn and follow-up prompts, model that explicitly with upstream `Prompt` nodes. Provider resolution: if `aiProviderId` parses as a GUID, the executor looks it up and fails if the row is missing (no fallback). If `aiProviderId` is unset or not a GUID, the executor falls back to `GetDefaultAiProviderAsync` (the provider flagged as default), failing only if no default is configured. Supports `rejectPattern` — a regex that, when matched against the AI output, causes the node to fail and route to the `on_failure` edge. Bounded by run-scoped cancellation only — no per-node timeout.
 _Avoid_: LLM node, model node
 
 **Human Node**:
@@ -150,7 +150,7 @@ See the [Architecture](#architecture) section below for how the API layer compos
 ### API surface
 
 - All controllers live under `ILD.Api/Controllers` and inherit `[Route("api/v1/...")]`. There is no implicit versioning middleware — see [API Versioning Policy](#api-versioning-policy).
-- Auth is enforced by `ILD.Api/Middleware/AuthMiddleware.cs` via bearer-token session cookies/headers. Excluded paths: `/api/v1/auth/login`, `/api/v1/health`, `/api/v1/logging`, `/metrics`. The webhook endpoints (`/api/v1/webhooks/forgejo` and `/api/v1/webhooks/github`) are **not** excluded; external callers must additionally pass HMAC verification via `IRemoteGitProviderAdapter.VerifyWebhookSignature` (the relevant adapter owns the check) on top of bearer auth.
+- Auth is enforced by `ILD.Api/Middleware/AuthMiddleware.cs` via bearer-token session cookies/headers. The middleware only **enforces** auth on `/api/*`, `/hubs/*`, and `/metrics`; everything else (SPA routes, static assets when `AuthOptions.AllowStaticFiles` is on — the default) is allowed through so the SPA shell can serve. Within the enforced scope, `AuthOptions.ExcludedPaths` adds explicit exemptions: `/api/v1/auth/login`, `/api/v1/health`, `/api/v1/logging`, `/metrics`. The webhook endpoints (`/api/v1/webhooks/forgejo` and `/api/v1/webhooks/github`) are **not** excluded; external callers must additionally pass HMAC verification via `IRemoteGitProviderAdapter.VerifyWebhookSignature` (the relevant adapter owns the check) on top of bearer auth.
 - `AuthService.LoginAsync` auto-seeds the `admin` user the first time it sees a login attempt with the username `admin` and a non-empty `ILD_PASSWORD` env var.
 - Webhook routes verify HMAC against `RemoteProvider.WebhookSecret` values; if no provider has a secret configured, all webhook calls are rejected with 401.
 - `EventLog` query routes live on `LoopRunsController` (`GET /api/v1/loopruns/{id}/events?cursor=&limit=` for the cursor-paginated list, `GET /api/v1/loopruns/{id}/events/payload?sequence=N` for the spilled large-payload fetch) — there is no separate `EventLogController`.

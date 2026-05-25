@@ -23,7 +23,7 @@ const allowedEdgeTypesByNodeType: Record<NodeType, EdgeType[]> = {
   [NodeType.Human]: [EdgeType.OnSuccess, EdgeType.OnFailure, EdgeType.OnRespond],
   [NodeType.Prompt]: [EdgeType.OnSuccess, EdgeType.OnFailure],
   [NodeType.PR]: [EdgeType.OnSuccess, EdgeType.OnFailure, EdgeType.OnRespond],
-  [NodeType.Cleanup]: [EdgeType.OnSuccess, EdgeType.OnFailure],
+  [NodeType.Cleanup]: [],
 };
 
 export function checkEdgeConstraints(

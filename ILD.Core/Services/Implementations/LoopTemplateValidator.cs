@@ -15,7 +15,7 @@ public static class LoopTemplateValidator
         { "AI", new() { "OnSuccess", "OnFailure" } },
         { "Prompt", new() { "OnSuccess", "OnFailure" } },
         { "PR", new() { "OnSuccess", "OnFailure", "OnRespond" } },
-        { "Cleanup", new() { "OnSuccess", "OnFailure" } },
+        { "Cleanup", new() },
     };
 
     private static HashSet<string> GetAllowedEdgeTypes(string nodeType)
