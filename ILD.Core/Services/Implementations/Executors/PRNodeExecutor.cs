@@ -126,7 +126,49 @@ public sealed class PRNodeExecutor : INodeExecutor
             prUrl = prResult.HtmlUrl ?? prResult.Url ?? string.Empty;
             yield return new NodeOutcome.PrCreated(prUrl);
         }
+        else if (!string.IsNullOrEmpty(cfg.PrCommentTemplate))
+        {
+            // PR already exists for this run — render the comment template and
+            // post it on the existing PR. Each re-visit of this node posts a
+            // fresh comment.
+            var remote = sp.GetRequiredService<IRemoteProvider>();
+            var prNumber = ExtractPrNumber(prUrl);
+            if (string.IsNullOrEmpty(prNumber))
+            {
+                yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"Cannot derive PR number from '{prUrl}' to post comment");
+                yield break;
+            }
+            string commentBody = cfg.PrCommentTemplate;
+            if (rendering is not null)
+            {
+                try { commentBody = await rendering.RenderAsync(cfg.PrCommentTemplate, ctx.Run.Id, wi, ctx.Run.PreviousNodeOutput); }
+                catch { }
+            }
+            bool posted = false;
+            string? commentErr = null;
+            try { posted = await remote.CreatePullRequestCommentAsync(repo.CloneUrl, prNumber, commentBody); }
+            catch (Exception ex) { commentErr = ex.Message; }
+            if (!posted)
+            {
+                yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"PR comment failed: {commentErr ?? "remote returned false"}");
+                yield break;
+            }
+        }
 
         yield return new NodeOutcome.WaitingAction("PR awaiting merge", prUrl);
+    }
+
+    private static string? ExtractPrNumber(string prUrl)
+    {
+        if (string.IsNullOrEmpty(prUrl)) return null;
+        // Both GitHub (.../pull/N) and Forgejo (.../pulls/N) end with the
+        // numeric PR id as the last non-empty segment.
+        var segments = prUrl.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (var i = segments.Length - 1; i >= 0; i--)
+        {
+            var seg = segments[i].TrimEnd('?', '#');
+            if (seg.Length > 0 && seg.All(char.IsDigit)) return seg;
+        }
+        return null;
     }
 }

@@ -49,7 +49,7 @@ Renders a templated text payload using the prompt placeholder pipeline (`{{WorkI
 _Avoid_: template node, text node
 
 **PR Node**:
-Creates a pull request (or reuses existing one via `WorkItem.PrUrl`). Before PR creation, automatically commits any uncommitted changes, pushes the branch, fetches the remote, and verifies the branch has commits ahead of the target branch — if the branch has 0 commits ahead, the node fails (no-changes guard). Waits for webhook events: merge routes to `on_success`, rejection routes to `on_failure`. Supports `prDescriptionTemplate` config field with placeholder resolution (`{{WorkItem.Title}}`, `{{WorkItem.Description}}`, `{{PreviousNode.Output}}`); falls back to `WorkItem.Description` if unset. Makes the PR lifecycle explicit in the graph.
+Creates a pull request (or reuses existing one via `WorkItem.PrUrl`). Before PR creation, automatically commits any uncommitted changes, pushes the branch, fetches the remote, and verifies the branch has commits ahead of the target branch — if the branch has 0 commits ahead, the node fails (no-changes guard). Waits for webhook events: merge routes to `on_success`, rejection routes to `on_failure`. Supports three template config fields, all rendered through the prompt placeholder pipeline: `prompt` (announced as the node's input), `prDescriptionTemplate` (used as the PR body on creation; falls back to `WorkItem.Description` if unset), and `prCommentTemplate` (posted as a fresh PR comment on every re-visit when the PR already exists; the node fails if the comment post fails). Makes the PR lifecycle explicit in the graph.
 _Avoid_: repository node, git node
 
 **Cleanup Node**:
