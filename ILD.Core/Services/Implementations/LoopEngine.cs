@@ -202,6 +202,7 @@ public sealed class LoopEngine : ILoopEngine
     {
         using var scope = _sp.CreateScope();
         var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+        var workItems = scope.ServiceProvider.GetRequiredService<IWorkItemManager>();
         var run = await loopRunStore.GetByIdAsync(runId);
         if (run is null) return;
         if (run.Status == LoopRunStatus.Running && !run.IsPaused)
@@ -216,6 +217,7 @@ public sealed class LoopEngine : ILoopEngine
             var prev = await loopRunStore.GetRunNodeByIdAsync(prevId);
             prevOutput = prev?.Output;
         }
+        var oldStatus = run.Status;
         run.CurrentNodeId = target.LoopNodeId;
         run.PreviousNodeOutput = prevOutput;
         run.ExternalActionResult = null;
@@ -223,6 +225,8 @@ public sealed class LoopEngine : ILoopEngine
         run.Status = LoopRunStatus.Running;
         run.IsPaused = false;
         await loopRunStore.UpdateRunAsync(run);
+        await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.Running, currentLoopRunId: run.Id);
+        await _notifier.RunStateChangedAsync(runId, oldStatus, LoopRunStatus.Running);
         _ = LaunchAfterAwaitAsync(runId);
     }
 
