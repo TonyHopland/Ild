@@ -219,6 +219,7 @@ public class PiAdapterTests
         var scriptPath = Path.Combine(worktreeDir, "args.sh");
         File.WriteAllText(scriptPath,
             "#!/bin/sh\n" +
+            "cat >/dev/null\n" +
             "printf '%s\\n' \"$@\"\n" +
             "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-session-restore\",\"cwd\":\"$PWD\"}'\n" +
             "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ok\"}]}}'\n");

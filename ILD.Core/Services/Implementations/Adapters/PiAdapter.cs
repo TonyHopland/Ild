@@ -75,9 +75,18 @@ public sealed class PiAdapter : IAgentAdapter
             }
 
             using var process = proc ?? throw new InvalidOperationException("Process.Start returned null");
-            await process.StandardInput.WriteAsync(rendered.AsMemory(), ctx.Cancel);
-            await process.StandardInput.FlushAsync(ctx.Cancel);
-            process.StandardInput.Close();
+            try
+            {
+                await process.StandardInput.WriteAsync(rendered.AsMemory(), ctx.Cancel);
+                await process.StandardInput.FlushAsync(ctx.Cancel);
+            }
+            catch (IOException)
+            {
+                // Child already closed stdin (e.g. consumed enough of the
+                // prompt and exited). Don't discard its stdout — let the
+                // exit code and parsed output decide success.
+            }
+            try { process.StandardInput.Close(); } catch (IOException) { }
             var stdoutTask = ReadStdoutAsync(process.StandardOutput, ctx.ProgressCallback, ctx.Cancel);
             var stderrTask = process.StandardError.ReadToEndAsync(ctx.Cancel);
 
