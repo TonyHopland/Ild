@@ -123,7 +123,19 @@ public class AIProviderService : IAIProviderService
                     return new ToolExecutionResult(true, "ok", null);
                 }
                 case "git.diff":
-                    return await RunShellAsync("git diff HEAD", worktreePath);
+                {
+                    // Scope the diff to what this run added on top of the default branch's
+                    // fork point. `origin/HEAD` resolves to origin/<defaultBranch>; merge-base
+                    // pins the fork point so subsequent fast-forwards on the default branch
+                    // don't drag unrelated commits into the diff. `--intent-to-add` makes new
+                    // untracked files appear without staging their contents.
+                    var mb = await RunShellAsync("git merge-base HEAD origin/HEAD", worktreePath);
+                    var baseRef = mb.Success && !string.IsNullOrWhiteSpace(mb.Output)
+                        ? mb.Output.Trim()
+                        : "origin/HEAD";
+                    await RunShellAsync("git add --intent-to-add .", worktreePath);
+                    return await RunShellAsync($"git diff {baseRef}", worktreePath);
+                }
                 case "ild.create_workitem":
                     return await CreateWorkItemAsync(arguments);
                 case "ild.preview_start":
