@@ -14,13 +14,14 @@ public class AiProviderDto
     [StringLength(64, MinimumLength = 1)]
     public string Type { get; set; } = string.Empty;
 
-    [Required]
-    [Url]
+    // Optional at the DTO level. Some provider types (e.g. claude-code, which
+    // authenticates via the locally-installed CLI's stored credentials) don't
+    // need a base URL or model. The controller enforces them for the types
+    // that do require them.
     [StringLength(512)]
     public string BaseUrl { get; set; } = string.Empty;
 
-    [Required]
-    [StringLength(128, MinimumLength = 1)]
+    [StringLength(128)]
     public string Model { get; set; } = string.Empty;
 
     [StringLength(4096)]

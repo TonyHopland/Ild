@@ -26,7 +26,7 @@ public class AiProvidersControllerTests : IDisposable
         var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(_conn).Options;
         _db = new AppDbContext(options);
         _db.Database.EnsureCreated();
-        _registry.Setup(r => r.GetAllSupportedProviderTypes()).Returns(["opencode", "pi"]);
+        _registry.Setup(r => r.GetAllSupportedProviderTypes()).Returns(["opencode", "pi", "claude-code"]);
     }
 
     public void Dispose()
@@ -139,6 +139,42 @@ public class AiProvidersControllerTests : IDisposable
         Assert.Contains("\"Key\":\"write\"", json);
         Assert.Contains("\"Key\":\"execute\"", json);
         Assert.Contains("\"Key\":\"ild\"", json);
+    }
+
+    [Fact]
+    public async Task Create_accepts_claude_code_with_empty_url_and_model()
+    {
+        var controller = CreateController();
+
+        var result = await controller.Create(new AiProviderDto
+        {
+            Name = "claude-max",
+            Type = "claude-code",
+            BaseUrl = string.Empty,
+            Model = string.Empty,
+        });
+
+        var created = Assert.IsType<CreatedAtActionResult>(result);
+        var json = System.Text.Json.JsonSerializer.Serialize(created.Value);
+        Assert.Contains("claude-code", json);
+    }
+
+    [Fact]
+    public async Task Create_rejects_non_cli_provider_without_url()
+    {
+        var controller = CreateController();
+
+        var result = await controller.Create(new AiProviderDto
+        {
+            Name = "pi-default",
+            Type = "pi",
+            BaseUrl = string.Empty,
+            Model = "gpt-4",
+        });
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+        var json = System.Text.Json.JsonSerializer.Serialize(badRequest.Value);
+        Assert.Contains("BaseUrl", json);
     }
 
     [Fact]

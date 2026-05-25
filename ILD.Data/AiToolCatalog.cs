@@ -46,5 +46,5 @@ public static class AiToolCatalog
     }
 
     private static bool IsDefaultAgentProvider(string? providerType)
-        => providerType?.Trim().ToLowerInvariant() is "opencode" or "pi";
+        => providerType?.Trim().ToLowerInvariant() is "opencode" or "pi" or "claude-code";
 }

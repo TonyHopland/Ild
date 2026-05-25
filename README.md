@@ -133,14 +133,15 @@ Most important environment variables:
 
 Build-time container options from compose:
 
-| Build arg         | Purpose                                                   |
-| ----------------- | --------------------------------------------------------- |
-| `WITH_OPENCODE`   | Install the OpenCode CLI in the ILD image                 |
-| `WITH_PI`         | Install the Pi CLI in the ILD image                       |
-| `WITH_NODE`       | Install Node.js tooling in the ILD image                  |
-| `WITH_DOTNET_SDK` | Install the .NET SDK in the ILD image                     |
-| `WITH_CHROME`     | Install Chrome in the ILD image                           |
-| `WITH_CERTS`      | Import `.crt` or `.pem` files from `certs/` at build time |
+| Build arg          | Purpose                                                   |
+| ------------------ | --------------------------------------------------------- |
+| `WITH_OPENCODE`    | Install the OpenCode CLI in the ILD image                 |
+| `WITH_PI`          | Install the Pi CLI in the ILD image                       |
+| `WITH_CLAUDE_CODE` | Install the Claude Code CLI in the ILD image              |
+| `WITH_NODE`        | Install Node.js tooling in the ILD image                  |
+| `WITH_DOTNET_SDK`  | Install the .NET SDK in the ILD image                     |
+| `WITH_CHROME`      | Install Chrome in the ILD image                           |
+| `WITH_CERTS`       | Import `.crt` or `.pem` files from `certs/` at build time |
 
 Remote providers, repositories, AI providers, and runtime polling settings are managed from the UI and persisted in the ILD database.
 

@@ -49,6 +49,7 @@ services:
         DOTNET_SDK_CHANNEL: ${DOTNET_SDK_CHANNEL:-10.0}
         WITH_OPENCODE: ${WITH_OPENCODE:-1}
         WITH_PI: ${WITH_PI:-1}
+        WITH_CLAUDE_CODE: ${WITH_CLAUDE_CODE:-1}
         WITH_NODE: ${WITH_NODE:-1}
         WITH_DOTNET_SDK: ${WITH_DOTNET_SDK:-1}
         WITH_CHROME: ${WITH_CHROME:-1}
@@ -72,6 +73,11 @@ services:
     volumes:
       - ild-data:/data
       - ild-worktrees:/worktrees
+      # One volume to persist all agent CLI config/login dirs (.claude,
+      # .opencode, .pi, ...) across image rebuilds. The entrypoint
+      # symlinks each name listed in AGENT_CONFIG_DIRS from $HOME into
+      # this store, so binary installs in the image stay updatable.
+      - ild-config:/home/ild/.agent-config
       - ${GIT_CONFIG:-~/.gitconfig}:/home/ild/.gitconfig:ro
     depends_on:
       postgres:
@@ -84,4 +90,5 @@ volumes:
   postgres-data:
   ild-data:
   ild-worktrees:
+  ild-config:
   workitem-data:
