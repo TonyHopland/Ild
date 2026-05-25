@@ -122,7 +122,7 @@ _Avoid_: draft, planned
 ## Example Dialogue
 
 > **Dev:** "When I create a work item, does it start running immediately?"
-> **Domain expert:** "No — it lands in Backlog or Work Queue depending on the repository's gating setting. If it has no dependencies and lands in Work Queue, it auto-transitions to Ready. You still need to click Start."
+> **Domain expert:** "Maybe. It lands in Backlog or Work Queue depending on the repository's gating setting. If it has no dependencies and lands in Work Queue, it auto-transitions to Ready, and from there the scheduler will pick it up on its next poll and transition it to Running (subject to the global pause toggle and max-concurrent-runs cap)."
 
 > **Dev:** "Can I change the loop template for a running work item?"
 > **Domain expert:** "Not for the in-flight run — every LoopRun pins the template version it started with, so editing the template mid-run won't disturb it. But the next run on the same WorkItem will re-resolve from tags and pick the latest version, including any edits."
@@ -195,4 +195,4 @@ The frontend hook `useSignalR.on<E>(eventType, handler)` resolves the payload ty
 
 ### Frontend route loading
 
-Routes in `frontend/src/App.tsx` are registered with `React.lazy(() => import(...))` and wrapped in a top-level `ErrorBoundary` so a render failure in one route can't take down the shell. Page-level errors surface through the shared `ErrorBanner` component (issue #036).
+Routes in `frontend/src/App.tsx` are wrapped in a top-level `ErrorBoundary` so a render failure in one route can't take down the shell. The heavier editor and live-monitor pages (`LoopEditor`, `LoopRunMonitor`) are code-split via `React.lazy(() => import(...))` and wrapped in a `Suspense` boundary; the remaining pages (Login, Taskboard, EventLogViewer, Settings, Repositories, RemoteProviders, AiProviders) are imported eagerly because their footprint doesn't justify a separate chunk. Page-level errors surface through the shared `ErrorBanner` component (issue #036).
