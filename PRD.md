@@ -20,7 +20,7 @@ ILD is composed of:
 The product should let a developer:
 
 1. Create, categorize, and prioritize work items in a shared queue.
-2. Resolve those work items through reusable loop templates made of `Start`, `Cmd`, `AI`, `Human`, `PR`, and `Cleanup` nodes.
+2. Resolve those work items through reusable loop templates made of `Start`, `Cmd`, `AI`, `Human`, `Prompt`, `PR`, and `Cleanup` nodes.
 3. Run work either manually from the UI or automatically through background polling.
 4. Use different AI execution backends through adapters instead of a single hard-coded LLM path.
 5. Pause for review, feed back context, inspect run history, and recover safely after restarts.
@@ -99,7 +99,7 @@ The product should let a developer:
 | Loop execution            | Sequential per run                                            |
 | Recovery                  | Per-run policy with startup reconciliation                    |
 | AI architecture           | Adapter-driven, resolved by provider type                     |
-| Tool execution            | Mixed model: HTTP providers and external agent CLIs           |
+| Tool execution            | Provider-owned: each CLI adapter maps the per-node allowlist  |
 | Realtime                  | SignalR hubs for loop-run and work-item streams               |
 | Auth                      | Session-token auth in ILD; bearer API keys in WorkItem Server |
 
@@ -125,8 +125,7 @@ The product should let a developer:
 The following items are still desired but not fully delivered in the current codebase:
 
 1. The ILD health endpoint reports database and disk health but does not perform a real remote-provider connectivity probe yet.
-2. Per-node tool allowlists for AI providers are still a future enhancement.
-3. Documentation and product messaging should continue avoiding references to the removed single-container and SQLite-first architecture.
+2. Documentation and product messaging should continue avoiding references to the removed single-container and SQLite-first architecture.
 
 ## Non-Goals
 
