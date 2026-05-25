@@ -9,9 +9,15 @@ RUNTIME_DIRS="${RUNTIME_DIRS:-/data /worktrees /home/ild/.agent-config}"
 # persistent volume mounted at AGENT_CONFIG_STORE, then symlinked into
 # $HOME at container start. This lets login state survive image rebuilds
 # without freezing tool binary installs that live elsewhere in the image.
-# Override AGENT_CONFIG_DIRS to add or remove agents.
+# Override AGENT_CONFIG_DIRS / AGENT_CONFIG_FILES to add or remove entries.
+#
+# AGENT_CONFIG_FILES covers individual files that live in $HOME alongside
+# the dotdirs — Claude Code's .claude.json (which holds `oauthAccount` and
+# project state) is the canonical example: without it, even a valid
+# .claude/.credentials.json reads as logged-out.
 AGENT_CONFIG_STORE="${AGENT_CONFIG_STORE:-/home/ild/.agent-config}"
 AGENT_CONFIG_DIRS="${AGENT_CONFIG_DIRS:-.claude .opencode .pi}"
+AGENT_CONFIG_FILES="${AGENT_CONFIG_FILES:-.claude.json}"
 
 ensure_owned_by_runtime_user() {
   path="$1"
@@ -47,6 +53,37 @@ link_agent_config_dirs() {
     fi
 
     if [ -L "$link" ] || [ ! -e "$link" ]; then
+      ln -sfn "$target" "$link"
+      chown -h "$RUNTIME_USER:$RUNTIME_GROUP" "$link"
+    fi
+  done
+}
+
+# For each file name, symlink $HOME/<name> at the persistent store. Unlike
+# dirs we actively migrate a pre-existing real file into the store on the
+# first run after this fix is deployed, so users who logged in before the
+# symlink existed don't lose their session on the very next rebuild.
+link_agent_config_files() {
+  store="$1"
+  user_home="$2"
+  shift 2
+
+  [ -d "$store" ] || return 0
+
+  for name in "$@"; do
+    [ -n "$name" ] || continue
+    target="$store/$name"
+    link="$user_home/$name"
+
+    if [ -L "$link" ]; then
+      ln -sfn "$target" "$link"
+      chown -h "$RUNTIME_USER:$RUNTIME_GROUP" "$link"
+    elif [ -f "$link" ] && [ ! -e "$target" ]; then
+      mv "$link" "$target"
+      chown "$RUNTIME_USER:$RUNTIME_GROUP" "$target"
+      ln -sfn "$target" "$link"
+      chown -h "$RUNTIME_USER:$RUNTIME_GROUP" "$link"
+    elif [ ! -e "$link" ]; then
       ln -sfn "$target" "$link"
       chown -h "$RUNTIME_USER:$RUNTIME_GROUP" "$link"
     fi
@@ -107,10 +144,12 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
     chown "$RUNTIME_USER:$RUNTIME_GROUP" "$runtime_home"
     export HOME="$runtime_home"
 
-    # Intentional word-split on AGENT_CONFIG_DIRS — entries are
-    # space-separated dotdir names.
+    # Intentional word-split on AGENT_CONFIG_DIRS / AGENT_CONFIG_FILES —
+    # entries are space-separated names.
     # shellcheck disable=SC2086
     link_agent_config_dirs "$AGENT_CONFIG_STORE" "$runtime_home" $AGENT_CONFIG_DIRS
+    # shellcheck disable=SC2086
+    link_agent_config_files "$AGENT_CONFIG_STORE" "$runtime_home" $AGENT_CONFIG_FILES
   fi
 
   wait_for_postgres

@@ -221,6 +221,64 @@ public class ClaudeCodeAdapterTests
         Assert.DoesNotContain("--resume", psi.ArgumentList);
     }
 
+    [Fact]
+    public void EncodeWorktreePath_replaces_slashes_with_dashes()
+    {
+        Assert.Equal("-workspaces-Ild", ClaudeCodeAdapter.EncodeWorktreePath("/workspaces/Ild"));
+    }
+
+    [Fact]
+    public void WrapJsonl_roundtrips_through_UnwrapJsonl()
+    {
+        var jsonl =
+            "{\"type\":\"user\",\"text\":\"hello\"}\n" +
+            "{\"type\":\"assistant\",\"text\":\"hi\"}\n";
+
+        var wrapped = ClaudeCodeAdapter.WrapJsonl("sess-1", jsonl);
+
+        // Wrapper is valid JSON the UI can parse for `messages`/`events` counts.
+        using (var doc = System.Text.Json.JsonDocument.Parse(wrapped))
+        {
+            Assert.Equal("claude-jsonl", doc.RootElement.GetProperty("format").GetString());
+            Assert.Equal("sess-1", doc.RootElement.GetProperty("sessionId").GetString());
+            Assert.Equal(2, doc.RootElement.GetProperty("events").GetArrayLength());
+        }
+
+        var roundtrip = ClaudeCodeAdapter.UnwrapJsonl(wrapped);
+        Assert.NotNull(roundtrip);
+
+        var lines = roundtrip!
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.Trim())
+            .ToArray();
+        Assert.Equal(2, lines.Length);
+        Assert.Contains("\"hello\"", lines[0]);
+        Assert.Contains("\"hi\"", lines[1]);
+    }
+
+    [Fact]
+    public void WrapJsonl_skips_malformed_lines()
+    {
+        var jsonl =
+            "{\"type\":\"ok\"}\n" +
+            "not-json\n" +
+            "{\"type\":\"also-ok\"}\n";
+
+        var wrapped = ClaudeCodeAdapter.WrapJsonl("sess", jsonl);
+
+        using var doc = System.Text.Json.JsonDocument.Parse(wrapped);
+        Assert.Equal(2, doc.RootElement.GetProperty("events").GetArrayLength());
+    }
+
+    [Fact]
+    public void UnwrapJsonl_returns_null_for_unrelated_json()
+    {
+        Assert.Null(ClaudeCodeAdapter.UnwrapJsonl("\"just-a-string\""));
+        Assert.Null(ClaudeCodeAdapter.UnwrapJsonl("{\"unrelated\":true}"));
+        Assert.Null(ClaudeCodeAdapter.UnwrapJsonl(""));
+        Assert.Null(ClaudeCodeAdapter.UnwrapJsonl("not json at all"));
+    }
+
     private static string CreateWorktree()
     {
         var path = Path.Combine(Path.GetTempPath(), $"ild-claude-test-{Guid.NewGuid():N}");

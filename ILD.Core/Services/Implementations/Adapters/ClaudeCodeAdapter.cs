@@ -1,9 +1,12 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
+using ILD.Data.Stores.Interfaces;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Core.Services.Implementations.Adapters;
 
@@ -18,6 +21,16 @@ namespace ILD.Core.Services.Implementations.Adapters;
 public sealed class ClaudeCodeAdapter : IAgentAdapter
 {
     private static readonly IPromptTemplateResolver Resolver = new PromptTemplateResolver();
+    private readonly IServiceScopeFactory? _scopeFactory;
+
+    public ClaudeCodeAdapter()
+    {
+    }
+
+    public ClaudeCodeAdapter(IServiceScopeFactory scopeFactory)
+    {
+        _scopeFactory = scopeFactory;
+    }
 
     public string Name => "ClaudeCode";
     public string[] SupportedProviderTypes => ["claude-code"];
@@ -34,6 +47,13 @@ public sealed class ClaudeCodeAdapter : IAgentAdapter
             if (string.IsNullOrEmpty(worktreePath) || !Directory.Exists(worktreePath))
                 return NodeExecutionResult.Fail(
                     "[claude-code-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
+
+            // Before invoking claude, if a managed session is in play and the
+            // turn JSONL is missing from $HOME/.claude/projects, materialize
+            // it from the snapshot store so `--resume` can pick up the
+            // history even when the on-disk cache has been wiped.
+            if (ctx.ManageSession && !string.IsNullOrWhiteSpace(ctx.SessionId))
+                await TryRestoreSessionJsonlAsync(ctx, ctx.SessionId!, worktreePath);
 
             Process? proc;
             try
@@ -94,6 +114,14 @@ public sealed class ClaudeCodeAdapter : IAgentAdapter
 
             if (process.ExitCode == 0 && stdout.SawJsonEvents && string.IsNullOrWhiteSpace(stdout.Content))
                 return NodeExecutionResult.Fail(response);
+
+            // On a successful managed-session turn, copy the JSONL claude
+            // wrote at $HOME/.claude/projects/<encoded-cwd>/<sid>.jsonl into
+            // the snapshot store. This is what surfaces the run's session in
+            // the "Available AI Sessions" panel and lets us rehydrate the
+            // on-disk file on a later turn (see TryRestoreSessionJsonlAsync).
+            if (process.ExitCode == 0 && ctx.ManageSession && !string.IsNullOrWhiteSpace(effectiveSessionId))
+                await TryPersistSessionJsonlAsync(ctx, effectiveSessionId!, worktreePath);
 
             return process.ExitCode == 0
                 ? NodeExecutionResult.Ok(response, rendered, effectiveSessionId, ctx.IncomingSessionId)
@@ -286,6 +314,135 @@ public sealed class ClaudeCodeAdapter : IAgentAdapter
             PreviousNodeOutput: context.PreviousNodeOutput,
             EventLogSummary: context.EventLogSummary,
             WorktreePath: context.WorktreePath)));
+
+    private async Task TryRestoreSessionJsonlAsync(AgentExecutionContext ctx, string sessionId, string worktreePath)
+    {
+        if (_scopeFactory is null) return;
+
+        var path = GetSessionFilePath(worktreePath, sessionId);
+        if (path is null || File.Exists(path)) return;
+
+        AdapterSessionSnapshot? snapshot;
+        try
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var store = scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>();
+            snapshot = await store.GetAsync(ctx.RunContext.LoopRunId, Name, sessionId, ctx.Cancel);
+        }
+        catch
+        {
+            return;
+        }
+
+        if (snapshot is null || string.IsNullOrWhiteSpace(snapshot.SessionJson)) return;
+
+        var jsonl = UnwrapJsonl(snapshot.SessionJson);
+        if (jsonl is null) return;
+
+        try
+        {
+            var dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            await File.WriteAllTextAsync(path, jsonl, ctx.Cancel);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
+    private async Task TryPersistSessionJsonlAsync(AgentExecutionContext ctx, string sessionId, string worktreePath)
+    {
+        if (_scopeFactory is null) return;
+
+        var path = GetSessionFilePath(worktreePath, sessionId);
+        if (path is null || !File.Exists(path)) return;
+
+        string jsonl;
+        try
+        {
+            jsonl = await File.ReadAllTextAsync(path, ctx.Cancel);
+        }
+        catch (IOException) { return; }
+        catch (UnauthorizedAccessException) { return; }
+
+        var wrapped = WrapJsonl(sessionId, jsonl);
+
+        try
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var store = scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>();
+            await store.UpsertAsync(ctx.RunContext.LoopRunId, Name, sessionId, wrapped, ctx.Cancel);
+        }
+        catch
+        {
+            // Snapshot persistence is observational — never fail a run because
+            // the UI-facing snapshot couldn't be written.
+        }
+    }
+
+    public static string? GetSessionFilePath(string worktreePath, string sessionId)
+    {
+        if (string.IsNullOrEmpty(worktreePath) || string.IsNullOrEmpty(sessionId)) return null;
+        var home = Environment.GetEnvironmentVariable("HOME");
+        if (string.IsNullOrEmpty(home))
+            home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (string.IsNullOrEmpty(home)) return null;
+        return Path.Combine(home, ".claude", "projects", EncodeWorktreePath(worktreePath), $"{sessionId}.jsonl");
+    }
+
+    // Claude Code stores per-cwd session JSONL files under
+    // ~/.claude/projects/<encoded-cwd>/. The encoding observed in practice
+    // is a verbatim slash-to-dash substitution (e.g. /workspaces/Ild ->
+    // -workspaces-Ild). If Anthropic ever changes the rule, restore/persist
+    // will silently no-op (path miss) rather than misbehave.
+    public static string EncodeWorktreePath(string path) => path.Replace('/', '-');
+
+    public static string WrapJsonl(string sessionId, string jsonl)
+    {
+        var events = new JsonArray();
+        using var reader = new StringReader(jsonl);
+        string? line;
+        while ((line = reader.ReadLine()) is not null)
+        {
+            line = line.Trim();
+            if (line.Length == 0) continue;
+            try
+            {
+                var node = JsonNode.Parse(line);
+                if (node is not null) events.Add(node);
+            }
+            catch (JsonException)
+            {
+                // Skip malformed lines; the wrapper is a UI-facing summary,
+                // not a faithful copy.
+            }
+        }
+
+        var obj = new JsonObject
+        {
+            ["format"] = "claude-jsonl",
+            ["sessionId"] = sessionId,
+            ["events"] = events,
+        };
+        return obj.ToJsonString();
+    }
+
+    public static string? UnwrapJsonl(string sessionJson)
+    {
+        if (string.IsNullOrWhiteSpace(sessionJson)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(sessionJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return null;
+            if (!doc.RootElement.TryGetProperty("events", out var events)
+                || events.ValueKind != JsonValueKind.Array) return null;
+
+            var sb = new StringBuilder();
+            foreach (var evt in events.EnumerateArray())
+                sb.AppendLine(evt.GetRawText());
+            return sb.ToString();
+        }
+        catch (JsonException) { return null; }
+    }
 
     private sealed record ClaudeStreamOutput(
         string RawStdout,
