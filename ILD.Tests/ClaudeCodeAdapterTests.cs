@@ -1,0 +1,268 @@
+using System.Diagnostics;
+using ILD.Core.Services.Implementations.Adapters;
+using ILD.Data.DTOs;
+using ILD.Data.Entities;
+
+namespace ILD.Tests;
+
+public class ClaudeCodeAdapterTests
+{
+    [Fact]
+    public void Metadata_advertises_claude_code_provider_type()
+    {
+        var adapter = new ClaudeCodeAdapter();
+
+        Assert.Equal("ClaudeCode", adapter.Name);
+        Assert.Contains("claude-code", adapter.SupportedProviderTypes);
+        Assert.Empty(adapter.ConfigSchema);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_succeeds_when_binary_exits_zero()
+    {
+        var worktreeDir = CreateWorktree();
+        try
+        {
+            var adapter = new ClaudeCodeAdapter();
+            var ctx = BuildContext(binaryPath: "/bin/true", worktreePath: worktreeDir);
+
+            var result = await adapter.ExecuteAsync(ctx);
+
+            Assert.True(result.Success);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_returns_failure_when_binary_not_found()
+    {
+        var worktreeDir = CreateWorktree();
+        try
+        {
+            var adapter = new ClaudeCodeAdapter();
+            var ctx = BuildContext(binaryPath: "/nonexistent/claude", worktreePath: worktreeDir);
+
+            var result = await adapter.ExecuteAsync(ctx);
+
+            Assert.False(result.Success);
+            Assert.Contains("claude-code-error", result.Error);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_fails_without_worktree()
+    {
+        var adapter = new ClaudeCodeAdapter();
+        var ctx = BuildContext(binaryPath: "/bin/true", worktreePath: "/this/does/not/exist");
+
+        var result = await adapter.ExecuteAsync(ctx);
+
+        Assert.False(result.Success);
+        Assert.Contains("valid worktree path", result.Error);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_reads_binaryPath_from_config()
+    {
+        var worktreeDir = CreateWorktree();
+        try
+        {
+            var adapter = new ClaudeCodeAdapter();
+            var ctx = BuildContext(
+                binaryPath: "/nonexistent/path",
+                worktreePath: worktreeDir,
+                config: "{\"binaryPath\":\"/bin/true\"}");
+
+            var result = await adapter.ExecuteAsync(ctx);
+
+            Assert.True(result.Success);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_extracts_assistant_text_and_session_id_from_stream_json()
+    {
+        var worktreeDir = CreateWorktree();
+        var scriptPath = Path.Combine(worktreeDir, "fake-claude.sh");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "echo '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"sess-abc\"}'\n" +
+            "echo '{\"type\":\"assistant\",\"session_id\":\"sess-abc\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Hello, world.\"}]}}'\n" +
+            "echo '{\"type\":\"result\",\"session_id\":\"sess-abc\",\"is_error\":false,\"result\":\"Hello, world.\"}'\n");
+        Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var adapter = new ClaudeCodeAdapter();
+            var progress = new System.Collections.Concurrent.ConcurrentBag<string>();
+            var ctx = BuildContext(
+                binaryPath: scriptPath,
+                worktreePath: worktreeDir,
+                progressCallback: line =>
+                {
+                    progress.Add(line);
+                    return Task.CompletedTask;
+                });
+
+            var result = await adapter.ExecuteAsync(ctx);
+
+            Assert.True(result.Success);
+            Assert.Equal("Hello, world.", result.Output);
+            Assert.Equal("sess-abc", result.SessionId);
+            Assert.Contains("Hello, world.", progress);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_surfaces_error_when_result_is_marked_as_error()
+    {
+        var worktreeDir = CreateWorktree();
+        var scriptPath = Path.Combine(worktreeDir, "fake-claude.sh");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "echo '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"sess-x\"}'\n" +
+            "echo '{\"type\":\"result\",\"session_id\":\"sess-x\",\"is_error\":true,\"result\":\"upstream broke\"}'\n");
+        Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var adapter = new ClaudeCodeAdapter();
+            var ctx = BuildContext(binaryPath: scriptPath, worktreePath: worktreeDir);
+
+            var result = await adapter.ExecuteAsync(ctx);
+
+            Assert.False(result.Success);
+            Assert.Contains("upstream broke", result.Error);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_passes_resume_flag_when_session_id_is_set()
+    {
+        var worktreeDir = CreateWorktree();
+        var scriptPath = Path.Combine(worktreeDir, "args.sh");
+        File.WriteAllText(scriptPath, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n");
+        Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var adapter = new ClaudeCodeAdapter();
+            var ctx = BuildContext(
+                binaryPath: scriptPath,
+                worktreePath: worktreeDir,
+                sessionId: "resume-me-123");
+
+            var result = await adapter.ExecuteAsync(ctx);
+
+            Assert.True(result.Success);
+            Assert.Contains("--resume", result.Output);
+            Assert.Contains("resume-me-123", result.Output);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public void BuildRunProcessStartInfo_emits_expected_arguments()
+    {
+        var psi = ClaudeCodeAdapter.BuildRunProcessStartInfo(
+            binaryPath: "claude",
+            worktreePath: "/tmp/wt",
+            renderedPrompt: "fix it",
+            sessionId: "abc");
+
+        Assert.Equal("/tmp/wt", psi.WorkingDirectory);
+        Assert.Equal(new[]
+        {
+            "--print",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--add-dir",
+            "/tmp/wt",
+            "--permission-mode",
+            "bypassPermissions",
+            "--resume",
+            "abc",
+            "fix it",
+        }, psi.ArgumentList);
+    }
+
+    [Fact]
+    public void BuildRunProcessStartInfo_omits_resume_when_session_id_is_null()
+    {
+        var psi = ClaudeCodeAdapter.BuildRunProcessStartInfo(
+            binaryPath: "claude",
+            worktreePath: "/tmp/wt",
+            renderedPrompt: "fix it",
+            sessionId: null);
+
+        Assert.DoesNotContain("--resume", psi.ArgumentList);
+    }
+
+    private static string CreateWorktree()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"ild-claude-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
+    private static AgentExecutionContext BuildContext(
+        string binaryPath,
+        string worktreePath,
+        string prompt = "test prompt",
+        string? config = null,
+        string? sessionId = null,
+        Func<string, Task>? progressCallback = null)
+    {
+        var mergedConfig = config;
+        if (string.IsNullOrEmpty(mergedConfig))
+            mergedConfig = $"{{\"binaryPath\":\"{binaryPath}\"}}";
+
+        return new AgentExecutionContext(
+            Provider: new AiProvider
+            {
+                Name = "claude-test",
+                Type = "claude-code",
+                BaseUrl = string.Empty,
+                ApiKey = null,
+                Model = string.Empty,
+                Config = mergedConfig,
+            },
+            Prompt: prompt,
+            RunContext: new LoopRunContext(
+                Guid.NewGuid(),
+                Guid.NewGuid().ToString(),
+                "Test Task",
+                "Test description",
+                worktreePath,
+                "main",
+                new List<string>(),
+                null),
+            ExecutionCount: 1,
+            Cancel: CancellationToken.None,
+            ProgressCallback: progressCallback,
+            SessionId: sessionId);
+    }
+}

@@ -60,9 +60,27 @@ public sealed class InteractiveProviderSessionService
         }
     }
 
+    /// <summary>
+    /// Maps an AiProvider <c>Type</c> to the binary name shipped by its
+    /// vendor's CLI. For most adapters the type matches the binary name
+    /// (<c>opencode</c>, <c>pi</c>), but <c>claude-code</c> ships as
+    /// <c>claude</c>.
+    /// </summary>
+    private static string DefaultBinaryForType(string? providerType)
+    {
+        if (string.IsNullOrWhiteSpace(providerType))
+            return string.Empty;
+
+        return providerType.ToLowerInvariant() switch
+        {
+            "claude-code" => "claude",
+            var other => other,
+        };
+    }
+
     private static string ResolveBinaryPath(AiProvider provider)
     {
-        var fallback = string.IsNullOrWhiteSpace(provider.Type) ? "" : provider.Type.ToLowerInvariant();
+        var fallback = DefaultBinaryForType(provider.Type);
         if (string.IsNullOrEmpty(provider.Config)) return fallback;
 
         try

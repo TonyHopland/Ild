@@ -30,6 +30,30 @@ public class AiProvidersController : ControllerBase
         _interactiveSessions = interactiveSessions;
     }
 
+    /// <summary>
+    /// Provider types whose authentication is handled by the CLI itself
+    /// (e.g. <c>claude-code</c> uses the Max-subscription session stored in
+    /// <c>~/.claude</c>). For these we do not require BaseUrl, ApiKey or
+    /// Model on the AiProvider record.
+    /// </summary>
+    private static readonly HashSet<string> CliAuthProviderTypes =
+        new(StringComparer.OrdinalIgnoreCase) { "claude-code" };
+
+    private static string? ValidateConnectionFields(AiProviderDto request)
+    {
+        if (CliAuthProviderTypes.Contains(request.Type))
+            return null;
+
+        if (string.IsNullOrWhiteSpace(request.BaseUrl))
+            return "BaseUrl is required for this provider type.";
+        if (!Uri.TryCreate(request.BaseUrl, UriKind.Absolute, out _))
+            return "BaseUrl must be an absolute URL.";
+        if (string.IsNullOrWhiteSpace(request.Model))
+            return "Model is required for this provider type.";
+
+        return null;
+    }
+
     private static object ToResponse(AiProvider p) => new
     {
         id = p.Id,
@@ -72,6 +96,8 @@ public class AiProvidersController : ControllerBase
             return BadRequest(ModelState);
         if (!_supportedProviderTypes.Contains(request.Type))
             return BadRequest(new { error = $"Unsupported AI provider type '{request.Type}'." });
+        if (ValidateConnectionFields(request) is { } validationError)
+            return BadRequest(new { error = validationError });
 
         var p = new AiProvider
         {
@@ -115,6 +141,8 @@ public class AiProvidersController : ControllerBase
         if (p == null) return NotFound();
         if (!_supportedProviderTypes.Contains(request.Type))
             return BadRequest(new { error = $"Unsupported AI provider type '{request.Type}'." });
+        if (ValidateConnectionFields(request) is { } validationError)
+            return BadRequest(new { error = validationError });
         p.Name = request.Name;
         p.Type = request.Type;
         p.BaseUrl = request.BaseUrl;

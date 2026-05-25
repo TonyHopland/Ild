@@ -50,6 +50,7 @@ WORKDIR /app
 
 ARG WITH_OPENCODE=0
 ARG WITH_PI=0
+ARG WITH_CLAUDE_CODE=0
 ARG WITH_NODE=0
 ARG NODE_RUNTIME_VERSION=24.15.0
 ARG WITH_DOTNET_SDK=0
@@ -64,6 +65,23 @@ ARG APP_GID=10001
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates gosu netcat-openbsd && \
     mkdir -p /usr/local/share/ca-certificates && \
     rm -rf /var/lib/apt/lists/*
+
+# Create the runtime user up front so subsequent install steps that need a
+# real (non-root) HOME — e.g. the Claude Code launcher, which uses absolute
+# symlinks into $HOME/.local/share — can install into /home/ild directly
+# via gosu. Reuses any existing user/group at the configured UID/GID.
+RUN existing_group="$(getent group "${APP_GID}" | cut -d: -f1 || true)" && \
+    if [ -n "$existing_group" ] && [ "$existing_group" != "ild" ]; then \
+      groupmod -n ild "$existing_group"; \
+    elif [ -z "$existing_group" ]; then \
+      groupadd --gid ${APP_GID} ild; \
+    fi && \
+    existing_user="$(getent passwd "${APP_UID}" | cut -d: -f1 || true)" && \
+    if [ -n "$existing_user" ] && [ "$existing_user" != "ild" ]; then \
+      usermod -l ild -g ild -d /home/ild -m -s /usr/sbin/nologin "$existing_user"; \
+    elif [ -z "$existing_user" ]; then \
+      useradd --uid ${APP_UID} --gid ${APP_GID} --create-home --home-dir /home/ild --shell /usr/sbin/nologin ild; \
+    fi
 
 # The opencode install script drops files under $HOME/.opencode. Because ILD
 # runs as a non-root runtime user, keep that install outside /root so the
@@ -101,6 +119,22 @@ RUN if [ "$WITH_PI" = "1" ]; then \
   fi && \
   npm install -g @earendil-works/pi-coding-agent; \
 fi
+
+# Claude Code ships a native binary via https://claude.ai/install.sh. The
+# launcher at $HOME/.local/bin/claude is an absolute symlink into
+# $HOME/.local/share/claude/versions/<ver>, so the install tree must stay
+# where it lands. We run the installer as the ild user (gosu sets
+# HOME=/home/ild) so files are owned by the runtime user from the start
+# and the launcher's symlinks stay valid; a /usr/local/bin/claude symlink
+# exposes the binary on PATH for any user inside the container.
+# Auth is handled at runtime via `claude /login` (Max subscription) or
+# CLAUDE_CODE_OAUTH_TOKEN.
+RUN if [ "$WITH_CLAUDE_CODE" = "1" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && \
+      gosu ild sh -c 'curl -fsSL https://claude.ai/install.sh | bash' && \
+      ln -sf /home/ild/.local/bin/claude /usr/local/bin/claude && \
+      rm -rf /var/lib/apt/lists/*; \
+    fi
 
 RUN if [ "$WITH_DOTNET_SDK" = "1" ]; then \
   apt-get update && \
@@ -148,23 +182,11 @@ RUN if [ "$WITH_CERTS" = "1" ]; then \
 COPY --from=build /app/publish ./
 COPY --from=build /app/mcp-server/ ./
 COPY --from=frontend-build /app/frontend/dist ./wwwroot
-RUN existing_group="$(getent group "${APP_GID}" | cut -d: -f1 || true)" && \
-    if [ -n "$existing_group" ] && [ "$existing_group" != "ild" ]; then \
-      groupmod -n ild "$existing_group"; \
-    elif [ -z "$existing_group" ]; then \
-      groupadd --gid ${APP_GID} ild; \
-    fi && \
-    existing_user="$(getent passwd "${APP_UID}" | cut -d: -f1 || true)" && \
-    if [ -n "$existing_user" ] && [ "$existing_user" != "ild" ]; then \
-      usermod -l ild -g ild -d /home/ild -m -s /usr/sbin/nologin "$existing_user"; \
-    elif [ -z "$existing_user" ]; then \
-      useradd --uid ${APP_UID} --gid ${APP_GID} --create-home --home-dir /home/ild --shell /usr/sbin/nologin ild; \
-    fi
 ENV HOME=/home/ild
 ENV ILD_DATA_PATH=/data
 ENV ILD_WORKTREES_PATH=/worktrees
 RUN mkdir -p /data /worktrees && \
-  chown -R ild:ild /app /data /worktrees /home/ild
+  chown -R ild:ild /app /data /worktrees
 
 COPY entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh

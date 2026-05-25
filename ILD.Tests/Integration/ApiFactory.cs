@@ -105,6 +105,6 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             => throw new InvalidOperationException("Integration tests using ApiFactory should not execute AI adapters.");
 
         public string[] GetAllSupportedProviderTypes()
-            => ["opencode", "pi"];
+            => ["opencode", "pi", "claude-code"];
     }
 }

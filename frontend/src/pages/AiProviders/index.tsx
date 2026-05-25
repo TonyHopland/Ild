@@ -60,23 +60,29 @@ export default function AiProviders() {
     setParallelism(0);
   };
 
+  // Provider types whose auth is handled by the CLI itself (e.g.
+  // claude-code logs in via `claude /login` and stores creds in ~/.claude),
+  // so the BaseUrl / API key / model fields are not applicable.
+  const isCliAuthProvider = (t: string) => t === "claude-code";
+
   const handleSave = async () => {
+    const cliAuth = isCliAuthProvider(type);
     const data: Partial<AiProvider> = {
       name,
       type,
-      baseUrl,
-      model,
+      baseUrl: cliAuth ? "" : baseUrl,
+      model: cliAuth ? "" : model,
       isDefault,
       parallelism,
     };
 
     if (editingProvider) {
-      if (apiKey) {
+      if (!cliAuth && apiKey) {
         data.apiKey = apiKey;
       }
       await aiProviderService.update(editingProvider.id, data);
     } else {
-      data.apiKey = apiKey;
+      data.apiKey = cliAuth ? "" : apiKey;
       await aiProviderService.create(data);
     }
 
@@ -128,20 +134,26 @@ export default function AiProviders() {
                 <span className="ap-label">Type</span>
                 <span className="ap-value">{provider.type}</span>
               </div>
-              <div className="ap-field">
-                <span className="ap-label">URL</span>
-                <span className="ap-value">{provider.baseUrl}</span>
-              </div>
-              <div className="ap-field">
-                <span className="ap-label">Model</span>
-                <span className="ap-value">{provider.model}</span>
-              </div>
-              <div className="ap-field">
-                <span className="ap-label">API Key</span>
-                <span className="ap-value ap-masked">
-                  {provider.apiKey ? "••••••••" : "(not set)"}
-                </span>
-              </div>
+              {provider.baseUrl && (
+                <div className="ap-field">
+                  <span className="ap-label">URL</span>
+                  <span className="ap-value">{provider.baseUrl}</span>
+                </div>
+              )}
+              {provider.model && (
+                <div className="ap-field">
+                  <span className="ap-label">Model</span>
+                  <span className="ap-value">{provider.model}</span>
+                </div>
+              )}
+              {!isCliAuthProvider(provider.type) && (
+                <div className="ap-field">
+                  <span className="ap-label">API Key</span>
+                  <span className="ap-value ap-masked">
+                    {provider.apiKey ? "••••••••" : "(not set)"}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         ))}
@@ -198,35 +210,45 @@ export default function AiProviders() {
                   ))}
                 </select>
               </div>
-              <div className="form-group">
-                <label htmlFor="apBaseUrl">Base URL</label>
-                <input
-                  id="apBaseUrl"
-                  type="text"
-                  value={baseUrl}
-                  onChange={(e) => setBaseUrl(e.target.value)}
-                  required
-                />
-              </div>
-              <div className="form-group">
-                <label htmlFor="apModel">Model</label>
-                <input
-                  id="apModel"
-                  type="text"
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  required
-                />
-              </div>
-              <div className="form-group">
-                <label htmlFor="apApiKey">API Key</label>
-                <input
-                  id="apApiKey"
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                />
-              </div>
+              {isCliAuthProvider(type) ? (
+                <div className="ap-cli-note">
+                  This provider type authenticates via the locally-installed Claude Code CLI (e.g.{" "}
+                  <code>claude /login</code> with a Max subscription). Base URL, API key and model
+                  are configured by the CLI itself and are not needed here.
+                </div>
+              ) : (
+                <>
+                  <div className="form-group">
+                    <label htmlFor="apBaseUrl">Base URL</label>
+                    <input
+                      id="apBaseUrl"
+                      type="text"
+                      value={baseUrl}
+                      onChange={(e) => setBaseUrl(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="apModel">Model</label>
+                    <input
+                      id="apModel"
+                      type="text"
+                      value={model}
+                      onChange={(e) => setModel(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="apApiKey">API Key</label>
+                    <input
+                      id="apApiKey"
+                      type="password"
+                      value={apiKey}
+                      onChange={(e) => setApiKey(e.target.value)}
+                    />
+                  </div>
+                </>
+              )}
               <div className="form-group">
                 <label htmlFor="apParallelism">Parallelism (0 = unlimited)</label>
                 <input
@@ -452,6 +474,22 @@ export default function AiProviders() {
           display: flex;
           justify-content: flex-end;
           gap: 0.5rem;
+        }
+
+        .ap-cli-note {
+          font-size: 0.8rem;
+          color: #a0a0b0;
+          background-color: #2a2a40;
+          border: 1px solid #3a3a5c;
+          padding: 0.5rem 0.75rem;
+          border-radius: 0.375rem;
+          line-height: 1.4;
+        }
+
+        .ap-cli-note code {
+          background-color: #1e1e30;
+          padding: 0 0.25rem;
+          border-radius: 0.25rem;
         }
       `}</style>
     </div>

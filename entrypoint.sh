@@ -3,7 +3,15 @@ set -eu
 
 RUNTIME_USER="${RUNTIME_USER:-ild}"
 RUNTIME_GROUP="${RUNTIME_GROUP:-ild}"
-RUNTIME_DIRS="${RUNTIME_DIRS:-/data /worktrees}"
+RUNTIME_DIRS="${RUNTIME_DIRS:-/data /worktrees /home/ild/.agent-config}"
+
+# Agent CLI config dirs (.claude, .opencode, .pi, ...) are kept in a single
+# persistent volume mounted at AGENT_CONFIG_STORE, then symlinked into
+# $HOME at container start. This lets login state survive image rebuilds
+# without freezing tool binary installs that live elsewhere in the image.
+# Override AGENT_CONFIG_DIRS to add or remove agents.
+AGENT_CONFIG_STORE="${AGENT_CONFIG_STORE:-/home/ild/.agent-config}"
+AGENT_CONFIG_DIRS="${AGENT_CONFIG_DIRS:-.claude .opencode .pi}"
 
 ensure_owned_by_runtime_user() {
   path="$1"
@@ -15,6 +23,34 @@ ensure_owned_by_runtime_user() {
   else
     chown "$RUNTIME_USER:$RUNTIME_GROUP" "$path"
   fi
+}
+
+# For each agent dotdir name, ensure a subdir exists under the config store
+# and that $HOME/<name> points at it via a symlink. Skips entries that
+# already exist as real directories in $HOME so we don't clobber image-side
+# state that the container expects to find there.
+link_agent_config_dirs() {
+  store="$1"
+  user_home="$2"
+  shift 2
+
+  [ -d "$store" ] || return 0
+
+  for name in "$@"; do
+    [ -n "$name" ] || continue
+    target="$store/$name"
+    link="$user_home/$name"
+
+    if [ ! -d "$target" ]; then
+      mkdir -p "$target"
+      chown "$RUNTIME_USER:$RUNTIME_GROUP" "$target"
+    fi
+
+    if [ -L "$link" ] || [ ! -e "$link" ]; then
+      ln -sfn "$target" "$link"
+      chown -h "$RUNTIME_USER:$RUNTIME_GROUP" "$link"
+    fi
+  done
 }
 
 wait_for_postgres() {
@@ -70,6 +106,11 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
     mkdir -p "$runtime_home"
     chown "$RUNTIME_USER:$RUNTIME_GROUP" "$runtime_home"
     export HOME="$runtime_home"
+
+    # Intentional word-split on AGENT_CONFIG_DIRS — entries are
+    # space-separated dotdir names.
+    # shellcheck disable=SC2086
+    link_agent_config_dirs "$AGENT_CONFIG_STORE" "$runtime_home" $AGENT_CONFIG_DIRS
   fi
 
   wait_for_postgres
