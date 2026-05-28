@@ -646,22 +646,6 @@ export default function WorkItemModal({
                   <div className="detail-section human-feedback-section">
                     <span className="detail-label">Human Feedback</span>
                     <div className="feedback-reason">{workItem.humanFeedbackReason}</div>
-                    <div className="feedback-actions">
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-warning"
-                        onClick={handleCleanupDone}
-                      >
-                        Cleanup -&gt; Done
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-secondary"
-                        onClick={handleCleanupBacklog}
-                      >
-                        Cleanup -&gt; Backlog
-                      </button>
-                    </div>
                   </div>
                 )}
 
@@ -841,6 +825,26 @@ export default function WorkItemModal({
                   <button type="button" className="btn btn-sm btn-danger" onClick={handleDelete}>
                     Delete
                   </button>
+                  {workItem.status === WorkItemStatus.HumanFeedback &&
+                    workItem.humanFeedbackReason !== "Human Input Needed" &&
+                    workItem.humanFeedbackReason !== "PR Awaiting Merge" && (
+                      <>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-warning"
+                          onClick={handleCleanupDone}
+                        >
+                          Cleanup -&gt; Done
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-secondary"
+                          onClick={handleCleanupBacklog}
+                        >
+                          Cleanup -&gt; Backlog
+                        </button>
+                      </>
+                    )}
                 </div>
               </Accordion>
 

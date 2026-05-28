@@ -32,9 +32,12 @@ ensure_owned_by_runtime_user() {
 }
 
 # For each agent dotdir name, ensure a subdir exists under the config store
-# and that $HOME/<name> points at it via a symlink. Skips entries that
-# already exist as real directories in $HOME so we don't clobber image-side
-# state that the container expects to find there.
+# and that $HOME/<name> is a symlink pointing at it. The volume is the source
+# of truth across rebuilds. If the image baked in a *real* $HOME/<name>
+# directory (e.g. the Claude Code installer creates ~/.claude at build time),
+# fold its contents into the store on first run — without overwriting newer
+# persisted copies — then replace it with the symlink, so login state written
+# later lands in the volume instead of the throwaway container layer.
 link_agent_config_dirs() {
   store="$1"
   user_home="$2"
@@ -47,22 +50,28 @@ link_agent_config_dirs() {
     target="$store/$name"
     link="$user_home/$name"
 
-    if [ ! -d "$target" ]; then
-      mkdir -p "$target"
-      chown "$RUNTIME_USER:$RUNTIME_GROUP" "$target"
+    mkdir -p "$target"
+
+    if [ -d "$link" ] && [ ! -L "$link" ]; then
+      # Image-baked real dir: migrate contents (dotfiles included), keeping any
+      # already-persisted file, then drop it so the symlink can take its place.
+      cp -an "$link/." "$target/" 2>/dev/null || true
+      rm -rf "$link"
+    elif [ -e "$link" ] && [ ! -L "$link" ]; then
+      rm -f "$link"
     fi
 
-    if [ -L "$link" ] || [ ! -e "$link" ]; then
-      ln -sfn "$target" "$link"
-      chown -h "$RUNTIME_USER:$RUNTIME_GROUP" "$link"
-    fi
+    ln -sfn "$target" "$link"
+    chown -R "$RUNTIME_USER:$RUNTIME_GROUP" "$target"
+    chown -h "$RUNTIME_USER:$RUNTIME_GROUP" "$link"
   done
 }
 
-# For each file name, symlink $HOME/<name> at the persistent store. Unlike
-# dirs we actively migrate a pre-existing real file into the store on the
-# first run after this fix is deployed, so users who logged in before the
-# symlink existed don't lose their session on the very next rebuild.
+# For each file name, ensure $HOME/<name> is a symlink at the persistent store.
+# On first run we migrate a pre-existing real file into the store so a login
+# made before the symlink existed isn't lost. If the store already holds a copy
+# it wins (it's the persisted one) and any image-side real file is discarded —
+# Claude Code rewrites .claude.json on the next /login regardless.
 link_agent_config_files() {
   store="$1"
   user_home="$2"
@@ -75,18 +84,15 @@ link_agent_config_files() {
     target="$store/$name"
     link="$user_home/$name"
 
-    if [ -L "$link" ]; then
-      ln -sfn "$target" "$link"
-      chown -h "$RUNTIME_USER:$RUNTIME_GROUP" "$link"
-    elif [ -f "$link" ] && [ ! -e "$target" ]; then
+    if [ -f "$link" ] && [ ! -L "$link" ] && [ ! -e "$target" ]; then
       mv "$link" "$target"
-      chown "$RUNTIME_USER:$RUNTIME_GROUP" "$target"
-      ln -sfn "$target" "$link"
-      chown -h "$RUNTIME_USER:$RUNTIME_GROUP" "$link"
-    elif [ ! -e "$link" ]; then
-      ln -sfn "$target" "$link"
-      chown -h "$RUNTIME_USER:$RUNTIME_GROUP" "$link"
+    elif [ -e "$link" ] && [ ! -L "$link" ]; then
+      rm -f "$link"
     fi
+
+    ln -sfn "$target" "$link"
+    [ -e "$target" ] && chown "$RUNTIME_USER:$RUNTIME_GROUP" "$target"
+    chown -h "$RUNTIME_USER:$RUNTIME_GROUP" "$link"
   done
 }
 
