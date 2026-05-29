@@ -1,5 +1,12 @@
 export type AdapterConfigValue = string | number | boolean;
 
+/** Per-file outcome shown after a (possibly multi-file) template import. */
+export interface ImportFeedbackItem {
+  filename: string;
+  status: "success" | "error" | "skipped";
+  message: string;
+}
+
 export interface SessionPlaceholderUsage {
   name: string;
   count: number;

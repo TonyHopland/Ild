@@ -50,6 +50,7 @@ import { LoopEditorSidebar } from "./components/LoopEditorSidebar";
 import { NodeSettingsModal } from "./components/NodeSettingsModal";
 import type {
   AdapterConfigValue,
+  ImportFeedbackItem,
   LoopTemplateVersion,
   NodeSettingsSnapshot,
   SessionPlaceholderUsage,
@@ -197,9 +198,7 @@ export default function LoopEditor() {
   const [originalNodeConfig, setOriginalNodeConfig] = useState<NodeSettingsSnapshot | null>(null);
 
   // Import state
-  const [importFeedback, setImportFeedback] = useState<
-    { filename: string; status: "success" | "error" | "skipped"; message: string }[]
-  >([]);
+  const [importFeedback, setImportFeedback] = useState<ImportFeedbackItem[]>([]);
   const [showImportFeedback, setShowImportFeedback] = useState(false);
   const [importConflictTemplate, setImportConflictTemplate] = useState<LoopTemplate | null>(null);
   const [importConflictData, setImportConflictData] = useState<{
@@ -214,7 +213,7 @@ export default function LoopEditor() {
   // Refs for import queue — avoids window pollution and stale closures
   const importQueueRef = useRef<{
     remainingFiles: File[];
-    feedback: { filename: string; status: "success" | "error" | "skipped"; message: string }[];
+    feedback: ImportFeedbackItem[];
   } | null>(null);
   const templatesRef = useRef<LoopTemplate[]>([]);
 
@@ -515,13 +514,9 @@ export default function LoopEditor() {
   const processSingleImportFile = useCallback(
     async (
       file: File,
-      accumulatedFeedback: {
-        filename: string;
-        status: "success" | "error" | "skipped";
-        message: string;
-      }[],
+      accumulatedFeedback: ImportFeedbackItem[],
     ): Promise<{
-      feedback: { filename: string; status: "success" | "error" | "skipped"; message: string }[];
+      feedback: ImportFeedbackItem[];
       haltedForConflict: boolean;
     }> => {
       try {
@@ -606,11 +601,7 @@ export default function LoopEditor() {
     async (files: File[]) => {
       // Preserve accumulated feedback from previous batch if continuing after conflict
       const existingFeedback = importQueueRef.current?.feedback ?? [];
-      const feedback: {
-        filename: string;
-        status: "success" | "error" | "skipped";
-        message: string;
-      }[] = [...existingFeedback];
+      const feedback: ImportFeedbackItem[] = [...existingFeedback];
 
       // Initialize queue ref for potential conflict continuation
       importQueueRef.current = { remainingFiles: files, feedback };
@@ -639,11 +630,7 @@ export default function LoopEditor() {
 
   // Helper: after resolving a conflict, continue processing remaining files
   const continueImportAfterConflict = useCallback(
-    async (extraFeedback: {
-      filename: string;
-      status: "success" | "error" | "skipped";
-      message: string;
-    }) => {
+    async (extraFeedback: ImportFeedbackItem) => {
       setImportConflictTemplate(null);
       setImportConflictData(null);
 
