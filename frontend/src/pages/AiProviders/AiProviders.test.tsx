@@ -319,6 +319,92 @@ describe("AI Providers page", () => {
     );
   });
 
+  test("Set as default button only shows on non-default providers and calls API", async () => {
+    const providers = [
+      {
+        id: "ai-1",
+        name: "Pi",
+        type: "pi",
+        baseUrl: "http://pi.local",
+        apiKey: "key",
+        model: "gpt-4",
+        isDefault: true,
+        createdAt: "2025-01-01T00:00:00Z",
+      },
+      {
+        id: "ai-2",
+        name: "OpenCode",
+        type: "opencode",
+        baseUrl: "http://opencode.local",
+        apiKey: "key",
+        model: "claude-3",
+        isDefault: false,
+        createdAt: "2025-02-01T00:00:00Z",
+      },
+    ];
+
+    const fetchMock = mockFetch(null);
+    fetchMock.mockReturnValueOnce(
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify(providers)),
+      }),
+    );
+    fetchMock.mockReturnValueOnce(
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify(["opencode", "pi"])),
+      }),
+    );
+
+    renderPage(fetchMock);
+
+    await waitFor(() => {
+      expect(screen.getByText("AI Providers")).toBeTruthy();
+    });
+
+    // Exactly one "Set as default" button (only on the non-default OpenCode card).
+    const buttons = screen.getAllByText("Set as default");
+    expect(buttons.length).toBe(1);
+
+    const promoted = { ...providers[1], isDefault: true };
+    const demoted = { ...providers[0], isDefault: false };
+
+    fetchMock
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify(promoted)),
+        }),
+      )
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([demoted, promoted])),
+        }),
+      )
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify(["opencode", "pi"])),
+        }),
+      );
+
+    fireEvent.click(buttons[0]);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/aiproviders/ai-2/set-default"),
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+  });
+
   test("shows default badge for default provider", async () => {
     const providers = [
       {

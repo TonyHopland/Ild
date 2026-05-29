@@ -65,6 +65,11 @@ export default function AiProviders() {
   // so the BaseUrl / API key / model fields are not applicable.
   const isCliAuthProvider = (t: string) => t === "claude-code";
 
+  const handleSetDefault = async (provider: AiProvider) => {
+    await aiProviderService.setDefault(provider.id);
+    await loadData();
+  };
+
   const handleSave = async () => {
     const cliAuth = isCliAuthProvider(type);
     const data: Partial<AiProvider> = {
@@ -117,6 +122,15 @@ export default function AiProviders() {
                 {provider.isDefault && <span className="ap-default-badge">Default</span>}
               </div>
               <div className="ap-actions">
+                {!provider.isDefault && (
+                  <button
+                    className="btn btn-secondary btn-small"
+                    onClick={() => handleSetDefault(provider)}
+                    title="Promote this provider so AI nodes without an explicit provider use it"
+                  >
+                    Set as default
+                  </button>
+                )}
                 <button
                   className="btn btn-secondary btn-small"
                   onClick={() => setTerminalProvider(provider)}

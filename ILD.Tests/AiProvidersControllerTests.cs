@@ -198,6 +198,58 @@ public class AiProvidersControllerTests : IDisposable
     }
 
     [Fact]
+    public async Task SetDefault_promotes_provider_and_demotes_previous_default()
+    {
+        var firstId = Guid.NewGuid();
+        var secondId = Guid.NewGuid();
+        _db.AiProviders.Add(new AiProvider
+        {
+            Id = firstId,
+            Name = "first",
+            Type = "pi",
+            BaseUrl = "https://a",
+            Model = "m",
+            IsDefault = true,
+        });
+        _db.AiProviders.Add(new AiProvider
+        {
+            Id = secondId,
+            Name = "second",
+            Type = "pi",
+            BaseUrl = "https://b",
+            Model = "m",
+            IsDefault = false,
+        });
+        await _db.SaveChangesAsync();
+
+        var controller = CreateController();
+        var result = await controller.SetDefault(secondId.ToString()) as OkObjectResult;
+
+        Assert.NotNull(result);
+        _db.ChangeTracker.Clear();
+        var reloadedFirst = await _db.AiProviders.FindAsync(firstId);
+        var reloadedSecond = await _db.AiProviders.FindAsync(secondId);
+        Assert.False(reloadedFirst!.IsDefault);
+        Assert.True(reloadedSecond!.IsDefault);
+    }
+
+    [Fact]
+    public async Task SetDefault_unknown_id_returns_NotFound()
+    {
+        var controller = CreateController();
+        var result = await controller.SetDefault(Guid.NewGuid().ToString());
+        Assert.IsType<NotFoundResult>(result);
+    }
+
+    [Fact]
+    public async Task SetDefault_invalid_id_returns_BadRequest()
+    {
+        var controller = CreateController();
+        var result = await controller.SetDefault("not-a-guid");
+        Assert.IsType<BadRequestResult>(result);
+    }
+
+    [Fact]
     public async Task Update_rejects_unsupported_provider_type()
     {
         var id = Guid.NewGuid();
