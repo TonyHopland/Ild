@@ -269,6 +269,10 @@ export default function AiProviders() {
                   />
                   Set as default provider
                 </label>
+                <div className="ap-default-hint">
+                  Only one provider can be the default at a time. Promoting this one will demote any
+                  other default.
+                </div>
               </div>
             </div>
             <div className="modal-footer">
@@ -490,6 +494,13 @@ export default function AiProviders() {
           background-color: #1e1e30;
           padding: 0 0.25rem;
           border-radius: 0.25rem;
+        }
+
+        .ap-default-hint {
+          font-size: 0.7rem;
+          color: #707090;
+          margin-top: 0.25rem;
+          line-height: 1.4;
         }
       `}</style>
     </div>

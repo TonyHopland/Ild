@@ -3,6 +3,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
+using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -15,18 +16,21 @@ public class AiProvidersController : ControllerBase
     private readonly IAIProviderService _aiProviderService;
     private readonly HashSet<string> _supportedProviderTypes;
     private readonly AppDbContext _db;
+    private readonly IProviderStore _providerStore;
     private readonly InteractiveProviderSessionService _interactiveSessions;
 
     public AiProvidersController(
         IAIProviderService aiProviderService,
         IAgentAdapterRegistry adapterRegistry,
         AppDbContext db,
+        IProviderStore providerStore,
         InteractiveProviderSessionService interactiveSessions)
     {
         _aiProviderService = aiProviderService;
         _supportedProviderTypes = adapterRegistry.GetAllSupportedProviderTypes()
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         _db = db;
+        _providerStore = providerStore;
         _interactiveSessions = interactiveSessions;
     }
 
@@ -112,8 +116,7 @@ public class AiProvidersController : ControllerBase
             Config = request.Config,
             CreatedAt = DateTime.UtcNow,
         };
-        _db.AiProviders.Add(p);
-        await _db.SaveChangesAsync();
+        await _providerStore.CreateAiProviderAsync(p);
         return CreatedAtAction(nameof(GetById), new { id = p.Id }, ToResponse(p));
     }
 
@@ -137,7 +140,7 @@ public class AiProvidersController : ControllerBase
     public async Task<IActionResult> Update(string id, [FromBody] AiProviderDto request)
     {
         if (!Guid.TryParse(id, out var guid)) return BadRequest();
-        var p = await _db.AiProviders.FindAsync(guid);
+        var p = await _providerStore.GetAiProviderByIdAsync(guid);
         if (p == null) return NotFound();
         if (!_supportedProviderTypes.Contains(request.Type))
             return BadRequest(new { error = $"Unsupported AI provider type '{request.Type}'." });
@@ -152,7 +155,7 @@ public class AiProvidersController : ControllerBase
         p.Parallelism = request.Parallelism;
         p.Config = request.Config;
         p.UpdatedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync();
+        await _providerStore.UpdateAiProviderAsync(p);
         return Ok(ToResponse(p));
     }
 }

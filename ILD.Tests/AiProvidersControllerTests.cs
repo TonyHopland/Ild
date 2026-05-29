@@ -5,6 +5,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
+using ILD.Data.Stores;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
@@ -41,6 +42,7 @@ public class AiProvidersControllerTests : IDisposable
             Mock.Of<IAIProviderService>(),
             _registry.Object,
             _db,
+            new ProviderStore(_db),
             new InteractiveProviderSessionService(NullLogger<InteractiveProviderSessionService>.Instance));
 
     [Fact]
