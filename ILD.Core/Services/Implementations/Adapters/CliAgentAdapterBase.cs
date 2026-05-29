@@ -77,29 +77,6 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
         await store.UpsertAsync(loopRunId, Name, sessionId, sessionJson, ct);
     }
 
-    /// <summary>
-    /// Read a string field from a provider's free-form <c>Config</c> JSON blob.
-    /// Returns <c>null</c> when the config is empty, not an object, the key is
-    /// missing/non-string/blank, or the JSON is malformed.
-    /// </summary>
-    protected static string? ReadConfigString(string? config, string key)
-    {
-        if (string.IsNullOrEmpty(config)) return null;
-        try
-        {
-            using var doc = JsonDocument.Parse(config);
-            if (doc.RootElement.ValueKind == JsonValueKind.Object
-                && doc.RootElement.TryGetProperty(key, out var prop)
-                && prop.ValueKind == JsonValueKind.String)
-            {
-                var value = prop.GetString();
-                return string.IsNullOrWhiteSpace(value) ? null : value;
-            }
-        }
-        catch (JsonException) { }
-        return null;
-    }
-
     /// <summary>Try to read a string property from a JSON object element.</summary>
     protected static bool TryGetString(JsonElement element, string propertyName, out string? value)
     {

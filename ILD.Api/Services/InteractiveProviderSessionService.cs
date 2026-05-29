@@ -1,5 +1,5 @@
 using System.Net.WebSockets;
-using System.Text.Json;
+using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.Entities;
 using Porta.Pty;
 
@@ -79,23 +79,5 @@ public sealed class InteractiveProviderSessionService
     }
 
     private static string ResolveBinaryPath(AiProvider provider)
-    {
-        var fallback = DefaultBinaryForType(provider.Type);
-        if (string.IsNullOrEmpty(provider.Config)) return fallback;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(provider.Config);
-            if (doc.RootElement.ValueKind == JsonValueKind.Object
-                && doc.RootElement.TryGetProperty("binaryPath", out var bp)
-                && bp.ValueKind == JsonValueKind.String)
-            {
-                var value = bp.GetString();
-                if (!string.IsNullOrWhiteSpace(value)) return value!;
-            }
-        }
-        catch { }
-
-        return fallback;
-    }
+        => AiProviderConfig.Parse(provider.Config).BinaryPathOr(DefaultBinaryForType(provider.Type));
 }

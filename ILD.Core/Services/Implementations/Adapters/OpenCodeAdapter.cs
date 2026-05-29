@@ -30,10 +30,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         {
             var rendered = await RenderPromptAsync(ctx.Prompt, ctx.RunContext);
 
-            var binaryPath = ReadConfigString(ctx.Provider.Config, "binaryPath") ?? "opencode";
-
-            if (string.IsNullOrEmpty(binaryPath))
-                return NodeExecutionResult.Fail("[opencode-error] binaryPath is not configured");
+            var binaryPath = AiProviderConfig.Parse(ctx.Provider.Config).BinaryPathOr("opencode");
 
             var worktreePath = ctx.RunContext.WorktreePath;
             if (string.IsNullOrEmpty(worktreePath) || !Directory.Exists(worktreePath))
@@ -605,25 +602,6 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         var fallback = new StringBuilder();
         ExtractTextFromElement(message, fallback);
         return fallback.Length > 0 ? fallback.ToString().Trim() : null;
-    }
-
-    private static string ResolveBinaryPath(AiProvider provider)
-    {
-        var binaryPath = "opencode";
-
-        if (!string.IsNullOrEmpty(provider.Config))
-        {
-            try
-            {
-                using var doc = System.Text.Json.JsonDocument.Parse(provider.Config);
-                var root = doc.RootElement;
-                if (root.TryGetProperty("binaryPath", out var bp) && bp.ValueKind == System.Text.Json.JsonValueKind.String)
-                    binaryPath = bp.GetString() ?? binaryPath;
-            }
-            catch { }
-        }
-
-        return binaryPath;
     }
 
     private static (string ModelRef, string ConfigJson) BuildOpenCodeConfig(AiProvider provider, LoopRunContext? runContext = null, IReadOnlyList<string>? selectedToolKeys = null)

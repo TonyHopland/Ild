@@ -466,37 +466,15 @@ public sealed class PiAdapter : CliAgentAdapterBase
 
     private static PiAdapterSettings ResolveSettings(AiProvider provider, Guid loopRunId, IReadOnlyList<string>? selectedToolKeys)
     {
-        var binaryPath = "pi";
-        var apiKey = provider.ApiKey;
-        var providerName = default(string?);
-        var model = provider.Model;
-        var api = "openai-completions";
+        var config = AiProviderConfig.Parse(provider.Config);
+        var binaryPath = config.BinaryPathOr("pi");
+        var apiKey = config.ApiKey ?? provider.ApiKey;
+        var providerName = config.Provider;
+        var model = config.Model ?? provider.Model;
+        var api = config.Api ?? "openai-completions";
         var hasAbsoluteBaseUrl = Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out _);
         var enabledToolKeys = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, selectedToolKeys);
         var toolNames = BuildPiToolNames(enabledToolKeys);
-
-        if (!string.IsNullOrWhiteSpace(provider.Config))
-        {
-            try
-            {
-                using var doc = JsonDocument.Parse(provider.Config);
-                var root = doc.RootElement;
-                if (TryGetString(root, "binaryPath", out var configuredBinaryPath) && !string.IsNullOrWhiteSpace(configuredBinaryPath))
-                    binaryPath = configuredBinaryPath;
-                if (TryGetString(root, "provider", out var configuredProvider) && !string.IsNullOrWhiteSpace(configuredProvider))
-                    providerName = configuredProvider;
-                if (TryGetString(root, "model", out var configuredModel) && !string.IsNullOrWhiteSpace(configuredModel))
-                    model = configuredModel;
-                if (TryGetString(root, "apiKey", out var configuredApiKey) && !string.IsNullOrWhiteSpace(configuredApiKey))
-                    apiKey = configuredApiKey;
-                if (TryGetString(root, "api", out var configuredApi) && !string.IsNullOrWhiteSpace(configuredApi))
-                    api = configuredApi;
-            }
-            catch (JsonException)
-            {
-                // Misconfigured provider JSON — fall through with defaults
-            }
-        }
 
         if (!string.IsNullOrWhiteSpace(provider.BaseUrl)
             && !Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out _)
