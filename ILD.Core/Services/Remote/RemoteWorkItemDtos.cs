@@ -24,7 +24,7 @@ public enum RemoteWorkItemPriority
     Critical = 3,
 }
 
-public sealed record RemoteConversationMessage(string Role, string Content, DateTime Timestamp);
+public sealed record RemoteConversationMessage(string Role, string Content, DateTime Timestamp, string? Name = null);
 
 public sealed class RemoteWorkItem
 {
@@ -69,6 +69,9 @@ public sealed class RemoteTransitionRequest
     public RemoteWorkItemStatus TargetStatus { get; set; }
     public string? Reason { get; set; }
     public string? Actions { get; set; }
+    /// <summary>Optional author display name for the conversation entry this
+    /// transition appends (e.g. the originating node's title).</summary>
+    public string? Name { get; set; }
 }
 
 public sealed class RemoteTransitionResponse

@@ -237,7 +237,8 @@ public class WorkItemManager : IWorkItemManager
         string? reason = null,
         string? actions = null,
         Guid? currentLoopRunId = null,
-        string? humanFeedbackReason = null)
+        string? humanFeedbackReason = null,
+        string? name = null)
     {
         var prevWi = await GetWorkItemAsync(workItemId);
         if (prevWi == null) return false;
@@ -249,6 +250,7 @@ public class WorkItemManager : IWorkItemManager
             TargetStatus = targetStatus,
             Reason = reason,
             Actions = actions,
+            Name = name,
         });
 
         if (!resp.Success)
@@ -295,6 +297,16 @@ public class WorkItemManager : IWorkItemManager
             _scheduler.Pulse();
 
         return true;
+    }
+
+    public async Task<bool> AppendAiTurnAsync(string workItemId, string name, string content)
+    {
+        try
+        {
+            var opts = await _options.ResolveForWorkItemAsync(workItemId);
+            return await _server.AppendConversationAsync(opts, workItemId, "ai", content, name);
+        }
+        catch (InvalidOperationException) { return false; /* No remote — local only. */ }
     }
 
     // ──────────────────────────────────────────────────────────────────

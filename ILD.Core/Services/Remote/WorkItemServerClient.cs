@@ -23,6 +23,7 @@ public interface IWorkItemServerClient
     Task<bool> AddDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, CancellationToken ct = default);
     Task<bool> RemoveDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, CancellationToken ct = default);
     Task<bool> AppendFeedbackAsync(WorkItemServerOptions opts, string id, string content, CancellationToken ct = default);
+    Task<bool> AppendConversationAsync(WorkItemServerOptions opts, string id, string role, string content, string? name, CancellationToken ct = default);
 
     Task<RemotePollResponse> PollAsync(WorkItemServerOptions opts, IReadOnlyList<string> activeIds, CancellationToken ct = default);
 }
@@ -125,6 +126,14 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
     {
         var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/feedback");
         msg.Content = JsonContent.Create(new { content }, options: JsonOpts);
+        var resp = await _http.SendAsync(msg, ct);
+        return resp.IsSuccessStatusCode;
+    }
+
+    public async Task<bool> AppendConversationAsync(WorkItemServerOptions opts, string id, string role, string content, string? name, CancellationToken ct = default)
+    {
+        var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/conversation");
+        msg.Content = JsonContent.Create(new { role, content, name }, options: JsonOpts);
         var resp = await _http.SendAsync(msg, ct);
         return resp.IsSuccessStatusCode;
     }

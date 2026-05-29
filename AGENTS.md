@@ -14,6 +14,22 @@ Docs are local at `node_modules/vite-plus/docs` or online at https://viteplus.de
 
 <!--VITE PLUS END-->
 
+## Running the frontend tests
+
+`vp` is a **global** CLI — invoke it directly. Do NOT reach into `node_modules`
+(`node_modules/.bin/vite-plus`, `node_modules/vite-plus/dist/cli.js`) and do NOT
+use `pnpm vite-plus`/`npm test`/`npx vitest` — those paths do not exist or are
+not wired up here and will only waste time.
+
+```bash
+cd frontend && vp test                 # watch mode
+cd frontend && vp test --run           # one-shot (CI / agents)
+cd frontend && vp test --run src/utils/__tests__/workItemJson.test.ts   # single file
+cd frontend && vp check                # format + lint + type-check
+```
+
+.NET tests: `dotnet test ILD.Tests/ILD.Tests.csproj`.
+
 ## Database Migrations
 
 NEVER manually write or edit EF Core migration files. Always use the EF Core CLI tools to scaffold migrations from model changes:

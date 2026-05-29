@@ -35,7 +35,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         Tags = dto.Tags,
         Dependencies = dto.Dependencies,
         Conversation = dto.Conversation
-            .Select(m => new RemoteConversationMessage(m.Role, m.Content, m.Timestamp))
+            .Select(m => new RemoteConversationMessage(m.Role, m.Content, m.Timestamp, m.Name))
             .ToList(),
         HumanFeedbackActions = dto.HumanFeedbackActions,
         CreatedByLoopRunId = dto.CreatedByLoopRunId,
@@ -91,6 +91,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             TargetStatus = Map(req.TargetStatus),
             Reason = req.Reason,
             Actions = req.Actions,
+            Name = req.Name,
         }, ct);
         return new RemoteTransitionResponse
         {
@@ -108,6 +109,9 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
 
     public Task<bool> AppendFeedbackAsync(WorkItemServerOptions opts, string id, string content, CancellationToken ct = default)
         => _svc.AppendFeedbackAsync(id, content, ct);
+
+    public Task<bool> AppendConversationAsync(WorkItemServerOptions opts, string id, string role, string content, string? name, CancellationToken ct = default)
+        => _svc.AppendConversationAsync(id, role, content, name, ct);
 
     public async Task<RemotePollResponse> PollAsync(WorkItemServerOptions opts, IReadOnlyList<string> activeIds, CancellationToken ct = default)
     {

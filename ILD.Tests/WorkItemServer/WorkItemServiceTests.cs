@@ -149,6 +149,67 @@ public class WorkItemServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Transition_with_Name_records_author_on_conversation_entry()
+    {
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
+
+        await _svc.TransitionAsync(dto.Id, new TransitionRequest
+        {
+            TargetStatus = WorkItemStatus.HumanFeedback,
+            Reason = "Need approval",
+            Name = "Code Review",
+        });
+
+        var fresh = await _svc.GetAsync(dto.Id);
+        Assert.Single(fresh!.Conversation);
+        Assert.Equal("ai", fresh.Conversation[0].Role);
+        Assert.Equal("Code Review", fresh.Conversation[0].Name);
+    }
+
+    [Fact]
+    public async Task Transition_to_Done_with_reason_is_recorded_as_ai_role()
+    {
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
+
+        await _svc.TransitionAsync(dto.Id, new TransitionRequest
+        {
+            TargetStatus = WorkItemStatus.Done,
+            Reason = "All checks passed",
+        });
+
+        var fresh = await _svc.GetAsync(dto.Id);
+        Assert.Single(fresh!.Conversation);
+        // Done is a system/AI-authored event, not a human turn.
+        Assert.Equal("ai", fresh.Conversation[0].Role);
+        Assert.Equal("All checks passed", fresh.Conversation[0].Content);
+    }
+
+    [Fact]
+    public async Task AppendConversation_adds_named_ai_turn_without_changing_status()
+    {
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
+        await _svc.TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running });
+
+        var ok = await _svc.AppendConversationAsync(dto.Id, "ai", "Implemented the feature", "AI Coder");
+
+        Assert.True(ok);
+        var fresh = await _svc.GetAsync(dto.Id);
+        // Status is untouched — an AI turn is dialogue, not a lifecycle change.
+        Assert.Equal(WorkItemStatus.Running, fresh!.Status);
+        Assert.Single(fresh.Conversation);
+        Assert.Equal("ai", fresh.Conversation[0].Role);
+        Assert.Equal("Implemented the feature", fresh.Conversation[0].Content);
+        Assert.Equal("AI Coder", fresh.Conversation[0].Name);
+    }
+
+    [Fact]
+    public async Task AppendConversation_returns_false_for_missing_work_item()
+    {
+        var ok = await _svc.AppendConversationAsync("does-not-exist", "ai", "hi", "AI Coder");
+        Assert.False(ok);
+    }
+
+    [Fact]
     public async Task Transition_to_non_response_state_does_not_append_conversation()
     {
         var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
