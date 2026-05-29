@@ -94,6 +94,47 @@ public class AiProvidersIntegrationTests
     }
 
     [Fact]
+    public async Task SetDefault_endpoint_promotes_provider_and_demotes_previous_default()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+
+        var aResponse = await client.PostAsJsonAsync("/api/v1/aiproviders", new
+        {
+            name = "A",
+            type = "opencode",
+            baseUrl = "https://a.example.com",
+            model = "gpt-4",
+            isDefault = true,
+        });
+        Assert.Equal(HttpStatusCode.Created, aResponse.StatusCode);
+        var a = (await aResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+
+        var bResponse = await client.PostAsJsonAsync("/api/v1/aiproviders", new
+        {
+            name = "B",
+            type = "opencode",
+            baseUrl = "https://b.example.com",
+            model = "gpt-4",
+            isDefault = false,
+        });
+        Assert.Equal(HttpStatusCode.Created, bResponse.StatusCode);
+        var b = (await bResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+
+        var promoteResponse = await client.PostAsync($"/api/v1/aiproviders/{b}/set-default", null);
+        Assert.Equal(HttpStatusCode.OK, promoteResponse.StatusCode);
+
+        var listResponse = await client.GetAsync("/api/v1/aiproviders");
+        var items = await listResponse.Content.ReadFromJsonAsync<JsonElement[]>();
+        Assert.NotNull(items);
+
+        var byId = items!.ToDictionary(i => i.GetProperty("id").GetString()!);
+        Assert.False(byId[a].GetProperty("isDefault").GetBoolean());
+        Assert.True(byId[b].GetProperty("isDefault").GetBoolean());
+        Assert.Single(items, i => i.GetProperty("isDefault").GetBoolean());
+    }
+
+    [Fact]
     public async Task Creating_second_default_demotes_the_first()
     {
         await using var factory = new ApiFactory();

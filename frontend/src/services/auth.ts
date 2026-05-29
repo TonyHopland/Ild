@@ -387,6 +387,10 @@ export const aiProviderService = {
   update: async (id: string, data: Partial<AiProvider>): Promise<AiProvider> => {
     return api.put<AiProvider>(`/aiproviders/${id}`, data);
   },
+
+  setDefault: async (id: string): Promise<AiProvider> => {
+    return api.post<AiProvider>(`/aiproviders/${id}/set-default`, {});
+  },
 };
 
 export const loggingService = {

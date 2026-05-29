@@ -136,6 +136,19 @@ public class AiProvidersController : ControllerBase
         return new EmptyResult();
     }
 
+    [HttpPost("{id}/set-default")]
+    public async Task<IActionResult> SetDefault(string id)
+    {
+        if (!Guid.TryParse(id, out var guid)) return BadRequest();
+        var p = await _providerStore.GetAiProviderByIdAsync(guid);
+        if (p == null) return NotFound();
+        if (p.IsDefault) return Ok(ToResponse(p));
+        p.IsDefault = true;
+        p.UpdatedAt = DateTime.UtcNow;
+        await _providerStore.UpdateAiProviderAsync(p);
+        return Ok(ToResponse(p));
+    }
+
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(string id, [FromBody] AiProviderDto request)
     {
