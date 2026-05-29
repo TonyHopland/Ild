@@ -3,8 +3,8 @@ using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Enums;
 using ILD.Data.Entities;
+using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Api.Controllers;
 
@@ -15,17 +15,17 @@ public class WorkItemsController : ControllerBase
     private readonly IWorkItemManager _workItemManager;
     private readonly ILoopEngine _engine;
     private readonly IWorktreePreviewService _worktreePreviewService;
-    private readonly AppDbContext _db;
+    private readonly ILoopRunStore _loopRunStore;
     private readonly ILogger<WorkItemsController> _logger;
     private readonly IWorkItemNotifier _notifier;
     private readonly IRemoteProvider? _remoteProvider;
 
-    public WorkItemsController(IWorkItemManager workItemManager, ILoopEngine engine, IWorktreePreviewService worktreePreviewService, AppDbContext db, ILogger<WorkItemsController> logger, IWorkItemNotifier? notifier = null, IRemoteProvider? remoteProvider = null)
+    public WorkItemsController(IWorkItemManager workItemManager, ILoopEngine engine, IWorktreePreviewService worktreePreviewService, ILoopRunStore loopRunStore, ILogger<WorkItemsController> logger, IWorkItemNotifier? notifier = null, IRemoteProvider? remoteProvider = null)
     {
         _workItemManager = workItemManager;
         _engine = engine;
         _worktreePreviewService = worktreePreviewService;
-        _db = db;
+        _loopRunStore = loopRunStore;
         _logger = logger;
         _notifier = notifier ?? new NoopWorkItemNotifier();
         _remoteProvider = remoteProvider;
@@ -249,11 +249,7 @@ public class WorkItemsController : ControllerBase
         if (skip < 0) skip = 0;
         if (take <= 0) take = 100;
         if (take > 500) take = 500;
-        var runs = await _db.LoopRuns.AsNoTracking()
-            .Where(r => r.WorkItemId == id)
-            .OrderByDescending(r => r.StartedAt)
-            .Skip(skip).Take(take)
-            .ToListAsync();
+        var runs = await _loopRunStore.GetByWorkItemPagedAsync(id, skip, take);
         return Ok(runs);
     }
 
@@ -270,59 +266,8 @@ public class WorkItemsController : ControllerBase
     [HttpPost("{id}/mark-merged")]
     public async Task<IActionResult> MarkMerged(string id)
     {
-        var ok = await _workItemManager.ManuallyMarkMergedAsync(id);
-        if (!ok) return NotFound();
-
-        // Only resume the workitem's current run, not stale ones.
-        var currentRun = await _db.LoopRuns
-            .FirstOrDefaultAsync(r =>
-                r.WorkItemId == id &&
-                (r.Status == ILD.Data.Enums.LoopRunStatus.Running ||
-                 r.Status == ILD.Data.Enums.LoopRunStatus.Failed));
-
-            if (currentRun != null)
-            {
-                // Try to find the PR node first, then fall back to any waiting/failed node
-                // (the LoopNode may not exist if the template was updated since the run started)
-                var prRunNode = await _db.LoopRunNodes
-                    .Include(n => n.LoopNode)
-                    .FirstOrDefaultAsync(n =>
-                        n.LoopRunId == currentRun.Id &&
-                        n.LoopNode.NodeType == ILD.Data.Enums.NodeType.PR &&
-                        (n.Status == ILD.Data.Enums.LoopRunNodeStatus.WaitingHuman ||
-                         n.Status == ILD.Data.Enums.LoopRunNodeStatus.Failed));
-
-                if (prRunNode == null)
-                {
-                    prRunNode = await _db.LoopRunNodes
-                        .Include(n => n.LoopNode)
-                        .FirstOrDefaultAsync(n =>
-                            n.LoopRunId == currentRun.Id &&
-                            (n.Status == ILD.Data.Enums.LoopRunNodeStatus.WaitingHuman ||
-                             n.Status == ILD.Data.Enums.LoopRunNodeStatus.Failed));
-                }
-
-                if (prRunNode != null)
-                {
-                    // If the node's LoopNode is gone (template was updated), the run is
-                    // unrecoverable — the engine can't route to the Cleanup node. Complete
-                    // the run and mark the workitem Done directly.
-                    if (prRunNode.LoopNode == null)
-                    {
-                        // Unrecoverable — transition work item to Done via manager
-                            await _workItemManager.TransitionAsync(id, RemoteWorkItemStatus.Done);
-                    }
-                    else
-                    {
-                        await _engine.SignalNodeResultAsync(currentRun.Id, prRunNode.Id, NodeSignal.Success());
-
-                        // SignalNodeResultAsync re-enters the run loop itself;
-                        // calling RunInBackground here would race a second runner.
-                    }
-                }
-            }
-
-        return Ok();
+        var ok = await _workItemManager.MarkMergedAndAdvanceAsync(id);
+        return ok ? Ok() : NotFound();
     }
 
     [HttpPost("{id}/human-feedback/input")]
