@@ -77,6 +77,21 @@ public abstract record NodeOutcome
     /// AI node bound a session. The engine persists the binding.
     /// </summary>
     public sealed record SessionBound(string SessionPlaceholder, string SessionId) : NodeOutcome;
+
+    /// <summary>
+    /// Map a consumed external-action signal to the re-entry outcome every
+    /// waitable node (Human, PR) shares: <c>Reject</c> → fail on
+    /// <see cref="EdgeType.OnFailure"/>, <c>Respond</c> → succeed on
+    /// <see cref="EdgeType.OnRespond"/>, anything else → succeed on
+    /// <see cref="EdgeType.OnSuccess"/>. <paramref name="rejectReason"/> lets
+    /// each node phrase its own rejection text.
+    /// </summary>
+    public static NodeOutcome FromExternalAction(string? result, ExternalActionResultType type, string rejectReason) => type switch
+    {
+        ExternalActionResultType.Reject => new Fail(EdgeType.OnFailure, rejectReason, result),
+        ExternalActionResultType.Respond => new Success(EdgeType.OnRespond, result),
+        _ => new Success(EdgeType.OnSuccess, result),
+    };
 }
 
 /// <summary>

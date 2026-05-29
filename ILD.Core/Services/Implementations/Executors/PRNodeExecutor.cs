@@ -39,18 +39,9 @@ public sealed class PRNodeExecutor : INodeExecutor
         // a second LoopRunNode — the existing WaitingHuman node covers this visit.
         if (ctx.Run.ExternalActionResult is not null)
         {
-            switch (ctx.Run.ExternalActionResultType)
-            {
-                case ExternalActionResultType.Reject:
-                    yield return new NodeOutcome.Fail(EdgeType.OnFailure, "PR rejected", ctx.Run.ExternalActionResult);
-                    yield break;
-                case ExternalActionResultType.Respond:
-                    yield return new NodeOutcome.Success(EdgeType.OnRespond, ctx.Run.ExternalActionResult);
-                    yield break;
-                default:
-                    yield return new NodeOutcome.Success(EdgeType.OnSuccess, ctx.Run.ExternalActionResult);
-                    yield break;
-            }
+            yield return NodeOutcome.FromExternalAction(
+                ctx.Run.ExternalActionResult, ctx.Run.ExternalActionResultType, "PR rejected");
+            yield break;
         }
 
         var rendering = sp.GetService<IPromptRenderingService>();
