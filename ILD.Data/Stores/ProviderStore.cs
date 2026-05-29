@@ -34,14 +34,26 @@ public class ProviderStore : IProviderStore
 
     public async Task CreateAiProviderAsync(AiProvider provider)
     {
-        _db.AiProviders.Add(provider);
-        await _db.SaveChangesAsync();
+        await SaveWithSingleDefaultAsync(provider, () => _db.AiProviders.Add(provider));
     }
 
     public async Task UpdateAiProviderAsync(AiProvider provider)
     {
-        _db.AiProviders.Update(provider);
+        await SaveWithSingleDefaultAsync(provider, () => _db.AiProviders.Update(provider));
+    }
+
+    private async Task SaveWithSingleDefaultAsync(AiProvider provider, Action stage)
+    {
+        await using var tx = await _db.Database.BeginTransactionAsync();
+        if (provider.IsDefault)
+        {
+            await _db.AiProviders
+                .Where(p => p.IsDefault && p.Id != provider.Id)
+                .ExecuteUpdateAsync(s => s.SetProperty(p => p.IsDefault, false));
+        }
+        stage();
         await _db.SaveChangesAsync();
+        await tx.CommitAsync();
     }
 
     public async Task DeleteAiProviderAsync(AiProvider provider)
