@@ -321,73 +321,42 @@ export default function WorkItemModal({
     }
   };
 
-  const handleMarkMerged = async () => {
+  // The PR/feedback/cleanup actions all share the same shape: invoke a service
+  // call, refetch the work item, and hand it to onSave (logging on failure).
+  const runAction = async (action: (id: string) => Promise<unknown>, errorLabel: string) => {
     if (!workItem) return;
     try {
-      await workItemService.markMerged(workItem.id);
+      await action(workItem.id);
       const updated = await workItemService.getById(workItem.id);
       onSave(updated);
     } catch (error) {
-      console.error("Failed to mark merged:", error);
+      console.error(`Failed to ${errorLabel}:`, error);
     }
   };
 
-  const handleContinue = async () => {
-    if (!workItem) return;
-    try {
-      await workItemService.humanFeedbackInput(workItem.id, feedbackInput || "");
-      const updated = await workItemService.getById(workItem.id);
-      onSave(updated);
-    } catch (error) {
-      console.error("Failed to submit feedback:", error);
-    }
-  };
+  const handleMarkMerged = () => runAction((id) => workItemService.markMerged(id), "mark merged");
 
-  const handleReject = async () => {
-    if (!workItem) return;
-    try {
-      // Pass any typed feedback through to the OnFailure successor as
-      // {{PreviousNode.Output}}.
-      await workItemService.humanFeedbackReject(workItem.id, feedbackInput || undefined);
-      const updated = await workItemService.getById(workItem.id);
-      onSave(updated);
-    } catch (error) {
-      console.error("Failed to reject:", error);
-    }
-  };
+  const handleContinue = () =>
+    runAction(
+      (id) => workItemService.humanFeedbackInput(id, feedbackInput || ""),
+      "submit feedback",
+    );
 
-  const handleRespond = async () => {
-    if (!workItem) return;
-    try {
-      await workItemService.humanFeedbackRespond(workItem.id, feedbackInput || "");
-      const updated = await workItemService.getById(workItem.id);
-      onSave(updated);
-    } catch (error) {
-      console.error("Failed to respond:", error);
-    }
-  };
+  // Pass any typed feedback through to the OnFailure successor as {{PreviousNode.Output}}.
+  const handleReject = () =>
+    runAction(
+      (id) => workItemService.humanFeedbackReject(id, feedbackInput || undefined),
+      "reject",
+    );
 
-  const handleCleanupDone = async () => {
-    if (!workItem) return;
-    try {
-      await workItemService.cleanupToDone(workItem.id);
-      const updated = await workItemService.getById(workItem.id);
-      onSave(updated);
-    } catch (error) {
-      console.error("Failed to cleanup to done:", error);
-    }
-  };
+  const handleRespond = () =>
+    runAction((id) => workItemService.humanFeedbackRespond(id, feedbackInput || ""), "respond");
 
-  const handleCleanupBacklog = async () => {
-    if (!workItem) return;
-    try {
-      await workItemService.cleanupToBacklog(workItem.id);
-      const updated = await workItemService.getById(workItem.id);
-      onSave(updated);
-    } catch (error) {
-      console.error("Failed to cleanup to backlog:", error);
-    }
-  };
+  const handleCleanupDone = () =>
+    runAction((id) => workItemService.cleanupToDone(id), "cleanup to done");
+
+  const handleCleanupBacklog = () =>
+    runAction((id) => workItemService.cleanupToBacklog(id), "cleanup to backlog");
 
   const handleStartPreview = async () => {
     if (!workItem) return;
