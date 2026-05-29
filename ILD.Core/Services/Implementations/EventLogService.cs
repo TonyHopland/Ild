@@ -4,6 +4,7 @@ using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
+using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations;
 
@@ -12,17 +13,19 @@ public class EventLogService : IEventLogService
     private readonly IEventLogStore _eventLogStore;
     private readonly ILoopRunStore _loopRunStore;
     private readonly EventLogOptions _options;
+    private readonly ILogger<EventLogService>? _logger;
 
     // Per-run lock guards the sequence allocate -> file-write -> insert path so
     // concurrent appends within a run cannot interleave payload-file writes
     // ahead of their event row. Cross-run appends never block each other.
     private static readonly ConcurrentDictionary<Guid, SemaphoreSlim> _runLocks = new();
 
-    public EventLogService(IEventLogStore eventLogStore, ILoopRunStore loopRunStore, EventLogOptions? options = null)
+    public EventLogService(IEventLogStore eventLogStore, ILoopRunStore loopRunStore, EventLogOptions? options = null, ILogger<EventLogService>? logger = null)
     {
         _eventLogStore = eventLogStore;
         _loopRunStore = loopRunStore;
         _options = options ?? new EventLogOptions();
+        _logger = logger;
     }
 
     public EventLogService(IEventLogStore eventLogStore, ILoopRunStore loopRunStore, string payloadDirectory)
@@ -33,7 +36,16 @@ public class EventLogService : IEventLogService
     public async Task<long> AppendAsync(Guid runId, string eventType, string message, Guid? nodeId = null, string? payloadPath = null, Guid? runNodeId = null)
     {
         if (!Enum.TryParse<EventType>(eventType, ignoreCase: true, out var parsed))
+        {
+            // An unrecognized event-type string is a programming error (typo / drift from
+            // the EventType enum), not a runtime "Error" event. Coercing it silently to
+            // EventType.Error mislabels successful events as failures, so log it loudly.
+            _logger?.LogError(
+                "Unknown event type '{EventType}' for run {RunId} (node {NodeId}); recording as Error. " +
+                "This string does not match any EventType enum member.",
+                eventType, runId, nodeId);
             parsed = EventType.Error;
+        }
 
         var runLock = _runLocks.GetOrAdd(runId, _ => new SemaphoreSlim(1, 1));
         await runLock.WaitAsync();

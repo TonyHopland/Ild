@@ -187,6 +187,15 @@
   overflow-y: auto;
 }
 
+.node-output-content + .node-output-content {
+  margin-top: 0.5rem;
+}
+
+.node-output-error {
+  border-color: #ef4444;
+  color: #fca5a5;
+}
+
 .node-events-list {
   font-size: 0.8rem;
   color: #9ca3af;

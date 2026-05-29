@@ -8,20 +8,27 @@ interface NodeOutputSectionProps {
 }
 
 export default function NodeOutputSection({ output, error, nodeType }: NodeOutputSectionProps) {
-  const content = error ?? output ?? "";
   const isMarkdown = nodeType === NodeType.AI;
+  const hasOutput = !!output;
+  const hasError = !!error;
 
   return (
     <div className="node-detail-section node-output-section">
       <h4>Output</h4>
-      {!content ? (
+      {!hasOutput && !hasError ? (
         <pre className="node-output-content">No output</pre>
-      ) : isMarkdown ? (
-        <div className="node-output-content">
-          <MarkdownRenderer content={content} />
-        </div>
       ) : (
-        <pre className="node-output-content">{content}</pre>
+        <>
+          {hasOutput &&
+            (isMarkdown ? (
+              <div className="node-output-content">
+                <MarkdownRenderer content={output!} />
+              </div>
+            ) : (
+              <pre className="node-output-content">{output}</pre>
+            ))}
+          {hasError && <pre className="node-output-content node-output-error">{error}</pre>}
+        </>
       )}
     </div>
   );

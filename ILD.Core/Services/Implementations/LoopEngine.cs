@@ -415,7 +415,7 @@ public sealed class LoopEngine : ILoopEngine
                         await loopRunStore.UpdateRunAsync(run);
                         await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Succeeded);
                         if (eventLog is not null && runNodeId is Guid id)
-                            await TrySafe(() => eventLog.AppendAsync(run.Id, "NodeSucceeded", ok.Output ?? string.Empty, node.Id, runNodeId: id));
+                            await TrySafe(() => eventLog.AppendAsync(run.Id, "NodeCompleted", ok.Output ?? string.Empty, node.Id, runNodeId: id));
                         var successEdge = await ResolveNextEdgeAsync(loopRunStore, node.Id, ok.Edge);
                         if (successEdge is null) return await CompleteRunAsync(run, loopRunStore, workItems, ok.Output);
                         if (await TraversalLimitExceededAsync(run, successEdge, edgeTraversalCount, loopRunStore, sp))
