@@ -281,7 +281,15 @@ public sealed class LoopEngine : ILoopEngine
         {
             try { await RunUntilParkAsync(runId, cts.Token); }
             catch (OperationCanceledException) { }
-            catch (Exception ex) { _logger.LogError(ex, "Run {RunId} crashed", runId); }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Run {RunId} crashed", runId);
+                // Without this the run is left in the DB as Running forever with
+                // no task driving it: the work item hangs in the Running column
+                // and the run page shows RUNNING even though nothing will ever
+                // resume it. Park it for human review instead.
+                await TrySafe(() => MarkRunCrashedAsync(runId, ex.Message));
+            }
             finally
             {
                 _runCts.TryRemove(runId, out _);
@@ -353,6 +361,19 @@ public sealed class LoopEngine : ILoopEngine
                     if (!await enumerator.MoveNextAsync()) break;
                     outcome = enumerator.Current;
                 }
+                catch (OperationCanceledException)
+                {
+                    // Cancellation (e.g. the run was stopped while a process-based
+                    // node was executing) is not a node failure. Mark the in-flight
+                    // node as interrupted and let the cancellation propagate up to
+                    // LaunchAsync, which swallows it cleanly.
+                    if (runNodeId is not null)
+                    {
+                        await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.Interrupted, null, "Run cancelled");
+                        await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Interrupted);
+                    }
+                    throw;
+                }
                 catch (Exception ex)
                 {
                     outcome = new NodeOutcome.Fail(EdgeType.OnFailure, ex.Message);
@@ -406,6 +427,18 @@ public sealed class LoopEngine : ILoopEngine
                     }
                     case NodeOutcome.Fail f:
                     {
+                        if (ct.IsCancellationRequested)
+                        {
+                            // The run was stopped while this node was running; the AI
+                            // adapter killed the agent and surfaced this as a Fail
+                            // (e.g. "claude-code timed out"). Record an interruption
+                            // rather than a failure, and stop without traversing the
+                            // OnFailure edge into another node.
+                            await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.Interrupted, f.Output, "Run cancelled");
+                            if (runNodeId is not null)
+                                await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Interrupted);
+                            return ParkResult.Stop;
+                        }
                         await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.Failed, f.Output, f.Reason);
                         run.PreviousNodeOutput = f.Output ?? f.Reason;
                         run.ExternalActionResult = null;
@@ -566,6 +599,31 @@ public sealed class LoopEngine : ILoopEngine
         await store.UpdateRunAsync(run);
         await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             reason: reason, humanFeedbackReason: HumanFeedbackReasons.NodeFailed, currentLoopRunId: run.Id);
+    }
+
+    /// <summary>
+    /// Terminal handler for an unhandled exception in the run loop. Marks the
+    /// run Failed and parks the work item for review, but only if the run is
+    /// still Running — a crash during a transition that already moved the run
+    /// to a terminal/parked state must not clobber that state.
+    /// </summary>
+    private async Task MarkRunCrashedAsync(Guid runId, string reason)
+    {
+        using var scope = _sp.CreateScope();
+        var sp = scope.ServiceProvider;
+        var store = sp.GetRequiredService<ILoopRunStore>();
+        var run = await store.GetByIdAsync(runId);
+        if (run is null || run.Status != LoopRunStatus.Running) return;
+
+        var workItems = sp.GetRequiredService<IWorkItemManager>();
+        var old = run.Status;
+        run.Status = LoopRunStatus.Failed;
+        run.CompletedAt = DateTime.UtcNow;
+        run.HumanFeedbackReason = reason;
+        await store.UpdateRunAsync(run);
+        await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.Failed);
+        await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+            reason: reason, humanFeedbackReason: HumanFeedbackReasons.RunCrashed, currentLoopRunId: run.Id);
     }
 
     private static async Task TrySafe(Func<Task> f) { try { await f(); } catch { } }

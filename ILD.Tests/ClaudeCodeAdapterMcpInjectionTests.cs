@@ -142,4 +142,28 @@ public class ClaudeCodeAdapterMcpInjectionTests : IDisposable
         var idx = psi.ArgumentList.IndexOf("--mcp-config");
         Assert.Equal("/tmp/mcp.json", psi.ArgumentList[idx + 1]);
     }
+
+    [Fact]
+    public void BuildRunProcessStartInfo_separates_prompt_from_variadic_mcp_config()
+    {
+        // Regression: with an mcp-config and no session, the prompt must not sit
+        // directly after the variadic `--mcp-config` flag, or the claude CLI
+        // swallows it as another config-file path (ENAMETOOLONG). A `--`
+        // terminator must precede the prompt, which must be the final argument.
+        var psi = ClaudeCodeAdapter.BuildRunProcessStartInfo(
+            binaryPath: "claude",
+            worktreePath: "/tmp/wt",
+            renderedPrompt: "fix it",
+            sessionId: null,
+            mcpConfigPath: "/tmp/mcp.json");
+
+        var args = psi.ArgumentList;
+        Assert.Equal("fix it", args[^1]);
+        Assert.Equal("--", args[^2]);
+
+        var mcpIdx = args.IndexOf("--mcp-config");
+        // The token immediately after the config path must be the terminator,
+        // never the prompt itself.
+        Assert.Equal("--", args[mcpIdx + 2]);
+    }
 }

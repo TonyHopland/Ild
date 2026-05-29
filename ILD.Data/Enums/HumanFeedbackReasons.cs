@@ -27,4 +27,7 @@ public static class HumanFeedbackReasons
 
     /// <summary>Run is parked because the AI provider for the current node is at capacity.</summary>
     public const string AiProviderThrottled = "AI Provider Throttled";
+
+    /// <summary>The run loop threw an unhandled exception and was parked for review.</summary>
+    public const string RunCrashed = "Run Crashed";
 }
