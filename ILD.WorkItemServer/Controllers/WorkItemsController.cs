@@ -91,6 +91,14 @@ public sealed class WorkItemsController : ControllerBase
         return await _svc.AppendFeedbackAsync(id, req.Content, ct) ? NoContent() : NotFound();
     }
 
+    [HttpPost("{id}/conversation")]
+    public async Task<IActionResult> AppendConversation(string id, [FromBody] AppendConversationRequest req, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(req.Content)) return BadRequest("Content is required");
+        var role = string.IsNullOrWhiteSpace(req.Role) ? "ai" : req.Role;
+        return await _svc.AppendConversationAsync(id, role, req.Content, req.Name, ct) ? NoContent() : NotFound();
+    }
+
     private static IReadOnlyList<string> ParseIdList(string? csv)
     {
         if (string.IsNullOrWhiteSpace(csv)) return Array.Empty<string>();

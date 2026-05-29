@@ -30,13 +30,22 @@ public interface IWorkItemManager
     /// </summary>
     /// <param name="reason">Content stored in the server conversation thread.</param>
     /// <param name="humanFeedbackReason">Short label stored on LoopRun for frontend UI routing. Falls back to <paramref name="reason"/> when null.</param>
+    /// <param name="name">Optional author display name for the conversation entry (e.g. the originating node's title).</param>
     Task<bool> TransitionAsync(
         string workItemId,
         RemoteWorkItemStatus targetStatus,
         string? reason = null,
         string? actions = null,
         Guid? currentLoopRunId = null,
-        string? humanFeedbackReason = null);
+        string? humanFeedbackReason = null,
+        string? name = null);
+
+    /// <summary>
+    /// Append an AI-authored conversation turn (e.g. an AI node's output) to the
+    /// work item's thread without changing its status. <paramref name="name"/> is
+    /// the author label shown in the UI, typically the node's title.
+    /// </summary>
+    Task<bool> AppendAiTurnAsync(string workItemId, string name, string content);
     Task<bool> AddDependencyAsync(string workItemId, string dependsOnWorkItemId);
     Task<bool> RemoveDependencyAsync(string workItemId, string dependsOnWorkItemId);
     Task<IReadOnlyList<WorkItemView>> GetDependenciesAsync(string workItemId);

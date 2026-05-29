@@ -24,7 +24,12 @@ export function parseConversation(workItem: Pick<WorkItem, "conversation">): Con
       typeof m.content === "string" &&
       typeof m.timestamp === "string"
     ) {
-      out.push({ role: m.role, content: m.content, timestamp: m.timestamp });
+      out.push({
+        role: m.role,
+        content: m.content,
+        timestamp: m.timestamp,
+        name: typeof m.name === "string" ? m.name : null,
+      });
     }
   }
   return out;

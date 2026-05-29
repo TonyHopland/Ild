@@ -415,7 +415,13 @@ public sealed class LoopEngine : ILoopEngine
                         await loopRunStore.UpdateRunAsync(run);
                         await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Succeeded);
                         if (eventLog is not null && runNodeId is Guid id)
-                            await TrySafe(() => eventLog.AppendAsync(run.Id, "NodeSucceeded", ok.Output ?? string.Empty, node.Id, runNodeId: id));
+                            await TrySafe(() => eventLog.AppendAsync(run.Id, "NodeCompleted", ok.Output ?? string.Empty, node.Id, runNodeId: id));
+                        // Surface each AI node's output as a conversation turn so the
+                        // coder ↔ reviewer ↔ human dialogue can be followed in the UI.
+                        // Authored by the node's title; best-effort so a conversation
+                        // write never blocks or breaks the run.
+                        if (node.NodeType == NodeType.AI && !string.IsNullOrWhiteSpace(ok.Output))
+                            await TrySafe(() => workItems.AppendAiTurnAsync(run.WorkItemId, node.Label, ok.Output!));
                         var successEdge = await ResolveNextEdgeAsync(loopRunStore, node.Id, ok.Edge);
                         if (successEdge is null) return await CompleteRunAsync(run, loopRunStore, workItems, ok.Output);
                         if (await TraversalLimitExceededAsync(run, successEdge, edgeTraversalCount, loopRunStore, sp))
@@ -476,7 +482,7 @@ public sealed class LoopEngine : ILoopEngine
                             .Distinct());
                         await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
                             reason: wa.Reason, actions: string.IsNullOrEmpty(actions) ? null : actions,
-                            humanFeedbackReason: wa.Reason, currentLoopRunId: run.Id);
+                            humanFeedbackReason: wa.Reason, currentLoopRunId: run.Id, name: node.Label);
                         return ParkResult.Stop;
                     }
                     case NodeOutcome.WaitingIld wi:

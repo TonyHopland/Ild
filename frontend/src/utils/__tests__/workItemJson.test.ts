@@ -17,12 +17,27 @@ describe("parseConversation", () => {
       role: "ai",
       content: "Need approval",
       timestamp: "2025-01-01T00:00:00Z",
+      name: null,
     });
     expect(result[1]).toEqual({
       role: "human",
       content: "Approved",
       timestamp: "2025-01-01T01:00:00Z",
+      name: null,
     });
+  });
+
+  test("carries the author name through, defaulting to null", () => {
+    const workItem = {
+      conversation: [
+        { role: "ai", name: "AI Coder", content: "done", timestamp: "2025-01-01T00:00:00Z" },
+        { role: "human", content: "ok", timestamp: "2025-01-01T01:00:00Z" },
+      ],
+    } as unknown as WorkItem;
+
+    const result = parseConversation(workItem);
+    expect(result[0].name).toBe("AI Coder");
+    expect(result[1].name).toBeNull();
   });
 
   test("returns empty array when conversation is undefined", () => {

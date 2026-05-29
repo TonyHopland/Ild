@@ -196,16 +196,18 @@ export default function Taskboard() {
         <h1 className="page-title">Taskboard</h1>
         <div className="taskboard-header-actions">
           <label
-            className="scheduler-pause-toggle"
-            title="Pause the scheduler — Ready items stay queued until resumed."
+            className={`scheduler-pause-toggle${isPaused ? "" : " is-running"}`}
+            title="Toggle the scheduler — when paused, Ready items stay queued until resumed."
           >
             <input
               type="checkbox"
-              checked={isPaused}
+              className="scheduler-pause-toggle-input"
+              checked={!isPaused}
               disabled={pauseBusy}
-              aria-label="Pause scheduler"
+              aria-label="Scheduler running"
               onChange={async (e) => {
-                const next = e.target.checked;
+                const running = e.target.checked;
+                const next = !running;
                 setPauseBusy(true);
                 try {
                   await settingsService.put(SchedulerSettingKeys.IsPaused, next ? "true" : "false");
@@ -217,11 +219,11 @@ export default function Taskboard() {
                 }
               }}
             />
-            {isPaused ? "Paused" : "Running"}
+            <span className="scheduler-pause-toggle-track" aria-hidden="true">
+              <span className="scheduler-pause-toggle-thumb" />
+            </span>
+            <span className="scheduler-pause-toggle-label">{isPaused ? "Paused" : "Running"}</span>
           </label>
-          <button className="btn btn-primary" onClick={openCreateModal}>
-            + New Item
-          </button>
         </div>
       </div>
       <ErrorBanner message={errorText} onDismiss={() => setErrorText("")} />
@@ -241,6 +243,7 @@ export default function Taskboard() {
               onWorkItemClick={handleCardClick}
               onError={(msg) => setErrorText(msg)}
               onMoveWorkItem={handleMoveWorkItem}
+              onAddItem={status.value === "Backlog" ? openCreateModal : undefined}
             />
           );
         })}
@@ -269,10 +272,68 @@ export default function Taskboard() {
         .scheduler-pause-toggle {
           display: inline-flex;
           align-items: center;
-          gap: 0.4rem;
+          gap: 0.5rem;
           font-size: 0.9rem;
           color: var(--text-secondary, #555);
           cursor: pointer;
+          user-select: none;
+        }
+
+        .scheduler-pause-toggle-input {
+          position: absolute;
+          width: 1px;
+          height: 1px;
+          padding: 0;
+          margin: -1px;
+          overflow: hidden;
+          clip: rect(0 0 0 0);
+          white-space: nowrap;
+          border: 0;
+        }
+
+        .scheduler-pause-toggle-track {
+          position: relative;
+          display: inline-block;
+          width: 36px;
+          height: 20px;
+          border-radius: 999px;
+          background: var(--border-color, #ccc);
+          transition: background 0.2s ease;
+          flex-shrink: 0;
+        }
+
+        .scheduler-pause-toggle.is-running .scheduler-pause-toggle-track {
+          background: var(--success-color, #2e9e5b);
+        }
+
+        .scheduler-pause-toggle-thumb {
+          position: absolute;
+          top: 2px;
+          left: 2px;
+          width: 16px;
+          height: 16px;
+          border-radius: 50%;
+          background: #fff;
+          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+          transition: transform 0.2s ease;
+        }
+
+        .scheduler-pause-toggle.is-running .scheduler-pause-toggle-thumb {
+          transform: translateX(16px);
+        }
+
+        .scheduler-pause-toggle-input:focus-visible + .scheduler-pause-toggle-track {
+          outline: 2px solid var(--focus-color, #3b82f6);
+          outline-offset: 2px;
+        }
+
+        .scheduler-pause-toggle-input:disabled ~ .scheduler-pause-toggle-track,
+        .scheduler-pause-toggle-input:disabled ~ .scheduler-pause-toggle-label {
+          opacity: 0.5;
+        }
+
+        .scheduler-pause-toggle-label {
+          font-variant-numeric: tabular-nums;
         }
 
         .taskboard-live-region {
@@ -303,21 +364,6 @@ export default function Taskboard() {
             max-height: none;
             min-height: 200px;
           }
-        }
-
-        .btn-primary {
-          background-color: #6366f1;
-          color: #fff;
-          padding: 0.5rem 1rem;
-          border-radius: 0.375rem;
-          border: none;
-          cursor: pointer;
-          font-size: 0.875rem;
-          transition: background-color 0.15s ease;
-        }
-
-        .btn-primary:hover {
-          background-color: #5558e6;
         }
       `}</style>
     </div>

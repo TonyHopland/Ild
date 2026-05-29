@@ -972,7 +972,9 @@ export default function WorkItemModal({
                           className={`conversation-message conversation-${m.role.toLowerCase()}`}
                         >
                           <div className="conversation-message-header">
-                            <strong className="conversation-message-role">{m.role}</strong>
+                            <strong className="conversation-message-role">
+                              {m.name ?? (m.role.toLowerCase() === "human" ? "You" : "AI")}
+                            </strong>
                             <span>{new Date(m.timestamp).toLocaleString()}</span>
                           </div>
                           <div className="conversation-message-content">

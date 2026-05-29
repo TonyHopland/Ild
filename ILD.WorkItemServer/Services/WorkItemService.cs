@@ -20,6 +20,13 @@ public interface IWorkItemService
 
     Task<bool> AppendFeedbackAsync(string id, string content, CancellationToken ct = default);
 
+    /// <summary>
+    /// Append a conversation entry without changing the work item's status.
+    /// Used by the engine to record AI-node turns (coder ↔ reviewer ↔ human)
+    /// as they happen, so the dialogue can be followed in the UI.
+    /// </summary>
+    Task<bool> AppendConversationAsync(string id, string role, string content, string? name, CancellationToken ct = default);
+
     Task<PollResponse> PollAsync(IReadOnlyList<string> activeIds, CancellationToken ct = default);
     Task<int> ReclaimStaleAsync(TimeSpan timeout, CancellationToken ct = default);
 }
@@ -156,14 +163,17 @@ public sealed class WorkItemService : IWorkItemService
             w.HumanFeedbackActions = null;
 
         // Append a conversation entry on transitions to response states when a
-        // reason is supplied.
+        // reason is supplied. Both response states (HumanFeedback, Done) are
+        // system/AI-authored events, so the role is "ai"; an optional Name
+        // (e.g. the node's title) gives the entry a friendly author label.
         if (req.Reason != null && IsResponseState(req.TargetStatus))
         {
             var msgs = WorkItemMapper.ReadConversation(w);
             msgs.Add(new ConversationMessage(
-                Role: req.TargetStatus == WorkItemStatus.HumanFeedback ? "ai" : "human",
+                Role: "ai",
                 Content: req.Reason,
-                Timestamp: now));
+                Timestamp: now,
+                Name: req.Name));
             WorkItemMapper.WriteConversation(w, msgs);
         }
 
@@ -228,6 +238,21 @@ public sealed class WorkItemService : IWorkItemService
         // Per PRD: human feedback transitions the item to WaitingForIld so the
         // claiming ILD instance picks it back up on its next poll.
         w.Status = WorkItemStatus.WaitingForIld;
+        w.UpdatedAt = now;
+        await _db.SaveChangesAsync(ct);
+        return true;
+    }
+
+    public async Task<bool> AppendConversationAsync(string id, string role, string content, string? name, CancellationToken ct = default)
+    {
+        var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (w == null) return false;
+        var now = _clock.GetUtcNow().UtcDateTime;
+        var msgs = WorkItemMapper.ReadConversation(w);
+        msgs.Add(new ConversationMessage(role, content, now, name));
+        WorkItemMapper.WriteConversation(w, msgs);
+        // Status is intentionally left untouched — an AI turn is dialogue, not
+        // a lifecycle transition.
         w.UpdatedAt = now;
         await _db.SaveChangesAsync(ct);
         return true;

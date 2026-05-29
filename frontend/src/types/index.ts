@@ -34,6 +34,8 @@ export interface ConversationMessage {
   role: string;
   content: string;
   timestamp: string;
+  /** Author display name (e.g. the node's title). Falls back to role when absent. */
+  name?: string | null;
 }
 
 export interface WorkItem {
