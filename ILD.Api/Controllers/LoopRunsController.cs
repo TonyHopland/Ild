@@ -1,3 +1,4 @@
+using ILD.Api.Contracts;
 using ILD.Api.Services;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
@@ -49,19 +50,7 @@ public class LoopRunsController : ControllerBase
             nodeExecutionCount = r.NodeExecutionCount,
             startedAt = r.StartedAt,
             completedAt = r.CompletedAt,
-            nodes = r.RunNodes.OrderBy(rn => rn.CreatedAt).Select(rn => new
-            {
-                id = rn.Id,
-                nodeId = rn.LoopNodeId,
-                nodeLabel = rn.NodeLabel ?? rn.LoopNode?.Label ?? string.Empty,
-                status = rn.Status.ToString(),
-                effectiveInput = rn.EffectiveInput,
-                output = rn.Output,
-                error = rn.Error,
-                startedAt = rn.StartedAt,
-                completedAt = rn.CompletedAt,
-                executionCount = 0,
-            }).ToList(),
+            nodes = r.RunNodes.OrderBy(rn => rn.CreatedAt).Select(LoopRunNodeResponse.From).ToList(),
         }).ToList();
 
         return Ok(result);
@@ -110,19 +99,7 @@ public class LoopRunsController : ControllerBase
                     .OrderBy(v => v)
                     .ToList(),
             }).ToList(),
-            nodes = runNodes.Select(rn => new
-            {
-                id = rn.Id,
-                nodeId = rn.LoopNodeId,
-                nodeLabel = rn.NodeLabel ?? rn.LoopNode?.Label ?? string.Empty,
-                status = rn.Status.ToString(),
-                effectiveInput = rn.EffectiveInput,
-                output = rn.Output,
-                error = rn.Error,
-                startedAt = rn.StartedAt,
-                completedAt = rn.CompletedAt,
-                executionCount = 0,
-            }).ToList(),
+            nodes = runNodes.Select(LoopRunNodeResponse.From).ToList(),
         });
     }
 
