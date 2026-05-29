@@ -132,7 +132,7 @@ public class PiAdapterTests
                 {
                     Name = "test-provider",
                     Type = "pi",
-                    BaseUrl = "http://192.168.1.5:1234/v1",
+                    BaseUrl = "http://localhost:1234/v1",
                     Model = "openai/gpt-5",
                     Config = null,
                 },
@@ -334,7 +334,7 @@ public class PiAdapterTests
     public void ExecuteAsync_escapes_control_characters_in_ild_extension_strings()
     {
         var extensionContent = GeneratePiExtension(
-            "http://192.168.1.5:1234/v1",
+            "http://localhost:1234/v1",
             "sk-local\r\nnext-line",
             Guid.NewGuid().ToString());
 
@@ -346,7 +346,7 @@ public class PiAdapterTests
     public void ExecuteAsync_generates_query_parameter_code_without_embedded_newlines()
     {
         var extensionContent = GeneratePiExtension(
-            "http://192.168.1.5:1234/v1",
+            "http://localhost:1234/v1",
             "Local",
             Guid.NewGuid().ToString());
 
@@ -372,7 +372,7 @@ public class PiAdapterTests
             modifiers: null)!;
 
         var extensionContent = (string)generateMethod.Invoke(null, [
-            "http://192.168.1.5:1234/v1",
+            "http://localhost:1234/v1",
             "Local",
             Guid.NewGuid().ToString(),
             new[] { "ild_get_workitem" }

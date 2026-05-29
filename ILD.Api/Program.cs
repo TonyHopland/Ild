@@ -9,7 +9,11 @@ using Serilog.Core;
 using Serilog.Events;
 using Serilog.Formatting.Json;
 
-var loggingLevelSwitch = new LoggingLevelSwitch(LogEventLevel.Information);
+var initialLogLevel = Enum.TryParse<LogEventLevel>(
+    Environment.GetEnvironmentVariable("ILD_LOG_LEVEL"), ignoreCase: true, out var parsedLevel)
+        ? parsedLevel
+        : LogEventLevel.Information;
+var loggingLevelSwitch = new LoggingLevelSwitch(initialLogLevel);
 
 try
 {

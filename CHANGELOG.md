@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Node executors** — Start, Cmd, AI, Human, PR, and Cleanup node types for configurable workflows
 - **Loop Template Editor** — visual graph editor with versioning; every save creates an immutable LoopTemplateVersion
 - **Remote Provider system** — configurable git provider connections with WorkItem server URL, poll schedule, grace period, and max concurrency
-- **AI Provider management** — OpenAI-compatible chat completions with per-provider usage statistics (token/cost tracking)
+- **AI Provider management** — adapter-driven AI execution resolved by provider type, with per-provider usage statistics (token/cost tracking)
 - **Repository management** — configured repositories for work item execution
 - **SignalR real-time updates** — live node state changes, event log entries, and run state transitions pushed to the frontend
 - **MCP Server** — Model Context Protocol server for AI agent integration with work item operations
@@ -41,7 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Human feedback workflow** — configurable grace period polling, fast cadence during active feedback, and Approve/Reject UI
 - **Startup reconciliation** — on restart, queries remote server for each tracked work item's status and resumes, tracks, or cleans up accordingly
 - **Recovery policies** — AutoResume, NeedsReview, or Cancel for in-flight runs after a crash
-- **Authentication** — JWT-based auth with PBKDF2-SHA256 password hashing, bootstrapped via environment variables
+- **Authentication** — session-token auth with PBKDF2-SHA256 password hashing, bootstrapped via environment variables
 - **Webhook integration** — Forgejo/Gitea PR webhook ingress for merge sync
 - **AI usage statistics** — token and cost tracking per AI provider
 

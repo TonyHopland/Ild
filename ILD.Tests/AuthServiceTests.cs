@@ -58,4 +58,29 @@ public class AuthServiceTests
 
         Assert.False((await svc.ValidateSessionAsync(token)));
     }
+
+    [Fact]
+    public async Task ILD_USERNAME_overrides_the_bootstrapped_username()
+    {
+        using var db = new TestDb();
+        Environment.SetEnvironmentVariable("ILD_PASSWORD", "secret");
+        Environment.SetEnvironmentVariable("ILD_USERNAME", "tony");
+        try
+        {
+            var svc = new AuthService(db.Auth);
+
+            // The configured username bootstraps and authenticates.
+            var ok = await svc.LoginAsync("tony", "secret");
+            Assert.True(ok.Success);
+            Assert.Equal("tony", ok.Username);
+
+            // "admin" no longer bootstraps when a custom username is configured.
+            var admin = await svc.LoginAsync("admin", "secret");
+            Assert.False(admin.Success);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ILD_USERNAME", null);
+        }
+    }
 }
