@@ -54,6 +54,7 @@ import type {
   NodeSettingsSnapshot,
   SessionPlaceholderUsage,
 } from "./types";
+import { validateLoopGraphLocally } from "./utils/loopGraphValidation";
 
 function loadErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message) return error.message;
@@ -345,61 +346,7 @@ export default function LoopEditor() {
   const handleSave = async () => {
     if (isSaving) return;
 
-    if (nodes.length === 0) {
-      setValidationErrors(["Graph must contain at least one node."]);
-      return;
-    }
-
-    const errors: string[] = [];
-    const currentNodeTypes = nodes.map((node) => (node.data as { type?: string }).type);
-
-    if (!currentNodeTypes.includes(NodeType.Start)) {
-      errors.push("Graph must contain a Start node.");
-    }
-    if (!currentNodeTypes.includes(NodeType.Cleanup)) {
-      errors.push("Graph must contain a Cleanup node.");
-    }
-
-    const startNode = nodes.find(
-      (node) => (node.data as { type?: string }).type === NodeType.Start,
-    );
-    if (startNode) {
-      const adjacency = new Map<string, string[]>();
-      for (const edge of edges) {
-        const targets = adjacency.get(edge.source) ?? [];
-        targets.push(edge.target);
-        adjacency.set(edge.source, targets);
-      }
-
-      const reachable = new Set<string>();
-      const queue: string[] = [startNode.id];
-      reachable.add(startNode.id);
-      while (queue.length > 0) {
-        const current = queue.shift()!;
-        for (const target of adjacency.get(current) ?? []) {
-          if (!reachable.has(target)) {
-            reachable.add(target);
-            queue.push(target);
-          }
-        }
-      }
-
-      const unreachableNodes = nodes
-        .filter((node) => !reachable.has(node.id))
-        .map((node) => node.id);
-      if (unreachableNodes.length > 0) {
-        errors.push(`Unreachable nodes from Start: ${unreachableNodes.join(", ")}`);
-      }
-
-      const cleanupNodes = nodes.filter(
-        (node) => (node.data as { type?: string }).type === NodeType.Cleanup,
-      );
-      const reachableCleanup = cleanupNodes.some((node) => reachable.has(node.id));
-      if (cleanupNodes.length > 0 && !reachableCleanup) {
-        errors.push("No path from Start leads to a Cleanup node.");
-      }
-    }
-
+    const errors = validateLoopGraphLocally(nodes, edges);
     if (errors.length > 0) {
       setValidationErrors(errors);
       return;
