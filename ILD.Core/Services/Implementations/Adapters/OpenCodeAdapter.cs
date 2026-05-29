@@ -10,31 +10,27 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Core.Services.Implementations.Adapters;
 
-public class OpenCodeAdapter : IAgentAdapter
+public class OpenCodeAdapter : CliAgentAdapterBase
 {
-    private static readonly IPromptTemplateResolver Resolver = new PromptTemplateResolver();
-    private readonly IServiceScopeFactory? _scopeFactory;
-
     public OpenCodeAdapter()
     {
     }
 
     public OpenCodeAdapter(IServiceScopeFactory scopeFactory)
+        : base(scopeFactory)
     {
-        _scopeFactory = scopeFactory;
     }
 
-    public string Name => "OpenCode";
-    public string[] SupportedProviderTypes => ["opencode"];
-    public ConfigFieldDescriptor[] ConfigSchema => Array.Empty<ConfigFieldDescriptor>();
+    public override string Name => "OpenCode";
+    public override string[] SupportedProviderTypes => ["opencode"];
 
-    public async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
+    public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
         try
         {
             var rendered = await RenderPromptAsync(ctx.Prompt, ctx.RunContext);
 
-            var binaryPath = ResolveBinaryPath(ctx.Provider);
+            var binaryPath = ReadConfigString(ctx.Provider.Config, "binaryPath") ?? "opencode";
 
             if (string.IsNullOrEmpty(binaryPath))
                 return NodeExecutionResult.Fail("[opencode-error] binaryPath is not configured");
@@ -107,7 +103,7 @@ public class OpenCodeAdapter : IAgentAdapter
             }
             catch (OperationCanceledException)
             {
-                try { p.Kill(entireProcessTree: true); } catch { }
+                KillProcessTree(p);
                 return NodeExecutionResult.Fail("opencode timed out");
             }
 
@@ -119,7 +115,7 @@ public class OpenCodeAdapter : IAgentAdapter
             }
             catch (OperationCanceledException)
             {
-                try { p.Kill(entireProcessTree: true); } catch { }
+                KillProcessTree(p);
                 return NodeExecutionResult.Fail("opencode stream read timed out");
             }
             var (response, sessionId, jsonError, sawJsonEvents) = ExtractTextAndSessionIdFromJsonEvents(stdout);
@@ -188,12 +184,10 @@ public class OpenCodeAdapter : IAgentAdapter
         AgentExecutionContext ctx,
         string sessionId)
     {
-        if (_scopeFactory is null || string.IsNullOrEmpty(sessionId))
+        if (ScopeFactory is null || string.IsNullOrEmpty(sessionId))
             return ManagedSessionRestoreResult.Use(sessionId);
 
-        await using var scope = _scopeFactory.CreateAsyncScope();
-        var snapshotStore = scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>();
-        var snapshot = await snapshotStore.GetAsync(ctx.RunContext.LoopRunId, Name, sessionId, ctx.Cancel);
+        var snapshot = await GetSnapshotAsync(ctx.RunContext.LoopRunId, sessionId, ctx.Cancel);
         if (snapshot is null || string.IsNullOrWhiteSpace(snapshot.SessionJson))
             return ManagedSessionRestoreResult.Use(sessionId);
 
@@ -223,7 +217,7 @@ public class OpenCodeAdapter : IAgentAdapter
 
     private async Task<(string? Error, string? SessionJson)> PersistManagedSessionAsync(string binaryPath, string worktreePath, AgentExecutionContext ctx, string sessionId)
     {
-        if (_scopeFactory is null)
+        if (ScopeFactory is null)
             return (null, null);
 
         var exportResult = await RunOpencodeCommandAsync(binaryPath, worktreePath, ctx.Cancel, ["export", sessionId]);
@@ -236,9 +230,7 @@ public class OpenCodeAdapter : IAgentAdapter
         if (!IsValidJson(sessionJson))
             return ($"[opencode-error] failed to export managed session '{sessionId}': invalid JSON returned ({sessionJson.Length} chars)", null);
 
-        await using var scope = _scopeFactory.CreateAsyncScope();
-        var snapshotStore = scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>();
-        await snapshotStore.UpsertAsync(ctx.RunContext.LoopRunId, Name, sessionId, sessionJson, ctx.Cancel);
+        await UpsertSnapshotAsync(ctx.RunContext.LoopRunId, sessionId, sessionJson, ctx.Cancel);
         return (null, sessionJson);
     }
 
@@ -563,7 +555,7 @@ public class OpenCodeAdapter : IAgentAdapter
             for (var i = messages.GetArrayLength() - 1; i >= 0; i--)
             {
                 var message = messages[i];
-                var role = TryGetString(message, "role");
+                var role = GetString(message, "role");
                 if (!string.IsNullOrEmpty(role)
                     && !string.Equals(role, "assistant", StringComparison.OrdinalIgnoreCase))
                     continue;
@@ -593,15 +585,15 @@ public class OpenCodeAdapter : IAgentAdapter
                 if (part.ValueKind != JsonValueKind.Object)
                     continue;
 
-                var partType = TryGetString(part, "type");
+                var partType = GetString(part, "type");
                 if (!string.IsNullOrEmpty(partType)
                     && !string.Equals(partType, "text", StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                var text = TryGetString(part, "text")
-                    ?? TryGetString(part, "content")
-                    ?? TryGetString(part, "delta")
-                    ?? TryGetString(part, "body");
+                var text = GetString(part, "text")
+                    ?? GetString(part, "content")
+                    ?? GetString(part, "delta")
+                    ?? GetString(part, "body");
                 if (!string.IsNullOrWhiteSpace(text))
                     sb.Append(text);
             }
@@ -711,73 +703,22 @@ public class OpenCodeAdapter : IAgentAdapter
     /// </summary>
     public static Dictionary<string, object?>? BuildIldMcpEntry(LoopRunContext? runContext)
     {
-        var dllPath = ResolveIldMcpServerDll();
+        var dllPath = IldMcpServer.ResolveServerDll();
         if (dllPath == null) return null;
-
-        var apiUrl = Environment.GetEnvironmentVariable("ILD_API_URL")
-            ?? "http://localhost:5000";
-
-        var environment = new Dictionary<string, object?>
-        {
-            ["ILD_API_URL"] = apiUrl,
-        };
-
-        var apiToken = Environment.GetEnvironmentVariable("ILD_API_TOKEN");
-        if (!string.IsNullOrEmpty(apiToken))
-            environment["ILD_API_TOKEN"] = apiToken;
-
-        if (runContext != null)
-            environment["ILD_LOOP_RUN_ID"] = runContext.LoopRunId.ToString();
 
         return new Dictionary<string, object?>
         {
             ["type"] = "local",
             ["command"] = new[] { "dotnet", dllPath },
-            ["environment"] = environment,
+            ["environment"] = IldMcpServer.BuildEnvironment(runContext),
         };
     }
 
     /// <summary>
-    /// Locate the published <c>ild-mcp-server.dll</c>. Probes in order:
-    ///   1. <c>ILD_MCP_SERVER_DLL</c> env var (explicit override),
-    ///   2. next to the currently executing assembly,
-    ///   3. walk up from the executing assembly looking for a sibling
-    ///      <c>ILD.McpServer/bin/{Debug|Release}/net*</c> directory (dev case).
-    /// Returns <c>null</c> if nothing is found.
+    /// Locate the published <c>ild-mcp-server.dll</c>. Retained as a stable
+    /// entry point (covered by tests); delegates to <see cref="IldMcpServer"/>.
     /// </summary>
-    public static string? ResolveIldMcpServerDll()
-    {
-        var envOverride = Environment.GetEnvironmentVariable("ILD_MCP_SERVER_DLL");
-        if (!string.IsNullOrEmpty(envOverride) && File.Exists(envOverride))
-            return Path.GetFullPath(envOverride);
-
-        const string DllName = "ild-mcp-server.dll";
-
-        var baseDir = AppContext.BaseDirectory;
-        var sibling = Path.Combine(baseDir, DllName);
-        if (File.Exists(sibling)) return Path.GetFullPath(sibling);
-
-        // Walk upwards (max 8 levels) looking for an ILD.McpServer build output.
-        var dir = new DirectoryInfo(baseDir);
-        for (var i = 0; i < 8 && dir != null; i++, dir = dir.Parent)
-        {
-            var candidateRoot = Path.Combine(dir.FullName, "ILD.McpServer", "bin");
-            if (!Directory.Exists(candidateRoot)) continue;
-
-            // Prefer Release over Debug if both exist.
-            foreach (var flavor in new[] { "Release", "Debug" })
-            {
-                var flavorDir = Path.Combine(candidateRoot, flavor);
-                if (!Directory.Exists(flavorDir)) continue;
-                var hit = Directory.GetFiles(flavorDir, DllName, SearchOption.AllDirectories)
-                    .OrderByDescending(File.GetLastWriteTimeUtc)
-                    .FirstOrDefault();
-                if (hit != null) return hit;
-            }
-        }
-
-        return null;
-    }
+    public static string? ResolveIldMcpServerDll() => IldMcpServer.ResolveServerDll();
 
     private static string SanitizeProviderId(string name)
     {
@@ -791,14 +732,6 @@ public class OpenCodeAdapter : IAgentAdapter
         }
         return sb.ToString() ?? "provider";
     }
-
-    private static Task<string> RenderPromptAsync(string template, LoopRunContext context)
-        => Task.FromResult(Resolver.Render(template, new PromptContext(
-            WorkItemTitle: context.WorkItemTitle,
-            WorkItemDescription: context.WorkItemDescription,
-            PreviousNodeOutput: context.PreviousNodeOutput,
-            EventLogSummary: context.EventLogSummary,
-            WorktreePath: context.WorktreePath)));
 
     private static async Task<string> ReadAndStreamLinesAsync(
         System.IO.StreamReader reader,
@@ -835,10 +768,10 @@ public class OpenCodeAdapter : IAgentAdapter
             // No text content; surface event metadata based on real opencode output
             if (doc.RootElement.ValueKind == JsonValueKind.Object)
             {
-                var type = TryGetString(doc.RootElement, "type");
+                var type = GetString(doc.RootElement, "type");
                 if (type == "tool_use")
                 {
-                    var tool = TryGetString(doc.RootElement, "tool");
+                    var tool = GetString(doc.RootElement, "tool");
                     return tool != null ? $"[tool: {tool}]" : "[tool call]";
                 }
                 if (type != null)
@@ -853,12 +786,5 @@ public class OpenCodeAdapter : IAgentAdapter
             // Not valid JSON; pass through as-is for non-JSON output
             return trimmed;
         }
-    }
-
-    private static string? TryGetString(JsonElement element, string propertyName)
-    {
-        if (element.TryGetProperty(propertyName, out var prop) && prop.ValueKind == JsonValueKind.String)
-            return prop.GetString();
-        return null;
     }
 }

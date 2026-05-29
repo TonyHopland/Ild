@@ -11,25 +11,21 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Core.Services.Implementations.Adapters;
 
-public sealed class PiAdapter : IAgentAdapter
+public sealed class PiAdapter : CliAgentAdapterBase
 {
-    private static readonly IPromptTemplateResolver Resolver = new PromptTemplateResolver();
-    private readonly IServiceScopeFactory? _scopeFactory;
-
     public PiAdapter()
     {
     }
 
     public PiAdapter(IServiceScopeFactory scopeFactory)
+        : base(scopeFactory)
     {
-        _scopeFactory = scopeFactory;
     }
 
-    public string Name => "Pi";
-    public string[] SupportedProviderTypes => ["pi"];
-    public ConfigFieldDescriptor[] ConfigSchema => Array.Empty<ConfigFieldDescriptor>();
+    public override string Name => "Pi";
+    public override string[] SupportedProviderTypes => ["pi"];
 
-    public async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
+    public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
         try
         {
@@ -96,7 +92,7 @@ public sealed class PiAdapter : IAgentAdapter
             }
             catch (OperationCanceledException)
             {
-                try { process.Kill(entireProcessTree: true); } catch { }
+                KillProcessTree(process);
                 return NodeExecutionResult.Fail("pi timed out");
             }
 
@@ -109,7 +105,7 @@ public sealed class PiAdapter : IAgentAdapter
             }
             catch (OperationCanceledException)
             {
-                try { process.Kill(entireProcessTree: true); } catch { }
+                KillProcessTree(process);
                 return NodeExecutionResult.Fail("pi stream read timed out");
             }
 
@@ -235,12 +231,10 @@ public sealed class PiAdapter : IAgentAdapter
         if (!string.IsNullOrWhiteSpace(localSessionPath))
             return ManagedSessionRestoreResult.Use(sessionId, localSessionPath);
 
-        if (_scopeFactory is null)
+        if (ScopeFactory is null)
             return ManagedSessionRestoreResult.StartFresh();
 
-        await using var scope = _scopeFactory.CreateAsyncScope();
-        var snapshotStore = scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>();
-        var snapshot = await snapshotStore.GetAsync(ctx.RunContext.LoopRunId, Name, sessionId, ctx.Cancel);
+        var snapshot = await GetSnapshotAsync(ctx.RunContext.LoopRunId, sessionId, ctx.Cancel);
         if (snapshot is null || string.IsNullOrWhiteSpace(snapshot.SessionJson))
             return ManagedSessionRestoreResult.StartFresh();
 
@@ -252,7 +246,7 @@ public sealed class PiAdapter : IAgentAdapter
 
     private async Task PersistManagedSessionAsync(string sessionDirectory, string sessionId, AgentExecutionContext ctx)
     {
-        if (_scopeFactory is null)
+        if (ScopeFactory is null)
             return;
 
         var sessionPath = FindSessionFile(sessionDirectory, sessionId);
@@ -261,9 +255,7 @@ public sealed class PiAdapter : IAgentAdapter
 
         var sessionJson = await File.ReadAllTextAsync(sessionPath, ctx.Cancel);
 
-        await using var scope = _scopeFactory.CreateAsyncScope();
-        var snapshotStore = scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>();
-        await snapshotStore.UpsertAsync(ctx.RunContext.LoopRunId, Name, sessionId, sessionJson, ctx.Cancel);
+        await UpsertSnapshotAsync(ctx.RunContext.LoopRunId, sessionId, sessionJson, ctx.Cancel);
     }
 
     private static async Task<PiExecutionOutput> ReadStdoutAsync(StreamReader reader, Func<string, Task>? progressCallback, CancellationToken ct)
@@ -385,20 +377,6 @@ public sealed class PiAdapter : IAgentAdapter
             doc = null;
             return false;
         }
-    }
-
-    private static bool TryGetString(JsonElement element, string propertyName, out string? value)
-    {
-        if (element.ValueKind == JsonValueKind.Object
-            && element.TryGetProperty(propertyName, out var property)
-            && property.ValueKind == JsonValueKind.String)
-        {
-            value = property.GetString();
-            return true;
-        }
-
-        value = null;
-        return false;
     }
 
     private static string BuildSessionDirectory(Guid loopRunId)
@@ -662,14 +640,6 @@ public sealed class PiAdapter : IAgentAdapter
             loopRunId.ToString(),
             ToolDescriptors.All.Select(tool => tool.Name).ToArray());
     }
-
-    private static Task<string> RenderPromptAsync(string template, LoopRunContext context)
-        => Task.FromResult(Resolver.Render(template, new PromptContext(
-            WorkItemTitle: context.WorkItemTitle,
-            WorkItemDescription: context.WorkItemDescription,
-            PreviousNodeOutput: context.PreviousNodeOutput,
-            EventLogSummary: context.EventLogSummary,
-            WorktreePath: context.WorktreePath)));
 
     internal sealed record PiAdapterSettings(
         string BinaryPath,
