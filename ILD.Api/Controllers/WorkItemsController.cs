@@ -389,8 +389,12 @@ public class WorkItemsController : ControllerBase
         }
         catch (Exception ex)
         {
+            // Surface the outage rather than masquerading as "no comments" — an
+            // empty 200 here is indistinguishable from a PR that genuinely has
+            // none, which is the degraded-silently behavior GetAll deliberately
+            // rejects (it returns 503 too).
             _logger.LogWarning(ex, "Failed to fetch PR comments for work item {WorkItemId}", id);
-            return Ok(Array.Empty<RemotePrComment>());
+            return StatusCode(503, new { error = "Failed to fetch PR comments from remote provider", detail = ex.Message });
         }
     }
 
