@@ -205,6 +205,7 @@ public class ClaudeCodeAdapterTests
             "bypassPermissions",
             "--resume",
             "abc",
+            "--",
             "fix it",
         }, psi.ArgumentList);
     }

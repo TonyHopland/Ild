@@ -187,6 +187,13 @@ public sealed class ClaudeCodeAdapter : IAgentAdapter
             psi.ArgumentList.Add(sessionId);
         }
 
+        // Terminate option parsing before the prompt. `--mcp-config` is a
+        // variadic option in the claude CLI: without this separator it greedily
+        // consumes the trailing prompt as another config-file path, which the
+        // CLI then fails to open (ENAMETOOLONG). The `--` guarantees the prompt
+        // is treated as the positional prompt argument regardless of whether a
+        // `--resume <id>` precedes it.
+        psi.ArgumentList.Add("--");
         psi.ArgumentList.Add(renderedPrompt);
         return psi;
     }
