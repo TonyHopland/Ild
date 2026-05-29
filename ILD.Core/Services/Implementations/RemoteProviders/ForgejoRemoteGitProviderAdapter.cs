@@ -1,7 +1,5 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
@@ -9,61 +7,21 @@ using ILD.Data.Entities;
 
 namespace ILD.Core.Services.Implementations.RemoteProviders;
 
-public sealed class ForgejoRemoteGitProviderAdapter : IRemoteGitProviderAdapter
+public sealed class ForgejoRemoteGitProviderAdapter : RemoteGitProviderAdapterBase
 {
-    public string ProviderType => "Forgejo";
-    public string WebhookRouteSegment => "forgejo";
+    public override string ProviderType => "Forgejo";
+    public override string WebhookRouteSegment => "forgejo";
+    protected override string SignatureHeaderName => "X-Forgejo-Signature";
 
-    public ResolvedRemoteRepository? TryResolve(RemoteProvider provider, Uri repoUri)
-    {
-        if (!string.Equals(provider.Type, ProviderType, StringComparison.OrdinalIgnoreCase))
-            return null;
+    protected override bool HostMatches(Uri providerUri, Uri repoUri)
+        => providerUri.Host.Equals(repoUri.Host, StringComparison.OrdinalIgnoreCase)
+            && providerUri.Scheme.Equals(repoUri.Scheme, StringComparison.OrdinalIgnoreCase)
+            && providerUri.Port == repoUri.Port;
 
-        if (!Uri.TryCreate(provider.Url, UriKind.Absolute, out var providerUri))
-            return null;
+    protected override string BuildApiBase(Uri providerUri)
+        => providerUri.ToString().TrimEnd('/') + "/api/v1";
 
-        if (!providerUri.Host.Equals(repoUri.Host, StringComparison.OrdinalIgnoreCase)
-            || !providerUri.Scheme.Equals(repoUri.Scheme, StringComparison.OrdinalIgnoreCase)
-            || providerUri.Port != repoUri.Port)
-            return null;
-
-        var path = repoUri.AbsolutePath.Trim('/');
-        if (path.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
-            path = path[..^4];
-
-        var parts = path.Split('/', 2);
-        if (parts.Length < 2)
-            return null;
-
-        return new ResolvedRemoteRepository(
-            provider,
-            ProviderType,
-            providerUri.ToString().TrimEnd('/') + "/api/v1",
-            parts[0],
-            parts[1],
-            this);
-    }
-
-    public async Task<RemotePrResult> CreatePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string sourceBranch, string targetBranch, string title, string body)
-    {
-        ApplyHeaders(http, repo.Provider);
-
-        using var resp = await http.PostAsJsonAsync(
-            $"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/pulls",
-            new { title, body, head = sourceBranch, @base = targetBranch });
-
-        if (!resp.IsSuccessStatusCode)
-            return new RemotePrResult(null, null, RemotePrStatus.Open, $"HTTP {(int)resp.StatusCode}");
-
-        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
-        return new RemotePrResult(
-            doc.RootElement.GetProperty("url").GetString(),
-            doc.RootElement.TryGetProperty("html_url", out var htmlUrl) ? htmlUrl.GetString() : null,
-            RemotePrStatus.Open,
-            null);
-    }
-
-    public async Task<bool> MergePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+    public override async Task<bool> MergePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
     {
         ApplyHeaders(http, repo.Provider);
         using var resp = await http.PostAsJsonAsync(
@@ -72,17 +30,7 @@ public sealed class ForgejoRemoteGitProviderAdapter : IRemoteGitProviderAdapter
         return resp.IsSuccessStatusCode;
     }
 
-    public async Task<IEnumerable<RemotePrComment>> GetPullRequestCommentsAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
-    {
-        ApplyHeaders(http, repo.Provider);
-        using var resp = await http.GetAsync($"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/issues/{prNumber}/comments");
-        if (!resp.IsSuccessStatusCode)
-            return Array.Empty<RemotePrComment>();
-
-        return await ReadCommentsAsync(resp);
-    }
-
-    public async Task RegisterWebhookAsync(HttpClient http, ResolvedRemoteRepository repo, string callbackUrl)
+    public override async Task RegisterWebhookAsync(HttpClient http, ResolvedRemoteRepository repo, string callbackUrl)
     {
         ApplyHeaders(http, repo.Provider);
         await http.PostAsJsonAsync(
@@ -96,20 +44,7 @@ public sealed class ForgejoRemoteGitProviderAdapter : IRemoteGitProviderAdapter
             });
     }
 
-    public Task UnregisterWebhookAsync(HttpClient http, ResolvedRemoteRepository repo, string callbackUrl)
-        => Task.CompletedTask;
-
-    public async Task<RemotePrStatus> GetPullRequestStatusAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
-    {
-        ApplyHeaders(http, repo.Provider);
-        using var resp = await http.GetAsync($"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/pulls/{prNumber}");
-        if (!resp.IsSuccessStatusCode)
-            return RemotePrStatus.Open;
-
-        return await ReadStatusAsync(resp);
-    }
-
-    public async Task<bool> DeleteBranchAsync(HttpClient http, ResolvedRemoteRepository repo, string branchName)
+    public override async Task<bool> DeleteBranchAsync(HttpClient http, ResolvedRemoteRepository repo, string branchName)
     {
         ApplyHeaders(http, repo.Provider);
         var branchRef = Uri.EscapeDataString(branchName);
@@ -117,13 +52,7 @@ public sealed class ForgejoRemoteGitProviderAdapter : IRemoteGitProviderAdapter
         return resp.IsSuccessStatusCode;
     }
 
-    public Task<bool> CreatePullRequestCommentAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string body)
-        => PrCommentHelper.CreatePullRequestCommentAsync(http, repo, prNumber, body, ApplyHeaders);
-
-    public bool VerifyWebhookSignature(string body, IReadOnlyDictionary<string, string> headers, string secret)
-        => VerifyHmacSha256(body, GetHeader(headers, "X-Forgejo-Signature"), secret);
-
-    public WebhookPayload? ParseWebhookPayload(string body, IReadOnlyDictionary<string, string> headers)
+    public override WebhookPayload? ParseWebhookPayload(string body, IReadOnlyDictionary<string, string> headers)
     {
         var normalized = TryParseNormalizedPayload(body);
         if (normalized != null)
@@ -180,7 +109,7 @@ public sealed class ForgejoRemoteGitProviderAdapter : IRemoteGitProviderAdapter
         return null;
     }
 
-    private static void ApplyHeaders(HttpClient http, RemoteProvider provider)
+    protected override void ApplyHeaders(HttpClient http, RemoteProvider provider)
     {
         http.DefaultRequestHeaders.Authorization = null;
         http.DefaultRequestHeaders.Accept.Clear();
@@ -190,32 +119,6 @@ public sealed class ForgejoRemoteGitProviderAdapter : IRemoteGitProviderAdapter
         {
             http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("token", provider.ApiKey);
         }
-    }
-
-    private static async Task<IEnumerable<RemotePrComment>> ReadCommentsAsync(HttpResponseMessage resp)
-    {
-        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
-        var list = new List<RemotePrComment>();
-        foreach (var el in doc.RootElement.EnumerateArray())
-        {
-            list.Add(new RemotePrComment(
-                el.GetProperty("id").GetRawText(),
-                el.GetProperty("body").GetString() ?? string.Empty,
-                el.GetProperty("user").GetProperty("login").GetString() ?? string.Empty,
-                el.GetProperty("created_at").GetDateTime()));
-        }
-
-        return list;
-    }
-
-    private static async Task<RemotePrStatus> ReadStatusAsync(HttpResponseMessage resp)
-    {
-        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
-        if (doc.RootElement.TryGetProperty("merged", out var merged) && merged.GetBoolean())
-            return RemotePrStatus.Merged;
-
-        var state = doc.RootElement.GetProperty("state").GetString();
-        return state == "closed" ? RemotePrStatus.Closed : RemotePrStatus.Open;
     }
 
     private static WebhookPayload? TryParseNormalizedPayload(string body)
@@ -259,23 +162,4 @@ public sealed class ForgejoRemoteGitProviderAdapter : IRemoteGitProviderAdapter
 
     private static bool TryGetBool(JsonElement element, string propertyName)
         => element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.True;
-
-    private static string? GetHeader(IReadOnlyDictionary<string, string> headers, string name)
-        => headers.TryGetValue(name, out var value) ? value : null;
-
-    private static bool VerifyHmacSha256(string body, string? signature, string? secret)
-    {
-        if (string.IsNullOrEmpty(signature) || string.IsNullOrEmpty(secret))
-            return false;
-
-        var normalized = signature.StartsWith("sha256=", StringComparison.OrdinalIgnoreCase)
-            ? signature["sha256=".Length..]
-            : signature;
-
-        using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
-        var expected = Convert.ToHexString(hmac.ComputeHash(Encoding.UTF8.GetBytes(body))).ToLowerInvariant();
-        return CryptographicOperations.FixedTimeEquals(
-            Encoding.UTF8.GetBytes(normalized.ToLowerInvariant()),
-            Encoding.UTF8.GetBytes(expected));
-    }
 }
