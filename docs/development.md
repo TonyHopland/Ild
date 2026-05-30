@@ -18,7 +18,7 @@ For the standalone WorkItem Server outside compose:
 
 ```bash
 export WORKITEM_DB_CONNECTION_STRING='Host=localhost;Port=5432;Database=IldWorkitems;Username=ild_workitems;Password=ild_workitems_password'
-export WORKITEM_API_KEYS=test-api-key-123
+export WORKITEM_API_KEYS=$(openssl rand -hex 32)
 dotnet run --project ILD.WorkItemServer
 ```
 

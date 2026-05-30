@@ -9,10 +9,13 @@ public interface ILoopRunStore
     Task<LoopRun?> GetByPrUrlAsync(string prUrl);
     Task<LoopRun?> GetByWorkItemAsync(string workItemId);
     Task<IReadOnlyList<LoopRun>> GetAllByWorkItemAsync(string workItemId);
+    Task<IReadOnlyList<LoopRun>> GetByWorkItemPagedAsync(string workItemId, int skip, int take);
     Task<LoopRun?> GetCurrentByWorkItemAsync(string workItemId);
     Task<IReadOnlyList<LoopRun>> GetAllAsync(int skip = 0, int take = 100);
     Task<IReadOnlyList<LoopRun>> GetRunningRunsAsync();
     Task<IReadOnlyList<LoopRunNode>> GetRunNodesAsync(Guid runId);
+    /// <summary>Run nodes for a run with their <c>LoopNode</c> eager-loaded (left join — may be null if the template node was since removed).</summary>
+    Task<IReadOnlyList<LoopRunNode>> GetRunNodesWithNodeAsync(Guid runId);
     Task<IReadOnlyList<AdapterSessionSnapshot>> GetSessionSnapshotsAsync(Guid runId);
     Task<IReadOnlyList<LoopRunSessionBinding>> GetSessionBindingsAsync(Guid runId);
     Task<LoopRunSessionBinding?> GetSessionBindingAsync(Guid runId, string adapterName, string placeholderId);

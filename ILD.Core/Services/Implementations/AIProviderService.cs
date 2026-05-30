@@ -6,6 +6,7 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
+using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations;
 
@@ -19,14 +20,22 @@ public class AIProviderService : IAIProviderService
     private readonly IWorktreePreviewService _worktreePreviewService;
     private readonly HttpClient _http;
     private readonly IPromptTemplateResolver _resolver;
+    private readonly ILogger<AIProviderService>? _logger;
 
-    public AIProviderService(IProviderStore providerStore, IWorkItemManager workItemManager, IWorktreePreviewService worktreePreviewService, HttpClient http, IPromptTemplateResolver? resolver = null)
+    public AIProviderService(IProviderStore providerStore, IWorkItemManager workItemManager, IWorktreePreviewService worktreePreviewService, HttpClient http, IPromptTemplateResolver? resolver = null, ILogger<AIProviderService>? logger = null)
     {
         _providerStore = providerStore;
         _workItemManager = workItemManager;
         _worktreePreviewService = worktreePreviewService;
         _http = http;
         _resolver = resolver ?? new PromptTemplateResolver();
+        _logger = logger;
+    }
+
+    private ToolExecutionResult ToolFailure(string toolName, Exception ex)
+    {
+        _logger?.LogWarning(ex, "Tool '{Tool}' failed: {Message}", toolName, ex.Message);
+        return new ToolExecutionResult(false, "", ex.Message, -1);
     }
 
     public async Task<string> CompleteAsync(string prompt, string? providerId = null, CancellationToken cancellationToken = default)
@@ -148,7 +157,7 @@ public class AIProviderService : IAIProviderService
                     return new ToolExecutionResult(false, "", $"unknown tool {toolName}", -1);
             }
         }
-        catch (Exception ex) { return new ToolExecutionResult(false, "", ex.Message, -1); }
+        catch (Exception ex) { return ToolFailure(toolName, ex); }
     }
 
     private async Task<AiProvider?> ResolveProviderAsync(string? providerId)
@@ -207,7 +216,7 @@ public class AIProviderService : IAIProviderService
         }
         catch (Exception ex)
         {
-            return new ToolExecutionResult(false, "", ex.Message, -1);
+            return ToolFailure("ild.create_workitem", ex);
         }
     }
 
@@ -248,7 +257,7 @@ public class AIProviderService : IAIProviderService
         }
         catch (Exception ex)
         {
-            return new ToolExecutionResult(false, "", ex.Message, -1);
+            return ToolFailure("ild.preview_start", ex);
         }
     }
 
@@ -261,7 +270,7 @@ public class AIProviderService : IAIProviderService
         }
         catch (Exception ex)
         {
-            return new ToolExecutionResult(false, "", ex.Message, -1);
+            return ToolFailure("ild.preview_status", ex);
         }
     }
 
@@ -274,7 +283,7 @@ public class AIProviderService : IAIProviderService
         }
         catch (Exception ex)
         {
-            return new ToolExecutionResult(false, "", ex.Message, -1);
+            return ToolFailure("ild.preview_stop", ex);
         }
     }
 }

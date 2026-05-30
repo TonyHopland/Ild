@@ -34,6 +34,13 @@ public class LoopRunStore : ILoopRunStore
             .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
             .ToListAsync();
 
+    public async Task<IReadOnlyList<LoopRun>> GetByWorkItemPagedAsync(string workItemId, int skip, int take)
+        => await _db.LoopRuns.AsNoTracking()
+            .Where(r => r.WorkItemId == workItemId)
+            .OrderByDescending(r => r.StartedAt)
+            .Skip(skip).Take(take)
+            .ToListAsync();
+
     public async Task<LoopRun?> GetCurrentByWorkItemAsync(string workItemId)
         => await _db.LoopRuns
             .Where(r => r.WorkItemId == workItemId && (r.Status == LoopRunStatus.Running
@@ -56,6 +63,13 @@ public class LoopRunStore : ILoopRunStore
 
     public async Task<IReadOnlyList<LoopRunNode>> GetRunNodesAsync(Guid runId)
         => await _db.LoopRunNodes
+            .Where(rn => rn.LoopRunId == runId)
+            .OrderBy(rn => rn.CreatedAt)
+            .ToListAsync();
+
+    public async Task<IReadOnlyList<LoopRunNode>> GetRunNodesWithNodeAsync(Guid runId)
+        => await _db.LoopRunNodes
+            .Include(rn => rn.LoopNode)
             .Where(rn => rn.LoopRunId == runId)
             .OrderBy(rn => rn.CreatedAt)
             .ToListAsync();

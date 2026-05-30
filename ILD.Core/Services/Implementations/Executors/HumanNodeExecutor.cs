@@ -35,17 +35,7 @@ public sealed class HumanNodeExecutor : INodeExecutor
 
         // Re-entry: external signal arrived. Skip NodeStarting to avoid creating
         // a second LoopRunNode — the existing WaitingHuman node covers this visit.
-        switch (ctx.Run.ExternalActionResultType)
-        {
-            case ExternalActionResultType.Reject:
-                yield return new NodeOutcome.Fail(EdgeType.OnFailure, "Rejected", ctx.Run.ExternalActionResult);
-                yield break;
-            case ExternalActionResultType.Respond:
-                yield return new NodeOutcome.Success(EdgeType.OnRespond, ctx.Run.ExternalActionResult);
-                yield break;
-            default:
-                yield return new NodeOutcome.Success(EdgeType.OnSuccess, ctx.Run.ExternalActionResult);
-                yield break;
-        }
+        yield return NodeOutcome.FromExternalAction(
+            ctx.Run.ExternalActionResult, ctx.Run.ExternalActionResultType, "Rejected");
     }
 }

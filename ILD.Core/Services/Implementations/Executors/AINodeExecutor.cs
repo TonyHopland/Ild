@@ -55,10 +55,16 @@ public sealed class AINodeExecutor : INodeExecutor
             yield break;
         }
         IAgentAdapter? adapter = null;
-        try { adapter = registry.ResolveForProvider(provider)(); } catch { }
+        string? adapterError = null;
+        try { adapter = registry.ResolveForProvider(provider)(); }
+        catch (Exception ex) { adapterError = ex.Message; }
         if (adapter is null)
         {
-            yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"No adapter for provider type '{provider.Type}'");
+            yield return new NodeOutcome.Fail(
+                EdgeType.OnFailure,
+                adapterError is null
+                    ? $"No adapter for provider type '{provider.Type}'"
+                    : $"Could not resolve adapter for provider type '{provider.Type}': {adapterError}");
             yield break;
         }
 

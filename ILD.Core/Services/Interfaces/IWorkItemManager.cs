@@ -53,6 +53,15 @@ public interface IWorkItemManager
     Task<bool> IsReadyAsync(string workItemId);
     Task<bool> LinkPullRequestAsync(string workItemId, string prUrl);
     Task<bool> ManuallyMarkMergedAsync(string workItemId);
+
+    /// <summary>
+    /// Mark the work item's PR merged and advance the run past its parked PR
+    /// node: signals the PR (or any waiting/failed) node to success so the
+    /// engine routes onward, or — when the run is unrecoverable because the
+    /// node's template entry was removed — transitions the work item to Done
+    /// directly. Returns false when the work item has no current run.
+    /// </summary>
+    Task<bool> MarkMergedAndAdvanceAsync(string workItemId);
     Task<bool> CleanupToDoneAsync(string workItemId);
     Task<bool> CleanupToBacklogAsync(string workItemId);
     Task<bool> SubmitHumanFeedbackInputAsync(string workItemId, string input);

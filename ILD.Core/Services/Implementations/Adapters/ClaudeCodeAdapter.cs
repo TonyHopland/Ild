@@ -19,31 +19,27 @@ namespace ILD.Core.Services.Implementations.Adapters;
 /// <see cref="AiProvider.ApiKey"/> and <see cref="AiProvider.Model"/> — those
 /// fields are not meaningful for subscription-based auth.
 /// </summary>
-public sealed class ClaudeCodeAdapter : IAgentAdapter
+public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
 {
-    private static readonly IPromptTemplateResolver Resolver = new PromptTemplateResolver();
-    private readonly IServiceScopeFactory? _scopeFactory;
-
     public ClaudeCodeAdapter()
     {
     }
 
     public ClaudeCodeAdapter(IServiceScopeFactory scopeFactory)
+        : base(scopeFactory)
     {
-        _scopeFactory = scopeFactory;
     }
 
-    public string Name => "ClaudeCode";
-    public string[] SupportedProviderTypes => ["claude-code"];
-    public ConfigFieldDescriptor[] ConfigSchema => Array.Empty<ConfigFieldDescriptor>();
+    public override string Name => "ClaudeCode";
+    public override string[] SupportedProviderTypes => ["claude-code"];
 
-    public async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
+    public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
         string? mcpConfigPath = null;
         try
         {
             var rendered = await RenderPromptAsync(ctx.Prompt, ctx.RunContext);
-            var binaryPath = ResolveBinaryPath(ctx.Provider);
+            var binaryPath = AiProviderConfig.Parse(ctx.Provider.Config).BinaryPathOr("claude");
 
             var worktreePath = ctx.RunContext.WorktreePath;
             if (string.IsNullOrEmpty(worktreePath) || !Directory.Exists(worktreePath))
@@ -86,7 +82,7 @@ public sealed class ClaudeCodeAdapter : IAgentAdapter
             }
             catch (OperationCanceledException)
             {
-                try { process.Kill(entireProcessTree: true); } catch { }
+                KillProcessTree(process);
                 return NodeExecutionResult.Fail("claude-code timed out");
             }
 
@@ -99,7 +95,7 @@ public sealed class ClaudeCodeAdapter : IAgentAdapter
             }
             catch (OperationCanceledException)
             {
-                try { process.Kill(entireProcessTree: true); } catch { }
+                KillProcessTree(process);
                 return NodeExecutionResult.Fail("claude-code stream read timed out");
             }
 
@@ -207,29 +203,14 @@ public sealed class ClaudeCodeAdapter : IAgentAdapter
     /// </summary>
     public static Dictionary<string, object?>? BuildIldMcpEntry(LoopRunContext? runContext)
     {
-        var dllPath = OpenCodeAdapter.ResolveIldMcpServerDll();
+        var dllPath = IldMcpServer.ResolveServerDll();
         if (dllPath == null) return null;
-
-        var apiUrl = Environment.GetEnvironmentVariable("ILD_API_URL")
-            ?? "http://localhost:5000";
-
-        var env = new Dictionary<string, object?>
-        {
-            ["ILD_API_URL"] = apiUrl,
-        };
-
-        var apiToken = Environment.GetEnvironmentVariable("ILD_API_TOKEN");
-        if (!string.IsNullOrEmpty(apiToken))
-            env["ILD_API_TOKEN"] = apiToken;
-
-        if (runContext != null)
-            env["ILD_LOOP_RUN_ID"] = runContext.LoopRunId.ToString();
 
         return new Dictionary<string, object?>
         {
             ["command"] = "dotnet",
             ["args"] = new[] { dllPath },
-            ["env"] = env,
+            ["env"] = IldMcpServer.BuildEnvironment(runContext),
         };
     }
 
@@ -265,27 +246,6 @@ public sealed class ClaudeCodeAdapter : IAgentAdapter
         }
         catch (IOException) { return null; }
         catch (UnauthorizedAccessException) { return null; }
-    }
-
-    private static string ResolveBinaryPath(AiProvider provider)
-    {
-        var binaryPath = "claude";
-        if (string.IsNullOrEmpty(provider.Config)) return binaryPath;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(provider.Config);
-            if (doc.RootElement.ValueKind == JsonValueKind.Object
-                && doc.RootElement.TryGetProperty("binaryPath", out var bp)
-                && bp.ValueKind == JsonValueKind.String)
-            {
-                var value = bp.GetString();
-                if (!string.IsNullOrWhiteSpace(value)) return value!;
-            }
-        }
-        catch (JsonException) { }
-
-        return binaryPath;
     }
 
     private static async Task<ClaudeStreamOutput> ReadStreamJsonAsync(
@@ -392,31 +352,9 @@ public sealed class ClaudeCodeAdapter : IAgentAdapter
         return sb.Length > 0 ? sb.ToString() : null;
     }
 
-    private static bool TryGetString(JsonElement element, string propertyName, out string? value)
-    {
-        if (element.ValueKind == JsonValueKind.Object
-            && element.TryGetProperty(propertyName, out var property)
-            && property.ValueKind == JsonValueKind.String)
-        {
-            value = property.GetString();
-            return true;
-        }
-
-        value = null;
-        return false;
-    }
-
-    private static Task<string> RenderPromptAsync(string template, LoopRunContext context)
-        => Task.FromResult(Resolver.Render(template, new PromptContext(
-            WorkItemTitle: context.WorkItemTitle,
-            WorkItemDescription: context.WorkItemDescription,
-            PreviousNodeOutput: context.PreviousNodeOutput,
-            EventLogSummary: context.EventLogSummary,
-            WorktreePath: context.WorktreePath)));
-
     private async Task TryRestoreSessionJsonlAsync(AgentExecutionContext ctx, string sessionId, string worktreePath)
     {
-        if (_scopeFactory is null) return;
+        if (ScopeFactory is null) return;
 
         var path = GetSessionFilePath(worktreePath, sessionId);
         if (path is null || File.Exists(path)) return;
@@ -424,9 +362,7 @@ public sealed class ClaudeCodeAdapter : IAgentAdapter
         AdapterSessionSnapshot? snapshot;
         try
         {
-            await using var scope = _scopeFactory.CreateAsyncScope();
-            var store = scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>();
-            snapshot = await store.GetAsync(ctx.RunContext.LoopRunId, Name, sessionId, ctx.Cancel);
+            snapshot = await GetSnapshotAsync(ctx.RunContext.LoopRunId, sessionId, ctx.Cancel);
         }
         catch
         {
@@ -450,7 +386,7 @@ public sealed class ClaudeCodeAdapter : IAgentAdapter
 
     private async Task TryPersistSessionJsonlAsync(AgentExecutionContext ctx, string sessionId, string worktreePath)
     {
-        if (_scopeFactory is null) return;
+        if (ScopeFactory is null) return;
 
         var path = GetSessionFilePath(worktreePath, sessionId);
         if (path is null || !File.Exists(path)) return;
@@ -467,9 +403,7 @@ public sealed class ClaudeCodeAdapter : IAgentAdapter
 
         try
         {
-            await using var scope = _scopeFactory.CreateAsyncScope();
-            var store = scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>();
-            await store.UpsertAsync(ctx.RunContext.LoopRunId, Name, sessionId, wrapped, ctx.Cancel);
+            await UpsertSnapshotAsync(ctx.RunContext.LoopRunId, sessionId, wrapped, ctx.Cancel);
         }
         catch
         {

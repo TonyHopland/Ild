@@ -11,25 +11,21 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Core.Services.Implementations.Adapters;
 
-public sealed class PiAdapter : IAgentAdapter
+public sealed class PiAdapter : CliAgentAdapterBase
 {
-    private static readonly IPromptTemplateResolver Resolver = new PromptTemplateResolver();
-    private readonly IServiceScopeFactory? _scopeFactory;
-
     public PiAdapter()
     {
     }
 
     public PiAdapter(IServiceScopeFactory scopeFactory)
+        : base(scopeFactory)
     {
-        _scopeFactory = scopeFactory;
     }
 
-    public string Name => "Pi";
-    public string[] SupportedProviderTypes => ["pi"];
-    public ConfigFieldDescriptor[] ConfigSchema => Array.Empty<ConfigFieldDescriptor>();
+    public override string Name => "Pi";
+    public override string[] SupportedProviderTypes => ["pi"];
 
-    public async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
+    public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
         try
         {
@@ -96,7 +92,7 @@ public sealed class PiAdapter : IAgentAdapter
             }
             catch (OperationCanceledException)
             {
-                try { process.Kill(entireProcessTree: true); } catch { }
+                KillProcessTree(process);
                 return NodeExecutionResult.Fail("pi timed out");
             }
 
@@ -109,7 +105,7 @@ public sealed class PiAdapter : IAgentAdapter
             }
             catch (OperationCanceledException)
             {
-                try { process.Kill(entireProcessTree: true); } catch { }
+                KillProcessTree(process);
                 return NodeExecutionResult.Fail("pi stream read timed out");
             }
 
@@ -235,12 +231,10 @@ public sealed class PiAdapter : IAgentAdapter
         if (!string.IsNullOrWhiteSpace(localSessionPath))
             return ManagedSessionRestoreResult.Use(sessionId, localSessionPath);
 
-        if (_scopeFactory is null)
+        if (ScopeFactory is null)
             return ManagedSessionRestoreResult.StartFresh();
 
-        await using var scope = _scopeFactory.CreateAsyncScope();
-        var snapshotStore = scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>();
-        var snapshot = await snapshotStore.GetAsync(ctx.RunContext.LoopRunId, Name, sessionId, ctx.Cancel);
+        var snapshot = await GetSnapshotAsync(ctx.RunContext.LoopRunId, sessionId, ctx.Cancel);
         if (snapshot is null || string.IsNullOrWhiteSpace(snapshot.SessionJson))
             return ManagedSessionRestoreResult.StartFresh();
 
@@ -252,7 +246,7 @@ public sealed class PiAdapter : IAgentAdapter
 
     private async Task PersistManagedSessionAsync(string sessionDirectory, string sessionId, AgentExecutionContext ctx)
     {
-        if (_scopeFactory is null)
+        if (ScopeFactory is null)
             return;
 
         var sessionPath = FindSessionFile(sessionDirectory, sessionId);
@@ -261,9 +255,7 @@ public sealed class PiAdapter : IAgentAdapter
 
         var sessionJson = await File.ReadAllTextAsync(sessionPath, ctx.Cancel);
 
-        await using var scope = _scopeFactory.CreateAsyncScope();
-        var snapshotStore = scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>();
-        await snapshotStore.UpsertAsync(ctx.RunContext.LoopRunId, Name, sessionId, sessionJson, ctx.Cancel);
+        await UpsertSnapshotAsync(ctx.RunContext.LoopRunId, sessionId, sessionJson, ctx.Cancel);
     }
 
     private static async Task<PiExecutionOutput> ReadStdoutAsync(StreamReader reader, Func<string, Task>? progressCallback, CancellationToken ct)
@@ -387,20 +379,6 @@ public sealed class PiAdapter : IAgentAdapter
         }
     }
 
-    private static bool TryGetString(JsonElement element, string propertyName, out string? value)
-    {
-        if (element.ValueKind == JsonValueKind.Object
-            && element.TryGetProperty(propertyName, out var property)
-            && property.ValueKind == JsonValueKind.String)
-        {
-            value = property.GetString();
-            return true;
-        }
-
-        value = null;
-        return false;
-    }
-
     private static string BuildSessionDirectory(Guid loopRunId)
         => Path.Combine(Path.GetTempPath(), "ild-pi-sessions", loopRunId.ToString("N"));
 
@@ -488,37 +466,15 @@ public sealed class PiAdapter : IAgentAdapter
 
     private static PiAdapterSettings ResolveSettings(AiProvider provider, Guid loopRunId, IReadOnlyList<string>? selectedToolKeys)
     {
-        var binaryPath = "pi";
-        var apiKey = provider.ApiKey;
-        var providerName = default(string?);
-        var model = provider.Model;
-        var api = "openai-completions";
+        var config = AiProviderConfig.Parse(provider.Config);
+        var binaryPath = config.BinaryPathOr("pi");
+        var apiKey = config.ApiKey ?? provider.ApiKey;
+        var providerName = config.Provider;
+        var model = config.Model ?? provider.Model;
+        var api = config.Api ?? "openai-completions";
         var hasAbsoluteBaseUrl = Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out _);
         var enabledToolKeys = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, selectedToolKeys);
         var toolNames = BuildPiToolNames(enabledToolKeys);
-
-        if (!string.IsNullOrWhiteSpace(provider.Config))
-        {
-            try
-            {
-                using var doc = JsonDocument.Parse(provider.Config);
-                var root = doc.RootElement;
-                if (TryGetString(root, "binaryPath", out var configuredBinaryPath) && !string.IsNullOrWhiteSpace(configuredBinaryPath))
-                    binaryPath = configuredBinaryPath;
-                if (TryGetString(root, "provider", out var configuredProvider) && !string.IsNullOrWhiteSpace(configuredProvider))
-                    providerName = configuredProvider;
-                if (TryGetString(root, "model", out var configuredModel) && !string.IsNullOrWhiteSpace(configuredModel))
-                    model = configuredModel;
-                if (TryGetString(root, "apiKey", out var configuredApiKey) && !string.IsNullOrWhiteSpace(configuredApiKey))
-                    apiKey = configuredApiKey;
-                if (TryGetString(root, "api", out var configuredApi) && !string.IsNullOrWhiteSpace(configuredApi))
-                    api = configuredApi;
-            }
-            catch (JsonException)
-            {
-                // Misconfigured provider JSON — fall through with defaults
-            }
-        }
 
         if (!string.IsNullOrWhiteSpace(provider.BaseUrl)
             && !Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out _)
@@ -662,14 +618,6 @@ public sealed class PiAdapter : IAgentAdapter
             loopRunId.ToString(),
             ToolDescriptors.All.Select(tool => tool.Name).ToArray());
     }
-
-    private static Task<string> RenderPromptAsync(string template, LoopRunContext context)
-        => Task.FromResult(Resolver.Render(template, new PromptContext(
-            WorkItemTitle: context.WorkItemTitle,
-            WorkItemDescription: context.WorkItemDescription,
-            PreviousNodeOutput: context.PreviousNodeOutput,
-            EventLogSummary: context.EventLogSummary,
-            WorktreePath: context.WorktreePath)));
 
     internal sealed record PiAdapterSettings(
         string BinaryPath,

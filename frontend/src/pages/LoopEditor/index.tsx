@@ -50,10 +50,12 @@ import { LoopEditorSidebar } from "./components/LoopEditorSidebar";
 import { NodeSettingsModal } from "./components/NodeSettingsModal";
 import type {
   AdapterConfigValue,
+  ImportFeedbackItem,
   LoopTemplateVersion,
   NodeSettingsSnapshot,
   SessionPlaceholderUsage,
 } from "./types";
+import { validateLoopGraphLocally } from "./utils/loopGraphValidation";
 
 function loadErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message) return error.message;
@@ -196,9 +198,7 @@ export default function LoopEditor() {
   const [originalNodeConfig, setOriginalNodeConfig] = useState<NodeSettingsSnapshot | null>(null);
 
   // Import state
-  const [importFeedback, setImportFeedback] = useState<
-    { filename: string; status: "success" | "error" | "skipped"; message: string }[]
-  >([]);
+  const [importFeedback, setImportFeedback] = useState<ImportFeedbackItem[]>([]);
   const [showImportFeedback, setShowImportFeedback] = useState(false);
   const [importConflictTemplate, setImportConflictTemplate] = useState<LoopTemplate | null>(null);
   const [importConflictData, setImportConflictData] = useState<{
@@ -213,7 +213,7 @@ export default function LoopEditor() {
   // Refs for import queue — avoids window pollution and stale closures
   const importQueueRef = useRef<{
     remainingFiles: File[];
-    feedback: { filename: string; status: "success" | "error" | "skipped"; message: string }[];
+    feedback: ImportFeedbackItem[];
   } | null>(null);
   const templatesRef = useRef<LoopTemplate[]>([]);
 
@@ -345,61 +345,7 @@ export default function LoopEditor() {
   const handleSave = async () => {
     if (isSaving) return;
 
-    if (nodes.length === 0) {
-      setValidationErrors(["Graph must contain at least one node."]);
-      return;
-    }
-
-    const errors: string[] = [];
-    const currentNodeTypes = nodes.map((node) => (node.data as { type?: string }).type);
-
-    if (!currentNodeTypes.includes(NodeType.Start)) {
-      errors.push("Graph must contain a Start node.");
-    }
-    if (!currentNodeTypes.includes(NodeType.Cleanup)) {
-      errors.push("Graph must contain a Cleanup node.");
-    }
-
-    const startNode = nodes.find(
-      (node) => (node.data as { type?: string }).type === NodeType.Start,
-    );
-    if (startNode) {
-      const adjacency = new Map<string, string[]>();
-      for (const edge of edges) {
-        const targets = adjacency.get(edge.source) ?? [];
-        targets.push(edge.target);
-        adjacency.set(edge.source, targets);
-      }
-
-      const reachable = new Set<string>();
-      const queue: string[] = [startNode.id];
-      reachable.add(startNode.id);
-      while (queue.length > 0) {
-        const current = queue.shift()!;
-        for (const target of adjacency.get(current) ?? []) {
-          if (!reachable.has(target)) {
-            reachable.add(target);
-            queue.push(target);
-          }
-        }
-      }
-
-      const unreachableNodes = nodes
-        .filter((node) => !reachable.has(node.id))
-        .map((node) => node.id);
-      if (unreachableNodes.length > 0) {
-        errors.push(`Unreachable nodes from Start: ${unreachableNodes.join(", ")}`);
-      }
-
-      const cleanupNodes = nodes.filter(
-        (node) => (node.data as { type?: string }).type === NodeType.Cleanup,
-      );
-      const reachableCleanup = cleanupNodes.some((node) => reachable.has(node.id));
-      if (cleanupNodes.length > 0 && !reachableCleanup) {
-        errors.push("No path from Start leads to a Cleanup node.");
-      }
-    }
-
+    const errors = validateLoopGraphLocally(nodes, edges);
     if (errors.length > 0) {
       setValidationErrors(errors);
       return;
@@ -568,13 +514,9 @@ export default function LoopEditor() {
   const processSingleImportFile = useCallback(
     async (
       file: File,
-      accumulatedFeedback: {
-        filename: string;
-        status: "success" | "error" | "skipped";
-        message: string;
-      }[],
+      accumulatedFeedback: ImportFeedbackItem[],
     ): Promise<{
-      feedback: { filename: string; status: "success" | "error" | "skipped"; message: string }[];
+      feedback: ImportFeedbackItem[];
       haltedForConflict: boolean;
     }> => {
       try {
@@ -659,11 +601,7 @@ export default function LoopEditor() {
     async (files: File[]) => {
       // Preserve accumulated feedback from previous batch if continuing after conflict
       const existingFeedback = importQueueRef.current?.feedback ?? [];
-      const feedback: {
-        filename: string;
-        status: "success" | "error" | "skipped";
-        message: string;
-      }[] = [...existingFeedback];
+      const feedback: ImportFeedbackItem[] = [...existingFeedback];
 
       // Initialize queue ref for potential conflict continuation
       importQueueRef.current = { remainingFiles: files, feedback };
@@ -692,11 +630,7 @@ export default function LoopEditor() {
 
   // Helper: after resolving a conflict, continue processing remaining files
   const continueImportAfterConflict = useCallback(
-    async (extraFeedback: {
-      filename: string;
-      status: "success" | "error" | "skipped";
-      message: string;
-    }) => {
+    async (extraFeedback: ImportFeedbackItem) => {
       setImportConflictTemplate(null);
       setImportConflictData(null);
 

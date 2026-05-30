@@ -29,7 +29,7 @@ services:
     environment:
       - WORKITEM_DATA_PATH=/data
       - WORKITEM_DB_CONNECTION_STRING=Host=postgres;Port=5432;Database=IldWorkitems;Username=ild_workitems;Password=ild_workitems_password
-      - WORKITEM_API_KEYS=${WORKITEM_API_KEYS:-${WORKITEM_API_KEY:-test-api-key-123}}
+      - "WORKITEM_API_KEYS=${WORKITEM_API_KEYS:?Set WORKITEM_API_KEYS in your .env (generate one with: openssl rand -hex 32)}"
       - ASPNETCORE_URLS=http://+:8081
     volumes:
       - workitem-data:/data
@@ -68,7 +68,7 @@ services:
       - ILD_LOG_LEVEL=${ILD_LOG_LEVEL:-Information}
       - ILD_API_URL=${ILD_API_URL:-http://localhost:8080}
       - ILD_WORKITEM_SERVER_URL=${ILD_WORKITEM_SERVER_URL:-http://workitem-server:8081}
-      - ILD_WORKITEM_SERVER_API_KEY=${ILD_WORKITEM_SERVER_API_KEY:-${WORKITEM_API_KEYS:-${WORKITEM_API_KEY:-test-api-key-123}}}
+      - "ILD_WORKITEM_SERVER_API_KEY=${ILD_WORKITEM_SERVER_API_KEY:-${WORKITEM_API_KEYS:?Set WORKITEM_API_KEYS in your .env (generate one with: openssl rand -hex 32)}}"
       - ASPNETCORE_URLS=http://+:8080
     volumes:
       - ild-data:/data
