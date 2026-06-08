@@ -4,21 +4,22 @@ All ILD application routes are under `/api/v1/...`. The `/metrics` endpoint is t
 
 ## Selected ILD endpoints
 
-| Method | Route                                  | Purpose                                          |
-| ------ | -------------------------------------- | ------------------------------------------------ |
-| `POST` | `/api/v1/auth/login`                   | Create a session token                           |
-| `POST` | `/api/v1/auth/logout`                  | Revoke the current session                       |
-| `GET`  | `/api/v1/auth/me`                      | Return the authenticated user                    |
-| `GET`  | `/api/v1/health`                       | Database and disk health summary                 |
-| `PUT`  | `/api/v1/logging/level`                | Change backend log level at runtime              |
-| `GET`  | `/metrics`                             | Prometheus-style metrics snapshot (root route)   |
-| `GET`  | `/api/v1/workitems`                    | List work items                                  |
-| `POST` | `/api/v1/workitems/{id}/transition`    | Transition a work item (e.g. claim to `Running`) |
-| `POST` | `/api/v1/workitems/{id}/preview/start` | Start a QA preview                               |
-| `GET`  | `/api/v1/loopruns`                     | List loop runs                                   |
-| `GET`  | `/api/v1/loopruns/{id}/events`         | Read run event logs (cursor-paginated)           |
-| `GET`  | `/api/v1/remoteproviders`              | Manage git + WorkItem Server settings            |
-| `GET`  | `/api/v1/agent/workitems`              | Agent-facing work-item listing                   |
+| Method      | Route                                  | Purpose                                                                              |
+| ----------- | -------------------------------------- | ------------------------------------------------------------------------------------ |
+| `POST`      | `/api/v1/auth/login`                   | Create a session token                                                               |
+| `POST`      | `/api/v1/auth/logout`                  | Revoke the current session                                                           |
+| `GET`       | `/api/v1/auth/me`                      | Return the authenticated user                                                        |
+| `GET`       | `/api/v1/health`                       | Database and disk health summary                                                     |
+| `PUT`       | `/api/v1/logging/level`                | Change backend log level at runtime                                                  |
+| `GET`       | `/metrics`                             | Prometheus-style metrics snapshot (root route)                                       |
+| `GET`       | `/api/v1/workitems`                    | List work items                                                                      |
+| `POST`      | `/api/v1/workitems/{id}/transition`    | Transition a work item (e.g. claim to `Running`)                                     |
+| `POST`      | `/api/v1/workitems/{id}/preview/start` | Start a QA preview                                                                   |
+| `GET`       | `/api/v1/loopruns`                     | List loop runs                                                                       |
+| `GET`       | `/api/v1/loopruns/{id}/events`         | Read run event logs (cursor-paginated)                                               |
+| `GET`       | `/api/v1/remoteproviders`              | Manage git provider settings                                                         |
+| `GET`/`PUT` | `/api/v1/workitemserver`               | Read/update the global WorkItem Server connection (URL, API key, poll/grace cadence) |
+| `GET`       | `/api/v1/agent/workitems`              | Agent-facing work-item listing                                                       |
 
 Manual start of a `Ready` work item is performed through `POST /api/v1/workitems/{id}/transition` with a target status of `Running` — there is no separate `/start` route. List endpoints accept `skip`/`take` (default 100, max 500); event-log queries cap `limit` server-side at 500.
 

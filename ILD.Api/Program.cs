@@ -116,8 +116,8 @@ try
             var mgr = scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Interfaces.ILoopTemplateManager>();
             await ILD.Api.Configuration.TemplateSeeder.SeedAsync(templateStore, mgr);
 
-            var providerStore = scope.ServiceProvider.GetRequiredService<ILD.Data.Stores.Interfaces.IProviderStore>();
-            await ILD.Api.Configuration.TemplateSeeder.SeedRemoteProviderAsync(providerStore);
+            var settingStore = scope.ServiceProvider.GetRequiredService<ILD.Data.Stores.Interfaces.IAppSettingStore>();
+            await ILD.Api.Configuration.TemplateSeeder.SeedWorkItemServerAsync(settingStore);
 
             var recovery = scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Interfaces.IRecoveryManager>();
             foreach (var runId in await recovery.GetRecoverableRunIdsAsync())

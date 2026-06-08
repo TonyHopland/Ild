@@ -10,6 +10,15 @@ public static class AppSettingKeys
 
     public const int DefaultMaxConcurrent = 5;
     public const bool DefaultIsPaused = false;
+
+    // WorkItem server connection settings (previously stored per RemoteProvider).
+    public const string WorkItemServerUrl = "workItemServer.url";
+    public const string WorkItemServerApiKey = "workItemServer.apiKey";
+    public const string WorkItemServerPollIntervalSeconds = "workItemServer.pollIntervalSeconds";
+    public const string WorkItemServerGraceIntervalSeconds = "workItemServer.graceIntervalSeconds";
+
+    public const int DefaultPollIntervalSeconds = 60;
+    public const int DefaultGraceIntervalSeconds = 5;
 }
 
 /// <summary>

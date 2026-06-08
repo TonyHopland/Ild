@@ -6,7 +6,7 @@
 
 **The poller is not claiming work**
 
-Confirm at least one remote provider has `WorkItemServerUrl` configured, plus a valid WorkItem API key and poll settings. The poller remains effectively disabled until that configuration exists.
+Confirm the WorkItem Server is configured (its own tab in the UI) with a URL, a valid WorkItem API key, and poll settings. The poller remains effectively disabled until that configuration exists.
 
 **A work item is stuck in `Running` remotely**
 

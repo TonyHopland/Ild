@@ -27,21 +27,5 @@ public class RemoteProviderDto
 
     public bool IsDefault { get; set; }
 
-    [Url]
-    [StringLength(1024)]
-    public string? WorkItemServerUrl { get; set; }
-
-    [StringLength(1024)]
-    public string? WorkItemApiKey { get; set; }
-
-    [Range(1, 86400)]
-    public int PollIntervalSeconds { get; set; } = 60;
-
-    [Range(1, 3600)]
-    public int GraceIntervalSeconds { get; set; } = 5;
-
-    [Range(1, 100)]
-    public int MaxConcurrentWorkItems { get; set; } = 1;
-
     public DateTime CreatedAt { get; set; }
 }

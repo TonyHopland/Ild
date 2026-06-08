@@ -20,7 +20,7 @@ public static class TemplateSeeder
         await CreatePlanAsync(mgr);
     }
 
-    public static async Task SeedRemoteProviderAsync(IProviderStore providerStore)
+    public static async Task SeedWorkItemServerAsync(IAppSettingStore settingStore)
     {
         var serverUrl = Environment.GetEnvironmentVariable("ILD_WORKITEM_SERVER_URL");
         var apiKey = Environment.GetEnvironmentVariable("ILD_WORKITEM_SERVER_API_KEY");
@@ -28,23 +28,12 @@ public static class TemplateSeeder
         if (string.IsNullOrEmpty(serverUrl) || string.IsNullOrEmpty(apiKey))
             return;
 
-        var existing = await providerStore.GetAllRemoteProvidersAsync();
-        if (existing.Any())
+        var existing = await settingStore.GetByKeyAsync(AppSettingKeys.WorkItemServerUrl);
+        if (existing != null && !string.IsNullOrEmpty(existing.Value))
             return;
 
-        var provider = new RemoteProvider
-        {
-            Id = Guid.NewGuid(),
-            Name = "Default",
-            Type = "Local",
-            Url = serverUrl,
-            WorkItemServerUrl = serverUrl,
-            WorkItemApiKey = apiKey,
-            IsDefault = true,
-            CreatedAt = DateTime.UtcNow,
-        };
-
-        await providerStore.CreateRemoteProviderAsync(provider);
+        await settingStore.UpsertAsync(AppSettingKeys.WorkItemServerUrl, serverUrl);
+        await settingStore.UpsertAsync(AppSettingKeys.WorkItemServerApiKey, apiKey);
     }
 
     private static async Task CreateSimpleCodeChangeAsync(ILoopTemplateManager mgr)

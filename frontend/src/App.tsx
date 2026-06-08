@@ -12,6 +12,7 @@ import EventLogViewer from "./pages/EventLogViewer";
 import Settings from "./pages/Settings";
 import Repositories from "./pages/Repositories";
 import RemoteProviders from "./pages/RemoteProviders";
+import WorkItemServer from "./pages/WorkItemServer";
 import AiProviders from "./pages/AiProviders";
 import "./App.css";
 
@@ -134,6 +135,14 @@ function AppRoutes() {
             element={
               <ProtectedRoute>
                 <AiProviders />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/work-item-server"
+            element={
+              <ProtectedRoute>
+                <WorkItemServer />
               </ProtectedRoute>
             }
           />
