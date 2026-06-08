@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Provider API keys and webhook secrets (`RemoteProvider.ApiKey`/`WebhookSecret`, `AiProvider.ApiKey`) are now encrypted at rest with AES-256-GCM when the new `ILD_SECRET_KEY` environment variable is set. Behaviour is backwards-compatible: when the key is unset, secrets are stored as plaintext and a startup warning is logged; legacy plaintext rows remain readable after a key is added. See [docs/configuration.md](docs/configuration.md#secret-encryption-at-rest).
+- Webhook secrets are now masked (`***`) in `GET /api/v1/remote-providers` responses, matching the existing treatment of API keys, and a `hasWebhookSecret` flag indicates whether one is set.
+- Added [SECURITY.md](SECURITY.md) documenting the trust model and vulnerability reporting process.
+
 ### Changed
 
 - AI nodes now use a single `prompt` field regardless of whether they run in a fresh or resumed session; prompt variation across turns is now modeled explicitly with `Prompt` nodes in the graph.

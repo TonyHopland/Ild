@@ -1,5 +1,7 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using ILD.Data.Enums;
+using ILD.Data.Security;
 
 namespace ILD.Data.Entities;
 
@@ -33,6 +35,31 @@ public class AppDbContext : DbContext
         ConfigureTimestamps(modelBuilder);
         ConfigureConstraints(modelBuilder);
         ConfigureEnumConversions(modelBuilder);
+        ConfigureSecretProtection(modelBuilder);
+    }
+
+    /// <summary>
+    /// Transparently encrypts credential columns at rest via <see cref="SecretProtector"/>.
+    /// When no encryption key is configured this is a passthrough, and legacy plaintext
+    /// rows remain readable, so toggling the feature never breaks an existing database.
+    /// Columns are widened to accommodate the encrypted envelope.
+    /// </summary>
+    private static void ConfigureSecretProtection(ModelBuilder modelBuilder)
+    {
+        var converter = new ValueConverter<string?, string?>(
+            v => SecretProtector.Protect(v),
+            v => SecretProtector.Unprotect(v));
+
+        modelBuilder.Entity<RemoteProvider>(e =>
+        {
+            e.Property(r => r.ApiKey).HasConversion(converter).HasMaxLength(2048);
+            e.Property(r => r.WebhookSecret).HasConversion(converter).HasMaxLength(1024);
+        });
+
+        modelBuilder.Entity<AiProvider>(e =>
+        {
+            e.Property(a => a.ApiKey).HasConversion(converter).HasMaxLength(2048);
+        });
     }
 
     private void ConfigureEnumConversions(ModelBuilder modelBuilder)
