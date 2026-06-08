@@ -264,13 +264,15 @@ export interface RemoteProvider {
   apiKey: string;
   hasApiKey?: boolean;
   webhookSecret: string;
-  workItemServerUrl?: string | null;
-  workItemApiKey?: string | null;
-  hasWorkItemApiKey?: boolean;
-  pollIntervalSeconds?: number;
-  graceIntervalSeconds?: number;
-  maxConcurrentWorkItems?: number;
   createdAt: string;
+}
+
+export interface WorkItemServerConfig {
+  url?: string | null;
+  apiKey?: string | null;
+  hasApiKey?: boolean;
+  pollIntervalSeconds: number;
+  graceIntervalSeconds: number;
 }
 
 export interface RemoteProviderTypeOption {

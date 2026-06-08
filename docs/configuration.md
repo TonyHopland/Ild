@@ -1,6 +1,6 @@
 # Configuration
 
-Remote providers, repositories, AI providers, and runtime polling settings are managed from the UI and persisted in the ILD database. The settings below are environment- and build-time configuration.
+Remote providers, the WorkItem Server connection, repositories, AI providers, and runtime polling settings are managed from the UI and persisted in the ILD database. The WorkItem Server connection (URL, API key, poll/grace cadence) is a single app-wide setting edited from its own tab, no longer per remote provider. The settings below are environment- and build-time configuration.
 
 ## Environment variables
 
@@ -13,8 +13,8 @@ Remote providers, repositories, AI providers, and runtime polling settings are m
 | `ILD_DATA_PATH`                 | Base data directory for ILD runtime files                                                |
 | `ILD_WORKTREES_PATH`            | Base directory for per-item worktrees (overrides the `DataRoot`/`worktrees` default)     |
 | `ILD_LOG_LEVEL`                 | Initial Serilog level (`Verbose`, `Debug`, `Information`, `Warning`, `Error`, `Fatal`)   |
-| `ILD_WORKITEM_SERVER_URL`       | URL used for remote-provider auto-seeding                                                |
-| `ILD_WORKITEM_SERVER_API_KEY`   | API key used for remote-provider auto-seeding                                            |
+| `ILD_WORKITEM_SERVER_URL`       | URL used to auto-seed the global WorkItem Server connection                              |
+| `ILD_WORKITEM_SERVER_API_KEY`   | API key used to auto-seed the global WorkItem Server connection                          |
 | `ILD_ALLOWED_ORIGINS`           | Comma-separated CORS origins allowed to call the ILD API                                 |
 | `WORKITEM_API_KEYS`             | Accepted bearer keys for the WorkItem Server (comma-separated)                           |
 | `WORKITEM_DATA_PATH`            | Base data directory for WorkItem Server runtime files                                    |

@@ -26,6 +26,7 @@ export const ROUTES = {
   SETTINGS: "/settings",
   REPOSITORIES: "/repositories",
   REMOTE_PROVIDERS: "/remote-providers",
+  WORK_ITEM_SERVER: "/work-item-server",
   AI_PROVIDERS: "/ai-providers",
 } as const;
 
@@ -36,6 +37,7 @@ export const NAV_ITEMS = [
   { label: "Settings", path: ROUTES.SETTINGS },
   { label: "Repositories", path: ROUTES.REPOSITORIES },
   { label: "Remote Providers", path: ROUTES.REMOTE_PROVIDERS },
+  { label: "WorkItem Server", path: ROUTES.WORK_ITEM_SERVER },
   { label: "AI Providers", path: ROUTES.AI_PROVIDERS },
 ] as const;
 

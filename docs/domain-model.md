@@ -1,15 +1,16 @@
 # Domain Model
 
-| Concept                 | Meaning                                                       |
-| ----------------------- | ------------------------------------------------------------- |
-| `WorkItem`              | Shared remote unit of work stored on the WorkItem Server      |
-| `LoopTemplate`          | Named workflow definition with immutable saved versions       |
-| `LoopRun`               | One local execution of a template version against a work item |
-| `LoopRunNode`           | One visited node execution within a run                       |
-| `RemoteProvider`        | Git provider + WorkItem Server settings + poll cadence        |
-| `AiProvider`            | Adapter-resolved AI provider configuration                    |
-| `RecoveryPolicy`        | `AutoResume`, `NeedsReview`, or `Cancel` after restart        |
-| `ActiveWorkItemTracker` | Local set of items this ILD instance is actively heartbeating |
+| Concept                    | Meaning                                                                                                                   |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `WorkItem`                 | Shared remote unit of work stored on the WorkItem Server                                                                  |
+| `LoopTemplate`             | Named workflow definition with immutable saved versions                                                                   |
+| `LoopRun`                  | One local execution of a template version against a work item                                                             |
+| `LoopRunNode`              | One visited node execution within a run                                                                                   |
+| `RemoteProvider`           | Git provider settings                                                                                                     |
+| WorkItem Server connection | App-wide URL, API key, and poll/grace cadence for reaching the WorkItem Server (stored in app settings, not per provider) |
+| `AiProvider`               | Adapter-resolved AI provider configuration                                                                                |
+| `RecoveryPolicy`           | `AutoResume`, `NeedsReview`, or `Cancel` after restart                                                                    |
+| `ActiveWorkItemTracker`    | Local set of items this ILD instance is actively heartbeating                                                             |
 
 ## Node types
 

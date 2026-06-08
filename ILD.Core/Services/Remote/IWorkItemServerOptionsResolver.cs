@@ -1,13 +1,15 @@
 using ILD.Data.Entities;
+using ILD.Core.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Core.Services.Remote;
 
 /// <summary>
 /// Resolves the <see cref="WorkItemServerOptions"/> (URL + API key) that
-/// should be used when talking to the remote WorkItemServer for a given
-/// repository / work item. Per-call resolution because a single ILD instance
-/// can in principle talk to multiple remote providers (one per repo).
+/// should be used when talking to the remote WorkItemServer. The WorkItem
+/// server is a single global configuration stored in the AppSettings table,
+/// no longer tied to an individual remote provider. The repository/work-item
+/// parameters are retained for signature compatibility but are not used.
 /// </summary>
 public interface IWorkItemServerOptionsResolver
 {
@@ -16,11 +18,10 @@ public interface IWorkItemServerOptionsResolver
 }
 
 /// <summary>
-/// Production resolver that looks up the <see cref="RemoteProvider"/>
-/// associated with the repository (or the work item's repository) and
-/// extracts <c>WorkItemServerUrl</c> + <c>WorkItemApiKey</c>.
-/// Throws when no provider is configured — per the PRD's hard-break
-/// contract, ILD requires a remote WorkItemServer.
+/// Production resolver that reads the global WorkItem server connection
+/// (<c>workItemServer.url</c> + <c>workItemServer.apiKey</c>) from the
+/// AppSettings table. Throws when no URL is configured — per the PRD's
+/// hard-break contract, ILD requires a remote WorkItemServer.
 /// </summary>
 public sealed class DbWorkItemServerOptionsResolver : IWorkItemServerOptionsResolver
 {
@@ -30,43 +31,27 @@ public sealed class DbWorkItemServerOptionsResolver : IWorkItemServerOptionsReso
 
     public async Task<WorkItemServerOptions> ResolveForRepositoryAsync(Guid? repositoryId, CancellationToken ct = default)
     {
-        RemoteProvider? provider = null;
-        if (repositoryId.HasValue && repositoryId.Value != Guid.Empty)
-        {
-            var repo = await _db.Repositories
-                .AsNoTracking()
-                .FirstOrDefaultAsync(r => r.Id == repositoryId.Value, ct);
-            if (repo != null)
-            {
-                provider = await _db.RemoteProviders
-                    .AsNoTracking()
-                    .FirstOrDefaultAsync(p => p.Id == repo.RemoteProviderId, ct);
-            }
-        }
-
-        provider ??= await _db.RemoteProviders
+        var settings = await _db.AppSettings
             .AsNoTracking()
-            .FirstOrDefaultAsync(p => !string.IsNullOrEmpty(p.WorkItemServerUrl), ct);
+            .Where(s => s.Key == AppSettingKeys.WorkItemServerUrl || s.Key == AppSettingKeys.WorkItemServerApiKey)
+            .ToDictionaryAsync(s => s.Key, s => s.Value, ct);
 
-        if (provider == null || string.IsNullOrEmpty(provider.WorkItemServerUrl))
+        settings.TryGetValue(AppSettingKeys.WorkItemServerUrl, out var url);
+
+        if (string.IsNullOrEmpty(url))
             throw new InvalidOperationException(
-                "No RemoteProvider with a WorkItemServerUrl is configured. " +
+                "No WorkItem server URL is configured. " +
                 "ILD requires a remote WorkItemServer for work-item operations.");
+
+        settings.TryGetValue(AppSettingKeys.WorkItemServerApiKey, out var apiKey);
 
         return new WorkItemServerOptions
         {
-            BaseUrl = provider.WorkItemServerUrl!,
-            ApiKey = provider.WorkItemApiKey ?? string.Empty,
+            BaseUrl = url,
+            ApiKey = apiKey ?? string.Empty,
         };
     }
 
-    public async Task<WorkItemServerOptions> ResolveForWorkItemAsync(string workItemId, CancellationToken ct = default)
-    {
-        var repoId = await _db.LoopRuns
-            .AsNoTracking()
-            .Where(r => r.WorkItemId == workItemId)
-            .Select(r => (Guid?)r.RepositoryId)
-            .FirstOrDefaultAsync(ct);
-        return await ResolveForRepositoryAsync(repoId, ct);
-    }
+    public Task<WorkItemServerOptions> ResolveForWorkItemAsync(string workItemId, CancellationToken ct = default)
+        => ResolveForRepositoryAsync(null, ct);
 }

@@ -17,6 +17,7 @@ import {
   LoopRunSessionPreview,
   WorktreePreview,
   AppSetting,
+  WorkItemServerConfig,
 } from "../types";
 
 interface BackendLoginResponse {
@@ -422,5 +423,19 @@ export const settingsService = {
   },
   put: async (key: string, value: string): Promise<AppSetting> => {
     return api.put<AppSetting>(`/settings/${key}`, { value });
+  },
+};
+
+export const workItemServerService = {
+  get: async (): Promise<WorkItemServerConfig> => {
+    return api.get<WorkItemServerConfig>("/workitemserver");
+  },
+  update: async (data: {
+    url?: string | null;
+    apiKey?: string | null;
+    pollIntervalSeconds: number;
+    graceIntervalSeconds: number;
+  }): Promise<WorkItemServerConfig> => {
+    return api.put<WorkItemServerConfig>("/workitemserver", data);
   },
 };

@@ -50,5 +50,5 @@ On first successful ILD startup:
 1. EF Core migrations are applied when a database connection string is configured.
 2. The bootstrap user is created on first login from `ILD_USERNAME` (default `admin`) and `ILD_PASSWORD`.
 3. Seed loop templates are created: `Simple Code Change`, `AI-Assisted Feature`, and `Plan`.
-4. A default remote provider is auto-seeded when `ILD_WORKITEM_SERVER_URL` and `ILD_WORKITEM_SERVER_API_KEY` are present and no providers exist yet.
+4. The global WorkItem Server connection is auto-seeded when `ILD_WORKITEM_SERVER_URL` and `ILD_WORKITEM_SERVER_API_KEY` are present and no URL is configured yet.
 5. Recoverable runs are inspected and recovery is attempted according to each run's policy.

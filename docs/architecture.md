@@ -39,6 +39,10 @@ Two SignalR hubs are mapped:
 
 Both emit messages of shape `{ type, payload, timestamp }`. Event payload types are statically modelled in `frontend/src/types/signalr.ts`. Known events include `NodeStateChanged`, `LoopRunStateChanged`, `WorkItemStateChanged`, `HumanFeedbackRequired`, `EventLogged`, `RunPaused`, `RunResumed`, `DependencyResolved`, and `NodeProgress` (real-time progress lines consumed by the live-stream view).
 
+## Why it's shaped this way
+
+The decisions behind this architecture — the WorkItem Server split, manual API versioning, per-edge traversal limits, the explicit PR node, tag-based template resolution, the clean-origin run isolation invariant, and adapter-owned AI execution — are recorded as [ADRs](./adr/).
+
 ## Deeper internals
 
-For the full engineering reference — node execution semantics, recovery policies, edge-traversal limits, storage layout, and the auth/webhook enforcement model — see [CONTEXT.md](../CONTEXT.md). For product scope and requirements, see [PRD.md](./PRD.md).
+For the full engineering reference — node execution semantics, recovery policies, edge-traversal limits, storage layout, and the auth/webhook enforcement model — see [CONTEXT.md](../CONTEXT.md). For the API design and conventions, see [api.md](./api.md). For product scope and requirements, see [PRD.md](./PRD.md).
