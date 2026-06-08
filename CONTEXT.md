@@ -141,7 +141,7 @@ _Avoid_: draft, planned
 
 ## API Versioning Policy
 
-API routes use a manual prefix (`/api/v1/...`) hard-coded in `[Route]` attributes. There is **no** `Asp.Versioning` package wiring; breaking changes require introducing a new prefix (`/api/v2/...`) and keeping `/api/v1/...` working until clients migrate. List endpoints accept `skip`/`take` (default 100, max 500); event-log queries cap `limit` server-side at 500.
+API routes use a manual prefix (`/api/v1/...`) hard-coded in `[Route]` attributes. There is **no** `Asp.Versioning` package wiring; breaking changes require introducing a new prefix (`/api/v2/...`) and keeping `/api/v1/...` working until clients migrate (the rationale is recorded in [ADR-0002](./docs/adr/0002-manual-api-versioning.md)). List endpoints accept `skip`/`take` (default 100, max 500); event-log queries cap `limit` server-side at 500.
 
 See the [Architecture](#architecture) section below for how the API layer composes with storage, auth, and realtime channels.
 
