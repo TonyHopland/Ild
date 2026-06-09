@@ -24,6 +24,7 @@ public class SettingsController : ControllerBase
     {
         AppSettingKeys.SchedulerMaxConcurrent,
         AppSettingKeys.SchedulerIsPaused,
+        AppSettingKeys.RunRetentionDays,
     };
 
     public SettingsController(
@@ -55,6 +56,8 @@ public class SettingsController : ControllerBase
             map[AppSettingKeys.SchedulerMaxConcurrent] = AppSettingKeys.DefaultMaxConcurrent.ToString();
         if (!map.ContainsKey(AppSettingKeys.SchedulerIsPaused))
             map[AppSettingKeys.SchedulerIsPaused] = AppSettingKeys.DefaultIsPaused.ToString().ToLowerInvariant();
+        if (!map.ContainsKey(AppSettingKeys.RunRetentionDays))
+            map[AppSettingKeys.RunRetentionDays] = AppSettingKeys.DefaultRunRetentionDays.ToString();
         return Ok(map.Select(kv => new { key = kv.Key, value = kv.Value }));
     }
 
@@ -92,6 +95,7 @@ public class SettingsController : ControllerBase
     {
         AppSettingKeys.SchedulerMaxConcurrent => AppSettingKeys.DefaultMaxConcurrent.ToString(),
         AppSettingKeys.SchedulerIsPaused => AppSettingKeys.DefaultIsPaused.ToString().ToLowerInvariant(),
+        AppSettingKeys.RunRetentionDays => AppSettingKeys.DefaultRunRetentionDays.ToString(),
         _ => string.Empty,
     };
 
@@ -110,6 +114,13 @@ public class SettingsController : ControllerBase
                 if (!bool.TryParse(value, out _))
                 {
                     error = "scheduler.isPaused must be 'true' or 'false'";
+                    return false;
+                }
+                break;
+            case AppSettingKeys.RunRetentionDays:
+                if (!int.TryParse(value, out var days) || days < 0 || days > 3650)
+                {
+                    error = "run.retentionDays must be an integer between 0 (disabled) and 3650";
                     return false;
                 }
                 break;

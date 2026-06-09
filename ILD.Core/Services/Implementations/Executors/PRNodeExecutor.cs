@@ -58,7 +58,7 @@ public sealed class PRNodeExecutor : INodeExecutor
         var gitAuth = remoteProvider is null
             ? null
             : new GitAuthOptions(repo.CloneUrl, remoteProvider.ApiKey, remoteProvider.Type);
-        var branch = ctx.Run.BranchName ?? $"ild/wi-{wi.Id:N}";
+        var branch = ctx.Run.BranchName ?? RunWorktreeNaming.BranchFor(wi.Id, ctx.Run.Id);
         var target = repo.DefaultBranch ?? "main";
         var repoManager = sp.GetRequiredService<IRepositoryManager>();
 

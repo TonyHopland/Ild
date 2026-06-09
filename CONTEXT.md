@@ -23,7 +23,7 @@ A single execution of a pinned LoopTemplateVersion against a WorkItem. Tracks no
 _Avoid_: execution, run, instance
 
 **Worktree**:
-A per-WorkItem git worktree created on first run, destroyed when Cleanup executes. Each new run after cleanup creates a fresh worktree.
+A per-**run** git worktree on a per-run branch (`ild/wi-<workItemId>-run-<runId>`), created by the Start node. It is **kept** after the run finishes so the run stays inspectable; the `WorktreeRetentionSweeper` reclaims it (and the branch, and the whole run) once the run has been terminal longer than `run.retentionDays`. See [ADR-0008](docs/adr/0008-worktree-and-branch-per-run.md).
 _Avoid_: workspace, checkout
 
 ### Node Types
@@ -53,7 +53,7 @@ Creates a pull request (or reuses existing one via `WorkItem.PrUrl`). Before PR 
 _Avoid_: repository node, git node
 
 **Cleanup Node**:
-A terminal (sink) node with only incoming edges. Destroys the worktree when executed, ending the LoopRun.
+A terminal (sink) node with only incoming edges. Marks the LoopRun finished. It deliberately **keeps** the worktree and branch so the run stays inspectable — disk is reclaimed later by the `WorktreeRetentionSweeper` (or explicit reset / retention). See [ADR-0008](docs/adr/0008-worktree-and-branch-per-run.md).
 _Avoid_: teardown, end node
 
 ### Execution & Recovery
@@ -110,7 +110,7 @@ _Avoid_: draft, planned
 - A **WorkItem** may have dependencies on other **WorkItem**s; it becomes ready when all dependencies reach `Done` status
 - New **WorkItem**s land in either Backlog or Work Queue based on a per-**Repository** gating setting (Backlog = requires human approval to proceed, Work Queue = auto-flows)
 - A **WorkItem** is optionally associated with a **Repository** (Plan-type items may not need one)
-- A **Worktree** is created on first run, destroyed on Cleanup. Re-starting a WorkItem creates a fresh worktree
+- A **Worktree** (and its branch) is created per **LoopRun** by the Start node and kept after the run finishes for inspection; the `WorktreeRetentionSweeper` reclaims worktree, branch, and run once terminal longer than `run.retentionDays` (settings-driven; `0` disables; runs marked `Retain` are never reclaimed). See [ADR-0008](docs/adr/0008-worktree-and-branch-per-run.md)
 - `{{PreviousNode.Output}}` resolves to the source node of the incoming edge, not the chronologically previous execution
 - `{{EventLog.LastN}}` returns the last 10 event-log summary entries (fixed — not parameterizable)
 - AI node always uses its single `prompt`; graph structure controls prompt variation across turns

@@ -48,6 +48,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<EventLogOptions>();
         services.AddScoped<IEventLogService, EventLogService>();
         services.AddHostedService<EventLogRetentionSweeper>();
+        services.AddHostedService<WorktreeRetentionSweeper>();
         services.AddScoped<IRecoveryManager, RecoveryManager>();
         services.AddScoped<IPrSyncService, PrSyncService>();
         services.AddScoped<IAdapterSessionSnapshotStore, AdapterSessionSnapshotStore>();

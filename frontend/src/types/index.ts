@@ -220,6 +220,9 @@ export interface LoopRun {
   status: LoopRunStatus;
   currentNodeId: string | null;
   isPaused: boolean;
+  retain?: boolean;
+  worktreePath?: string | null;
+  branchName?: string | null;
   nodeExecutionCount: number;
   startedAt: string;
   completedAt: string | null;

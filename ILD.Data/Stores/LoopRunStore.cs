@@ -61,6 +61,18 @@ public class LoopRunStore : ILoopRunStore
     public async Task<IReadOnlyList<LoopRun>> GetRunningRunsAsync()
         => await _db.LoopRuns.Where(r => r.Status == LoopRunStatus.Running).ToListAsync();
 
+    public async Task<IReadOnlyList<LoopRun>> GetReclaimableRunsAsync(DateTime cutoff, int take = 200)
+        => await _db.LoopRuns
+            .Where(r => !r.Retain
+                && (r.Status == LoopRunStatus.Completed
+                    || r.Status == LoopRunStatus.Failed
+                    || r.Status == LoopRunStatus.Cancelled)
+                && r.CompletedAt != null
+                && r.CompletedAt < cutoff)
+            .OrderBy(r => r.CompletedAt)
+            .Take(take)
+            .ToListAsync();
+
     public async Task<IReadOnlyList<LoopRunNode>> GetRunNodesAsync(Guid runId)
         => await _db.LoopRunNodes
             .Where(rn => rn.LoopRunId == runId)

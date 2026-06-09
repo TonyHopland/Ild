@@ -13,6 +13,15 @@ public interface ILoopRunStore
     Task<LoopRun?> GetCurrentByWorkItemAsync(string workItemId);
     Task<IReadOnlyList<LoopRun>> GetAllAsync(int skip = 0, int take = 100);
     Task<IReadOnlyList<LoopRun>> GetRunningRunsAsync();
+
+    /// <summary>
+    /// Terminal runs (Completed/Failed/Cancelled) that completed before
+    /// <paramref name="cutoff"/> and are not pinned (<c>Retain == false</c>).
+    /// Candidates for the worktree retention sweeper; the caller still applies
+    /// the "not the work item's current run" rule. Bounded by <paramref name="take"/>.
+    /// </summary>
+    Task<IReadOnlyList<LoopRun>> GetReclaimableRunsAsync(DateTime cutoff, int take = 200);
+
     Task<IReadOnlyList<LoopRunNode>> GetRunNodesAsync(Guid runId);
     /// <summary>Run nodes for a run with their <c>LoopNode</c> eager-loaded (left join — may be null if the template node was since removed).</summary>
     Task<IReadOnlyList<LoopRunNode>> GetRunNodesWithNodeAsync(Guid runId);

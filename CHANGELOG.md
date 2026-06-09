@@ -19,9 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - AI adapters now always receive one prompt from the AI node; session handling only controls binding and resume behavior.
 - Opencode managed session import/export now only runs for AI nodes that explicitly enable session usage.
 - The seeded templates now insert `Prompt` nodes ahead of session-backed AI nodes wherever the first turn should differ from later follow-up turns.
+- Each run now gets its own git branch (`ild/wi-<workItemId>-run-<runId>`) and worktree instead of a shared per-work-item branch — this fixes prior-run commits leaking into a new run via rebase. The Cleanup node no longer destroys the worktree; finished runs keep their worktree so they stay inspectable, and re-running a work item now opens a separate PR per run.
 
 ### Added
 
+- A `WorktreeRetentionSweeper` reclaims a finished run's worktree, branch, and record once it has been terminal longer than the configurable `run.retentionDays` setting (default 30; `0` disables; the run a still-active work item points at is preserved). Individual runs can be pinned with **Retain** (`PUT /api/v1/loopruns/{id}/retain`) so retention never deletes them. See [ADR-0008](docs/adr/0008-worktree-and-branch-per-run.md).
 - Added a `Prompt` loop node type that renders a prompt template with the same placeholder-aware editor used by AI and PR prompt fields, then emits the rendered text as node output.
 
 ### Removed
