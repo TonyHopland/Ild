@@ -112,6 +112,11 @@ try
             }
             Log.Information("Database ready");
 
+            if (ILD.Data.Security.SecretProtector.IsEnabled)
+                Log.Information("Secret encryption-at-rest is enabled (ILD_SECRET_KEY set)");
+            else
+                Log.Warning("ILD_SECRET_KEY is not set — provider API keys and webhook secrets are stored in plaintext. Set it to enable encryption-at-rest.");
+
             var templateStore = scope.ServiceProvider.GetRequiredService<ILD.Data.Stores.Interfaces.ILoopTemplateStore>();
             var mgr = scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Interfaces.ILoopTemplateManager>();
             await ILD.Api.Configuration.TemplateSeeder.SeedAsync(templateStore, mgr);
