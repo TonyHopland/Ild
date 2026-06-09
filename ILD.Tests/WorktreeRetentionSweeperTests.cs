@@ -23,13 +23,11 @@ public class WorktreeRetentionSweeperTests
             worktree: "/tmp/wt/run-a", branch: "ild/wi-x-run-a");
 
         var workItems = WorkItemsReturning(workItemId, RemoteWorkItemStatus.Done);
-        var repo = new Mock<IRepositoryManager>();
-        repo.Setup(r => r.ResolveBaseRepoPathAsync("/tmp/wt/run-a")).ReturnsAsync("/repos/x");
+        var reclaimer = ReclaimerReturning(true);
 
-        await InvokeSweepOnceAsync(BuildSweeper(db, workItems.Object, repo.Object, retentionDays: 30));
+        await InvokeSweepOnceAsync(BuildSweeper(db, workItems.Object, reclaimer.Object, retentionDays: 30));
 
-        repo.Verify(r => r.DestroyWorktreeAsync("/tmp/wt/run-a"), Times.Once);
-        repo.Verify(r => r.DeleteLocalBranchAsync("/repos/x", "ild/wi-x-run-a"), Times.Once);
+        reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.Is<LoopRun>(x => x.Id == run.Id)), Times.Once);
         Assert.Null(await db.LoopRuns.GetByIdAsync(run.Id));
     }
 
@@ -44,11 +42,11 @@ public class WorktreeRetentionSweeperTests
             worktree: "/tmp/wt/pinned", branch: "ild/wi-x-run-pinned", retain: true);
 
         var workItems = WorkItemsReturning(workItemId, RemoteWorkItemStatus.Done);
-        var repo = new Mock<IRepositoryManager>();
+        var reclaimer = ReclaimerReturning(true);
 
-        await InvokeSweepOnceAsync(BuildSweeper(db, workItems.Object, repo.Object, retentionDays: 30));
+        await InvokeSweepOnceAsync(BuildSweeper(db, workItems.Object, reclaimer.Object, retentionDays: 30));
 
-        repo.Verify(r => r.DestroyWorktreeAsync(It.IsAny<string>()), Times.Never);
+        reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.IsAny<LoopRun>()), Times.Never);
         Assert.NotNull(await db.LoopRuns.GetByIdAsync(run.Id));
     }
 
@@ -63,11 +61,11 @@ public class WorktreeRetentionSweeperTests
             worktree: "/tmp/wt/keep", branch: "ild/wi-x-run-keep");
 
         var workItems = WorkItemsReturning(workItemId, RemoteWorkItemStatus.Done);
-        var repo = new Mock<IRepositoryManager>();
+        var reclaimer = ReclaimerReturning(true);
 
-        await InvokeSweepOnceAsync(BuildSweeper(db, workItems.Object, repo.Object, retentionDays: 0));
+        await InvokeSweepOnceAsync(BuildSweeper(db, workItems.Object, reclaimer.Object, retentionDays: 0));
 
-        repo.Verify(r => r.DestroyWorktreeAsync(It.IsAny<string>()), Times.Never);
+        reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.IsAny<LoopRun>()), Times.Never);
         Assert.NotNull(await db.LoopRuns.GetByIdAsync(run.Id));
     }
 
@@ -83,11 +81,11 @@ public class WorktreeRetentionSweeperTests
             worktree: "/tmp/wt/active", branch: "ild/wi-x-run-active");
 
         var workItems = WorkItemsReturning(workItemId, RemoteWorkItemStatus.HumanFeedback);
-        var repo = new Mock<IRepositoryManager>();
+        var reclaimer = ReclaimerReturning(true);
 
-        await InvokeSweepOnceAsync(BuildSweeper(db, workItems.Object, repo.Object, retentionDays: 30));
+        await InvokeSweepOnceAsync(BuildSweeper(db, workItems.Object, reclaimer.Object, retentionDays: 30));
 
-        repo.Verify(r => r.DestroyWorktreeAsync(It.IsAny<string>()), Times.Never);
+        reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.IsAny<LoopRun>()), Times.Never);
         Assert.NotNull(await db.LoopRuns.GetByIdAsync(run.Id));
     }
 
@@ -107,13 +105,38 @@ public class WorktreeRetentionSweeperTests
             startedAt: DateTime.UtcNow.AddDays(-1));
 
         var workItems = WorkItemsReturning(workItemId, RemoteWorkItemStatus.Running);
-        var repo = new Mock<IRepositoryManager>();
-        repo.Setup(r => r.ResolveBaseRepoPathAsync("/tmp/wt/old")).ReturnsAsync("/repos/x");
+        var reclaimer = ReclaimerReturning(true);
 
-        await InvokeSweepOnceAsync(BuildSweeper(db, workItems.Object, repo.Object, retentionDays: 30));
+        await InvokeSweepOnceAsync(BuildSweeper(db, workItems.Object, reclaimer.Object, retentionDays: 30));
 
-        repo.Verify(r => r.DestroyWorktreeAsync("/tmp/wt/old"), Times.Once);
+        reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.Is<LoopRun>(x => x.Id == old.Id)), Times.Once);
         Assert.Null(await db.LoopRuns.GetByIdAsync(old.Id));
+    }
+
+    [Fact]
+    public async Task Sweep_keeps_run_row_when_reclaim_fails_so_next_sweep_retries()
+    {
+        var db = new TestDb();
+        var (version, _) = SeedTemplate(db);
+        var workItemId = Guid.NewGuid().ToString();
+        var run = SeedRun(db, version.Id, workItemId, LoopRunStatus.Completed,
+            completedAt: DateTime.UtcNow.AddDays(-40),
+            worktree: "/tmp/wt/stuck", branch: "ild/wi-x-run-stuck");
+
+        var workItems = WorkItemsReturning(workItemId, RemoteWorkItemStatus.Done);
+        var reclaimer = ReclaimerReturning(false);
+
+        await InvokeSweepOnceAsync(BuildSweeper(db, workItems.Object, reclaimer.Object, retentionDays: 30));
+
+        // Reclaim was attempted but reported failure: the row must survive so a
+        // later sweep can retry — deleting it would orphan the worktree forever.
+        reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.Is<LoopRun>(x => x.Id == run.Id)), Times.Once);
+        Assert.NotNull(await db.LoopRuns.GetByIdAsync(run.Id));
+
+        // A later sweep where the reclaim succeeds deletes the row.
+        var retryReclaimer = ReclaimerReturning(true);
+        await InvokeSweepOnceAsync(BuildSweeper(db, workItems.Object, retryReclaimer.Object, retentionDays: 30));
+        Assert.Null(await db.LoopRuns.GetByIdAsync(run.Id));
     }
 
     private static (LoopTemplateVersion version, LoopTemplate template) SeedTemplate(TestDb db)
@@ -155,7 +178,14 @@ public class WorktreeRetentionSweeperTests
         return m;
     }
 
-    private static WorktreeRetentionSweeper BuildSweeper(TestDb db, IWorkItemManager workItems, IRepositoryManager repo, int retentionDays)
+    private static Mock<IRunReclaimer> ReclaimerReturning(bool success)
+    {
+        var m = new Mock<IRunReclaimer>();
+        m.Setup(r => r.ReclaimLocalStateAsync(It.IsAny<LoopRun>())).ReturnsAsync(success);
+        return m;
+    }
+
+    private static WorktreeRetentionSweeper BuildSweeper(TestDb db, IWorkItemManager workItems, IRunReclaimer reclaimer, int retentionDays)
     {
         var settings = new Mock<ISchedulerSettingsService>();
         settings.Setup(s => s.GetRunRetentionDaysAsync(It.IsAny<CancellationToken>())).ReturnsAsync(retentionDays);
@@ -163,7 +193,7 @@ public class WorktreeRetentionSweeperTests
         var services = new ServiceCollection();
         services.AddSingleton<ILoopRunStore>(db.LoopRuns);
         services.AddSingleton(workItems);
-        services.AddSingleton(repo);
+        services.AddSingleton(reclaimer);
         services.AddSingleton(settings.Object);
         var provider = services.BuildServiceProvider();
         var scopes = provider.GetRequiredService<IServiceScopeFactory>();

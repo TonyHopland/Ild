@@ -124,11 +124,22 @@ try
             var settingStore = scope.ServiceProvider.GetRequiredService<ILD.Data.Stores.Interfaces.IAppSettingStore>();
             await ILD.Api.Configuration.TemplateSeeder.SeedWorkItemServerAsync(settingStore);
 
-            var recovery = scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Interfaces.IRecoveryManager>();
-            foreach (var runId in await recovery.GetRecoverableRunIdsAsync())
+            // When the remote work-item scheduler is enabled, startup recovery
+            // belongs to RemoteWorkItemStartupReconciler: it consults the
+            // server before resuming, so a run whose work item the server has
+            // since reclaimed (stale heartbeat) is cancelled instead of blindly
+            // resumed into a duplicate of the freshly claimed run.
+            var schedulerOpts = scope.ServiceProvider
+                .GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<ILD.Core.Services.Remote.WorkItemSchedulerOptions>>()
+                .CurrentValue;
+            if (!schedulerOpts.Enabled || string.IsNullOrWhiteSpace(schedulerOpts.BaseUrl))
             {
-                try { await recovery.RecoverRunAsync(runId); }
-                catch (Exception ex) { Log.Warning(ex, "Recovery failed for run {RunId}", runId); }
+                var recovery = scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Interfaces.IRecoveryManager>();
+                foreach (var runId in await recovery.GetRecoverableRunIdsAsync())
+                {
+                    try { await recovery.RecoverRunAsync(runId); }
+                    catch (Exception ex) { Log.Warning(ex, "Recovery failed for run {RunId}", runId); }
+                }
             }
         }
     }

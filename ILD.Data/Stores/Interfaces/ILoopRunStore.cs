@@ -15,6 +15,12 @@ public interface ILoopRunStore
     Task<IReadOnlyList<LoopRun>> GetRunningRunsAsync();
 
     /// <summary>
+    /// Runs the engine considers alive: <c>Running</c> plus <c>WaitingHuman</c>
+    /// (parked at a Human/PR node awaiting a signal).
+    /// </summary>
+    Task<IReadOnlyList<LoopRun>> GetActiveRunsAsync();
+
+    /// <summary>
     /// Terminal runs (Completed/Failed/Cancelled) that completed before
     /// <paramref name="cutoff"/> and are not pinned (<c>Retain == false</c>).
     /// Candidates for the worktree retention sweeper; the caller still applies
@@ -33,6 +39,14 @@ public interface ILoopRunStore
     Task<LoopRunNode?> GetRunNodeByIdAsync(Guid runNodeId);
     Task CreateRunAsync(LoopRun run);
     Task UpdateRunAsync(LoopRun run);
+
+    /// <summary>
+    /// Refresh a tracked <see cref="LoopRun"/> instance with the row's current
+    /// column values, discarding unsaved in-memory changes. Used by the engine
+    /// before persisting so a stale instance held across a long node execution
+    /// cannot clobber concurrent control-plane writes (pause, cancel, pin).
+    /// </summary>
+    Task ReloadAsync(LoopRun run);
     Task CreateRunNodeAsync(LoopRunNode runNode);
     Task UpdateRunNodeAsync(LoopRunNode runNode);
     Task DeleteRunNodeAsync(Guid runNodeId);

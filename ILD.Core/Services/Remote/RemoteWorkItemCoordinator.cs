@@ -169,6 +169,28 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
                 {
                     _logger?.LogWarning(ex,
                         "Engine failed to start run for claimed work item {WorkItemId}", ready.Id);
+                    // The item was already claimed (Running on the server) and
+                    // added to the tracker. Leaving it there means it is
+                    // heartbeated forever with no run driving it — stuck and
+                    // permanently occupying a concurrency slot. Hand it back
+                    // for review instead.
+                    try
+                    {
+                        await _client.TransitionAsync(opts, ready.Id, new RemoteTransitionRequest
+                        {
+                            TargetStatus = RemoteWorkItemStatus.HumanFeedback,
+                            Reason = $"Failed to start run: {ex.Message}",
+                        }, ct);
+                        _tracker.Remove(ready.Id);
+                        await _workItemNotifier.WorkItemStateChangedAsync(
+                            ready.Id, RemoteWorkItemStatus.Running, RemoteWorkItemStatus.HumanFeedback);
+                        escalated.Add(ready);
+                    }
+                    catch (Exception unwindEx)
+                    {
+                        _logger?.LogWarning(unwindEx,
+                            "Failed to hand back work item {WorkItemId} after run start failure", ready.Id);
+                    }
                 }
             }
             // Lost-claim race (another instance got there first) is silently

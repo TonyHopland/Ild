@@ -375,6 +375,13 @@ public class WorkItemManagerTests
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         await mgr.TransitionToHumanFeedbackAsync(id, "Node Failed");
 
+        // Real directory: the run reclaimer verifies the worktree actually
+        // disappeared before clearing the run's worktree/branch fields.
+        var worktree = Directory.CreateTempSubdirectory("ild-wim-test-").FullName;
+        repoMgr.Setup(r => r.DestroyWorktreeAsync(worktree))
+            .Callback(() => Directory.Delete(worktree, recursive: true))
+            .Returns(Task.CompletedTask);
+
         var run = new LoopRun
         {
             Id = Guid.NewGuid(),
@@ -383,7 +390,7 @@ public class WorkItemManagerTests
             Status = LoopRunStatus.Failed,
             StartedAt = DateTime.UtcNow,
             CompletedAt = DateTime.UtcNow,
-            WorktreePath = "/tmp/worktrees/test-wi",
+            WorktreePath = worktree,
             HumanFeedbackReason = "Node Failed",
         };
         db.Context.LoopRuns.Add(run);
@@ -391,7 +398,7 @@ public class WorkItemManagerTests
 
         await mgr.CleanupToDoneAsync(id);
 
-        repoMgr.Verify(r => r.DestroyWorktreeAsync("/tmp/worktrees/test-wi"), Times.Once);
+        repoMgr.Verify(r => r.DestroyWorktreeAsync(worktree), Times.Once);
         var after = await mgr.GetWorkItemAsync(id);
         Assert.Equal(RemoteWorkItemStatus.Done, after!.Status);
         Assert.True(string.IsNullOrEmpty(after.WorktreePath));
@@ -418,6 +425,11 @@ public class WorkItemManagerTests
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
 
+        var worktree = Directory.CreateTempSubdirectory("ild-wim-test-").FullName;
+        repoMgr.Setup(r => r.DestroyWorktreeAsync(worktree))
+            .Callback(() => Directory.Delete(worktree, recursive: true))
+            .Returns(Task.CompletedTask);
+
         var runId = Guid.NewGuid();
         var run = new LoopRun
         {
@@ -431,13 +443,13 @@ public class WorkItemManagerTests
         db.Context.LoopRuns.Add(run);
 
         await mgr.TransitionToHumanFeedbackAsync(id, "Node Failed");
-        run.WorktreePath = "/tmp/worktrees/test-wi";
+        run.WorktreePath = worktree;
         run.HumanFeedbackReason = "Node Failed";
         await db.Context.SaveChangesAsync();
 
         await mgr.CleanupToBacklogAsync(id);
 
-        repoMgr.Verify(r => r.DestroyWorktreeAsync("/tmp/worktrees/test-wi"), Times.Once);
+        repoMgr.Verify(r => r.DestroyWorktreeAsync(worktree), Times.Once);
         var after = await mgr.GetWorkItemAsync(id);
         Assert.Equal(RemoteWorkItemStatus.Backlog, after!.Status);
         Assert.True(string.IsNullOrEmpty(after.WorktreePath));

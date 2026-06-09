@@ -3,6 +3,7 @@ using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Remote;
 
 namespace ILD.Core.Services.Implementations;
 
@@ -45,10 +46,26 @@ public class PrSyncService : IPrSyncService
 
         if (signal.Type == ExternalActionResultType.Success)
         {
+            // Per-run PRs (ADR-0008) mean a webhook can arrive for an *old*
+            // run's still-open PR. Merge bookkeeping must stay on the run that
+            // owns the PR — going through the work item (ManuallyMarkMergedAsync)
+            // would mark the current run merged instead and could flip the item
+            // to Done while another run is mid-flight.
             run.IsPrMerged = true;
             run.UpdatedAt = DateTime.UtcNow;
             await _loopRunStore.UpdateRunAsync(run);
-            await _workItems.ManuallyMarkMergedAsync(run.WorkItemId);
+
+            // An active run completes through its own graph (PR node signal →
+            // ... → Cleanup → Done). Only when the merged PR belongs to the
+            // work item's current run and that run is already terminal (no
+            // engine path left to resume) does the merge finish the item here.
+            if (run.Status is LoopRunStatus.Failed or LoopRunStatus.Cancelled)
+            {
+                var current = await _loopRunStore.GetCurrentByWorkItemAsync(run.WorkItemId);
+                if (current?.Id == run.Id)
+                    await _workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.Done,
+                        currentLoopRunId: run.Id);
+            }
         }
 
         var runNode = await ResolveRunNodeAsync(run);

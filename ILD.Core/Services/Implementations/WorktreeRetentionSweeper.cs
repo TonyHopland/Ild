@@ -30,6 +30,9 @@ namespace ILD.Core.Services.Implementations;
 public sealed class WorktreeRetentionSweeper : BackgroundService
 {
     private static readonly TimeSpan SweepInterval = TimeSpan.FromHours(6);
+    // Short first delay: a 6h wait before the first pass means a deployment
+    // that restarts more often than every 6h never reclaims anything.
+    private static readonly TimeSpan InitialDelay = TimeSpan.FromMinutes(10);
 
     private readonly IServiceScopeFactory _scopes;
     private readonly ILogger<WorktreeRetentionSweeper> _log;
@@ -42,12 +45,14 @@ public sealed class WorktreeRetentionSweeper : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        // Reclamation is never urgent (the window is days); wait one interval
-        // before the first sweep so it doesn't contend with app startup.
+        // Reclamation is never urgent (the window is days); wait before the
+        // first sweep so it doesn't contend with app startup.
+        var delay = InitialDelay;
         while (!stoppingToken.IsCancellationRequested)
         {
-            try { await Task.Delay(SweepInterval, stoppingToken); }
+            try { await Task.Delay(delay, stoppingToken); }
             catch (OperationCanceledException) { return; }
+            delay = SweepInterval;
 
             try
             {
@@ -67,7 +72,7 @@ public sealed class WorktreeRetentionSweeper : BackgroundService
         var settings = sp.GetRequiredService<ISchedulerSettingsService>();
         var runStore = sp.GetRequiredService<ILoopRunStore>();
         var workItems = sp.GetRequiredService<IWorkItemManager>();
-        var repo = sp.GetRequiredService<IRepositoryManager>();
+        var reclaimer = sp.GetRequiredService<IRunReclaimer>();
 
         var retentionDays = await settings.GetRunRetentionDaysAsync(ct);
         if (retentionDays <= 0) return; // reclamation disabled
@@ -77,9 +82,18 @@ public sealed class WorktreeRetentionSweeper : BackgroundService
         if (candidates.Count == 0) return;
 
         var reclaimed = 0;
-        foreach (var run in candidates)
+        foreach (var candidate in candidates)
         {
             if (ct.IsCancellationRequested) return;
+
+            // Re-read the run just before touching it: between the candidate
+            // query and now the user may have pinned it or retried it back to
+            // Running — destroying an active run's worktree out from under it
+            // would strand the resumed run.
+            var run = await runStore.GetByIdAsync(candidate.Id);
+            if (run is null || run.Retain) continue;
+            if (run.Status is not (LoopRunStatus.Completed or LoopRunStatus.Failed or LoopRunStatus.Cancelled)) continue;
+            if (run.CompletedAt is null || run.CompletedAt >= cutoff) continue;
 
             // Keep the run a still-active work item is pointing at; only reclaim
             // it once the work item is Done or a newer run has superseded it.
@@ -90,7 +104,14 @@ public sealed class WorktreeRetentionSweeper : BackgroundService
                 if (current?.Id == run.Id) continue;
             }
 
-            await ReclaimRunAsync(run, repo);
+            // Only drop the run row once its local git state is verified gone;
+            // otherwise keep the row so the next sweep can retry — a deleted
+            // row makes the leftover worktree/branch permanently invisible.
+            if (!await reclaimer.ReclaimLocalStateAsync(run))
+            {
+                _log.LogWarning("Run {RunId} reclaim incomplete; keeping run row for retry next sweep", run.Id);
+                continue;
+            }
 
             if (await runStore.DeleteAsync(run.Id))
                 reclaimed++;
@@ -98,26 +119,5 @@ public sealed class WorktreeRetentionSweeper : BackgroundService
 
         if (reclaimed > 0)
             _log.LogInformation("Worktree retention reclaimed {Count} runs terminal before {Cutoff:o}", reclaimed, cutoff);
-    }
-
-    private async Task ReclaimRunAsync(Data.Entities.LoopRun run, IRepositoryManager repo)
-    {
-        // Resolve the base repo before destroying the worktree — afterwards the
-        // worktree path is gone and the branch can no longer be located through it.
-        string? baseRepoPath = null;
-        if (!string.IsNullOrEmpty(run.WorktreePath))
-        {
-            try { baseRepoPath = await repo.ResolveBaseRepoPathAsync(run.WorktreePath); }
-            catch (Exception ex) { _log.LogDebug(ex, "Could not resolve base repo for run {RunId}", run.Id); }
-
-            try { await repo.DestroyWorktreeAsync(run.WorktreePath); }
-            catch (Exception ex) { _log.LogWarning(ex, "Failed to destroy worktree for run {RunId} at {Path}", run.Id, run.WorktreePath); }
-        }
-
-        if (baseRepoPath is not null && !string.IsNullOrEmpty(run.BranchName))
-        {
-            try { await repo.DeleteLocalBranchAsync(baseRepoPath, run.BranchName); }
-            catch (Exception ex) { _log.LogDebug(ex, "Failed to delete branch {Branch} for run {RunId}", run.BranchName, run.Id); }
-        }
     }
 }

@@ -1,3 +1,7 @@
+using ILD.Core.Services.Interfaces;
+using ILD.Data.Entities;
+using ILD.Data.Enums;
+using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -9,9 +13,13 @@ namespace ILD.Core.Services.Remote;
 /// Runs once at startup to reconcile local loop-run state with the remote
 /// WorkItem server. For every local LoopRun in Running or WaitingHuman
 /// status the reconciler queries the server for the work item's current
-/// state and either resumes execution (server says Running), adds the item
-/// to the active tracker without resuming (server says HumanFeedback), or
-/// removes it from the tracker (server says Done or item no longer exists).
+/// state and either resumes execution via the recovery manager (server says
+/// Running), re-adds the item to the active tracker without resuming
+/// (server says HumanFeedback/WaitingForIld — re-tracking keeps the
+/// heartbeat alive so the stale reclaimer can't hand the item to a second
+/// concurrent run after a human resumes it), or cancels the local run
+/// (item gone, Done, or reclaimed by the server) so an orphaned Running
+/// row can't be resurrected by a later restart and fight the fresh run.
 ///
 /// Registered as a IHostedService so it runs before the poller's first
 /// tick but is guaranteed to complete within the host startup timeout.
@@ -47,8 +55,8 @@ public sealed class RemoteWorkItemStartupReconciler : IHostedService
             using var scope = _scopes.CreateScope();
             var sp = scope.ServiceProvider;
 
-            var loopRunStore = sp.GetRequiredService<ILD.Data.Stores.Interfaces.ILoopRunStore>();
-            var engine = sp.GetRequiredService<ILD.Core.Services.Interfaces.ILoopEngine>();
+            var loopRunStore = sp.GetRequiredService<ILoopRunStore>();
+            var recovery = sp.GetRequiredService<IRecoveryManager>();
             var tracker = sp.GetRequiredService<IActiveWorkItemTracker>();
             var client = sp.GetRequiredService<IWorkItemServerClient>();
 
@@ -58,13 +66,9 @@ public sealed class RemoteWorkItemStartupReconciler : IHostedService
                 ApiKey = opts.ApiKey,
             };
 
-            // Gather all local runs that might need reconciliation.
-            var activeRuns = await loopRunStore.GetRunningRunsAsync();
-            var waitingRuns = await loopRunStore.GetFailedRunIdsAsync(); // completed runs aren't relevant
-
-            // Also check for WaitingHuman runs — they're not "Running" in the
-            // store but the engine considers them active.
-            var allActive = activeRuns.ToList();
+            // Running runs plus runs parked WaitingHuman at a Human/PR node —
+            // the engine considers both active.
+            var allActive = await loopRunStore.GetActiveRunsAsync();
 
             var reconciled = 0;
             var resumed = 0;
@@ -76,11 +80,13 @@ public sealed class RemoteWorkItemStartupReconciler : IHostedService
 
                 if (wi == null)
                 {
-                    // Work item no longer exists on server — clean up locally.
+                    // Work item no longer exists on server — cancel the orphan
+                    // run so a later restart can't resurrect it.
+                    await CancelLocalRunAsync(loopRunStore, run, "Work item no longer exists on server");
                     tracker.Remove(run.WorkItemId);
                     cleaned++;
                     _log.LogInformation(
-                        "Startup reconcile: work item {WorkItemId} for run {RunId} not found on server — cleaned up",
+                        "Startup reconcile: work item {WorkItemId} for run {RunId} not found on server — run cancelled",
                         run.WorkItemId, run.Id);
                     continue;
                 }
@@ -89,18 +95,28 @@ public sealed class RemoteWorkItemStartupReconciler : IHostedService
                 {
                     case RemoteWorkItemStatus.Running:
                         tracker.Add(run.WorkItemId);
-                        await engine.ResumeRecoveredRunAsync(run.Id);
-                        resumed++;
-                        _log.LogInformation(
-                            "Startup reconcile: work item {WorkItemId} still Running on server — resumed run {RunId}",
-                            run.WorkItemId, run.Id);
+                        if (run.Status == LoopRunStatus.Running)
+                        {
+                            // RecoveryManager honors the run's RecoveryPolicy and
+                            // skips runs parked at WaitingHuman nodes or with an
+                            // unhealthy worktree.
+                            await recovery.RecoverRunAsync(run.Id);
+                            resumed++;
+                            _log.LogInformation(
+                                "Startup reconcile: work item {WorkItemId} still Running on server — recovering run {RunId}",
+                                run.WorkItemId, run.Id);
+                        }
+                        // WaitingHuman runs resume via their pending signal.
                         reconciled++;
                         break;
 
                     case RemoteWorkItemStatus.HumanFeedback:
                     case RemoteWorkItemStatus.WaitingForIld:
                         // Item is parked — track it so the poller heartbeats it,
-                        // but don't resume the engine (human needs to respond first).
+                        // but don't resume the engine (human needs to respond
+                        // first). Without re-tracking, the stale reclaimer hands
+                        // the item to a second concurrent run ~15 minutes after
+                        // a human resumes it.
                         tracker.Add(run.WorkItemId);
                         _log.LogInformation(
                             "Startup reconcile: work item {WorkItemId} in {Status} — tracked (no resume)",
@@ -109,20 +125,28 @@ public sealed class RemoteWorkItemStartupReconciler : IHostedService
                         break;
 
                     case RemoteWorkItemStatus.Done:
+                        // Inconsistent: normal completion marks the run terminal
+                        // before the item goes Done. Cancel so the run isn't
+                        // resurrected by a later restart.
+                        await CancelLocalRunAsync(loopRunStore, run, "Work item already Done on server");
                         tracker.Remove(run.WorkItemId);
                         cleaned++;
                         _log.LogInformation(
-                            "Startup reconcile: work item {WorkItemId} is Done on server — cleaned up run {RunId}",
+                            "Startup reconcile: work item {WorkItemId} is Done on server — cancelled stale run {RunId}",
                             run.WorkItemId, run.Id);
                         break;
 
                     default:
-                        // Backlog, WorkQueue, Ready — item is no longer ours.
+                        // Backlog, WorkQueue, Ready — the server reclaimed or
+                        // reset the item and will hand it out as a fresh run.
+                        // Cancel the local run so two loops never fight over
+                        // one work item.
+                        await CancelLocalRunAsync(loopRunStore, run, $"Server reset work item to {wi.Status}");
                         tracker.Remove(run.WorkItemId);
                         cleaned++;
                         _log.LogInformation(
-                            "Startup reconcile: work item {WorkItemId} in {Status} — removed from tracker",
-                            run.WorkItemId, wi.Status);
+                            "Startup reconcile: work item {WorkItemId} in {Status} — cancelled superseded run {RunId}",
+                            run.WorkItemId, wi.Status, run.Id);
                         break;
                 }
             }
@@ -139,6 +163,14 @@ public sealed class RemoteWorkItemStartupReconciler : IHostedService
         {
             _log.LogWarning(ex, "Startup reconciliation failed — poller will pick up work on next cycle");
         }
+    }
+
+    private static async Task CancelLocalRunAsync(ILoopRunStore store, LoopRun run, string reason)
+    {
+        run.Status = LoopRunStatus.Cancelled;
+        run.CompletedAt ??= DateTime.UtcNow;
+        run.HumanFeedbackReason = reason;
+        await store.UpdateRunAsync(run);
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;

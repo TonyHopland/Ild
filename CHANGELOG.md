@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Every path that discards a run (retention sweep, work-item delete, send-to-Done, send-to-Backlog) now reclaims the run's worktree **and** per-run branch through a shared `IRunReclaimer`, with a fallback that locates the base repo through the run's Repository when the worktree is already gone. The sweeper only deletes a run row once reclamation is verified, so a failed worktree/branch delete is retried on a later sweep instead of leaking untracked disk. Spilled event-log payload files are deleted together with the run.
+- The engine now reloads the run row before persisting each node outcome, so pausing, cancelling, or pinning (`Retain`) a run during a long node execution is no longer silently reverted by the node's completion write — previously a pinned run could still be deleted by retention and a cancel could be undone.
+- Startup reconciliation now includes runs parked at Human/PR nodes (`WaitingHuman`) and re-tracks their work items so server heartbeats resume — previously the stale-item reclaimer would hand the item to a second concurrent run ~15 minutes after a human resumed it. Runs whose work item the server has since finished, reclaimed, or deleted are cancelled instead of being blindly resumed into a duplicate, and recovery honors the template's `RecoveryPolicy` (which is now actually pinned onto each run at start).
+- A work item claim whose run fails to start (e.g. broken template) is handed back to HumanFeedback instead of remaining stuck in Running while heartbeated forever, permanently occupying a scheduler slot.
+- A PR-merge webhook now books the merge on the run that owns the PR (matched by URL). Merging an old run's still-open PR no longer marks the current run merged or flips the work item to Done while another run is mid-flight, and a merge no longer marks the work item Done before the resumed run has executed its post-merge nodes.
+- The worktree retention sweeper re-checks each run's status and `Retain` pin just before reclaiming (a run retried back to Running mid-sweep is left alone), and its first pass now happens 10 minutes after startup instead of 6 hours, so frequently-restarted deployments still reclaim disk.
+
 ### Security
 
 - Provider API keys and webhook secrets (`RemoteProvider.ApiKey`/`WebhookSecret`, `AiProvider.ApiKey`) are now encrypted at rest with AES-256-GCM when the new `ILD_SECRET_KEY` environment variable is set. Behaviour is backwards-compatible: when the key is unset, secrets are stored as plaintext and a startup warning is logged; legacy plaintext rows remain readable after a key is added. See [docs/configuration.md](docs/configuration.md#secret-encryption-at-rest).
