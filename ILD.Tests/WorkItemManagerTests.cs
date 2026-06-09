@@ -355,7 +355,7 @@ public class WorkItemManagerTests
     }
 
     [Fact]
-    public async Task CleanupToDone_destroys_worktree_and_marks_workitem_Done()
+    public async Task CleanupToDone_keeps_worktree_and_marks_workitem_Done()
     {
         var (mgr, db, repoId, repoMgr, _) = Setup();
         using var _ = db;
@@ -375,13 +375,6 @@ public class WorkItemManagerTests
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         await mgr.TransitionToHumanFeedbackAsync(id, "Node Failed");
 
-        // Real directory: the run reclaimer verifies the worktree actually
-        // disappeared before clearing the run's worktree/branch fields.
-        var worktree = Directory.CreateTempSubdirectory("ild-wim-test-").FullName;
-        repoMgr.Setup(r => r.DestroyWorktreeAsync(worktree))
-            .Callback(() => Directory.Delete(worktree, recursive: true))
-            .Returns(Task.CompletedTask);
-
         var run = new LoopRun
         {
             Id = Guid.NewGuid(),
@@ -390,7 +383,8 @@ public class WorkItemManagerTests
             Status = LoopRunStatus.Failed,
             StartedAt = DateTime.UtcNow,
             CompletedAt = DateTime.UtcNow,
-            WorktreePath = worktree,
+            WorktreePath = "/tmp/worktrees/test-wi",
+            BranchName = "ild/wi-x-run-1",
             HumanFeedbackReason = "Node Failed",
         };
         db.Context.LoopRuns.Add(run);
@@ -398,15 +392,21 @@ public class WorkItemManagerTests
 
         await mgr.CleanupToDoneAsync(id);
 
-        repoMgr.Verify(r => r.DestroyWorktreeAsync(worktree), Times.Once);
+        // Worktree and branch live exactly as long as the run row: nothing is
+        // destroyed here — the retention sweeper (or a manual run delete)
+        // reclaims them together with the run.
+        repoMgr.Verify(r => r.DestroyWorktreeAsync(It.IsAny<string>()), Times.Never);
         var after = await mgr.GetWorkItemAsync(id);
         Assert.Equal(RemoteWorkItemStatus.Done, after!.Status);
-        Assert.True(string.IsNullOrEmpty(after.WorktreePath));
         Assert.True(string.IsNullOrEmpty(after.HumanFeedbackReason));
+        var freshRun = db.Fresh().LoopRuns.Single(r => r.Id == run.Id);
+        Assert.Equal("/tmp/worktrees/test-wi", freshRun.WorktreePath);
+        Assert.Equal("ild/wi-x-run-1", freshRun.BranchName);
+        Assert.NotNull(freshRun.CompletedAt);
     }
 
     [Fact]
-    public async Task CleanupToBacklog_destroys_worktree_resets_to_Backlog_and_clears_run_state()
+    public async Task CleanupToBacklog_keeps_worktree_resets_to_Backlog_and_finishes_run()
     {
         var (mgr, db, repoId, repoMgr, _) = Setup();
         using var _ = db;
@@ -424,11 +424,6 @@ public class WorkItemManagerTests
         await db.Context.SaveChangesAsync();
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
-
-        var worktree = Directory.CreateTempSubdirectory("ild-wim-test-").FullName;
-        repoMgr.Setup(r => r.DestroyWorktreeAsync(worktree))
-            .Callback(() => Directory.Delete(worktree, recursive: true))
-            .Returns(Task.CompletedTask);
 
         var runId = Guid.NewGuid();
         var run = new LoopRun
@@ -443,19 +438,26 @@ public class WorkItemManagerTests
         db.Context.LoopRuns.Add(run);
 
         await mgr.TransitionToHumanFeedbackAsync(id, "Node Failed");
-        run.WorktreePath = worktree;
+        run.WorktreePath = "/tmp/worktrees/test-wi";
+        run.BranchName = "ild/wi-x-run-1";
         run.HumanFeedbackReason = "Node Failed";
         await db.Context.SaveChangesAsync();
 
         await mgr.CleanupToBacklogAsync(id);
 
-        repoMgr.Verify(r => r.DestroyWorktreeAsync(worktree), Times.Once);
+        // Worktree and branch stay with the run row for inspection; the next
+        // run gets its own branch/worktree, so nothing can leak into it.
+        repoMgr.Verify(r => r.DestroyWorktreeAsync(It.IsAny<string>()), Times.Never);
         var after = await mgr.GetWorkItemAsync(id);
         Assert.Equal(RemoteWorkItemStatus.Backlog, after!.Status);
-        Assert.True(string.IsNullOrEmpty(after.WorktreePath));
         Assert.True(string.IsNullOrEmpty(after.HumanFeedbackReason));
+        // The Completed run is no longer the work item's current run.
         Assert.Null(after.CurrentLoopRunId);
-        Assert.True(string.IsNullOrEmpty(after.BranchName));
+        var freshRun = db.Fresh().LoopRuns.Single(r => r.Id == runId);
+        Assert.Equal(LoopRunStatus.Completed, freshRun.Status);
+        Assert.Equal("/tmp/worktrees/test-wi", freshRun.WorktreePath);
+        Assert.Equal("ild/wi-x-run-1", freshRun.BranchName);
+        Assert.NotNull(freshRun.CompletedAt);
     }
 
     [Fact]

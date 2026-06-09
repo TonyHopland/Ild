@@ -23,7 +23,7 @@ A single execution of a pinned LoopTemplateVersion against a WorkItem. Tracks no
 _Avoid_: execution, run, instance
 
 **Worktree**:
-A per-**run** git worktree on a per-run branch (`ild/wi-<workItemId>-run-<runId>`), created by the Start node. It is **kept** after the run finishes so the run stays inspectable; the `WorktreeRetentionSweeper` reclaims it (and the branch, and the whole run) once the run has been terminal longer than `run.retentionDays`. Reclamation goes through the shared `IRunReclaimer` and is verified: the run row is only deleted once worktree and branch are confirmed gone, otherwise the next sweep retries. All other paths that discard a run (work-item delete, send-to-Done, send-to-Backlog) reclaim through the same service. See [ADR-0008](docs/adr/0008-worktree-and-branch-per-run.md).
+A per-**run** git worktree on a per-run branch (`ild/wi-<workItemId>-run-<runId>`), created by the Start node. It is **kept** after the run finishes so the run stays inspectable: a run's worktree and branch live exactly as long as its `LoopRun` row, and only the two paths that delete the row destroy them — a manual delete (`DELETE /api/v1/loopruns/{id}`, or deleting the whole work item) and the `WorktreeRetentionSweeper` once the run has been terminal longer than `run.retentionDays`. Both go through the shared `IRunReclaimer`, and reclamation is verified: the row is only deleted once worktree and branch are confirmed gone, otherwise it is kept (manual delete returns 409) so a later sweep retries. Sending a work item to Done/Backlog finishes the run but does **not** touch its worktree or branch. See [ADR-0008](docs/adr/0008-worktree-and-branch-per-run.md).
 _Avoid_: workspace, checkout
 
 ### Node Types
@@ -116,7 +116,7 @@ _Avoid_: draft, planned
 - AI node always uses its single `prompt`; graph structure controls prompt variation across turns
 - `AiProvider.Config` is a free-form JSON blob; each adapter reads what it needs
 - Rebase happens only at loop start, not before each node
-- Failed/cancelled WorkItems: "Done" destroys the run's worktree and per-run branch and discards; "Backlog" fully resets for re-planning (also reclaiming worktree and branch)
+- Failed/cancelled WorkItems: "Done" finishes the current run and discards; "Backlog" fully resets for re-planning. Neither destroys the run's worktree or branch — those live as long as the run row and are reclaimed by run deletion (manual or retention)
 - Safety net (max edge traversals): when an edge is traversed more than its `MaxTraversals` (default 50 via `LoopEngine.DefaultMaxEdgeTraversals`), the engine fails the run with "Max traversals exceeded for edge …"
 
 ## Example Dialogue

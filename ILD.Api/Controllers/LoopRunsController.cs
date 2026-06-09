@@ -16,19 +16,22 @@ public class LoopRunsController : ControllerBase
     private readonly ILoopRunStore _loopRunStore;
     private readonly IAdapterSessionSnapshotStore _sessionSnapshotStore;
     private readonly InteractiveShellSessionService _shellSessions;
+    private readonly IRunReclaimer _runReclaimer;
 
     public LoopRunsController(
         ILoopEngine loopEngine,
         IEventLogService eventLogService,
         ILoopRunStore loopRunStore,
         IAdapterSessionSnapshotStore sessionSnapshotStore,
-        InteractiveShellSessionService shellSessions)
+        InteractiveShellSessionService shellSessions,
+        IRunReclaimer runReclaimer)
     {
         _loopEngine = loopEngine;
         _eventLogService = eventLogService;
         _loopRunStore = loopRunStore;
         _sessionSnapshotStore = sessionSnapshotStore;
         _shellSessions = shellSessions;
+        _runReclaimer = runReclaimer;
     }
 
     [HttpGet]
@@ -147,6 +150,13 @@ public class LoopRunsController : ControllerBase
         if (run == null) return NotFound();
         if (run.Status == ILD.Data.Enums.LoopRunStatus.Running)
             return BadRequest(new { error = "Cannot delete a running loop. Cancel it first." });
+
+        // Deleting the run is the only path (besides retention) that destroys
+        // its worktree and branch; the row may only go once that state is
+        // verifiably gone — a deleted row would leave the leftovers orphaned
+        // with nothing pointing at them.
+        if (!await _runReclaimer.ReclaimLocalStateAsync(run))
+            return Conflict(new { error = "Could not reclaim the run's worktree/branch; the run was not deleted. Retry, or check server logs." });
 
         var deleted = await _loopRunStore.DeleteAsync(guid);
         return deleted ? NoContent() : NotFound();

@@ -51,12 +51,12 @@ public class WorkItemManager : IWorkItemManager
     }
 
     /// <summary>
-    /// Stop a still-active run (engine cancel) and reclaim its worktree and
-    /// per-run branch. Returns true when local git state is verified gone —
-    /// callers null the run's worktree/branch fields only on success so the
-    /// retention sweeper can retry a failed reclaim later.
+    /// Stop a still-active run (engine cancel). Does <b>not</b> touch the
+    /// run's worktree or branch — local git state lives exactly as long as
+    /// the run row and is reclaimed only when the run itself is deleted
+    /// (manual delete or the retention sweeper).
     /// </summary>
-    private async Task<bool> CancelAndReclaimRunAsync(LoopRun run)
+    private async Task CancelRunIfActiveAsync(LoopRun run)
     {
         if (run.Status is LoopRunStatus.Running or LoopRunStatus.WaitingHuman && _engine is not null)
         {
@@ -65,7 +65,6 @@ public class WorkItemManager : IWorkItemManager
             // tracked instance so we don't write stale state back over it.
             try { await _loopRunStore.ReloadAsync(run); } catch { /* row may be gone */ }
         }
-        return await _runReclaimer.ReclaimLocalStateAsync(run);
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -517,18 +516,14 @@ public class WorkItemManager : IWorkItemManager
 
         if (currentRun != null)
         {
-            // Reclaim the per-run branch along with the worktree — with one
-            // branch per run (ADR-0008) an undeleted branch leaks forever once
-            // the worktree fields are cleared.
-            if (await CancelAndReclaimRunAsync(currentRun))
-            {
-                currentRun.WorktreePath = null;
-                currentRun.BranchName = null;
-            }
-            // Leave the run terminal so the retention sweeper can reclaim
-            // whatever is left (the row, or a failed worktree/branch delete).
+            // Stop a still-active run but keep its worktree and branch: the
+            // run stays inspectable until the row itself is deleted (manual
+            // delete or the retention sweeper), which reclaims them.
+            await CancelRunIfActiveAsync(currentRun);
             if (currentRun.Status is LoopRunStatus.Running or LoopRunStatus.WaitingHuman)
                 currentRun.Status = LoopRunStatus.Cancelled;
+            // Terminal timestamp makes the row (and its worktree/branch)
+            // visible to the retention sweeper.
             currentRun.CompletedAt ??= DateTime.UtcNow;
             await _loopRunStore.UpdateRunAsync(currentRun);
         }
@@ -559,9 +554,12 @@ public class WorkItemManager : IWorkItemManager
     {
         var currentRun = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
 
-        var reclaimed = true;
+        // Stop a still-active run but keep its worktree and branch for
+        // inspection; the retention sweeper (or a manual run delete) reclaims
+        // them together with the row. The next run gets its own branch and
+        // worktree anyway (ADR-0008), so nothing here can leak into it.
         if (currentRun != null)
-            reclaimed = await CancelAndReclaimRunAsync(currentRun);
+            await CancelRunIfActiveAsync(currentRun);
 
         try
         {
@@ -580,11 +578,6 @@ public class WorkItemManager : IWorkItemManager
             // sweeper; without it the run is never reclaimed.
             currentRun.CompletedAt ??= DateTime.UtcNow;
             currentRun.HumanFeedbackReason = null;
-            if (reclaimed)
-            {
-                currentRun.WorktreePath = null;
-                currentRun.BranchName = null;
-            }
             currentRun.UpdatedAt = DateTime.UtcNow;
             await _loopRunStore.UpdateRunAsync(currentRun);
         }
@@ -738,7 +731,8 @@ public class WorkItemManager : IWorkItemManager
         var runs = await _loopRunStore.GetAllByWorkItemAsync(workItemId);
         foreach (var run in runs)
         {
-            if (!await CancelAndReclaimRunAsync(run))
+            await CancelRunIfActiveAsync(run);
+            if (!await _runReclaimer.ReclaimLocalStateAsync(run))
                 continue;
             await _loopRunStore.DeleteAsync(run.Id);
         }
