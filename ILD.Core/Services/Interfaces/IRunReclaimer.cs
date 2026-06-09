@@ -4,10 +4,10 @@ namespace ILD.Core.Services.Interfaces;
 
 /// <summary>
 /// Destroys the local git state a run owns — its worktree and its per-run
-/// branch (ADR-0008). Shared by the retention sweeper and the work-item
-/// lifecycle paths (delete / send to Done / send to Backlog) so every way a
-/// run dies reclaims the same things. Remote branches and PRs are never
-/// touched.
+/// branch (ADR-0008). That state lives exactly as long as the run row, so
+/// this is invoked only by the paths that delete the run: the retention
+/// sweeper and manual deletion (the run delete endpoint, or deleting the
+/// whole work item). Remote branches and PRs are never touched.
 /// </summary>
 public interface IRunReclaimer
 {

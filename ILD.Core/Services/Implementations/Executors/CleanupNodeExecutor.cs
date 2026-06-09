@@ -7,9 +7,10 @@ namespace ILD.Core.Services.Implementations.Executors;
 /// <summary>
 /// Marks the run finished. Deliberately does <b>not</b> destroy the worktree:
 /// each run keeps its own worktree and branch so a completed run stays
-/// inspectable afterwards. Disk is reclaimed later by the
+/// inspectable afterwards. Disk is reclaimed only when the run itself is
+/// deleted — by the
 /// <see cref="ILD.Core.Services.Implementations.WorktreeRetentionSweeper"/>
-/// (or an explicit reset / retained-run un-pin). See ADR-0008.
+/// or a manual run delete. See ADR-0008.
 /// </summary>
 public sealed class CleanupNodeExecutor : INodeExecutor
 {

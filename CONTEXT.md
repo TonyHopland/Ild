@@ -53,7 +53,7 @@ Creates a pull request (or reuses the one already linked on the run via `LoopRun
 _Avoid_: repository node, git node
 
 **Cleanup Node**:
-A terminal (sink) node with only incoming edges. Marks the LoopRun finished. It deliberately **keeps** the worktree and branch so the run stays inspectable — disk is reclaimed later by the `WorktreeRetentionSweeper` (or explicit reset / retention). See [ADR-0008](docs/adr/0008-worktree-and-branch-per-run.md).
+A terminal (sink) node with only incoming edges. Marks the LoopRun finished. It deliberately **keeps** the worktree and branch so the run stays inspectable — disk is reclaimed only when the run itself is deleted (the `WorktreeRetentionSweeper`, or a manual run delete). See [ADR-0008](docs/adr/0008-worktree-and-branch-per-run.md).
 _Avoid_: teardown, end node
 
 ### Execution & Recovery
