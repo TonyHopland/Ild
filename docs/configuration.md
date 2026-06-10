@@ -16,13 +16,15 @@ Remote providers, the WorkItem Server connection, repositories, AI providers, an
 | `ILD_SECRET_KEY`                | Optional encryption-at-rest key for provider API keys and webhook secrets (see below)    |
 | `ILD_WORKITEM_SERVER_URL`       | URL used to auto-seed the global WorkItem Server connection                              |
 | `ILD_WORKITEM_SERVER_API_KEY`   | API key used to auto-seed the global WorkItem Server connection                          |
+| `ILD_API_URL`                   | Base URL agents and the MCP server use to call back into the ILD API                     |
 | `ILD_ALLOWED_ORIGINS`           | Comma-separated CORS origins allowed to call the ILD API                                 |
 | `WORKITEM_API_KEYS`             | Accepted bearer keys for the WorkItem Server (comma-separated)                           |
 | `WORKITEM_DATA_PATH`            | Base data directory for WorkItem Server runtime files                                    |
+| `WORKITEM_LOG_LEVEL`            | Serilog level for the WorkItem Server (docker compose defaults it to `ILD_LOG_LEVEL`)    |
 | `GIT_CONFIG`                    | Path to the host `.gitconfig` mounted into the ILD container so commits inherit identity |
 | `ASPNETCORE_URLS`               | HTTP bind address for each .NET host (standard ASP.NET Core variable)                    |
 
-The log level is also changeable at runtime through `PUT /api/v1/logging/level` without restarting; `ILD_LOG_LEVEL` only sets the starting level.
+The ILD API log level is also changeable at runtime through `PUT /api/v1/logging/level` without restarting; `ILD_LOG_LEVEL` only sets the starting level. The WorkItem Server has no runtime endpoint; its level is fixed at startup.
 
 The ILD container additionally uses an `ILD_AGENT_TOKEN` for agent/MCP calls back into the local API. It is auto-generated at startup if unset, so you normally don't need to provide one.
 

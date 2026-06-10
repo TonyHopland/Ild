@@ -3,6 +3,7 @@ using ILD.WorkItemServer.Hosting;
 using ILD.WorkItemServer.Services;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
+using Serilog.Events;
 using Serilog.Formatting.Json;
 
 namespace ILD.WorkItemServer;
@@ -20,9 +21,16 @@ public sealed class WorkItemServerProgram
     {
         var builder = WebApplication.CreateBuilder(args);
 
+        var logLevel = Enum.TryParse<LogEventLevel>(
+            Environment.GetEnvironmentVariable("WORKITEM_LOG_LEVEL"), ignoreCase: true, out var parsedLevel)
+                ? parsedLevel
+                : LogEventLevel.Information;
+
         builder.Host.UseSerilog((context, _, loggerConfiguration) =>
         {
-            loggerConfiguration.Enrich.FromLogContext();
+            loggerConfiguration
+                .Enrich.FromLogContext()
+                .MinimumLevel.Is(logLevel);
 
             if (context.Configuration.GetValue("Serilog:WriteToConsole", true))
             {
