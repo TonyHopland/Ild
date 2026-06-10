@@ -13,7 +13,7 @@ ILD is composed of:
 - A local ILD host exposing the taskboard UI, loop-template editor, provider settings, loop-run views, preview controls, and agent-facing API tools.
 - A standalone WorkItem Server that owns the shared work-item record and claim semantics.
 - A PostgreSQL-backed persistence layer in the supported deployment path.
-- Per-work-item local git worktrees plus ILD-local runtime state for loop runs, templates, event logs, providers, sessions, and previews.
+- Per-run local git worktrees plus ILD-local runtime state for loop runs, templates, event logs, providers, sessions, and previews.
 
 ## Primary Outcomes
 
@@ -151,5 +151,5 @@ The following items are still desired but not fully delivered in the current cod
 - Recovery is a first-class concern: the system must survive container restarts gracefully
 - The visual loop editor (React Flow) is a key UX surface — investing in good custom node rendering and edge UI is important
 - Tool access should be conservative by default — read-only unless explicitly granted
-- Worktree is one per work item, destroyed when Cleanup executes — each new run creates a fresh worktree
+- Worktree and branch are one per run, kept after the run finishes for inspection and reclaimed only when the run is deleted (retention sweep or manual delete) — each new run creates a fresh worktree
 - Vite+ is alpha; keep frontend dependencies minimal and be prepared for potential breaking changes

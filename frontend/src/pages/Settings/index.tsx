@@ -12,6 +12,10 @@ export default function Settings() {
   const [maxConcurrentInput, setMaxConcurrentInput] = useState<string>("5");
   const [maxConcurrentError, setMaxConcurrentError] = useState<string | null>(null);
   const [savingMaxConcurrent, setSavingMaxConcurrent] = useState(false);
+  const [retentionDays, setRetentionDays] = useState<number>(30);
+  const [retentionInput, setRetentionInput] = useState<string>("30");
+  const [retentionError, setRetentionError] = useState<string | null>(null);
+  const [savingRetention, setSavingRetention] = useState(false);
 
   useEffect(() => {
     const stored = localStorage.getItem("ild_notifications_enabled");
@@ -25,6 +29,16 @@ export default function Settings() {
         if (!Number.isNaN(n)) {
           setMaxConcurrent(n);
           setMaxConcurrentInput(String(n));
+        }
+      })
+      .catch(() => {});
+    void settingsService
+      .get(SchedulerSettingKeys.RunRetentionDays)
+      .then((s) => {
+        const n = parseInt(s.value, 10);
+        if (!Number.isNaN(n)) {
+          setRetentionDays(n);
+          setRetentionInput(String(n));
         }
       })
       .catch(() => {});
@@ -45,6 +59,24 @@ export default function Settings() {
       setMaxConcurrentError(err instanceof Error ? err.message : "Failed to save.");
     } finally {
       setSavingMaxConcurrent(false);
+    }
+  };
+
+  const saveRetention = async () => {
+    const n = parseInt(retentionInput, 10);
+    if (Number.isNaN(n) || n < 0 || n > 3650) {
+      setRetentionError("Must be an integer between 0 (disabled) and 3650.");
+      return;
+    }
+    setRetentionError(null);
+    setSavingRetention(true);
+    try {
+      await settingsService.put(SchedulerSettingKeys.RunRetentionDays, String(n));
+      setRetentionDays(n);
+    } catch (err) {
+      setRetentionError(err instanceof Error ? err.message : "Failed to save.");
+    } finally {
+      setSavingRetention(false);
     }
   };
 
@@ -132,6 +164,42 @@ export default function Settings() {
             <p className="settings-about-desc" style={{ marginTop: "0.5rem" }}>
               Caps how many work items the scheduler will run at once. Per-provider parallelism is
               configured on each AI provider.
+            </p>
+          </div>
+        </div>
+
+        <div className="settings-section">
+          <h2 className="settings-section-title">Run retention</h2>
+          <div className="form-group">
+            <label htmlFor="retentionDays">Delete finished runs after (days)</label>
+            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+              <input
+                id="retentionDays"
+                type="number"
+                min={0}
+                max={3650}
+                value={retentionInput}
+                onChange={(e) => setRetentionInput(e.target.value)}
+                style={{ width: "6rem" }}
+              />
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={saveRetention}
+                disabled={savingRetention || retentionInput === String(retentionDays)}
+              >
+                Save
+              </button>
+            </div>
+            {retentionError && (
+              <div className="form-error" style={{ color: "#f87171", marginTop: "0.25rem" }}>
+                {retentionError}
+              </div>
+            )}
+            <p className="settings-about-desc" style={{ marginTop: "0.5rem" }}>
+              How long a finished run's worktree, branch, and history are kept before being
+              reclaimed. Set to <strong>0</strong> to keep runs forever. Runs pinned with “Retain”
+              are never deleted.
             </p>
           </div>
         </div>

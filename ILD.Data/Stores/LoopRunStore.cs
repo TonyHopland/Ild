@@ -61,6 +61,23 @@ public class LoopRunStore : ILoopRunStore
     public async Task<IReadOnlyList<LoopRun>> GetRunningRunsAsync()
         => await _db.LoopRuns.Where(r => r.Status == LoopRunStatus.Running).ToListAsync();
 
+    public async Task<IReadOnlyList<LoopRun>> GetActiveRunsAsync()
+        => await _db.LoopRuns
+            .Where(r => r.Status == LoopRunStatus.Running || r.Status == LoopRunStatus.WaitingHuman)
+            .ToListAsync();
+
+    public async Task<IReadOnlyList<LoopRun>> GetReclaimableRunsAsync(DateTime cutoff, int take = 200)
+        => await _db.LoopRuns.AsNoTracking()
+            .Where(r => !r.Retain
+                && (r.Status == LoopRunStatus.Completed
+                    || r.Status == LoopRunStatus.Failed
+                    || r.Status == LoopRunStatus.Cancelled)
+                && r.CompletedAt != null
+                && r.CompletedAt < cutoff)
+            .OrderBy(r => r.CompletedAt)
+            .Take(take)
+            .ToListAsync();
+
     public async Task<IReadOnlyList<LoopRunNode>> GetRunNodesAsync(Guid runId)
         => await _db.LoopRunNodes
             .Where(rn => rn.LoopRunId == runId)
@@ -129,6 +146,22 @@ public class LoopRunStore : ILoopRunStore
     {
         _db.LoopRuns.Add(run);
         await _db.SaveChangesAsync();
+    }
+
+    public async Task ReloadAsync(LoopRun run)
+    {
+        // Refresh a (possibly long-held) tracked instance with the row's
+        // current column values. A plain re-query is not enough: EF identity
+        // resolution returns the already-tracked instance with its in-memory
+        // values, so control-plane fields written by other scopes (IsPaused,
+        // Retain, Status=Cancelled) stay invisible without an explicit reload.
+        var entry = _db.Entry(run);
+        if (entry.State == EntityState.Detached)
+        {
+            _db.LoopRuns.Attach(run);
+            entry = _db.Entry(run);
+        }
+        await entry.ReloadAsync();
     }
 
     public async Task UpdateRunAsync(LoopRun run)
@@ -216,6 +249,30 @@ public class LoopRunStore : ILoopRunStore
         var eventLogs = await _db.EventLogs
             .Where(e => e.LoopRunId == runId)
             .ToListAsync();
+
+        // Large event payloads spill to files outside the DB (EventLogService);
+        // deleting only the rows would orphan them on disk forever. Best-effort.
+        string? payloadDir = null;
+        foreach (var entry in eventLogs)
+        {
+            if (string.IsNullOrEmpty(entry.PayloadPath)) continue;
+            try
+            {
+                if (File.Exists(entry.PayloadPath)) File.Delete(entry.PayloadPath);
+                payloadDir ??= Path.GetDirectoryName(entry.PayloadPath);
+            }
+            catch { /* best effort */ }
+        }
+        if (payloadDir is not null)
+        {
+            try
+            {
+                if (Directory.Exists(payloadDir) && !Directory.EnumerateFileSystemEntries(payloadDir).Any())
+                    Directory.Delete(payloadDir);
+            }
+            catch { /* best effort */ }
+        }
+
         if (eventLogs.Count > 0)
             _db.EventLogs.RemoveRange(eventLogs);
 

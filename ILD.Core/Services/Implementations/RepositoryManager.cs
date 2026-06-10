@@ -80,6 +80,11 @@ public class RepositoryManager : IRepositoryManager
         if (Directory.Exists(worktreePath))
         {
             try { Directory.Delete(worktreePath, recursive: true); } catch { /* best effort */ }
+            // The fallback delete leaves the worktree registration behind in the
+            // base repo; prune it so the branch isn't pinned as "checked out"
+            // by a ghost worktree (that would block `git branch -D` later).
+            if (repoPath != worktreePath)
+                await RunAsync(repoPath, "worktree", "prune");
         }
     }
 
@@ -155,6 +160,17 @@ public class RepositoryManager : IRepositoryManager
     {
         var (code, _, _) = await RunAsync(repoPath, "branch", "-D", branchName);
         return code == 0;
+    }
+
+    public async Task<bool> LocalBranchExistsAsync(string repoPath, string branchName)
+    {
+        var (code, _, _) = await RunAsync(repoPath, "rev-parse", "--verify", "--quiet", $"refs/heads/{branchName}");
+        return code == 0;
+    }
+
+    public async Task PruneWorktreesAsync(string repoPath)
+    {
+        await RunAsync(repoPath, "worktree", "prune");
     }
 
     public Task<string?> ResolveBaseRepoPathAsync(string worktreePath)

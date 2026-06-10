@@ -66,10 +66,24 @@ public sealed class LoopEngine : ILoopEngine
             await workItems.TransitionAsync(workItemId, RemoteWorkItemStatus.HumanFeedback, reason);
             return;
         }
-        var version = await templateStore.GetLatestVersionAsync(resolution.TemplateId.Value)
-            ?? throw new InvalidOperationException("Template has no version");
-        var startNode = await loopRunStore.GetStartNodeAsync(version.Id)
-            ?? throw new InvalidOperationException("Template has no Start node");
+        // Park instead of throwing for a broken template: an exception here
+        // leaves the work item claimed as Running on the server with no run
+        // driving it — stuck and holding a concurrency slot forever.
+        var template = await templateStore.GetByIdAsync(resolution.TemplateId.Value);
+        var version = await templateStore.GetLatestVersionAsync(resolution.TemplateId.Value);
+        if (version is null)
+        {
+            await workItems.TransitionAsync(workItemId, RemoteWorkItemStatus.HumanFeedback,
+                "Matched loop template has no version");
+            return;
+        }
+        var startNode = await loopRunStore.GetStartNodeAsync(version.Id);
+        if (startNode is null)
+        {
+            await workItems.TransitionAsync(workItemId, RemoteWorkItemStatus.HumanFeedback,
+                "Matched loop template has no Start node");
+            return;
+        }
 
         var run = new LoopRun
         {
@@ -80,7 +94,9 @@ public sealed class LoopEngine : ILoopEngine
             StartedAt = DateTime.UtcNow,
             CurrentNodeId = startNode.Id,
             RepositoryId = wi.RepositoryId,
-            RecoveryPolicy = RecoveryPolicy.AutoResume,
+            // The per-template setting controls crash recovery; pin it on the
+            // run the same way the template version is pinned.
+            RecoveryPolicy = template?.RecoveryPolicy ?? RecoveryPolicy.AutoResume,
         };
         await loopRunStore.CreateRunAsync(run);
         await workItems.TransitionAsync(workItemId, RemoteWorkItemStatus.Running, currentLoopRunId: run.Id);
@@ -312,7 +328,13 @@ public sealed class LoopEngine : ILoopEngine
         while (!ct.IsCancellationRequested)
         {
             var run = await loopRunStore.GetByIdAsync(runId);
-            if (run is null || run.Status != LoopRunStatus.Running || run.IsPaused) return;
+            if (run is null) return;
+            // On repeat iterations GetByIdAsync returns the already-tracked
+            // instance with its in-memory values (EF identity resolution), so
+            // pause/cancel/pin written by other scopes since the previous
+            // iteration would be invisible without an explicit reload.
+            try { await loopRunStore.ReloadAsync(run); } catch { return; }
+            if (run.Status != LoopRunStatus.Running || run.IsPaused) return;
             if (run.CurrentNodeId is null) return;
 
             var nodes = await templateStore.GetNodesForVersionAsync(run.LoopTemplateVersionId);
@@ -335,6 +357,10 @@ public sealed class LoopEngine : ILoopEngine
         var workItems = sp.GetRequiredService<IWorkItemManager>();
         var eventLog = sp.GetService<IEventLogService>();
         var executor = _registry.Get(node.NodeType);
+        // Status at entry: Running for the normal loop, but CleanupRunAsync
+        // drives this method against already-terminal runs too. The reload
+        // guard below bails when the status *changed* underneath us.
+        var entryStatus = run.Status;
         // On re-entry after signal (ExternalActionResult set), reuse the existing
         // WaitingHuman run node so CompleteRunNodeAsync updates it instead of
         // silently skipping (runNodeId == null).
@@ -383,6 +409,8 @@ public sealed class LoopEngine : ILoopEngine
                 {
                     case NodeOutcome.NodeStarting ns:
                     {
+                        if (!await ReloadRunStillCurrentAsync(loopRunStore, run, entryStatus))
+                            return ParkResult.Stop;
                         var rn = new LoopRunNode
                         {
                             Id = Guid.NewGuid(),
@@ -408,14 +436,23 @@ public sealed class LoopEngine : ILoopEngine
                     }
                     case NodeOutcome.Success ok:
                     {
+                        // Reload before persisting: the node may have run for
+                        // hours and the user may have paused/cancelled/pinned
+                        // the run meanwhile — a stale full-entity write would
+                        // silently revert those. Record the node's result
+                        // either way (the work happened), but stop without
+                        // routing when the run state changed underneath us.
+                        var stillCurrent = await ReloadRunStillCurrentAsync(loopRunStore, run, entryStatus);
                         await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.Succeeded, ok.Output, null);
+                        await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Succeeded);
+                        if (eventLog is not null && runNodeId is Guid id)
+                            await TrySafe(() => eventLog.AppendAsync(run.Id, "NodeCompleted", ok.Output ?? string.Empty, node.Id, runNodeId: id));
+                        if (!stillCurrent)
+                            return ParkResult.Stop;
                         run.PreviousNodeOutput = ok.Output;
                         run.ExternalActionResult = null;
                         run.ExternalActionResultType = ExternalActionResultType.Success;
                         await loopRunStore.UpdateRunAsync(run);
-                        await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Succeeded);
-                        if (eventLog is not null && runNodeId is Guid id)
-                            await TrySafe(() => eventLog.AppendAsync(run.Id, "NodeCompleted", ok.Output ?? string.Empty, node.Id, runNodeId: id));
                         // Surface each AI node's output as a conversation turn so the
                         // coder ↔ reviewer ↔ human dialogue can be followed in the UI.
                         // Authored by the node's title; best-effort so a conversation
@@ -445,14 +482,18 @@ public sealed class LoopEngine : ILoopEngine
                                 await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Interrupted);
                             return ParkResult.Stop;
                         }
+                        // Same stale-write guard as the Success branch.
+                        var stillCurrent = await ReloadRunStillCurrentAsync(loopRunStore, run, entryStatus);
                         await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.Failed, f.Output, f.Reason);
+                        await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Failed);
+                        if (eventLog is not null && runNodeId is Guid id)
+                            await TrySafe(() => eventLog.AppendAsync(run.Id, "NodeFailed", f.Reason, node.Id, runNodeId: id));
+                        if (!stillCurrent)
+                            return ParkResult.Stop;
                         run.PreviousNodeOutput = f.Output ?? f.Reason;
                         run.ExternalActionResult = null;
                         run.ExternalActionResultType = ExternalActionResultType.Success;
                         await loopRunStore.UpdateRunAsync(run);
-                        await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Failed);
-                        if (eventLog is not null && runNodeId is Guid id)
-                            await TrySafe(() => eventLog.AppendAsync(run.Id, "NodeFailed", f.Reason, node.Id, runNodeId: id));
                         var failEdge = await ResolveNextEdgeAsync(loopRunStore, node.Id, f.Edge);
                         if (failEdge is null)
                         {
@@ -468,7 +509,10 @@ public sealed class LoopEngine : ILoopEngine
                     }
                     case NodeOutcome.WaitingAction wa:
                     {
+                        var stillCurrent = await ReloadRunStillCurrentAsync(loopRunStore, run, entryStatus);
                         await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.WaitingHuman, wa.Output, null);
+                        if (!stillCurrent)
+                            return ParkResult.Stop;
                         var oldStatus = run.Status;
                         run.Status = LoopRunStatus.WaitingHuman;
                         run.HumanFeedbackReason = wa.Reason;
@@ -488,19 +532,33 @@ public sealed class LoopEngine : ILoopEngine
                     case NodeOutcome.WaitingIld wi:
                     {
                         // Engine has not created a LoopRunNode yet (capacity gate fires before NodeStarting).
-                        await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.WaitingForIld,
+                        var transitioned = await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.WaitingForIld,
                             reason: wi.Reason, humanFeedbackReason: HumanFeedbackReasons.AiProviderThrottled);
+                        if (!transitioned)
+                            // The scheduler only auto-resumes items the server reports as
+                            // WaitingForIld; with the transition lost this run stays parked
+                            // until the next restart's reconciliation.
+                            _logger.LogWarning(
+                                "Failed to mark work item {WorkItemId} WaitingForIld for run {RunId}; run stays parked until restart",
+                                run.WorkItemId, run.Id);
                         return ParkResult.Stop;
                     }
                     case NodeOutcome.Terminal t:
                     {
+                        var stillCurrent = await ReloadRunStillCurrentAsync(loopRunStore, run, entryStatus);
                         await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.Succeeded, t.Output, null);
                         await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Succeeded);
+                        if (!stillCurrent)
+                            return ParkResult.Stop;
                         await CompleteRunAsync(run, loopRunStore, workItems, t.Output);
                         return ParkResult.Stop;
                     }
                     case NodeOutcome.WorktreeReady wr:
                     {
+                        // Record the worktree/branch even if the run was cancelled
+                        // mid-node — without these fields on the row the retention
+                        // sweeper can never reclaim what was just created.
+                        await TrySafe(() => loopRunStore.ReloadAsync(run));
                         run.WorktreePath = wr.WorktreePath;
                         run.BranchName = wr.BranchName;
                         await loopRunStore.UpdateRunAsync(run);
@@ -508,12 +566,14 @@ public sealed class LoopEngine : ILoopEngine
                     }
                     case NodeOutcome.PrCreated pc:
                     {
+                        await TrySafe(() => loopRunStore.ReloadAsync(run));
                         run.PrUrl = pc.PrUrl;
                         await loopRunStore.UpdateRunAsync(run);
                         break;
                     }
                     case NodeOutcome.WorktreeDestroyed _:
                     {
+                        await TrySafe(() => loopRunStore.ReloadAsync(run));
                         run.WorktreePath = null;
                         run.BranchName = null;
                         await loopRunStore.UpdateRunAsync(run);
@@ -532,6 +592,21 @@ public sealed class LoopEngine : ILoopEngine
             if (enumerator is not null) await enumerator.DisposeAsync();
         }
         return ParkResult.Stop;
+    }
+
+    /// <summary>
+    /// Refresh the engine's (possibly long-held) run instance with the row's
+    /// current column values so persisting node results can't clobber
+    /// concurrent control-plane writes (pause, cancel, retain-pin) made by
+    /// other scopes while the node was executing. Returns false when the
+    /// run's status changed underneath the engine — the caller must stop
+    /// without routing or overwriting that state.
+    /// </summary>
+    private static async Task<bool> ReloadRunStillCurrentAsync(ILoopRunStore store, LoopRun run, LoopRunStatus entryStatus)
+    {
+        try { await store.ReloadAsync(run); }
+        catch { return false; }
+        return run.Status == entryStatus;
     }
 
     private static async Task<Guid?> FindPreviousRunNodeIdAsync(ILoopRunStore store, Guid runId)

@@ -306,6 +306,10 @@ export const loopRunService = {
     return api.post<void>(`/loopruns/${id}/nodes/${runNodeId}/retry`, {});
   },
 
+  setRetain: async (id: string, retain: boolean): Promise<{ id: string; retain: boolean }> => {
+    return api.put<{ id: string; retain: boolean }>(`/loopruns/${id}/retain`, { retain });
+  },
+
   getEvents: async (runId: string, cursor = 0, limit = 100): Promise<EventLogPage> => {
     return api.get<EventLogPage>(`/loopruns/${runId}/events?cursor=${cursor}&limit=${limit}`);
   },
@@ -412,6 +416,7 @@ export const agentAdapterService = {
 export const SchedulerSettingKeys = {
   MaxConcurrent: "scheduler.maxConcurrent",
   IsPaused: "scheduler.isPaused",
+  RunRetentionDays: "run.retentionDays",
 } as const;
 
 export const settingsService = {

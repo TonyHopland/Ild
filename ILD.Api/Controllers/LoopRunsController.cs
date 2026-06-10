@@ -16,19 +16,22 @@ public class LoopRunsController : ControllerBase
     private readonly ILoopRunStore _loopRunStore;
     private readonly IAdapterSessionSnapshotStore _sessionSnapshotStore;
     private readonly InteractiveShellSessionService _shellSessions;
+    private readonly IRunReclaimer _runReclaimer;
 
     public LoopRunsController(
         ILoopEngine loopEngine,
         IEventLogService eventLogService,
         ILoopRunStore loopRunStore,
         IAdapterSessionSnapshotStore sessionSnapshotStore,
-        InteractiveShellSessionService shellSessions)
+        InteractiveShellSessionService shellSessions,
+        IRunReclaimer runReclaimer)
     {
         _loopEngine = loopEngine;
         _eventLogService = eventLogService;
         _loopRunStore = loopRunStore;
         _sessionSnapshotStore = sessionSnapshotStore;
         _shellSessions = shellSessions;
+        _runReclaimer = runReclaimer;
     }
 
     [HttpGet]
@@ -47,6 +50,7 @@ public class LoopRunsController : ControllerBase
             status = r.Status.ToString(),
             currentNodeId = r.CurrentNodeId,
             isPaused = r.IsPaused,
+            retain = r.Retain,
             nodeExecutionCount = r.NodeExecutionCount,
             startedAt = r.StartedAt,
             completedAt = r.CompletedAt,
@@ -82,6 +86,9 @@ public class LoopRunsController : ControllerBase
             status = run.Status.ToString(),
             currentNodeId = run.CurrentNodeId,
             isPaused = run.IsPaused,
+            retain = run.Retain,
+            worktreePath = run.WorktreePath,
+            branchName = run.BranchName,
             nodeExecutionCount = run.NodeExecutionCount,
             startedAt = run.StartedAt,
             completedAt = run.CompletedAt,
@@ -144,6 +151,13 @@ public class LoopRunsController : ControllerBase
         if (run.Status == ILD.Data.Enums.LoopRunStatus.Running)
             return BadRequest(new { error = "Cannot delete a running loop. Cancel it first." });
 
+        // Deleting the run is the only path (besides retention) that destroys
+        // its worktree and branch; the row may only go once that state is
+        // verifiably gone — a deleted row would leave the leftovers orphaned
+        // with nothing pointing at them.
+        if (!await _runReclaimer.ReclaimLocalStateAsync(run))
+            return Conflict(new { error = "Could not reclaim the run's worktree/branch; the run was not deleted. Retry, or check server logs." });
+
         var deleted = await _loopRunStore.DeleteAsync(guid);
         return deleted ? NoContent() : NotFound();
     }
@@ -165,6 +179,28 @@ public class LoopRunsController : ControllerBase
             return BadRequest(new { error = ex.Message });
         }
         return Ok();
+    }
+
+    public sealed class RetainRequest
+    {
+        public bool Retain { get; set; }
+    }
+
+    /// <summary>
+    /// Pin or unpin a run. A pinned run (<c>retain = true</c>) is never reclaimed
+    /// by the worktree retention sweeper — its worktree, branch, and history are
+    /// kept until the mark is cleared.
+    /// </summary>
+    [HttpPut("{id}/retain")]
+    public async Task<IActionResult> SetRetain(string id, [FromBody] RetainRequest request)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+        var run = await _loopRunStore.GetByIdAsync(guid);
+        if (run == null) return NotFound();
+        run.Retain = request.Retain;
+        await _loopRunStore.UpdateRunAsync(run);
+        return Ok(new { id = run.Id, retain = run.Retain });
     }
 
     [HttpGet("{id}/events")]

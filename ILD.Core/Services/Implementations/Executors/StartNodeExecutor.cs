@@ -71,7 +71,7 @@ public sealed class StartNodeExecutor : INodeExecutor
         NodeExecutionContext ctx, IServiceProvider sp, IRepositoryManager repoManager,
         LoopRun run, Repository repo, WorkItemView wi, GitAuthOptions? gitAuth)
     {
-        var branch = run.BranchName ?? $"ild/wi-{wi.Id:N}";
+        var branch = run.BranchName ?? RunWorktreeNaming.BranchFor(wi.Id, run.Id);
         var basePath = repo.WorktreesPath;
         var cloned = false;
         if (string.IsNullOrWhiteSpace(basePath) || !Directory.Exists(Path.Combine(basePath, ".git")))

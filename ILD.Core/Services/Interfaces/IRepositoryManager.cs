@@ -38,6 +38,19 @@ public interface IRepositoryManager
     Task<bool> DeleteLocalBranchAsync(string repoPath, string branchName);
 
     /// <summary>
+    /// True if <paramref name="branchName"/> exists as a local branch in the
+    /// repository at <paramref name="repoPath"/>.
+    /// </summary>
+    Task<bool> LocalBranchExistsAsync(string repoPath, string branchName);
+
+    /// <summary>
+    /// Run <c>git worktree prune</c> in the repository at <paramref name="repoPath"/>.
+    /// Clears stale worktree registrations whose directories no longer exist —
+    /// a stale registration pins its branch and blocks <c>git branch -D</c>.
+    /// </summary>
+    Task PruneWorktreesAsync(string repoPath);
+
+    /// <summary>
     /// Resolve the base (main) repository path from a worktree path.
     /// Returns null if the worktree is not a valid git worktree.
     /// </summary>

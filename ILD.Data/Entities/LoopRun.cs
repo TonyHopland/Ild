@@ -24,6 +24,13 @@ public class LoopRun : IHasUpdatedAt
 
     public bool IsPaused { get; set; }
 
+    /// <summary>
+    /// When true the run is pinned: the worktree retention sweeper never
+    /// reclaims its worktree/branch nor deletes the run. Stays pinned until a
+    /// human clears the mark. See ADR-0008.
+    /// </summary>
+    public bool Retain { get; set; }
+
     public int NodeExecutionCount { get; set; }
 
     public int NextEventSeq { get; set; }

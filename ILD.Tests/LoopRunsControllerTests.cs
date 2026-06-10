@@ -44,7 +44,7 @@ public class LoopRunsControllerTests
 
         var engine = new Mock<ILoopEngine>();
         var events = new Mock<IEventLogService>();
-        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance));
+        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance), new Mock<ILD.Core.Services.Interfaces.IRunReclaimer>().Object);
 
         var result = await controller.GetAll();
 
@@ -55,6 +55,61 @@ public class LoopRunsControllerTests
         var items = (System.Collections.IEnumerable)payload!;
         Assert.Equal(2, items.Cast<object>().Count());
     }
+
+    [Fact]
+    public async Task Delete_reclaims_worktree_and_branch_before_removing_the_run()
+    {
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = "wi-1",
+            Status = LoopRunStatus.Completed,
+            WorktreePath = "/tmp/wt/run-a",
+            BranchName = "ild/wi-1-run-a",
+        };
+        var store = new Mock<ILoopRunStore>();
+        store.Setup(s => s.GetByIdAsync(run.Id)).ReturnsAsync(run);
+        store.Setup(s => s.DeleteAsync(run.Id)).ReturnsAsync(true);
+        var reclaimer = new Mock<IRunReclaimer>();
+        reclaimer.Setup(r => r.ReclaimLocalStateAsync(run)).ReturnsAsync(true);
+
+        var controller = BuildController(store, reclaimer);
+        var result = await controller.Delete(run.Id.ToString());
+
+        Assert.IsType<NoContentResult>(result);
+        reclaimer.Verify(r => r.ReclaimLocalStateAsync(run), Times.Once);
+        store.Verify(s => s.DeleteAsync(run.Id), Times.Once);
+    }
+
+    [Fact]
+    public async Task Delete_refuses_when_reclaim_fails_so_git_state_is_never_orphaned()
+    {
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = "wi-1",
+            Status = LoopRunStatus.Completed,
+            WorktreePath = "/tmp/wt/run-a",
+        };
+        var store = new Mock<ILoopRunStore>();
+        store.Setup(s => s.GetByIdAsync(run.Id)).ReturnsAsync(run);
+        var reclaimer = new Mock<IRunReclaimer>();
+        reclaimer.Setup(r => r.ReclaimLocalStateAsync(run)).ReturnsAsync(false);
+
+        var controller = BuildController(store, reclaimer);
+        var result = await controller.Delete(run.Id.ToString());
+
+        // The row must survive a failed reclaim — deleting it would leave the
+        // worktree/branch orphaned with nothing pointing at them.
+        Assert.IsType<ConflictObjectResult>(result);
+        store.Verify(s => s.DeleteAsync(It.IsAny<Guid>()), Times.Never);
+    }
+
+    private static LoopRunsController BuildController(Mock<ILoopRunStore> store, Mock<IRunReclaimer> reclaimer)
+        => new(new Mock<ILoopEngine>().Object, new Mock<IEventLogService>().Object, store.Object,
+            new Mock<IAdapterSessionSnapshotStore>().Object,
+            new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance),
+            reclaimer.Object);
 
     [Fact]
     public async Task GetEvents_includes_runNodeId_in_response()
@@ -99,7 +154,7 @@ public class LoopRunsControllerTests
             RunNodes = new List<LoopRunNode>(),
         });
 
-        var controller = new LoopRunsController(engine.Object, eventLogService.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance));
+        var controller = new LoopRunsController(engine.Object, eventLogService.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance), new Mock<ILD.Core.Services.Interfaces.IRunReclaimer>().Object);
 
         var result = await controller.GetEvents(runId.ToString());
 
@@ -165,7 +220,7 @@ public class LoopRunsControllerTests
         var engine = new Mock<ILoopEngine>();
         var events = new Mock<IEventLogService>();
         var snapshots = new Mock<IAdapterSessionSnapshotStore>();
-        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance));
+        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance), new Mock<ILD.Core.Services.Interfaces.IRunReclaimer>().Object);
 
         var result = await controller.GetById(runId.ToString());
 
@@ -201,7 +256,7 @@ public class LoopRunsControllerTests
 
         var engine = new Mock<ILoopEngine>();
         var events = new Mock<IEventLogService>();
-        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance));
+        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance), new Mock<ILD.Core.Services.Interfaces.IRunReclaimer>().Object);
 
         var result = await controller.GetSessionPreview(runId.ToString(), "OpenCode", "ses_current");
 

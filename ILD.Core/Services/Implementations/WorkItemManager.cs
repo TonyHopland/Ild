@@ -14,7 +14,6 @@ namespace ILD.Core.Services.Implementations;
 /// </summary>
 public class WorkItemManager : IWorkItemManager
 {
-    private readonly IRepositoryManager _repoManager;
     private readonly IProviderStore _providerStore;
     private readonly IEventLogService _eventLog;
     private readonly ILoopRunStore _loopRunStore;
@@ -24,6 +23,7 @@ public class WorkItemManager : IWorkItemManager
     private readonly IWorktreePreviewService _previewService;
     private readonly IWorkItemScheduler? _scheduler;
     private readonly ILoopEngine? _engine;
+    private readonly IRunReclaimer _runReclaimer;
 
     public WorkItemManager(
         IRepositoryManager repoManager,
@@ -35,9 +35,9 @@ public class WorkItemManager : IWorkItemManager
         IWorkItemNotifier? notifier = null,
         IWorktreePreviewService? previewService = null,
         IWorkItemScheduler? scheduler = null,
-        ILoopEngine? engine = null)
+        ILoopEngine? engine = null,
+        IRunReclaimer? runReclaimer = null)
     {
-        _repoManager = repoManager;
         _providerStore = providerStore;
         _eventLog = eventLog;
         _loopRunStore = loopRunStore;
@@ -47,6 +47,24 @@ public class WorkItemManager : IWorkItemManager
         _previewService = previewService ?? new NoopPreviewService();
         _scheduler = scheduler;
         _engine = engine;
+        _runReclaimer = runReclaimer ?? new RunReclaimer(repoManager, providerStore);
+    }
+
+    /// <summary>
+    /// Stop a still-active run (engine cancel). Does <b>not</b> touch the
+    /// run's worktree or branch — local git state lives exactly as long as
+    /// the run row and is reclaimed only when the run itself is deleted
+    /// (manual delete or the retention sweeper).
+    /// </summary>
+    private async Task CancelRunIfActiveAsync(LoopRun run)
+    {
+        if (run.Status is LoopRunStatus.Running or LoopRunStatus.WaitingHuman && _engine is not null)
+        {
+            try { await _engine.CancelRunAsync(run.Id); } catch { /* best effort */ }
+            // CancelRunAsync persisted through its own scope; refresh our
+            // tracked instance so we don't write stale state back over it.
+            try { await _loopRunStore.ReloadAsync(run); } catch { /* row may be gone */ }
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -496,10 +514,17 @@ public class WorkItemManager : IWorkItemManager
         var wi = await GetWorkItemAsync(workItemId);
         if (wi == null) return false;
 
-        if (!string.IsNullOrEmpty(currentRun?.WorktreePath))
+        if (currentRun != null)
         {
-            await _repoManager.DestroyWorktreeAsync(currentRun.WorktreePath);
-            currentRun.WorktreePath = null;
+            // Stop a still-active run but keep its worktree and branch: the
+            // run stays inspectable until the row itself is deleted (manual
+            // delete or the retention sweeper), which reclaims them.
+            await CancelRunIfActiveAsync(currentRun);
+            if (currentRun.Status is LoopRunStatus.Running or LoopRunStatus.WaitingHuman)
+                currentRun.Status = LoopRunStatus.Cancelled;
+            // Terminal timestamp makes the row (and its worktree/branch)
+            // visible to the retention sweeper.
+            currentRun.CompletedAt ??= DateTime.UtcNow;
             await _loopRunStore.UpdateRunAsync(currentRun);
         }
 
@@ -529,11 +554,12 @@ public class WorkItemManager : IWorkItemManager
     {
         var currentRun = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
 
-        if (currentRun != null && !string.IsNullOrEmpty(currentRun.WorktreePath))
-        {
-            await _repoManager.DestroyWorktreeAsync(currentRun.WorktreePath);
-            currentRun.WorktreePath = null;
-        }
+        // Stop a still-active run but keep its worktree and branch for
+        // inspection; the retention sweeper (or a manual run delete) reclaims
+        // them together with the row. The next run gets its own branch and
+        // worktree anyway (ADR-0008), so nothing here can leak into it.
+        if (currentRun != null)
+            await CancelRunIfActiveAsync(currentRun);
 
         try
         {
@@ -548,8 +574,10 @@ public class WorkItemManager : IWorkItemManager
         if (currentRun != null)
         {
             currentRun.Status = LoopRunStatus.Completed;
+            // Terminal timestamp keeps the row visible to the retention
+            // sweeper; without it the run is never reclaimed.
+            currentRun.CompletedAt ??= DateTime.UtcNow;
             currentRun.HumanFeedbackReason = null;
-            currentRun.BranchName = null;
             currentRun.UpdatedAt = DateTime.UtcNow;
             await _loopRunStore.UpdateRunAsync(currentRun);
         }
@@ -694,10 +722,18 @@ public class WorkItemManager : IWorkItemManager
         }
         catch (InvalidOperationException) { /* No remote — local only. */ }
 
-        // Delete all LoopRuns for this work item
+        // Delete all LoopRuns for this work item. Reclaim each run's local
+        // git state first — once the rows are gone the retention sweeper can
+        // never find the worktrees and branches again. A run whose reclaim
+        // fails keeps its row so a later sweep retries (the work item no
+        // longer exists on the server, so the sweeper's current-run guard
+        // won't protect it).
         var runs = await _loopRunStore.GetAllByWorkItemAsync(workItemId);
         foreach (var run in runs)
         {
+            await CancelRunIfActiveAsync(run);
+            if (!await _runReclaimer.ReclaimLocalStateAsync(run))
+                continue;
             await _loopRunStore.DeleteAsync(run.Id);
         }
         return true;

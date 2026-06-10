@@ -25,7 +25,7 @@ Open <http://localhost:8080> and log in with the configured username (`admin` by
 | --------------- | ------------------------------------------------------ |
 | `postgres-data` | PostgreSQL data for both ILD and the WorkItem Server   |
 | `ild-data`      | ILD runtime files under `/data`                        |
-| `ild-worktrees` | Per-work-item git worktrees                            |
+| `ild-worktrees` | Per-run git worktrees                                  |
 | `workitem-data` | Additional WorkItem Server runtime files under `/data` |
 
 Your host `~/.gitconfig` is mounted read-only into the ILD container so commits inherit your local name and email unless you override `GIT_CONFIG`.

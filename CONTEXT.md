@@ -23,7 +23,7 @@ A single execution of a pinned LoopTemplateVersion against a WorkItem. Tracks no
 _Avoid_: execution, run, instance
 
 **Worktree**:
-A per-WorkItem git worktree created on first run, destroyed when Cleanup executes. Each new run after cleanup creates a fresh worktree.
+A per-**run** git worktree on a per-run branch (`ild/wi-<workItemId>-run-<runId>`), created by the Start node. It is **kept** after the run finishes so the run stays inspectable: a run's worktree and branch live exactly as long as its `LoopRun` row, and only the two paths that delete the row destroy them — a manual delete (`DELETE /api/v1/loopruns/{id}`, or deleting the whole work item) and the `WorktreeRetentionSweeper` once the run has been terminal longer than `run.retentionDays`. Both go through the shared `IRunReclaimer`, and reclamation is verified: the row is only deleted once worktree and branch are confirmed gone, otherwise it is kept (manual delete returns 409) so a later sweep retries. Sending a work item to Done/Backlog finishes the run but does **not** touch its worktree or branch. See [ADR-0008](docs/adr/0008-worktree-and-branch-per-run.md).
 _Avoid_: workspace, checkout
 
 ### Node Types
@@ -49,11 +49,11 @@ Renders a templated text payload using the prompt placeholder pipeline (`{{WorkI
 _Avoid_: template node, text node
 
 **PR Node**:
-Creates a pull request (or reuses existing one via `WorkItem.PrUrl`). Before PR creation, automatically commits any uncommitted changes, pushes the branch, fetches the remote, and verifies the branch has commits ahead of the target branch — if the branch has 0 commits ahead, the node fails (no-changes guard). Waits for webhook events: merge routes to `on_success`, rejection routes to `on_failure`. Supports three template config fields, all rendered through the prompt placeholder pipeline: `prompt` (announced as the node's input), `prDescriptionTemplate` (used as the PR body on creation; falls back to `WorkItem.Description` if unset), and `prCommentTemplate` (posted as a fresh PR comment on every re-visit when the PR already exists; the node fails if the comment post fails). Makes the PR lifecycle explicit in the graph.
+Creates a pull request (or reuses the one already linked on the run via `LoopRun.PrUrl` — PRs are per-run, see [ADR-0008](docs/adr/0008-worktree-and-branch-per-run.md)). Before PR creation, automatically commits any uncommitted changes, pushes the branch, fetches the remote, and verifies the branch has commits ahead of the target branch — if the branch has 0 commits ahead, the node fails (no-changes guard). Waits for webhook events: merge routes to `on_success`, rejection routes to `on_failure`. Supports three template config fields, all rendered through the prompt placeholder pipeline: `prompt` (announced as the node's input), `prDescriptionTemplate` (used as the PR body on creation; falls back to `WorkItem.Description` if unset), and `prCommentTemplate` (posted as a fresh PR comment on every re-visit when the PR already exists; the node fails if the comment post fails). Makes the PR lifecycle explicit in the graph.
 _Avoid_: repository node, git node
 
 **Cleanup Node**:
-A terminal (sink) node with only incoming edges. Destroys the worktree when executed, ending the LoopRun.
+A terminal (sink) node with only incoming edges. Marks the LoopRun finished. It deliberately **keeps** the worktree and branch so the run stays inspectable — disk is reclaimed only when the run itself is deleted (the `WorktreeRetentionSweeper`, or a manual run delete). See [ADR-0008](docs/adr/0008-worktree-and-branch-per-run.md).
 _Avoid_: teardown, end node
 
 ### Execution & Recovery
@@ -75,14 +75,14 @@ The engine's runaway-graph safety net is **per edge**, not per node. Each edge's
 _Avoid_: max node execs, run iteration limit
 
 **Recovery Policy**:
-Per-LoopTemplate setting controlling crash recovery behavior: AutoResume, NeedsReview, or Cancel. On recovery, stale `LoopRunNode` rows with `Status = Running` are transitioned to `Interrupted` and the engine re-enters the loop at `CurrentNodeId`; the node's `ExecuteAsync` is invoked fresh and re-checks its own preconditions. AutoResume does not resume runs at Human or PR nodes in `WaitingHuman` state — those require explicit human action.
+Per-LoopTemplate setting controlling crash recovery behavior: AutoResume, NeedsReview, or Cancel. The template's policy is pinned onto each `LoopRun` at start (like the template version), and recovery reads the run's copy. On recovery, stale `LoopRunNode` rows with `Status = Running` are transitioned to `Interrupted` and the engine re-enters the loop at `CurrentNodeId`; the node's `ExecuteAsync` is invoked fresh and re-checks its own preconditions. AutoResume does not resume runs at Human or PR nodes in `WaitingHuman` state — those require explicit human action. When the remote work-item scheduler is enabled, startup recovery is owned by `RemoteWorkItemStartupReconciler`, which consults the server first: it recovers via the policy, re-tracks parked (HumanFeedback/WaitingForIld) items so heartbeats resume, and cancels local runs whose work item the server has since reclaimed, finished, or deleted.
 _Avoid_: restart policy, failover
 
 **Best-Effort Guarantees**:
 Event log writes and SignalR notifications are best-effort — failures in these side effects never cause node execution to fail.
 
 **Run Refresh**:
-The engine reloads the `LoopRun` row from the store at the top of every iteration of `RunUntilParkAsync`, ensuring the latest run state (status, pause flag, current node) is used. Individual executors that need WorkItem state (`Start`, `Human`, `PR`) call `IWorkItemManager.GetWorkItemAsync` directly; there is no engine-level per-iteration WorkItem refresh.
+The engine reloads the `LoopRun` row (an explicit `ReloadAsync`, since a re-query through the long-lived scope would return the stale tracked instance) at the top of every iteration of `RunUntilParkAsync` **and** again before persisting each node outcome. The pre-persist reload stops a run instance held across a long node execution from clobbering concurrent control-plane writes — pause, cancel, and the `Retain` pin survive node completion, and the engine stops without routing when the status changed underneath it. Individual executors that need WorkItem state (`Start`, `Human`, `PR`) call `IWorkItemManager.GetWorkItemAsync` directly; there is no engine-level per-iteration WorkItem refresh.
 
 ### Work Item Lifecycle
 
@@ -110,13 +110,13 @@ _Avoid_: draft, planned
 - A **WorkItem** may have dependencies on other **WorkItem**s; it becomes ready when all dependencies reach `Done` status
 - New **WorkItem**s land in either Backlog or Work Queue based on a per-**Repository** gating setting (Backlog = requires human approval to proceed, Work Queue = auto-flows)
 - A **WorkItem** is optionally associated with a **Repository** (Plan-type items may not need one)
-- A **Worktree** is created on first run, destroyed on Cleanup. Re-starting a WorkItem creates a fresh worktree
+- A **Worktree** (and its branch) is created per **LoopRun** by the Start node and kept after the run finishes for inspection; the `WorktreeRetentionSweeper` reclaims worktree, branch, and run once terminal longer than `run.retentionDays` (settings-driven; `0` disables; runs marked `Retain` are never reclaimed). See [ADR-0008](docs/adr/0008-worktree-and-branch-per-run.md)
 - `{{PreviousNode.Output}}` resolves to the source node of the incoming edge, not the chronologically previous execution
 - `{{EventLog.LastN}}` returns the last 10 event-log summary entries (fixed — not parameterizable)
 - AI node always uses its single `prompt`; graph structure controls prompt variation across turns
 - `AiProvider.Config` is a free-form JSON blob; each adapter reads what it needs
 - Rebase happens only at loop start, not before each node
-- Failed/cancelled WorkItems: "Done" destroys worktree and discards; "Backlog" fully resets for re-planning
+- Failed/cancelled WorkItems: "Done" finishes the current run and discards; "Backlog" fully resets for re-planning. Neither destroys the run's worktree or branch — those live as long as the run row and are reclaimed by run deletion (manual or retention)
 - Safety net (max edge traversals): when an edge is traversed more than its `MaxTraversals` (default 50 via `LoopEngine.DefaultMaxEdgeTraversals`), the engine fails the run with "Max traversals exceeded for edge …"
 
 ## Example Dialogue

@@ -278,6 +278,17 @@ export default function EventLogViewer() {
     }
   };
 
+  const handleToggleRetain = async () => {
+    if (!runId || !run) return;
+    const next = !run.retain;
+    try {
+      await loopRunService.setRetain(runId, next);
+      setRun((prev) => (prev ? { ...prev, retain: next } : null));
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "Failed to update retain.");
+    }
+  };
+
   const handlePreviewSession = useCallback(
     async (session: LoopRunAvailableSession) => {
       if (!runId) return;
@@ -383,6 +394,17 @@ export default function EventLogViewer() {
               </button>
             </div>
           )}
+          <button
+            className={`btn btn-small ${run.retain ? "btn-primary" : "btn-secondary"}`}
+            onClick={handleToggleRetain}
+            title={
+              run.retain
+                ? "Pinned: this run is kept and never auto-deleted. Click to unpin."
+                : "Pin this run so its worktree, branch, and history are never auto-deleted."
+            }
+          >
+            {run.retain ? "📌 Retained" : "Retain"}
+          </button>
         </div>
       </div>
       <div className="run-details-meta">
