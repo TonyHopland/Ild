@@ -36,7 +36,7 @@ public class EventLogStore : IEventLogStore
         => await _db.EventLogs.FirstOrDefaultAsync(e => e.LoopRunId == runId && e.Sequence == sequence);
 
     public async Task<IReadOnlyList<EventLog>> GetOlderThanAsync(DateTimeOffset before)
-        => await _db.EventLogs.Where(e => e.Timestamp < before.DateTime).ToListAsync();
+        => await _db.EventLogs.Where(e => e.Timestamp < before.UtcDateTime).ToListAsync();
 
     public async Task RemoveRangeAsync(IReadOnlyList<EventLog> entries)
     {
