@@ -6,6 +6,8 @@ interface ConfirmModalProps {
   message: string;
   onConfirm: () => void;
   onCancel: () => void;
+  /** Label for the confirm button. Defaults to "Delete". */
+  confirmText?: string;
 }
 
 export default function ConfirmModal({
@@ -14,6 +16,7 @@ export default function ConfirmModal({
   message,
   onConfirm,
   onCancel,
+  confirmText = "Delete",
 }: ConfirmModalProps) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -48,7 +51,7 @@ export default function ConfirmModal({
             Cancel
           </button>
           <button type="button" className="btn btn-danger" onClick={onConfirm}>
-            Delete
+            {confirmText}
           </button>
         </div>
       </div>

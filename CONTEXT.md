@@ -26,6 +26,10 @@ _Avoid_: execution, run, instance
 A per-**run** git worktree on a per-run branch (`ild/wi-<workItemId>-run-<runId>`), created by the Start node. It is **kept** after the run finishes so the run stays inspectable: a run's worktree and branch live exactly as long as its `LoopRun` row, and only the two paths that delete the row destroy them — a manual delete (`DELETE /api/v1/loopruns/{id}`, or deleting the whole work item) and the `WorktreeRetentionSweeper` once the run has been terminal longer than `run.retentionDays`. Both go through the shared `IRunReclaimer`, and reclamation is verified: the row is only deleted once worktree and branch are confirmed gone, otherwise it is kept (manual delete returns 409) so a later sweep retries. Sending a work item to Done/Backlog finishes the run but does **not** touch its worktree or branch. See [ADR-0008](docs/adr/0008-worktree-and-branch-per-run.md).
 _Avoid_: workspace, checkout
 
+**Worktree Preview**:
+A live, running instance of a **WorkItem**'s **Worktree**, started on demand so a human can click through the work in progress. Exposes named services with ports and public URLs, and is started/stopped/inspected via the work item's preview endpoints (`startPreview`/`stopPreview`/`getPreview`). Surfaced in the work item dialog's **Preview** tab.
+_Avoid_: QA, staging, live env
+
 ### Node Types
 
 **Start Node**:

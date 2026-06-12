@@ -4,6 +4,7 @@ import type { TypedSignalRMessage } from "../../types/signalr";
 import { workItemService, settingsService, SchedulerSettingKeys } from "../../services/auth";
 import TaskboardColumn from "../../components/TaskboardColumn";
 import WorkItemModal from "../../components/WorkItemModal";
+import WorkItemModalV2 from "../../components/workitem-v2/WorkItemModalV2";
 import ErrorBanner from "../../components/ErrorBanner";
 import { useSignalR } from "../../hooks/useSignalR";
 import { WORK_ITEM_STATUSES } from "../../utils/constants";
@@ -248,13 +249,24 @@ export default function Taskboard() {
           );
         })}
       </div>
-      <WorkItemModal
-        workItem={editingItem}
-        isOpen={modalOpen}
-        onClose={() => setModalOpen(false)}
-        onSave={handleSave}
-        onDelete={handleDeleted}
-      />
+      {/* Existing items open in the tabbed detail dialog; creating a new item
+          still uses the classic form (the detail dialog needs an existing item). */}
+      {modalOpen && editingItem ? (
+        <WorkItemModalV2
+          workItem={editingItem}
+          onClose={() => setModalOpen(false)}
+          onSave={handleSave}
+          onDelete={handleDeleted}
+        />
+      ) : (
+        <WorkItemModal
+          workItem={editingItem}
+          isOpen={modalOpen}
+          onClose={() => setModalOpen(false)}
+          onSave={handleSave}
+          onDelete={handleDeleted}
+        />
+      )}
       <style>{`
         .taskboard-header {
           display: flex;
