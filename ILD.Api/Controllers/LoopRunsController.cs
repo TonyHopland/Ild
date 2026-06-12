@@ -288,8 +288,13 @@ public class LoopRunsController : ControllerBase
 
         var run = await _loopRunStore.GetByIdAsync(guid);
         if (run is null) return NotFound();
-        if (run.Status != ILD.Data.Enums.LoopRunStatus.WaitingHuman)
-            return BadRequest(new { error = "Terminal is only available while the run is awaiting human feedback." });
+        // A live worktree is inspectable for any run that has stopped executing
+        // — parked for review (WaitingHuman), failed (e.g. a node hitting a
+        // session/usage limit), or cancelled — so a human can read the diff or
+        // recover work. Only a still-Running run is off-limits: its executor is
+        // actively writing the worktree, so a concurrent shell would race it.
+        if (run.Status == ILD.Data.Enums.LoopRunStatus.Running)
+            return BadRequest(new { error = "Terminal is not available while the run is still executing." });
         if (string.IsNullOrWhiteSpace(run.WorktreePath) || !Directory.Exists(run.WorktreePath))
             return BadRequest(new { error = "Run has no live worktree." });
 

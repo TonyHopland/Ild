@@ -46,25 +46,51 @@ public static class PtyWebSocketBridge
                 return;
             }
 
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            // Signals the PTY->socket pump that the child is gone. Deliberately
+            // NOT linked to the WebSocket Send/Receive calls: cancelling an
+            // in-flight WebSocket op *aborts* the socket, which strips the close
+            // frame and surfaces to the browser as an abnormal 1006 close. The
+            // only token the socket ops observe is the request-abort token,
+            // which fires only when the client/connection is genuinely gone.
+            using var ptyExited = new CancellationTokenSource();
             pty.ProcessExited += (_, _) =>
             {
-                try { linked.Cancel(); } catch { }
+                try { ptyExited.Cancel(); } catch { }
             };
 
-            var ptyToSocket = PumpPtyToSocketAsync(pty, socket, linked.Token);
-            var socketToPty = PumpSocketToPtyAsync(socket, pty, linked.Token);
+            var ptyToSocket = PumpPtyToSocketAsync(pty, socket, cancellationToken);
+            var socketToPty = PumpSocketToPtyAsync(socket, pty, cancellationToken);
 
-            await Task.WhenAny(ptyToSocket, socketToPty);
-            try { linked.Cancel(); } catch { }
+            // Wake teardown the moment the child exits, even if the PTY reader is
+            // slow to surface EOF. This waits on the token only — it never
+            // touches the socket, so unlike the old linked-token cancel it can't
+            // abort it.
+            await Task.WhenAny(ptyToSocket, socketToPty, AwaitCancellationAsync(ptyExited.Token));
+
+            // Send the close frame BEFORE killing the child or tearing anything
+            // down, while the socket is still in a closable state, so the client
+            // sees a clean 1000 close instead of a 1006 drop. CloseOutputAsync
+            // only sends — it doesn't read — so it never races the receive pump
+            // that drains the client's close reply.
+            if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
+            {
+                try
+                {
+                    await socket.CloseOutputAsync(
+                        WebSocketCloseStatus.NormalClosure, "session ended", cancellationToken);
+                }
+                catch { }
+            }
+
             // The PTY reader stream on Unix doesn't observe the cancellation
             // token, so kill the child to unblock ReadAsync before draining.
             try { pty.Kill(); } catch { }
 
             try { await ptyToSocket; } catch { }
-            try { await socketToPty; } catch { }
-
-            await CloseSocketAsync(socket, WebSocketCloseStatus.NormalClosure, "session ended", cancellationToken);
+            // Bounded wait: once CloseOutputAsync has sent our close frame the
+            // client already shows a clean close, so don't block teardown if it
+            // never sends its close reply back.
+            try { await Task.WhenAny(socketToPty, Task.Delay(TimeSpan.FromSeconds(3), cancellationToken)); } catch { }
         }
         finally
         {
@@ -90,27 +116,48 @@ public static class PtyWebSocketBridge
         await CloseSocketAsync(socket, WebSocketCloseStatus.InternalServerError, message, ct);
     }
 
-    private static async Task PumpPtyToSocketAsync(IPtyConnection pty, WebSocket socket, CancellationToken ct)
+    /// <summary>
+    /// Completes when <paramref name="token"/> is cancelled, without throwing.
+    /// Lets <see cref="Task.WhenAny(Task[])"/> react to child-process exit
+    /// without cancelling (and thereby aborting) the live WebSocket.
+    /// </summary>
+    private static Task AwaitCancellationAsync(CancellationToken token)
+    {
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        token.Register(static s => ((TaskCompletionSource)s!).TrySetResult(), tcs);
+        return tcs.Task;
+    }
+
+    private static async Task PumpPtyToSocketAsync(
+        IPtyConnection pty, WebSocket socket, CancellationToken requestCt)
     {
         var buffer = ArrayPool<byte>.Shared.Rent(ReadBufferSize);
         try
         {
-            while (!ct.IsCancellationRequested && socket.State == WebSocketState.Open)
+            while (!requestCt.IsCancellationRequested && socket.State == WebSocketState.Open)
             {
                 int read;
                 try
                 {
-                    read = await pty.ReaderStream.ReadAsync(buffer.AsMemory(0, ReadBufferSize), ct);
+                    read = await pty.ReaderStream.ReadAsync(buffer.AsMemory(0, ReadBufferSize), requestCt);
                 }
                 catch (OperationCanceledException) { break; }
                 catch (IOException) { break; }
+                // EOF: the child exited and its output is drained. On Unix the
+                // reader doesn't observe a token, so this EOF (not ptyExited) is
+                // the real signal that ends the pump.
                 if (read <= 0) break;
 
-                await socket.SendAsync(
-                    new ArraySegment<byte>(buffer, 0, read),
-                    WebSocketMessageType.Binary,
-                    endOfMessage: true,
-                    cancellationToken: ct);
+                try
+                {
+                    await socket.SendAsync(
+                        new ArraySegment<byte>(buffer, 0, read),
+                        WebSocketMessageType.Binary,
+                        endOfMessage: true,
+                        cancellationToken: requestCt);
+                }
+                catch (OperationCanceledException) { break; }
+                catch (WebSocketException) { break; }
             }
         }
         finally

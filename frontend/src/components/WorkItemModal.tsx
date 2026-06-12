@@ -529,8 +529,14 @@ export default function WorkItemModal({
               </button>
             </div>
             <div className="modal-body">
-              {/* Worktree terminal — only while parked at human feedback with a live worktree */}
-              {workItem.status === WorkItemStatus.HumanFeedback &&
+              {/* Worktree terminal — available for any run that has stopped
+                  executing and still has a live worktree (parked for review,
+                  failed, or cancelled), so the diff can be inspected or work
+                  recovered. Hidden while the run is active (Running, or
+                  WaitingForIld where the run is still Running under the hood)
+                  since its executor is writing the worktree. */}
+              {workItem.status !== WorkItemStatus.Running &&
+                workItem.status !== WorkItemStatus.WaitingForIld &&
                 workItem.currentLoopRunId &&
                 workItem.worktreePath && (
                   <div className="detail-section worktree-terminal-row">

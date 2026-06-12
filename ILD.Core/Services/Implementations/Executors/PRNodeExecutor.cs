@@ -146,7 +146,7 @@ public sealed class PRNodeExecutor : INodeExecutor
             }
         }
 
-        yield return new NodeOutcome.WaitingAction("PR awaiting merge", prUrl);
+        yield return new NodeOutcome.WaitingAction(HumanFeedbackReasons.PrAwaitingMerge, prUrl);
     }
 
     private static string? ExtractPrNumber(string prUrl)
