@@ -4,11 +4,7 @@ import type { TypedSignalRMessage } from "../../types/signalr";
 import { workItemService, settingsService, SchedulerSettingKeys } from "../../services/auth";
 import TaskboardColumn from "../../components/TaskboardColumn";
 import WorkItemModal from "../../components/WorkItemModal";
-import WorkItemModalV2, {
-  WorkItemUiVariant,
-  WORK_ITEM_UI_VARIANTS,
-  WORK_ITEM_UI_VARIANT_KEY,
-} from "../../components/workitem-v2/WorkItemModalV2";
+import WorkItemModalV2 from "../../components/workitem-v2/WorkItemModalV2";
 import ErrorBanner from "../../components/ErrorBanner";
 import { useSignalR } from "../../hooks/useSignalR";
 import { WORK_ITEM_STATUSES } from "../../utils/constants";
@@ -29,18 +25,6 @@ export default function Taskboard() {
   const [errorText, setErrorText] = useState("");
   const [isPaused, setIsPaused] = useState(false);
   const [pauseBusy, setPauseBusy] = useState(false);
-  // Workitem dialog mockup switcher — lets us compare the V2 layouts against
-  // the classic modal on real data before committing to one design.
-  const [uiVariant, setUiVariant] = useState<WorkItemUiVariant>(() => {
-    const stored = localStorage.getItem(WORK_ITEM_UI_VARIANT_KEY);
-    return WORK_ITEM_UI_VARIANTS.some((v) => v.value === stored)
-      ? (stored as WorkItemUiVariant)
-      : "classic";
-  });
-  const handleUiVariantChange = (variant: WorkItemUiVariant) => {
-    setUiVariant(variant);
-    localStorage.setItem(WORK_ITEM_UI_VARIANT_KEY, variant);
-  };
   const { on, off } = useSignalR();
 
   useEffect(() => {
@@ -212,19 +196,6 @@ export default function Taskboard() {
       <div className="taskboard-header">
         <h1 className="page-title">Taskboard</h1>
         <div className="taskboard-header-actions">
-          <label className="workitem-ui-picker" title="Choose which work item dialog design to use">
-            Workitem UI
-            <select
-              value={uiVariant}
-              onChange={(e) => handleUiVariantChange(e.target.value as WorkItemUiVariant)}
-            >
-              {WORK_ITEM_UI_VARIANTS.map((v) => (
-                <option key={v.value} value={v.value}>
-                  {v.label}
-                </option>
-              ))}
-            </select>
-          </label>
           <label
             className={`scheduler-pause-toggle${isPaused ? "" : " is-running"}`}
             title="Toggle the scheduler — when paused, Ready items stay queued until resumed."
@@ -278,13 +249,11 @@ export default function Taskboard() {
           );
         })}
       </div>
-      {/* Creating a new item always uses the classic form; the V2 mockups
-          cover the detail view, which is where the redesign matters. */}
-      {modalOpen && editingItem && uiVariant !== "classic" ? (
+      {/* Existing items open in the tabbed detail dialog; creating a new item
+          still uses the classic form (the detail dialog needs an existing item). */}
+      {modalOpen && editingItem ? (
         <WorkItemModalV2
           workItem={editingItem}
-          variant={uiVariant}
-          onVariantChange={handleUiVariantChange}
           onClose={() => setModalOpen(false)}
           onSave={handleSave}
           onDelete={handleDeleted}
@@ -310,23 +279,6 @@ export default function Taskboard() {
           display: flex;
           align-items: center;
           gap: 1rem;
-        }
-
-        .workitem-ui-picker {
-          display: inline-flex;
-          align-items: center;
-          gap: 0.5rem;
-          font-size: 0.8rem;
-          color: var(--text-secondary, #555);
-        }
-
-        .workitem-ui-picker select {
-          background-color: #2a2a40;
-          border: 1px solid #3a3a5c;
-          border-radius: 0.375rem;
-          color: #e0e0e0;
-          font-size: 0.8rem;
-          padding: 0.3rem 0.4rem;
         }
 
         .scheduler-pause-toggle {

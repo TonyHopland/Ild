@@ -105,20 +105,12 @@ function mockServices(runs: LoopRun[] = [makeRun()]) {
 
 async function renderDialog(
   workItem: WorkItem,
-  variant: "tabs" | "split" | "rail" = "tabs",
   props: Partial<React.ComponentProps<typeof WorkItemModalV2>> = {},
 ) {
   await act(async () => {
     render(
       <MemoryRouter>
-        <WorkItemModalV2
-          workItem={workItem}
-          variant={variant}
-          onVariantChange={vi.fn()}
-          onClose={vi.fn()}
-          onSave={vi.fn()}
-          {...props}
-        />
+        <WorkItemModalV2 workItem={workItem} onClose={vi.fn()} onSave={vi.fn()} {...props} />
       </MemoryRouter>,
     );
     await Promise.resolve();
@@ -126,21 +118,18 @@ async function renderDialog(
 }
 
 describe("WorkItemModalV2", () => {
-  test.each(["tabs", "split", "rail"] as const)(
-    "%s variant renders header, tabs and overview",
-    async (variant) => {
-      mockServices();
-      await renderDialog(makeWorkItem(), variant);
+  test("renders header, tabs and overview", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem());
 
-      expect(screen.getByText("Test Work Item")).toBeTruthy();
-      expect(screen.getByRole("tab", { name: "Overview" })).toBeTruthy();
-      expect(screen.getByRole("tab", { name: /Runs/ })).toBeTruthy();
-      expect(screen.getByRole("tab", { name: /Conversation/ })).toBeTruthy();
-      expect(screen.getByRole("tab", { name: /Preview/ })).toBeTruthy();
-      // Overview shows the description by default.
-      expect(screen.getByText("Description")).toBeTruthy();
-    },
-  );
+    expect(screen.getByText("Test Work Item")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Overview" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: /Runs/ })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: /Conversation/ })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: /Preview/ })).toBeTruthy();
+    // Overview shows the description by default.
+    expect(screen.getByText("Description")).toBeTruthy();
+  });
 
   test("runs tab shows run list and inline node timeline", async () => {
     mockServices();
@@ -176,9 +165,9 @@ describe("WorkItemModalV2", () => {
     expect(screen.getByText("hello")).toBeTruthy();
   });
 
-  test("split variant always shows metadata sidebar", async () => {
+  test("overview shows work item metadata", async () => {
     mockServices();
-    await renderDialog(makeWorkItem(), "split");
+    await renderDialog(makeWorkItem());
 
     // Repository name resolves from the mocked repository service.
     expect(await screen.findByText("my-repo")).toBeTruthy();
@@ -216,7 +205,7 @@ describe("WorkItemModalV2", () => {
   test("Escape closes immediately when there are no unsaved changes", async () => {
     mockServices();
     const onClose = vi.fn();
-    await renderDialog(makeWorkItem(), "tabs", { onClose });
+    await renderDialog(makeWorkItem(), { onClose });
 
     await act(async () => {
       fireEvent.keyDown(document, { key: "Escape" });
@@ -230,7 +219,7 @@ describe("WorkItemModalV2", () => {
   test("Escape with unsaved edits prompts to discard instead of closing", async () => {
     mockServices();
     const onClose = vi.fn();
-    await renderDialog(makeWorkItem(), "tabs", { onClose });
+    await renderDialog(makeWorkItem(), { onClose });
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Edit" }));
@@ -282,18 +271,5 @@ describe("WorkItemModalV2", () => {
       await Promise.resolve();
     });
     expect(screen.getByText("done")).toBeTruthy();
-  });
-
-  test("split sidebar collapse toggle persists to localStorage", async () => {
-    mockServices();
-    await renderDialog(makeWorkItem(), "split");
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Hide panel" }));
-      await Promise.resolve();
-    });
-
-    expect(localStorage.getItem("ild_workitem_sidebar_collapsed")).toBe("true");
-    expect(screen.getByRole("button", { name: "Show panel" })).toBeTruthy();
   });
 });

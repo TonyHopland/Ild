@@ -18,53 +18,23 @@ import {
 import RunsPanel from "./RunsPanel";
 import EditPanel from "./EditPanel";
 
-export type WorkItemUiVariant = "classic" | "tabs" | "split" | "rail";
-
-export const WORK_ITEM_UI_VARIANT_KEY = "ild_workitem_ui_variant";
-export const WORK_ITEM_SIDEBAR_COLLAPSED_KEY = "ild_workitem_sidebar_collapsed";
-
-export const WORK_ITEM_UI_VARIANTS: { value: WorkItemUiVariant; label: string }[] = [
-  { value: "classic", label: "Classic" },
-  { value: "tabs", label: "Mockup A — Full tabs" },
-  { value: "split", label: "Mockup B — Tabs + sidebar" },
-  { value: "rail", label: "Mockup C — Side rail" },
-];
-
 type TabId = "overview" | "runs" | "conversation" | "preview";
 
 interface WorkItemModalV2Props {
   workItem: WorkItem;
-  variant: Exclude<WorkItemUiVariant, "classic">;
-  onVariantChange: (variant: WorkItemUiVariant) => void;
   onClose: () => void;
   onSave: (workItem: WorkItem) => void;
   onDelete?: (id: string) => void;
 }
 
-/** Below this width the persistent sidebar can't fit, so split folds its
- *  metadata into the Overview tab instead. Kept in sync with the CSS. */
-const NARROW_QUERY = "(max-width: 900px)";
-
-function matchesNarrow(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    typeof window.matchMedia === "function" &&
-    window.matchMedia(NARROW_QUERY).matches
-  );
-}
-
 /**
- * Near-fullscreen work item dialog mockups. Three layout variants share the
- * same data hook and panels so only the navigation chrome differs:
- *  - "tabs":  horizontal tab bar, content uses the full width
- *  - "split": horizontal tab bar plus an always-visible metadata sidebar
- *             (collapsible, and folded into Overview when there's no room)
- *  - "rail":  vertical navigation rail on the left
+ * Near-fullscreen work item detail dialog: a horizontal tab bar (Overview,
+ * Runs, Conversation, Preview) over the full width, with run history shown
+ * inline rather than on a separate page. New items are still created through
+ * the classic modal — this dialog is the detail/edit view for existing items.
  */
 export default function WorkItemModalV2({
   workItem,
-  variant,
-  onVariantChange,
   onClose,
   onSave,
   onDelete,
@@ -79,23 +49,6 @@ export default function WorkItemModalV2({
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [showTerminal, setShowTerminal] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(
-    () => localStorage.getItem(WORK_ITEM_SIDEBAR_COLLAPSED_KEY) === "true",
-  );
-  const [isNarrow, setIsNarrow] = useState(matchesNarrow);
-
-  useEffect(() => {
-    localStorage.setItem(WORK_ITEM_SIDEBAR_COLLAPSED_KEY, String(sidebarCollapsed));
-  }, [sidebarCollapsed]);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
-    const mq = window.matchMedia(NARROW_QUERY);
-    const onChange = (e: MediaQueryListEvent) => setIsNarrow(e.matches);
-    mq.addEventListener("change", onChange);
-    setIsNarrow(mq.matches);
-    return () => mq.removeEventListener("change", onChange);
-  }, []);
 
   const exitEdit = useCallback(() => {
     setEditMode(false);
@@ -173,30 +126,15 @@ export default function WorkItemModalV2({
     { id: "preview", label: `Preview${detail.preview?.state === "running" ? " ●" : ""}` },
   ];
 
-  // The metadata sidebar is the defining trait of the split variant, but it
-  // only fits when expanded and the viewport is wide enough. Whenever it is
-  // hidden, MetaPanel is folded back into the Overview tab so nothing — Link
-  // PR, dependency editing, dates — is ever unreachable.
-  const sidebarShown = variant === "split" && !sidebarCollapsed && !isNarrow;
-  const showOverviewMeta = !sidebarShown;
-  const fullBodyEdit = editMode && variant !== "split";
-  const inlineEdit = editMode && variant === "split";
-
   const showCleanupButtons =
     workItem.status === WorkItemStatus.HumanFeedback &&
     workItem.humanFeedbackReason !== "Human Input Needed" &&
     workItem.humanFeedbackReason !== "PR Awaiting Merge";
 
-  const handleTabKeyDown = (
-    e: React.KeyboardEvent,
-    index: number,
-    orientation: "horizontal" | "vertical",
-  ) => {
-    const nextKey = orientation === "horizontal" ? "ArrowRight" : "ArrowDown";
-    const prevKey = orientation === "horizontal" ? "ArrowLeft" : "ArrowUp";
+  const handleTabKeyDown = (e: React.KeyboardEvent, index: number) => {
     let nextIndex: number | null = null;
-    if (e.key === nextKey) nextIndex = (index + 1) % tabs.length;
-    else if (e.key === prevKey) nextIndex = (index - 1 + tabs.length) % tabs.length;
+    if (e.key === "ArrowRight") nextIndex = (index + 1) % tabs.length;
+    else if (e.key === "ArrowLeft") nextIndex = (index - 1 + tabs.length) % tabs.length;
     else if (e.key === "Home") nextIndex = 0;
     else if (e.key === "End") nextIndex = tabs.length - 1;
     if (nextIndex === null) return;
@@ -217,17 +155,15 @@ export default function WorkItemModalV2({
         className="wiv2-tabpanel"
         hidden={activeTab !== "overview"}
       >
-        <div className={showOverviewMeta ? "wiv2-overview wiv2-overview-cols" : "wiv2-overview"}>
+        <div className="wiv2-overview wiv2-overview-cols">
           <div className="wiv2-overview-main">
             {detail.shouldStream && <LiveStream text={detail.progressText} />}
             <span className="detail-label">Description</span>
             <DescriptionPanel workItem={workItem} />
           </div>
-          {showOverviewMeta && (
-            <aside className="wiv2-overview-aside">
-              <MetaPanel workItem={workItem} detail={detail} />
-            </aside>
-          )}
+          <aside className="wiv2-overview-aside">
+            <MetaPanel workItem={workItem} detail={detail} />
+          </aside>
         </div>
       </section>
       <section
@@ -260,13 +196,8 @@ export default function WorkItemModalV2({
     </>
   );
 
-  const tabBar = (orientation: "horizontal" | "vertical") => (
-    <div
-      className={orientation === "vertical" ? "wiv2-rail" : "wiv2-tabbar"}
-      role="tablist"
-      aria-orientation={orientation}
-      aria-label="Work item sections"
-    >
+  const tabBar = (
+    <div className="wiv2-tabbar" role="tablist" aria-label="Work item sections">
       {tabs.map((tab, i) => (
         <button
           key={tab.id}
@@ -278,22 +209,12 @@ export default function WorkItemModalV2({
           tabIndex={activeTab === tab.id ? 0 : -1}
           className={`wiv2-tab ${activeTab === tab.id ? "wiv2-tab-active" : ""}`}
           onClick={() => setActiveTab(tab.id)}
-          onKeyDown={(e) => handleTabKeyDown(e, i, orientation)}
+          onKeyDown={(e) => handleTabKeyDown(e, i)}
         >
           {tab.label}
         </button>
       ))}
     </div>
-  );
-
-  const editForm = (
-    <EditPanel
-      workItem={workItem}
-      detail={detail}
-      onSave={onSave}
-      onDone={exitEdit}
-      onDirtyChange={setEditDirty}
-    />
   );
 
   return (
@@ -318,30 +239,6 @@ export default function WorkItemModalV2({
               </div>
             </div>
             <div className="wiv2-header-actions">
-              <label className="wiv2-variant-picker">
-                UI
-                <select
-                  value={variant}
-                  onChange={(e) => onVariantChange(e.target.value as WorkItemUiVariant)}
-                >
-                  {WORK_ITEM_UI_VARIANTS.map((v) => (
-                    <option key={v.value} value={v.value}>
-                      {v.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {variant === "split" && !isNarrow && (
-                <button
-                  type="button"
-                  className="btn btn-sm btn-secondary"
-                  onClick={() => setSidebarCollapsed((c) => !c)}
-                  aria-pressed={sidebarCollapsed}
-                  title={sidebarCollapsed ? "Show the details panel" : "Hide the details panel"}
-                >
-                  {sidebarCollapsed ? "Show panel" : "Hide panel"}
-                </button>
-              )}
               {workItem.status === WorkItemStatus.HumanFeedback &&
                 workItem.currentLoopRunId &&
                 workItem.worktreePath && (
@@ -369,79 +266,63 @@ export default function WorkItemModalV2({
             </div>
           </div>
 
-          {fullBodyEdit ? (
-            <div className="wiv2-body wiv2-body-edit">{editForm}</div>
+          {editMode ? (
+            <div className="wiv2-body wiv2-body-edit">
+              <EditPanel
+                workItem={workItem}
+                detail={detail}
+                onSave={onSave}
+                onDone={exitEdit}
+                onDirtyChange={setEditDirty}
+              />
+            </div>
           ) : (
             <>
-              {!editMode && (
-                <FeedbackBanner workItem={workItem} detail={detail} prompt={feedbackPrompt} />
-              )}
-              {variant === "rail" ? (
-                <div className="wiv2-body wiv2-body-rail">
-                  {tabBar("vertical")}
-                  <div className="wiv2-content">{renderPanels()}</div>
-                </div>
-              ) : (
-                <div className="wiv2-body wiv2-body-top">
-                  {tabBar("horizontal")}
-                  <div className="wiv2-content-row">
-                    <div className="wiv2-content">
-                      {inlineEdit ? (
-                        <div className="wiv2-tabpanel">{editForm}</div>
-                      ) : (
-                        renderPanels()
-                      )}
-                    </div>
-                    {sidebarShown && (
-                      <aside className="wiv2-sidebar">
-                        <MetaPanel workItem={workItem} detail={detail} />
-                      </aside>
-                    )}
-                  </div>
-                </div>
-              )}
-              {!editMode && (
-                <div className="wiv2-footer">
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-danger"
-                    onClick={() => setShowDeleteConfirm(true)}
-                  >
-                    Delete
-                  </button>
-                  {showCleanupButtons && (
-                    <>
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-warning"
-                        onClick={() => void detail.handleCleanupDone()}
-                      >
-                        Cleanup -&gt; Done
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-secondary"
-                        onClick={() => void detail.handleCleanupBacklog()}
-                      >
-                        Cleanup -&gt; Backlog
-                      </button>
-                    </>
-                  )}
-                  <span className="wiv2-footer-spacer" />
-                  {workItem.prUrl && (
+              <FeedbackBanner workItem={workItem} detail={detail} prompt={feedbackPrompt} />
+              <div className="wiv2-body wiv2-body-top">
+                {tabBar}
+                <div className="wiv2-content">{renderPanels()}</div>
+              </div>
+              <div className="wiv2-footer">
+                <button
+                  type="button"
+                  className="btn btn-sm btn-danger"
+                  onClick={() => setShowDeleteConfirm(true)}
+                >
+                  Delete
+                </button>
+                {showCleanupButtons && (
+                  <>
                     <button
                       type="button"
-                      className="btn btn-success"
-                      onClick={() => void detail.handleMarkMerged()}
+                      className="btn btn-sm btn-warning"
+                      onClick={() => void detail.handleCleanupDone()}
                     >
-                      Mark Merged
+                      Cleanup -&gt; Done
                     </button>
-                  )}
-                  <button type="button" className="btn btn-secondary" onClick={requestClose}>
-                    Close
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-secondary"
+                      onClick={() => void detail.handleCleanupBacklog()}
+                    >
+                      Cleanup -&gt; Backlog
+                    </button>
+                  </>
+                )}
+                <span className="wiv2-footer-spacer" />
+                {workItem.prUrl && (
+                  <button
+                    type="button"
+                    className="btn btn-success"
+                    onClick={() => void detail.handleMarkMerged()}
+                  >
+                    Mark Merged
                   </button>
-                </div>
-              )}
+                )}
+                <button type="button" className="btn btn-secondary" onClick={requestClose}>
+                  Close
+                </button>
+              </div>
             </>
           )}
         </div>
