@@ -153,6 +153,76 @@ describe("WorkItemModalV2", () => {
     expect(screen.getByText("done")).toBeTruthy();
   });
 
+  test("runs tab retry button restarts the run from a node and refreshes", async () => {
+    mockServices();
+    const retrySpy = vi
+      .spyOn(authServices.loopRunService, "retryFromNode")
+      .mockResolvedValue(undefined);
+    const getRunsSpy = vi.spyOn(authServices.workItemService, "getRuns");
+    await renderDialog(makeWorkItem());
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Runs/ }));
+      await Promise.resolve();
+    });
+
+    const retryButton = await screen.findByRole("button", { name: "Retry from this node" });
+    expect((retryButton as HTMLButtonElement).disabled).toBe(false);
+
+    // getRuns is called once on mount; the retry should trigger a refresh.
+    const callsBeforeRetry = getRunsSpy.mock.calls.length;
+
+    await act(async () => {
+      fireEvent.click(retryButton);
+      await Promise.resolve();
+    });
+
+    expect(retrySpy).toHaveBeenCalledWith("run-1", "rn-1");
+    expect(getRunsSpy.mock.calls.length).toBeGreaterThan(callsBeforeRetry);
+  });
+
+  test("runs tab retry is disabled while the run is actively executing", async () => {
+    // A running, non-paused run cannot be retried — its node is shown but the
+    // retry button is disabled.
+    const runningRun = makeRun({
+      status: LoopRunStatus.Running,
+      completedAt: null,
+      nodes: [
+        {
+          id: "rn-1",
+          nodeId: "n-1",
+          nodeLabel: "Implement",
+          status: LoopRunNodeStatus.Succeeded,
+          effectiveInput: JSON.stringify({ prompt: "do the thing" }),
+          output: "done",
+          error: null,
+          startedAt: "2025-01-02T00:00:00Z",
+          completedAt: "2025-01-02T00:30:00Z",
+          executionCount: 1,
+        },
+      ],
+    });
+    mockServices([runningRun]);
+    const retrySpy = vi
+      .spyOn(authServices.loopRunService, "retryFromNode")
+      .mockResolvedValue(undefined);
+    await renderDialog(makeWorkItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1" }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Runs/ }));
+      await Promise.resolve();
+    });
+
+    const retryButton = await screen.findByRole("button", { name: "Retry from this node" });
+    expect((retryButton as HTMLButtonElement).disabled).toBe(true);
+
+    await act(async () => {
+      fireEvent.click(retryButton);
+      await Promise.resolve();
+    });
+    expect(retrySpy).not.toHaveBeenCalled();
+  });
+
   test("conversation tab shows messages", async () => {
     mockServices();
     await renderDialog(makeWorkItem());
