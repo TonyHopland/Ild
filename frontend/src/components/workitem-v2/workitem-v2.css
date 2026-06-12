@@ -178,9 +178,24 @@
 
 .wiv2-content {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* All tab panels stay mounted; only the active one is shown so selected run,
+   expanded nodes and scroll position survive tab switches. Each panel owns its
+   own scroll + padding so it fills the content column. */
+.wiv2-tabpanel {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 1rem;
-  min-width: 0;
+}
+
+.wiv2-tabpanel[hidden] {
+  display: none;
 }
 
 .wiv2-sidebar {
@@ -494,9 +509,5 @@
     width: auto;
     flex-direction: row;
     flex-wrap: wrap;
-  }
-
-  .wiv2-sidebar {
-    display: none;
   }
 }

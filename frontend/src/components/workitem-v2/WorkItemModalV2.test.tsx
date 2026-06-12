@@ -16,6 +16,7 @@ import * as authServices from "../../services/auth";
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  localStorage.clear();
 });
 
 function makeWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
@@ -135,7 +136,7 @@ describe("WorkItemModalV2", () => {
       expect(screen.getByRole("tab", { name: "Overview" })).toBeTruthy();
       expect(screen.getByRole("tab", { name: /Runs/ })).toBeTruthy();
       expect(screen.getByRole("tab", { name: /Conversation/ })).toBeTruthy();
-      expect(screen.getByRole("tab", { name: /QA/ })).toBeTruthy();
+      expect(screen.getByRole("tab", { name: /Preview/ })).toBeTruthy();
       // Overview shows the description by default.
       expect(screen.getByText("Description")).toBeTruthy();
     },
@@ -210,5 +211,89 @@ describe("WorkItemModalV2", () => {
 
     expect(screen.getByLabelText("Title")).toBeTruthy();
     expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Test Work Item");
+  });
+
+  test("Escape closes immediately when there are no unsaved changes", async () => {
+    mockServices();
+    const onClose = vi.fn();
+    await renderDialog(makeWorkItem(), "tabs", { onClose });
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Escape" });
+      await Promise.resolve();
+    });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/Discard unsaved changes/)).toBeNull();
+  });
+
+  test("Escape with unsaved edits prompts to discard instead of closing", async () => {
+    mockServices();
+    const onClose = vi.fn();
+    await renderDialog(makeWorkItem(), "tabs", { onClose });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Changed title" } });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Escape" });
+      await Promise.resolve();
+    });
+
+    // Dialog is still open and asks before discarding.
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText(/Discard unsaved changes/)).toBeTruthy();
+
+    // Confirming the discard finally closes.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+      await Promise.resolve();
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  test("expanded run node survives a tab switch (panels stay mounted)", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem());
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Runs/ }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText("Implement"));
+      await Promise.resolve();
+    });
+    expect(screen.getByText("done")).toBeTruthy();
+
+    // Hop to another tab and back — the node should still be expanded without
+    // re-clicking, because the panel was not unmounted.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Conversation/ }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Runs/ }));
+      await Promise.resolve();
+    });
+    expect(screen.getByText("done")).toBeTruthy();
+  });
+
+  test("split sidebar collapse toggle persists to localStorage", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem(), "split");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Hide panel" }));
+      await Promise.resolve();
+    });
+
+    expect(localStorage.getItem("ild_workitem_sidebar_collapsed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Show panel" })).toBeTruthy();
   });
 });

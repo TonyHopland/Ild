@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { WorkItem, WorkItemStatus, WorkItemPriority } from "../../types";
 import { workItemService } from "../../services/auth";
 import { parseTags } from "../../utils/workItemJson";
@@ -10,13 +10,22 @@ interface EditPanelProps {
   detail: WorkItemDetail;
   onSave: (workItem: WorkItem) => void;
   onDone: () => void;
+  /** Reports whether any field differs from the work item, so the dialog can
+   *  guard close paths against discarding unsaved edits. */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 /**
  * Inline edit form for the V2 dialog — same fields and save behaviour as the
  * classic modal's edit mode, but rendered inside the full-screen layout.
  */
-export default function EditPanel({ workItem, detail, onSave, onDone }: EditPanelProps) {
+export default function EditPanel({
+  workItem,
+  detail,
+  onSave,
+  onDone,
+  onDirtyChange,
+}: EditPanelProps) {
   const [title, setTitle] = useState(workItem.title);
   const [description, setDescription] = useState(workItem.description);
   const [status, setStatus] = useState<WorkItemStatus>(workItem.status);
@@ -25,6 +34,18 @@ export default function EditPanel({ workItem, detail, onSave, onDone }: EditPane
   const [repositoryId, setRepositoryId] = useState(workItem.repositoryId);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  const dirty =
+    title !== workItem.title ||
+    description !== workItem.description ||
+    status !== workItem.status ||
+    priority !== workItem.priority ||
+    tags !== parseTags(workItem).join(", ") ||
+    repositoryId !== workItem.repositoryId;
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

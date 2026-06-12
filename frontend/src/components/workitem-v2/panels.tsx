@@ -100,8 +100,8 @@ export function ConversationPanel({ workItem }: { workItem: WorkItem }) {
   );
 }
 
-/** QA / preview tab: state, services and start/stop controls. */
-export function QAPanel({ workItem, detail }: { workItem: WorkItem; detail: WorkItemDetail }) {
+/** Preview tab: worktree preview state, services and start/stop controls. */
+export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail: WorkItemDetail }) {
   const { preview, previewLoading, previewError } = detail;
 
   if (!workItem.worktreePath) {
@@ -116,7 +116,7 @@ export function QAPanel({ workItem, detail }: { workItem: WorkItem; detail: Work
     preview?.services.find((service) => !!service.publicUrl)?.publicUrl ?? null;
 
   return (
-    <div className="wiv2-qa">
+    <div className="wiv2-preview">
       <div className="preview-summary">
         <span className="detail-value">
           {previewLoading ? "Checking preview..." : (preview?.state ?? "stopped")}
