@@ -55,7 +55,7 @@ describe("parseConversation", () => {
     expect(parseConversation(workItem)).toEqual([]);
   });
 
-  test("drops the AI 'Human Input Needed' sentinel that precedes a human response", () => {
+  test("drops the 'Human Input Needed' sentinel that precedes a human response", () => {
     const workItem = {
       conversation: [
         {
@@ -78,16 +78,37 @@ describe("parseConversation", () => {
     });
   });
 
-  test("keeps a human message that happens to say 'Human Input Needed'", () => {
+  test("drops the sentinel regardless of the role it is stored under", () => {
+    // The node label can surface the sentinel under a "Human" bubble, so the
+    // match cannot rely on role.
     const workItem = {
       conversation: [
-        { role: "human", content: "Human Input Needed", timestamp: "2025-01-01T00:00:00Z" },
+        {
+          role: "human",
+          name: "Human",
+          content: "Human Input Needed",
+          timestamp: "2025-01-01T00:00:00Z",
+        },
+      ],
+    } as unknown as WorkItem;
+
+    expect(parseConversation(workItem)).toEqual([]);
+  });
+
+  test("keeps messages that merely contain the sentinel phrase", () => {
+    const workItem = {
+      conversation: [
+        {
+          role: "human",
+          content: "Human Input Needed: please clarify",
+          timestamp: "2025-01-01T00:00:00Z",
+        },
       ],
     } as unknown as WorkItem;
 
     const result = parseConversation(workItem);
     expect(result).toHaveLength(1);
-    expect(result[0].role).toBe("human");
+    expect(result[0].content).toBe("Human Input Needed: please clarify");
   });
 
   test("filters out malformed entries", () => {
