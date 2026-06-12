@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Link } from "react-router-dom";
 import {
   WorkItem,
@@ -62,6 +62,14 @@ function formatDuration(start: string | null, end: string | null): string | null
   return `${Math.floor(min / 60)}h ${min % 60}m`;
 }
 
+function normalizeRun(data: LoopRun): LoopRun {
+  return {
+    ...data,
+    status: normalizeRunStatus(data.status),
+    nodes: data.nodes.map((n) => ({ ...n, status: normalizeNodeStatus(n.status) })),
+  };
+}
+
 function parseEffectiveInput(node: LoopRunNode): EffectiveInput | null {
   if (!node.effectiveInput) return null;
   try {
@@ -75,10 +83,14 @@ function NodeRow({
   node,
   isLive,
   progressText,
+  onRetry,
+  retryDisabled,
 }: {
   node: LoopRunNode;
   isLive: boolean;
   progressText: string;
+  onRetry: (runNodeId: string) => void;
+  retryDisabled: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const input = parseEffectiveInput(node);
@@ -88,19 +100,35 @@ function NodeRow({
 
   return (
     <div className={`wiv2-node ${expanded ? "wiv2-node-expanded" : ""}`}>
-      <button type="button" className="wiv2-node-header" onClick={() => setExpanded((p) => !p)}>
-        <span
-          className={`wiv2-node-dot wiv2-node-dot-${status.toLowerCase()}`}
-          aria-hidden="true"
-        />
-        <span className="wiv2-node-label">{node.nodeLabel}</span>
-        {node.executionCount > 1 && <span className="wiv2-node-count">×{node.executionCount}</span>}
-        <span className="wiv2-node-meta">
-          {status}
-          {duration ? ` · ${duration}` : ""}
-        </span>
-        <span className="wiv2-node-chevron">{expanded ? "▾" : "▸"}</span>
-      </button>
+      <div className="wiv2-node-header-row">
+        <button type="button" className="wiv2-node-header" onClick={() => setExpanded((p) => !p)}>
+          <span
+            className={`wiv2-node-dot wiv2-node-dot-${status.toLowerCase()}`}
+            aria-hidden="true"
+          />
+          <span className="wiv2-node-label">{node.nodeLabel}</span>
+          {node.executionCount > 1 && (
+            <span className="wiv2-node-count">×{node.executionCount}</span>
+          )}
+          <span className="wiv2-node-meta">
+            {status}
+            {duration ? ` · ${duration}` : ""}
+          </span>
+          <span className="wiv2-node-chevron">{expanded ? "▾" : "▸"}</span>
+        </button>
+        {status !== LoopRunNodeStatus.Running && (
+          <button
+            type="button"
+            className="wiv2-node-retry"
+            disabled={retryDisabled}
+            title="Retry from this node with the same input as last time"
+            aria-label="Retry from this node"
+            onClick={() => onRetry(node.id)}
+          >
+            ↻ Retry
+          </button>
+        )}
+      </div>
       {expanded && (
         <div className="wiv2-node-body">
           {isLive ? (
@@ -140,6 +168,8 @@ interface RunsPanelProps {
   workItem: WorkItem;
   runs: LoopRun[];
   progressText: string;
+  /** Called after a retry so the parent can refresh the run list. */
+  onRunsChanged?: () => void;
 }
 
 /**
@@ -147,12 +177,20 @@ interface RunsPanelProps {
  * inline on the right — no navigation to a separate page needed. A link to
  * the full run page is kept for the deep-dive cases (events, sessions).
  */
-export default function RunsPanel({ workItem, runs, progressText }: RunsPanelProps) {
+export default function RunsPanel({ workItem, runs, progressText, onRunsChanged }: RunsPanelProps) {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [runDetail, setRunDetail] = useState<LoopRun | null>(null);
   const [loading, setLoading] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [errorText, setErrorText] = useState("");
 
   const effectiveRunId = selectedRunId ?? workItem.currentLoopRunId ?? runs[0]?.id ?? null;
+
+  const reloadRunDetail = useCallback(async () => {
+    if (!effectiveRunId) return;
+    const data = await loopRunService.getById(effectiveRunId);
+    setRunDetail(normalizeRun(data));
+  }, [effectiveRunId]);
 
   useEffect(() => {
     if (!effectiveRunId) {
@@ -164,12 +202,7 @@ export default function RunsPanel({ workItem, runs, progressText }: RunsPanelPro
     loopRunService
       .getById(effectiveRunId)
       .then((data) => {
-        if (cancelled) return;
-        setRunDetail({
-          ...data,
-          status: normalizeRunStatus(data.status),
-          nodes: data.nodes.map((n) => ({ ...n, status: normalizeNodeStatus(n.status) })),
-        });
+        if (!cancelled) setRunDetail(normalizeRun(data));
       })
       .catch(() => {
         if (!cancelled) setRunDetail(null);
@@ -185,9 +218,29 @@ export default function RunsPanel({ workItem, runs, progressText }: RunsPanelPro
     // current without its own SignalR subscription.
   }, [effectiveRunId, workItem]);
 
+  const handleRetry = async (runNodeId: string) => {
+    if (!effectiveRunId) return;
+    setErrorText("");
+    setRetrying(true);
+    try {
+      await loopRunService.retryFromNode(effectiveRunId, runNodeId);
+      await reloadRunDetail();
+      onRunsChanged?.();
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "Failed to retry from node.");
+    } finally {
+      setRetrying(false);
+    }
+  };
+
   if (runs.length === 0) {
     return <div className="wiv2-empty">No runs yet for this work item.</div>;
   }
+
+  // Retrying restarts the run, so it is blocked while the run is actively
+  // executing (a paused run can still be retried) or while a retry is in flight.
+  const retryDisabled =
+    retrying || (runDetail?.status === LoopRunStatus.Running && !runDetail.isPaused);
 
   const isLiveRun =
     runDetail?.id === workItem.currentLoopRunId && workItem.status === WorkItemStatus.Running;
@@ -216,6 +269,14 @@ export default function RunsPanel({ workItem, runs, progressText }: RunsPanelPro
         })}
       </div>
       <div className="wiv2-runs-detail">
+        {errorText && (
+          <div className="wiv2-error" role="alert">
+            {errorText}
+            <button type="button" className="wiv2-error-close" onClick={() => setErrorText("")}>
+              ✕
+            </button>
+          </div>
+        )}
         {loading && !runDetail && <div className="wiv2-empty">Loading run...</div>}
         {!loading && !runDetail && <div className="wiv2-empty">Select a run.</div>}
         {runDetail && (
@@ -253,6 +314,8 @@ export default function RunsPanel({ workItem, runs, progressText }: RunsPanelPro
                     normalizeNodeStatus(node.status) === LoopRunNodeStatus.Running
                   }
                   progressText={progressText}
+                  onRetry={handleRetry}
+                  retryDisabled={retryDisabled}
                 />
               ))}
             </div>

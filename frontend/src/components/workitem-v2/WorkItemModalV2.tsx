@@ -173,7 +173,12 @@ export default function WorkItemModalV2({
         className="wiv2-tabpanel"
         hidden={activeTab !== "runs"}
       >
-        <RunsPanel workItem={workItem} runs={detail.runs} progressText={detail.progressText} />
+        <RunsPanel
+          workItem={workItem}
+          runs={detail.runs}
+          progressText={detail.progressText}
+          onRunsChanged={detail.refreshRuns}
+        />
       </section>
       <section
         role="tabpanel"
