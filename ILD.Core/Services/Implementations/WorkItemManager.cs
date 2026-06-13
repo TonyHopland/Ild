@@ -1,4 +1,5 @@
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Remote;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -14,6 +15,7 @@ namespace ILD.Core.Services.Implementations;
 /// </summary>
 public class WorkItemManager : IWorkItemManager
 {
+    private readonly IRepositoryManager _repoManager;
     private readonly IProviderStore _providerStore;
     private readonly IEventLogService _eventLog;
     private readonly ILoopRunStore _loopRunStore;
@@ -38,6 +40,7 @@ public class WorkItemManager : IWorkItemManager
         ILoopEngine? engine = null,
         IRunReclaimer? runReclaimer = null)
     {
+        _repoManager = repoManager;
         _providerStore = providerStore;
         _eventLog = eventLog;
         _loopRunStore = loopRunStore;
@@ -583,6 +586,43 @@ public class WorkItemManager : IWorkItemManager
         }
 
         return true;
+    }
+
+    public async Task<(bool Success, string? Branch, string? Error)> CommitAndPushBranchAsync(string workItemId)
+    {
+        var wi = await GetWorkItemAsync(workItemId);
+        if (wi is null)
+            return (false, null, "Work item not found.");
+        if (string.IsNullOrWhiteSpace(wi.WorktreePath) || !Directory.Exists(wi.WorktreePath))
+            return (false, null, "Work item does not currently have an active worktree.");
+        if (wi.RepositoryId is null)
+            return (false, null, "Work item has no associated repository.");
+
+        var repo = await _providerStore.GetRepositoryByIdAsync(wi.RepositoryId.Value);
+        if (repo is null)
+            return (false, null, "Repository not found.");
+
+        var branch = wi.BranchName
+            ?? (wi.CurrentLoopRunId is { } runId ? RunWorktreeNaming.BranchFor(wi.Id, runId) : null);
+        if (string.IsNullOrEmpty(branch))
+            return (false, null, "Could not resolve a branch to push.");
+
+        var remoteProvider = await _providerStore.GetRemoteProviderByIdAsync(repo.RemoteProviderId);
+        var gitAuth = remoteProvider is null
+            ? null
+            : new GitAuthOptions(repo.CloneUrl, remoteProvider.ApiKey, remoteProvider.Type);
+
+        // Mirror the PR node's prep: commit only when there is something to
+        // commit, then push the branch with the repository's credentials.
+        var diff = await _repoManager.GetDiffAsync(wi.WorktreePath);
+        if (!string.IsNullOrEmpty(diff) && !await _repoManager.CommitAsync(wi.WorktreePath, wi.Title))
+            return (false, null, "Failed to commit uncommitted changes.");
+
+        var pushResult = await _repoManager.PushAsync(wi.WorktreePath, branch, default, gitAuth);
+        if (!pushResult.Success)
+            return (false, null, $"Failed to push branch '{branch}': {pushResult.Error ?? "unknown error"}");
+
+        return (true, branch, null);
     }
 
     // ──────────────────────────────────────────────────────────────────

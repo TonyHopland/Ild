@@ -379,6 +379,25 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
         <div className="wiv2-meta-row wiv2-meta-col">
           <span className="detail-label">Branch</span>
           <span className="detail-value wiv2-meta-mono">{workItem.branchName}</span>
+          {workItem.worktreePath && (
+            <>
+              <button
+                type="button"
+                className="btn btn-sm btn-secondary wiv2-meta-btn"
+                onClick={() => void detail.handlePushBranch()}
+                disabled={detail.pushBranchLoading}
+                title="Commit all changes and push this branch to origin"
+              >
+                {detail.pushBranchLoading ? "Pushing..." : "Push branch"}
+              </button>
+              {detail.pushBranchError && (
+                <span className="preview-message preview-error">{detail.pushBranchError}</span>
+              )}
+              {!detail.pushBranchError && detail.pushBranchMessage && (
+                <span className="preview-message">{detail.pushBranchMessage}</span>
+              )}
+            </>
+          )}
         </div>
       )}
     </div>

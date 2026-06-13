@@ -166,6 +166,10 @@ export const workItemService = {
     return api.get<PrComment[]>(`/workitems/${id}/pr-comments`);
   },
 
+  pushBranch: async (id: string): Promise<{ branch: string }> => {
+    return api.post<{ branch: string }>(`/workitems/${id}/push-branch`, {});
+  },
+
   cleanupToDone: async (id: string): Promise<void> => {
     return api.post<void>(`/workitems/${id}/cleanup-to-done`, {});
   },
