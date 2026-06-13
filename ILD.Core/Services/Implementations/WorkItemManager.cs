@@ -123,7 +123,8 @@ public class WorkItemManager : IWorkItemManager
                               .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
                               .FirstOrDefault();
 
-        return BuildView(remote, currentRun, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty));
+        var timingRun = LatestRun(runs);
+        return BuildView(remote, currentRun, timingRun, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty));
     }
 
     public async Task<IReadOnlyList<WorkItemView>> ListAsync(
@@ -147,6 +148,7 @@ public class WorkItemManager : IWorkItemManager
         foreach (var r in remoteList)
         {
             LoopRun? currentRun = null;
+            LoopRun? timingRun = null;
             if (runsByWorkItem.TryGetValue(r.Id, out var runs))
             {
                 currentRun = runs.FirstOrDefault(rn => rn.Status == LoopRunStatus.Running)
@@ -156,8 +158,9 @@ public class WorkItemManager : IWorkItemManager
                            ?? runs.Where(rn => rn.Status != LoopRunStatus.Completed)
                                   .OrderByDescending(rn => rn.StartedAt ?? rn.CreatedAt)
                                   .FirstOrDefault();
+                timingRun = LatestRun(runs);
             }
-            var view = BuildView(r, currentRun, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty));
+            var view = BuildView(r, currentRun, timingRun, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty));
             if (createdByLoopRunId.HasValue && view.CreatedByLoopRunId != createdByLoopRunId) continue;
             if (repositoryId.HasValue && view.RepositoryId != repositoryId) continue;
             views.Add(view);
@@ -170,7 +173,17 @@ public class WorkItemManager : IWorkItemManager
             .ToList();
     }
 
-    private static WorkItemView BuildView(RemoteWorkItem remote, LoopRun? run, bool isPreviewRunning)
+    /// <summary>
+    /// The run whose lifetime defines the work item's Started/Completed times:
+    /// the most recently started run regardless of status. A successfully
+    /// finished run is <see cref="LoopRunStatus.Completed"/> and is therefore
+    /// excluded from the current-run selection above, so it must be picked up
+    /// here for the work item to surface its completion time.
+    /// </summary>
+    private static LoopRun? LatestRun(IEnumerable<LoopRun> runs)
+        => runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).FirstOrDefault();
+
+    private static WorkItemView BuildView(RemoteWorkItem remote, LoopRun? run, LoopRun? timingRun, bool isPreviewRunning)
     {
         return new WorkItemView
         {
@@ -187,6 +200,8 @@ public class WorkItemManager : IWorkItemManager
             HumanFeedbackActions = remote.HumanFeedbackActions,
             RepositoryId = run?.RepositoryId ?? remote.RepositoryId,
             CreatedByLoopRunId = run?.CreatedByLoopRunId ?? remote.CreatedByLoopRunId,
+            StartedAt = timingRun?.StartedAt,
+            CompletedAt = timingRun?.CompletedAt,
             WorktreePath = run?.WorktreePath,
             BranchName = run?.BranchName,
             PrUrl = run?.PrUrl,
@@ -370,7 +385,7 @@ public class WorkItemManager : IWorkItemManager
                 var runs = await _loopRunStore.GetAllByWorkItemAsync(id);
                 var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
                                ?? runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).FirstOrDefault();
-                views.Add(BuildView(remote, currentRun, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty)));
+                views.Add(BuildView(remote, currentRun, LatestRun(runs), _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty)));
             }
         }
         return views;
@@ -388,7 +403,7 @@ public class WorkItemManager : IWorkItemManager
                 var runs = await _loopRunStore.GetAllByWorkItemAsync(candidate.Id);
                 var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
                                ?? runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).FirstOrDefault();
-                views.Add(BuildView(candidate, currentRun, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty)));
+                views.Add(BuildView(candidate, currentRun, LatestRun(runs), _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty)));
             }
         }
         return views;
