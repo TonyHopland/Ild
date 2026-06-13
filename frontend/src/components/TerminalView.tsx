@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import { createClipboardKeyHandler } from "../utils/terminalClipboard";
 
 interface Props {
   /** Stable identity for this connection. Changing it tears down the socket and reconnects. */
@@ -47,6 +48,11 @@ export default function TerminalView({
     term.loadAddon(fit);
     term.open(containerRef.current);
     fit.fit();
+
+    // Map Ctrl/Cmd+C (copy selection) and Ctrl/Cmd+V (paste) onto the system
+    // clipboard so the usual keyboard shortcuts work alongside the right-click
+    // menu. Ctrl+C without a selection still falls through to the PTY as SIGINT.
+    term.attachCustomKeyEventHandler(createClipboardKeyHandler(term, navigator.clipboard));
 
     termRef.current = term;
     fitRef.current = fit;
