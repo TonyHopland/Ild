@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, cleanup, waitFor, act } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { render, screen, within, cleanup, waitFor, act, fireEvent } from "@testing-library/react";
+import { MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
 import Taskboard from "./index";
 import { WorkItemStatus, WorkItemPriority, WorkItem } from "../../types";
 import * as authServices from "../../services/auth";
@@ -15,6 +15,34 @@ afterEach(() => {
 beforeEach(() => {
   localStorage.clear();
 });
+
+function LocationDisplay() {
+  const location = useLocation();
+  return <div data-testid="location">{location.pathname}</div>;
+}
+
+// The taskboard reads the open work item from the URL, so tests mount it behind
+// the same two routes the app wires up (bare board + per-item deep link). The
+// location probe lets a test assert the URL matches the open item.
+function renderTaskboard(initialPath = "/taskboard") {
+  return render(
+    <MemoryRouter initialEntries={[initialPath]}>
+      <Routes>
+        <Route path="/taskboard" element={<Taskboard />} />
+        <Route path="/taskboard/:workItemId" element={<Taskboard />} />
+      </Routes>
+      <LocationDisplay />
+    </MemoryRouter>,
+  );
+}
+
+// Mocks the work item detail dialog's own data fetches so it can render.
+function mockModalServices() {
+  vi.spyOn(authServices.workItemService, "getRuns").mockResolvedValue([]);
+  vi.spyOn(authServices.workItemService, "getDependencies").mockResolvedValue([]);
+  vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
+  vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([]);
+}
 
 async function dispatchSignalR(handler: (msg: any) => void, payload: unknown) {
   await act(async () => {
@@ -64,11 +92,7 @@ describe("Taskboard SignalR", () => {
 
     vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([makeItem()]);
 
-    render(
-      <MemoryRouter>
-        <Taskboard />
-      </MemoryRouter>,
-    );
+    renderTaskboard();
 
     await waitFor(() => {
       expect(screen.getByText("Test Item")).toBeTruthy();
@@ -112,11 +136,7 @@ describe("Taskboard SignalR", () => {
       }),
     );
 
-    render(
-      <MemoryRouter>
-        <Taskboard />
-      </MemoryRouter>,
-    );
+    renderTaskboard();
 
     await waitFor(() => {
       expect(screen.getByText("Test Item")).toBeTruthy();
@@ -159,11 +179,7 @@ describe("Taskboard SignalR", () => {
 
     vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([makeItem()]);
 
-    render(
-      <MemoryRouter>
-        <Taskboard />
-      </MemoryRouter>,
-    );
+    renderTaskboard();
 
     await waitFor(() => {
       expect(screen.getByText("Test Item")).toBeTruthy();
@@ -208,11 +224,7 @@ describe("Taskboard SignalR", () => {
 
     vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([makeItem()]);
 
-    render(
-      <MemoryRouter>
-        <Taskboard />
-      </MemoryRouter>,
-    );
+    renderTaskboard();
 
     await waitFor(() => {
       expect(screen.getByText("Test Item")).toBeTruthy();
@@ -248,12 +260,7 @@ describe("Taskboard keyboard navigation", () => {
       makeItem({ status: WorkItemStatus.Running }),
     );
 
-    const { default: Taskboard } = await import("./index");
-    render(
-      <MemoryRouter>
-        <Taskboard />
-      </MemoryRouter>,
-    );
+    renderTaskboard();
 
     const card = await screen.findByRole("button", { name: /Test Item/i });
     card.focus();
@@ -313,11 +320,7 @@ describe("Taskboard editing item refetch", () => {
       return getByIdCallCount === 1 ? Promise.resolve(staleItem) : Promise.resolve(freshItem);
     });
 
-    render(
-      <MemoryRouter>
-        <Taskboard />
-      </MemoryRouter>,
-    );
+    renderTaskboard();
 
     await waitFor(() => {
       expect(screen.getByText("Test Item")).toBeTruthy();
@@ -344,5 +347,88 @@ describe("Taskboard editing item refetch", () => {
     await waitFor(() => {
       expect(getByIdCallCount).toBeGreaterThan(1);
     });
+  });
+});
+
+describe("Taskboard work item URL", () => {
+  function mockSignalR() {
+    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+      on: vi.fn(),
+      off: vi.fn(),
+      invoke: vi.fn(),
+      connectionState: "connected",
+    });
+  }
+
+  test("opens the detail dialog for the work item id in the URL", async () => {
+    mockSignalR();
+    mockModalServices();
+    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([makeItem()]);
+
+    renderTaskboard("/taskboard/wi-1");
+
+    await waitFor(() => {
+      expect(screen.getByRole("dialog")).toBeTruthy();
+    });
+    // The opened dialog is the one for the id in the URL.
+    expect(
+      within(screen.getByRole("dialog")).getByRole("heading", { name: "Test Item" }),
+    ).toBeTruthy();
+    expect(screen.getByTestId("location").textContent).toBe("/taskboard/wi-1");
+  });
+
+  test("clicking a card reflects the open item in the URL", async () => {
+    mockSignalR();
+    mockModalServices();
+    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([makeItem()]);
+
+    renderTaskboard();
+    expect(screen.getByTestId("location").textContent).toBe("/taskboard");
+
+    const card = await screen.findByRole("button", { name: /Test Item/i });
+    fireEvent.click(card);
+
+    await waitFor(() => {
+      expect(screen.getByRole("dialog")).toBeTruthy();
+    });
+    expect(screen.getByTestId("location").textContent).toBe("/taskboard/wi-1");
+  });
+
+  test("closing the dialog clears the work item from the URL", async () => {
+    mockSignalR();
+    mockModalServices();
+    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([makeItem()]);
+
+    renderTaskboard("/taskboard/wi-1");
+
+    await waitFor(() => {
+      expect(screen.getByRole("dialog")).toBeTruthy();
+    });
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    expect(screen.getByTestId("location").textContent).toBe("/taskboard");
+  });
+
+  test("redirects to the taskboard when the URL points at a missing work item", async () => {
+    mockSignalR();
+    mockModalServices();
+    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([]);
+    const getByIdSpy = vi
+      .spyOn(authServices.workItemService, "getById")
+      .mockRejectedValue(new Error("not found"));
+
+    renderTaskboard("/taskboard/ghost");
+
+    await waitFor(() => {
+      expect(getByIdSpy).toHaveBeenCalledWith("ghost");
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("location").textContent).toBe("/taskboard");
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

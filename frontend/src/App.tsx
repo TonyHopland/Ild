@@ -59,6 +59,14 @@ function AppRoutes() {
             }
           />
           <Route
+            path="/taskboard/:workItemId"
+            element={
+              <ProtectedRoute>
+                <Taskboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
             path="/loop-editor"
             element={
               <ProtectedRoute>

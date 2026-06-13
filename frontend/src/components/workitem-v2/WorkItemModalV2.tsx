@@ -40,9 +40,9 @@ export default function WorkItemModalV2({
   onDelete,
 }: WorkItemModalV2Props) {
   const detail = useWorkItemDetail(workItem, onSave);
-  const [activeTab, setActiveTab] = useState<TabId>(() =>
-    workItem.status === WorkItemStatus.Running ? "runs" : "overview",
-  );
+  // The detail dialog always opens on Overview, regardless of status or which
+  // tab was last viewed on a previously-opened item.
+  const [activeTab, setActiveTab] = useState<TabId>("overview");
   const [editMode, setEditMode] = useState(false);
   const [editDirty, setEditDirty] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -77,7 +77,7 @@ export default function WorkItemModalV2({
   useEffect(() => {
     setEditMode(false);
     setEditDirty(false);
-    setActiveTab(workItem.status === WorkItemStatus.Running ? "runs" : "overview");
+    setActiveTab("overview");
     // Only reset when switching to a different item — status changes on the
     // same item must not yank the user away from the tab they are reading.
     // eslint-disable-next-line react-hooks/exhaustive-deps

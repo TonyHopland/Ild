@@ -131,6 +131,16 @@ describe("WorkItemModalV2", () => {
     expect(screen.getByText("Description")).toBeTruthy();
   });
 
+  test("opens on the Overview tab even for a running item", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1" }));
+
+    expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    expect(screen.getByRole("tab", { name: /Runs/ }).getAttribute("aria-selected")).toBe("false");
+  });
+
   test("runs tab shows run list and inline node timeline", async () => {
     mockServices();
     await renderDialog(makeWorkItem());
