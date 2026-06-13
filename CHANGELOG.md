@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A `WorktreeRetentionSweeper` reclaims a finished run's worktree, branch, and record once it has been terminal longer than the configurable `run.retentionDays` setting (default 30; `0` disables; the run a still-active work item points at is preserved). Individual runs can be pinned with **Retain** (`PUT /api/v1/loopruns/{id}/retain`) so retention never deletes them. See [ADR-0008](docs/adr/0008-worktree-and-branch-per-run.md).
 - Added a `Prompt` loop node type that renders a prompt template with the same placeholder-aware editor used by AI and PR prompt fields, then emits the rendered text as node output.
 - Added a **Push branch** button to the work item overview (`POST /api/v1/workitems/{id}/push-branch`) that commits all uncommitted changes in the current run's worktree and pushes its branch to origin, using the same built-in repository functionality as the PR node — for keeping work produced by a loop that has no PR node.
+- The work item overview now shows a **Loop** row while an item is mid run, naming the run's pinned loop template and the node the engine is currently on (e.g. `build-loop · Implement`).
 
 ### Removed
 

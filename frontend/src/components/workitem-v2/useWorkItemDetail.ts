@@ -8,7 +8,12 @@ import {
   WorktreePreview,
 } from "../../types";
 import type { TypedSignalRMessage } from "../../types/signalr";
-import { workItemService, repositoryService, loopTemplateService } from "../../services/auth";
+import {
+  workItemService,
+  repositoryService,
+  loopTemplateService,
+  loopRunService,
+} from "../../services/auth";
 import { useSignalR } from "../../hooks/useSignalR";
 
 /**
@@ -18,6 +23,7 @@ import { useSignalR } from "../../hooks/useSignalR";
  */
 export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkItem) => void) {
   const [runs, setRuns] = useState<LoopRun[]>([]);
+  const [currentRun, setCurrentRun] = useState<LoopRun | null>(null);
   const [dependencies, setDependencies] = useState<WorkItem[]>([]);
   const [allWorkItems, setAllWorkItems] = useState<WorkItem[]>([]);
   const [repositories, setRepositories] = useState<Repository[]>([]);
@@ -63,6 +69,32 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
       .then((w) => setAllWorkItems(Array.isArray(w) ? w : []))
       .catch(() => {});
   }, [workItem?.id, refreshRuns]);
+
+  // Detail for the work item's current run — its pinned template and the node
+  // the engine is on power the loop/current-node line in the overview. The
+  // run list endpoint omits both, so the detail is fetched separately. The
+  // parent refetches the work item on every node state change, so depending on
+  // workItem identity keeps the current node fresh as the run advances.
+  useEffect(() => {
+    const runId = workItem?.currentLoopRunId;
+    if (!runId) {
+      setCurrentRun(null);
+      return;
+    }
+    let cancelled = false;
+    loopRunService
+      .getById(runId)
+      .then((r) => {
+        if (!cancelled) setCurrentRun(r);
+      })
+      .catch(() => {
+        if (!cancelled) setCurrentRun(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workItem]);
 
   useEffect(() => {
     setFeedbackInput("");
@@ -370,6 +402,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
 
   return {
     runs,
+    currentRun,
     refreshRuns,
     dependencies,
     allWorkItems,
