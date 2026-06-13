@@ -238,6 +238,61 @@ public class WorkItemManagerTests
     }
 
     [Fact]
+    public async Task GetWorkItemAsync_leaves_StartedAt_and_CompletedAt_null_when_no_run()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+
+        var wi = await mgr.GetWorkItemAsync(id);
+        Assert.Null(wi!.StartedAt);
+        Assert.Null(wi.CompletedAt);
+    }
+
+    [Fact]
+    public async Task GetWorkItemAsync_surfaces_StartedAt_from_running_run_with_no_CompletedAt()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var runId = SeedLoopRun(db, id);
+        var started = DateTime.UtcNow;
+        var run = await db.Context.LoopRuns.FindAsync(runId);
+        run!.Status = LoopRunStatus.Running;
+        run.StartedAt = started;
+        await db.Context.SaveChangesAsync();
+
+        var wi = await mgr.GetWorkItemAsync(id);
+        Assert.Equal(started, wi!.StartedAt);
+        Assert.Null(wi.CompletedAt);
+    }
+
+    [Fact]
+    public async Task GetWorkItemAsync_surfaces_StartedAt_and_CompletedAt_from_completed_run()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var runId = SeedLoopRun(db, id);
+        var started = DateTime.UtcNow.AddMinutes(-5);
+        var completed = DateTime.UtcNow;
+        // A successfully finished run is Completed, which the current-run
+        // selection deliberately excludes — its timestamps must still surface.
+        var run = await db.Context.LoopRuns.FindAsync(runId);
+        run!.Status = LoopRunStatus.Completed;
+        run.StartedAt = started;
+        run.CompletedAt = completed;
+        await db.Context.SaveChangesAsync();
+
+        var wi = await mgr.GetWorkItemAsync(id);
+        Assert.Equal(started, wi!.StartedAt);
+        Assert.Equal(completed, wi.CompletedAt);
+    }
+
+    [Fact]
     public async Task ManuallyMarkMerged_transitions_workitem_to_Done()
     {
         var (mgr, db, repoId, _, _) = Setup();

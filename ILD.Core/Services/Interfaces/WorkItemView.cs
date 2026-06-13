@@ -23,6 +23,8 @@ public sealed class WorkItemView
     // Engine-only fields (from LoopRun)
     public Guid? RepositoryId { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
+    public DateTime? StartedAt { get; set; }
+    public DateTime? CompletedAt { get; set; }
     public string? WorktreePath { get; set; }
     public string? BranchName { get; set; }
     public string? PrUrl { get; set; }
