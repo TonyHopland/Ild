@@ -182,13 +182,14 @@ describe("Taskboard SignalR", () => {
       expect(screen.getByText("Test Item")).toBeTruthy();
     });
 
-    // 5 is WorkItemStatus.Done on the server enum (mirroring an approve moving
-    // the item out of HumanFeedback). A raw number would crash status rendering
-    // and never match a column; the card should land in the Done column instead.
+    // 6 is the wire value for Done (RemoteWorkItemStatus.Done), mirroring an
+    // approve moving the item out of HumanFeedback. A raw number would crash
+    // status rendering and never match a column; the card should land in the
+    // Done column instead.
     await dispatchSignalR(handlers["WorkItemStateChanged"]![0], {
       workItemId: "wi-1",
       oldStatus: 4,
-      newStatus: 5,
+      newStatus: 6,
     });
 
     await waitFor(() => {

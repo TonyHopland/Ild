@@ -14,12 +14,12 @@ describe("normalizeWorkItemStatus", () => {
     expect(normalizeWorkItemStatus(4)).toBe(WorkItemStatus.HumanFeedback);
   });
 
-  // Done (5) and WaitingForIld (6) are declared in a different order on the
-  // server enum than in the TS enum, so the numeric mapping must follow the
-  // server's values rather than the TS declaration order.
-  test("maps the server-ordered Done/WaitingForIld values correctly", () => {
-    expect(normalizeWorkItemStatus(5)).toBe(WorkItemStatus.Done);
-    expect(normalizeWorkItemStatus(6)).toBe(WorkItemStatus.WaitingForIld);
+  // The wire value is the RemoteWorkItemStatus integer (WaitingForIld = 5,
+  // Done = 6), not the TS enum declaration order, so the numeric mapping must
+  // follow that ordering — an approve driving the item to Done emits 6.
+  test("maps the wire-ordered WaitingForIld/Done values correctly", () => {
+    expect(normalizeWorkItemStatus(5)).toBe(WorkItemStatus.WaitingForIld);
+    expect(normalizeWorkItemStatus(6)).toBe(WorkItemStatus.Done);
   });
 
   test("falls back to Backlog for unknown or non-status values", () => {
