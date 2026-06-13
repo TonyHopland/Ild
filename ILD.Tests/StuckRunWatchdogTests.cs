@@ -1,5 +1,6 @@
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Remote;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
@@ -21,8 +22,9 @@ public class StuckRunWatchdogTests
 
         var engine = EngineWithActiveRuns(/* none */);
         var recovery = RecoveryReturning(true);
+        var workItems = WorkItemsReturning(RemoteWorkItemStatus.Running);
 
-        await InvokeSweepOnceAsync(BuildWatchdog(db, engine.Object, recovery.Object));
+        await InvokeSweepOnceAsync(BuildWatchdog(db, engine.Object, recovery.Object, workItems.Object));
 
         recovery.Verify(r => r.RecoverRunAsync(run.Id), Times.Once);
     }
@@ -39,8 +41,9 @@ public class StuckRunWatchdogTests
 
         var engine = EngineWithActiveRuns(run.Id); // a task is driving it
         var recovery = RecoveryReturning(true);
+        var workItems = WorkItemsReturning(RemoteWorkItemStatus.Running);
 
-        await InvokeSweepOnceAsync(BuildWatchdog(db, engine.Object, recovery.Object));
+        await InvokeSweepOnceAsync(BuildWatchdog(db, engine.Object, recovery.Object, workItems.Object));
 
         recovery.Verify(r => r.RecoverRunAsync(It.IsAny<Guid>()), Times.Never);
     }
@@ -57,8 +60,9 @@ public class StuckRunWatchdogTests
 
         var engine = EngineWithActiveRuns(/* none */);
         var recovery = RecoveryReturning(true);
+        var workItems = WorkItemsReturning(RemoteWorkItemStatus.Running);
 
-        await InvokeSweepOnceAsync(BuildWatchdog(db, engine.Object, recovery.Object));
+        await InvokeSweepOnceAsync(BuildWatchdog(db, engine.Object, recovery.Object, workItems.Object));
 
         recovery.Verify(r => r.RecoverRunAsync(It.IsAny<Guid>()), Times.Never);
     }
@@ -73,8 +77,47 @@ public class StuckRunWatchdogTests
 
         var engine = EngineWithActiveRuns(/* none */);
         var recovery = RecoveryReturning(true);
+        var workItems = WorkItemsReturning(RemoteWorkItemStatus.Running);
 
-        await InvokeSweepOnceAsync(BuildWatchdog(db, engine.Object, recovery.Object));
+        await InvokeSweepOnceAsync(BuildWatchdog(db, engine.Object, recovery.Object, workItems.Object));
+
+        recovery.Verify(r => r.RecoverRunAsync(It.IsAny<Guid>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Skips_run_whose_work_item_is_parked_waiting_for_ild()
+    {
+        // A run parked by the capacity gate leaves the run row Running with no
+        // driver on purpose; its work item is WaitingForIld and the scheduler
+        // owns the resume. The watchdog must not bounce it.
+        var db = new TestDb();
+        var (version, _) = SeedTemplate(db);
+        SeedRun(db, version.Id, LoopRunStatus.Running,
+            updatedAt: DateTime.UtcNow.AddMinutes(-10));
+
+        var engine = EngineWithActiveRuns(/* none */);
+        var recovery = RecoveryReturning(true);
+        var workItems = WorkItemsReturning(RemoteWorkItemStatus.WaitingForIld);
+
+        await InvokeSweepOnceAsync(BuildWatchdog(db, engine.Object, recovery.Object, workItems.Object));
+
+        recovery.Verify(r => r.RecoverRunAsync(It.IsAny<Guid>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Skips_run_whose_work_item_is_gone()
+    {
+        var db = new TestDb();
+        var (version, _) = SeedTemplate(db);
+        SeedRun(db, version.Id, LoopRunStatus.Running,
+            updatedAt: DateTime.UtcNow.AddMinutes(-10));
+
+        var engine = EngineWithActiveRuns(/* none */);
+        var recovery = RecoveryReturning(true);
+        var workItems = new Mock<IWorkItemManager>();
+        workItems.Setup(x => x.GetWorkItemAsync(It.IsAny<string>())).ReturnsAsync((WorkItemView?)null);
+
+        await InvokeSweepOnceAsync(BuildWatchdog(db, engine.Object, recovery.Object, workItems.Object));
 
         recovery.Verify(r => r.RecoverRunAsync(It.IsAny<Guid>()), Times.Never);
     }
@@ -125,11 +168,20 @@ public class StuckRunWatchdogTests
         return m;
     }
 
-    private static StuckRunWatchdog BuildWatchdog(TestDb db, ILoopEngine engine, IRecoveryManager recovery)
+    private static Mock<IWorkItemManager> WorkItemsReturning(RemoteWorkItemStatus status)
+    {
+        var m = new Mock<IWorkItemManager>();
+        m.Setup(x => x.GetWorkItemAsync(It.IsAny<string>()))
+            .ReturnsAsync((string id) => new WorkItemView { Id = id, Status = status });
+        return m;
+    }
+
+    private static StuckRunWatchdog BuildWatchdog(TestDb db, ILoopEngine engine, IRecoveryManager recovery, IWorkItemManager workItems)
     {
         var services = new ServiceCollection();
         services.AddSingleton<ILoopRunStore>(db.LoopRuns);
         services.AddSingleton(recovery);
+        services.AddSingleton(workItems);
         var provider = services.BuildServiceProvider();
         var scopes = provider.GetRequiredService<IServiceScopeFactory>();
         return new StuckRunWatchdog(scopes, engine, NullLogger<StuckRunWatchdog>.Instance);

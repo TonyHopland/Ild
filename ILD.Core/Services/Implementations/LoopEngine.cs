@@ -197,8 +197,16 @@ public sealed class LoopEngine : ILoopEngine
         return run?.Status;
     }
 
+    // Report liveness off _runCts, not _runTasks: the CTS entry is the
+    // ownership token (added before the driving task is scheduled, removed
+    // last in its finally), so "active" here means exactly "owned by a live
+    // loop". Keying off _runTasks instead would leave a window — between the
+    // ownership claim and the task handle being stored, and again between the
+    // two removals in finally — where a genuinely-driven run looks inactive.
+    // The stuck-run watchdog relies on this equivalence to never recover a run
+    // that a loop still owns.
     public Task<IEnumerable<Guid>> GetActiveRunIdsAsync() =>
-        Task.FromResult<IEnumerable<Guid>>(_runTasks.Keys.ToArray());
+        Task.FromResult<IEnumerable<Guid>>(_runCts.Keys.ToArray());
 
     public async Task SignalNodeResultAsync(Guid runId, Guid runNodeId, NodeSignal signal)
     {

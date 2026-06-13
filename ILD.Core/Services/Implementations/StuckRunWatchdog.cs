@@ -1,4 +1,5 @@
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Remote;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
@@ -31,6 +32,13 @@ namespace ILD.Core.Services.Implementations;
 /// duration cap on the run. Recovery itself is gentle and policy-aware — it
 /// re-drives, parks for review, or cancels per the run's
 /// <see cref="ILD.Data.Enums.RecoveryPolicy"/> — see <see cref="IRecoveryManager"/>.</para>
+///
+/// <para><b>Out of scope by design.</b> A run whose driving task is <i>alive but
+/// wedged</i> — e.g. an AI node blocked on I/O that never returns — stays in the
+/// active set and is deliberately never touched here. Detecting that needs a
+/// per-node liveness timeout, which ADR-0007 (AI execution is a single bounded
+/// step, cancelled only at run scope) explicitly rules out. This watchdog
+/// targets only the "no driver at all" failure, not a hung-but-present one.</para>
 /// </summary>
 public sealed class StuckRunWatchdog : BackgroundService
 {
@@ -82,6 +90,7 @@ public sealed class StuckRunWatchdog : BackgroundService
         var sp = scope.ServiceProvider;
         var runStore = sp.GetRequiredService<ILoopRunStore>();
         var recovery = sp.GetRequiredService<IRecoveryManager>();
+        var workItems = sp.GetRequiredService<IWorkItemManager>();
 
         var running = await runStore.GetRunningRunsAsync();
         if (running.Count == 0) return;
@@ -103,6 +112,23 @@ public sealed class StuckRunWatchdog : BackgroundService
             // stale UpdatedAt, but it was already excluded by the active check.
             var lastTouched = run.UpdatedAt ?? run.StartedAt ?? run.CreatedAt;
             if (lastTouched > cutoff) continue;
+
+            // Only recover a run whose work item the server still considers
+            // Running. A run parked by the capacity gate (WaitingIld) leaves
+            // the run row Running with no driver on purpose — its work item is
+            // WaitingForIld and the scheduler resumes it when capacity frees —
+            // so resuming it here would bypass throttling and bounce the item.
+            // Likewise a human-/done-parked item is intentionally undriven.
+            // (When that gate's transition itself failed, the work item is
+            // still Running, so this correctly recovers the "stays parked until
+            // restart" case that path warns about.)
+            var wi = await workItems.GetWorkItemAsync(run.WorkItemId);
+            if (wi is null)
+            {
+                _log.LogDebug("Skipping orphaned run {RunId}: work item {WorkItemId} not found", run.Id, run.WorkItemId);
+                continue;
+            }
+            if (wi.Status != RemoteWorkItemStatus.Running) continue;
 
             _log.LogWarning(
                 "Recovering orphaned run {RunId} (work item {WorkItemId}): Running with no driving task since {LastTouched:o}",
