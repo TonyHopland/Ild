@@ -9,6 +9,7 @@ import WorkItemModalV2 from "../../components/workitem-v2/WorkItemModalV2";
 import ErrorBanner from "../../components/ErrorBanner";
 import { useSignalR } from "../../hooks/useSignalR";
 import { WORK_ITEM_STATUSES } from "../../utils/constants";
+import { normalizeWorkItemStatus } from "../../utils/workItemStatus";
 
 function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message) return error.message;
@@ -94,7 +95,9 @@ export default function Taskboard() {
             .catch(() => {});
           return prev;
         }
-        return prev.map((item) => (item.id === workItemId ? { ...item, status: newStatus } : item));
+        return prev.map((item) =>
+          item.id === workItemId ? { ...item, status: normalizeWorkItemStatus(newStatus) } : item,
+        );
       });
       syncWorkItem(workItemId);
       delayedTimers.push(setTimeout(() => syncWorkItem(workItemId), 500));

@@ -154,6 +154,49 @@ describe("Taskboard SignalR", () => {
     });
   });
 
+  test("normalizes numeric status from a WorkItemStateChanged event", async () => {
+    const handlers: Record<string, ((msg: any) => void)[]> = {};
+    const mockOn = vi.fn((eventType: string, handler: (msg: any) => void) => {
+      handlers[eventType] = handlers[eventType] || [];
+      handlers[eventType].push(handler);
+    });
+
+    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+      on: mockOn,
+      off: vi.fn(),
+      invoke: vi.fn(),
+      connectionState: "connected",
+    });
+
+    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([
+      makeItem({ status: WorkItemStatus.HumanFeedback }),
+    ]);
+    // SignalR delivers the enum as its numeric value, and the follow-up refetch
+    // is irrelevant to what the event itself writes into state — fail it so the
+    // assertion observes only the normalized event payload.
+    vi.spyOn(authServices.workItemService, "getById").mockRejectedValue(new Error("offline"));
+
+    renderTaskboard();
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Item")).toBeTruthy();
+    });
+
+    // 6 is the wire value for Done (RemoteWorkItemStatus.Done), mirroring an
+    // approve moving the item out of HumanFeedback. A raw number would crash
+    // status rendering and never match a column; the card should land in the
+    // Done column instead.
+    await dispatchSignalR(handlers["WorkItemStateChanged"]![0], {
+      workItemId: "wi-1",
+      oldStatus: 4,
+      newStatus: 6,
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText(/Test Item, status Done/)).toBeTruthy();
+    });
+  });
+
   test("fires browser notification when HumanFeedbackRequired event arrives", async () => {
     const notificationCalls: Array<[string, NotificationOptions]> = [];
     class MockNotification {
