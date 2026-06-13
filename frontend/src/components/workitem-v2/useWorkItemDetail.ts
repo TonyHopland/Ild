@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   WorkItem,
   WorkItemStatus,
@@ -174,23 +174,52 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     connectionState: runConnectionState,
   } = useSignalR("/hubs/loop-run");
 
-  useEffect(() => {
-    if (runConnectionState !== "connected" || !shouldStream || !workItem?.currentLoopRunId) return;
-    void runInvoke?.("SubscribeToRun", workItem.currentLoopRunId);
-  }, [shouldStream, runInvoke, runConnectionState, workItem?.currentLoopRunId]);
+  // Backlog→live handoff state. `seeded` flips true once the replayed backlog
+  // has been written; until then live chunks are queued. `seededSeq` is the
+  // last sequence number already reflected in `progressText`, so a chunk is
+  // applied only once even if it appears in both the backlog and the live feed.
+  const seededRef = useRef(false);
+  const seededSeqRef = useRef(0);
+  const pendingRef = useRef<{ seq: number; line: string }[]>([]);
 
   useEffect(() => {
-    if (!shouldStream) {
+    if (!shouldStream || !workItem?.currentLoopRunId) {
       setProgressText("");
       return;
     }
+    // Wait for the connection before subscribing; the effect re-runs (and
+    // re-seeds from the buffer) when the state flips to "connected".
+    if (runConnectionState !== "connected") return;
 
+    const runId = workItem.currentLoopRunId;
     const delayedTimers: number[] = [];
+    let cancelled = false;
+
+    seededRef.current = false;
+    seededSeqRef.current = 0;
+    pendingRef.current = [];
+    setProgressText("");
+
+    const applyChunk = (seq: number, line: string) => {
+      if (seq <= seededSeqRef.current) return; // already in the backlog/applied
+      seededSeqRef.current = seq;
+      setProgressText((prev) => prev + line);
+    };
+
+    const flushPending = () => {
+      const queued = pendingRef.current.sort((a, b) => a.seq - b.seq);
+      pendingRef.current = [];
+      for (const c of queued) applyChunk(c.seq, c.line);
+    };
 
     const onNodeProgress = (message: TypedSignalRMessage<"NodeProgress">) => {
-      const { runId: msgRunId, line } = message.payload;
-      if (msgRunId !== workItem?.currentLoopRunId) return;
-      setProgressText((prev) => prev + line);
+      if (message.payload.runId !== runId) return;
+      const { seq, line } = message.payload;
+      if (!seededRef.current) {
+        pendingRef.current.push({ seq, line });
+        return;
+      }
+      applyChunk(seq, line);
     };
 
     const refetchSoon = () => {
@@ -200,33 +229,60 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     };
 
     const onLoopRunStateChanged = (message: TypedSignalRMessage<"LoopRunStateChanged">) => {
-      if (message.payload.runId !== workItem?.currentLoopRunId) return;
+      if (message.payload.runId !== runId) return;
       refetchSoon();
     };
 
     const onNodeStateChanged = (message: TypedSignalRMessage<"NodeStateChanged">) => {
-      if (message.payload.runId !== workItem?.currentLoopRunId) return;
+      if (message.payload.runId !== runId) return;
       refetchSoon();
     };
 
     const onEventLogged = (message: TypedSignalRMessage<"EventLogged">) => {
-      if (message.payload.runId !== workItem?.currentLoopRunId) return;
+      if (message.payload.runId !== runId) return;
       refetchWorkItem();
     };
 
+    // Attach the live listener BEFORE subscribing so no chunk is lost in the
+    // window between joining the group and seeding from the backlog.
     runOn("NodeProgress", onNodeProgress);
     runOn("LoopRunStateChanged", onLoopRunStateChanged);
     runOn("NodeStateChanged", onNodeStateChanged);
     runOn("EventLogged", onEventLogged);
 
+    void Promise.resolve(runInvoke?.("SubscribeToRun", runId))
+      .then((snapshot) => {
+        if (cancelled) return;
+        const snap = (snapshot ?? {}) as { text?: string; lastSeq?: number };
+        setProgressText(snap.text ?? "");
+        seededSeqRef.current = snap.lastSeq ?? 0;
+        seededRef.current = true;
+        flushPending();
+      })
+      .catch(() => {
+        // Replay unavailable — fall back to a pure-live view from here on.
+        if (cancelled) return;
+        seededRef.current = true;
+        flushPending();
+      });
+
     return () => {
+      cancelled = true;
       runOff("NodeProgress", onNodeProgress);
       runOff("LoopRunStateChanged", onLoopRunStateChanged);
       runOff("NodeStateChanged", onNodeStateChanged);
       runOff("EventLogged", onEventLogged);
       for (const t of delayedTimers) clearTimeout(t);
     };
-  }, [shouldStream, runOn, runOff, workItem?.currentLoopRunId, refetchWorkItem]);
+  }, [
+    shouldStream,
+    runOn,
+    runOff,
+    runInvoke,
+    runConnectionState,
+    workItem?.currentLoopRunId,
+    refetchWorkItem,
+  ]);
 
   // The PR/feedback/cleanup actions all share the same shape: invoke a service
   // call, refetch the work item, and hand it to onSave (logging on failure).

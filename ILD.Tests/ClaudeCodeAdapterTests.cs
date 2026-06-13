@@ -129,6 +129,49 @@ public class ClaudeCodeAdapterTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_streams_tool_calls_to_progress_without_polluting_output()
+    {
+        var worktreeDir = CreateWorktree();
+        var scriptPath = Path.Combine(worktreeDir, "fake-claude.sh");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "echo '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"sess-t\"}'\n" +
+            "echo '{\"type\":\"assistant\",\"session_id\":\"sess-t\",\"message\":{\"content\":[" +
+            "{\"type\":\"text\",\"text\":\"Listing files.\"}," +
+            "{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"ls\"}}]}}'\n" +
+            "echo '{\"type\":\"result\",\"session_id\":\"sess-t\",\"is_error\":false,\"result\":\"Listing files.\"}'\n");
+        Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var adapter = new ClaudeCodeAdapter();
+            var progress = new System.Collections.Concurrent.ConcurrentBag<string>();
+            var ctx = BuildContext(
+                binaryPath: scriptPath,
+                worktreePath: worktreeDir,
+                progressCallback: line =>
+                {
+                    progress.Add(line);
+                    return Task.CompletedTask;
+                });
+
+            var result = await adapter.ExecuteAsync(ctx);
+
+            Assert.True(result.Success);
+            // The tool call surfaces on the live stream...
+            Assert.Contains(progress, p => p.Contains("[tool: Bash]"));
+            Assert.Contains("Listing files.", progress);
+            // ...but never bleeds into the node's text output.
+            Assert.Equal("Listing files.", result.Output);
+            Assert.DoesNotContain("[tool: Bash]", result.Output);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_surfaces_error_when_result_is_marked_as_error()
     {
         var worktreeDir = CreateWorktree();

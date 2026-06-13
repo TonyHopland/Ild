@@ -126,7 +126,7 @@ public class SignalRRunNotifierTests
             .Returns(Task.CompletedTask);
 
         var notifier = new SignalRRunNotifier(ctx.Object, logger.Object);
-        await notifier.NodeProgressAsync(runId, nodeId, "thinking about the problem...");
+        await notifier.NodeProgressAsync(runId, nodeId, "thinking about the problem...", 7);
 
         Assert.NotNull(capturedArgs);
         Assert.Single(capturedArgs!);
@@ -134,5 +134,6 @@ public class SignalRRunNotifierTests
         Assert.Equal(runId, payload.RunId);
         Assert.Equal(nodeId, payload.NodeId);
         Assert.Equal("thinking about the problem...", payload.Line);
+        Assert.Equal(7, payload.Seq);
     }
 }

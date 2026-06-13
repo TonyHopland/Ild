@@ -83,12 +83,12 @@ public class SignalRRunNotifier : IRunNotifier
         }
     }
 
-    public async Task NodeProgressAsync(Guid runId, Guid nodeId, string line)
+    public async Task NodeProgressAsync(Guid runId, Guid nodeId, string line, long seq)
     {
         try
         {
             await _runHub.Clients.Group(runId.ToString())
-                .SendAsync("NodeProgress", new NodeProgressPayload(runId, nodeId, line));
+                .SendAsync("NodeProgress", new NodeProgressPayload(runId, nodeId, line, seq));
         }
         catch (Exception ex)
         {

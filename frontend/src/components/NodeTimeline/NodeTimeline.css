@@ -298,15 +298,16 @@
   background: #030711;
   border: 1px solid #1f2937;
   border-radius: 0.25rem;
-  padding: 0.75rem;
-  font-size: 0.8rem;
-  font-family: "Courier New", Courier, monospace;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: #d1d5db;
-  max-height: 300px;
-  overflow-y: auto;
-  min-height: 100px;
+  padding: 0.5rem;
+  height: 300px;
+  overflow: hidden;
+}
+
+.livestream-container .xterm,
+.livestream-container .xterm-viewport,
+.livestream-container .xterm-screen {
+  width: 100% !important;
+  height: 100% !important;
 }
 
 .livestream-empty {
@@ -315,22 +316,7 @@
   justify-content: center;
   color: #6b7280;
   font-style: italic;
-}
-
-.livestream-scroll-btn {
-  background: #3b82f6;
-  color: white;
-  border: none;
-  border-radius: 0.25rem;
-  padding: 0.25rem 0.75rem;
-  font-size: 0.75rem;
-  cursor: pointer;
-  margin-top: 0.5rem;
-  transition: background-color 0.15s;
-}
-
-.livestream-scroll-btn:hover {
-  background: #2563eb;
+  font-size: 0.8rem;
 }
 
 /* ---- Page-level layout ---- */

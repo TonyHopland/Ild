@@ -21,6 +21,7 @@ public sealed class LoopEngine : ILoopEngine
     private readonly IServiceProvider _sp;
     private readonly INodeExecutorRegistry _registry;
     private readonly IRunNotifier _notifier;
+    private readonly IRunProgressBuffer _progressBuffer;
     private readonly IWorkItemNotifier _workItemNotifier;
     private readonly ILogger<LoopEngine> _logger;
 
@@ -37,13 +38,15 @@ public sealed class LoopEngine : ILoopEngine
         INodeExecutorRegistry registry,
         IRunNotifier notifier,
         ILogger<LoopEngine> logger,
-        IWorkItemNotifier? workItemNotifier = null)
+        IWorkItemNotifier? workItemNotifier = null,
+        IRunProgressBuffer? progressBuffer = null)
     {
         _sp = sp;
         _registry = registry;
         _notifier = notifier;
         _logger = logger;
         _workItemNotifier = workItemNotifier ?? new NoopWorkItemNotifier();
+        _progressBuffer = progressBuffer ?? new RunProgressBuffer();
     }
 
     public async Task StartRunAsync(string workItemId, CancellationToken cancellationToken = default)
@@ -166,6 +169,7 @@ public sealed class LoopEngine : ILoopEngine
         run.Status = LoopRunStatus.Cancelled;
         run.CompletedAt = DateTime.UtcNow;
         await loopRunStore.UpdateRunAsync(run);
+        _progressBuffer.Clear(runId);
         if (_runCts.TryGetValue(runId, out var cts))
         {
             try { cts.Cancel(); } catch { }
@@ -372,8 +376,15 @@ public sealed class LoopEngine : ILoopEngine
             runNodeId = existing?.Id;
         }
 
+        // Capture the complete live stream into the per-run buffer (which both
+        // backs the mid-run replay and assigns the sequence number) before
+        // broadcasting each chunk, so the live and backlog views stay in sync.
         var ctx = new NodeExecutionContext(run, node, sp, ct,
-            line => _notifier.NodeProgressAsync(run.Id, node.Id, line));
+            line =>
+            {
+                var seq = _progressBuffer.Append(run.Id, line);
+                return _notifier.NodeProgressAsync(run.Id, node.Id, line, seq);
+            });
 
         IAsyncEnumerator<NodeOutcome>? enumerator = null;
         try
@@ -661,12 +672,13 @@ public sealed class LoopEngine : ILoopEngine
         return false;
     }
 
-    private static async Task<ParkResult> CompleteRunAsync(LoopRun run, ILoopRunStore store, IWorkItemManager workItems, string? output)
+    private async Task<ParkResult> CompleteRunAsync(LoopRun run, ILoopRunStore store, IWorkItemManager workItems, string? output)
     {
         var old = run.Status;
         run.Status = LoopRunStatus.Completed;
         run.CompletedAt = DateTime.UtcNow;
         await store.UpdateRunAsync(run);
+        _progressBuffer.Clear(run.Id);
         await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.Done, currentLoopRunId: run.Id);
         return ParkResult.Stop;
     }
@@ -678,6 +690,7 @@ public sealed class LoopEngine : ILoopEngine
         run.CompletedAt = DateTime.UtcNow;
         run.HumanFeedbackReason = reason;
         await store.UpdateRunAsync(run);
+        _progressBuffer.Clear(run.Id);
         await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             reason: reason, humanFeedbackReason: HumanFeedbackReasons.NodeFailed, currentLoopRunId: run.Id);
     }
@@ -702,6 +715,7 @@ public sealed class LoopEngine : ILoopEngine
         run.CompletedAt = DateTime.UtcNow;
         run.HumanFeedbackReason = reason;
         await store.UpdateRunAsync(run);
+        _progressBuffer.Clear(runId);
         await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.Failed);
         await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             reason: reason, humanFeedbackReason: HumanFeedbackReasons.RunCrashed, currentLoopRunId: run.Id);
