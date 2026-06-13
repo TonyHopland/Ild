@@ -17,7 +17,11 @@ public sealed record LoopRunNodeResponse(
     string? Error,
     DateTime? StartedAt,
     DateTime? CompletedAt,
-    int ExecutionCount)
+    int ExecutionCount,
+    // The template node's type (e.g. "AI"), when the LoopNode navigation was
+    // eager-loaded. Null on the list endpoint, which doesn't load it. Drives
+    // the live-view Halt affordance, which is AI-node only.
+    string? NodeType)
 {
     public static LoopRunNodeResponse From(LoopRunNode rn) => new(
         rn.Id,
@@ -29,5 +33,6 @@ public sealed record LoopRunNodeResponse(
         rn.Error,
         rn.StartedAt,
         rn.CompletedAt,
-        0);
+        0,
+        rn.LoopNode?.NodeType.ToString());
 }

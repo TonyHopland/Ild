@@ -75,10 +75,30 @@ public sealed class AINodeExecutor : INodeExecutor
             yield break;
         }
 
-        var prompt = cfg.Prompt ?? string.Empty;
+        // The session-id capture and note-clear writes run in their own DI
+        // scopes: the first fires on the adapter's stream task (concurrent with
+        // the engine's scope), the second must survive the engine's pre-routing
+        // reload. Both touch a single column to avoid clobbering control-plane
+        // writes (halt, pause, cancel) on the same run.
+        var scopeFactory = sp.GetService<IServiceScopeFactory>();
+
+        // A halt→resume parks a one-shot steering note on the run. When present
+        // it overrides the node config: continue the SAME captured AI session
+        // (ignore UseSession) with the human's note — or a neutral continue when
+        // they gave none — as the next message. The note is cleared as it is
+        // consumed so a later visit to this node runs normally.
+        var steeringNote = ctx.Run.SteeringNote;
+        var isSteering = steeringNote is not null;
+
+        var prompt = isSteering
+            ? (string.IsNullOrWhiteSpace(steeringNote) ? "Continue where you left off." : steeringNote!)
+            : (cfg.Prompt ?? string.Empty);
         string rendered = prompt;
         if (rendering is not null)
             rendered = await rendering.RenderAsync(prompt, ctx.Run.Id, wi, ctx.Run.PreviousNodeOutput);
+
+        if (isSteering && scopeFactory is not null)
+            await ClearSteeringNoteAsync(scopeFactory, ctx.Run.Id);
 
         yield return new NodeOutcome.NodeStarting(rendered);
 
@@ -93,16 +113,22 @@ public sealed class AINodeExecutor : INodeExecutor
                 var sessionBinding = await sessions.GetSessionBindingAsync(ctx.Run.Id, ctx.Node.NodeType.ToString(), cfg.SessionPlaceholder!);
                 incomingSessionId = sessionBinding?.SessionId;
             }
+            // Steering forces continuation of the live session captured before
+            // the halt, regardless of the node's UseSession config.
+            if (isSteering)
+                incomingSessionId = ctx.Run.CurrentAiSessionId;
             var adapterConfigDict = ParseAdapterConfig(cfg.AdapterConfig);
             var runContext = new LoopRunContext(
                 ctx.Run.Id, wi.Id, wi.Title, wi.Description ?? string.Empty,
                 ctx.Run.WorktreePath ?? string.Empty, ctx.Run.BranchName ?? string.Empty,
                 new List<string>(), ctx.Run.PreviousNodeOutput);
+            var runId = ctx.Run.Id;
             var agentCtx = new AgentExecutionContext(
                 provider, rendered, runContext, 0, ctx.CancellationToken,
                 ctx.ProgressCallback, adapterConfigDict, cfg.ToolAllowlist,
                 SessionId: incomingSessionId, IncomingSessionId: incomingSessionId,
-                ManageSession: manageSession);
+                ManageSession: manageSession,
+                OnSessionId: scopeFactory is null ? null : sid => PersistSessionId(scopeFactory, runId, sid));
             result = await adapter.ExecuteAsync(agentCtx);
         }
         catch (Exception ex)
@@ -134,6 +160,34 @@ public sealed class AINodeExecutor : INodeExecutor
         {
             yield return new NodeOutcome.Fail(EdgeType.OnFailure, result.Error ?? "AI adapter failed", result.Output);
         }
+    }
+
+    /// <summary>
+    /// Persist the live AI session id captured mid-stream. Runs synchronously on
+    /// the adapter's stream task in a fresh DI scope (fires once per run);
+    /// best-effort — capturing the session is observational and must never take
+    /// down the stream read.
+    /// </summary>
+    private static void PersistSessionId(IServiceScopeFactory factory, Guid runId, string sessionId)
+    {
+        try
+        {
+            using var scope = factory.CreateScope();
+            var store = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+            store.SetCurrentAiSessionIdAsync(runId, sessionId).GetAwaiter().GetResult();
+        }
+        catch { /* best-effort */ }
+    }
+
+    private static async Task ClearSteeringNoteAsync(IServiceScopeFactory factory, Guid runId)
+    {
+        try
+        {
+            using var scope = factory.CreateScope();
+            var store = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+            await store.ClearSteeringNoteAsync(runId);
+        }
+        catch { /* best-effort */ }
     }
 
     private static Dictionary<string, object?>? ParseAdapterConfig(JsonElement? cfg)

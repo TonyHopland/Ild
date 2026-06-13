@@ -63,6 +63,30 @@ describe("loopRunService URL contract", () => {
     expect(init?.method).toBe("POST");
   });
 
+  test("halt calls POST /api/v1/loopruns/:id/halt", async () => {
+    fetchSpy.mockResolvedValue(new Response("", { status: 200 }));
+    await loopRunService.halt("abc-123");
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe("/api/v1/loopruns/abc-123/halt");
+    expect(init?.method).toBe("POST");
+  });
+
+  test("resumeSteer POSTs the note to /api/v1/loopruns/:id/resume-steer", async () => {
+    fetchSpy.mockResolvedValue(new Response("", { status: 200 }));
+    await loopRunService.resumeSteer("abc-123", "focus on the bug");
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe("/api/v1/loopruns/abc-123/resume-steer");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(init?.body as string)).toEqual({ note: "focus on the bug" });
+  });
+
+  test("resumeSteer sends null note when omitted", async () => {
+    fetchSpy.mockResolvedValue(new Response("", { status: 200 }));
+    await loopRunService.resumeSteer("abc-123");
+    const [, init] = fetchSpy.mock.calls[0];
+    expect(JSON.parse(init?.body as string)).toEqual({ note: null });
+  });
+
   test("getSessionPreview calls GET /api/v1/loopruns/:id/sessions/preview", async () => {
     fetchSpy.mockResolvedValue(okJsonResponse({}));
 

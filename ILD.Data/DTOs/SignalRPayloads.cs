@@ -12,6 +12,8 @@ public record RunPausedPayload(Guid RunId);
 
 public record RunResumedPayload(Guid RunId);
 
+public record RunHaltedPayload(Guid RunId);
+
 public record WorkItemStateChangedPayload(string WorkItemId, WorkItemStatus OldStatus, WorkItemStatus NewStatus);
 
 public record DependencyResolvedPayload(string WorkItemId);

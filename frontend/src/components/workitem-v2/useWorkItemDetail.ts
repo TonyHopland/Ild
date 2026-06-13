@@ -295,12 +295,20 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
       refetchWorkItem();
     };
 
+    // A halt parks the run mid-AI-node; refetch so the work item flips to
+    // HumanFeedback and the Runs tab swaps the live view for the steer window.
+    const onRunHalted = (message: TypedSignalRMessage<"RunHalted">) => {
+      if (message.payload.runId !== runId) return;
+      refetchSoon();
+    };
+
     // Attach the live listener BEFORE subscribing so no chunk is lost in the
     // window between joining the group and seeding from the backlog.
     runOn("NodeProgress", onNodeProgress);
     runOn("LoopRunStateChanged", onLoopRunStateChanged);
     runOn("NodeStateChanged", onNodeStateChanged);
     runOn("EventLogged", onEventLogged);
+    runOn("RunHalted", onRunHalted);
 
     void Promise.resolve(runInvoke?.("SubscribeToRun", runId))
       .then((snapshot) => {
@@ -324,6 +332,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
       runOff("LoopRunStateChanged", onLoopRunStateChanged);
       runOff("NodeStateChanged", onNodeStateChanged);
       runOff("EventLogged", onEventLogged);
+      runOff("RunHalted", onRunHalted);
       for (const t of delayedTimers) clearTimeout(t);
     };
   }, [
@@ -369,6 +378,20 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
 
   const handleRespond = () =>
     runAction((id) => workItemService.humanFeedbackRespond(id, feedbackInput || ""), "respond");
+
+  // Halt/steer act on the work item's current run, not the work item itself,
+  // but reuse runAction's refetch-and-save so the dialog reflects the new state.
+  const handleHalt = () => {
+    const runId = workItem?.currentLoopRunId;
+    if (!runId) return Promise.resolve();
+    return runAction(() => loopRunService.halt(runId), "halt run");
+  };
+
+  const handleResumeSteer = (note?: string) => {
+    const runId = workItem?.currentLoopRunId;
+    if (!runId) return Promise.resolve();
+    return runAction(() => loopRunService.resumeSteer(runId, note), "resume run");
+  };
 
   const handleCleanupDone = () =>
     runAction((id) => workItemService.cleanupToDone(id), "cleanup to done");
@@ -427,6 +450,8 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     handleApprove,
     handleReject,
     handleRespond,
+    handleHalt,
+    handleResumeSteer,
     handleCleanupDone,
     handleCleanupBacklog,
     handleLinkPr,

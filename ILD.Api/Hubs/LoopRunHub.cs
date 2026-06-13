@@ -62,6 +62,12 @@ public class LoopRunHub : Hub
             new ILD.Data.DTOs.SignalRPayloads.RunResumedPayload(runId));
     }
 
+    public async Task NotifyHalted(Guid runId)
+    {
+        await Clients.Group(runId.ToString()).SendAsync("RunHalted",
+            new ILD.Data.DTOs.SignalRPayloads.RunHaltedPayload(runId));
+    }
+
     public async Task NotifyNodeProgress(Guid runId, Guid nodeId, string line, long seq)
     {
         await Clients.Group(runId.ToString()).SendAsync("NodeProgress",

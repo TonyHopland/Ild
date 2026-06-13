@@ -41,6 +41,22 @@ public interface ILoopRunStore
     Task UpdateRunAsync(LoopRun run);
 
     /// <summary>
+    /// Atomically persist the live AI session id captured mid-stream, touching
+    /// only that column. Used by the AI node executor's <c>OnSessionId</c>
+    /// callback, which runs on the adapter's stream task in its own DI scope —
+    /// a single-column write avoids clobbering concurrent control-plane writes
+    /// (halt, pause, cancel) on the same run.
+    /// </summary>
+    Task SetCurrentAiSessionIdAsync(Guid runId, string sessionId);
+
+    /// <summary>
+    /// Atomically clear the one-shot steering note after the AI node has
+    /// consumed it, touching only that column so a concurrent control-plane
+    /// write is not lost.
+    /// </summary>
+    Task ClearSteeringNoteAsync(Guid runId);
+
+    /// <summary>
     /// Refresh a tracked <see cref="LoopRun"/> instance with the row's current
     /// column values, discarding unsaved in-memory changes. Used by the engine
     /// before persisting so a stale instance held across a long node execution

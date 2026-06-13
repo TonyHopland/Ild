@@ -13,6 +13,7 @@ public interface IRunNotifier
     Task RunStateChangedAsync(Guid runId, LoopRunStatus oldStatus, LoopRunStatus newStatus);
     Task PausedAsync(Guid runId);
     Task ResumedAsync(Guid runId);
+    Task HaltedAsync(Guid runId);
     Task NodeProgressAsync(Guid runId, Guid nodeId, string line, long seq);
 }
 
@@ -23,5 +24,6 @@ public sealed class NoopRunNotifier : IRunNotifier
     public Task RunStateChangedAsync(Guid runId, LoopRunStatus oldStatus, LoopRunStatus newStatus) => Task.CompletedTask;
     public Task PausedAsync(Guid runId) => Task.CompletedTask;
     public Task ResumedAsync(Guid runId) => Task.CompletedTask;
+    public Task HaltedAsync(Guid runId) => Task.CompletedTask;
     public Task NodeProgressAsync(Guid runId, Guid nodeId, string line, long seq) => Task.CompletedTask;
 }

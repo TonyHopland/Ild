@@ -272,6 +272,51 @@ public class ClaudeCodeAdapterTests
     }
 
     [Fact]
+    public void EncodeWorktreePath_replaces_dots_with_dashes()
+    {
+        // Claude maps '.' to '-' as well as '/'. A dotted worktree path (the run
+        // worktree slug contains them) must encode the same way Claude does, or
+        // session snapshot persist/restore silently targets the wrong directory.
+        Assert.Equal(
+            "-home-ild-wi-22-run-a1-b2",
+            ClaudeCodeAdapter.EncodeWorktreePath("/home/ild/wi-22-run-a1.b2"));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_invokes_OnSessionId_once_with_first_session_id()
+    {
+        var worktreeDir = CreateWorktree();
+        var scriptPath = Path.Combine(worktreeDir, "fake-claude.sh");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "echo '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"sess-live\"}'\n" +
+            "echo '{\"type\":\"assistant\",\"session_id\":\"sess-live\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}'\n" +
+            "echo '{\"type\":\"result\",\"session_id\":\"sess-live\",\"is_error\":false,\"result\":\"hi\"}'\n");
+        Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var adapter = new ClaudeCodeAdapter();
+            var captured = new System.Collections.Concurrent.ConcurrentBag<string>();
+            var ctx = BuildContext(
+                binaryPath: scriptPath,
+                worktreePath: worktreeDir,
+                onSessionId: sid => captured.Add(sid));
+
+            var result = await adapter.ExecuteAsync(ctx);
+
+            Assert.True(result.Success);
+            // The session id surfaces on every event but the callback fires once.
+            Assert.Single(captured);
+            Assert.Equal("sess-live", captured.Single());
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
     public void WrapJsonl_roundtrips_through_UnwrapJsonl()
     {
         var jsonl =
@@ -336,7 +381,8 @@ public class ClaudeCodeAdapterTests
         string prompt = "test prompt",
         string? config = null,
         string? sessionId = null,
-        Func<string, Task>? progressCallback = null)
+        Func<string, Task>? progressCallback = null,
+        Action<string>? onSessionId = null)
     {
         var mergedConfig = config;
         if (string.IsNullOrEmpty(mergedConfig))
@@ -365,6 +411,7 @@ public class ClaudeCodeAdapterTests
             ExecutionCount: 1,
             Cancel: CancellationToken.None,
             ProgressCallback: progressCallback,
-            SessionId: sessionId);
+            SessionId: sessionId,
+            OnSessionId: onSessionId);
     }
 }

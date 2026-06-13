@@ -83,7 +83,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
                 // exit code and parsed output decide success.
             }
             try { process.StandardInput.Close(); } catch (IOException) { }
-            var stdoutTask = ReadStdoutAsync(process.StandardOutput, ctx.ProgressCallback, ctx.Cancel);
+            var stdoutTask = ReadStdoutAsync(process.StandardOutput, ctx.ProgressCallback, ctx.OnSessionId, ctx.Cancel);
             var stderrTask = process.StandardError.ReadToEndAsync(ctx.Cancel);
 
             try
@@ -258,7 +258,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
         await UpsertSnapshotAsync(ctx.RunContext.LoopRunId, sessionId, sessionJson, ctx.Cancel);
     }
 
-    private static async Task<PiExecutionOutput> ReadStdoutAsync(StreamReader reader, Func<string, Task>? progressCallback, CancellationToken ct)
+    private static async Task<PiExecutionOutput> ReadStdoutAsync(StreamReader reader, Func<string, Task>? progressCallback, Action<string>? onSessionId, CancellationToken ct)
     {
         var raw = new StringBuilder();
         var content = new StringBuilder();
@@ -282,7 +282,11 @@ public sealed class PiAdapter : CliAgentAdapterBase
                 if (hasEventType && string.Equals(eventType, "session", StringComparison.OrdinalIgnoreCase))
                 {
                     if (TryGetString(root, "id", out var headerSessionId))
+                    {
+                        var isFirst = sessionId is null;
                         sessionId = headerSessionId;
+                        if (isFirst) FireSessionId(onSessionId, headerSessionId);
+                    }
                     continue;
                 }
 

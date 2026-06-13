@@ -83,6 +83,19 @@ public class SignalRRunNotifier : IRunNotifier
         }
     }
 
+    public async Task HaltedAsync(Guid runId)
+    {
+        try
+        {
+            await _runHub.Clients.Group(runId.ToString())
+                .SendAsync("RunHalted", new RunHaltedPayload(runId));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send RunHalted for run {RunId}", runId);
+        }
+    }
+
     public async Task NodeProgressAsync(Guid runId, Guid nodeId, string line, long seq)
     {
         try

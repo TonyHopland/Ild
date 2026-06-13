@@ -10,6 +10,7 @@ import {
 } from "../../types";
 import { loopRunService } from "../../services/auth";
 import LiveStream from "../NodeTimeline/LiveStream";
+import HaltSteerControls from "./HaltSteerControls";
 
 interface EffectiveInput {
   nodeType?: string;
@@ -170,6 +171,13 @@ interface RunsPanelProps {
   progressText: string;
   /** Called after a retry so the parent can refresh the run list. */
   onRunsChanged?: () => void;
+  /** Halt the in-flight AI node of the current run. */
+  onHalt?: () => void | Promise<unknown>;
+  /** Resume a halted run with optional steering guidance. */
+  onResumeSteer?: (note: string) => void | Promise<unknown>;
+  /** Cleanup handlers reused from the work item dialog for a halted run. */
+  onCleanupDone?: () => void | Promise<unknown>;
+  onCleanupBacklog?: () => void | Promise<unknown>;
 }
 
 /**
@@ -177,7 +185,16 @@ interface RunsPanelProps {
  * inline on the right — no navigation to a separate page needed. A link to
  * the full run page is kept for the deep-dive cases (events, sessions).
  */
-export default function RunsPanel({ workItem, runs, progressText, onRunsChanged }: RunsPanelProps) {
+export default function RunsPanel({
+  workItem,
+  runs,
+  progressText,
+  onRunsChanged,
+  onHalt,
+  onResumeSteer,
+  onCleanupDone,
+  onCleanupBacklog,
+}: RunsPanelProps) {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [runDetail, setRunDetail] = useState<LoopRun | null>(null);
   const [loading, setLoading] = useState(false);
@@ -300,6 +317,14 @@ export default function RunsPanel({ workItem, runs, progressText, onRunsChanged 
                 Open full run view ↗
               </Link>
             </div>
+            <HaltSteerControls
+              run={runDetail}
+              workItemStatus={workItem.status}
+              onHalt={onHalt}
+              onResumeSteer={onResumeSteer}
+              onCleanupDone={onCleanupDone}
+              onCleanupBacklog={onCleanupBacklog}
+            />
             <div className="wiv2-node-list">
               {runDetail.nodes.length === 0 && (
                 <div className="wiv2-empty">No nodes executed yet.</div>

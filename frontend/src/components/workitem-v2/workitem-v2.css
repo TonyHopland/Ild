@@ -421,6 +421,16 @@
   margin-top: 0.5rem;
 }
 
+.wiv2-halt-steer {
+  margin: 0.5rem 0;
+}
+
+.wiv2-halt-bar {
+  display: flex;
+  justify-content: flex-start;
+  margin: 0.25rem 0 0.5rem;
+}
+
 .wiv2-node-pre {
   margin: 0.25rem 0 0;
   padding: 0.5rem;
