@@ -10,6 +10,7 @@ import {
 } from "../../types";
 import { loopRunService } from "../../services/auth";
 import LiveStream from "../NodeTimeline/LiveStream";
+import HaltSteerControls from "./HaltSteerControls";
 
 interface EffectiveInput {
   nodeType?: string;
@@ -85,16 +86,12 @@ function NodeRow({
   progressText,
   onRetry,
   retryDisabled,
-  onHalt,
-  halting,
 }: {
   node: LoopRunNode;
   isLive: boolean;
   progressText: string;
   onRetry: (runNodeId: string) => void;
   retryDisabled: boolean;
-  onHalt?: () => void;
-  halting?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const input = parseEffectiveInput(node);
@@ -136,22 +133,7 @@ function NodeRow({
       {expanded && (
         <div className="wiv2-node-body">
           {isLive ? (
-            <>
-              <LiveStream text={progressText} />
-              {node.nodeType === "AI" && onHalt && (
-                <div className="wiv2-node-actions">
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-warning"
-                    onClick={onHalt}
-                    disabled={halting}
-                    title="Interrupt this AI node now, then resume it with optional guidance"
-                  >
-                    {halting ? "Halting…" : "Halt"}
-                  </button>
-                </div>
-              )}
-            </>
+            <LiveStream text={progressText} />
           ) : (
             <>
               {inputText && (
@@ -217,9 +199,6 @@ export default function RunsPanel({
   const [runDetail, setRunDetail] = useState<LoopRun | null>(null);
   const [loading, setLoading] = useState(false);
   const [retrying, setRetrying] = useState(false);
-  const [halting, setHalting] = useState(false);
-  const [resuming, setResuming] = useState(false);
-  const [steerNote, setSteerNote] = useState("");
   const [errorText, setErrorText] = useState("");
 
   const effectiveRunId = selectedRunId ?? workItem.currentLoopRunId ?? runs[0]?.id ?? null;
@@ -271,33 +250,6 @@ export default function RunsPanel({
     }
   };
 
-  const handleHalt = async () => {
-    if (!onHalt) return;
-    setErrorText("");
-    setHalting(true);
-    try {
-      await onHalt();
-    } catch (error) {
-      setErrorText(error instanceof Error ? error.message : "Failed to halt run.");
-    } finally {
-      setHalting(false);
-    }
-  };
-
-  const handleResume = async () => {
-    if (!onResumeSteer) return;
-    setErrorText("");
-    setResuming(true);
-    try {
-      await onResumeSteer(steerNote);
-      setSteerNote("");
-    } catch (error) {
-      setErrorText(error instanceof Error ? error.message : "Failed to resume run.");
-    } finally {
-      setResuming(false);
-    }
-  };
-
   if (runs.length === 0) {
     return <div className="wiv2-empty">No runs yet for this work item.</div>;
   }
@@ -309,15 +261,6 @@ export default function RunsPanel({
 
   const isLiveRun =
     runDetail?.id === workItem.currentLoopRunId && workItem.status === WorkItemStatus.Running;
-
-  // A halted run is parked at WaitingHuman with the halt flag set; the steer
-  // window lets the human resume the same agent session (optionally guided) or
-  // clean the run up, right where they were watching the live view.
-  const isHaltedRun =
-    !!runDetail &&
-    runDetail.id === workItem.currentLoopRunId &&
-    runDetail.status === LoopRunStatus.WaitingHuman &&
-    !!runDetail.isHalted;
 
   return (
     <div className="wiv2-runs">
@@ -374,46 +317,14 @@ export default function RunsPanel({
                 Open full run view ↗
               </Link>
             </div>
-            {isHaltedRun && onResumeSteer && (
-              <div className="wiv2-feedback">
-                <div className="wiv2-feedback-title">Halted — steer &amp; resume</div>
-                <textarea
-                  className="feedback-textarea"
-                  value={steerNote}
-                  onChange={(e) => setSteerNote(e.target.value)}
-                  placeholder="Optional guidance for the resumed agent — leave blank to just continue…"
-                  rows={3}
-                />
-                <div className="feedback-actions">
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-primary"
-                    onClick={() => void handleResume()}
-                    disabled={resuming}
-                  >
-                    {resuming ? "Resuming…" : "Resume"}
-                  </button>
-                  {onCleanupDone && (
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-warning"
-                      onClick={() => void onCleanupDone()}
-                    >
-                      Cleanup -&gt; Done
-                    </button>
-                  )}
-                  {onCleanupBacklog && (
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-secondary"
-                      onClick={() => void onCleanupBacklog()}
-                    >
-                      Cleanup -&gt; Backlog
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
+            <HaltSteerControls
+              run={runDetail}
+              workItemStatus={workItem.status}
+              onHalt={onHalt}
+              onResumeSteer={onResumeSteer}
+              onCleanupDone={onCleanupDone}
+              onCleanupBacklog={onCleanupBacklog}
+            />
             <div className="wiv2-node-list">
               {runDetail.nodes.length === 0 && (
                 <div className="wiv2-empty">No nodes executed yet.</div>
@@ -430,8 +341,6 @@ export default function RunsPanel({
                   progressText={progressText}
                   onRetry={handleRetry}
                   retryDisabled={retryDisabled}
-                  onHalt={onHalt ? () => void handleHalt() : undefined}
-                  halting={halting}
                 />
               ))}
             </div>

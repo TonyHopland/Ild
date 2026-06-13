@@ -16,6 +16,7 @@ import {
   DescriptionPanel,
 } from "./panels";
 import RunsPanel from "./RunsPanel";
+import HaltSteerControls from "./HaltSteerControls";
 import EditPanel from "./EditPanel";
 
 type TabId = "overview" | "runs" | "conversation" | "preview";
@@ -158,6 +159,14 @@ export default function WorkItemModalV2({
         <div className="wiv2-overview wiv2-overview-cols">
           <div className="wiv2-overview-main">
             {detail.shouldStream && <LiveStream text={detail.progressText} />}
+            <HaltSteerControls
+              run={detail.currentRun}
+              workItemStatus={workItem.status}
+              onHalt={detail.handleHalt}
+              onResumeSteer={detail.handleResumeSteer}
+              onCleanupDone={detail.handleCleanupDone}
+              onCleanupBacklog={detail.handleCleanupBacklog}
+            />
             <span className="detail-label">Description</span>
             <DescriptionPanel workItem={workItem} />
           </div>
