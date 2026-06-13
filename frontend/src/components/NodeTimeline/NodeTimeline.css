@@ -298,6 +298,7 @@
   background: #030711;
   border: 1px solid #1f2937;
   border-radius: 0.25rem;
+  box-sizing: content-box;
   padding: 0.5rem;
   height: 300px;
   overflow: hidden;
