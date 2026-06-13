@@ -222,6 +222,10 @@
   word-break: break-all;
 }
 
+.wiv2-meta-node {
+  color: #7f849c;
+}
+
 /* ---------- runs tab ---------- */
 
 .wiv2-runs {

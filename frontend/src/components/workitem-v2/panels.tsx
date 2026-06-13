@@ -213,6 +213,14 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
   const tagList = parseTags(workItem);
   const fmt = (d: string | null) => (d ? new Date(d).toLocaleString() : "—");
 
+  // While the item is mid run, surface the pinned loop's name and the node the
+  // engine is currently on. Both come from the current run's detail.
+  const { currentRun } = detail;
+  const loopName = detail.templates.find((t) => t.id === currentRun?.loopTemplateId)?.name ?? null;
+  const currentNodeLabel =
+    currentRun?.nodes.find((n) => n.nodeId === currentRun.currentNodeId)?.nodeLabel ?? null;
+  const isRunning = workItem.status === WorkItemStatus.Running;
+
   return (
     <div className="wiv2-meta">
       <div className="wiv2-meta-row">
@@ -229,6 +237,15 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
         <span className="detail-label">Repository</span>
         <span className="detail-value">{repoName}</span>
       </div>
+      {isRunning && loopName && (
+        <div className="wiv2-meta-row">
+          <span className="detail-label">Loop</span>
+          <span className="detail-value">
+            {loopName}
+            {currentNodeLabel && <span className="wiv2-meta-node"> · {currentNodeLabel}</span>}
+          </span>
+        </div>
+      )}
       {tagList.length > 0 && (
         <div className="wiv2-meta-row">
           <span className="detail-label">Tags</span>

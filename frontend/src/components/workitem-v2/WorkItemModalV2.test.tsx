@@ -9,6 +9,8 @@ import {
   LoopRun,
   LoopRunStatus,
   LoopRunNodeStatus,
+  LoopTemplate,
+  RecoveryPolicy,
 } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
@@ -73,6 +75,22 @@ function makeRun(overrides: Partial<LoopRun> = {}): LoopRun {
         executionCount: 1,
       },
     ],
+    ...overrides,
+  };
+}
+
+function makeTemplate(overrides: Partial<LoopTemplate> = {}): LoopTemplate {
+  return {
+    id: "tmpl-1",
+    name: "build-loop",
+    description: "",
+    version: 1,
+    recoveryPolicy: RecoveryPolicy.AutoResume,
+    nodes: [],
+    edges: [],
+    createdAt: "2025-01-01T00:00:00Z",
+    updatedAt: "2025-01-01T00:00:00Z",
+    isArchived: false,
     ...overrides,
   };
 }
@@ -252,6 +270,56 @@ describe("WorkItemModalV2", () => {
     // Repository name resolves from the mocked repository service.
     expect(await screen.findByText("my-repo")).toBeTruthy();
     expect(screen.getByText("Dependencies")).toBeTruthy();
+  });
+
+  test("overview shows the loop name and current node while the item is mid run", async () => {
+    const run = makeRun({
+      status: LoopRunStatus.Running,
+      completedAt: null,
+      currentNodeId: "n-1",
+    });
+    mockServices([run]);
+    vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([
+      makeTemplate({ id: "tmpl-1", name: "build-loop" }),
+    ]);
+    await renderDialog(makeWorkItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1" }));
+
+    const loopLabel = await screen.findByText("Loop");
+    const row = loopLabel.parentElement;
+    expect(row?.textContent).toContain("build-loop");
+    // The current node label is shown beside the loop name.
+    expect(row?.textContent).toContain("Implement");
+  });
+
+  test("overview shows the loop name without a node when the run has no current node", async () => {
+    const run = makeRun({
+      status: LoopRunStatus.Running,
+      completedAt: null,
+      currentNodeId: null,
+    });
+    mockServices([run]);
+    vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([
+      makeTemplate({ id: "tmpl-1", name: "build-loop" }),
+    ]);
+    await renderDialog(makeWorkItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1" }));
+
+    const loopLabel = await screen.findByText("Loop");
+    const row = loopLabel.parentElement;
+    expect(row?.textContent).toContain("build-loop");
+    expect(row?.textContent).not.toContain("·");
+  });
+
+  test("overview hides the loop row when the item is not mid run", async () => {
+    const run = makeRun({ currentNodeId: "n-1" });
+    mockServices([run]);
+    vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([
+      makeTemplate({ id: "tmpl-1", name: "build-loop" }),
+    ]);
+    await renderDialog(makeWorkItem({ status: WorkItemStatus.Done, currentLoopRunId: "run-1" }));
+
+    // Overview is rendered (repository name resolves) but the loop row is absent.
+    expect(await screen.findByText("my-repo")).toBeTruthy();
+    expect(screen.queryByText("Loop")).toBeNull();
   });
 
   test("overview push branch button commits and pushes, then shows the branch", async () => {
