@@ -25,6 +25,30 @@ public class LoopRun : IHasUpdatedAt
     public bool IsPaused { get; set; }
 
     /// <summary>
+    /// When true the run was halted by a human watching the live view: the
+    /// in-flight AI node was interrupted and the run parked at
+    /// <see cref="LoopRunStatus.WaitingHuman"/> awaiting a steer/resume. Cleared
+    /// when the run resumes. Distinguishes a halted run from a node-driven
+    /// WaitingHuman park (Human/PR node) so the UI can show the steer window.
+    /// </summary>
+    public bool IsHalted { get; set; }
+
+    /// <summary>
+    /// The live AI session id captured mid-stream by the active adapter, so a
+    /// halted run can be resumed against the SAME agent session. Written by the
+    /// AI node executor in its own DI scope as the session id arrives.
+    /// </summary>
+    [MaxLength(256)]
+    public string? CurrentAiSessionId { get; set; }
+
+    /// <summary>
+    /// One-shot guidance the human supplied when resuming a halted AI node. The
+    /// AI node executor consumes it as the next message to the resumed session
+    /// and clears it so a later visit doesn't re-apply it.
+    /// </summary>
+    public string? SteeringNote { get; set; }
+
+    /// <summary>
     /// When true the run is pinned: the worktree retention sweeper never
     /// reclaims its worktree/branch nor deletes the run. Stays pinned until a
     /// human clears the mark. See ADR-0008.

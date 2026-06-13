@@ -306,6 +306,14 @@ export const loopRunService = {
     return api.post<void>(`/loopruns/${id}/resume`, {});
   },
 
+  halt: async (id: string): Promise<void> => {
+    return api.post<void>(`/loopruns/${id}/halt`, {});
+  },
+
+  resumeSteer: async (id: string, note?: string): Promise<void> => {
+    return api.post<void>(`/loopruns/${id}/resume-steer`, { note: note ?? null });
+  },
+
   retryFromNode: async (id: string, runNodeId: string): Promise<void> => {
     return api.post<void>(`/loopruns/${id}/nodes/${runNodeId}/retry`, {});
   },

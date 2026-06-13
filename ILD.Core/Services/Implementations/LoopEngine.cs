@@ -179,6 +179,70 @@ public sealed class LoopEngine : ILoopEngine
             reason: HumanFeedbackReasons.RunCancelled, humanFeedbackReason: HumanFeedbackReasons.RunCancelled);
     }
 
+    public async Task HaltRunAsync(Guid runId)
+    {
+        using var scope = _sp.CreateScope();
+        var sp = scope.ServiceProvider;
+        var loopRunStore = sp.GetRequiredService<ILoopRunStore>();
+        var templateStore = sp.GetRequiredService<ILoopTemplateStore>();
+        var workItems = sp.GetRequiredService<IWorkItemManager>();
+        var run = await loopRunStore.GetByIdAsync(runId);
+        if (run is null) return;
+
+        // Halt only applies to a run actively executing an AI node. The
+        // status + node-type checks together no-op the race where the node
+        // completes (or the engine advances off the AI node) between the user
+        // clicking Halt and this handler running.
+        if (run.Status != LoopRunStatus.Running || run.CurrentNodeId is null) return;
+        var nodes = await templateStore.GetNodesForVersionAsync(run.LoopTemplateVersionId);
+        var node = nodes.FirstOrDefault(n => n.Id == run.CurrentNodeId.Value);
+        if (node is null || node.NodeType != NodeType.AI) return;
+
+        var old = run.Status;
+        run.Status = LoopRunStatus.WaitingHuman;
+        run.IsHalted = true;
+        run.HumanFeedbackReason = HumanFeedbackReasons.RunHalted;
+        await loopRunStore.UpdateRunAsync(run);
+
+        // Cancel the run's CTS to kill the in-flight agent process now. The
+        // executor surfaces the cancellation as a Fail/OperationCanceled the
+        // engine's existing cancellation path records as an Interrupted node,
+        // without routing or clobbering the WaitingHuman status set above.
+        if (_runCts.TryGetValue(runId, out var cts))
+        {
+            try { cts.Cancel(); } catch { }
+        }
+        await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.WaitingHuman);
+        await _notifier.HaltedAsync(runId);
+        await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+            reason: HumanFeedbackReasons.RunHalted, humanFeedbackReason: HumanFeedbackReasons.RunHalted,
+            currentLoopRunId: run.Id, name: node.Label);
+    }
+
+    public async Task ResumeFromHaltAsync(Guid runId, string? note)
+    {
+        using var scope = _sp.CreateScope();
+        var sp = scope.ServiceProvider;
+        var loopRunStore = sp.GetRequiredService<ILoopRunStore>();
+        var workItems = sp.GetRequiredService<IWorkItemManager>();
+        var run = await loopRunStore.GetByIdAsync(runId);
+        if (run is null) return;
+        // Only a halted, parked run can be steered/resumed here.
+        if (run.Status != LoopRunStatus.WaitingHuman || !run.IsHalted) return;
+
+        var old = run.Status;
+        // A non-null note (empty allowed) flags the AI node to continue the
+        // captured session; the executor consumes and clears it one-shot.
+        run.SteeringNote = note ?? string.Empty;
+        run.IsHalted = false;
+        run.HumanFeedbackReason = null;
+        run.Status = LoopRunStatus.Running;
+        await loopRunStore.UpdateRunAsync(run);
+        await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.Running, currentLoopRunId: run.Id);
+        await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.Running);
+        _ = LaunchAfterAwaitAsync(runId);
+    }
+
     public async Task<LoopRunStatus?> GetRunStatusAsync(Guid runId)
     {
         using var scope = _sp.CreateScope();

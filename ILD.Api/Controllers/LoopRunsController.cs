@@ -50,6 +50,7 @@ public class LoopRunsController : ControllerBase
             status = r.Status.ToString(),
             currentNodeId = r.CurrentNodeId,
             isPaused = r.IsPaused,
+            isHalted = r.IsHalted,
             retain = r.Retain,
             nodeExecutionCount = r.NodeExecutionCount,
             startedAt = r.StartedAt,
@@ -70,7 +71,9 @@ public class LoopRunsController : ControllerBase
         if (run == null)
             return NotFound(new { error = "Run not found" });
 
-        var runNodes = await _loopRunStore.GetRunNodesAsync(guid);
+        // Eager-load the template node so the projection can surface each run
+        // node's NodeType — the live-view Halt affordance is AI-node only.
+        var runNodes = await _loopRunStore.GetRunNodesWithNodeAsync(guid);
         var sessionSnapshots = await _loopRunStore.GetSessionSnapshotsAsync(guid);
         var sessionBindings = await _loopRunStore.GetSessionBindingsAsync(guid);
         var currentSessionIds = sessionBindings
@@ -86,6 +89,7 @@ public class LoopRunsController : ControllerBase
             status = run.Status.ToString(),
             currentNodeId = run.CurrentNodeId,
             isPaused = run.IsPaused,
+            isHalted = run.IsHalted,
             retain = run.Retain,
             worktreePath = run.WorktreePath,
             branchName = run.BranchName,
@@ -137,6 +141,31 @@ public class LoopRunsController : ControllerBase
             return BadRequest(new { error = "Invalid GUID" });
 
         await _loopEngine.CancelRunAsync(guid);
+        return Ok();
+    }
+
+    [HttpPost("{id}/halt")]
+    public async Task<IActionResult> Halt(string id)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+
+        await _loopEngine.HaltRunAsync(guid);
+        return Ok();
+    }
+
+    public sealed class ResumeSteerRequest
+    {
+        public string? Note { get; set; }
+    }
+
+    [HttpPost("{id}/resume-steer")]
+    public async Task<IActionResult> ResumeSteer(string id, [FromBody] ResumeSteerRequest? request)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+
+        await _loopEngine.ResumeFromHaltAsync(guid, request?.Note);
         return Ok();
     }
 

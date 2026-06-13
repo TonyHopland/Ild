@@ -20,6 +20,23 @@ public interface ILoopEngine
     Task PauseRunAsync(Guid runId);
     Task ResumeRunAsync(Guid runId);
     Task CancelRunAsync(Guid runId);
+
+    /// <summary>
+    /// Halt the in-flight AI node of an actively-running run: kill the agent
+    /// process now (cancel the run's CTS) and park the run at
+    /// <c>WaitingHuman</c> with <c>IsHalted</c> set, keeping <c>CurrentNodeId</c>
+    /// so it can be resumed against the same session. No-op unless the run is
+    /// <c>Running</c> on an AI node (guards the halt-races-completion case).
+    /// </summary>
+    Task HaltRunAsync(Guid runId);
+
+    /// <summary>
+    /// Resume a halted run, optionally steering it with <paramref name="note"/>
+    /// as the next message to the same agent session. Re-runs the parked AI
+    /// node. Requires the run to be <c>WaitingHuman</c> and <c>IsHalted</c> —
+    /// distinct from <see cref="ResumeRunAsync"/>, which refuses WaitingHuman runs.
+    /// </summary>
+    Task ResumeFromHaltAsync(Guid runId, string? note);
     Task<LoopRunStatus?> GetRunStatusAsync(Guid runId);
     Task<IEnumerable<Guid>> GetActiveRunIdsAsync();
 

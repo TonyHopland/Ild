@@ -55,6 +55,17 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     }
 
     /// <summary>
+    /// Hand the freshly-captured session id to the run's <c>OnSessionId</c>
+    /// callback. Best-effort: a throwing callback must never take down the
+    /// stream-read loop it runs on.
+    /// </summary>
+    protected static void FireSessionId(Action<string>? onSessionId, string? sessionId)
+    {
+        if (onSessionId is null || string.IsNullOrWhiteSpace(sessionId)) return;
+        try { onSessionId(sessionId); } catch { /* best effort */ }
+    }
+
+    /// <summary>
     /// Fetch the managed-session snapshot for this adapter, keyed by run + this
     /// adapter's <see cref="Name"/>. Returns <c>null</c> when no DI scope is
     /// available (unit tests) or no snapshot exists. Store exceptions propagate

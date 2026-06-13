@@ -193,6 +193,8 @@ export interface LoopRunNode {
   startedAt: string | null;
   completedAt: string | null;
   executionCount: number;
+  /** Template node type (e.g. "AI"); only populated by the run-detail endpoint. */
+  nodeType?: string | null;
 }
 
 export interface LoopRunAvailableSession {
@@ -220,6 +222,7 @@ export interface LoopRun {
   status: LoopRunStatus;
   currentNodeId: string | null;
   isPaused: boolean;
+  isHalted?: boolean;
   retain?: boolean;
   worktreePath?: string | null;
   branchName?: string | null;
@@ -348,6 +351,10 @@ export interface RunPausedPayload {
 }
 
 export interface RunResumedPayload {
+  runId: string;
+}
+
+export interface RunHaltedPayload {
   runId: string;
 }
 

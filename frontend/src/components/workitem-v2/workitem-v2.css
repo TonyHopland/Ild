@@ -421,6 +421,12 @@
   margin-top: 0.5rem;
 }
 
+.wiv2-node-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.5rem;
+}
+
 .wiv2-node-pre {
   margin: 0.25rem 0 0;
   padding: 0.5rem;

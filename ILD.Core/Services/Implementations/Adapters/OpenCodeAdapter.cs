@@ -91,8 +91,20 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             var stdoutLock = new object();
             var stderrLock = new object();
 
-            var stdoutTask = ReadAndStreamLinesAsync(p.StandardOutput, stdoutLines, stdoutLock, ctx.ProgressCallback, ctx.Cancel);
-            var stderrTask = ReadAndStreamLinesAsync(p.StandardError, stderrLines, stderrLock, ctx.ProgressCallback, ctx.Cancel);
+            // Fire OnSessionId at most once, the first time the session id
+            // surfaces on stdout, so the run can be halted/resumed mid-stream.
+            var sessionIdReported = false;
+            Action<string>? reportSessionId = ctx.OnSessionId is null
+                ? null
+                : sid =>
+                {
+                    if (sessionIdReported) return;
+                    sessionIdReported = true;
+                    FireSessionId(ctx.OnSessionId, sid);
+                };
+
+            var stdoutTask = ReadAndStreamLinesAsync(p.StandardOutput, stdoutLines, stdoutLock, ctx.ProgressCallback, reportSessionId, ctx.Cancel);
+            var stderrTask = ReadAndStreamLinesAsync(p.StandardError, stderrLines, stderrLock, ctx.ProgressCallback, null, ctx.Cancel);
 
             try
             {
@@ -716,11 +728,18 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         List<string> lines,
         object lockObj,
         Func<string, Task>? progressCallback,
+        Action<string>? onSessionId,
         CancellationToken ct)
     {
         while (await reader.ReadLineAsync(ct).ConfigureAwait(false) is { } line)
         {
             lock (lockObj) lines.Add(line);
+            if (onSessionId != null)
+            {
+                var sid = ExtractSessionIdFromLine(line);
+                if (!string.IsNullOrEmpty(sid))
+                    onSessionId(sid!);
+            }
             if (progressCallback != null)
             {
                 var text = ExtractTextFromJsonLine(line);
@@ -729,6 +748,21 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             }
         }
         lock (lockObj) return string.Join("\n", lines);
+    }
+
+    private static string? ExtractSessionIdFromLine(string line)
+    {
+        var trimmed = line.Trim();
+        if (string.IsNullOrEmpty(trimmed)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(trimmed);
+            return ExtractSessionIdFromElement(doc.RootElement);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static string? ExtractTextFromJsonLine(string line)

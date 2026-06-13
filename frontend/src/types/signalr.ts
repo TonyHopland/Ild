@@ -15,6 +15,7 @@ import type {
   EventLoggedPayload,
   RunPausedPayload,
   RunResumedPayload,
+  RunHaltedPayload,
   DependencyResolvedPayload,
   NodeProgressPayload,
   PreviewStateChangedPayload,
@@ -29,6 +30,7 @@ export interface SignalREventPayloads {
   EventLogged: EventLoggedPayload;
   RunPaused: RunPausedPayload;
   RunResumed: RunResumedPayload;
+  RunHalted: RunHaltedPayload;
   DependencyResolved: DependencyResolvedPayload;
   NodeProgress: NodeProgressPayload;
   PreviewStateChanged: PreviewStateChangedPayload;

@@ -79,6 +79,39 @@ public class PiAdapterTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_invokes_OnSessionId_once_on_session_event()
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-pi-sid-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-live\",\"cwd\":\"$PWD\"}'\n" +
+            "echo '{\"type\":\"message_update\",\"message\":{\"role\":\"assistant\",\"content\":[]},\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"hi\"}}'\n" +
+            "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"hi\"}]}}'\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var captured = new System.Collections.Concurrent.ConcurrentBag<string>();
+            var result = await new PiAdapter().ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                prompt: "ignored",
+                worktreePath: worktreeDir,
+                executionCount: 1,
+                onSessionId: sid => captured.Add(sid)));
+
+            Assert.True(result.Success);
+            Assert.Single(captured);
+            Assert.Equal("pi-live", captured.Single());
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_fails_when_stream_ends_before_turn_end()
     {
         var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-pi-truncated-{Guid.NewGuid():N}");
@@ -430,7 +463,8 @@ public class PiAdapterTests
         CancellationToken? cancel = null,
         Guid? runId = null,
         string? sessionId = null,
-        bool manageSession = false)
+        bool manageSession = false,
+        Action<string>? onSessionId = null)
     {
         var dict = JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, object>>(
             config ?? "{}") ?? new System.Collections.Generic.Dictionary<string, object>();
@@ -462,7 +496,8 @@ public class PiAdapterTests
             Cancel: cancel ?? CancellationToken.None,
             ProgressCallback: progressCallback,
             SessionId: sessionId,
-            ManageSession: manageSession);
+            ManageSession: manageSession,
+            OnSessionId: onSessionId);
     }
 
     private static string GeneratePiExtension(string apiUrl, string apiToken, string loopRunId)

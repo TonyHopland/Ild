@@ -184,7 +184,7 @@ public class LoopRunsControllerTests
 
         var store = new Mock<ILoopRunStore>();
         store.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(run);
-        store.Setup(s => s.GetRunNodesAsync(runId)).ReturnsAsync(Array.Empty<LoopRunNode>());
+        store.Setup(s => s.GetRunNodesWithNodeAsync(runId)).ReturnsAsync(Array.Empty<LoopRunNode>());
         store.Setup(s => s.GetSessionSnapshotsAsync(runId)).ReturnsAsync(new[]
         {
             new AdapterSessionSnapshot

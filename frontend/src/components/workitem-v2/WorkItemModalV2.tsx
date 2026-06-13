@@ -178,6 +178,10 @@ export default function WorkItemModalV2({
           runs={detail.runs}
           progressText={detail.progressText}
           onRunsChanged={detail.refreshRuns}
+          onHalt={detail.handleHalt}
+          onResumeSteer={detail.handleResumeSteer}
+          onCleanupDone={detail.handleCleanupDone}
+          onCleanupBacklog={detail.handleCleanupBacklog}
         />
       </section>
       <section

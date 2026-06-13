@@ -73,7 +73,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
 
             using var process = proc ?? throw new InvalidOperationException("Process.Start returned null");
 
-            var stdoutTask = ReadStreamJsonAsync(process.StandardOutput, ctx.ProgressCallback, ctx.Cancel);
+            var stdoutTask = ReadStreamJsonAsync(process.StandardOutput, ctx.ProgressCallback, ctx.OnSessionId, ctx.Cancel);
             var stderrTask = process.StandardError.ReadToEndAsync(ctx.Cancel);
 
             try
@@ -251,6 +251,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     private static async Task<ClaudeStreamOutput> ReadStreamJsonAsync(
         StreamReader reader,
         Func<string, Task>? progressCallback,
+        Action<string>? onSessionId,
         CancellationToken ct)
     {
         var raw = new StringBuilder();
@@ -290,7 +291,11 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             //   { "type": "user",      "message": { "content": [...] } }   (tool results)
             //   { "type": "result",    "subtype": "...", "result": ..., "session_id": ..., "is_error": bool }
             if (TryGetString(root, "session_id", out var sid) && !string.IsNullOrWhiteSpace(sid))
+            {
+                var isFirst = sessionId is null;
                 sessionId = sid;
+                if (isFirst) FireSessionId(onSessionId, sid);
+            }
 
             if (!TryGetString(root, "type", out var eventType))
                 continue;
@@ -457,11 +462,12 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     }
 
     // Claude Code stores per-cwd session JSONL files under
-    // ~/.claude/projects/<encoded-cwd>/. The encoding observed in practice
-    // is a verbatim slash-to-dash substitution (e.g. /workspaces/Ild ->
-    // -workspaces-Ild). If Anthropic ever changes the rule, restore/persist
-    // will silently no-op (path miss) rather than misbehave.
-    public static string EncodeWorktreePath(string path) => path.Replace('/', '-');
+    // ~/.claude/projects/<encoded-cwd>/. The encoding maps both path separators
+    // and dots to dashes (e.g. /home/ild/wi-1.2 -> -home-ild-wi-1-2). Mapping
+    // only '/' left dotted worktree paths pointing at the wrong directory, so
+    // snapshot persist/restore silently no-op'd. If Anthropic ever changes the
+    // rule, restore/persist still no-op (path miss) rather than misbehave.
+    public static string EncodeWorktreePath(string path) => path.Replace('/', '-').Replace('.', '-');
 
     public static string WrapJsonl(string sessionId, string jsonl)
     {

@@ -30,4 +30,7 @@ public static class HumanFeedbackReasons
 
     /// <summary>The run loop threw an unhandled exception and was parked for review.</summary>
     public const string RunCrashed = "Run Crashed";
+
+    /// <summary>A human halted an in-flight AI node and the run is parked awaiting a steer/resume.</summary>
+    public const string RunHalted = "Run Halted";
 }

@@ -181,6 +181,16 @@ public class LoopRunStore : ILoopRunStore
         await _db.SaveChangesAsync();
     }
 
+    public async Task SetCurrentAiSessionIdAsync(Guid runId, string sessionId)
+        => await _db.LoopRuns
+            .Where(r => r.Id == runId)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.CurrentAiSessionId, sessionId));
+
+    public async Task ClearSteeringNoteAsync(Guid runId)
+        => await _db.LoopRuns
+            .Where(r => r.Id == runId)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.SteeringNote, (string?)null));
+
     public async Task CreateRunNodeAsync(LoopRunNode runNode)
     {
         _db.LoopRunNodes.Add(runNode);

@@ -578,6 +578,41 @@ public class OpenCodeAdapterTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_invokes_OnSessionId_once_with_first_session_id()
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-sid-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
+        // Two events carry the session id; the callback must fire only once.
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "echo '{\"type\":\"step_start\",\"sessionId\":\"oc-live\"}'\n" +
+            "echo '{\"type\":\"text\",\"text\":\"hello\",\"sessionId\":\"oc-live\"}'\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var captured = new System.Collections.Concurrent.ConcurrentBag<string>();
+            var ctx = BuildContext(
+                binaryPath: scriptPath,
+                prompt: "ignored",
+                worktreePath: worktreeDir,
+                executionCount: 1,
+                onSessionId: sid => captured.Add(sid));
+
+            var result = await new OpenCodeAdapter().ExecuteAsync(ctx);
+
+            Assert.True(result.Success);
+            Assert.Single(captured);
+            Assert.Equal("oc-live", captured.Single());
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_returns_session_id_from_nested_session_object()
     {
         // opencode emits stream events whose payloads sometimes nest the
@@ -1155,7 +1190,8 @@ public class OpenCodeAdapterTests
         Func<string, Task>? progressCallback = null,
         string? sessionId = null,
         Guid? runId = null,
-        bool manageSession = false)
+        bool manageSession = false,
+        Action<string>? onSessionId = null)
     {
         var dict = System.Text.Json.JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, object>>(
             config ?? "{}") ?? new System.Collections.Generic.Dictionary<string, object>();
@@ -1187,7 +1223,8 @@ public class OpenCodeAdapterTests
             Cancel: cancel ?? CancellationToken.None,
             ProgressCallback: progressCallback,
             SessionId: sessionId,
-            ManageSession: manageSession);
+            ManageSession: manageSession,
+            OnSessionId: onSessionId);
     }
 
     private static async Task<SessionHarness> CreateSessionHarnessAsync()
