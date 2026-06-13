@@ -55,17 +55,20 @@ public sealed class CmdNodeExecutor : INodeExecutor
         var sb = new StringBuilder();
         var err = new StringBuilder();
         using var p = new Process { StartInfo = psi, EnableRaisingEvents = true };
+        // Forward the full stdout+stderr stream verbatim (newline included, ANSI
+        // preserved) so the live view captures the complete output rather than
+        // newline-stripped fragments.
         p.OutputDataReceived += (_, e) =>
         {
             if (e.Data is null) return;
             sb.AppendLine(e.Data);
-            try { ctx.ProgressCallback?.Invoke(e.Data); } catch { }
+            try { ctx.ProgressCallback?.Invoke(e.Data + "\n"); } catch { }
         };
         p.ErrorDataReceived += (_, e) =>
         {
             if (e.Data is null) return;
             err.AppendLine(e.Data);
-            try { ctx.ProgressCallback?.Invoke(e.Data); } catch { }
+            try { ctx.ProgressCallback?.Invoke(e.Data + "\n"); } catch { }
         };
         try
         {

@@ -8,9 +8,23 @@ namespace ILD.Api.Hubs;
 
 public class LoopRunHub : Hub
 {
-    public async Task SubscribeToRun(Guid runId)
+    private readonly IRunProgressBuffer _progressBuffer;
+
+    public LoopRunHub(IRunProgressBuffer progressBuffer)
+    {
+        _progressBuffer = progressBuffer;
+    }
+
+    /// <summary>
+    /// Join the run's group and return the live-output captured so far so the
+    /// caller can render the run from its start before attaching to the live
+    /// stream. The returned <see cref="RunProgressSnapshot.LastSeq"/> lets the
+    /// caller drop any live chunk already contained in the replay.
+    /// </summary>
+    public async Task<RunProgressSnapshot> SubscribeToRun(Guid runId)
     {
         await Groups.AddToGroupAsync(Context.ConnectionId, runId.ToString());
+        return _progressBuffer.Snapshot(runId);
     }
 
     public async Task UnsubscribeFromRun(Guid runId)
@@ -48,10 +62,10 @@ public class LoopRunHub : Hub
             new ILD.Data.DTOs.SignalRPayloads.RunResumedPayload(runId));
     }
 
-    public async Task NotifyNodeProgress(Guid runId, Guid nodeId, string line)
+    public async Task NotifyNodeProgress(Guid runId, Guid nodeId, string line, long seq)
     {
         await Clients.Group(runId.ToString()).SendAsync("NodeProgress",
-            new ILD.Data.DTOs.SignalRPayloads.NodeProgressPayload(runId, nodeId, line));
+            new ILD.Data.DTOs.SignalRPayloads.NodeProgressPayload(runId, nodeId, line, seq));
     }
 
     public override async Task OnConnectedAsync()

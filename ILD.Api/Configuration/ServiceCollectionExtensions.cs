@@ -54,6 +54,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPrSyncService, PrSyncService>();
         services.AddScoped<IAdapterSessionSnapshotStore, AdapterSessionSnapshotStore>();
 
+        services.AddSingleton<IRunProgressBuffer, RunProgressBuffer>();
         services.AddSingleton<IRunNotifier, SignalRRunNotifier>();
         services.AddSingleton<IWorkItemNotifier, SignalRWorkItemNotifier>();
         services.AddSingleton<INodeExecutor, StartNodeExecutor>();

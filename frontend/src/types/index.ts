@@ -370,6 +370,8 @@ export interface NodeProgressPayload {
   runId: string;
   nodeId: string;
   line: string;
+  /** Monotonic per-run sequence number; used to dedupe the backlog→live handoff. */
+  seq: number;
 }
 
 export interface PreviewStateChangedPayload {

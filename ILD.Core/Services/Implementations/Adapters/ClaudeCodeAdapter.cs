@@ -306,6 +306,14 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
                     if (progressCallback is not null)
                         await progressCallback(text).ConfigureAwait(false);
                 }
+
+                // Tool calls are part of the run's complete picture but not of
+                // the node's text output: surface them on the live stream only.
+                if (progressCallback is not null)
+                {
+                    foreach (var marker in ExtractToolMarkers(message))
+                        await progressCallback(marker).ConfigureAwait(false);
+                }
             }
             else if (string.Equals(eventType, "result", StringComparison.OrdinalIgnoreCase))
             {
@@ -350,6 +358,32 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         }
 
         return sb.Length > 0 ? sb.ToString() : null;
+    }
+
+    /// <summary>
+    /// Build readable markers for any <c>tool_use</c> parts in an assistant
+    /// message (e.g. <c>\n[tool: Bash]\n</c>). These feed the live view so the
+    /// run's tool activity is visible, without polluting the node's text output.
+    /// </summary>
+    private static IEnumerable<string> ExtractToolMarkers(JsonElement message)
+    {
+        if (!message.TryGetProperty("content", out var content)
+            || content.ValueKind != JsonValueKind.Array)
+            yield break;
+
+        foreach (var item in content.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                continue;
+            if (!TryGetString(item, "type", out var partType)
+                || !string.Equals(partType, "tool_use", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var name = TryGetString(item, "name", out var toolName) && !string.IsNullOrWhiteSpace(toolName)
+                ? toolName
+                : "tool";
+            yield return $"\n[tool: {name}]\n";
+        }
     }
 
     private async Task TryRestoreSessionJsonlAsync(AgentExecutionContext ctx, string sessionId, string worktreePath)
