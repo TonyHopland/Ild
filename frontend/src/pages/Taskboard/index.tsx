@@ -221,7 +221,7 @@ export default function Taskboard() {
   }
 
   return (
-    <div className="page-container">
+    <div className="page-container taskboard-page">
       <div className="taskboard-header">
         <h1 className="page-title">Taskboard</h1>
         <div className="taskboard-header-actions">
@@ -394,7 +394,18 @@ export default function Taskboard() {
           border: 0;
         }
 
+        /* Fill the main area so the column row, not the window, owns the
+           vertical space — the page never grows past the viewport. */
+        .taskboard-page {
+          height: 100%;
+          display: flex;
+          flex-direction: column;
+          min-height: 0;
+        }
+
         .taskboard {
+          flex: 1;
+          min-height: 0;
           display: flex;
           gap: 1rem;
           overflow-x: auto;
@@ -404,10 +415,10 @@ export default function Taskboard() {
         @media (max-width: 640px) {
           .taskboard {
             flex-direction: column;
+            overflow-y: auto;
           }
 
           .taskboard-column {
-            max-height: none;
             min-height: 200px;
           }
         }

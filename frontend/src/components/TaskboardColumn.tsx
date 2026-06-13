@@ -126,11 +126,11 @@ export default function TaskboardColumn({
         .taskboard-column {
           flex: 1 1 0;
           min-width: 0;
+          min-height: 0;
           background-color: #1e1e30;
           border-radius: 0.5rem;
           display: flex;
           flex-direction: column;
-          max-height: calc(100vh - 8rem);
         }
 
         .taskboard-column.drag-over {
