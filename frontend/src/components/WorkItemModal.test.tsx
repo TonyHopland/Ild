@@ -136,6 +136,45 @@ describe("WorkItemModal", () => {
     expect(screen.getByText("my-repo")).toBeTruthy();
   });
 
+  test("create form is cleared when reopened after entering values", async () => {
+    const fetchMock = mockFetch([]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const onClose = vi.fn();
+    const onSave = vi.fn();
+
+    const { rerender } = await renderWithEffectsSettled(
+      <WorkItemModal workItem={null} isOpen={true} onClose={onClose} onSave={onSave} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("New Work Item")).toBeTruthy();
+    });
+
+    const titleInput = screen.getByLabelText("Title") as HTMLInputElement;
+    const descriptionInput = screen.getByLabelText("Description") as HTMLTextAreaElement;
+    fireEvent.change(titleInput, { target: { value: "First item" } });
+    fireEvent.change(descriptionInput, { target: { value: "Some description" } });
+    expect(titleInput.value).toBe("First item");
+    expect(descriptionInput.value).toBe("Some description");
+
+    // The create modal stays mounted while closed (isOpen toggles to false),
+    // then is reopened for the next new item.
+    await act(async () => {
+      rerender(<WorkItemModal workItem={null} isOpen={false} onClose={onClose} onSave={onSave} />);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      rerender(<WorkItemModal workItem={null} isOpen={true} onClose={onClose} onSave={onSave} />);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("");
+    });
+    expect((screen.getByLabelText("Description") as HTMLTextAreaElement).value).toBe("");
+  });
+
   test("detail view does not show a Start button — scheduler picks up Ready items automatically", async () => {
     const workItem = makeWorkItem({ status: WorkItemStatus.Ready });
 

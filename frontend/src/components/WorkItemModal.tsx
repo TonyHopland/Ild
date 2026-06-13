@@ -202,7 +202,12 @@ export default function WorkItemModal({
     };
   }, [workItem?.id, workItem?.status, workItem?.humanFeedbackReason]);
 
+  // Re-initialize the form whenever the dialog opens (or the item it shows
+  // changes). The create modal is kept mounted with workItem === null and only
+  // toggled via isOpen, so isOpen must be a dependency — otherwise the fields
+  // typed for one new item would still be present the next time it is opened.
   useEffect(() => {
+    if (!isOpen) return;
     if (workItem) {
       setTitle(workItem.title);
       setDescription(workItem.description);
@@ -223,11 +228,12 @@ export default function WorkItemModal({
       setPriority(WorkItemPriority.Medium);
       setTags("");
       setRepositoryId("");
+      setSubmitError(null);
       setShowDeleteConfirm(false);
       setDeleteError(null);
       setEditMode(true);
     }
-  }, [workItem?.id, workItem?.status]);
+  }, [isOpen, workItem?.id, workItem?.status]);
 
   // Live stream for running work items
   const shouldStream =
