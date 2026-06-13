@@ -8,7 +8,7 @@ import WorkItemModal from "../../components/WorkItemModal";
 import WorkItemModalV2 from "../../components/workitem-v2/WorkItemModalV2";
 import ErrorBanner from "../../components/ErrorBanner";
 import { useSignalR } from "../../hooks/useSignalR";
-import { WORK_ITEM_STATUSES } from "../../utils/constants";
+import { WORK_ITEM_STATUSES, TASKBOARD_PAGE_SIZE } from "../../utils/constants";
 import { normalizeWorkItemStatus } from "../../utils/workItemStatus";
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -274,6 +274,11 @@ export default function Taskboard() {
               onError={(msg) => setErrorText(msg)}
               onMoveWorkItem={handleMoveWorkItem}
               onAddItem={status.value === "Backlog" ? openCreateModal : undefined}
+              pageSize={
+                status.value === "Backlog" || status.value === "Done"
+                  ? TASKBOARD_PAGE_SIZE
+                  : undefined
+              }
             />
           );
         })}

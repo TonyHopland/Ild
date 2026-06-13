@@ -66,6 +66,76 @@ describe("TaskboardColumn", () => {
     expect(screen.getByText("0")).toBeTruthy();
   });
 
+  test("renders every item when pageSize is not set", () => {
+    const items = Array.from({ length: 8 }, (_, i) =>
+      makeItem({ id: String(i), title: `Item ${i}` }),
+    );
+    render(
+      <TaskboardColumn
+        status={WorkItemStatus.Done}
+        label="Done"
+        workItems={items}
+        onWorkItemUpdate={() => {}}
+      />,
+    );
+
+    for (let i = 0; i < 8; i++) {
+      expect(screen.getByText(`Item ${i}`)).toBeTruthy();
+    }
+    expect(screen.queryByRole("button", { name: "Load more" })).toBeFalsy();
+  });
+
+  test("paginates to pageSize and reveals more on each Load more click", () => {
+    const items = Array.from({ length: 12 }, (_, i) =>
+      makeItem({ id: String(i), title: `Item ${i}` }),
+    );
+    render(
+      <TaskboardColumn
+        status={WorkItemStatus.Backlog}
+        label="Backlog"
+        workItems={items}
+        onWorkItemUpdate={() => {}}
+        pageSize={5}
+      />,
+    );
+
+    // First page: only the first 5 cards are rendered.
+    expect(screen.getByText("Item 0")).toBeTruthy();
+    expect(screen.getByText("Item 4")).toBeTruthy();
+    expect(screen.queryByText("Item 5")).toBeFalsy();
+
+    const loadMore = screen.getByRole("button", { name: "Load more" });
+    fireEvent.click(loadMore);
+
+    // Second page reveals the next 5.
+    expect(screen.getByText("Item 9")).toBeTruthy();
+    expect(screen.queryByText("Item 10")).toBeFalsy();
+    expect(screen.getByRole("button", { name: "Load more" })).toBeTruthy();
+
+    // Final click reveals the remainder and hides the button.
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    expect(screen.getByText("Item 11")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Load more" })).toBeFalsy();
+  });
+
+  test("hides Load more when item count is at or below pageSize", () => {
+    const items = Array.from({ length: 5 }, (_, i) =>
+      makeItem({ id: String(i), title: `Item ${i}` }),
+    );
+    render(
+      <TaskboardColumn
+        status={WorkItemStatus.Done}
+        label="Done"
+        workItems={items}
+        onWorkItemUpdate={() => {}}
+        pageSize={5}
+      />,
+    );
+
+    expect(screen.getByText("Item 4")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Load more" })).toBeFalsy();
+  });
+
   test("does not call transition when dropping work item into the same column", () => {
     const transitionSpy = vi
       .spyOn(authServices.workItemService, "transition")

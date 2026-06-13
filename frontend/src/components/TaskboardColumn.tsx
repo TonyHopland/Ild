@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { WorkItem, WorkItemStatus } from "../types";
 import { workItemService } from "../services/auth";
 import WorkItemCard from "./WorkItemCard";
@@ -12,6 +12,10 @@ interface TaskboardColumnProps {
   onError?: (message: string) => void;
   onMoveWorkItem?: (workItem: WorkItem, direction: "prev" | "next") => void;
   onAddItem?: () => void;
+  // When set, the column lazily renders at most this many cards at a time and
+  // reveals the rest in further increments of this size via a "Load more"
+  // button. Omitted means every item is rendered up front.
+  pageSize?: number;
 }
 
 export default function TaskboardColumn({
@@ -23,8 +27,20 @@ export default function TaskboardColumn({
   onError,
   onMoveWorkItem,
   onAddItem,
+  pageSize,
 }: TaskboardColumnProps) {
   const [dragOver, setDragOver] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(pageSize ?? 0);
+
+  // Reset back to the first page whenever pagination is (re)configured so the
+  // column never starts wider than one page after a prop change.
+  useEffect(() => {
+    setVisibleCount(pageSize ?? 0);
+  }, [pageSize]);
+
+  const paginated = pageSize !== undefined;
+  const visibleItems = paginated ? workItems.slice(0, visibleCount) : workItems;
+  const hasMore = paginated && workItems.length > visibleItems.length;
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -88,7 +104,7 @@ export default function TaskboardColumn({
         </div>
       </div>
       <div className="taskboard-column-body">
-        {workItems.map((item) => (
+        {visibleItems.map((item) => (
           <WorkItemCard
             key={item.id}
             workItem={item}
@@ -96,6 +112,15 @@ export default function TaskboardColumn({
             onMove={onMoveWorkItem}
           />
         ))}
+        {hasMore && (
+          <button
+            type="button"
+            className="taskboard-column-load-more"
+            onClick={() => setVisibleCount((count) => count + (pageSize ?? 0))}
+          >
+            Load more
+          </button>
+        )}
       </div>
       <style>{`
         .taskboard-column {
@@ -168,6 +193,22 @@ export default function TaskboardColumn({
           display: flex;
           flex-direction: column;
           gap: 0.5rem;
+        }
+
+        .taskboard-column-load-more {
+          font-size: 0.75rem;
+          font-weight: 600;
+          color: #c0c0d0;
+          background-color: #2d2d44;
+          border: 1px solid #3a3a55;
+          padding: 0.4rem 0.55rem;
+          border-radius: 0.375rem;
+          cursor: pointer;
+          transition: background-color 0.15s ease;
+        }
+
+        .taskboard-column-load-more:hover {
+          background-color: #353553;
         }
       `}</style>
     </div>
