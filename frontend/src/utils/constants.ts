@@ -10,6 +10,9 @@ export const WORK_ITEM_STATUSES = [
   { value: "Done", label: "Done" },
 ] as const;
 
+// How many cards the Backlog and Done columns reveal per "Load more" click.
+export const TASKBOARD_PAGE_SIZE = 5;
+
 export const WORK_ITEM_PRIORITIES = [
   { value: "Low", label: "Low", color: "#6b7280" },
   { value: "Medium", label: "Medium", color: "#f59e0b" },
