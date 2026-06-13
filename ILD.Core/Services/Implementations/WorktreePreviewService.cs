@@ -273,8 +273,13 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 continue;
             }
 
-            ports[service.Port] = FindFreePort(reservedPorts);
-            reservedPorts.Add(ports[service.Port]);
+            var suggested = service.SuggestedPort;
+            var port = suggested is > 0 && !reservedPorts.Contains(suggested.Value) && IsPortAvailable(suggested.Value)
+                ? suggested.Value
+                : FindFreePort(reservedPorts);
+
+            ports[service.Port] = port;
+            reservedPorts.Add(port);
         }
 
         foreach (var (alias, port) in ports)
