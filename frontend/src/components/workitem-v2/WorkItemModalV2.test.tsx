@@ -254,6 +254,50 @@ describe("WorkItemModalV2", () => {
     expect(screen.getByText("Dependencies")).toBeTruthy();
   });
 
+  test("overview push branch button commits and pushes, then shows the branch", async () => {
+    mockServices();
+    const pushSpy = vi
+      .spyOn(authServices.workItemService, "pushBranch")
+      .mockResolvedValue({ branch: "ild/wi-1-run-1" });
+    await renderDialog(
+      makeWorkItem({ branchName: "ild/wi-1-run-1", worktreePath: "/tmp/wt/wi-1" }),
+    );
+
+    const pushButton = screen.getByRole("button", { name: "Push branch" });
+
+    await act(async () => {
+      fireEvent.click(pushButton);
+      await Promise.resolve();
+    });
+
+    expect(pushSpy).toHaveBeenCalledWith("wi-1");
+    expect(screen.getByText("Pushed ild/wi-1-run-1 to origin.")).toBeTruthy();
+  });
+
+  test("overview push branch button surfaces the error when the push fails", async () => {
+    mockServices();
+    vi.spyOn(authServices.workItemService, "pushBranch").mockRejectedValue({
+      message: "Failed to push branch 'ild/wi-1-run-1': no upstream",
+    });
+    await renderDialog(
+      makeWorkItem({ branchName: "ild/wi-1-run-1", worktreePath: "/tmp/wt/wi-1" }),
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Push branch" }));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("Failed to push branch 'ild/wi-1-run-1': no upstream")).toBeTruthy();
+  });
+
+  test("overview hides push branch button when there is no worktree", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem({ branchName: "ild/wi-1-run-1", worktreePath: null }));
+
+    expect(screen.queryByRole("button", { name: "Push branch" })).toBeNull();
+  });
+
   test("feedback banner is pinned while waiting on a human", async () => {
     mockServices();
     await renderDialog(

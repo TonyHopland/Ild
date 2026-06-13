@@ -461,6 +461,129 @@ public class WorkItemManagerTests
     }
 
     [Fact]
+    public async Task CommitAndPushBranch_commits_uncommitted_changes_and_pushes_branch()
+    {
+        var (mgr, db, repoId, repoMgr, _) = Setup();
+        using var _ = db;
+
+        var worktree = Path.Combine(Path.GetTempPath(), "ild-push-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(worktree);
+        try
+        {
+            var id = await mgr.CreateWorkItemAsync("Keep my work", "", repoId);
+            var runId = SeedLoopRun(db, id);
+            var run = await db.Context.LoopRuns.FindAsync(runId);
+            run!.WorktreePath = worktree;
+            run.BranchName = "ild/wi-x-run-1";
+            run.RepositoryId = repoId;
+            await db.Context.SaveChangesAsync();
+
+            repoMgr.Setup(r => r.GetDiffAsync(worktree)).ReturnsAsync("diff --git a b");
+            repoMgr.Setup(r => r.CommitAsync(worktree, "Keep my work")).ReturnsAsync(true);
+            repoMgr.Setup(r => r.PushAsync(worktree, "ild/wi-x-run-1", It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+                .ReturnsAsync((true, (string?)null));
+
+            var result = await mgr.CommitAndPushBranchAsync(id);
+
+            Assert.True(result.Success);
+            Assert.Equal("ild/wi-x-run-1", result.Branch);
+            Assert.Null(result.Error);
+            repoMgr.Verify(r => r.CommitAsync(worktree, "Keep my work"), Times.Once);
+            repoMgr.Verify(r => r.PushAsync(worktree, "ild/wi-x-run-1", It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Once);
+        }
+        finally
+        {
+            Directory.Delete(worktree, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CommitAndPushBranch_skips_commit_when_worktree_is_clean()
+    {
+        var (mgr, db, repoId, repoMgr, _) = Setup();
+        using var _ = db;
+
+        var worktree = Path.Combine(Path.GetTempPath(), "ild-push-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(worktree);
+        try
+        {
+            var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+            var runId = SeedLoopRun(db, id);
+            var run = await db.Context.LoopRuns.FindAsync(runId);
+            run!.WorktreePath = worktree;
+            run.BranchName = "ild/wi-x-run-1";
+            run.RepositoryId = repoId;
+            await db.Context.SaveChangesAsync();
+
+            // No diff — nothing to commit, but the branch should still be pushed.
+            repoMgr.Setup(r => r.GetDiffAsync(worktree)).ReturnsAsync(string.Empty);
+            repoMgr.Setup(r => r.PushAsync(worktree, "ild/wi-x-run-1", It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+                .ReturnsAsync((true, (string?)null));
+
+            var result = await mgr.CommitAndPushBranchAsync(id);
+
+            Assert.True(result.Success);
+            repoMgr.Verify(r => r.CommitAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+            repoMgr.Verify(r => r.PushAsync(worktree, "ild/wi-x-run-1", It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Once);
+        }
+        finally
+        {
+            Directory.Delete(worktree, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CommitAndPushBranch_returns_error_when_no_worktree()
+    {
+        var (mgr, db, repoId, repoMgr, _) = Setup();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        SeedLoopRun(db, id); // run has no WorktreePath
+
+        var result = await mgr.CommitAndPushBranchAsync(id);
+
+        Assert.False(result.Success);
+        Assert.Null(result.Branch);
+        Assert.NotNull(result.Error);
+        repoMgr.Verify(r => r.PushAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CommitAndPushBranch_returns_error_when_push_fails()
+    {
+        var (mgr, db, repoId, repoMgr, _) = Setup();
+        using var _ = db;
+
+        var worktree = Path.Combine(Path.GetTempPath(), "ild-push-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(worktree);
+        try
+        {
+            var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+            var runId = SeedLoopRun(db, id);
+            var run = await db.Context.LoopRuns.FindAsync(runId);
+            run!.WorktreePath = worktree;
+            run.BranchName = "ild/wi-x-run-1";
+            run.RepositoryId = repoId;
+            await db.Context.SaveChangesAsync();
+
+            repoMgr.Setup(r => r.GetDiffAsync(worktree)).ReturnsAsync(string.Empty);
+            repoMgr.Setup(r => r.PushAsync(worktree, "ild/wi-x-run-1", It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+                .ReturnsAsync((false, "no upstream"));
+
+            var result = await mgr.CommitAndPushBranchAsync(id);
+
+            Assert.False(result.Success);
+            Assert.Null(result.Branch);
+            Assert.Contains("no upstream", result.Error);
+        }
+        finally
+        {
+            Directory.Delete(worktree, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task SubmitHumanFeedbackInput_signals_engine_with_success_and_logs_event()
     {
         var (mgr, db, repoId, _, eventLog) = SetupWithEngine(out var engine);

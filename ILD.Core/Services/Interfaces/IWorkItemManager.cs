@@ -64,6 +64,15 @@ public interface IWorkItemManager
     Task<bool> MarkMergedAndAdvanceAsync(string workItemId);
     Task<bool> CleanupToDoneAsync(string workItemId);
     Task<bool> CleanupToBacklogAsync(string workItemId);
+
+    /// <summary>
+    /// Commit any uncommitted changes in the work item's current run worktree
+    /// and push its branch to origin, using the same built-in repository
+    /// functionality the PR node uses. Lets a human keep work produced by a
+    /// loop that has no PR node. Returns the pushed branch name on success, or
+    /// an error message describing why the push could not happen.
+    /// </summary>
+    Task<(bool Success, string? Branch, string? Error)> CommitAndPushBranchAsync(string workItemId);
     Task<bool> SubmitHumanFeedbackInputAsync(string workItemId, string input);
     Task<bool> SubmitHumanFeedbackRespondAsync(string workItemId, string input);
     Task<bool> RejectHumanFeedbackAsync(string workItemId, string? input = null);

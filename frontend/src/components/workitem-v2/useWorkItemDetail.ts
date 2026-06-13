@@ -28,6 +28,9 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const [preview, setPreview] = useState<WorktreePreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [pushBranchLoading, setPushBranchLoading] = useState(false);
+  const [pushBranchError, setPushBranchError] = useState<string | null>(null);
+  const [pushBranchMessage, setPushBranchMessage] = useState<string | null>(null);
 
   useEffect(() => {
     repositoryService
@@ -149,6 +152,23 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
       setPreviewError((error as { message?: string })?.message ?? "Failed to stop preview.");
     } finally {
       setPreviewLoading(false);
+    }
+  }, [workItem?.id]);
+
+  // Commit all changes and push the branch to origin — for keeping work from
+  // a loop that has no PR node. Mirrors the preview action shape.
+  const handlePushBranch = useCallback(async () => {
+    if (!workItem) return;
+    setPushBranchLoading(true);
+    setPushBranchError(null);
+    setPushBranchMessage(null);
+    try {
+      const result = await workItemService.pushBranch(workItem.id);
+      setPushBranchMessage(`Pushed ${result.branch} to origin.`);
+    } catch (error) {
+      setPushBranchError((error as { message?: string })?.message ?? "Failed to push branch.");
+    } finally {
+      setPushBranchLoading(false);
     }
   }, [workItem?.id]);
 
@@ -310,6 +330,10 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     refreshPreview,
     handleStartPreview,
     handleStopPreview,
+    pushBranchLoading,
+    pushBranchError,
+    pushBranchMessage,
+    handlePushBranch,
     handleMarkMerged,
     handleApprove,
     handleReject,

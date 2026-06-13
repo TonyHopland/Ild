@@ -194,6 +194,18 @@ public class WorkItemsController : ControllerBase
         }
     }
 
+    [HttpPost("{id}/push-branch")]
+    public async Task<IActionResult> PushBranch(string id)
+    {
+        var (_, error) = await GetPreviewableWorkItemAsync(id);
+        if (error != null) return error;
+
+        var result = await _workItemManager.CommitAndPushBranchAsync(id);
+        if (!result.Success)
+            return BadRequest(new { error = result.Error });
+        return Ok(new { branch = result.Branch });
+    }
+
     [HttpPost("{id}/transition")]
     public async Task<IActionResult> Transition(string id, [FromBody] WorkItemTransitionRequest request)
     {
