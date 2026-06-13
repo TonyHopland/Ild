@@ -52,7 +52,7 @@ export default function TerminalView({
     // Map Ctrl/Cmd+C (copy selection) and Ctrl/Cmd+V (paste) onto the system
     // clipboard so the usual keyboard shortcuts work alongside the right-click
     // menu. Ctrl+C without a selection still falls through to the PTY as SIGINT.
-    term.attachCustomKeyEventHandler(createClipboardKeyHandler(term, navigator.clipboard));
+    term.attachCustomKeyEventHandler(createClipboardKeyHandler(term));
 
     termRef.current = term;
     fitRef.current = fit;

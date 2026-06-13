@@ -1,7 +1,7 @@
-import { describe, expect, test, vi } from "vite-plus/test";
+import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import {
+  copyTextToClipboard,
   createClipboardKeyHandler,
-  type ClipboardLike,
   type ClipboardTerminal,
 } from "../terminalClipboard";
 
@@ -9,18 +9,7 @@ function makeTerminal(overrides: Partial<ClipboardTerminal> = {}): ClipboardTerm
   return {
     hasSelection: () => false,
     getSelection: () => "",
-    paste: vi.fn(),
     ...overrides,
-  };
-}
-
-function makeClipboard(readValue = ""): ClipboardLike & {
-  writeText: ReturnType<typeof vi.fn>;
-  readText: ReturnType<typeof vi.fn>;
-} {
-  return {
-    writeText: vi.fn(() => Promise.resolve()),
-    readText: vi.fn(() => Promise.resolve(readValue)),
   };
 }
 
@@ -38,94 +27,131 @@ function keyEvent(key: string, init: Partial<KeyboardEvent> = {}): KeyboardEvent
 describe("createClipboardKeyHandler", () => {
   test("Ctrl+C copies the selection and swallows the event", () => {
     const term = makeTerminal({ hasSelection: () => true, getSelection: () => "hello" });
-    const clipboard = makeClipboard();
-    const handler = createClipboardKeyHandler(term, clipboard);
+    const copyText = vi.fn();
+    const handler = createClipboardKeyHandler(term, copyText);
 
     const handled = handler(keyEvent("c", { ctrlKey: true }));
 
+    // false => xterm skips its own handling (no SIGINT) without preventDefault.
     expect(handled).toBe(false);
-    expect(clipboard.writeText).toHaveBeenCalledWith("hello");
+    expect(copyText).toHaveBeenCalledWith("hello");
   });
 
   test("Cmd+C copies the selection too (macOS)", () => {
     const term = makeTerminal({ hasSelection: () => true, getSelection: () => "world" });
-    const clipboard = makeClipboard();
-    const handler = createClipboardKeyHandler(term, clipboard);
+    const copyText = vi.fn();
+    const handler = createClipboardKeyHandler(term, copyText);
 
     expect(handler(keyEvent("c", { metaKey: true }))).toBe(false);
-    expect(clipboard.writeText).toHaveBeenCalledWith("world");
+    expect(copyText).toHaveBeenCalledWith("world");
   });
 
   test("Ctrl+C without a selection falls through to the PTY as SIGINT", () => {
     const term = makeTerminal({ hasSelection: () => false });
-    const clipboard = makeClipboard();
-    const handler = createClipboardKeyHandler(term, clipboard);
+    const copyText = vi.fn();
+    const handler = createClipboardKeyHandler(term, copyText);
 
     const handled = handler(keyEvent("c", { ctrlKey: true }));
 
     expect(handled).toBe(true);
-    expect(clipboard.writeText).not.toHaveBeenCalled();
+    expect(copyText).not.toHaveBeenCalled();
   });
 
-  test("Ctrl+V pastes clipboard contents into the terminal", async () => {
-    const paste = vi.fn();
-    const term = makeTerminal({ paste });
-    const clipboard = makeClipboard("pasted text");
-    const handler = createClipboardKeyHandler(term, clipboard);
+  test("Ctrl+C with an empty selection string is treated as SIGINT", () => {
+    const term = makeTerminal({ hasSelection: () => true, getSelection: () => "" });
+    const copyText = vi.fn();
+    const handler = createClipboardKeyHandler(term, copyText);
 
-    const handled = handler(keyEvent("v", { ctrlKey: true }));
-
-    expect(handled).toBe(false);
-    expect(clipboard.readText).toHaveBeenCalled();
-    // paste happens after the clipboard read resolves.
-    await Promise.resolve();
-    expect(paste).toHaveBeenCalledWith("pasted text");
+    expect(handler(keyEvent("c", { ctrlKey: true }))).toBe(true);
+    expect(copyText).not.toHaveBeenCalled();
   });
 
-  test("Ctrl+V with an empty clipboard does not paste an empty string", async () => {
-    const paste = vi.fn();
-    const term = makeTerminal({ paste });
-    const clipboard = makeClipboard("");
-    const handler = createClipboardKeyHandler(term, clipboard);
+  test("Ctrl+V suppresses the literal \\x16 so the native paste event can run", () => {
+    const term = makeTerminal();
+    const copyText = vi.fn();
+    const handler = createClipboardKeyHandler(term, copyText);
 
+    // Returning false makes xterm skip emitting \x16 without preventDefault,
+    // leaving the browser's native paste (which xterm handles) intact.
     expect(handler(keyEvent("v", { ctrlKey: true }))).toBe(false);
-    await Promise.resolve();
-    expect(paste).not.toHaveBeenCalled();
+    expect(handler(keyEvent("v", { metaKey: true }))).toBe(false);
+    expect(copyText).not.toHaveBeenCalled();
   });
 
   test("plain keystrokes are forwarded untouched", () => {
     const term = makeTerminal({ hasSelection: () => true, getSelection: () => "sel" });
-    const clipboard = makeClipboard("clip");
-    const handler = createClipboardKeyHandler(term, clipboard);
+    const copyText = vi.fn();
+    const handler = createClipboardKeyHandler(term, copyText);
 
-    // 'c' without a modifier, and a modified-but-unrelated key.
+    // 'c'/'v' without a modifier, and a modified-but-unrelated key.
     expect(handler(keyEvent("c"))).toBe(true);
+    expect(handler(keyEvent("v"))).toBe(true);
     expect(handler(keyEvent("a", { ctrlKey: true }))).toBe(true);
-    expect(clipboard.writeText).not.toHaveBeenCalled();
-    expect(clipboard.readText).not.toHaveBeenCalled();
+    expect(copyText).not.toHaveBeenCalled();
   });
 
   test("Alt-modified copy/paste combos are ignored", () => {
     const term = makeTerminal({ hasSelection: () => true, getSelection: () => "sel" });
-    const clipboard = makeClipboard("clip");
-    const handler = createClipboardKeyHandler(term, clipboard);
+    const copyText = vi.fn();
+    const handler = createClipboardKeyHandler(term, copyText);
 
     expect(handler(keyEvent("c", { ctrlKey: true, altKey: true }))).toBe(true);
     expect(handler(keyEvent("v", { ctrlKey: true, altKey: true }))).toBe(true);
-    expect(clipboard.writeText).not.toHaveBeenCalled();
-    expect(clipboard.readText).not.toHaveBeenCalled();
+    expect(copyText).not.toHaveBeenCalled();
   });
 
   test("only keydown is handled, so keypress does not double-fire", () => {
     const term = makeTerminal({ hasSelection: () => true, getSelection: () => "sel" });
-    const clipboard = makeClipboard();
-    const handler = createClipboardKeyHandler(term, clipboard);
+    const copyText = vi.fn();
+    const handler = createClipboardKeyHandler(term, copyText);
 
     const handled = handler(
       keyEvent("c", { ctrlKey: true, type: "keypress" } as Partial<KeyboardEvent>),
     );
 
     expect(handled).toBe(true);
-    expect(clipboard.writeText).not.toHaveBeenCalled();
+    expect(copyText).not.toHaveBeenCalled();
+  });
+});
+
+describe("copyTextToClipboard", () => {
+  function setClipboard(value: Clipboard | undefined): void {
+    Object.defineProperty(navigator, "clipboard", { value, configurable: true });
+  }
+
+  afterEach(() => {
+    setClipboard(undefined);
+    delete (document as { execCommand?: unknown }).execCommand;
+  });
+
+  test("uses the async Clipboard API when it is available (secure context)", () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    setClipboard({ writeText } as unknown as Clipboard);
+    const execCommand = vi.fn(() => true);
+    (document as { execCommand: unknown }).execCommand = execCommand;
+
+    copyTextToClipboard("secure text");
+
+    expect(writeText).toHaveBeenCalledWith("secure text");
+    expect(execCommand).not.toHaveBeenCalled();
+  });
+
+  test("falls back to execCommand when navigator.clipboard is absent (insecure context)", () => {
+    setClipboard(undefined);
+    const execCommand = vi.fn(() => true);
+    (document as { execCommand: unknown }).execCommand = execCommand;
+
+    copyTextToClipboard("insecure text");
+
+    expect(execCommand).toHaveBeenCalledWith("copy");
+    // The temporary textarea must be cleaned up afterwards.
+    expect(document.querySelector("textarea")).toBeNull();
+  });
+
+  test("does not throw when no clipboard mechanism works at all", () => {
+    setClipboard(undefined);
+    // No execCommand defined and none assigned — the deepest fallback.
+    expect(() => copyTextToClipboard("nowhere")).not.toThrow();
+    expect(document.querySelector("textarea")).toBeNull();
   });
 });
