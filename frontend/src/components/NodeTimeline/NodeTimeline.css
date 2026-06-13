@@ -304,6 +304,7 @@
 }
 
 .livestream-container .xterm,
+.livestream-container .xterm-scrollable-element,
 .livestream-container .xterm-viewport,
 .livestream-container .xterm-screen {
   width: 100% !important;
