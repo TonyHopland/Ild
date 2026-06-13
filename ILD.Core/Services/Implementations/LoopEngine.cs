@@ -110,6 +110,17 @@ public sealed class LoopEngine : ILoopEngine
 
     public async Task ResumeRecoveredRunAsync(Guid runId)
     {
+        // If a loop already owns this run, recovery must be a no-op: marking
+        // its in-flight nodes Interrupted (below) would corrupt a live
+        // execution, and relaunching is already blocked by the single-owner
+        // gate. This is what makes the periodic scheduler's WaitingForIld
+        // resume calls — and the stuck-run watchdog — safe to invoke against a
+        // run that may genuinely be mid-node.
+        if (_runCts.ContainsKey(runId))
+        {
+            _logger.LogDebug("ResumeRecoveredRunAsync skipped for run {RunId}: already owned", runId);
+            return;
+        }
         using (var scope = _sp.CreateScope())
         {
             var store = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
@@ -186,8 +197,16 @@ public sealed class LoopEngine : ILoopEngine
         return run?.Status;
     }
 
+    // Report liveness off _runCts, not _runTasks: the CTS entry is the
+    // ownership token (added before the driving task is scheduled, removed
+    // last in its finally), so "active" here means exactly "owned by a live
+    // loop". Keying off _runTasks instead would leave a window — between the
+    // ownership claim and the task handle being stored, and again between the
+    // two removals in finally — where a genuinely-driven run looks inactive.
+    // The stuck-run watchdog relies on this equivalence to never recover a run
+    // that a loop still owns.
     public Task<IEnumerable<Guid>> GetActiveRunIdsAsync() =>
-        Task.FromResult<IEnumerable<Guid>>(_runTasks.Keys.ToArray());
+        Task.FromResult<IEnumerable<Guid>>(_runCts.Keys.ToArray());
 
     public async Task SignalNodeResultAsync(Guid runId, Guid runNodeId, NodeSignal signal)
     {
@@ -283,18 +302,19 @@ public sealed class LoopEngine : ILoopEngine
 
     private Task LaunchAsync(Guid runId)
     {
-        // Idempotency: if a background loop is already driving this run we
-        // must not start a second one. Two concurrent loops on the same run
-        // produce duplicated LoopRunNode rows and corrupt visit counts.
-        if (_runTasks.TryGetValue(runId, out var inflight) && !inflight.IsCompleted)
-        {
-            _logger.LogDebug("LaunchAsync skipped for run {RunId}: already active", runId);
-            return Task.CompletedTask;
-        }
+        // Single-owner gate. The CancellationTokenSource entry IS the ownership
+        // token: whoever wins this atomic TryAdd owns the run's driving loop for
+        // its entire lifetime (the entry is removed only in the task's finally
+        // below), so a concurrent caller can never start a second loop on the
+        // same run. Two concurrent loops would otherwise produce duplicated
+        // LoopRunNode rows and corrupt visit counts. A prior check-then-add on
+        // _runTasks left a TOCTOU window between the check and this add; folding
+        // both into the single atomic TryAdd removes it.
         var cts = new CancellationTokenSource();
         if (!_runCts.TryAdd(runId, cts))
         {
             cts.Dispose();
+            _logger.LogDebug("LaunchAsync skipped for run {RunId}: already owned", runId);
             return Task.CompletedTask;
         }
         var task = Task.Run(async () =>
@@ -307,13 +327,18 @@ public sealed class LoopEngine : ILoopEngine
                 // Without this the run is left in the DB as Running forever with
                 // no task driving it: the work item hangs in the Running column
                 // and the run page shows RUNNING even though nothing will ever
-                // resume it. Park it for human review instead.
+                // resume it. Park it for human review instead. (StuckRunWatchdog
+                // is the backstop for the exit paths this catch can't see.)
                 await TrySafe(() => MarkRunCrashedAsync(runId, ex.Message));
             }
             finally
             {
-                _runCts.TryRemove(runId, out _);
+                // Remove the task handle first, then release ownership: a
+                // relaunch awaiting this task (LaunchAfterAwaitAsync) only
+                // re-claims after the CTS entry is gone, so its new loop can
+                // never overlap this one.
                 _runTasks.TryRemove(runId, out _);
+                _runCts.TryRemove(runId, out _);
                 cts.Dispose();
             }
         });
