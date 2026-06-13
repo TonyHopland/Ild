@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { WorkItem, WorkItemStatus } from "../../types";
 import type { TypedSignalRMessage } from "../../types/signalr";
 import { workItemService, settingsService, SchedulerSettingKeys } from "../../services/auth";
@@ -16,12 +17,14 @@ function errorMessage(error: unknown, fallback: string): string {
 }
 
 export default function Taskboard() {
+  const navigate = useNavigate();
+  // The id in the URL is the source of truth for which item's detail dialog is
+  // open, so a work item can be linked to directly (e.g. /taskboard/<id>).
+  const { workItemId: openWorkItemId } = useParams<{ workItemId?: string }>();
   const [workItems, setWorkItems] = useState<WorkItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [modalOpen, setModalOpen] = useState(false);
+  const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<WorkItem | null>(null);
-  const editingItemIdRef = useRef<string | null>(null);
-  editingItemIdRef.current = editingItem?.id ?? null;
   const [errorText, setErrorText] = useState("");
   const [isPaused, setIsPaused] = useState(false);
   const [pauseBusy, setPauseBusy] = useState(false);
@@ -47,9 +50,6 @@ export default function Taskboard() {
             if (!exists) return [...items, wi];
             return items.map((item) => (item.id === wi.id ? wi : item));
           });
-          if (editingItemIdRef.current === wi.id) {
-            setEditingItem(wi);
-          }
         })
         .catch(() => {});
     };
@@ -122,6 +122,37 @@ export default function Taskboard() {
     };
   }, [on, off]);
 
+  // Keep the open detail item in sync with the id in the URL. Resolving from
+  // the loaded board keeps the dialog's data fresh; a direct link to an item
+  // not on the board is fetched on demand, and a stale/invalid id bounces back
+  // to the bare taskboard so the URL always matches what is actually open.
+  useEffect(() => {
+    if (!openWorkItemId) {
+      setEditingItem(null);
+      return;
+    }
+    const found = workItems.find((item) => item.id === openWorkItemId);
+    if (found) {
+      setEditingItem(found);
+      return;
+    }
+    if (isLoading) return;
+    let cancelled = false;
+    void workItemService
+      .getById(openWorkItemId)
+      .then((wi) => {
+        if (cancelled) return;
+        setEditingItem(wi);
+        setWorkItems((items) => (items.some((item) => item.id === wi.id) ? items : [...items, wi]));
+      })
+      .catch(() => {
+        if (!cancelled) void navigate("/taskboard", { replace: true });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [openWorkItemId, workItems, isLoading, navigate]);
+
   const loadWorkItems = async () => {
     try {
       const items = await workItemService.getAll();
@@ -145,19 +176,14 @@ export default function Taskboard() {
       }
       return [...prev, saved];
     });
-    if (editingItem?.id === saved.id) {
-      setEditingItem(saved);
-    }
   };
 
   const openCreateModal = () => {
-    setEditingItem(null);
-    setModalOpen(true);
+    setCreateModalOpen(true);
   };
 
   const handleCardClick = (wi: WorkItem) => {
-    setEditingItem(wi);
-    setModalOpen(true);
+    void navigate(`/taskboard/${wi.id}`);
   };
 
   const handleDeleted = (id: string) => {
@@ -249,24 +275,24 @@ export default function Taskboard() {
           );
         })}
       </div>
-      {/* Existing items open in the tabbed detail dialog; creating a new item
-          still uses the classic form (the detail dialog needs an existing item). */}
-      {modalOpen && editingItem ? (
+      {/* Existing items open in the tabbed detail dialog, keyed by the URL so the
+          link matches the open item; creating a new item still uses the classic
+          form (the detail dialog needs an existing item). */}
+      {editingItem && (
         <WorkItemModalV2
           workItem={editingItem}
-          onClose={() => setModalOpen(false)}
-          onSave={handleSave}
-          onDelete={handleDeleted}
-        />
-      ) : (
-        <WorkItemModal
-          workItem={editingItem}
-          isOpen={modalOpen}
-          onClose={() => setModalOpen(false)}
+          onClose={() => void navigate("/taskboard")}
           onSave={handleSave}
           onDelete={handleDeleted}
         />
       )}
+      <WorkItemModal
+        workItem={null}
+        isOpen={createModalOpen}
+        onClose={() => setCreateModalOpen(false)}
+        onSave={handleSave}
+        onDelete={handleDeleted}
+      />
       <style>{`
         .taskboard-header {
           display: flex;
