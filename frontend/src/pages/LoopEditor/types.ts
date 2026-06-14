@@ -1,3 +1,5 @@
+import type { AiMatchRule } from "../../types";
+
 export type AdapterConfigValue = string | number | boolean;
 
 /** Per-file outcome shown after a (possibly multi-file) template import. */
@@ -18,7 +20,8 @@ export interface NodeSettingsSnapshot {
   aiPrompt: string;
   aiProvider: string;
   aiTools: string[];
-  aiRejectPattern: string;
+  aiMatchRules: AiMatchRule[];
+  customEdgeNames: string[];
   aiUseSession: boolean;
   aiSessionPlaceholder: string;
   startCreateWorktree: boolean;

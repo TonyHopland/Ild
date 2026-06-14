@@ -134,20 +134,20 @@ public class LoopEngineRoutingTests
     }
 
     [Fact]
-    public async Task SignalNodeResult_with_success_routes_via_OnRespond_edge()
+    public async Task SignalNodeResult_with_custom_edge_routes_via_named_edge()
     {
         using var h = new LoopEngineHarness();
         h.AddNode("h", NodeType.Human);
         h.AddNode("after", NodeType.Cmd);
-        h.AddEdge("h", "after", EdgeType.OnRespond);
+        h.AddEdge("h", "after", EdgeType.Custom, "Respond");
 
         var humanExec = new ScriptedExecutor(NodeType.Human,
             new NodeOutcome.NodeStarting("ask"),
             new NodeOutcome.WaitingAction("Awaiting input", "prompt"));
-        // Re-entry after signal: succeed via OnRespond.
+        // Re-entry after signal: succeed via the named "Respond" custom edge.
         humanExec.Then(
             new NodeOutcome.NodeStarting("ask"),
-            new NodeOutcome.Success(EdgeType.OnRespond, "human-said-yes"));
+            new NodeOutcome.Success(EdgeType.Custom, "human-said-yes", "Respond"));
         h.Registry.Register(humanExec);
         h.Registry.Register(new ScriptedExecutor(NodeType.Cmd,
             new NodeOutcome.NodeStarting("after"),
@@ -158,9 +158,9 @@ public class LoopEngineRoutingTests
 
         var waitingNode = h.ReloadRunNodes().Single(rn => rn.Status == LoopRunNodeStatus.WaitingHuman);
 
-        // Engine.SignalNodeResultAsync re-enters Human on success.
+        // Engine.SignalNodeResultAsync re-enters Human on the named edge.
         await h.Engine.SignalNodeResultAsync(h.RunId, waitingNode.Id,
-            new NodeSignal(ExternalActionResultType.Respond, Output: "user-text"));
+            NodeSignal.Custom("Respond", "user-text"));
 
         // SignalNodeResultAsync launches the run via Task.Run; drain it.
         await WaitUntilAsync(() => h.ReloadRun().Status != LoopRunStatus.Running, TimeSpan.FromSeconds(5));
@@ -173,6 +173,27 @@ public class LoopEngineRoutingTests
         Assert.Equal(3, nodes.Count);
         Assert.Equal(LoopRunNodeStatus.Succeeded, nodes[1].Status);
         Assert.Equal("after-output", nodes[2].Output);
+    }
+
+    [Fact]
+    public async Task Custom_edge_with_no_connection_fails_run_with_missing_edge_reason()
+    {
+        using var h = new LoopEngineHarness();
+        h.AddNode("a", NodeType.AI);
+        // "a" has a default success edge but no custom "Escalate" edge wired up.
+        h.AddNode("c", NodeType.Cleanup);
+        h.AddEdge("a", "c", EdgeType.OnSuccess);
+
+        h.Registry.Register(new ScriptedExecutor(NodeType.AI,
+            new NodeOutcome.NodeStarting("a"),
+            new NodeOutcome.Success(EdgeType.Custom, "needs a human", "Escalate")));
+
+        h.SeedRun("a");
+        await h.RunAsync();
+
+        var run = h.ReloadRun();
+        Assert.Equal(LoopRunStatus.Failed, run.Status);
+        Assert.Equal("missing edge connection: Escalate", run.HumanFeedbackReason);
     }
 
     [Fact]

@@ -80,7 +80,7 @@ public class LoopTemplateManagerTests
     }
 
     [Fact]
-    public async Task OnRespond_edge_round_trips_correctly_and_is_not_corrupted_to_OnSuccess()
+    public async Task Custom_edge_name_round_trips_correctly_and_is_not_corrupted_to_OnSuccess()
     {
         using var db = new TestDb();
         var mgr = new LoopTemplateManager(db.LoopTemplates);
@@ -94,24 +94,26 @@ public class LoopTemplateManagerTests
             },
             new() {
                 new LoopNodeEdgeDto { Id = "e1", SourceNodeId = "s", TargetNodeId = "h", EdgeType = "OnSuccess" },
-                new LoopNodeEdgeDto { Id = "e2", SourceNodeId = "h", TargetNodeId = "a", EdgeType = "OnRespond" },
+                new LoopNodeEdgeDto { Id = "e2", SourceNodeId = "h", TargetNodeId = "a", EdgeType = "Custom", Name = "Respond" },
                 new LoopNodeEdgeDto { Id = "e3", SourceNodeId = "h", TargetNodeId = "c", EdgeType = "OnSuccess" },
                 new LoopNodeEdgeDto { Id = "e4", SourceNodeId = "h", TargetNodeId = "c", EdgeType = "OnFailure" },
                 new LoopNodeEdgeDto { Id = "e5", SourceNodeId = "a", TargetNodeId = "c", EdgeType = "OnSuccess" }
             });
 
-        var id = await mgr.CreateLoopTemplateAsync("on-respond-test", "", graph);
+        var id = await mgr.CreateLoopTemplateAsync("custom-edge-test", "", graph);
 
-        // Check that the OnRespond edge was stored as OnRespond in the DB, not corrupted to OnSuccess
+        // The custom edge keeps its role and name in the DB, not corrupted to OnSuccess.
         var edges = await db.Context.LoopNodeEdges.ToListAsync();
-        var respondEdge = edges.FirstOrDefault(e => e.EdgeType == EdgeType.OnRespond);
-        Assert.NotNull(respondEdge);
+        var customEdge = edges.FirstOrDefault(e => e.EdgeType == EdgeType.Custom);
+        Assert.NotNull(customEdge);
+        Assert.Equal("Respond", customEdge!.Name);
 
-        // Verify round-trip through GetVersionGraph returns OnRespond
+        // Verify round-trip through GetVersionGraph returns Custom + name.
         var versions = await mgr.GetVersionsAsync(id);
         var loadedGraph = await mgr.GetVersionGraphAsync(id, versions.Max(v => v.VersionNumber));
         Assert.NotNull(loadedGraph);
-        var loadedRespondEdge = loadedGraph!.Edges.FirstOrDefault(e => e.EdgeType == "OnRespond");
-        Assert.NotNull(loadedRespondEdge);
+        var loadedCustomEdge = loadedGraph!.Edges.FirstOrDefault(e => e.EdgeType == "Custom");
+        Assert.NotNull(loadedCustomEdge);
+        Assert.Equal("Respond", loadedCustomEdge!.Name);
     }
 }

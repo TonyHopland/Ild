@@ -4,26 +4,29 @@ import { EdgeType } from "../../../types";
 interface EdgePanelsProps {
   pendingConnection: boolean;
   edgeType: EdgeType;
+  edgeName: string;
+  customEdgeOptions: string[];
   edgeMaxTraversals: string;
   edgeError: string | null;
   showEdgeDeletePanel: boolean;
   selectedEdge: Edge | null;
   nodes: Node[];
+  onEdgeNameChange: (value: string) => void;
   onEdgeMaxTraversalsChange: (value: string) => void;
   onConfirmEdge: () => void;
   onCancelEdge: () => void;
   onDeleteEdge: () => void;
 }
 
-function edgeTypeLabel(edgeType: EdgeType | undefined): string {
+function edgeTypeLabel(edgeType: EdgeType | undefined, name?: string | null): string {
   if (edgeType === EdgeType.OnFailure) return "failure";
-  if (edgeType === EdgeType.OnRespond) return "respond";
+  if (edgeType === EdgeType.Custom) return name?.trim() || "custom";
   return "success";
 }
 
 function edgeTypeClassName(edgeType: EdgeType | undefined): string {
   if (edgeType === EdgeType.OnFailure) return "edge-type-dot--failure";
-  if (edgeType === EdgeType.OnRespond) return "edge-type-dot--respond";
+  if (edgeType === EdgeType.Custom) return "edge-type-dot--respond";
   return "edge-type-dot--success";
 }
 
@@ -35,17 +38,23 @@ function nodeLabel(nodes: Node[], nodeId: string): string {
 export function EdgePanels({
   pendingConnection,
   edgeType,
+  edgeName,
+  customEdgeOptions,
   edgeMaxTraversals,
   edgeError,
   showEdgeDeletePanel,
   selectedEdge,
   nodes,
+  onEdgeNameChange,
   onEdgeMaxTraversalsChange,
   onConfirmEdge,
   onCancelEdge,
   onDeleteEdge,
 }: EdgePanelsProps) {
   const selectedEdgeType = selectedEdge?.data?.edgeType as EdgeType | undefined;
+  const selectedEdgeName = (selectedEdge?.data as { name?: string | null } | undefined)?.name;
+  const isCustom = edgeType === EdgeType.Custom;
+  const canConfirm = !isCustom || edgeName.trim().length > 0;
 
   return (
     <>
@@ -54,8 +63,30 @@ export function EdgePanels({
           <div className="config-panel-header">Configure Edge</div>
           <div className="edge-type-indicator">
             <span className={`edge-type-dot ${edgeTypeClassName(edgeType)}`} />
-            <span>{edgeTypeLabel(edgeType)}</span>
+            <span>{edgeTypeLabel(edgeType, edgeName)}</span>
           </div>
+          {isCustom && (
+            <div className="config-field">
+              <label htmlFor="edge-name">Which edge?</label>
+              <select
+                id="edge-name"
+                value={edgeName}
+                onChange={(event) => onEdgeNameChange(event.target.value)}
+              >
+                <option value="">Select an edge…</option>
+                {customEdgeOptions.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+              {customEdgeOptions.length === 0 && (
+                <small className="config-help-text">
+                  Define custom edges in the source node's settings first.
+                </small>
+              )}
+            </div>
+          )}
           <div className="config-field">
             <label htmlFor="edge-max-traversals">Max Traversals</label>
             <input
@@ -69,7 +100,7 @@ export function EdgePanels({
             {edgeError && <div className="validation-error">{edgeError}</div>}
           </div>
           <div className="edge-config-actions">
-            <button className="connect-edge-btn" onClick={onConfirmEdge}>
+            <button className="connect-edge-btn" onClick={onConfirmEdge} disabled={!canConfirm}>
               Connect
             </button>
             <button className="cancel-edge-btn" onClick={onCancelEdge}>
@@ -86,7 +117,7 @@ export function EdgePanels({
             <span className="edge-info-label">Type</span>
             <span className="edge-info-value">
               <span className={`edge-type-dot ${edgeTypeClassName(selectedEdgeType)}`} />
-              {edgeTypeLabel(selectedEdgeType)}
+              {edgeTypeLabel(selectedEdgeType, selectedEdgeName)}
             </span>
           </div>
           <div className="edge-info-row">

@@ -3,6 +3,7 @@ import AdapterConfigFields from "../../../components/AdapterConfigFields";
 import PromptEditor from "../../../components/PromptEditor";
 import {
   NodeType,
+  type AiMatchRule,
   type AiProvider,
   type AiToolDefinition,
   type ConfigFieldDescriptor,
@@ -18,7 +19,8 @@ interface NodeSettingsModalProps {
   aiPrompt: string;
   aiProvider: string;
   aiTools: string[];
-  aiRejectPattern: string;
+  aiMatchRules: AiMatchRule[];
+  customEdgeNames: string[];
   aiUseSession: boolean;
   aiSessionPlaceholder: string;
   startCreateWorktree: boolean;
@@ -42,7 +44,8 @@ interface NodeSettingsModalProps {
   onAiPromptChange: (value: string) => void;
   onAiProviderChange: (value: string) => void;
   onAiToolsChange: (value: string[]) => void;
-  onAiRejectPatternChange: (value: string) => void;
+  onAiMatchRulesChange: (value: AiMatchRule[]) => void;
+  onCustomEdgeNamesChange: (value: string[]) => void;
   onAiUseSessionChange: (value: boolean) => void;
   onAiSessionPlaceholderChange: (value: string) => void;
   onStartCreateWorktreeChange: (value: boolean) => void;
@@ -54,6 +57,49 @@ interface NodeSettingsModalProps {
   onAdapterConfigChange: (name: string, value: AdapterConfigValue) => void;
 }
 
+/** Repeatable list of custom edge names, rendered for Human and PR nodes. */
+function CustomEdgesEditor({
+  names,
+  onChange,
+}: {
+  names: string[];
+  onChange: (value: string[]) => void;
+}) {
+  return (
+    <div className="config-field">
+      <label>Custom Edges</label>
+      <small className="config-help-text">
+        Named outlets shown as buttons when this node waits for a human. Define them here, then
+        connect each from the node's top handle.
+      </small>
+      {names.map((name, index) => (
+        <div key={index} className="match-rule-row">
+          <input
+            type="text"
+            aria-label={`Custom edge name ${index + 1}`}
+            value={name}
+            onChange={(event) =>
+              onChange(names.map((existing, i) => (i === index ? event.target.value : existing)))
+            }
+            placeholder="Edge name"
+          />
+          <button
+            type="button"
+            className="match-rule-remove"
+            aria-label={`Remove custom edge ${index + 1}`}
+            onClick={() => onChange(names.filter((_, i) => i !== index))}
+          >
+            ×
+          </button>
+        </div>
+      ))}
+      <button type="button" className="match-rule-add" onClick={() => onChange([...names, ""])}>
+        + Add edge
+      </button>
+    </div>
+  );
+}
+
 export function NodeSettingsModal({
   selectedNode,
   labelError,
@@ -62,7 +108,8 @@ export function NodeSettingsModal({
   aiPrompt,
   aiProvider,
   aiTools,
-  aiRejectPattern,
+  aiMatchRules,
+  customEdgeNames,
   aiUseSession,
   aiSessionPlaceholder,
   startCreateWorktree,
@@ -86,7 +133,8 @@ export function NodeSettingsModal({
   onAiPromptChange,
   onAiProviderChange,
   onAiToolsChange,
-  onAiRejectPatternChange,
+  onAiMatchRulesChange,
+  onCustomEdgeNamesChange,
   onAiUseSessionChange,
   onAiSessionPlaceholderChange,
   onStartCreateWorktreeChange,
@@ -225,18 +273,60 @@ export function NodeSettingsModal({
               </div>
 
               <div className="config-field">
-                <label htmlFor="ai-reject-pattern">Reject Pattern (regex)</label>
-                <input
-                  id="ai-reject-pattern"
-                  type="text"
-                  value={aiRejectPattern}
-                  onChange={(event) => onAiRejectPatternChange(event.target.value)}
-                  placeholder="e.g. I cannot|I'm unable|REJECT"
-                />
+                <label>Match Rules</label>
                 <small className="config-help-text">
-                  If the AI output matches this pattern case-insensitively, the node fails and
-                  routes to the onFailure edge.
+                  Each rule's pattern is matched case-insensitively against the AI output. The first
+                  match routes to its named custom edge; no match takes the success edge.
                 </small>
+                {aiMatchRules.map((rule, index) => (
+                  <div key={index} className="match-rule-row">
+                    <input
+                      type="text"
+                      aria-label={`Match pattern ${index + 1}`}
+                      value={rule.pattern}
+                      onChange={(event) =>
+                        onAiMatchRulesChange(
+                          aiMatchRules.map((existing, i) =>
+                            i === index ? { ...existing, pattern: event.target.value } : existing,
+                          ),
+                        )
+                      }
+                      placeholder="Match pattern (regex)"
+                    />
+                    <input
+                      type="text"
+                      aria-label={`Edge name ${index + 1}`}
+                      value={rule.edgeName}
+                      onChange={(event) =>
+                        onAiMatchRulesChange(
+                          aiMatchRules.map((existing, i) =>
+                            i === index ? { ...existing, edgeName: event.target.value } : existing,
+                          ),
+                        )
+                      }
+                      placeholder="Edge name"
+                    />
+                    <button
+                      type="button"
+                      className="match-rule-remove"
+                      aria-label={`Remove rule ${index + 1}`}
+                      onClick={() =>
+                        onAiMatchRulesChange(aiMatchRules.filter((_, i) => i !== index))
+                      }
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  className="match-rule-add"
+                  onClick={() =>
+                    onAiMatchRulesChange([...aiMatchRules, { pattern: "", edgeName: "" }])
+                  }
+                >
+                  + Add rule
+                </button>
               </div>
             </>
           )}
@@ -274,6 +364,7 @@ export function NodeSettingsModal({
                   onChange={onHumanPromptChange}
                 />
               </div>
+              <CustomEdgesEditor names={customEdgeNames} onChange={onCustomEdgeNamesChange} />
             </>
           )}
 
@@ -309,6 +400,7 @@ export function NodeSettingsModal({
                   onChange={onPrCommentTemplateChange}
                 />
               </div>
+              <CustomEdgesEditor names={customEdgeNames} onChange={onCustomEdgeNamesChange} />
             </>
           )}
         </div>

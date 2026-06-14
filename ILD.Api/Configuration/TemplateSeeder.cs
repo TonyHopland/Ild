@@ -93,7 +93,10 @@ public static class TemplateSeeder
                     ["timeout"] = 3600,
                     ["toolAllowlist"] = new List<object>(),
                     ["adapterConfig"] = new Dictionary<string, object>(),
-                    ["rejectPattern"] = "Reject",
+                    ["matchRules"] = new List<object>
+                    {
+                        new Dictionary<string, object> { ["pattern"] = "Reject", ["edgeName"] = "Reject" },
+                    },
                 } },
             new() { Id = "pr", Label = "PR", NodeType = "PR",
                 Config = new Dictionary<string, object>
@@ -108,6 +111,7 @@ public static class TemplateSeeder
             new() { SourceNodeId = "prompt-implement-initial", TargetNodeId = "ai-implement", EdgeType = "OnSuccess" },
             new() { SourceNodeId = "ai-implement", TargetNodeId = "ai-review", EdgeType = "OnSuccess" },
             new() { SourceNodeId = "ai-review", TargetNodeId = "pr", EdgeType = "OnSuccess" },
+            new() { SourceNodeId = "ai-review", TargetNodeId = "prompt-implement-retry", EdgeType = "Custom", Name = "Reject" },
             new() { SourceNodeId = "ai-review", TargetNodeId = "prompt-implement-retry", EdgeType = "OnFailure" },
             new() { SourceNodeId = "prompt-implement-retry", TargetNodeId = "ai-implement", EdgeType = "OnSuccess" },
             new() { SourceNodeId = "pr", TargetNodeId = "cleanup", EdgeType = "OnSuccess" },
@@ -180,12 +184,12 @@ public static class TemplateSeeder
             new() { SourceNodeId = "prompt-grill-initial", TargetNodeId = "ai-grill", EdgeType = "OnSuccess" },
             new() { SourceNodeId = "ai-grill", TargetNodeId = "human-plan", EdgeType = "OnSuccess" },
             new() { SourceNodeId = "human-plan", TargetNodeId = "prompt-create-tasks", EdgeType = "OnSuccess" },
-            new() { SourceNodeId = "human-plan", TargetNodeId = "prompt-grill-followup", EdgeType = "OnRespond" },
+            new() { SourceNodeId = "human-plan", TargetNodeId = "prompt-grill-followup", EdgeType = "Custom", Name = "Respond" },
             new() { SourceNodeId = "prompt-grill-followup", TargetNodeId = "ai-grill", EdgeType = "OnSuccess" },
             new() { SourceNodeId = "human-plan", TargetNodeId = "cleanup", EdgeType = "OnFailure" },
             new() { SourceNodeId = "prompt-create-tasks", TargetNodeId = "ai-create-tasks", EdgeType = "OnSuccess" },
             new() { SourceNodeId = "ai-create-tasks", TargetNodeId = "human-review", EdgeType = "OnSuccess" },
-            new() { SourceNodeId = "human-review", TargetNodeId = "ai-create-tasks", EdgeType = "OnRespond" },
+            new() { SourceNodeId = "human-review", TargetNodeId = "ai-create-tasks", EdgeType = "Custom", Name = "Respond" },
             new() { SourceNodeId = "human-review", TargetNodeId = "cleanup", EdgeType = "OnSuccess" },
             new() { SourceNodeId = "human-review", TargetNodeId = "cleanup", EdgeType = "OnFailure" },
         };

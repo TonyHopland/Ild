@@ -326,6 +326,22 @@ public class WorkItemsController : ControllerBase
         return Ok();
     }
 
+    [HttpPost("{id}/human-feedback/edge")]
+    public async Task<IActionResult> HumanFeedbackEdge(string id, [FromBody] HumanFeedbackEdgeRequest request)
+    {
+        if (!ModelState.IsValid)
+            return BadRequest(ModelState);
+        if (string.IsNullOrWhiteSpace(request.Name))
+            return BadRequest(new { error = "Edge name is required" });
+
+        var ok = await _workItemManager.SubmitHumanFeedbackEdgeAsync(id, request.Name, request.Input ?? string.Empty);
+        if (!ok) return NotFound();
+
+        // SubmitHumanFeedbackEdgeAsync signals the engine which re-launches the
+        // run loop along the named custom edge. See note on HumanFeedbackInput.
+        return Ok();
+    }
+
     [HttpGet("{id}/pr-comments")]
     public async Task<IActionResult> GetPrComments(string id)
     {
@@ -415,6 +431,24 @@ public class HumanFeedbackInputRequest
     /// allowed: the human may simply approve the suspended node. When supplied
     /// the text becomes <c>{{PreviousNode.Output}}</c> for the OnSuccess
     /// successor.
+    /// </summary>
+    [System.ComponentModel.DataAnnotations.StringLength(8192)]
+    public string? Input { get; set; }
+}
+
+public class HumanFeedbackEdgeRequest
+{
+    /// <summary>
+    /// Name of the custom edge the human selected (one of the parked node's
+    /// named buttons). Routes the node to the matching <c>Custom</c> edge.
+    /// </summary>
+    [System.ComponentModel.DataAnnotations.Required]
+    [System.ComponentModel.DataAnnotations.StringLength(256)]
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Optional input that becomes <c>{{PreviousNode.Output}}</c> for the
+    /// custom edge's successor.
     /// </summary>
     [System.ComponentModel.DataAnnotations.StringLength(8192)]
     public string? Input { get; set; }

@@ -158,8 +158,8 @@ export const workItemService = {
     return api.post<void>(`/workitems/${id}/human-feedback/reject`, input ? { input } : {});
   },
 
-  humanFeedbackRespond: async (id: string, input: string): Promise<void> => {
-    return api.post<void>(`/workitems/${id}/human-feedback/respond`, { input });
+  humanFeedbackEdge: async (id: string, name: string, input: string): Promise<void> => {
+    return api.post<void>(`/workitems/${id}/human-feedback/edge`, { name, input });
   },
 
   getPrComments: async (id: string): Promise<PrComment[]> => {

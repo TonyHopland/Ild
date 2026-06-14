@@ -1,5 +1,6 @@
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
+using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
@@ -32,7 +33,8 @@ public class AINodeExecutorTests
     private static IServiceProvider BuildServices(
         IProviderStore providerStore,
         ILoopRunStore? loopRunStore = null,
-        IWorkItemManager? workItemManager = null)
+        IWorkItemManager? workItemManager = null,
+        IAgentAdapterRegistry? registry = null)
     {
         var wi = new WorkItemView { Id = "WI-1", RepositoryId = null };
         var wimMock = workItemManager ?? Mock.Of<IWorkItemManager>(m =>
@@ -46,9 +48,93 @@ public class AINodeExecutorTests
         services.AddSingleton(providerStore);
         services.AddSingleton(lrsMock);
         services.AddSingleton(wimMock);
-        // IAgentAdapterRegistry intentionally not registered — causes executor to
-        // fail with "No agent adapter registry", which proves provider resolution succeeded.
+        // When no registry is supplied the executor fails with "No agent adapter
+        // registry", which proves provider resolution succeeded. Match-rule
+        // routing tests pass a fake registry so a real output is produced.
+        if (registry is not null)
+            services.AddSingleton(registry);
         return services.BuildServiceProvider();
+    }
+
+    /// <summary>Adapter that returns a fixed result, ignoring the request.</summary>
+    private sealed class StubAdapter(NodeExecutionResult result) : IAgentAdapter
+    {
+        public string Name => "stub";
+        public string[] SupportedProviderTypes => ["stub"];
+        public ConfigFieldDescriptor[] ConfigSchema => [];
+        public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context) => Task.FromResult(result);
+    }
+
+    private static IAgentAdapterRegistry RegistryReturning(NodeExecutionResult result)
+    {
+        var adapter = new StubAdapter(result);
+        return Mock.Of<IAgentAdapterRegistry>(r =>
+            r.ResolveForProvider(It.IsAny<AiProvider>()) == (Func<IAgentAdapter>)(() => adapter));
+    }
+
+    private static (IServiceProvider sp, Mock<IProviderStore> store) BuildServicesWithDefaultProvider(
+        NodeExecutionResult adapterResult)
+    {
+        var provider = new AiProvider
+        {
+            Id = Guid.NewGuid(),
+            Name = "default",
+            Type = "stub",
+            IsDefault = true,
+            Parallelism = 1,
+            CreatedAt = DateTime.UtcNow,
+        };
+        var providerStore = new Mock<IProviderStore>();
+        providerStore.Setup(s => s.GetDefaultAiProviderAsync()).ReturnsAsync(provider);
+        var sp = BuildServices(providerStore.Object, registry: RegistryReturning(adapterResult));
+        return (sp, providerStore);
+    }
+
+    private static async Task<NodeOutcome> LastOutcomeAsync(string configJson, NodeExecutionResult adapterResult)
+    {
+        var (sp, _) = BuildServicesWithDefaultProvider(adapterResult);
+        var executor = new AINodeExecutor();
+        var ctx = BuildCtx(MakeNode(configJson), MakeRun(), sp);
+
+        NodeOutcome? last = null;
+        await foreach (var o in executor.ExecuteAsync(ctx))
+            last = o;
+        return last!;
+    }
+
+    // Two rules both match "REJECT and review" (the first case-insensitively);
+    // first-match-wins must route to the earlier rule's edge.
+    private const string TwoRuleConfig =
+        @"{""matchRules"":[{""pattern"":""reject"",""edgeName"":""Reject""},{""pattern"":""review"",""edgeName"":""Review""}]}";
+
+    [Fact]
+    public async Task Matching_output_routes_to_first_matching_rules_custom_edge_case_insensitively()
+    {
+        var outcome = await LastOutcomeAsync(TwoRuleConfig, NodeExecutionResult.Ok("REJECT and review"));
+
+        var success = Assert.IsType<NodeOutcome.Success>(outcome);
+        Assert.Equal(EdgeType.Custom, success.Edge);
+        // Earlier rule wins even though the later "review" rule also matches.
+        Assert.Equal("Reject", success.EdgeName);
+    }
+
+    [Fact]
+    public async Task Non_matching_output_falls_through_to_OnSuccess()
+    {
+        var outcome = await LastOutcomeAsync(TwoRuleConfig, NodeExecutionResult.Ok("all good, shipping it"));
+
+        var success = Assert.IsType<NodeOutcome.Success>(outcome);
+        Assert.Equal(EdgeType.OnSuccess, success.Edge);
+        Assert.Null(success.EdgeName);
+    }
+
+    [Fact]
+    public async Task Adapter_failure_routes_to_OnFailure()
+    {
+        var outcome = await LastOutcomeAsync(TwoRuleConfig, NodeExecutionResult.Fail("adapter blew up"));
+
+        var fail = Assert.IsType<NodeOutcome.Fail>(outcome);
+        Assert.Equal(EdgeType.OnFailure, fail.Edge);
     }
 
     [Fact]

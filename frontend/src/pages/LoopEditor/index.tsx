@@ -32,8 +32,9 @@ import {
   exportNodesToLoopNodes,
   exportEdgesToLoopNodeEdges,
 } from "../../utils/loopTemplateExport";
-import { checkEdgeConstraints, buildEdge } from "../../utils/edgeUtils";
+import { checkEdgeConstraints, buildEdge, getCustomEdgeNames } from "../../utils/edgeUtils";
 import {
+  type AiMatchRule,
   type AiToolDefinition,
   type AiProvider,
   type ConfigFieldDescriptor,
@@ -141,6 +142,35 @@ function resolveToolSelection(provider: AiProvider | null, configuredTools: unkn
   return supportedTools.filter((tool) => tool.defaultEnabled).map((tool) => tool.key);
 }
 
+/** Reads an AI node's ordered output-match rules from its config. */
+function readMatchRules(config: Record<string, unknown>): AiMatchRule[] {
+  const rules = config.matchRules;
+  if (!Array.isArray(rules)) return [];
+  return rules
+    .map((rule) => ({
+      pattern: String((rule as AiMatchRule)?.pattern ?? ""),
+      edgeName: String((rule as AiMatchRule)?.edgeName ?? ""),
+    }))
+    .filter((rule) => rule.pattern !== "" || rule.edgeName !== "");
+}
+
+/** Reads a Human/PR node's declared custom edge names from its config. */
+function readCustomEdges(config: Record<string, unknown>): string[] {
+  const names = config.customEdges;
+  if (!Array.isArray(names)) return [];
+  return names.filter((name): name is string => typeof name === "string");
+}
+
+/** Trims, drops blanks and dedupes a node's custom edge names for persistence. */
+function cleanCustomEdgeNames(names: string[]): string[] {
+  const seen = new Set<string>();
+  for (const name of names) {
+    const trimmed = name.trim();
+    if (trimmed) seen.add(trimmed);
+  }
+  return [...seen];
+}
+
 export default function LoopEditor() {
   const [templates, setTemplates] = useState<LoopTemplate[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<LoopTemplate | null>(null);
@@ -158,6 +188,7 @@ export default function LoopEditor() {
   const [selectedEdge, setSelectedEdge] = useState<Edge | null>(null);
   const [pendingConnection, setPendingConnection] = useState<Connection | null>(null);
   const [edgeType, setEdgeType] = useState<EdgeType>(EdgeType.OnSuccess);
+  const [edgeName, setEdgeName] = useState("");
   const [edgeMaxTraversals, setEdgeMaxTraversals] = useState("");
   const [edgeError, setEdgeError] = useState<string | null>(null);
   const [showEdgeDeletePanel, setShowEdgeDeletePanel] = useState(false);
@@ -167,7 +198,8 @@ export default function LoopEditor() {
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiProvider, setAiProvider] = useState("");
   const [aiTools, setAiTools] = useState<string[]>([]);
-  const [aiRejectPattern, setAiRejectPattern] = useState("");
+  const [aiMatchRules, setAiMatchRules] = useState<AiMatchRule[]>([]);
+  const [customEdgeNames, setCustomEdgeNames] = useState<string[]>([]);
   const [aiUseSession, setAiUseSession] = useState(false);
   const [aiSessionPlaceholder, setAiSessionPlaceholder] = useState("");
   const [startCreateWorktree, setStartCreateWorktree] = useState(true);
@@ -774,7 +806,8 @@ export default function LoopEditor() {
       setAiPrompt((config.prompt as string) || "");
       setAiProvider((config.aiProviderId as string) || "");
       setAiTools(resolvedAiTools);
-      setAiRejectPattern((config.rejectPattern as string) || "");
+      setAiMatchRules(readMatchRules(config));
+      setCustomEdgeNames(readCustomEdges(config));
       setAiUseSession((config.useSession as boolean | undefined) ?? false);
       setAiSessionPlaceholder((config.sessionPlaceholder as string) || "");
       setStartCreateWorktree((config.createWorktree as boolean) ?? true);
@@ -798,7 +831,8 @@ export default function LoopEditor() {
         aiPrompt: (config.prompt as string) || "",
         aiProvider: (config.aiProviderId as string) || "",
         aiTools: resolvedAiTools,
-        aiRejectPattern: (config.rejectPattern as string) || "",
+        aiMatchRules: readMatchRules(config),
+        customEdgeNames: readCustomEdges(config),
         aiUseSession: (config.useSession as boolean | undefined) ?? false,
         aiSessionPlaceholder: (config.sessionPlaceholder as string) || "",
         startCreateWorktree: (config.createWorktree as boolean) ?? true,
@@ -841,18 +875,23 @@ export default function LoopEditor() {
       config.aiProviderId = aiProvider;
       config.toolAllowlist = aiTools;
       config.adapterConfig = { ...adapterConfigValues };
-      if (aiRejectPattern) config.rejectPattern = aiRejectPattern;
+      const cleanRules = aiMatchRules
+        .map((rule) => ({ pattern: rule.pattern.trim(), edgeName: rule.edgeName.trim() }))
+        .filter((rule) => rule.pattern !== "" && rule.edgeName !== "");
+      config.matchRules = cleanRules;
       config.sessionPlaceholder = aiUseSession ? aiSessionPlaceholder.trim() : undefined;
     } else if (selectedNodeType === NodeType.Start) {
       config.createWorktree = startCreateWorktree;
     } else if (selectedNodeType === NodeType.Human) {
       config.inputLabel = humanInputLabel;
       if (humanPrompt) config.prompt = humanPrompt;
+      config.customEdges = cleanCustomEdgeNames(customEdgeNames);
     } else if (selectedNodeType === NodeType.Prompt) {
       if (promptNodePrompt) config.prompt = promptNodePrompt;
     } else if (selectedNodeType === NodeType.PR) {
       if (prDescriptionTemplate) config.prDescriptionTemplate = prDescriptionTemplate;
       if (prCommentTemplate) config.prCommentTemplate = prCommentTemplate;
+      config.customEdges = cleanCustomEdgeNames(customEdgeNames);
     }
 
     setNodes((currentNodes) =>
@@ -880,7 +919,8 @@ export default function LoopEditor() {
     selectedNode,
     aiProvider,
     aiPrompt,
-    aiRejectPattern,
+    aiMatchRules,
+    customEdgeNames,
     aiSessionPlaceholder,
     aiTools,
     aiUseSession,
@@ -903,7 +943,8 @@ export default function LoopEditor() {
       setAiPrompt(originalNodeConfig.aiPrompt);
       setAiProvider(originalNodeConfig.aiProvider);
       setAiTools(originalNodeConfig.aiTools);
-      setAiRejectPattern(originalNodeConfig.aiRejectPattern);
+      setAiMatchRules(originalNodeConfig.aiMatchRules);
+      setCustomEdgeNames(originalNodeConfig.customEdgeNames);
       setAiUseSession(originalNodeConfig.aiUseSession);
       setAiSessionPlaceholder(originalNodeConfig.aiSessionPlaceholder);
       setStartCreateWorktree(originalNodeConfig.startCreateWorktree);
@@ -962,11 +1003,14 @@ export default function LoopEditor() {
 
       let nextEdgeType = EdgeType.OnSuccess;
       if (connection.sourceHandle === "fail") nextEdgeType = EdgeType.OnFailure;
-      if (connection.sourceHandle === "respond") nextEdgeType = EdgeType.OnRespond;
+      // The top handle is the single custom outlet; the edge name is chosen in
+      // the Configure-Edge panel's "Which edge?" dropdown.
+      if (connection.sourceHandle === "respond") nextEdgeType = EdgeType.Custom;
 
       const result = checkEdgeConstraints(
         connection.source,
         sourceNode.data?.type as NodeType,
+        nextEdgeType,
         edges,
       );
       if (!result.allowed) {
@@ -974,16 +1018,8 @@ export default function LoopEditor() {
         return;
       }
 
-      if (
-        edges.some(
-          (edge) => edge.source === connection.source && edge.data?.edgeType === nextEdgeType,
-        )
-      ) {
-        setEdgeError("This edge type is already connected from this node");
-        return;
-      }
-
       setEdgeType(nextEdgeType);
+      setEdgeName("");
       setEdgeMaxTraversals("");
       setEdgeError(null);
       setPendingConnection(connection);
@@ -1002,10 +1038,30 @@ export default function LoopEditor() {
       return;
     }
 
+    const trimmedName = edgeName.trim();
+    if (edgeType === EdgeType.Custom) {
+      if (!trimmedName) {
+        setEdgeError("Select which custom edge to connect");
+        return;
+      }
+      if (
+        edges.some(
+          (edge) =>
+            edge.source === pendingConnection.source &&
+            edge.data?.edgeType === EdgeType.Custom &&
+            ((edge.data as { name?: string | null })?.name ?? "") === trimmedName,
+        )
+      ) {
+        setEdgeError(`The '${trimmedName}' edge is already connected from this node`);
+        return;
+      }
+    }
+
     const newEdge = buildEdge({
       source: pendingConnection.source,
       target: pendingConnection.target,
       edgeType,
+      name: edgeType === EdgeType.Custom ? trimmedName : null,
       maxTraversals: edgeMaxTraversals !== "" ? Number(edgeMaxTraversals) : null,
       sourceHandle: pendingConnection.sourceHandle ?? "success",
       targetHandle: pendingConnection.targetHandle ?? "target-handle",
@@ -1013,12 +1069,14 @@ export default function LoopEditor() {
 
     setEdges((currentEdges) => addEdge(newEdge, currentEdges));
     setPendingConnection(null);
+    setEdgeName("");
     setEdgeMaxTraversals("");
     setEdgeError(null);
-  }, [edgeMaxTraversals, edgeType, pendingConnection, setEdges]);
+  }, [edgeMaxTraversals, edgeName, edgeType, edges, pendingConnection, setEdges]);
 
   const cancelEdge = useCallback(() => {
     setPendingConnection(null);
+    setEdgeName("");
     setEdgeMaxTraversals("");
     setEdgeError(null);
     setSelectedEdge(null);
@@ -1263,7 +1321,8 @@ export default function LoopEditor() {
                     aiPrompt={aiPrompt}
                     aiProvider={aiProvider}
                     aiTools={aiTools}
-                    aiRejectPattern={aiRejectPattern}
+                    aiMatchRules={aiMatchRules}
+                    customEdgeNames={customEdgeNames}
                     aiUseSession={aiUseSession}
                     aiSessionPlaceholder={aiSessionPlaceholder}
                     startCreateWorktree={startCreateWorktree}
@@ -1287,7 +1346,8 @@ export default function LoopEditor() {
                     onAiPromptChange={setAiPrompt}
                     onAiProviderChange={handleAiProviderChange}
                     onAiToolsChange={setAiTools}
-                    onAiRejectPatternChange={setAiRejectPattern}
+                    onAiMatchRulesChange={setAiMatchRules}
+                    onCustomEdgeNamesChange={setCustomEdgeNames}
                     onAiUseSessionChange={setAiUseSession}
                     onAiSessionPlaceholderChange={setAiSessionPlaceholder}
                     onStartCreateWorktreeChange={setStartCreateWorktree}
@@ -1305,11 +1365,16 @@ export default function LoopEditor() {
                 <EdgePanels
                   pendingConnection={pendingConnection !== null}
                   edgeType={edgeType}
+                  edgeName={edgeName}
+                  customEdgeOptions={getCustomEdgeNames(
+                    nodes.find((node) => node.id === pendingConnection?.source),
+                  )}
                   edgeMaxTraversals={edgeMaxTraversals}
                   edgeError={edgeError}
                   showEdgeDeletePanel={showEdgeDeletePanel}
                   selectedEdge={selectedEdge}
                   nodes={nodes}
+                  onEdgeNameChange={setEdgeName}
                   onEdgeMaxTraversalsChange={setEdgeMaxTraversals}
                   onConfirmEdge={confirmEdge}
                   onCancelEdge={cancelEdge}

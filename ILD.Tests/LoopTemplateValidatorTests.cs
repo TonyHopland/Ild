@@ -12,8 +12,8 @@ public class LoopTemplateValidatorTests
         return dto;
     }
 
-    private static LoopNodeEdgeDto Edge(string from, string to, string type = "OnSuccess")
-        => new() { Id = $"{from}->{to}", SourceNodeId = from, TargetNodeId = to, EdgeType = type };
+    private static LoopNodeEdgeDto Edge(string from, string to, string type = "OnSuccess", string? name = null)
+        => new() { Id = $"{from}->{to}:{type}:{name}", SourceNodeId = from, TargetNodeId = to, EdgeType = type, Name = name };
 
     [Fact]
     public void Graph_without_start_node_is_invalid()
@@ -123,17 +123,42 @@ public class LoopTemplateValidatorTests
     }
 
     [Fact]
-    public void OnRespond_edge_on_non_human_node_is_invalid()
+    public void Custom_edge_on_non_human_ai_pr_node_is_invalid()
     {
         var g = new LoopTemplateGraph(Guid.NewGuid(),
             new() { Node("s", "Start"), Node("a", "Cmd"), Node("c", "Cleanup") },
-            new() { Edge("s", "a"), Edge("a", "c", "OnRespond") });
+            new() { Edge("s", "a"), Edge("a", "c"), Edge("a", "c", "Custom", "Retry") });
         var errs = LoopTemplateValidator.Validate(g);
-        Assert.Contains(errs, e => e.Contains("OnRespond"));
+        Assert.Contains(errs, e => e.Contains("custom edges"));
     }
 
     [Fact]
-    public void OnRespond_edge_on_human_node_is_valid()
+    public void Custom_edge_without_name_is_invalid()
+    {
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Node("s", "Start"), Node("h", "Human", "Review"), Node("c", "Cleanup") },
+            new() { Edge("s", "h"), Edge("h", "c", "OnSuccess"), Edge("h", "c", "Custom") });
+        var errs = LoopTemplateValidator.Validate(g);
+        Assert.Contains(errs, e => e.Contains("must have a Name"));
+    }
+
+    [Fact]
+    public void Duplicate_custom_edge_names_on_one_node_is_invalid()
+    {
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Node("s", "Start"), Node("h", "Human", "Review"), Node("a", "AI"), Node("c", "Cleanup") },
+            new() {
+                Edge("s", "h"),
+                Edge("h", "a", "Custom", "Respond"),
+                Edge("h", "c", "Custom", "Respond"),
+                Edge("a", "c")
+            });
+        var errs = LoopTemplateValidator.Validate(g);
+        Assert.Contains(errs, e => e.Contains("duplicate custom edge 'Respond'"));
+    }
+
+    [Fact]
+    public void Multiple_distinct_custom_edges_on_human_node_are_valid()
     {
         var g = new LoopTemplateGraph(Guid.NewGuid(),
             new() {
@@ -144,7 +169,8 @@ public class LoopTemplateValidatorTests
             },
             new() {
                 Edge("s", "h"),
-                Edge("h", "a", "OnRespond"),
+                Edge("h", "a", "Custom", "Respond"),
+                Edge("h", "a", "Custom", "Escalate"),
                 Edge("h", "a", "OnSuccess"),
                 Edge("h", "c", "OnFailure"),
                 Edge("a", "c")
@@ -154,7 +180,7 @@ public class LoopTemplateValidatorTests
     }
 
     [Fact]
-    public void OnRespond_edge_on_pr_node_is_valid()
+    public void Custom_edge_on_pr_node_is_valid()
     {
         var g = new LoopTemplateGraph(Guid.NewGuid(),
             new() {
@@ -165,7 +191,7 @@ public class LoopTemplateValidatorTests
             },
             new() {
                 Edge("s", "p"),
-                Edge("p", "a", "OnRespond"),
+                Edge("p", "a", "Custom", "Respond"),
                 Edge("p", "c", "OnSuccess"),
                 Edge("p", "c", "OnFailure"),
                 Edge("a", "c")

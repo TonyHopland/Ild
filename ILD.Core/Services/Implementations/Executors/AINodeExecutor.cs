@@ -148,11 +148,19 @@ public sealed class AINodeExecutor : INodeExecutor
             {
                 yield return new NodeOutcome.SessionBound(cfg.SessionPlaceholder!, result.SessionId!);
             }
-            if (!string.IsNullOrWhiteSpace(cfg.RejectPattern) && !string.IsNullOrEmpty(result.Output)
-                && System.Text.RegularExpressions.Regex.IsMatch(result.Output, cfg.RejectPattern))
+            if (!string.IsNullOrEmpty(result.Output) && cfg.MatchRules is { Count: > 0 })
             {
-                yield return new NodeOutcome.Success(EdgeType.OnFailure, result.Output);
-                yield break;
+                // First rule whose pattern matches routes to its named custom
+                // edge; no match falls through to the default OnSuccess edge.
+                foreach (var rule in cfg.MatchRules)
+                {
+                    if (!string.IsNullOrWhiteSpace(rule.Pattern) && !string.IsNullOrWhiteSpace(rule.EdgeName)
+                        && System.Text.RegularExpressions.Regex.IsMatch(result.Output, rule.Pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                    {
+                        yield return new NodeOutcome.Success(EdgeType.Custom, result.Output, rule.EdgeName);
+                        yield break;
+                    }
+                }
             }
             yield return new NodeOutcome.Success(EdgeType.OnSuccess, result.Output);
         }

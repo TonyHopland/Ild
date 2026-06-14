@@ -111,7 +111,10 @@ export enum NodeType {
 export enum EdgeType {
   OnSuccess = "OnSuccess",
   OnFailure = "OnFailure",
-  OnRespond = "OnRespond",
+  // A named custom outlet. Only Human, AI and PR nodes may declare these, and a
+  // node may declare any number of them as long as their names are unique. The
+  // pair (edgeType, name) identifies the edge. Replaces the former OnRespond.
+  Custom = "Custom",
 }
 
 export interface LoopNode {
@@ -127,6 +130,8 @@ export interface LoopNodeEdge {
   sourceNodeId: string;
   targetNodeId: string;
   edgeType: EdgeType;
+  // Custom-edge key; null for default (OnSuccess) and fallback (OnFailure) edges.
+  name?: string | null;
   maxTraversals: number | null;
 }
 
@@ -310,6 +315,17 @@ export interface AiToolDefinition {
   label: string;
   description: string;
   defaultEnabled: boolean;
+}
+
+/**
+ * One AI output-matching rule: if {@link pattern} (a case-insensitive regex)
+ * matches the AI output, the node routes to the custom edge named
+ * {@link edgeName}. Rules are evaluated in order; the first match wins.
+ * Stored on an AI node's config as `matchRules`.
+ */
+export interface AiMatchRule {
+  pattern: string;
+  edgeName: string;
 }
 
 export interface ApiError {

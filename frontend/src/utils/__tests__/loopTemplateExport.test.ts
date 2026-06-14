@@ -81,6 +81,7 @@ describe("loopTemplateExport", () => {
         sourceNodeId: "n-start",
         targetNodeId: "n-cleanup",
         edgeType: EdgeType.OnSuccess,
+        name: null,
       });
     });
   });
@@ -261,6 +262,29 @@ describe("loopTemplateExport", () => {
       expect(loopEdges[0].sourceNodeId).toBe("n-start");
       expect(loopEdges[0].targetNodeId).toBe("n-cleanup");
       expect(loopEdges[0].edgeType).toBe(EdgeType.OnSuccess);
+    });
+
+    test("preserves a custom edge's name through export → import", () => {
+      const withCustomEdge = {
+        ...sampleTemplate,
+        edges: [
+          {
+            id: "e-custom",
+            sourceNodeId: "n-human",
+            targetNodeId: "n-ai",
+            edgeType: EdgeType.Custom,
+            name: "Escalate",
+            maxTraversals: null,
+          },
+        ],
+      };
+
+      const exportData = serializeForExport(withCustomEdge);
+      expect(exportData.edges[0].name).toBe("Escalate");
+
+      const loopEdges = exportEdgesToLoopNodeEdges(exportData.edges);
+      expect(loopEdges[0].edgeType).toBe(EdgeType.Custom);
+      expect(loopEdges[0].name).toBe("Escalate");
     });
   });
 
