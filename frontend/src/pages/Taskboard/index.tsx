@@ -1,8 +1,13 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { WorkItem, WorkItemStatus } from "../../types";
+import { Repository, WorkItem, WorkItemStatus } from "../../types";
 import type { TypedSignalRMessage } from "../../types/signalr";
-import { workItemService, settingsService, SchedulerSettingKeys } from "../../services/auth";
+import {
+  workItemService,
+  settingsService,
+  repositoryService,
+  SchedulerSettingKeys,
+} from "../../services/auth";
 import TaskboardColumn from "../../components/TaskboardColumn";
 import WorkItemModal from "../../components/WorkItemModal";
 import WorkItemModalV2 from "../../components/workitem-v2/WorkItemModalV2";
@@ -10,6 +15,14 @@ import ErrorBanner from "../../components/ErrorBanner";
 import { useSignalR } from "../../hooks/useSignalR";
 import { WORK_ITEM_STATUSES, TASKBOARD_PAGE_SIZE } from "../../utils/constants";
 import { normalizeWorkItemStatus } from "../../utils/workItemStatus";
+import {
+  EMPTY_TASKBOARD_FILTER,
+  collectRepositoryOptions,
+  collectTags,
+  filterWorkItems,
+  isFilterActive,
+  type TaskboardFilter,
+} from "../../utils/taskboardFilter";
 
 function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message) return error.message;
@@ -29,6 +42,8 @@ export default function Taskboard() {
   const [errorText, setErrorText] = useState("");
   const [isPaused, setIsPaused] = useState(false);
   const [pauseBusy, setPauseBusy] = useState(false);
+  const [repositories, setRepositories] = useState<Repository[]>([]);
+  const [filter, setFilter] = useState<TaskboardFilter>(EMPTY_TASKBOARD_FILTER);
   const { on, off } = useSignalR();
 
   useEffect(() => {
@@ -36,6 +51,10 @@ export default function Taskboard() {
     void settingsService
       .get(SchedulerSettingKeys.IsPaused)
       .then((s) => setIsPaused(s.value === "true"))
+      .catch(() => {});
+    void repositoryService
+      .getAll()
+      .then(setRepositories)
       .catch(() => {});
   }, []);
 
@@ -212,6 +231,18 @@ export default function Taskboard() {
     }
   };
 
+  const toggleTagFilter = (tag: string) => {
+    setFilter((prev) => ({
+      ...prev,
+      tags: prev.tags.includes(tag) ? prev.tags.filter((t) => t !== tag) : [...prev.tags, tag],
+    }));
+  };
+
+  const repositoryOptions = collectRepositoryOptions(workItems, repositories);
+  const tagOptions = collectTags(workItems);
+  const visibleWorkItems = filterWorkItems(workItems, filter);
+  const filterActive = isFilterActive(filter);
+
   if (isLoading) {
     return (
       <div className="page-container">
@@ -257,12 +288,62 @@ export default function Taskboard() {
         </div>
       </div>
       <ErrorBanner message={errorText} onDismiss={() => setErrorText("")} />
+      <div className="taskboard-filter" role="search">
+        <input
+          type="search"
+          className="taskboard-filter-search"
+          placeholder="Search work items..."
+          aria-label="Search work items"
+          value={filter.search}
+          onChange={(e) => setFilter((prev) => ({ ...prev, search: e.target.value }))}
+        />
+        <select
+          className="taskboard-filter-repo"
+          aria-label="Filter by repository"
+          value={filter.repositoryId}
+          onChange={(e) => setFilter((prev) => ({ ...prev, repositoryId: e.target.value }))}
+        >
+          <option value="">All repositories</option>
+          {repositoryOptions.map((repo) => (
+            <option key={repo.id} value={repo.id}>
+              {repo.name}
+            </option>
+          ))}
+        </select>
+        {tagOptions.length > 0 && (
+          <div className="taskboard-filter-tags" role="group" aria-label="Filter by tag">
+            {tagOptions.map((tag) => {
+              const active = filter.tags.includes(tag);
+              return (
+                <button
+                  key={tag}
+                  type="button"
+                  className={`taskboard-filter-tag${active ? " is-active" : ""}`}
+                  aria-pressed={active}
+                  onClick={() => toggleTagFilter(tag)}
+                >
+                  {tag}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {filterActive && (
+          <button
+            type="button"
+            className="taskboard-filter-clear"
+            onClick={() => setFilter(EMPTY_TASKBOARD_FILTER)}
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
       <div role="status" aria-live="polite" className="taskboard-live-region">
         {announcement}
       </div>
       <div className="taskboard">
         {WORK_ITEM_STATUSES.map((status) => {
-          const items = workItems.filter((wi) => wi.status === status.value);
+          const items = visibleWorkItems.filter((wi) => wi.status === status.value);
           return (
             <TaskboardColumn
               key={status.value}
@@ -380,6 +461,72 @@ export default function Taskboard() {
 
         .scheduler-pause-toggle-label {
           font-variant-numeric: tabular-nums;
+        }
+
+        .taskboard-filter {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 0.5rem;
+          margin-bottom: 1rem;
+        }
+
+        .taskboard-filter-search,
+        .taskboard-filter-repo {
+          background-color: #2a2a40;
+          border: 1px solid #3a3a5c;
+          border-radius: 0.375rem;
+          color: #e0e0e0;
+          padding: 0.4rem 0.6rem;
+          font-size: 0.85rem;
+        }
+
+        .taskboard-filter-search {
+          min-width: 16rem;
+          flex: 1 1 16rem;
+          max-width: 24rem;
+        }
+
+        .taskboard-filter-search:focus-visible,
+        .taskboard-filter-repo:focus-visible {
+          outline: 2px solid var(--focus-color, #3b82f6);
+          outline-offset: 1px;
+        }
+
+        .taskboard-filter-tags {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 0.25rem;
+        }
+
+        .taskboard-filter-tag {
+          font-size: 0.7rem;
+          padding: 0.2rem 0.5rem;
+          background-color: #2d2d44;
+          border: 1px solid #3a3a5c;
+          border-radius: 999px;
+          color: #a0a0b0;
+          cursor: pointer;
+        }
+
+        .taskboard-filter-tag.is-active {
+          background-color: #3b82f6;
+          border-color: #3b82f6;
+          color: #fff;
+        }
+
+        .taskboard-filter-clear {
+          font-size: 0.8rem;
+          padding: 0.3rem 0.6rem;
+          background: none;
+          border: 1px solid #3a3a5c;
+          border-radius: 0.375rem;
+          color: #a0a0b0;
+          cursor: pointer;
+        }
+
+        .taskboard-filter-clear:hover {
+          color: #e0e0e0;
         }
 
         .taskboard-live-region {
