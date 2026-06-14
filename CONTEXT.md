@@ -33,7 +33,7 @@ _Avoid_: QA, staging, live env
 ### Node Types
 
 **Start Node**:
-The entry point of a loop graph. Optionally creates a worktree and branch. If the base git repository is missing at `repo.WorktreesPath` (or fallback `{DataRoot}/repos/{repo-id}`), it is cloned on demand. If the base repository already exists, `git fetch origin` is run (best-effort — fetch failure is swallowed) followed by `git reset --hard origin/<defaultBranch>`. Reset failure **does** fail the node, enforcing the run-isolation invariant that every run must start from a clean origin base. After worktree creation, the branch is rebased onto `origin/<defaultBranch>` — rebase failure also fails the node to prevent stale worktrees.
+The entry point of a loop graph. Optionally creates a worktree and branch. If the base git repository is missing at `repo.WorktreesPath` (or fallback `{DataRoot}/repos/{repo-id}`), it is cloned on demand. If the base repository already exists, `git fetch origin` is run followed by `git reset --hard origin/<defaultBranch>`. Both fetch failure and reset failure **fail the node**, enforcing the run-isolation invariant that every run must start from the latest origin base — a swallowed fetch failure would otherwise reset/rebase against a stale local `origin/<defaultBranch>` and silently start the run on outdated code. After worktree creation, the branch is rebased onto `origin/<defaultBranch>` — rebase failure also fails the node to prevent stale worktrees.
 _Avoid_: init, setup
 
 **Cmd Node**:

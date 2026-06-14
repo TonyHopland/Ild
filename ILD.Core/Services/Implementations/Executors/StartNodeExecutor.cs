@@ -92,7 +92,9 @@ public sealed class StartNodeExecutor : INodeExecutor
         var defaultBranch = repo.DefaultBranch ?? "main";
         if (!cloned)
         {
-            await repoManager.FetchAsync(basePath, ctx.CancellationToken, gitAuth);
+            var fetchOk = await repoManager.FetchAsync(basePath, ctx.CancellationToken, gitAuth);
+            if (!fetchOk)
+                return (false, null, null, $"failed to fetch origin for base repo — refusing to start run from a stale origin/{defaultBranch}");
             var resetOk = await repoManager.ResetHardAsync(basePath, $"origin/{defaultBranch}", ctx.CancellationToken);
             if (!resetOk)
                 return (false, null, null, $"failed to reset base repo to origin/{defaultBranch}");
