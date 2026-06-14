@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/tes
 import { render, screen, within, cleanup, waitFor, act, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
 import Taskboard from "./index";
-import { WorkItemStatus, WorkItemPriority, WorkItem } from "../../types";
+import { WorkItemStatus, WorkItemPriority, WorkItem, Repository } from "../../types";
 import * as authServices from "../../services/auth";
 import * as signalRHook from "../../hooks/useSignalR";
 
@@ -71,6 +71,20 @@ function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
     currentLoopRunId: null,
     dependencyIds: [],
     dependentIds: [],
+    ...overrides,
+  };
+}
+
+function makeRepo(overrides: Partial<Repository> = {}): Repository {
+  return {
+    id: "repo-1",
+    name: "Repo One",
+    remoteProviderId: "rp-1",
+    cloneUrl: "https://example.com/repo.git",
+    defaultBranch: "main",
+    worktreesPath: null,
+    defaultIntakeStatus: WorkItemStatus.Backlog,
+    createdAt: "2025-01-01T00:00:00Z",
     ...overrides,
   };
 }
@@ -473,5 +487,97 @@ describe("Taskboard work item URL", () => {
       expect(screen.getByTestId("location").textContent).toBe("/taskboard");
     });
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("Taskboard filter", () => {
+  function mockSignalR() {
+    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+      on: vi.fn(),
+      off: vi.fn(),
+      invoke: vi.fn(),
+      connectionState: "connected",
+    });
+  }
+
+  const items = [
+    makeItem({ id: "wi-1", title: "Add login page", repositoryId: "repo-1", tags: ["frontend"] }),
+    makeItem({ id: "wi-2", title: "Fix logout bug", repositoryId: "repo-2", tags: ["backend"] }),
+    makeItem({ id: "wi-3", title: "Unrelated chore", repositoryId: "repo-1", tags: ["backend"] }),
+  ];
+
+  test("search narrows the board to matching work items", async () => {
+    mockSignalR();
+    vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
+    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue(items);
+
+    renderTaskboard();
+
+    await waitFor(() => {
+      expect(screen.getByText("Add login page")).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("Search work items"), {
+      target: { value: "log" },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Add login page")).toBeTruthy();
+      expect(screen.getByText("Fix logout bug")).toBeTruthy();
+      expect(screen.queryByText("Unrelated chore")).toBeNull();
+    });
+  });
+
+  test("repository filter is labelled by repository name", async () => {
+    mockSignalR();
+    vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([
+      makeRepo({ id: "repo-1", name: "Repo One" }),
+      makeRepo({ id: "repo-2", name: "Repo Two" }),
+    ]);
+    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue(items);
+
+    renderTaskboard();
+
+    await waitFor(() => {
+      expect(screen.getByText("Add login page")).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("Filter by repository"), {
+      target: { value: "repo-2" },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Fix logout bug")).toBeTruthy();
+      expect(screen.queryByText("Add login page")).toBeNull();
+      expect(screen.queryByText("Unrelated chore")).toBeNull();
+    });
+  });
+
+  test("tag chips narrow the board and clearing restores every item", async () => {
+    mockSignalR();
+    vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
+    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue(items);
+
+    renderTaskboard();
+
+    await waitFor(() => {
+      expect(screen.getByText("Add login page")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "backend" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Fix logout bug")).toBeTruthy();
+      expect(screen.getByText("Unrelated chore")).toBeTruthy();
+      expect(screen.queryByText("Add login page")).toBeNull();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Add login page")).toBeTruthy();
+      expect(screen.getByText("Fix logout bug")).toBeTruthy();
+      expect(screen.getByText("Unrelated chore")).toBeTruthy();
+    });
   });
 });
