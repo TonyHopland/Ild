@@ -106,6 +106,12 @@ public class WorkItemManager : IWorkItemManager
             RepositoryId = repositoryId,
         });
 
+        // Broadcast the creation so connected clients (e.g. the Taskboard) add
+        // the new item live instead of only on a manual refresh. Creation has
+        // no prior status, so old and new are the landing status. Covers every
+        // creation path — UI and agent/MCP alike — since both flow through here.
+        await _notifier.WorkItemStateChangedAsync(serverWi.Id, serverWi.Status, serverWi.Status);
+
         return serverWi.Id;
     }
 

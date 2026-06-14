@@ -123,10 +123,9 @@ public class WorkItemsController : ControllerBase
             forceBacklog: false,
             tags: request.Tags);
 
+        // Creation broadcasts over SignalR from WorkItemManager.CreateWorkItemAsync,
+        // so connected clients pick up the new item live without a duplicate here.
         var wi = await _workItemManager.GetWorkItemAsync(id);
-        if (wi != null)
-            await _notifier.WorkItemStateChangedAsync(id, wi.Status, wi.Status);
-
         return CreatedAtAction(nameof(GetById), new { id }, wi);
     }
 

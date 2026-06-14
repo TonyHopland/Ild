@@ -1104,4 +1104,52 @@ public class WorkItemManagerTests
         notifier.Verify(n => n.HumanFeedbackRequiredAsync(id, "first"), Times.Once);
         notifier.Verify(n => n.HumanFeedbackRequiredAsync(id, "second"), Times.Once);
     }
+
+    [Fact]
+    public async Task CreateWorkItemAsync_notifies_state_change_so_clients_add_the_item_live()
+    {
+        var db = new TestDb();
+        using var _ = db;
+        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/repo.git", DefaultIntakeStatus = WorkItemStatus.WorkQueue };
+        db.Context.RemoteProviders.Add(remote);
+        db.Context.Repositories.Add(repo);
+        db.Context.SaveChanges();
+        var repoMgr = new Mock<IRepositoryManager>();
+        var eventLog = new Mock<IEventLogService>();
+        var notifier = new Mock<IWorkItemNotifier>();
+        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, notifier.Object);
+
+        var id = await mgr.CreateWorkItemAsync("t", "", repo.Id);
+
+        // Creation has no prior status, so old and new are both the landing
+        // status (here WorkQueue). The Taskboard's WorkItemStateChanged handler
+        // loads any item it doesn't yet know about, so this single broadcast is
+        // what makes a freshly created item appear without a manual refresh.
+        notifier.Verify(n => n.WorkItemStateChangedAsync(id, RemoteWorkItemStatus.WorkQueue, RemoteWorkItemStatus.WorkQueue), Times.Once);
+    }
+
+    [Fact]
+    public async Task CreateWorkItemAsync_notifies_for_agent_created_backlog_items()
+    {
+        var db = new TestDb();
+        using var _ = db;
+        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/repo.git", DefaultIntakeStatus = WorkItemStatus.WorkQueue };
+        db.Context.RemoteProviders.Add(remote);
+        db.Context.Repositories.Add(repo);
+        db.Context.SaveChanges();
+        var repoMgr = new Mock<IRepositoryManager>();
+        var eventLog = new Mock<IEventLogService>();
+        var notifier = new Mock<IWorkItemNotifier>();
+        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, notifier.Object);
+
+        // The AI/MCP path forces Backlog regardless of the repo's intake default.
+        // This is the path the bug report was about — an agent-created item must
+        // still broadcast so the board updates without a refresh.
+        var runId = Guid.NewGuid();
+        var id = await mgr.CreateWorkItemAsync("t", "", repo.Id, runId, forceBacklog: true);
+
+        notifier.Verify(n => n.WorkItemStateChangedAsync(id, RemoteWorkItemStatus.Backlog, RemoteWorkItemStatus.Backlog), Times.Once);
+    }
 }
