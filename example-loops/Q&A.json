@@ -1,0 +1,117 @@
+{
+  "$schema": "ild-loop-template/v1",
+  "name": "Q&A",
+  "description": "",
+  "recoveryPolicy": "AutoResume",
+  "nodes": [
+    {
+      "id": "4ba2ec6f-2c94-409f-9bad-8c83420026a4",
+      "type": "Prompt",
+      "label": "Workitem summary",
+      "config": {
+        "prompt": "{{WorkItem.Title}}\n\n{{WorkItem.Description}}",
+        "__pos": {
+          "x": -468.5,
+          "y": 127
+        }
+      }
+    },
+    {
+      "id": "6a21b6e4-05cd-4e9e-95d6-7fbd978b98d6",
+      "type": "Start",
+      "label": "Start",
+      "config": {
+        "__pos": {
+          "x": -649.5,
+          "y": 127.5
+        }
+      }
+    },
+    {
+      "id": "7e83b932-7119-4ea4-b2f6-da20fa275439",
+      "type": "Human",
+      "label": "Human",
+      "config": {
+        "inputLabel": "",
+        "prompt": "{{Node.Input}}",
+        "__pos": {
+          "x": -70,
+          "y": 128
+        },
+        "customEdges": ["Respond", "Complete"]
+      }
+    },
+    {
+      "id": "9400eaff-b1ea-4008-ba76-80fa98acc0ef",
+      "type": "Cleanup",
+      "label": "Cleanup",
+      "config": {
+        "__pos": {
+          "x": 130.5,
+          "y": 129
+        }
+      }
+    },
+    {
+      "id": "fa400233-bcbc-4502-b334-12b93abc4dcd",
+      "type": "AI",
+      "label": "AI",
+      "config": {
+        "prompt": "{{Node.Input}}",
+        "useSession": true,
+        "aiProviderId": "",
+        "toolAllowlist": ["read", "execute", "ild"],
+        "adapterConfig": {},
+        "sessionPlaceholder": "Q&A",
+        "__pos": {
+          "x": -270.5,
+          "y": 128.5
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "4b2ba1b9-f682-4b22-a11a-88dd0aa4da8f",
+      "sourceNodeId": "4ba2ec6f-2c94-409f-9bad-8c83420026a4",
+      "targetNodeId": "fa400233-bcbc-4502-b334-12b93abc4dcd",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "6dc9771d-5936-41b8-94ca-22f5b21f7bf4",
+      "sourceNodeId": "7e83b932-7119-4ea4-b2f6-da20fa275439",
+      "targetNodeId": "9400eaff-b1ea-4008-ba76-80fa98acc0ef",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "8c5723c1-724e-4648-ac7d-05383f843a1a",
+      "sourceNodeId": "6a21b6e4-05cd-4e9e-95d6-7fbd978b98d6",
+      "targetNodeId": "4ba2ec6f-2c94-409f-9bad-8c83420026a4",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "8e336aae-0c7f-4897-be7c-2bba7050cf85",
+      "sourceNodeId": "fa400233-bcbc-4502-b334-12b93abc4dcd",
+      "targetNodeId": "7e83b932-7119-4ea4-b2f6-da20fa275439",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "90ef5302-ac55-4be7-96e9-943760c162b3",
+      "sourceNodeId": "7e83b932-7119-4ea4-b2f6-da20fa275439",
+      "targetNodeId": "9400eaff-b1ea-4008-ba76-80fa98acc0ef",
+      "edgeType": "Custom",
+      "name": "Complete"
+    },
+    {
+      "id": "b5c956c7-d403-4080-8b0e-28221fdd0e93",
+      "sourceNodeId": "7e83b932-7119-4ea4-b2f6-da20fa275439",
+      "targetNodeId": "fa400233-bcbc-4502-b334-12b93abc4dcd",
+      "edgeType": "Custom",
+      "name": "Respond"
+    }
+  ]
+}
