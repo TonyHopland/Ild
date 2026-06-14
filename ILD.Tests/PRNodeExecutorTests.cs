@@ -115,6 +115,86 @@ public class PRNodeExecutorTests
     }
 
     [Fact]
+    public async Task When_prompt_template_set_renders_it_to_announce_and_park()
+    {
+        var repoId = Guid.NewGuid();
+        var workItem = new WorkItemView { Id = "WI-1", Title = "Title", Description = "D", RepositoryId = repoId };
+        var repo = new Repository { Id = repoId, Name = "r", CloneUrl = "https://example.com/o/r.git", DefaultBranch = "main", RemoteProviderId = Guid.NewGuid() };
+
+        var workItems = new Mock<IWorkItemManager>();
+        workItems.Setup(m => m.GetWorkItemAsync(It.IsAny<string>())).ReturnsAsync(workItem);
+        var providerStore = new Mock<IProviderStore>();
+        providerStore.Setup(s => s.GetRepositoryByIdAsync(repoId)).ReturnsAsync(repo);
+        providerStore.Setup(s => s.GetRemoteProviderByIdAsync(It.IsAny<Guid>())).ReturnsAsync((RemoteProvider?)null);
+
+        // Strict — the existing PR with no comment template means the remote is never touched.
+        var remote = new Mock<IRemoteProvider>(MockBehavior.Strict);
+
+        var rendering = new Mock<IPromptRenderingService>();
+        rendering.Setup(r => r.RenderAsync(It.IsAny<string>(), It.IsAny<Guid>(), It.IsAny<WorkItemView>(), It.IsAny<string?>()))
+            .ReturnsAsync((string template, Guid _, WorkItemView _, string? _) => template.Replace("{{WorkItem.Title}}", "Title"));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(workItems.Object);
+        services.AddSingleton(providerStore.Object);
+        services.AddSingleton(remote.Object);
+        services.AddSingleton(rendering.Object);
+        services.AddSingleton(Mock.Of<IRepositoryManager>());
+        var sp = services.BuildServiceProvider();
+
+        var node = new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.PR, Config = """{"prompt":"Please merge {{WorkItem.Title}}"}""" };
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = "WI-1", PrUrl = "https://example.com/o/r/pull/7" };
+
+        var executor = new PRNodeExecutor();
+        var outcomes = new List<NodeOutcome>();
+        await foreach (var o in executor.ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+            outcomes.Add(o);
+
+        // The rendered template — not the raw template or the PR URL — is both
+        // announced as the node input and surfaced as the parked node's content.
+        var starting = outcomes.OfType<NodeOutcome.NodeStarting>().Single();
+        Assert.Equal("Please merge Title", starting.EffectiveInput);
+        var waiting = outcomes.OfType<NodeOutcome.WaitingAction>().Single();
+        Assert.Equal(HumanFeedbackReasons.PrAwaitingMerge, waiting.Reason);
+        Assert.Equal("Please merge Title", waiting.Output);
+    }
+
+    [Fact]
+    public async Task When_no_prompt_template_parks_with_pr_url()
+    {
+        var repoId = Guid.NewGuid();
+        var workItem = new WorkItemView { Id = "WI-1", Title = "T", Description = "D", RepositoryId = repoId };
+        var repo = new Repository { Id = repoId, Name = "r", CloneUrl = "https://example.com/o/r.git", DefaultBranch = "main", RemoteProviderId = Guid.NewGuid() };
+
+        var workItems = new Mock<IWorkItemManager>();
+        workItems.Setup(m => m.GetWorkItemAsync(It.IsAny<string>())).ReturnsAsync(workItem);
+        var providerStore = new Mock<IProviderStore>();
+        providerStore.Setup(s => s.GetRepositoryByIdAsync(repoId)).ReturnsAsync(repo);
+        providerStore.Setup(s => s.GetRemoteProviderByIdAsync(It.IsAny<Guid>())).ReturnsAsync((RemoteProvider?)null);
+
+        var remote = new Mock<IRemoteProvider>(MockBehavior.Strict);
+
+        var services = new ServiceCollection();
+        services.AddSingleton(workItems.Object);
+        services.AddSingleton(providerStore.Object);
+        services.AddSingleton(remote.Object);
+        services.AddSingleton(Mock.Of<IRepositoryManager>());
+        var sp = services.BuildServiceProvider();
+
+        var node = new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.PR, Config = "{}" };
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = "WI-1", PrUrl = "https://example.com/o/r/pull/7" };
+
+        var executor = new PRNodeExecutor();
+        var outcomes = new List<NodeOutcome>();
+        await foreach (var o in executor.ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+            outcomes.Add(o);
+
+        // No prompt template to render — the PR URL is kept as the parked content.
+        var waiting = outcomes.OfType<NodeOutcome.WaitingAction>().Single();
+        Assert.Equal("https://example.com/o/r/pull/7", waiting.Output);
+    }
+
+    [Fact]
     public async Task When_PR_exists_and_comment_post_fails_node_fails()
     {
         var repoId = Guid.NewGuid();
