@@ -1,29 +1,10 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
+import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
 import type { Edge } from "@xyflow/react";
 import { MemoryRouter } from "react-router-dom";
 import { AuthContext } from "../../hooks/useAuth";
 import { NodeType, EdgeType, RecoveryPolicy } from "../../types";
 import LoopEditor from "./index";
-
-beforeEach(() => {
-  vi.stubGlobal(
-    "ResizeObserver",
-    class ResizeObserver {
-      private callback: ResizeObserverCallback | null = null;
-      constructor(callback: ResizeObserverCallback) {
-        this.callback = callback;
-      }
-      observe() {
-        if (this.callback) {
-          this.callback([], this);
-        }
-      }
-      unobserve() {}
-      disconnect() {}
-    },
-  );
-});
 
 afterEach(() => {
   cleanup();
