@@ -16,6 +16,8 @@ interface TaskboardColumnProps {
   // reveals the rest in further increments of this size via a "Load more"
   // button. Omitted means every item is rendered up front.
   pageSize?: number;
+  // Loop template names, forwarded to each card so loop tags are highlighted.
+  loopTemplateNames?: string[];
 }
 
 export default function TaskboardColumn({
@@ -28,6 +30,7 @@ export default function TaskboardColumn({
   onMoveWorkItem,
   onAddItem,
   pageSize,
+  loopTemplateNames,
 }: TaskboardColumnProps) {
   const [dragOver, setDragOver] = useState(false);
   const [visibleCount, setVisibleCount] = useState(pageSize ?? 0);
@@ -110,6 +113,7 @@ export default function TaskboardColumn({
             workItem={item}
             onClick={onWorkItemClick}
             onMove={onMoveWorkItem}
+            loopTemplateNames={loopTemplateNames}
           />
         ))}
         {hasMore && (

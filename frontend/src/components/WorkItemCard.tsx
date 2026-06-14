@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import { WorkItem, WorkItemStatus } from "../types";
-import { parseTags } from "../utils/workItemJson";
+import { makeLoopTagMatcher, parseTags } from "../utils/workItemJson";
 import { formatDurationMs } from "../utils/duration";
 
 interface WorkItemCardProps {
   workItem: WorkItem;
   onClick?: (workItem: WorkItem) => void;
   onMove?: (workItem: WorkItem, direction: "prev" | "next") => void;
+  /** Loop template names, used to mark tags that resolve to a loop. */
+  loopTemplateNames?: string[];
 }
 
 const REASON_STYLES: Record<string, { bg: string; color: string; border: string }> = {
@@ -16,7 +18,13 @@ const REASON_STYLES: Record<string, { bg: string; color: string; border: string 
   "Human Input Needed": { bg: "#1a2d2a", color: "#34d399", border: "#059669" },
 };
 
-export default function WorkItemCard({ workItem, onClick, onMove }: WorkItemCardProps) {
+export default function WorkItemCard({
+  workItem,
+  onClick,
+  onMove,
+  loopTemplateNames = [],
+}: WorkItemCardProps) {
+  const isLoopTag = makeLoopTagMatcher(loopTemplateNames);
   const handleDragStart = (e: React.DragEvent) => {
     e.dataTransfer.setData("text/plain", workItem.id);
   };
@@ -110,7 +118,10 @@ export default function WorkItemCard({ workItem, onClick, onMove }: WorkItemCard
       )}
       <div className="work-item-tags">
         {parseTags(workItem).map((label) => (
-          <span key={label} className="work-item-tag">
+          <span
+            key={label}
+            className={`work-item-tag${isLoopTag(label) ? " work-item-tag--loop" : ""}`}
+          >
             {label}
           </span>
         ))}
@@ -210,6 +221,13 @@ export default function WorkItemCard({ workItem, onClick, onMove }: WorkItemCard
           background-color: #2d2d44;
           border-radius: 0.25rem;
           color: #a0a0b0;
+        }
+
+        /* Tags that resolve to a loop template get a purple background so they
+           stand out from ordinary free-form labels. */
+        .work-item-tag--loop {
+          background-color: #4c1d95;
+          color: #ddd6fe;
         }
 
         .qa-active-dot {

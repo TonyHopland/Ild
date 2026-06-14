@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { WorkItem, WorkItemStatus } from "../../types";
-import { parseConversation, parseTags } from "../../utils/workItemJson";
+import { makeLoopTagMatcher, parseConversation, parseTags } from "../../utils/workItemJson";
 import MarkdownRenderer from "../MarkdownRenderer";
 import FeedbackActions from "../FeedbackActions";
 import type { WorkItemDetail } from "./useWorkItemDetail";
@@ -211,6 +211,7 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
   const repoName =
     detail.repositories.find((r) => r.id === workItem.repositoryId)?.name ?? workItem.repositoryId;
   const tagList = parseTags(workItem);
+  const isLoopTag = makeLoopTagMatcher(detail.templates.map((t) => t.name));
   const fmt = (d: string | null) => (d ? new Date(d).toLocaleString() : "—");
 
   // While the item is mid run, surface the pinned loop's name and the node the
@@ -251,7 +252,11 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
           <span className="detail-label">Tags</span>
           <span className="detail-value">
             {tagList.map((t) => (
-              <span key={t} className="work-item-tag" style={{ marginRight: 4 }}>
+              <span
+                key={t}
+                className={`work-item-tag${isLoopTag(t) ? " work-item-tag--loop" : ""}`}
+                style={{ marginRight: 4 }}
+              >
                 {t}
               </span>
             ))}

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/tes
 import { render, screen, within, cleanup, waitFor, act, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
 import Taskboard from "./index";
-import { WorkItemStatus, WorkItemPriority, WorkItem, Repository } from "../../types";
+import { WorkItemStatus, WorkItemPriority, WorkItem, Repository, LoopTemplate } from "../../types";
 import * as authServices from "../../services/auth";
 import * as signalRHook from "../../hooks/useSignalR";
 
@@ -71,6 +71,22 @@ function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
     currentLoopRunId: null,
     dependencyIds: [],
     dependentIds: [],
+    ...overrides,
+  };
+}
+
+function makeTemplate(overrides: Partial<LoopTemplate> = {}): LoopTemplate {
+  return {
+    id: "tmpl-1",
+    name: "Bug Fix",
+    description: "",
+    version: 1,
+    recoveryPolicy: {} as LoopTemplate["recoveryPolicy"],
+    nodes: [],
+    edges: [],
+    createdAt: "2025-01-01T00:00:00Z",
+    updatedAt: "2025-01-01T00:00:00Z",
+    isArchived: false,
     ...overrides,
   };
 }
@@ -598,6 +614,26 @@ describe("Taskboard filter", () => {
       expect(screen.queryByText("Add login page")).toBeNull();
       expect(screen.queryByText("Unrelated chore")).toBeNull();
     });
+  });
+
+  test("marks filter chips that name a loop template, leaving free-form chips plain", async () => {
+    mockSignalR();
+    vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
+    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([
+      makeItem({ id: "wi-1", title: "Loop item", tags: ["bug fix"] }),
+      makeItem({ id: "wi-2", title: "Plain item", tags: ["frontend"] }),
+    ]);
+    // The matcher is case-insensitive, so a "Bug Fix" template marks a "bug fix" chip.
+    vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([
+      makeTemplate({ name: "Bug Fix" }),
+    ]);
+
+    renderTaskboard();
+
+    const loopChip = await screen.findByRole("button", { name: "bug fix" });
+    const plainChip = await screen.findByRole("button", { name: "frontend" });
+    expect(loopChip.className).toContain("taskboard-filter-tag--loop");
+    expect(plainChip.className).not.toContain("taskboard-filter-tag--loop");
   });
 
   test("tag chips narrow the board and clearing restores every item", async () => {

@@ -94,6 +94,39 @@ describe("WorkItemCard", () => {
     expect(screen.queryByText("implement-change")).toBeNull();
   });
 
+  test("marks tags that name a loop template, leaving free-form tags plain", () => {
+    render(
+      <WorkItemCard
+        workItem={makeItem({ status: WorkItemStatus.Backlog, tags: ["Bug Fix", "urgent"] })}
+        loopTemplateNames={["Bug Fix"]}
+      />,
+    );
+
+    const loopTag = screen.getByText("Bug Fix");
+    const plainTag = screen.getByText("urgent");
+    expect(loopTag.className).toContain("work-item-tag--loop");
+    expect(plainTag.className).not.toContain("work-item-tag--loop");
+  });
+
+  test("matches loop tags case-insensitively and leaves tags plain without templates", () => {
+    const { rerender } = render(
+      <WorkItemCard
+        workItem={makeItem({ status: WorkItemStatus.Backlog, tags: ["bug fix"] })}
+        loopTemplateNames={["Bug Fix"]}
+      />,
+    );
+    expect(screen.getByText("bug fix").className).toContain("work-item-tag--loop");
+
+    // With no loop templates known, the same tag renders as a plain label.
+    rerender(
+      <WorkItemCard
+        workItem={makeItem({ status: WorkItemStatus.Backlog, tags: ["bug fix"] })}
+        loopTemplateNames={[]}
+      />,
+    );
+    expect(screen.getByText("bug fix").className).not.toContain("work-item-tag--loop");
+  });
+
   test("omits the step when a running item has no current node label", () => {
     const base = new Date("2026-06-14T12:00:00Z").getTime();
     vi.useFakeTimers();

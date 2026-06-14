@@ -6,6 +6,7 @@ import {
   workItemService,
   settingsService,
   repositoryService,
+  loopTemplateService,
   SchedulerSettingKeys,
 } from "../../services/auth";
 import TaskboardColumn from "../../components/TaskboardColumn";
@@ -15,6 +16,7 @@ import ErrorBanner from "../../components/ErrorBanner";
 import { useSignalR } from "../../hooks/useSignalR";
 import { WORK_ITEM_STATUSES, TASKBOARD_PAGE_SIZE } from "../../utils/constants";
 import { normalizeWorkItemStatus } from "../../utils/workItemStatus";
+import { makeLoopTagMatcher } from "../../utils/workItemJson";
 import {
   EMPTY_TASKBOARD_FILTER,
   collectRepositoryOptions,
@@ -43,6 +45,7 @@ export default function Taskboard() {
   const [isPaused, setIsPaused] = useState(false);
   const [pauseBusy, setPauseBusy] = useState(false);
   const [repositories, setRepositories] = useState<Repository[]>([]);
+  const [loopTemplateNames, setLoopTemplateNames] = useState<string[]>([]);
   const [filter, setFilter] = useState<TaskboardFilter>(EMPTY_TASKBOARD_FILTER);
   const { on, off } = useSignalR();
 
@@ -55,6 +58,10 @@ export default function Taskboard() {
     void repositoryService
       .getAll()
       .then(setRepositories)
+      .catch(() => {});
+    void loopTemplateService
+      .getAll()
+      .then((templates) => setLoopTemplateNames(templates.map((t) => t.name)))
       .catch(() => {});
   }, []);
 
@@ -249,6 +256,7 @@ export default function Taskboard() {
 
   const repositoryOptions = collectRepositoryOptions(workItems, repositories);
   const tagOptions = collectTags(workItems);
+  const isLoopTag = makeLoopTagMatcher(loopTemplateNames);
   const visibleWorkItems = filterWorkItems(workItems, filter);
   const filterActive = isFilterActive(filter);
 
@@ -323,11 +331,14 @@ export default function Taskboard() {
           <div className="taskboard-filter-tags" role="group" aria-label="Filter by tag">
             {tagOptions.map((tag) => {
               const active = filter.tags.includes(tag);
+              const loop = isLoopTag(tag);
               return (
                 <button
                   key={tag}
                   type="button"
-                  className={`taskboard-filter-tag${active ? " is-active" : ""}`}
+                  className={`taskboard-filter-tag${loop ? " taskboard-filter-tag--loop" : ""}${
+                    active ? " is-active" : ""
+                  }`}
                   aria-pressed={active}
                   onClick={() => toggleTagFilter(tag)}
                 >
@@ -364,6 +375,7 @@ export default function Taskboard() {
               onError={(msg) => setErrorText(msg)}
               onMoveWorkItem={handleMoveWorkItem}
               onAddItem={status.value === "Backlog" ? openCreateModal : undefined}
+              loopTemplateNames={loopTemplateNames}
               pageSize={
                 status.value === "Backlog" || status.value === "Done"
                   ? TASKBOARD_PAGE_SIZE
@@ -521,6 +533,22 @@ export default function Taskboard() {
         .taskboard-filter-tag.is-active {
           background-color: #3b82f6;
           border-color: #3b82f6;
+          color: #fff;
+        }
+
+        /* Loop tags carry the same purple identity here as on the cards, so the
+           filter bar distinguishes them from free-form tags. Rules follow the
+           base is-active rule so the active loop variant wins on equal
+           specificity. */
+        .taskboard-filter-tag--loop {
+          background-color: #4c1d95;
+          border-color: #5b21b6;
+          color: #ddd6fe;
+        }
+
+        .taskboard-filter-tag--loop.is-active {
+          background-color: #7c3aed;
+          border-color: #7c3aed;
           color: #fff;
         }
 
