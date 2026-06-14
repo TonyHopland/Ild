@@ -43,17 +43,11 @@ internal static class NodeConfig
         public string[]? ToolAllowlist { get; init; }
 
         /// <summary>
-        /// Ordered output-match rules routing to named custom edges. Supersedes
-        /// <see cref="RejectPattern"/>.
+        /// Ordered output-match rules routing to named custom edges. The first
+        /// rule whose pattern matches the output routes to its named edge; no
+        /// match takes the default OnSuccess edge.
         /// </summary>
         public List<AiMatchRule>? MatchRules { get; init; }
-
-        /// <summary>
-        /// Legacy single reject pattern. Retained so templates authored before
-        /// named custom edges keep routing a matching output to the fallback
-        /// (OnFailure) edge. Ignored when <see cref="MatchRules"/> is set.
-        /// </summary>
-        public string? RejectPattern { get; init; }
 
         public JsonElement? AdapterConfig { get; init; }
         public string? SessionPlaceholder { get; init; }

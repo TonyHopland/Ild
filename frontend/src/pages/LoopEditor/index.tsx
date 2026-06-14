@@ -142,26 +142,16 @@ function resolveToolSelection(provider: AiProvider | null, configuredTools: unkn
   return supportedTools.filter((tool) => tool.defaultEnabled).map((tool) => tool.key);
 }
 
-/**
- * Reads an AI node's ordered match rules from its config. A legacy single
- * `rejectPattern` (authored before named custom edges) surfaces as one rule
- * routing to a custom edge named "Reject" so it can be edited and wired.
- */
+/** Reads an AI node's ordered output-match rules from its config. */
 function readMatchRules(config: Record<string, unknown>): AiMatchRule[] {
   const rules = config.matchRules;
-  if (Array.isArray(rules)) {
-    return rules
-      .map((rule) => ({
-        pattern: String((rule as AiMatchRule)?.pattern ?? ""),
-        edgeName: String((rule as AiMatchRule)?.edgeName ?? ""),
-      }))
-      .filter((rule) => rule.pattern !== "" || rule.edgeName !== "");
-  }
-  const legacy = config.rejectPattern;
-  if (typeof legacy === "string" && legacy.trim() !== "") {
-    return [{ pattern: legacy, edgeName: "Reject" }];
-  }
-  return [];
+  if (!Array.isArray(rules)) return [];
+  return rules
+    .map((rule) => ({
+      pattern: String((rule as AiMatchRule)?.pattern ?? ""),
+      edgeName: String((rule as AiMatchRule)?.edgeName ?? ""),
+    }))
+    .filter((rule) => rule.pattern !== "" || rule.edgeName !== "");
 }
 
 /** Reads a Human/PR node's declared custom edge names from its config. */
@@ -885,13 +875,10 @@ export default function LoopEditor() {
       config.aiProviderId = aiProvider;
       config.toolAllowlist = aiTools;
       config.adapterConfig = { ...adapterConfigValues };
-      // Replaces the obsolete single rejectPattern; clear it so the legacy
-      // fallback routing no longer applies once rules are configured.
       const cleanRules = aiMatchRules
         .map((rule) => ({ pattern: rule.pattern.trim(), edgeName: rule.edgeName.trim() }))
         .filter((rule) => rule.pattern !== "" && rule.edgeName !== "");
       config.matchRules = cleanRules;
-      config.rejectPattern = undefined;
       config.sessionPlaceholder = aiUseSession ? aiSessionPlaceholder.trim() : undefined;
     } else if (selectedNodeType === NodeType.Start) {
       config.createWorktree = startCreateWorktree;
