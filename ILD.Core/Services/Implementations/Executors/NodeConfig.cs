@@ -24,6 +24,16 @@ internal static class NodeConfig
         public string? Command { get; init; }
     }
 
+    public sealed record Start
+    {
+        /// <summary>
+        /// When true, the Start node runs the default <c>ild.config.json</c>
+        /// preview profile's install steps in the freshly prepared worktree
+        /// before routing to OnSuccess. A failing install step fails the node.
+        /// </summary>
+        public bool? RunInstall { get; init; }
+    }
+
     /// <summary>
     /// One AI output-matching rule: if <see cref="Pattern"/> (a case-insensitive
     /// regex) matches the AI output, route to the custom edge named

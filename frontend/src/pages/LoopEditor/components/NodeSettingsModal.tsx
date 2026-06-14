@@ -24,6 +24,7 @@ interface NodeSettingsModalProps {
   aiUseSession: boolean;
   aiSessionPlaceholder: string;
   startCreateWorktree: boolean;
+  startRunInstall: boolean;
   humanInputLabel: string;
   humanPrompt: string;
   promptNodePrompt: string;
@@ -49,6 +50,7 @@ interface NodeSettingsModalProps {
   onAiUseSessionChange: (value: boolean) => void;
   onAiSessionPlaceholderChange: (value: string) => void;
   onStartCreateWorktreeChange: (value: boolean) => void;
+  onStartRunInstallChange: (value: boolean) => void;
   onHumanInputLabelChange: (value: string) => void;
   onHumanPromptChange: (value: string) => void;
   onPromptNodePromptChange: (value: string) => void;
@@ -113,6 +115,7 @@ export function NodeSettingsModal({
   aiUseSession,
   aiSessionPlaceholder,
   startCreateWorktree,
+  startRunInstall,
   humanInputLabel,
   humanPrompt,
   promptNodePrompt,
@@ -138,6 +141,7 @@ export function NodeSettingsModal({
   onAiUseSessionChange,
   onAiSessionPlaceholderChange,
   onStartCreateWorktreeChange,
+  onStartRunInstallChange,
   onHumanInputLabelChange,
   onHumanPromptChange,
   onPromptNodePromptChange,
@@ -340,6 +344,14 @@ export function NodeSettingsModal({
                   onChange={(event) => onStartCreateWorktreeChange(event.target.checked)}
                 />
                 Create worktree
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={startRunInstall}
+                  onChange={(event) => onStartRunInstallChange(event.target.checked)}
+                />
+                Run ild.config install
               </label>
             </div>
           )}

@@ -25,6 +25,7 @@ export interface NodeSettingsSnapshot {
   aiUseSession: boolean;
   aiSessionPlaceholder: string;
   startCreateWorktree: boolean;
+  startRunInstall: boolean;
   humanInputLabel: string;
   humanPrompt: string;
   promptNodePrompt: string;

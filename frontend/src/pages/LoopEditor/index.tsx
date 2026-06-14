@@ -208,6 +208,7 @@ export default function LoopEditor() {
   const [aiUseSession, setAiUseSession] = useState(false);
   const [aiSessionPlaceholder, setAiSessionPlaceholder] = useState("");
   const [startCreateWorktree, setStartCreateWorktree] = useState(true);
+  const [startRunInstall, setStartRunInstall] = useState(false);
   const [humanInputLabel, setHumanInputLabel] = useState("");
   const [humanPrompt, setHumanPrompt] = useState("");
   const [promptNodePrompt, setPromptNodePrompt] = useState("");
@@ -826,6 +827,7 @@ export default function LoopEditor() {
       setAiUseSession((config.useSession as boolean | undefined) ?? false);
       setAiSessionPlaceholder((config.sessionPlaceholder as string) || "");
       setStartCreateWorktree((config.createWorktree as boolean) ?? true);
+      setStartRunInstall((config.runInstall as boolean) ?? false);
       setHumanInputLabel((config.inputLabel as string) || "");
       setHumanPrompt((config.prompt as string) || "");
       setPromptNodePrompt((config.prompt as string) || "");
@@ -851,6 +853,7 @@ export default function LoopEditor() {
         aiUseSession: (config.useSession as boolean | undefined) ?? false,
         aiSessionPlaceholder: (config.sessionPlaceholder as string) || "",
         startCreateWorktree: (config.createWorktree as boolean) ?? true,
+        startRunInstall: (config.runInstall as boolean) ?? false,
         humanInputLabel: (config.inputLabel as string) || "",
         humanPrompt: (config.prompt as string) || "",
         promptNodePrompt: (config.prompt as string) || "",
@@ -897,6 +900,7 @@ export default function LoopEditor() {
       config.sessionPlaceholder = aiUseSession ? aiSessionPlaceholder.trim() : undefined;
     } else if (selectedNodeType === NodeType.Start) {
       config.createWorktree = startCreateWorktree;
+      config.runInstall = startRunInstall;
     } else if (selectedNodeType === NodeType.Human) {
       config.inputLabel = humanInputLabel;
       if (humanPrompt) config.prompt = humanPrompt;
@@ -949,6 +953,7 @@ export default function LoopEditor() {
     promptNodePrompt,
     setNodes,
     startCreateWorktree,
+    startRunInstall,
   ]);
 
   const handleCancelNodeSettings = useCallback(() => {
@@ -963,6 +968,7 @@ export default function LoopEditor() {
       setAiUseSession(originalNodeConfig.aiUseSession);
       setAiSessionPlaceholder(originalNodeConfig.aiSessionPlaceholder);
       setStartCreateWorktree(originalNodeConfig.startCreateWorktree);
+      setStartRunInstall(originalNodeConfig.startRunInstall);
       setHumanInputLabel(originalNodeConfig.humanInputLabel);
       setHumanPrompt(originalNodeConfig.humanPrompt);
       setPromptNodePrompt(originalNodeConfig.promptNodePrompt);
@@ -1341,6 +1347,7 @@ export default function LoopEditor() {
                     aiUseSession={aiUseSession}
                     aiSessionPlaceholder={aiSessionPlaceholder}
                     startCreateWorktree={startCreateWorktree}
+                    startRunInstall={startRunInstall}
                     humanInputLabel={humanInputLabel}
                     humanPrompt={humanPrompt}
                     promptNodePrompt={promptNodePrompt}
@@ -1366,6 +1373,7 @@ export default function LoopEditor() {
                     onAiUseSessionChange={setAiUseSession}
                     onAiSessionPlaceholderChange={setAiSessionPlaceholder}
                     onStartCreateWorktreeChange={setStartCreateWorktree}
+                    onStartRunInstallChange={setStartRunInstall}
                     onHumanInputLabelChange={setHumanInputLabel}
                     onHumanPromptChange={setHumanPrompt}
                     onPromptNodePromptChange={setPromptNodePrompt}
