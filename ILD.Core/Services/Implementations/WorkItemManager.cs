@@ -530,6 +530,10 @@ public class WorkItemManager : IWorkItemManager
                 });
             }
             catch (InvalidOperationException) { /* No remote — local only. */ }
+
+            // Release the preview's ports — a Done item can no longer be
+            // stopped from the UI.
+            await StopPreviewIfRunningAsync(workItemId, currentRun.WorktreePath);
         }
 
         await _loopRunStore.UpdateRunAsync(currentRun);

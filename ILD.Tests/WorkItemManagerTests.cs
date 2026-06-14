@@ -1347,6 +1347,52 @@ public class WorkItemManagerTests
     }
 
     [Fact]
+    public async Task ManuallyMarkMergedAsync_stops_running_preview_when_it_transitions_to_Done()
+    {
+        var (mgr, db, repoId, preview, notifier) = SetupWithPreview();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var runId = SeedLoopRun(db, id);
+        // A non-Running run (here Failed) makes ManuallyMarkMerged transition to Done.
+        var run = await db.Context.LoopRuns.FindAsync(runId);
+        run!.Status = LoopRunStatus.Failed;
+        run.WorktreePath = "/tmp/worktrees/merged-wi";
+        await db.Context.SaveChangesAsync();
+
+        preview.Setup(p => p.IsPreviewRunning("/tmp/worktrees/merged-wi")).Returns(true);
+
+        await mgr.LinkPullRequestAsync(id, "https://forgejo/pr/7");
+        await mgr.ManuallyMarkMergedAsync(id);
+
+        var after = await mgr.GetWorkItemAsync(id);
+        Assert.Equal(RemoteWorkItemStatus.Done, after!.Status);
+        preview.Verify(p => p.StopAsync("/tmp/worktrees/merged-wi", It.IsAny<CancellationToken>()), Times.Once);
+        notifier.Verify(n => n.PreviewStateChangedAsync(id), Times.Once);
+    }
+
+    [Fact]
+    public async Task ManuallyMarkMergedAsync_leaves_preview_alone_when_run_still_Running()
+    {
+        var (mgr, db, repoId, preview, _) = SetupWithPreview();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var runId = SeedLoopRun(db, id); // Running — does not transition to Done.
+        var run = await db.Context.LoopRuns.FindAsync(runId);
+        run!.WorktreePath = "/tmp/worktrees/merged-running-wi";
+        await db.Context.SaveChangesAsync();
+
+        preview.Setup(p => p.IsPreviewRunning(It.IsAny<string>())).Returns(true);
+
+        await mgr.LinkPullRequestAsync(id, "https://forgejo/pr/8");
+        await mgr.ManuallyMarkMergedAsync(id);
+
+        // Still Running → no Done transition → preview must keep running.
+        preview.Verify(p => p.StopAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task CreateWorkItemAsync_notifies_for_agent_created_backlog_items()
     {
         var db = new TestDb();
