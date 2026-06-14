@@ -136,6 +136,15 @@ export default function TagAutocomplete({
         id={id}
         type="text"
         className="prompt-editor-textarea"
+        // Suppress the browser's native saved-input/autofill overlay so it
+        // doesn't cover our own suggestions list. The extra attributes cover
+        // engines that ignore a bare autoComplete="off" on text fields.
+        autoComplete="off"
+        autoCorrect="off"
+        autoCapitalize="off"
+        spellCheck={false}
+        data-1p-ignore
+        data-lpignore="true"
         value={value}
         placeholder={placeholder}
         onChange={handleChange}
