@@ -179,6 +179,75 @@ public class LoopTemplateValidatorTests
         Assert.Empty(errs);
     }
 
+    private static LoopNodeDto AiNodeWithRules(string id, params (string pattern, string edgeName)[] rules)
+    {
+        var dto = new LoopNodeDto { Id = id, NodeType = "AI", Label = id };
+        dto.Config["matchRules"] = rules
+            .Select(r => new Dictionary<string, object> { ["pattern"] = r.pattern, ["edgeName"] = r.edgeName })
+            .ToList();
+        return dto;
+    }
+
+    [Fact]
+    public void Ai_custom_edge_without_matching_rule_is_invalid()
+    {
+        // Removed the rule but left the custom edge: the edge is unreachable.
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Node("s", "Start"), Node("a", "AI"), Node("c", "Cleanup") },
+            new()
+            {
+                Edge("s", "a"),
+                Edge("a", "c"),
+                Edge("a", "c", "Custom", "Reject"),
+            });
+        var errs = LoopTemplateValidator.Validate(g);
+        Assert.Contains(errs, e => e.Contains("custom edge 'Reject' that no match rule routes to"));
+    }
+
+    [Fact]
+    public void Ai_match_rule_without_custom_edge_is_invalid()
+    {
+        // Rule references an edge that does not exist: routing would fail at run time.
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { AiNodeWithRules("a", ("Reject", "Reject")), Node("s", "Start"), Node("c", "Cleanup") },
+            new() { Edge("s", "a"), Edge("a", "c") });
+        var errs = LoopTemplateValidator.Validate(g);
+        Assert.Contains(errs, e => e.Contains("match rule routing to 'Reject' but no custom edge"));
+    }
+
+    [Fact]
+    public void Ai_match_rule_with_matching_custom_edge_is_valid()
+    {
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { AiNodeWithRules("a", ("Reject", "Reject")), Node("s", "Start"), Node("c", "Cleanup") },
+            new()
+            {
+                Edge("s", "a"),
+                Edge("a", "c"),
+                Edge("a", "c", "Custom", "Reject"),
+            });
+        var errs = LoopTemplateValidator.Validate(g);
+        Assert.Empty(errs);
+    }
+
+    [Fact]
+    public void Ai_custom_edge_name_casing_must_match_rule_exactly()
+    {
+        // The engine resolves edges by ordinal name, so a casing mismatch leaves
+        // both the edge orphaned and the rule dangling.
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { AiNodeWithRules("a", ("Reject", "reject")), Node("s", "Start"), Node("c", "Cleanup") },
+            new()
+            {
+                Edge("s", "a"),
+                Edge("a", "c"),
+                Edge("a", "c", "Custom", "Reject"),
+            });
+        var errs = LoopTemplateValidator.Validate(g);
+        Assert.Contains(errs, e => e.Contains("custom edge 'Reject' that no match rule routes to"));
+        Assert.Contains(errs, e => e.Contains("match rule routing to 'reject' but no custom edge"));
+    }
+
     [Fact]
     public void Custom_edge_on_pr_node_is_valid()
     {
