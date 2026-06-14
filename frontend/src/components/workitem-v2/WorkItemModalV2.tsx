@@ -328,15 +328,6 @@ export default function WorkItemModalV2({
                   </>
                 )}
                 <span className="wiv2-footer-spacer" />
-                {workItem.prUrl && (
-                  <button
-                    type="button"
-                    className="btn btn-success"
-                    onClick={() => void detail.handleMarkMerged()}
-                  >
-                    Mark Merged
-                  </button>
-                )}
                 <button type="button" className="btn btn-secondary" onClick={requestClose}>
                   Close
                 </button>

@@ -371,9 +371,9 @@ public class WorkItemManager : IWorkItemManager
             await _notifier.HumanFeedbackRequiredAsync(workItemId, reason);
 
         // Every path to Done funnels through here (the Cleanup node's
-        // completion, a drag to the Done column, Cleanup-Done, mark-merged),
-        // so this is the single place that releases the preview's ports — once
-        // Done the user can no longer reach the stop control.
+        // completion, a drag to the Done column, Cleanup-Done), so this is the
+        // single place that releases the preview's ports — once Done the user
+        // can no longer reach the stop control.
         if (actual == RemoteWorkItemStatus.Done)
             await StopPreviewIfRunningAsync(workItemId, runWorktreePath);
 
@@ -510,70 +510,6 @@ public class WorkItemManager : IWorkItemManager
         run.PrUrl = prUrl;
         run.UpdatedAt = DateTime.UtcNow;
         await _loopRunStore.UpdateRunAsync(run);
-        return true;
-    }
-
-    public async Task<bool> ManuallyMarkMergedAsync(string workItemId)
-    {
-        var currentRun = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
-        if (currentRun == null) return false;
-
-        currentRun.IsPrMerged = true;
-        currentRun.UpdatedAt = DateTime.UtcNow;
-
-        if (currentRun.Status != LoopRunStatus.Running)
-        {
-            // Drive the Done transition through the shared path so finishing a
-            // work item always runs the same side effects — including stopping
-            // its worktree preview.
-            try
-            {
-                await TransitionAsync(workItemId, RemoteWorkItemStatus.Done, currentLoopRunId: currentRun.Id);
-            }
-            catch (InvalidOperationException) { /* No remote — local only. */ }
-        }
-
-        await _loopRunStore.UpdateRunAsync(currentRun);
-        return true;
-    }
-
-    public async Task<bool> MarkMergedAndAdvanceAsync(string workItemId)
-    {
-        if (!await ManuallyMarkMergedAsync(workItemId))
-            return false;
-
-        // Only resume the work item's current run, not stale ones.
-        var runs = await _loopRunStore.GetAllByWorkItemAsync(workItemId);
-        var currentRun = runs.FirstOrDefault(r =>
-            r.Status is LoopRunStatus.Running or LoopRunStatus.Failed);
-        if (currentRun is null)
-            return true;
-
-        static bool Pending(LoopRunNode n)
-            => n.Status is LoopRunNodeStatus.WaitingHuman or LoopRunNodeStatus.Failed;
-
-        // Prefer the PR node; fall back to any waiting/failed node. The
-        // LoopNode is eager-loaded but may be null when the template was edited
-        // since the run started (the node's template entry is gone).
-        var nodes = await _loopRunStore.GetRunNodesWithNodeAsync(currentRun.Id);
-        var target = nodes.FirstOrDefault(n => n.LoopNode is { NodeType: NodeType.PR } && Pending(n))
-            ?? nodes.FirstOrDefault(Pending);
-        if (target is null)
-            return true;
-
-        if (target.LoopNode is null)
-        {
-            // Unrecoverable — the engine can't route to Cleanup without the
-            // node. Finish the work item directly.
-            await TransitionAsync(workItemId, RemoteWorkItemStatus.Done);
-        }
-        else if (_engine is not null)
-        {
-            // SignalNodeResultAsync re-enters the run loop itself; launching a
-            // background runner here would race a second runner.
-            await _engine.SignalNodeResultAsync(currentRun.Id, target.Id, NodeSignal.Success());
-        }
-
         return true;
     }
 

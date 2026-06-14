@@ -42,10 +42,6 @@ public class PrSyncServiceTests
         await service.HandleWebhookAsync(new WebhookPayload("pull_request.merged", "repo-1", "7", run.PrUrl, null, "merged"));
 
         loopRuns.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.IsPrMerged)), Times.Once);
-        // Merge bookkeeping stays on the run matched by PR URL — going through
-        // the work item would tag whatever run is "current" (wrong run once
-        // each run has its own PR, ADR-0008).
-        workItems.Verify(s => s.ManuallyMarkMergedAsync(It.IsAny<string>()), Times.Never);
         engine.Verify(s => s.SignalNodeResultAsync(run.Id, runNode.Id, It.Is<NodeSignal>(signal => signal.Type == ExternalActionResultType.Success)), Times.Once);
     }
 
@@ -76,7 +72,6 @@ public class PrSyncServiceTests
 
         loopRuns.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.Id == staleRun.Id && r.IsPrMerged)), Times.Once);
         loopRuns.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.Id == currentRun.Id)), Times.Never);
-        workItems.Verify(s => s.ManuallyMarkMergedAsync(It.IsAny<string>()), Times.Never);
         workItems.Verify(s => s.TransitionAsync(It.IsAny<string>(), It.IsAny<RemoteWorkItemStatus>(),
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
         Assert.False(currentRun.IsPrMerged);
@@ -141,7 +136,6 @@ public class PrSyncServiceTests
         await service.HandleWebhookAsync(new WebhookPayload("pull_request.rejected", "repo-1", "7", run.PrUrl, "needs work", "changes_requested"));
 
         events.Verify(s => s.AppendAsync(It.Is<EventLog>(e => e.Data == "needs work")), Times.Once);
-        workItems.Verify(s => s.ManuallyMarkMergedAsync(It.IsAny<string>()), Times.Never);
         engine.Verify(s => s.SignalNodeResultAsync(run.Id, runNode.Id, It.Is<NodeSignal>(signal => signal.Type == ExternalActionResultType.Reject && signal.Error == "needs work")), Times.Once);
     }
 }
