@@ -47,6 +47,8 @@ public sealed class StartNodeExecutor : INodeExecutor
             && Directory.Exists(ctx.Run.WorktreePath)
             && await repoManager.ValidateWorktreeHealthAsync(ctx.Run.WorktreePath);
 
+        string worktreePath;
+        string branchName;
         if (!hasHealthyWorktree)
         {
             var (ok, path, branch, error) = await EnsureWorktreeAsync(ctx, sp, repoManager, ctx.Run, repo, wi, gitAuth);
@@ -55,16 +57,51 @@ public sealed class StartNodeExecutor : INodeExecutor
                 yield return new NodeOutcome.Fail(EdgeType.OnFailure, error ?? "worktree setup failed");
                 yield break;
             }
-            yield return new NodeOutcome.WorktreeReady(path!, branch!);
+            worktreePath = path!;
+            branchName = branch!;
+            yield return new NodeOutcome.WorktreeReady(worktreePath, branchName);
         }
         else
         {
-            yield return new NodeOutcome.WorktreeReady(
-                ctx.Run.WorktreePath ?? string.Empty,
-                ctx.Run.BranchName ?? string.Empty);
+            worktreePath = ctx.Run.WorktreePath ?? string.Empty;
+            branchName = ctx.Run.BranchName ?? string.Empty;
+            yield return new NodeOutcome.WorktreeReady(worktreePath, branchName);
         }
 
-        yield return new NodeOutcome.Success(EdgeType.OnSuccess, $"worktree={ctx.Run.WorktreePath}");
+        var config = NodeConfig.Parse<NodeConfig.Start>(ctx.Node.Config);
+        if (config.RunInstall == true)
+        {
+            var preview = sp.GetService<IWorktreePreviewService>();
+            if (preview is null)
+            {
+                yield return new NodeOutcome.Fail(EdgeType.OnFailure,
+                    "install requested but the worktree preview service is unavailable.");
+                yield break;
+            }
+
+            var installError = await RunInstallAsync(preview, worktreePath, ctx.CancellationToken);
+            if (installError is not null)
+            {
+                yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"ild.config install failed: {installError}");
+                yield break;
+            }
+        }
+
+        yield return new NodeOutcome.Success(EdgeType.OnSuccess, $"worktree={worktreePath}");
+    }
+
+    private static async Task<string?> RunInstallAsync(
+        IWorktreePreviewService preview, string worktreePath, CancellationToken ct)
+    {
+        try
+        {
+            await preview.InstallAsync(worktreePath, cancellationToken: ct);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return ex.Message;
+        }
     }
 
     private static async Task<(bool Ok, string? Path, string? Branch, string? Error)> EnsureWorktreeAsync(

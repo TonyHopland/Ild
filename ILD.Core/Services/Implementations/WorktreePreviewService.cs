@@ -160,6 +160,39 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         }
     }
 
+    public async Task InstallAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
+    {
+        var normalized = NormalizeWorktreePath(worktreePath);
+        var loaded = await LoadConfigAsync(normalized, cancellationToken);
+        if (!loaded.Configured || loaded.Config == null)
+        {
+            throw new InvalidOperationException(loaded.Message ?? "No ild.config.json preview profile found.");
+        }
+
+        var resolvedProfileName = SelectProfileName(loaded.Config, profileName);
+        if (!loaded.Config.Preview!.Profiles.TryGetValue(resolvedProfileName, out var profile) || profile == null)
+        {
+            throw new InvalidOperationException($"Preview profile '{resolvedProfileName}' not found.");
+        }
+
+        var stateDirectory = BuildStateDirectory(normalized);
+        Directory.CreateDirectory(stateDirectory);
+
+        // Install needs no ports or running services — build a port-less runtime so
+        // the shared install runner resolves ${WORKTREE}/${STATE_DIR} the same way
+        // the preview start path does.
+        var runtime = new PreviewRuntime(
+            normalized,
+            loaded.ConfigPath!,
+            resolvedProfileName,
+            stateDirectory,
+            _configuration["ILD_PREVIEW_PUBLIC_HOST"] ?? "127.0.0.1",
+            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase),
+            new List<ManagedPreviewProcess>());
+
+        await RunInstallStepsAsync(profile.Install, runtime, cancellationToken);
+    }
+
     public bool IsPreviewRunning(string worktreePath)
     {
         if (string.IsNullOrWhiteSpace(worktreePath))
