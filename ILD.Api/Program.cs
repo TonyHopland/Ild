@@ -112,6 +112,13 @@ try
             }
             Log.Information("Database ready");
 
+            // Retire the obsolete AI rejectPattern config on already-seeded
+            // databases (the seeder is insert-only, so existing rows are never
+            // rewritten). Idempotent: a no-op once every node is migrated.
+            var rejectMigrated = await ILD.Data.Migrations.AiRejectPatternMigrator.MigrateAsync(dbContext);
+            if (rejectMigrated > 0)
+                Log.Information("Migrated {Count} AI node(s) from rejectPattern to named custom edges", rejectMigrated);
+
             if (ILD.Data.Security.SecretProtector.IsEnabled)
                 Log.Information("Secret encryption-at-rest is enabled (ILD_SECRET_KEY set)");
             else
