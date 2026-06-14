@@ -29,6 +29,26 @@ public class WorkItemManagerTests
         return runId;
     }
 
+    private static (Guid runId, Guid versionId) SeedRunWithVersion(TestDb db, string workItemId)
+    {
+        var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume };
+        var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
+        db.Context.LoopTemplates.Add(template);
+        db.Context.LoopTemplateVersions.Add(version);
+        var runId = Guid.NewGuid();
+        db.Context.LoopRuns.Add(new LoopRun
+        {
+            Id = runId,
+            WorkItemId = workItemId,
+            LoopTemplateVersionId = version.Id,
+            RecoveryPolicy = RecoveryPolicy.AutoResume,
+            Status = LoopRunStatus.Running,
+            StartedAt = DateTime.UtcNow,
+        });
+        db.Context.SaveChanges();
+        return (runId, version.Id);
+    }
+
     private static (WorkItemManager mgr, TestDb db, Guid repoId, Mock<IRepositoryManager> repoMgr, Mock<IEventLogService> eventLog) Setup()
         => SetupCore(out _);
 
@@ -248,6 +268,84 @@ public class WorkItemManagerTests
         var wi = await mgr.GetWorkItemAsync(id);
         Assert.Null(wi!.StartedAt);
         Assert.Null(wi.CompletedAt);
+    }
+
+    [Fact]
+    public async Task GetWorkItemAsync_leaves_CurrentNodeLabel_null_when_no_run()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+
+        var wi = await mgr.GetWorkItemAsync(id);
+        Assert.Null(wi!.CurrentNodeLabel);
+    }
+
+    [Fact]
+    public async Task GetWorkItemAsync_surfaces_CurrentNodeLabel_from_running_run_current_node()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var (runId, versionId) = SeedRunWithVersion(db, id);
+        var nodeId = Guid.NewGuid();
+        db.Context.LoopNodes.Add(new LoopNode
+        {
+            Id = nodeId,
+            LoopTemplateVersionId = versionId,
+            NodeType = NodeType.AI,
+            Label = "template-label",
+        });
+        db.Context.LoopRunNodes.Add(new LoopRunNode
+        {
+            Id = Guid.NewGuid(),
+            LoopRunId = runId,
+            LoopNodeId = nodeId,
+            NodeLabel = "implement-change",
+            Status = LoopRunNodeStatus.Running,
+        });
+        var run = await db.Context.LoopRuns.FindAsync(runId);
+        run!.CurrentNodeId = nodeId;
+        await db.Context.SaveChangesAsync();
+
+        var wi = await mgr.GetWorkItemAsync(id);
+        Assert.Equal("implement-change", wi!.CurrentNodeLabel);
+    }
+
+    [Fact]
+    public async Task GetWorkItemAsync_CurrentNodeLabel_falls_back_to_template_node_label()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var (runId, versionId) = SeedRunWithVersion(db, id);
+        var nodeId = Guid.NewGuid();
+        db.Context.LoopNodes.Add(new LoopNode
+        {
+            Id = nodeId,
+            LoopTemplateVersionId = versionId,
+            NodeType = NodeType.AI,
+            Label = "review",
+        });
+        // No NodeLabel on the run node — resolution must fall back to the
+        // template node's label, mirroring how run nodes surface elsewhere.
+        db.Context.LoopRunNodes.Add(new LoopRunNode
+        {
+            Id = Guid.NewGuid(),
+            LoopRunId = runId,
+            LoopNodeId = nodeId,
+            NodeLabel = null,
+            Status = LoopRunNodeStatus.Running,
+        });
+        var run = await db.Context.LoopRuns.FindAsync(runId);
+        run!.CurrentNodeId = nodeId;
+        await db.Context.SaveChangesAsync();
+
+        var wi = await mgr.GetWorkItemAsync(id);
+        Assert.Equal("review", wi!.CurrentNodeLabel);
     }
 
     [Fact]

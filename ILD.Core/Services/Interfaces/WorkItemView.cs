@@ -31,5 +31,13 @@ public sealed class WorkItemView
     public bool IsPrMerged { get; set; }
     public string? HumanFeedbackReason { get; set; }
     public Guid? CurrentLoopRunId { get; set; }
+
+    /// <summary>
+    /// Label of the node the current run is executing (resolved from the run's
+    /// CurrentNodeId). Null when there is no active run or the run has not
+    /// entered a node yet. Lets the taskboard show the step a running item is on
+    /// without opening it.
+    /// </summary>
+    public string? CurrentNodeLabel { get; set; }
     public bool IsPreviewRunning { get; set; }
 }
