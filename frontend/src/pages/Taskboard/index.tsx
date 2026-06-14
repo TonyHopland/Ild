@@ -126,6 +126,13 @@ export default function Taskboard() {
       syncWorkItem(message.payload.workItemId);
     };
 
+    // When a running item advances to a new node, re-sync it so its card shows
+    // the current step. Node transitions don't change the work item's status, so
+    // this is the only signal that keeps a running card's step fresh.
+    const onRunProgressed = (message: TypedSignalRMessage<"WorkItemRunProgressed">) => {
+      syncWorkItem(message.payload.workItemId);
+    };
+
     const onSchedulerStateChanged = (message: TypedSignalRMessage<"SchedulerStateChanged">) => {
       setIsPaused(message.payload.isPaused);
     };
@@ -133,12 +140,14 @@ export default function Taskboard() {
     on("HumanFeedbackRequired", onHumanFeedback);
     on("WorkItemStateChanged", onWorkItemStateChanged);
     on("PreviewStateChanged", onPreviewStateChanged);
+    on("WorkItemRunProgressed", onRunProgressed);
     on("SchedulerStateChanged", onSchedulerStateChanged);
 
     return () => {
       off("HumanFeedbackRequired", onHumanFeedback);
       off("WorkItemStateChanged", onWorkItemStateChanged);
       off("PreviewStateChanged", onPreviewStateChanged);
+      off("WorkItemRunProgressed", onRunProgressed);
       off("SchedulerStateChanged", onSchedulerStateChanged);
       for (const t of delayedTimers) clearTimeout(t);
     };

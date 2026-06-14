@@ -1,5 +1,7 @@
-import { WorkItem } from "../types";
+import { useEffect, useState } from "react";
+import { WorkItem, WorkItemStatus } from "../types";
 import { parseTags } from "../utils/workItemJson";
+import { formatDurationMs } from "../utils/duration";
 
 interface WorkItemCardProps {
   workItem: WorkItem;
@@ -36,6 +38,21 @@ export default function WorkItemCard({ workItem, onClick, onMove }: WorkItemCard
     }
   };
 
+  // Running cards surface the current step and a live-ticking elapsed time so
+  // the board gives a fast overview of in-flight work without opening each item.
+  const isRunning = workItem.status === WorkItemStatus.Running;
+  const startedAtMs = workItem.startedAt ? new Date(workItem.startedAt).getTime() : null;
+
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!isRunning || startedAtMs === null) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [isRunning, startedAtMs]);
+
+  const elapsed = startedAtMs !== null ? formatDurationMs(now - startedAtMs) : null;
+  const showRunningMeta = isRunning && (Boolean(workItem.currentNodeLabel) || elapsed !== null);
+
   const reasonStyle = workItem.humanFeedbackReason
     ? (REASON_STYLES[workItem.humanFeedbackReason] ?? {
         bg: "#2d2d44",
@@ -70,6 +87,25 @@ export default function WorkItemCard({ workItem, onClick, onMove }: WorkItemCard
           }}
         >
           {workItem.humanFeedbackReason}
+        </div>
+      )}
+      {showRunningMeta && (
+        <div className="work-item-running-meta">
+          {workItem.currentNodeLabel && (
+            <span className="work-item-step" title="Current step">
+              <span className="work-item-step-dot" aria-hidden="true" />
+              <span className="work-item-step-label">{workItem.currentNodeLabel}</span>
+            </span>
+          )}
+          {elapsed && (
+            <span
+              className="work-item-elapsed"
+              title="Time elapsed since start"
+              aria-label={`Running for ${elapsed}`}
+            >
+              {elapsed}
+            </span>
+          )}
         </div>
       )}
       <div className="work-item-tags">
@@ -122,6 +158,44 @@ export default function WorkItemCard({ workItem, onClick, onMove }: WorkItemCard
           margin-bottom: 0.375rem;
           text-transform: uppercase;
           letter-spacing: 0.03em;
+        }
+
+        .work-item-running-meta {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 0.5rem;
+          margin-bottom: 0.375rem;
+        }
+
+        .work-item-step {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.35rem;
+          min-width: 0;
+          font-size: 0.7rem;
+          color: #c0c0d0;
+        }
+
+        .work-item-step-dot {
+          flex-shrink: 0;
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background-color: #6366f1;
+        }
+
+        .work-item-step-label {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .work-item-elapsed {
+          flex-shrink: 0;
+          font-size: 0.7rem;
+          color: #7f849c;
+          font-variant-numeric: tabular-nums;
         }
 
         .work-item-tags {

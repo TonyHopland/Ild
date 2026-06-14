@@ -79,4 +79,23 @@ public class SignalRWorkItemNotifierTests
         var payload = Assert.IsType<PreviewStateChangedPayload>(capturedArgs![0]);
         Assert.Equal(workItemId, payload.WorkItemId);
     }
+
+    [Fact]
+    public async Task RunProgressedAsync_sends_a_single_typed_payload_to_the_work_item_group()
+    {
+        var workItemId = Guid.NewGuid().ToString();
+        var (ctx, proxy) = BuildHubContext();
+
+        object?[]? capturedArgs = null;
+        proxy.Setup(p => p.SendCoreAsync("WorkItemRunProgressed", It.IsAny<object?[]>(), It.IsAny<CancellationToken>()))
+            .Callback<string, object?[], CancellationToken>((_, args, _) => capturedArgs = args)
+            .Returns(Task.CompletedTask);
+
+        var notifier = new SignalRWorkItemNotifier(ctx.Object);
+        await notifier.RunProgressedAsync(workItemId);
+
+        Assert.Single(capturedArgs!);
+        var payload = Assert.IsType<WorkItemRunProgressedPayload>(capturedArgs![0]);
+        Assert.Equal(workItemId, payload.WorkItemId);
+    }
 }

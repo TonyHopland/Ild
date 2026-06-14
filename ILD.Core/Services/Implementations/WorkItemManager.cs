@@ -214,8 +214,26 @@ public class WorkItemManager : IWorkItemManager
             IsPrMerged = run?.IsPrMerged == true,
             HumanFeedbackReason = run?.HumanFeedbackReason,
             CurrentLoopRunId = run?.Id,
+            CurrentNodeLabel = ResolveCurrentNodeLabel(run),
             IsPreviewRunning = isPreviewRunning,
         };
+    }
+
+    /// <summary>
+    /// Resolves the label of the node the run is currently on. Matches the run's
+    /// CurrentNodeId against its run-node rows, preferring the most recent visit
+    /// (loops can revisit a node), and falls back to the template node's label —
+    /// mirroring how run nodes are surfaced elsewhere. Returns null when the run
+    /// has no current node or its run nodes were not loaded.
+    /// </summary>
+    private static string? ResolveCurrentNodeLabel(LoopRun? run)
+    {
+        if (run?.CurrentNodeId is not { } currentNodeId) return null;
+        var current = run.RunNodes
+            .Where(rn => rn.LoopNodeId == currentNodeId)
+            .OrderByDescending(rn => rn.StartedAt ?? rn.CreatedAt)
+            .FirstOrDefault();
+        return current?.NodeLabel ?? current?.LoopNode?.Label;
     }
 
     public async Task<bool> UpdateAsync(string workItemId, string title, string description, IEnumerable<string>? tags = null)

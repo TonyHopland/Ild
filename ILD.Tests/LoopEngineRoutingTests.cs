@@ -41,6 +41,34 @@ public class LoopEngineRoutingTests
     }
 
     [Fact]
+    public async Task Entering_a_node_notifies_the_work_item_hub_so_the_taskboard_card_refreshes()
+    {
+        using var h = new LoopEngineHarness();
+        h.AddNode("s", NodeType.Start);
+        h.AddNode("a", NodeType.Cmd);
+        h.AddNode("c", NodeType.Cleanup);
+        h.AddEdge("s", "a", EdgeType.OnSuccess);
+        h.AddEdge("a", "c", EdgeType.OnSuccess);
+
+        h.Registry.Register(new ScriptedExecutor(NodeType.Start,
+            new NodeOutcome.NodeStarting("start"),
+            new NodeOutcome.Success(EdgeType.OnSuccess, "worktree=/tmp/x")));
+        h.Registry.Register(new ScriptedExecutor(NodeType.Cmd,
+            new NodeOutcome.NodeStarting("cmd"),
+            new NodeOutcome.Success(EdgeType.OnSuccess, "cmd output")));
+        h.Registry.Register(new ScriptedExecutor(NodeType.Cleanup,
+            new NodeOutcome.NodeStarting("cleanup"),
+            new NodeOutcome.Terminal("done")));
+
+        h.SeedRun("s");
+        await h.RunAsync();
+
+        // Each node that enters Running changes the work item's current step, so
+        // the engine must nudge the work-item hub once per started node (3 here).
+        h.WorkItemNotifierMock.Verify(n => n.RunProgressedAsync(h.WorkItemId), Times.Exactly(3));
+    }
+
+    [Fact]
     public async Task Success_feeds_output_into_next_runs_PreviousNodeOutput()
     {
         using var h = new LoopEngineHarness();

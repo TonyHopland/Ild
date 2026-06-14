@@ -168,6 +168,53 @@ describe("Taskboard SignalR", () => {
     });
   });
 
+  test("refreshes a running card's current step on WorkItemRunProgressed", async () => {
+    const handlers: Record<string, ((msg: any) => void)[]> = {};
+    const mockOn = vi.fn((eventType: string, handler: (msg: any) => void) => {
+      handlers[eventType] = handlers[eventType] || [];
+      handlers[eventType].push(handler);
+    });
+
+    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+      on: mockOn,
+      off: vi.fn(),
+      invoke: vi.fn(),
+      connectionState: "connected",
+    });
+
+    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([
+      makeItem({
+        status: WorkItemStatus.Running,
+        startedAt: "2025-01-01T00:00:00Z",
+        currentLoopRunId: "run-1",
+        currentNodeLabel: "plan",
+      }),
+    ]);
+    const getByIdSpy = vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(
+      makeItem({
+        status: WorkItemStatus.Running,
+        startedAt: "2025-01-01T00:00:00Z",
+        currentLoopRunId: "run-1",
+        currentNodeLabel: "implement",
+      }),
+    );
+
+    renderTaskboard();
+
+    await waitFor(() => {
+      expect(screen.getByText("plan")).toBeTruthy();
+    });
+
+    await dispatchSignalR(handlers["WorkItemRunProgressed"]![0], {
+      workItemId: "wi-1",
+    });
+
+    await waitFor(() => {
+      expect(getByIdSpy).toHaveBeenCalledWith("wi-1");
+      expect(screen.getByText("implement")).toBeTruthy();
+    });
+  });
+
   test("normalizes numeric status from a WorkItemStateChanged event", async () => {
     const handlers: Record<string, ((msg: any) => void)[]> = {};
     const mockOn = vi.fn((eventType: string, handler: (msg: any) => void) => {

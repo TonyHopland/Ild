@@ -9,6 +9,7 @@ import {
   LoopRunNodeStatus,
 } from "../../types";
 import { loopRunService } from "../../services/auth";
+import { formatDuration } from "../../utils/duration";
 import LiveStream from "../NodeTimeline/LiveStream";
 import HaltSteerControls from "./HaltSteerControls";
 
@@ -50,17 +51,6 @@ function normalizeNodeStatus(value: unknown): LoopRunNodeStatus {
     return map[value] ?? LoopRunNodeStatus.Pending;
   }
   return LoopRunNodeStatus.Pending;
-}
-
-function formatDuration(start: string | null, end: string | null): string | null {
-  if (!start || !end) return null;
-  const ms = new Date(end).getTime() - new Date(start).getTime();
-  if (!Number.isFinite(ms) || ms < 0) return null;
-  const sec = Math.round(ms / 1000);
-  if (sec < 60) return `${sec}s`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ${sec % 60}s`;
-  return `${Math.floor(min / 60)}h ${min % 60}m`;
 }
 
 function normalizeRun(data: LoopRun): LoopRun {

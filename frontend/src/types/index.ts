@@ -65,6 +65,8 @@ export interface WorkItem {
   startedAt: string | null;
   completedAt: string | null;
   currentLoopRunId: string | null;
+  /** Label of the node the active run is currently executing; null when idle. */
+  currentNodeLabel?: string | null;
   worktreePath?: string | null;
   branchName?: string | null;
   dependencyIds: string[];
@@ -398,6 +400,10 @@ export interface NodeProgressPayload {
 }
 
 export interface PreviewStateChangedPayload {
+  workItemId: string;
+}
+
+export interface WorkItemRunProgressedPayload {
   workItemId: string;
 }
 

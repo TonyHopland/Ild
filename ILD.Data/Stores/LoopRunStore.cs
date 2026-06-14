@@ -30,6 +30,7 @@ public class LoopRunStore : ILoopRunStore
 
     public async Task<IReadOnlyList<LoopRun>> GetAllByWorkItemAsync(string workItemId)
         => await _db.LoopRuns
+            .Include(r => r.RunNodes).ThenInclude(rn => rn.LoopNode)
             .Where(r => r.WorkItemId == workItemId)
             .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
             .ToListAsync();
