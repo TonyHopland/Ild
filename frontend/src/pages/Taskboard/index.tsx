@@ -6,6 +6,7 @@ import {
   workItemService,
   settingsService,
   repositoryService,
+  loopTemplateService,
   SchedulerSettingKeys,
 } from "../../services/auth";
 import TaskboardColumn from "../../components/TaskboardColumn";
@@ -43,6 +44,7 @@ export default function Taskboard() {
   const [isPaused, setIsPaused] = useState(false);
   const [pauseBusy, setPauseBusy] = useState(false);
   const [repositories, setRepositories] = useState<Repository[]>([]);
+  const [loopTemplateNames, setLoopTemplateNames] = useState<string[]>([]);
   const [filter, setFilter] = useState<TaskboardFilter>(EMPTY_TASKBOARD_FILTER);
   const { on, off } = useSignalR();
 
@@ -55,6 +57,10 @@ export default function Taskboard() {
     void repositoryService
       .getAll()
       .then(setRepositories)
+      .catch(() => {});
+    void loopTemplateService
+      .getAll()
+      .then((templates) => setLoopTemplateNames(templates.map((t) => t.name)))
       .catch(() => {});
   }, []);
 
@@ -364,6 +370,7 @@ export default function Taskboard() {
               onError={(msg) => setErrorText(msg)}
               onMoveWorkItem={handleMoveWorkItem}
               onAddItem={status.value === "Backlog" ? openCreateModal : undefined}
+              loopTemplateNames={loopTemplateNames}
               pageSize={
                 status.value === "Backlog" || status.value === "Done"
                   ? TASKBOARD_PAGE_SIZE

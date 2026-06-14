@@ -18,7 +18,7 @@ import LiveStream from "./NodeTimeline/LiveStream";
 import ConfirmModal from "./ConfirmModal";
 import LoopRunTerminal from "./LoopRunTerminal";
 import TagAutocomplete from "./TagAutocomplete";
-import { parseConversation, parseTags } from "../utils/workItemJson";
+import { makeLoopTagMatcher, parseConversation, parseTags } from "../utils/workItemJson";
 import Accordion from "./Accordion";
 import MarkdownRenderer from "./MarkdownRenderer";
 import FeedbackActions from "./FeedbackActions";
@@ -647,12 +647,17 @@ export default function WorkItemModal({
                 {(() => {
                   const tagList = parseTags(workItem);
                   if (tagList.length === 0) return null;
+                  const isLoopTag = makeLoopTagMatcher(templates.map((t) => t.name));
                   return (
                     <div className="detail-row">
                       <span className="detail-label">Tags</span>
                       <span className="detail-value">
                         {tagList.map((t) => (
-                          <span key={t} className="work-item-tag" style={{ marginRight: 4 }}>
+                          <span
+                            key={t}
+                            className={`work-item-tag${isLoopTag(t) ? " work-item-tag--loop" : ""}`}
+                            style={{ marginRight: 4 }}
+                          >
                             {t}
                           </span>
                         ))}

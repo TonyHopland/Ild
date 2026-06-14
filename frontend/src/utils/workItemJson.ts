@@ -10,6 +10,18 @@ export function parseTags(workItem: Pick<WorkItem, "tags">): string[] {
 }
 
 /**
+ * Build a predicate that reports whether a tag is a "loop tag" — i.e. it names
+ * a loop template the engine could resolve and run. Matching is
+ * case-insensitive, mirroring the backend resolver (DbLoopTemplateResolver),
+ * which picks a template when a tag equals its name ignoring case. Tags that
+ * match no template are ordinary, free-form labels.
+ */
+export function makeLoopTagMatcher(loopTemplateNames: readonly string[]): (tag: string) => boolean {
+  const names = new Set(loopTemplateNames.map((n) => n.toLowerCase()));
+  return (tag: string) => names.has(tag.toLowerCase());
+}
+
+/**
  * Sentinel content the backend writes when a Human node parks a run awaiting
  * free-form input (`HumanFeedbackReasons.HumanInputNeeded`). It carries no
  * dialogue — the prompt lives in the feedback banner — so it is suppressed
