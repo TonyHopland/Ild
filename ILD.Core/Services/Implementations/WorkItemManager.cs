@@ -70,6 +70,25 @@ public class WorkItemManager : IWorkItemManager
         }
     }
 
+    /// <summary>
+    /// Best-effort stop of any worktree preview running for the given path so a
+    /// finished work item stops hogging its preview ports. No-ops when the path
+    /// is empty or no preview is running. Failures are swallowed — preview
+    /// teardown must never block a Done transition.
+    /// </summary>
+    private async Task StopPreviewIfRunningAsync(string workItemId, string? worktreePath)
+    {
+        if (string.IsNullOrWhiteSpace(worktreePath) || !_previewService.IsPreviewRunning(worktreePath))
+            return;
+
+        try
+        {
+            await _previewService.StopAsync(worktreePath);
+            await _notifier.PreviewStateChangedAsync(workItemId);
+        }
+        catch { /* best effort — never block the Done transition */ }
+    }
+
     // ──────────────────────────────────────────────────────────────────
     // Create / Read / Update
     // ──────────────────────────────────────────────────────────────────
@@ -325,11 +344,13 @@ public class WorkItemManager : IWorkItemManager
             var currentRun = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
             effectiveRunId = currentRun?.Id;
         }
+        string? runWorktreePath = null;
         if (effectiveRunId.HasValue)
         {
             var run = await _loopRunStore.GetByIdAsync(effectiveRunId.Value);
             if (run != null)
             {
+                runWorktreePath = run.WorktreePath;
                 if (actual == RemoteWorkItemStatus.HumanFeedback && reason != null)
                 {
                     // Use the dedicated humanFeedbackReason for UI routing on
@@ -348,6 +369,13 @@ public class WorkItemManager : IWorkItemManager
 
         if (actual == RemoteWorkItemStatus.HumanFeedback && reason != null)
             await _notifier.HumanFeedbackRequiredAsync(workItemId, reason);
+
+        // Every path to Done funnels through here (the Cleanup node's
+        // completion, a drag to the Done column, Cleanup-Done, mark-merged),
+        // so this is the single place that releases the preview's ports — once
+        // Done the user can no longer reach the stop control.
+        if (actual == RemoteWorkItemStatus.Done)
+            await StopPreviewIfRunningAsync(workItemId, runWorktreePath);
 
         // Wake the scheduler when a slot may have freed up (Done) or when a
         // run parked waiting for capacity might now be runnable.
@@ -495,13 +523,12 @@ public class WorkItemManager : IWorkItemManager
 
         if (currentRun.Status != LoopRunStatus.Running)
         {
+            // Drive the Done transition through the shared path so finishing a
+            // work item always runs the same side effects — including stopping
+            // its worktree preview.
             try
             {
-                var opts = await _options.ResolveForWorkItemAsync(workItemId);
-                await _server.TransitionAsync(opts, workItemId, new RemoteTransitionRequest
-                {
-                    TargetStatus = RemoteWorkItemStatus.Done,
-                });
+                await TransitionAsync(workItemId, RemoteWorkItemStatus.Done, currentLoopRunId: currentRun.Id);
             }
             catch (InvalidOperationException) { /* No remote — local only. */ }
         }
@@ -570,25 +597,15 @@ public class WorkItemManager : IWorkItemManager
             await _loopRunStore.UpdateRunAsync(currentRun);
         }
 
-        var prev = wi.Status;
+        // Drive the Done transition through the shared path so it clears the
+        // run's feedback reason, notifies clients, and stops the worktree
+        // preview — a finished item can no longer be stopped from the UI.
         try
         {
-            var opts = await _options.ResolveForWorkItemAsync(workItemId);
-            await _server.TransitionAsync(opts, workItemId, new RemoteTransitionRequest
-            {
-                TargetStatus = RemoteWorkItemStatus.Done,
-            });
+            await TransitionAsync(workItemId, RemoteWorkItemStatus.Done, currentLoopRunId: currentRun?.Id ?? Guid.Empty);
         }
         catch (InvalidOperationException) { /* No remote — local only. */ }
 
-        if (currentRun != null)
-        {
-            currentRun.HumanFeedbackReason = null;
-            currentRun.UpdatedAt = DateTime.UtcNow;
-            await _loopRunStore.UpdateRunAsync(currentRun);
-        }
-
-        await _notifier.WorkItemStateChangedAsync(workItemId, prev, RemoteWorkItemStatus.Done);
         return true;
     }
 
