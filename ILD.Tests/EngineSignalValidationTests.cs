@@ -75,14 +75,14 @@ public class EngineSignalValidationTests
         using var h = new LoopEngineHarness();
         h.AddNode("h", NodeType.Human);
         h.AddNode("after", NodeType.Cmd);
-        h.AddEdge("h", "after", EdgeType.OnRespond);
+        h.AddEdge("h", "after", EdgeType.Custom, "Respond");
 
         var humanExec = new ScriptedExecutor(NodeType.Human,
             new NodeOutcome.NodeStarting("ask"),
             new NodeOutcome.WaitingAction("Awaiting input", "prompt"));
         humanExec.Then(
             new NodeOutcome.NodeStarting("re-entry"),
-            new NodeOutcome.Success(EdgeType.OnRespond, "human-said-yes"));
+            new NodeOutcome.Success(EdgeType.Custom, "human-said-yes", "Respond"));
         h.Registry.Register(humanExec);
         h.Registry.Register(new ScriptedExecutor(NodeType.Cmd,
             new NodeOutcome.NodeStarting("after"),
@@ -95,7 +95,7 @@ public class EngineSignalValidationTests
 
         // Signal with the correct WaitingHuman node ID — should succeed.
         await h.Engine.SignalNodeResultAsync(h.RunId, waitingNode.Id,
-            new NodeSignal(ExternalActionResultType.Respond, Output: "user-text"));
+            NodeSignal.Custom("Respond", "user-text"));
 
         await WaitUntilAsync(() => h.ReloadRun().Status != LoopRunStatus.Running, TimeSpan.FromSeconds(5));
 

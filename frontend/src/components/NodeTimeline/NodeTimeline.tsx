@@ -54,7 +54,7 @@ export default function NodeTimeline({ runNodes, templateNodes }: NodeTimelinePr
             const prevType = mapNodeType(templateNodes, prevNode.nodeId);
             const prevHuman = prevType === "Human";
             if (prevNode.status === LoopRunNodeStatus.Succeeded) {
-              edgeType = prevHuman ? EdgeType.OnRespond : EdgeType.OnSuccess;
+              edgeType = prevHuman ? EdgeType.Custom : EdgeType.OnSuccess;
             } else {
               edgeType = EdgeType.OnFailure;
             }

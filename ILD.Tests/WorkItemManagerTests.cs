@@ -984,7 +984,7 @@ public class WorkItemManagerTests
 
         eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "please revise the approach", null), Times.Once);
         engine.Verify(eng => eng.SignalNodeResultAsync(runId, runNode.Id,
-            It.Is<NodeSignal>(s => s.Type == ExternalActionResultType.Respond && s.Output == "please revise the approach")), Times.Once);
+            It.Is<NodeSignal>(s => s.EdgeName == "Respond" && s.Output == "please revise the approach")), Times.Once);
     }
 
     // ---- TransitionAsync (canonical generic transition) ------------------

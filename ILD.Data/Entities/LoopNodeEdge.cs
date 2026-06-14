@@ -19,6 +19,16 @@ public class LoopNodeEdge
 
     public EdgeType EdgeType { get; set; }
 
+    /// <summary>
+    /// Custom-edge key. Null for the default (<see cref="EdgeType.OnSuccess"/>)
+    /// and fallback (<see cref="EdgeType.OnFailure"/>) edges; set to the edge
+    /// name for <see cref="EdgeType.Custom"/> edges. The pair
+    /// (<see cref="EdgeType"/>, <see cref="Name"/>) uniquely identifies an
+    /// outgoing edge of a node.
+    /// </summary>
+    [MaxLength(256)]
+    public string? Name { get; set; }
+
     public int? MaxTraversals { get; set; }
 
     public DateTime CreatedAt { get; set; }

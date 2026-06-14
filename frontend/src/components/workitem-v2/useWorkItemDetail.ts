@@ -376,8 +376,9 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
       "reject",
     );
 
-  const handleRespond = () =>
-    runAction((id) => workItemService.humanFeedbackRespond(id, feedbackInput || ""), "respond");
+  // Route the parked node to one of its named custom edges (a Human/PR button).
+  const handleEdge = (name: string) =>
+    runAction((id) => workItemService.humanFeedbackEdge(id, name, feedbackInput || ""), "respond");
 
   // Halt/steer act on the work item's current run, not the work item itself,
   // but reuse runAction's refetch-and-save so the dialog reflects the new state.
@@ -449,7 +450,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     handleMarkMerged,
     handleApprove,
     handleReject,
-    handleRespond,
+    handleEdge,
     handleHalt,
     handleResumeSteer,
     handleCleanupDone,

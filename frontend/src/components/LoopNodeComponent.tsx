@@ -48,7 +48,12 @@ const handleStyles = {
 export default function LoopNodeComponent({ data }: NodeProps) {
   const nodeData = data as { label: string; type: string };
   const style = nodeStyles[nodeData.type] || nodeStyles[NodeType.Cmd];
-  const hasRespondHandle = nodeData.type === NodeType.Human || nodeData.type === NodeType.PR;
+  // The top handle is the single "custom" outlet; any number of named custom
+  // edges may leave it. Only Human, AI and PR nodes declare custom edges.
+  const hasCustomHandle =
+    nodeData.type === NodeType.Human ||
+    nodeData.type === NodeType.AI ||
+    nodeData.type === NodeType.PR;
 
   return (
     <div
@@ -85,7 +90,7 @@ export default function LoopNodeComponent({ data }: NodeProps) {
         className="handle-fail"
         style={handleStyles.fail}
       />
-      {hasRespondHandle && (
+      {hasCustomHandle && (
         <Handle
           type="source"
           position={Position.Top}

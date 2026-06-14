@@ -101,6 +101,13 @@ public class LoopRun : IHasUpdatedAt
     // Discriminates which action the external actor took.
     public ExternalActionResultType ExternalActionResultType { get; set; }
 
+    // Name of the custom edge an external actor selected (e.g. a Human node's
+    // named button). Null means the actor took the default success / fallback
+    // outlet. Consumed alongside ExternalActionResult when a waiting node
+    // re-enters and routes.
+    [MaxLength(256)]
+    public string? ExternalActionEdgeName { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     public DateTime? UpdatedAt { get; set; }

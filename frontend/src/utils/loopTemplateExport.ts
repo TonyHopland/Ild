@@ -31,6 +31,7 @@ export function serializeForExport(template: LoopTemplate): LoopTemplateExport {
       sourceNodeId: e.sourceNodeId,
       targetNodeId: e.targetNodeId,
       edgeType: e.edgeType,
+      name: e.name ?? null,
     })),
   };
 }
@@ -154,6 +155,7 @@ export function exportEdgesToLoopNodeEdges(edges: LoopTemplateExportEdge[]): Loo
     sourceNodeId: e.sourceNodeId,
     targetNodeId: e.targetNodeId,
     edgeType: e.edgeType,
+    name: e.name ?? null,
     maxTraversals: null,
   }));
 }

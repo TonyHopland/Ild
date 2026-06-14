@@ -732,7 +732,10 @@ public class WorkItemManager : IWorkItemManager
         return true;
     }
 
-    public async Task<bool> SubmitHumanFeedbackRespondAsync(string workItemId, string input)
+    public Task<bool> SubmitHumanFeedbackRespondAsync(string workItemId, string input)
+        => SubmitHumanFeedbackEdgeAsync(workItemId, "Respond", input);
+
+    public async Task<bool> SubmitHumanFeedbackEdgeAsync(string workItemId, string edgeName, string input)
     {
         var wi = await GetWorkItemAsync(workItemId);
         if (wi == null || wi.CurrentLoopRunId == null) return false;
@@ -760,7 +763,7 @@ public class WorkItemManager : IWorkItemManager
         if (_engine is not null && humanRunNode is not null)
         {
             await _engine.SignalNodeResultAsync(runId, humanRunNode.Id,
-                NodeSignal.Respond(input));
+                NodeSignal.Custom(edgeName, input));
         }
         return true;
     }

@@ -41,12 +41,14 @@ export function templateToEdges(template: LoopTemplate): Edge[] {
           ? { stroke: "#ef4444" as const, strokeDasharray: "8 4" as const }
           : { stroke: "#f59e0b" as const, strokeDasharray: "4 4" as const };
 
+    // Custom edges read by their name so overlapping outlets stay readable;
+    // default/fallback edges keep their fixed role labels.
     const label =
       edge.edgeType === EdgeType.OnSuccess
         ? "success"
         : edge.edgeType === EdgeType.OnFailure
           ? "failure"
-          : "respond";
+          : edge.name?.trim() || "custom";
 
     const sourceHandle =
       edge.edgeType === EdgeType.OnSuccess
@@ -61,7 +63,7 @@ export function templateToEdges(template: LoopTemplate): Edge[] {
       target: edge.targetNodeId,
       sourceHandle,
       targetHandle: "target-handle",
-      data: { edgeType: edge.edgeType },
+      data: { edgeType: edge.edgeType, name: edge.name ?? null },
       animated: edge.edgeType === EdgeType.OnSuccess,
       style: strokeStyle,
       label,
@@ -75,7 +77,8 @@ export function templateToEdges(template: LoopTemplate): Edge[] {
 
 export function edgesToLoopNodeEdges(edges: Edge[]): LoopNodeEdge[] {
   return edges.map((edge) => {
-    const edgeType = (edge.data as { edgeType?: EdgeType })?.edgeType;
+    const data = edge.data as { edgeType?: EdgeType; name?: string | null };
+    const edgeType = data?.edgeType;
     if (!edgeType) {
       throw new Error(
         `Edge "${edge.id}" is missing edgeType in data. This usually means edge.data was lost during React Flow state management.`,
@@ -86,6 +89,7 @@ export function edgesToLoopNodeEdges(edges: Edge[]): LoopNodeEdge[] {
       sourceNodeId: edge.source,
       targetNodeId: edge.target,
       edgeType,
+      name: edgeType === EdgeType.Custom ? (data?.name ?? null) : null,
       maxTraversals: (edge.data as { maxTraversals?: number | null })?.maxTraversals ?? null,
     };
   });

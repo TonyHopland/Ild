@@ -516,7 +516,7 @@ describe("WorkItemModal", () => {
     const workItem = makeWorkItem({
       status: WorkItemStatus.HumanFeedback,
       humanFeedbackReason: "Human Input Needed",
-      humanFeedbackActions: "OnSuccess,OnRespond,OnFailure",
+      humanFeedbackActions: "OnSuccess,Respond,OnFailure",
     });
 
     const fetchMock = mockFetch([]);

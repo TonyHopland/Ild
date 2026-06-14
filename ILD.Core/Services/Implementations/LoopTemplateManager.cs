@@ -172,6 +172,7 @@ public class LoopTemplateManager : ILoopTemplateManager
                 SourceNodeId = srcId,
                 TargetNodeId = tgtId,
                 EdgeType = edgeType,
+                Name = string.IsNullOrWhiteSpace(e.Name) ? null : e.Name,
                 MaxTraversals = srcDto.MaxTraversals,
             };
         }).Where(e => e != null).Cast<LoopNodeEdge>().ToList();
@@ -201,6 +202,7 @@ public class LoopTemplateManager : ILoopTemplateManager
             SourceNodeId = e.SourceNodeId.ToString(),
             TargetNodeId = e.TargetNodeId.ToString(),
             EdgeType = e.EdgeType.ToString(),
+            Name = e.Name,
         }).ToList();
 
         return new LoopTemplateGraph(v.Id, nodeDtos, edgeDtos);

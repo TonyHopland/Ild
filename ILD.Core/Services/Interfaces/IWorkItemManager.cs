@@ -75,6 +75,13 @@ public interface IWorkItemManager
     Task<(bool Success, string? Branch, string? Error)> CommitAndPushBranchAsync(string workItemId);
     Task<bool> SubmitHumanFeedbackInputAsync(string workItemId, string input);
     Task<bool> SubmitHumanFeedbackRespondAsync(string workItemId, string input);
+
+    /// <summary>
+    /// Route the parked node to its named custom edge <paramref name="edgeName"/>
+    /// (a Human node button), passing <paramref name="input"/> as the node's
+    /// output for downstream <c>{{PreviousNode.Output}}</c>.
+    /// </summary>
+    Task<bool> SubmitHumanFeedbackEdgeAsync(string workItemId, string edgeName, string input);
     Task<bool> RejectHumanFeedbackAsync(string workItemId, string? input = null);
     Task<bool> DeleteAsync(string workItemId);
 }

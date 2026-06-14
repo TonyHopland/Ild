@@ -355,8 +355,9 @@ export default function WorkItemModal({
       "reject",
     );
 
-  const handleRespond = () =>
-    runAction((id) => workItemService.humanFeedbackRespond(id, feedbackInput || ""), "respond");
+  // Route the parked node to one of its named custom edges (a Human/PR button).
+  const handleEdge = (name: string) =>
+    runAction((id) => workItemService.humanFeedbackEdge(id, name, feedbackInput || ""), "respond");
 
   const handleCleanupDone = () =>
     runAction((id) => workItemService.cleanupToDone(id), "cleanup to done");
@@ -578,7 +579,7 @@ export default function WorkItemModal({
                       actions={workItem.humanFeedbackActions}
                       onApprove={handleContinue}
                       onReject={handleReject}
-                      onRespond={handleRespond}
+                      onEdge={handleEdge}
                     />
                   </div>
                 )}
@@ -616,7 +617,7 @@ export default function WorkItemModal({
                       actions={workItem.humanFeedbackActions}
                       onApprove={handleContinue}
                       onReject={handleReject}
-                      onRespond={handleRespond}
+                      onEdge={handleEdge}
                     />
                   </div>
                 )}

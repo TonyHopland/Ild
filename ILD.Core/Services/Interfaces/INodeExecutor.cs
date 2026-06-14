@@ -28,10 +28,15 @@ public abstract record NodeOutcome
     /// </summary>
     public sealed record NodeStarting(string? EffectiveInput = null) : NodeOutcome;
 
-    /// <summary>Node finished successfully; engine follows the named edge.</summary>
-    public sealed record Success(EdgeType Edge, string? Output = null) : NodeOutcome;
+    /// <summary>
+    /// Node finished successfully; engine follows the edge identified by
+    /// (<paramref name="Edge"/>, <paramref name="EdgeName"/>). For
+    /// <see cref="EdgeType.Custom"/> outcomes <paramref name="EdgeName"/> is the
+    /// custom edge key; for <see cref="EdgeType.OnSuccess"/> it is null.
+    /// </summary>
+    public sealed record Success(EdgeType Edge, string? Output = null, string? EdgeName = null) : NodeOutcome;
 
-    /// <summary>Node failed; engine follows the named edge.</summary>
+    /// <summary>Node failed; engine follows the fallback (<see cref="EdgeType.OnFailure"/>) edge.</summary>
     public sealed record Fail(EdgeType Edge, string Reason, string? Output = null) : NodeOutcome;
 
     /// <summary>
@@ -80,18 +85,25 @@ public abstract record NodeOutcome
 
     /// <summary>
     /// Map a consumed external-action signal to the re-entry outcome every
-    /// waitable node (Human, PR) shares: <c>Reject</c> → fail on
-    /// <see cref="EdgeType.OnFailure"/>, <c>Respond</c> → succeed on
-    /// <see cref="EdgeType.OnRespond"/>, anything else → succeed on
-    /// <see cref="EdgeType.OnSuccess"/>. <paramref name="rejectReason"/> lets
-    /// each node phrase its own rejection text.
+    /// waitable node (Human, PR) shares. A reject fails on
+    /// <see cref="EdgeType.OnFailure"/>; a non-empty <paramref name="edgeName"/>
+    /// succeeds on the matching <see cref="EdgeType.Custom"/> edge; everything
+    /// else succeeds on the default <see cref="EdgeType.OnSuccess"/> edge.
+    /// <paramref name="rejectReason"/> lets each node phrase its own rejection
+    /// text. The legacy <see cref="ExternalActionResultType.Respond"/> value
+    /// (persisted on runs parked before this change) maps to the custom edge
+    /// named "Respond".
     /// </summary>
-    public static NodeOutcome FromExternalAction(string? result, ExternalActionResultType type, string rejectReason) => type switch
+    public static NodeOutcome FromExternalAction(string? result, ExternalActionResultType type, string? edgeName, string rejectReason)
     {
-        ExternalActionResultType.Reject => new Fail(EdgeType.OnFailure, rejectReason, result),
-        ExternalActionResultType.Respond => new Success(EdgeType.OnRespond, result),
-        _ => new Success(EdgeType.OnSuccess, result),
-    };
+        if (type == ExternalActionResultType.Reject)
+            return new Fail(EdgeType.OnFailure, rejectReason, result);
+        if (!string.IsNullOrEmpty(edgeName))
+            return new Success(EdgeType.Custom, result, edgeName);
+        if (type == ExternalActionResultType.Respond)
+            return new Success(EdgeType.Custom, result, "Respond");
+        return new Success(EdgeType.OnSuccess, result);
+    }
 }
 
 /// <summary>

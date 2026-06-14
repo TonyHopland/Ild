@@ -40,7 +40,7 @@ public sealed class PRNodeExecutor : INodeExecutor
         if (ctx.Run.ExternalActionResult is not null)
         {
             yield return NodeOutcome.FromExternalAction(
-                ctx.Run.ExternalActionResult, ctx.Run.ExternalActionResultType, "PR rejected");
+                ctx.Run.ExternalActionResult, ctx.Run.ExternalActionResultType, ctx.Run.ExternalActionEdgeName, "PR rejected");
             yield break;
         }
 

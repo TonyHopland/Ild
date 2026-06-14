@@ -69,7 +69,7 @@ export function FeedbackBanner({
         actions={workItem.humanFeedbackActions}
         onApprove={detail.handleApprove}
         onReject={detail.handleReject}
-        onRespond={detail.handleRespond}
+        onEdge={detail.handleEdge}
       />
     </div>
   );

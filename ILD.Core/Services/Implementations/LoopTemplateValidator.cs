@@ -1,5 +1,6 @@
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Data.DTOs;
+using ILD.Data.Enums;
 using System.Linq;
 using System.Text.RegularExpressions;
 
@@ -7,22 +8,17 @@ namespace ILD.Core.Services.Implementations;
 
 public static class LoopTemplateValidator
 {
-    private static readonly Dictionary<string, HashSet<string>> AllowedEdgeTypes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        { "Human", new() { "OnSuccess", "OnFailure", "OnRespond" } },
-        { "Start", new() { "OnSuccess", "OnFailure" } },
-        { "Cmd", new() { "OnSuccess", "OnFailure" } },
-        { "AI", new() { "OnSuccess", "OnFailure" } },
-        { "Prompt", new() { "OnSuccess", "OnFailure" } },
-        { "PR", new() { "OnSuccess", "OnFailure", "OnRespond" } },
-        { "Cleanup", new() },
-    };
+    // Every node (except the Cleanup sink) routes success and failure. Only
+    // Human, AI and PR nodes may additionally declare named custom edges.
+    private static readonly HashSet<string> CustomEdgeNodeTypes =
+        new(new[] { "Human", "AI", "PR" }, StringComparer.OrdinalIgnoreCase);
 
-    private static HashSet<string> GetAllowedEdgeTypes(string nodeType)
-    {
-        if (AllowedEdgeTypes.TryGetValue(nodeType, out var types)) return types;
-        return AllowedEdgeTypes["Cmd"];
-    }
+    private static readonly HashSet<string> NoEdgeNodeTypes =
+        new(new[] { "Cleanup" }, StringComparer.OrdinalIgnoreCase);
+
+    private static bool AllowsCustomEdges(string nodeType) => CustomEdgeNodeTypes.Contains(nodeType);
+
+    private static bool AllowsAnyEdges(string nodeType) => !NoEdgeNodeTypes.Contains(nodeType);
 
     public static IReadOnlyList<string> Validate(LoopTemplateGraph graph)
     {
@@ -67,25 +63,62 @@ public static class LoopTemplateValidator
                 errors.Add("No path from Start leads to a Cleanup node.");
         }
 
-        // Edge type per node: max one OnSuccess and one OnFailure per source
+        // Per-source edge rules:
+        //   • at most one OnSuccess (default) and one OnFailure (fallback)
+        //   • custom edges allowed only on Human/AI/PR, each with a non-empty,
+        //     node-unique Name
+        //   • a sink node (Cleanup) takes no outgoing edges
+        var nodeTypeById = nodes
+            .GroupBy(n => n.Id, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First().NodeType, StringComparer.Ordinal);
+
         foreach (var src in edges.GroupBy(e => e.SourceNodeId))
         {
-            var dupes = src.GroupBy(e => e.EdgeType.ToLowerInvariant())
-                .Where(g => g.Count() > 1)
-                .Select(g => g.Key);
-            foreach (var d in dupes)
-                errors.Add($"Node {src.Key} has duplicate {d} edges.");
-        }
+            var srcType = nodeTypeById.GetValueOrDefault(src.Key) ?? string.Empty;
 
-        // Every edge must have a valid EdgeType for its source node type
-        foreach (var e in edges)
-        {
-            var srcNode = nodes.FirstOrDefault(n => n.Id == e.SourceNodeId);
-            var allowed = srcNode != null ? GetAllowedEdgeTypes(srcNode.NodeType) : null;
-            if (string.IsNullOrEmpty(e.EdgeType) || allowed == null || !allowed.Contains(e.EdgeType, StringComparer.OrdinalIgnoreCase))
+            if (!AllowsAnyEdges(srcType))
             {
-                var allowedList = allowed != null ? string.Join(", ", allowed) : "none";
-                errors.Add($"Edge {e.Id} has an invalid or missing EdgeType ('{e.EdgeType}'). Allowed for source node type: {allowedList}.");
+                errors.Add($"Node {src.Key} ({srcType}) must not have outgoing edges.");
+                continue;
+            }
+
+            var seenCustomNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var successCount = 0;
+            var failureCount = 0;
+
+            foreach (var e in src)
+            {
+                if (!Enum.TryParse<EdgeType>(e.EdgeType, ignoreCase: true, out var role))
+                {
+                    errors.Add($"Edge {e.Id} has an invalid or missing EdgeType ('{e.EdgeType}').");
+                    continue;
+                }
+
+                switch (role)
+                {
+                    case EdgeType.OnSuccess:
+                        if (++successCount > 1)
+                            errors.Add($"Node {src.Key} has duplicate OnSuccess edges.");
+                        break;
+                    case EdgeType.OnFailure:
+                        if (++failureCount > 1)
+                            errors.Add($"Node {src.Key} has duplicate OnFailure edges.");
+                        break;
+                    case EdgeType.Custom:
+                        if (!AllowsCustomEdges(srcType))
+                        {
+                            errors.Add($"Node {src.Key} ({srcType}) may not have custom edges; only Human, AI and PR nodes can.");
+                            break;
+                        }
+                        if (string.IsNullOrWhiteSpace(e.Name))
+                        {
+                            errors.Add($"Custom edge {e.Id} on node {src.Key} must have a Name.");
+                            break;
+                        }
+                        if (!seenCustomNames.Add(e.Name))
+                            errors.Add($"Node {src.Key} has duplicate custom edge '{e.Name}'.");
+                        break;
+                }
             }
         }
 

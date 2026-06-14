@@ -7,11 +7,16 @@ namespace ILD.Core.Services.Interfaces;
 /// <summary>
 /// Result of an external event for a node parked in <c>WaitingHuman</c>.
 /// </summary>
-public sealed record NodeSignal(ExternalActionResultType Type, string? Output = null, string? Error = null)
+public sealed record NodeSignal(ExternalActionResultType Type, string? Output = null, string? Error = null, string? EdgeName = null)
 {
     public static NodeSignal Success(string? output = null) => new(ExternalActionResultType.Success, output);
     public static NodeSignal Reject(string error, string? output = null) => new(ExternalActionResultType.Reject, output, error);
-    public static NodeSignal Respond(string? output = null) => new(ExternalActionResultType.Respond, output);
+
+    /// <summary>Route to a node's named custom edge (e.g. a Human node button).</summary>
+    public static NodeSignal Custom(string edgeName, string? output = null) => new(ExternalActionResultType.Success, output, EdgeName: edgeName);
+
+    /// <summary>Back-compat alias: the historical "respond" outlet is the custom edge named "Respond".</summary>
+    public static NodeSignal Respond(string? output = null) => Custom("Respond", output);
 }
 
 public interface ILoopEngine

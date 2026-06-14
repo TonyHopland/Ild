@@ -89,7 +89,7 @@ internal sealed class LoopEngineHarness : IDisposable
         return node;
     }
 
-    public void AddEdge(string from, string to, EdgeType type)
+    public void AddEdge(string from, string to, EdgeType type, string? name = null)
     {
         Db.Context.LoopNodeEdges.Add(new LoopNodeEdge
         {
@@ -97,6 +97,7 @@ internal sealed class LoopEngineHarness : IDisposable
             SourceNodeId = NodesById[from].Id,
             TargetNodeId = NodesById[to].Id,
             EdgeType = type,
+            Name = name,
         });
         Db.Context.SaveChanges();
     }

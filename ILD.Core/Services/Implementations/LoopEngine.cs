@@ -294,6 +294,7 @@ public sealed class LoopEngine : ILoopEngine
 
         run.ExternalActionResult = signal.Output ?? signal.Error ?? string.Empty;
         run.ExternalActionResultType = signal.Type;
+        run.ExternalActionEdgeName = signal.EdgeName;
         var old = run.Status;
         run.Status = LoopRunStatus.Running;
         await loopRunStore.UpdateRunAsync(run);
@@ -325,6 +326,7 @@ public sealed class LoopEngine : ILoopEngine
         run.PreviousNodeOutput = prevOutput;
         run.ExternalActionResult = null;
         run.ExternalActionResultType = ExternalActionResultType.Success;
+        run.ExternalActionEdgeName = null;
         run.Status = LoopRunStatus.Running;
         run.IsPaused = false;
         await loopRunStore.UpdateRunAsync(run);
@@ -552,6 +554,7 @@ public sealed class LoopEngine : ILoopEngine
                         run.PreviousNodeOutput = ok.Output;
                         run.ExternalActionResult = null;
                         run.ExternalActionResultType = ExternalActionResultType.Success;
+                        run.ExternalActionEdgeName = null;
                         await loopRunStore.UpdateRunAsync(run);
                         // Surface each AI node's output as a conversation turn so the
                         // coder ↔ reviewer ↔ human dialogue can be followed in the UI.
@@ -559,8 +562,20 @@ public sealed class LoopEngine : ILoopEngine
                         // write never blocks or breaks the run.
                         if (node.NodeType == NodeType.AI && !string.IsNullOrWhiteSpace(ok.Output))
                             await TrySafe(() => workItems.AppendAiTurnAsync(run.WorkItemId, node.Label, ok.Output!));
-                        var successEdge = await ResolveNextEdgeAsync(loopRunStore, node.Id, ok.Edge);
-                        if (successEdge is null) return await CompleteRunAsync(run, loopRunStore, workItems, ok.Output);
+                        var successEdge = await ResolveNextEdgeAsync(loopRunStore, node.Id, ok.Edge, ok.EdgeName);
+                        if (successEdge is null)
+                        {
+                            // A named custom edge with no matching connection is a
+                            // template wiring error, not a graph terminus: fail the
+                            // node so the human can wire it. The default OnSuccess
+                            // sink still completes the run.
+                            if (ok.Edge == EdgeType.Custom && !string.IsNullOrEmpty(ok.EdgeName))
+                            {
+                                await FailRunAsync(run, $"missing edge connection: {ok.EdgeName}", loopRunStore, sp);
+                                return ParkResult.Stop;
+                            }
+                            return await CompleteRunAsync(run, loopRunStore, workItems, ok.Output);
+                        }
                         if (await TraversalLimitExceededAsync(run, successEdge, edgeTraversalCount, loopRunStore, sp))
                             return ParkResult.Stop;
                         run.CurrentNodeId = successEdge.TargetNodeId;
@@ -593,6 +608,7 @@ public sealed class LoopEngine : ILoopEngine
                         run.PreviousNodeOutput = f.Output ?? f.Reason;
                         run.ExternalActionResult = null;
                         run.ExternalActionResultType = ExternalActionResultType.Success;
+                        run.ExternalActionEdgeName = null;
                         await loopRunStore.UpdateRunAsync(run);
                         var failEdge = await ResolveNextEdgeAsync(loopRunStore, node.Id, f.Edge);
                         if (failEdge is null)
@@ -620,9 +636,12 @@ public sealed class LoopEngine : ILoopEngine
                         await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.WaitingHuman);
                         await _notifier.RunStateChangedAsync(run.Id, oldStatus, LoopRunStatus.WaitingHuman);
                         var outEdges = await loopRunStore.GetEdgesForNodeIdsAsync(new[] { node.Id });
+                        // Custom edges surface by their name (the Human node's button
+                        // labels); default/fallback edges surface by their role name.
                         var actions = string.Join(",", outEdges
                             .Where(e => e.SourceNodeId == node.Id)
-                            .Select(e => e.EdgeType.ToString())
+                            .Select(e => e.EdgeType == EdgeType.Custom ? e.Name : e.EdgeType.ToString())
+                            .Where(s => !string.IsNullOrEmpty(s))
                             .Distinct());
                         await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
                             reason: wa.Reason, actions: string.IsNullOrEmpty(actions) ? null : actions,
@@ -730,10 +749,10 @@ public sealed class LoopEngine : ILoopEngine
         await store.UpdateRunNodeAsync(rn);
     }
 
-    private static async Task<LoopNodeEdge?> ResolveNextEdgeAsync(ILoopRunStore runStore, Guid fromNodeId, EdgeType edge)
+    private static async Task<LoopNodeEdge?> ResolveNextEdgeAsync(ILoopRunStore runStore, Guid fromNodeId, EdgeType edge, string? name = null)
     {
         var edges = await runStore.GetEdgesForNodeIdsAsync(new[] { fromNodeId });
-        return edges.FirstOrDefault(e => e.SourceNodeId == fromNodeId && e.EdgeType == edge);
+        return edges.FirstOrDefault(e => e.SourceNodeId == fromNodeId && e.EdgeType == edge && e.Name == name);
     }
 
     private static async Task<Dictionary<Guid, int>> RebuildEdgeTraversalCountsAsync(ILoopRunStore store, Guid runId)
