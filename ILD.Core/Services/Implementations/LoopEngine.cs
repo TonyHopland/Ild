@@ -532,6 +532,10 @@ public sealed class LoopEngine : ILoopEngine
                         run.NodeExecutionCount++;
                         await loopRunStore.UpdateRunAsync(run);
                         await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Pending, LoopRunNodeStatus.Running);
+                        // The work item's current step just changed; nudge the
+                        // taskboard (which listens on the work-item hub, not the
+                        // per-run hub) to refresh the card. Best-effort.
+                        await TrySafe(() => _workItemNotifier.RunProgressedAsync(run.WorkItemId));
                         if (eventLog is not null)
                             await TrySafe(() => eventLog.AppendAsync(run.Id, "NodeStarted", ns.EffectiveInput ?? string.Empty, node.Id, runNodeId: rn.Id));
                         break;

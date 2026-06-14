@@ -21,6 +21,7 @@ internal sealed class LoopEngineHarness : IDisposable
 {
     public TestDb Db { get; }
     public Mock<IWorkItemManager> WorkItemsMock { get; }
+    public Mock<IWorkItemNotifier> WorkItemNotifierMock { get; }
     public ScriptedExecutorRegistry Registry { get; }
     public ILoopEngine Engine { get; }
     public IServiceProvider Services { get; }
@@ -52,6 +53,8 @@ internal sealed class LoopEngineHarness : IDisposable
                 It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
             .ReturnsAsync(true);
 
+        WorkItemNotifierMock = new Mock<IWorkItemNotifier>(MockBehavior.Loose);
+
         Registry = new ScriptedExecutorRegistry();
 
         var services = new ServiceCollection();
@@ -61,11 +64,12 @@ internal sealed class LoopEngineHarness : IDisposable
         services.AddSingleton<IEventLogStore>(Db.EventLogs);
         services.AddSingleton<IRunNotifier, NoopRunNotifier>();
         services.AddSingleton<IWorkItemManager>(WorkItemsMock.Object);
+        services.AddSingleton<IWorkItemNotifier>(WorkItemNotifierMock.Object);
         services.AddSingleton<INodeExecutorRegistry>(Registry);
         services.AddSingleton<ILoopEngine>(sp =>
         {
             return new LoopEngine(sp, Registry, sp.GetRequiredService<IRunNotifier>(),
-                NullLogger<LoopEngine>.Instance);
+                NullLogger<LoopEngine>.Instance, sp.GetRequiredService<IWorkItemNotifier>());
         });
         _sp = services.BuildServiceProvider();
         Services = _sp;

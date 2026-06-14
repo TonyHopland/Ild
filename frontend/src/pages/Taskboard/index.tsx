@@ -127,15 +127,10 @@ export default function Taskboard() {
     };
 
     // When a running item advances to a new node, re-sync it so its card shows
-    // the current step. The payload carries the run id, so resolve the owning
-    // work item via its active run.
-    const onNodeStateChanged = (message: TypedSignalRMessage<"NodeStateChanged">) => {
-      const { runId } = message.payload;
-      setWorkItems((prev) => {
-        const owner = prev.find((item) => item.currentLoopRunId === runId);
-        if (owner) syncWorkItem(owner.id);
-        return prev;
-      });
+    // the current step. Node transitions don't change the work item's status, so
+    // this is the only signal that keeps a running card's step fresh.
+    const onRunProgressed = (message: TypedSignalRMessage<"WorkItemRunProgressed">) => {
+      syncWorkItem(message.payload.workItemId);
     };
 
     const onSchedulerStateChanged = (message: TypedSignalRMessage<"SchedulerStateChanged">) => {
@@ -145,14 +140,14 @@ export default function Taskboard() {
     on("HumanFeedbackRequired", onHumanFeedback);
     on("WorkItemStateChanged", onWorkItemStateChanged);
     on("PreviewStateChanged", onPreviewStateChanged);
-    on("NodeStateChanged", onNodeStateChanged);
+    on("WorkItemRunProgressed", onRunProgressed);
     on("SchedulerStateChanged", onSchedulerStateChanged);
 
     return () => {
       off("HumanFeedbackRequired", onHumanFeedback);
       off("WorkItemStateChanged", onWorkItemStateChanged);
       off("PreviewStateChanged", onPreviewStateChanged);
-      off("NodeStateChanged", onNodeStateChanged);
+      off("WorkItemRunProgressed", onRunProgressed);
       off("SchedulerStateChanged", onSchedulerStateChanged);
       for (const t of delayedTimers) clearTimeout(t);
     };

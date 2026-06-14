@@ -14,6 +14,13 @@ public interface IWorkItemNotifier
     Task DependencyResolvedAsync(string workItemId);
     Task PreviewStateChangedAsync(string workItemId);
     Task SchedulerStateChangedAsync(bool isPaused, int maxConcurrent);
+
+    /// <summary>
+    /// Signals that a work item's active run advanced to a new node, so its
+    /// taskboard card can refresh the step it is on without the work item's
+    /// status changing. Carries no node detail — listeners re-fetch the item.
+    /// </summary>
+    Task RunProgressedAsync(string workItemId);
 }
 
 public sealed class NoopWorkItemNotifier : IWorkItemNotifier
@@ -23,4 +30,5 @@ public sealed class NoopWorkItemNotifier : IWorkItemNotifier
     public Task DependencyResolvedAsync(string workItemId) => Task.CompletedTask;
     public Task PreviewStateChangedAsync(string workItemId) => Task.CompletedTask;
     public Task SchedulerStateChangedAsync(bool isPaused, int maxConcurrent) => Task.CompletedTask;
+    public Task RunProgressedAsync(string workItemId) => Task.CompletedTask;
 }

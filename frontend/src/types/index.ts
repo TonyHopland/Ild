@@ -403,6 +403,10 @@ export interface PreviewStateChangedPayload {
   workItemId: string;
 }
 
+export interface WorkItemRunProgressedPayload {
+  workItemId: string;
+}
+
 export interface SchedulerStateChangedPayload {
   isPaused: boolean;
   maxConcurrent: number;
