@@ -141,6 +141,25 @@ public static class LoopTemplateValidator
                 var cfg = NodeConfig.Parse<NodeConfig.Ai>(System.Text.Json.JsonSerializer.Serialize(node.Config));
                 if (cfg.UseSession == true && string.IsNullOrWhiteSpace(cfg.SessionPlaceholder))
                     errors.Add($"AI node {node.Id} with useSession=true must set sessionPlaceholder.");
+
+                // AI custom edges and match rules must stay in sync: every named
+                // custom edge must be routed to by a match rule, and every rule
+                // must point at an existing custom edge. Comparison is ordinal to
+                // mirror the engine's edge resolution (LoopEngine.ResolveNextEdgeAsync).
+                var ruleEdgeNames = (cfg.MatchRules ?? new())
+                    .Where(r => !string.IsNullOrWhiteSpace(r.EdgeName))
+                    .Select(r => r.EdgeName!)
+                    .ToHashSet(StringComparer.Ordinal);
+                var customEdgeNames = edges
+                    .Where(e => e.SourceNodeId == node.Id && !string.IsNullOrWhiteSpace(e.Name)
+                        && Enum.TryParse<EdgeType>(e.EdgeType, ignoreCase: true, out var role) && role == EdgeType.Custom)
+                    .Select(e => e.Name!)
+                    .ToHashSet(StringComparer.Ordinal);
+
+                foreach (var orphan in customEdgeNames.Except(ruleEdgeNames))
+                    errors.Add($"AI node {node.Id} has a custom edge '{orphan}' that no match rule routes to.");
+                foreach (var missing in ruleEdgeNames.Except(customEdgeNames))
+                    errors.Add($"AI node {node.Id} has a match rule routing to '{missing}' but no custom edge with that name exists.");
             }
 
             if (string.IsNullOrEmpty(aiPrompt) && string.IsNullOrEmpty(prTemplate) && string.IsNullOrEmpty(prCommentTemplate) && string.IsNullOrEmpty(humanPrompt) && string.IsNullOrEmpty(promptNodePrompt)) continue;

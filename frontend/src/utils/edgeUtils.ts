@@ -55,6 +55,25 @@ export function getCustomEdgeNames(node: Node | undefined | null): string[] {
 }
 
 /**
+ * The custom-edge names actually wired out of a node, read from its connected
+ * edges rather than its config. Seeded and migrated templates carry a connected
+ * custom edge (e.g. "Respond") on Human/PR nodes without a matching
+ * `customEdges` config entry, so the editor must union these in or the edge —
+ * and the run-time button it produces — stays invisible in the settings panel.
+ */
+export function getConnectedCustomEdgeNames(nodeId: string, edges: Edge[]): string[] {
+  const seen = new Set<string>();
+  for (const edge of edges) {
+    if (edge.source !== nodeId) continue;
+    const data = edge.data as { edgeType?: EdgeType; name?: string | null };
+    if (data?.edgeType !== EdgeType.Custom) continue;
+    const name = data?.name?.trim();
+    if (name) seen.add(name);
+  }
+  return [...seen];
+}
+
+/**
  * Validates that a node of {@link sourceNodeType} may gain an outgoing edge of
  * {@link edgeType}. Default/fallback edges are single per node; custom edges are
  * allowed in any number on Human/AI/PR (per-name uniqueness is enforced at

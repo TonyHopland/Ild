@@ -1,6 +1,11 @@
 import { describe, expect, test } from "vite-plus/test";
 import type { Edge, Node } from "@xyflow/react";
-import { checkEdgeConstraints, getCustomEdgeNames, buildEdge } from "./edgeUtils";
+import {
+  checkEdgeConstraints,
+  getCustomEdgeNames,
+  getConnectedCustomEdgeNames,
+  buildEdge,
+} from "./edgeUtils";
 import { EdgeType, NodeType } from "../types";
 
 function node(id: string, type: NodeType, config: Record<string, unknown> = {}): Node {
@@ -36,6 +41,33 @@ describe("getCustomEdgeNames", () => {
 
   test("returns no names for a node type that cannot have custom edges", () => {
     expect(getCustomEdgeNames(node("c", NodeType.Cmd))).toEqual([]);
+  });
+});
+
+describe("getConnectedCustomEdgeNames", () => {
+  test("returns the names of custom edges wired out of the node, deduped", () => {
+    const edges = [
+      edge("h", EdgeType.Custom, "Respond"),
+      edge("h", EdgeType.Custom, "Respond"),
+      edge("h", EdgeType.OnSuccess),
+      edge("h", EdgeType.OnFailure),
+      edge("other", EdgeType.Custom, "Escalate"),
+    ];
+    expect(getConnectedCustomEdgeNames("h", edges)).toEqual(["Respond"]);
+  });
+
+  test("surfaces a connected custom edge even when the node declares none (seeded/migrated data)", () => {
+    // The reviewer's case: a wired "Respond" edge with no `customEdges` config.
+    const human = node("h", NodeType.Human, {});
+    const declared = getCustomEdgeNames(human);
+    const connected = getConnectedCustomEdgeNames("h", [edge("h", EdgeType.Custom, "Respond")]);
+    expect(declared).toEqual([]);
+    expect(connected).toEqual(["Respond"]);
+  });
+
+  test("ignores blank and whitespace-only custom edge names", () => {
+    const edges = [edge("h", EdgeType.Custom, "   "), edge("h", EdgeType.Custom, undefined)];
+    expect(getConnectedCustomEdgeNames("h", edges)).toEqual([]);
   });
 });
 

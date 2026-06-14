@@ -148,6 +148,7 @@ public static class TemplateSeeder
                 {
                     ["inputLabel"] = "",
                     ["prompt"] = "{{PreviousNode.Output}}",
+                    ["customEdges"] = new List<object> { "Respond" },
                 } },
             new() { Id = "prompt-grill-followup", Label = "Prompt grill followup", NodeType = "Prompt",
                 Config = new Dictionary<string, object>
@@ -175,6 +176,7 @@ public static class TemplateSeeder
                 {
                     ["inputLabel"] = "",
                     ["prompt"] = "{{PreviousNode.Output}}",
+                    ["customEdges"] = new List<object> { "Respond" },
                 } },
             new() { Id = "cleanup", Label = "Cleanup", NodeType = "Cleanup" },
         };

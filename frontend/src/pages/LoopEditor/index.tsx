@@ -32,7 +32,12 @@ import {
   exportNodesToLoopNodes,
   exportEdgesToLoopNodeEdges,
 } from "../../utils/loopTemplateExport";
-import { checkEdgeConstraints, buildEdge, getCustomEdgeNames } from "../../utils/edgeUtils";
+import {
+  checkEdgeConstraints,
+  buildEdge,
+  getCustomEdgeNames,
+  getConnectedCustomEdgeNames,
+} from "../../utils/edgeUtils";
 import {
   type AiMatchRule,
   type AiToolDefinition,
@@ -800,6 +805,16 @@ export default function LoopEditor() {
         (config.aiProviderId as string) || "",
       );
       const resolvedAiTools = resolveToolSelection(activeProvider, config.toolAllowlist);
+      // Human/PR nodes declare custom edges in config, but seeded and migrated
+      // templates wire the edge without that declaration — union the connected
+      // edges in so the settings panel matches what the run actually surfaces.
+      const resolvedCustomEdges =
+        data.type === NodeType.Human || data.type === NodeType.PR
+          ? cleanCustomEdgeNames([
+              ...readCustomEdges(config),
+              ...getConnectedCustomEdgeNames(node.id, edgesRef.current),
+            ])
+          : readCustomEdges(config);
 
       setNodeLabel(data.label || "");
       setCmdCommand((config.command as string) || "");
@@ -807,7 +822,7 @@ export default function LoopEditor() {
       setAiProvider((config.aiProviderId as string) || "");
       setAiTools(resolvedAiTools);
       setAiMatchRules(readMatchRules(config));
-      setCustomEdgeNames(readCustomEdges(config));
+      setCustomEdgeNames(resolvedCustomEdges);
       setAiUseSession((config.useSession as boolean | undefined) ?? false);
       setAiSessionPlaceholder((config.sessionPlaceholder as string) || "");
       setStartCreateWorktree((config.createWorktree as boolean) ?? true);
@@ -832,7 +847,7 @@ export default function LoopEditor() {
         aiProvider: (config.aiProviderId as string) || "",
         aiTools: resolvedAiTools,
         aiMatchRules: readMatchRules(config),
-        customEdgeNames: readCustomEdges(config),
+        customEdgeNames: resolvedCustomEdges,
         aiUseSession: (config.useSession as boolean | undefined) ?? false,
         aiSessionPlaceholder: (config.sessionPlaceholder as string) || "",
         startCreateWorktree: (config.createWorktree as boolean) ?? true,
