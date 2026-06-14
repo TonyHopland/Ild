@@ -70,6 +70,25 @@ public class WorkItemManager : IWorkItemManager
         }
     }
 
+    /// <summary>
+    /// Best-effort stop of any worktree preview running for the given path so a
+    /// finished work item stops hogging its preview ports. No-ops when the path
+    /// is empty or no preview is running. Failures are swallowed — preview
+    /// teardown must never block a Done transition.
+    /// </summary>
+    private async Task StopPreviewIfRunningAsync(string workItemId, string? worktreePath)
+    {
+        if (string.IsNullOrWhiteSpace(worktreePath) || !_previewService.IsPreviewRunning(worktreePath))
+            return;
+
+        try
+        {
+            await _previewService.StopAsync(worktreePath);
+            await _notifier.PreviewStateChangedAsync(workItemId);
+        }
+        catch { /* best effort — never block the Done transition */ }
+    }
+
     // ──────────────────────────────────────────────────────────────────
     // Create / Read / Update
     // ──────────────────────────────────────────────────────────────────
@@ -325,11 +344,13 @@ public class WorkItemManager : IWorkItemManager
             var currentRun = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
             effectiveRunId = currentRun?.Id;
         }
+        string? runWorktreePath = null;
         if (effectiveRunId.HasValue)
         {
             var run = await _loopRunStore.GetByIdAsync(effectiveRunId.Value);
             if (run != null)
             {
+                runWorktreePath = run.WorktreePath;
                 if (actual == RemoteWorkItemStatus.HumanFeedback && reason != null)
                 {
                     // Use the dedicated humanFeedbackReason for UI routing on
@@ -348,6 +369,11 @@ public class WorkItemManager : IWorkItemManager
 
         if (actual == RemoteWorkItemStatus.HumanFeedback && reason != null)
             await _notifier.HumanFeedbackRequiredAsync(workItemId, reason);
+
+        // A finished work item should release its preview ports — once Done the
+        // user can no longer reach the stop control.
+        if (actual == RemoteWorkItemStatus.Done)
+            await StopPreviewIfRunningAsync(workItemId, runWorktreePath);
 
         // Wake the scheduler when a slot may have freed up (Done) or when a
         // run parked waiting for capacity might now be runnable.
@@ -562,6 +588,9 @@ public class WorkItemManager : IWorkItemManager
             // run stays inspectable until the row itself is deleted (manual
             // delete or the retention sweeper), which reclaims them.
             await CancelRunIfActiveAsync(currentRun);
+            // Release the preview's ports — a Done item can no longer be
+            // stopped from the UI.
+            await StopPreviewIfRunningAsync(workItemId, currentRun.WorktreePath);
             if (currentRun.Status is LoopRunStatus.Running or LoopRunStatus.WaitingHuman)
                 currentRun.Status = LoopRunStatus.Cancelled;
             // Terminal timestamp makes the row (and its worktree/branch)

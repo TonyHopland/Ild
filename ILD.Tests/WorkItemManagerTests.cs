@@ -1227,6 +1227,125 @@ public class WorkItemManagerTests
         notifier.Verify(n => n.WorkItemStateChangedAsync(id, RemoteWorkItemStatus.WorkQueue, RemoteWorkItemStatus.WorkQueue), Times.Once);
     }
 
+    // ---- Preview teardown on Done ----------------------------------------
+
+    private static (WorkItemManager mgr, TestDb db, Guid repoId, Mock<IWorktreePreviewService> preview, Mock<IWorkItemNotifier> notifier) SetupWithPreview()
+    {
+        var db = new TestDb();
+        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/repo.git" };
+        db.Context.RemoteProviders.Add(remote);
+        db.Context.Repositories.Add(repo);
+        db.Context.SaveChanges();
+        var repoMgr = new Mock<IRepositoryManager>();
+        var eventLog = new Mock<IEventLogService>();
+        var notifier = new Mock<IWorkItemNotifier>();
+        var preview = new Mock<IWorktreePreviewService>();
+        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions,
+            notifier.Object, preview.Object, engine: new Mock<ILoopEngine>().Object);
+        return (mgr, db, repo.Id, preview, notifier);
+    }
+
+    [Fact]
+    public async Task TransitionAsync_to_Done_stops_running_preview_and_notifies()
+    {
+        var (mgr, db, repoId, preview, notifier) = SetupWithPreview();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var runId = SeedLoopRun(db, id);
+        var run = await db.Context.LoopRuns.FindAsync(runId);
+        run!.WorktreePath = "/tmp/worktrees/done-wi";
+        await db.Context.SaveChangesAsync();
+
+        preview.Setup(p => p.IsPreviewRunning("/tmp/worktrees/done-wi")).Returns(true);
+
+        await mgr.TransitionToDoneAsync(id);
+
+        preview.Verify(p => p.StopAsync("/tmp/worktrees/done-wi", It.IsAny<CancellationToken>()), Times.Once);
+        notifier.Verify(n => n.PreviewStateChangedAsync(id), Times.Once);
+    }
+
+    [Fact]
+    public async Task TransitionAsync_to_Done_does_not_stop_when_no_preview_running()
+    {
+        var (mgr, db, repoId, preview, notifier) = SetupWithPreview();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var runId = SeedLoopRun(db, id);
+        var run = await db.Context.LoopRuns.FindAsync(runId);
+        run!.WorktreePath = "/tmp/worktrees/done-wi";
+        await db.Context.SaveChangesAsync();
+
+        preview.Setup(p => p.IsPreviewRunning(It.IsAny<string>())).Returns(false);
+
+        await mgr.TransitionToDoneAsync(id);
+
+        preview.Verify(p => p.StopAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        notifier.Verify(n => n.PreviewStateChangedAsync(It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task TransitionAsync_to_non_Done_leaves_running_preview_alone()
+    {
+        var (mgr, db, repoId, preview, _) = SetupWithPreview();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var runId = SeedLoopRun(db, id);
+        var run = await db.Context.LoopRuns.FindAsync(runId);
+        run!.WorktreePath = "/tmp/worktrees/running-wi";
+        await db.Context.SaveChangesAsync();
+
+        preview.Setup(p => p.IsPreviewRunning(It.IsAny<string>())).Returns(true);
+
+        // Moving to Running (e.g. resuming) must not tear down the preview.
+        await mgr.TransitionAsync(id, RemoteWorkItemStatus.Running);
+
+        preview.Verify(p => p.StopAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CleanupToDoneAsync_stops_running_preview()
+    {
+        var (mgr, db, repoId, preview, notifier) = SetupWithPreview();
+        using var _ = db;
+
+        var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
+        db.Context.LoopTemplates.Add(lt);
+        var ltv = new LoopTemplateVersion
+        {
+            Id = Guid.NewGuid(),
+            LoopTemplateId = lt.Id,
+            VersionNumber = 1,
+            CreatedAt = DateTime.UtcNow,
+        };
+        db.Context.LoopTemplateVersions.Add(ltv);
+        await db.Context.SaveChangesAsync();
+
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = id,
+            LoopTemplateVersionId = ltv.Id,
+            Status = LoopRunStatus.Failed,
+            StartedAt = DateTime.UtcNow,
+            CompletedAt = DateTime.UtcNow,
+            WorktreePath = "/tmp/worktrees/cleanup-wi",
+        };
+        db.Context.LoopRuns.Add(run);
+        await db.Context.SaveChangesAsync();
+
+        preview.Setup(p => p.IsPreviewRunning("/tmp/worktrees/cleanup-wi")).Returns(true);
+
+        await mgr.CleanupToDoneAsync(id);
+
+        preview.Verify(p => p.StopAsync("/tmp/worktrees/cleanup-wi", It.IsAny<CancellationToken>()), Times.Once);
+        notifier.Verify(n => n.PreviewStateChangedAsync(id), Times.Once);
+    }
+
     [Fact]
     public async Task CreateWorkItemAsync_notifies_for_agent_created_backlog_items()
     {
