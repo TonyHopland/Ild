@@ -370,8 +370,10 @@ public class WorkItemManager : IWorkItemManager
         if (actual == RemoteWorkItemStatus.HumanFeedback && reason != null)
             await _notifier.HumanFeedbackRequiredAsync(workItemId, reason);
 
-        // A finished work item should release its preview ports — once Done the
-        // user can no longer reach the stop control.
+        // Every path to Done funnels through here (the Cleanup node's
+        // completion, a drag to the Done column, Cleanup-Done, mark-merged),
+        // so this is the single place that releases the preview's ports — once
+        // Done the user can no longer reach the stop control.
         if (actual == RemoteWorkItemStatus.Done)
             await StopPreviewIfRunningAsync(workItemId, runWorktreePath);
 
@@ -521,19 +523,14 @@ public class WorkItemManager : IWorkItemManager
 
         if (currentRun.Status != LoopRunStatus.Running)
         {
+            // Drive the Done transition through the shared path so finishing a
+            // work item always runs the same side effects — including stopping
+            // its worktree preview.
             try
             {
-                var opts = await _options.ResolveForWorkItemAsync(workItemId);
-                await _server.TransitionAsync(opts, workItemId, new RemoteTransitionRequest
-                {
-                    TargetStatus = RemoteWorkItemStatus.Done,
-                });
+                await TransitionAsync(workItemId, RemoteWorkItemStatus.Done, currentLoopRunId: currentRun.Id);
             }
             catch (InvalidOperationException) { /* No remote — local only. */ }
-
-            // Release the preview's ports — a Done item can no longer be
-            // stopped from the UI.
-            await StopPreviewIfRunningAsync(workItemId, currentRun.WorktreePath);
         }
 
         await _loopRunStore.UpdateRunAsync(currentRun);
@@ -592,9 +589,6 @@ public class WorkItemManager : IWorkItemManager
             // run stays inspectable until the row itself is deleted (manual
             // delete or the retention sweeper), which reclaims them.
             await CancelRunIfActiveAsync(currentRun);
-            // Release the preview's ports — a Done item can no longer be
-            // stopped from the UI.
-            await StopPreviewIfRunningAsync(workItemId, currentRun.WorktreePath);
             if (currentRun.Status is LoopRunStatus.Running or LoopRunStatus.WaitingHuman)
                 currentRun.Status = LoopRunStatus.Cancelled;
             // Terminal timestamp makes the row (and its worktree/branch)
@@ -603,25 +597,15 @@ public class WorkItemManager : IWorkItemManager
             await _loopRunStore.UpdateRunAsync(currentRun);
         }
 
-        var prev = wi.Status;
+        // Drive the Done transition through the shared path so it clears the
+        // run's feedback reason, notifies clients, and stops the worktree
+        // preview — a finished item can no longer be stopped from the UI.
         try
         {
-            var opts = await _options.ResolveForWorkItemAsync(workItemId);
-            await _server.TransitionAsync(opts, workItemId, new RemoteTransitionRequest
-            {
-                TargetStatus = RemoteWorkItemStatus.Done,
-            });
+            await TransitionAsync(workItemId, RemoteWorkItemStatus.Done, currentLoopRunId: currentRun?.Id ?? Guid.Empty);
         }
         catch (InvalidOperationException) { /* No remote — local only. */ }
 
-        if (currentRun != null)
-        {
-            currentRun.HumanFeedbackReason = null;
-            currentRun.UpdatedAt = DateTime.UtcNow;
-            await _loopRunStore.UpdateRunAsync(currentRun);
-        }
-
-        await _notifier.WorkItemStateChangedAsync(workItemId, prev, RemoteWorkItemStatus.Done);
         return true;
     }
 
