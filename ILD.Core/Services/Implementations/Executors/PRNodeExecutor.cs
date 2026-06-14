@@ -45,14 +45,14 @@ public sealed class PRNodeExecutor : INodeExecutor
         }
 
         var rendering = sp.GetService<IPromptRenderingService>();
-        string? renderedPrompt = null;
+        string? renderedPrompt = cfg.Prompt;
         if (!string.IsNullOrEmpty(cfg.Prompt) && rendering is not null)
         {
             try { renderedPrompt = await rendering.RenderAsync(cfg.Prompt, ctx.Run.Id, wi, ctx.Run.PreviousNodeOutput); }
             catch { }
         }
 
-        yield return new NodeOutcome.NodeStarting(renderedPrompt ?? cfg.Prompt);
+        yield return new NodeOutcome.NodeStarting(renderedPrompt);
 
         var remoteProvider = await providerStore.GetRemoteProviderByIdAsync(repo.RemoteProviderId);
         var gitAuth = remoteProvider is null
@@ -146,7 +146,10 @@ public sealed class PRNodeExecutor : INodeExecutor
             }
         }
 
-        yield return new NodeOutcome.WaitingAction(HumanFeedbackReasons.PrAwaitingMerge, prUrl);
+        // Surface the rendered prompt template to the work item as the parked
+        // node's content — mirrors the Human node, which parks on its rendered
+        // prompt. Falls back to the PR URL when the node has no prompt template.
+        yield return new NodeOutcome.WaitingAction(HumanFeedbackReasons.PrAwaitingMerge, renderedPrompt ?? prUrl);
     }
 
     private static string? ExtractPrNumber(string prUrl)
