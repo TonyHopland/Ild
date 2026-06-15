@@ -123,7 +123,7 @@ public sealed class PRNodeExecutor : INodeExecutor
             // post it on the existing PR. Each re-visit of this node posts a
             // fresh comment.
             var remote = sp.GetRequiredService<IRemoteProvider>();
-            var prNumber = ExtractPrNumber(prUrl);
+            var prNumber = RemotePrUrl.ExtractPrNumber(prUrl);
             if (string.IsNullOrEmpty(prNumber))
             {
                 yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"Cannot derive PR number from '{prUrl}' to post comment");
@@ -150,19 +150,5 @@ public sealed class PRNodeExecutor : INodeExecutor
         // node's content — mirrors the Human node, which parks on its rendered
         // prompt. Falls back to the PR URL when the node has no prompt template.
         yield return new NodeOutcome.WaitingAction(HumanFeedbackReasons.PrAwaitingMerge, renderedPrompt ?? prUrl);
-    }
-
-    private static string? ExtractPrNumber(string prUrl)
-    {
-        if (string.IsNullOrEmpty(prUrl)) return null;
-        // Both GitHub (.../pull/N) and Forgejo (.../pulls/N) end with the
-        // numeric PR id as the last non-empty segment.
-        var segments = prUrl.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        for (var i = segments.Length - 1; i >= 0; i--)
-        {
-            var seg = segments[i].TrimEnd('?', '#');
-            if (seg.Length > 0 && seg.All(char.IsDigit)) return seg;
-        }
-        return null;
     }
 }

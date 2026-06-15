@@ -373,8 +373,33 @@
 
 .feedback-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.375rem;
   margin-top: 0.5rem;
+}
+
+.merge-confirm {
+  flex-basis: 100%;
+  margin-top: 0.5rem;
+  padding: 0.625rem;
+  border: 1px solid #334155;
+  border-radius: 0.375rem;
+  background-color: #1e293b;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.merge-confirm-option {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.8125rem;
+}
+
+.merge-confirm-actions {
+  display: flex;
+  gap: 0.375rem;
 }
 
 .feedback-reason {

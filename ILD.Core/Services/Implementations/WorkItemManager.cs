@@ -26,6 +26,7 @@ public class WorkItemManager : IWorkItemManager
     private readonly IWorkItemScheduler? _scheduler;
     private readonly ILoopEngine? _engine;
     private readonly IRunReclaimer _runReclaimer;
+    private readonly IRemoteProvider? _remoteProvider;
 
     public WorkItemManager(
         IRepositoryManager repoManager,
@@ -38,7 +39,8 @@ public class WorkItemManager : IWorkItemManager
         IWorktreePreviewService? previewService = null,
         IWorkItemScheduler? scheduler = null,
         ILoopEngine? engine = null,
-        IRunReclaimer? runReclaimer = null)
+        IRunReclaimer? runReclaimer = null,
+        IRemoteProvider? remoteProvider = null)
     {
         _repoManager = repoManager;
         _providerStore = providerStore;
@@ -51,6 +53,7 @@ public class WorkItemManager : IWorkItemManager
         _scheduler = scheduler;
         _engine = engine;
         _runReclaimer = runReclaimer ?? new RunReclaimer(repoManager, providerStore);
+        _remoteProvider = remoteProvider;
     }
 
     /// <summary>
@@ -743,6 +746,60 @@ public class WorkItemManager : IWorkItemManager
                 NodeSignal.Custom(edgeName, input));
         }
         return true;
+    }
+
+    public async Task<MergePullRequestResult?> MergePullRequestAsync(string workItemId, bool deleteBranch)
+    {
+        var wi = await GetWorkItemAsync(workItemId);
+        if (wi == null || wi.CurrentLoopRunId == null) return null;
+
+        if (string.IsNullOrEmpty(wi.PrUrl))
+            return new MergePullRequestResult(false, "Work item has no linked pull request.", false, null);
+        if (_remoteProvider == null)
+            return new MergePullRequestResult(false, "No remote provider configured.", false, null);
+        if (wi.RepositoryId == null)
+            return new MergePullRequestResult(false, "Work item has no repository.", false, null);
+
+        var repo = await _providerStore.GetRepositoryByIdAsync(wi.RepositoryId.Value);
+        if (repo == null)
+            return new MergePullRequestResult(false, "Repository not found.", false, null);
+
+        var prNumber = RemotePrUrl.ExtractPrNumber(wi.PrUrl);
+        if (prNumber == null)
+            return new MergePullRequestResult(false, $"Could not derive a PR number from '{wi.PrUrl}'.", false, null);
+
+        var runId = wi.CurrentLoopRunId.Value;
+        var merged = await _remoteProvider.MergePullRequestAsync(repo.CloneUrl, prNumber);
+        if (!merged)
+        {
+            await _eventLog.AppendAsync(runId, "PrMergeFailed", $"Merge of {wi.PrUrl} failed");
+            // Leave the work item parked — do not advance the loop.
+            return new MergePullRequestResult(false,
+                "Failed to merge the pull request. It may have conflicts or be blocked by branch protection.",
+                false, null);
+        }
+
+        await _eventLog.AppendAsync(runId, "PrMerged", $"PR {wi.PrUrl} merged by user");
+
+        // Branch deletion is best effort: a failure after a successful merge is
+        // reported but never blocks loop continuation.
+        var branchDeleted = false;
+        string? branchWarning = null;
+        if (deleteBranch)
+        {
+            var branch = wi.BranchName ?? RunWorktreeNaming.BranchFor(wi.Id, runId);
+            branchDeleted = await _remoteProvider.DeleteBranchAsync(repo.CloneUrl, branch);
+            if (!branchDeleted)
+            {
+                branchWarning = $"PR merged, but the branch '{branch}' could not be deleted.";
+                await _eventLog.AppendAsync(runId, "BranchDeleteFailed", branchWarning);
+            }
+        }
+
+        // Continue along OnSuccess — identical continuation to the Approve action.
+        await SubmitHumanFeedbackInputAsync(workItemId, string.Empty);
+
+        return new MergePullRequestResult(true, null, branchDeleted, branchWarning);
     }
 
     public async Task<bool> DeleteAsync(string workItemId)

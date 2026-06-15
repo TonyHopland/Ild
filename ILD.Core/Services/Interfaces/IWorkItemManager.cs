@@ -73,5 +73,30 @@ public interface IWorkItemManager
     /// </summary>
     Task<bool> SubmitHumanFeedbackEdgeAsync(string workItemId, string edgeName, string input);
     Task<bool> RejectHumanFeedbackAsync(string workItemId, string? input = null);
+
+    /// <summary>
+    /// Merge the pull request linked to the work item's current run on the
+    /// remote provider and, when <paramref name="deleteBranch"/> is set, delete
+    /// the source branch afterwards (best effort). On a successful merge the
+    /// loop is advanced along the <c>OnSuccess</c> edge — the same continuation
+    /// the Approve action uses. A failed merge leaves the work item parked and
+    /// does not advance the loop. Returns <c>null</c> when the work item or its
+    /// current run cannot be found.
+    /// </summary>
+    Task<MergePullRequestResult?> MergePullRequestAsync(string workItemId, bool deleteBranch);
     Task<bool> DeleteAsync(string workItemId);
 }
+
+/// <summary>
+/// Outcome of a <see cref="IWorkItemManager.MergePullRequestAsync"/> call.
+/// <paramref name="Merged"/> reports whether the remote merge succeeded;
+/// <paramref name="Error"/> carries the reason when it did not. When branch
+/// deletion was requested, <paramref name="BranchDeleted"/> says whether it
+/// succeeded and <paramref name="BranchWarning"/> describes a best-effort
+/// delete failure that did not block the merge.
+/// </summary>
+public sealed record MergePullRequestResult(
+    bool Merged,
+    string? Error,
+    bool BranchDeleted,
+    string? BranchWarning);

@@ -58,6 +58,8 @@ export default function WorkItemModal({
   const [prUrlInput, setPrUrlInput] = useState("");
   const [feedbackInput, setFeedbackInput] = useState("");
   const [prCommentsLoading, setPrCommentsLoading] = useState(false);
+  const [mergeError, setMergeError] = useState<string | null>(null);
+  const [mergeMessage, setMergeMessage] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [progressText, setProgressText] = useState<string>("");
@@ -357,6 +359,25 @@ export default function WorkItemModal({
   const handleEdge = (name: string) =>
     runAction((id) => workItemService.humanFeedbackEdge(id, name, feedbackInput || ""), "respond");
 
+  // Merge the linked PR on the remote (and optionally delete the branch), then
+  // continue along OnSuccess. A merge failure leaves the item parked, so surface
+  // the error instead of swallowing it like the other actions.
+  const handleMerge = async (deleteBranch: boolean) => {
+    if (!workItem) return;
+    setMergeError(null);
+    setMergeMessage(null);
+    try {
+      const result = await workItemService.mergePr(workItem.id, deleteBranch);
+      setMergeMessage(
+        result.warning ?? (deleteBranch ? "PR merged and branch deleted." : "PR merged."),
+      );
+      const updated = await workItemService.getById(workItem.id);
+      onSave(updated);
+    } catch (error) {
+      setMergeError((error as { message?: string })?.message ?? "Failed to merge PR.");
+    }
+  };
+
   const handleCleanupDone = () =>
     runAction((id) => workItemService.cleanupToDone(id), "cleanup to done");
 
@@ -616,7 +637,14 @@ export default function WorkItemModal({
                       onApprove={handleContinue}
                       onReject={handleReject}
                       onEdge={handleEdge}
+                      onMerge={handleMerge}
                     />
+                    {mergeError && (
+                      <div className="preview-message preview-error">{mergeError}</div>
+                    )}
+                    {!mergeError && mergeMessage && (
+                      <div className="preview-message">{mergeMessage}</div>
+                    )}
                   </div>
                 )}
               {workItem.status === WorkItemStatus.HumanFeedback &&

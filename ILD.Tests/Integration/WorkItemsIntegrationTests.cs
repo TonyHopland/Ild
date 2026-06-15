@@ -26,4 +26,22 @@ public class WorkItemsIntegrationTests
         Assert.NotNull(items);
         Assert.Empty(items!);
     }
+
+    [Fact]
+    public async Task MergePr_without_token_returns_401()
+    {
+        await using var factory = new ApiFactory();
+        var client = factory.CreateClient();
+        var response = await client.PostAsJsonAsync("/api/v1/workitems/unknown/pr/merge", new { deleteBranch = true });
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task MergePr_for_unknown_work_item_returns_404()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var response = await client.PostAsJsonAsync("/api/v1/workitems/unknown/pr/merge", new { deleteBranch = true });
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
 }
