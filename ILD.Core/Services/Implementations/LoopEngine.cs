@@ -59,6 +59,23 @@ public sealed class LoopEngine : ILoopEngine
 
         var wi = await workItems.GetWorkItemAsync(workItemId)
             ?? throw new InvalidOperationException($"WorkItem '{workItemId}' not found");
+
+        // At-most-one-active-run invariant: never start a second run while one is
+        // already alive (Running or parked WaitingHuman) for this work item. A
+        // duplicate would drive the same work item — and its worktree/branch —
+        // concurrently. This is the safety net for races where the same item is
+        // claimed twice (e.g. the stale-heartbeat reclaimer flipping a parked
+        // run's item back to Ready after a human resumes it). The existing run
+        // already owns the item, so this is a silent no-op.
+        var existingActive = await loopRunStore.GetActiveByWorkItemAsync(workItemId);
+        if (existingActive is not null)
+        {
+            _logger.LogWarning(
+                "StartRunAsync skipped for work item {WorkItemId}: run {RunId} is already active ({Status})",
+                workItemId, existingActive.Id, existingActive.Status);
+            return;
+        }
+
         var resolver = sp.GetRequiredService<Remote.ILoopTemplateResolver>();
         var resolution = resolver.Resolve(wi.Tags);
         if (resolution.Kind != Remote.LoopTemplateResolutionKind.Single || resolution.TemplateId is null)
