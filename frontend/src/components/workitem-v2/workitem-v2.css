@@ -503,6 +503,208 @@
   margin-top: 1rem;
 }
 
+/* ---------- files explorer ---------- */
+
+/* The Files panel manages its own internal scrolling, so override the default
+   tab panel padding/scroll and let the split fill the content column. */
+.wiv2-tabpanel-files {
+  padding: 0;
+  overflow: hidden;
+}
+
+.wiv2-files {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+
+.wiv2-files-tree {
+  width: 280px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid #2d2d44;
+}
+
+.wiv2-files-viewer {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.wiv2-files-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #2d2d44;
+  flex-shrink: 0;
+  min-height: 2.25rem;
+}
+
+.wiv2-files-viewer-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  color: #c0c0d0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.wiv2-toggle-group {
+  display: inline-flex;
+  border: 1px solid #3a3a5c;
+  border-radius: 0.25rem;
+  overflow: hidden;
+}
+
+.wiv2-toggle {
+  background: none;
+  border: none;
+  color: #a0a0b0;
+  font-size: 0.78rem;
+  padding: 0.2rem 0.6rem;
+  cursor: pointer;
+}
+
+.wiv2-toggle:hover {
+  color: #e0e0e0;
+}
+
+.wiv2-toggle-active {
+  background-color: #6366f1;
+  color: #fff;
+}
+
+.wiv2-files-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.25rem 0;
+}
+
+.wiv2-file-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  background: none;
+  border: none;
+  color: #c0c0d0;
+  font-size: 0.82rem;
+  text-align: left;
+  padding: 0.15rem 0.5rem;
+  cursor: pointer;
+}
+
+.wiv2-file-row:hover {
+  background-color: #2a2a40;
+}
+
+.wiv2-file-selected {
+  background-color: #33335a;
+  color: #fff;
+}
+
+.wiv2-file-caret {
+  width: 0.8rem;
+  flex-shrink: 0;
+  color: #8080a0;
+  font-size: 0.7rem;
+}
+
+.wiv2-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wiv2-file-folder .wiv2-file-name {
+  color: #d0d0e0;
+}
+
+.wiv2-file-badge {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+  width: 1rem;
+  text-align: center;
+}
+
+.wiv2-file-badge-added {
+  color: #4ec97a;
+}
+
+.wiv2-file-badge-modified {
+  color: #e0a030;
+}
+
+.wiv2-file-badge-deleted {
+  color: #e05252;
+}
+
+.wiv2-files-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.wiv2-code,
+.wiv2-diff {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: #d0d0e0;
+}
+
+.wiv2-code-line {
+  display: flex;
+  white-space: pre;
+}
+
+.wiv2-code-gutter {
+  flex-shrink: 0;
+  width: 3rem;
+  padding-right: 0.75rem;
+  text-align: right;
+  color: #606080;
+  user-select: none;
+}
+
+.wiv2-code-text {
+  white-space: pre;
+}
+
+.wiv2-diff-line {
+  white-space: pre;
+  padding: 0 0.75rem;
+}
+
+.wiv2-diff-add {
+  background-color: rgba(46, 160, 67, 0.18);
+  color: #7ee2a0;
+}
+
+.wiv2-diff-del {
+  background-color: rgba(224, 82, 82, 0.18);
+  color: #f0a0a0;
+}
+
+.wiv2-diff-hunk {
+  color: #7aa0ff;
+}
+
+.wiv2-diff-ctx {
+  color: #b0b0c0;
+}
+
 @media (max-width: 900px) {
   .wiv2-overview-cols {
     flex-direction: column;

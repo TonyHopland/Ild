@@ -15,16 +15,18 @@ public class WorkItemsController : ControllerBase
     private readonly IWorkItemManager _workItemManager;
     private readonly ILoopEngine _engine;
     private readonly IWorktreePreviewService _worktreePreviewService;
+    private readonly IRepositoryManager _repositoryManager;
     private readonly ILoopRunStore _loopRunStore;
     private readonly ILogger<WorkItemsController> _logger;
     private readonly IWorkItemNotifier _notifier;
     private readonly IRemoteProvider? _remoteProvider;
 
-    public WorkItemsController(IWorkItemManager workItemManager, ILoopEngine engine, IWorktreePreviewService worktreePreviewService, ILoopRunStore loopRunStore, ILogger<WorkItemsController> logger, IWorkItemNotifier? notifier = null, IRemoteProvider? remoteProvider = null)
+    public WorkItemsController(IWorkItemManager workItemManager, ILoopEngine engine, IWorktreePreviewService worktreePreviewService, IRepositoryManager repositoryManager, ILoopRunStore loopRunStore, ILogger<WorkItemsController> logger, IWorkItemNotifier? notifier = null, IRemoteProvider? remoteProvider = null)
     {
         _workItemManager = workItemManager;
         _engine = engine;
         _worktreePreviewService = worktreePreviewService;
+        _repositoryManager = repositoryManager;
         _loopRunStore = loopRunStore;
         _logger = logger;
         _notifier = notifier ?? new NoopWorkItemNotifier();
@@ -191,6 +193,35 @@ public class WorkItemsController : ControllerBase
         {
             return BadRequest(new { error = ex.Message });
         }
+    }
+
+    [HttpGet("{id}/files")]
+    public async Task<IActionResult> GetFiles(string id)
+    {
+        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
+        if (error != null) return error;
+
+        var files = await _repositoryManager.ListWorktreeFilesAsync(workItem!.WorktreePath!);
+        return Ok(new WorktreeFilesResponse
+        {
+            WorktreePath = workItem.WorktreePath!,
+            Files = files.ToList(),
+        });
+    }
+
+    [HttpGet("{id}/files/content")]
+    public async Task<IActionResult> GetFileContent(string id, [FromQuery] string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return BadRequest(new { error = "path is required." });
+
+        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
+        if (error != null) return error;
+
+        var content = await _repositoryManager.ReadWorktreeFileAsync(workItem!.WorktreePath!, path);
+        if (content == null)
+            return NotFound(new { error = "File not found in worktree." });
+        return Ok(content);
     }
 
     [HttpPost("{id}/push-branch")]

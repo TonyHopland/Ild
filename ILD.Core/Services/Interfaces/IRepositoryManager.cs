@@ -33,6 +33,23 @@ public interface IRepositoryManager
     Task<string?> ReadFileAsync(string worktreePath, string relativePath);
 
     /// <summary>
+    /// List every file in the worktree (tracked and untracked, ignoring
+    /// <c>.gitignore</c>d paths), each tagged with its change status relative
+    /// to the default branch's fork point. Files deleted on the branch are
+    /// included so a PR-style diff view can still surface them. Returns an
+    /// empty list if <paramref name="worktreePath"/> is not a valid worktree.
+    /// </summary>
+    Task<IReadOnlyList<WorktreeFileEntry>> ListWorktreeFilesAsync(string worktreePath);
+
+    /// <summary>
+    /// Read a single worktree file's full content together with its unified
+    /// diff against the default branch's fork point. Content is null for binary
+    /// or missing files; the diff is null when the file is unchanged. Returns
+    /// null if the path escapes the worktree.
+    /// </summary>
+    Task<WorktreeFileContentResponse?> ReadWorktreeFileAsync(string worktreePath, string relativePath);
+
+    /// <summary>
     /// Delete a local branch from the repository at <paramref name="repoPath"/>.
     /// </summary>
     Task<bool> DeleteLocalBranchAsync(string repoPath, string branchName);

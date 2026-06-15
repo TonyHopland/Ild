@@ -100,6 +100,27 @@ export interface WorktreePreview {
   services: WorktreePreviewService[];
 }
 
+/** A file's change status relative to the default branch's fork point. */
+export type WorktreeFileChangeStatus = "none" | "added" | "modified" | "deleted";
+
+export interface WorktreeFileEntry {
+  path: string;
+  changeStatus: WorktreeFileChangeStatus;
+}
+
+export interface WorktreeFiles {
+  worktreePath: string;
+  files: WorktreeFileEntry[];
+}
+
+export interface WorktreeFileContent {
+  path: string;
+  changeStatus: WorktreeFileChangeStatus;
+  content: string | null;
+  diff: string | null;
+  isBinary: boolean;
+}
+
 export enum NodeType {
   Start = "Start",
   Cmd = "Cmd",

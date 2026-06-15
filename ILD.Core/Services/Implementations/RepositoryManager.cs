@@ -1,4 +1,5 @@
 using ILD.Core.Services.Interfaces;
+using ILD.Data.DTOs;
 using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations;
@@ -154,6 +155,150 @@ public class RepositoryManager : IRepositoryManager
             return null;
         if (!File.Exists(full)) return null;
         return await File.ReadAllTextAsync(full);
+    }
+
+    public async Task<IReadOnlyList<WorktreeFileEntry>> ListWorktreeFilesAsync(string worktreePath)
+    {
+        if (!await ValidateWorktreeHealthAsync(worktreePath))
+            return Array.Empty<WorktreeFileEntry>();
+
+        var baseRef = await ResolveDiffBaseAsync(worktreePath);
+
+        // Present files (tracked + untracked), .gitignore honoured. Start every
+        // one at "none"; the diff below promotes the ones that actually changed.
+        var statuses = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var path in await ListZeroSeparatedAsync(worktreePath, "ls-files", "--cached", "--others", "--exclude-standard", "-z"))
+            statuses[path] = "none";
+
+        // Tracked changes against the fork point — working tree vs base, so
+        // uncommitted edits show up too. Parse the NUL-delimited name-status
+        // stream; renames/copies emit a source and a destination path.
+        var (code, diffOut, _) = await RunAsync(worktreePath, "diff", "--name-status", "-z", baseRef);
+        if (code == 0)
+        {
+            var tokens = diffOut.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+            for (var i = 0; i < tokens.Length;)
+            {
+                var status = tokens[i++];
+                if (status.Length == 0) continue;
+                var kind = status[0];
+                if ((kind == 'R' || kind == 'C') && i + 1 < tokens.Length)
+                {
+                    statuses[tokens[i++]] = "deleted"; // source
+                    statuses[tokens[i++]] = "added";   // destination
+                }
+                else if (i < tokens.Length)
+                {
+                    statuses[tokens[i++]] = MapDiffStatus(kind);
+                }
+            }
+        }
+
+        // git diff ignores untracked files, so tag them explicitly.
+        foreach (var path in await ListZeroSeparatedAsync(worktreePath, "ls-files", "--others", "--exclude-standard", "-z"))
+            statuses[path] = "added";
+
+        return statuses
+            .OrderBy(kv => kv.Key, StringComparer.Ordinal)
+            .Select(kv => new WorktreeFileEntry { Path = kv.Key, ChangeStatus = kv.Value })
+            .ToList();
+    }
+
+    public async Task<WorktreeFileContentResponse?> ReadWorktreeFileAsync(string worktreePath, string relativePath)
+    {
+        var full = ResolveSafePath(worktreePath, relativePath);
+        if (full == null) return null;
+
+        var baseRef = await ResolveDiffBaseAsync(worktreePath);
+
+        var status = "none";
+        string? diff = null;
+
+        var (nsCode, ns, _) = await RunAsync(worktreePath, "diff", "--name-status", "-z", baseRef, "--", relativePath);
+        var nsTokens = ns.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+        if (nsCode == 0 && nsTokens.Length > 0 && nsTokens[0].Length > 0)
+        {
+            status = MapDiffStatus(nsTokens[0][0]);
+            var (_, patch, _) = await RunAsync(worktreePath, "diff", baseRef, "--", relativePath);
+            diff = string.IsNullOrEmpty(patch) ? null : patch;
+        }
+
+        var exists = File.Exists(full);
+        if (status == "none" && exists)
+        {
+            // git diff ignores untracked files, so a brand-new file shows no
+            // status above — detect it and synthesize the "all added" diff.
+            var (othersCode, others, _) = await RunAsync(worktreePath, "ls-files", "--others", "--exclude-standard", "--", relativePath);
+            if (othersCode == 0 && !string.IsNullOrWhiteSpace(others))
+            {
+                status = "added";
+                var (_, addedDiff, _) = await RunAsync(worktreePath, "diff", "--no-index", "--", "/dev/null", relativePath);
+                diff = string.IsNullOrEmpty(addedDiff) ? null : addedDiff;
+            }
+        }
+
+        if (!exists && status == "none")
+            return null;
+
+        var response = new WorktreeFileContentResponse
+        {
+            Path = relativePath,
+            ChangeStatus = status,
+            Diff = diff,
+        };
+
+        if (exists)
+        {
+            var bytes = await File.ReadAllBytesAsync(full);
+            if (IsBinary(bytes))
+                response.IsBinary = true;
+            else
+                response.Content = System.Text.Encoding.UTF8.GetString(bytes);
+        }
+
+        return response;
+    }
+
+    /// <summary>
+    /// Resolve the fork point the run branched from. <c>origin/HEAD</c> tracks
+    /// the default branch; pinning the merge-base keeps later fast-forwards on
+    /// the default branch from dragging unrelated commits into the diff.
+    /// </summary>
+    private async Task<string> ResolveDiffBaseAsync(string worktreePath)
+    {
+        var (code, stdout, _) = await RunAsync(worktreePath, "merge-base", "HEAD", "origin/HEAD");
+        return code == 0 && !string.IsNullOrWhiteSpace(stdout) ? stdout.Trim() : "origin/HEAD";
+    }
+
+    private async Task<IReadOnlyList<string>> ListZeroSeparatedAsync(string worktreePath, params string[] args)
+    {
+        var (code, stdout, _) = await RunAsync(worktreePath, args, CancellationToken.None);
+        return code != 0
+            ? Array.Empty<string>()
+            : stdout.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+    }
+
+    private static string MapDiffStatus(char kind) => kind switch
+    {
+        'A' => "added",
+        'D' => "deleted",
+        _ => "modified",
+    };
+
+    private static string? ResolveSafePath(string worktreePath, string relativePath)
+    {
+        var root = Path.GetFullPath(worktreePath);
+        var full = Path.GetFullPath(Path.Combine(root, relativePath));
+        var rootWithSep = root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar;
+        return full.StartsWith(rootWithSep, StringComparison.Ordinal) ? full : null;
+    }
+
+    private static bool IsBinary(byte[] bytes)
+    {
+        var limit = Math.Min(bytes.Length, 8000);
+        for (var i = 0; i < limit; i++)
+            if (bytes[i] == 0) return true;
+        return false;
     }
 
     public async Task<bool> DeleteLocalBranchAsync(string repoPath, string branchName)
