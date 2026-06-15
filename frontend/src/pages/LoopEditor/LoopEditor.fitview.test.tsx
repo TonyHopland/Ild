@@ -5,8 +5,9 @@ import { AuthContext } from "../../hooks/useAuth";
 import { NodeType, EdgeType } from "../../types";
 import LoopEditor from "./index";
 
-// Spy on the React Flow viewport-fitting function. Must be prefixed with
-// `mock` so vitest allows referencing it inside the hoisted vi.mock factory.
+// Counts how many times the canvas performs an initial fit. Must be prefixed
+// with `mock` so vitest allows referencing it inside the hoisted vi.mock
+// factory.
 const mockFitView = vi.fn();
 
 vi.mock("@xyflow/react", async (importOriginal) => {
@@ -14,13 +15,18 @@ vi.mock("@xyflow/react", async (importOriginal) => {
   const React = await import("react");
   return {
     ...actual,
-    // A lightweight stand-in that exposes the real onInit/fitView contract: it
-    // hands the editor an instance whose fitView we can assert on, and renders
-    // each node's label so tests can tell which loop is currently open.
-    ReactFlow: ({ nodes, children, onInit }: any) => {
+    // A lightweight stand-in that models the real behaviour we depend on: when
+    // ReactFlow mounts with the `fitView` prop set, it fits the viewport once.
+    // Because the editor gives ReactFlow a per-loop `key`, opening a different
+    // loop remounts this component, which is what must re-fit the view. It also
+    // renders each node's label so tests can tell which loop is open.
+    ReactFlow: ({ nodes, children, onInit, fitView }: any) => {
+      // Runs once per mount (deps are stable): a fresh mount caused by a new
+      // per-loop key is exactly the re-fit we assert on.
       React.useEffect(() => {
-        onInit?.({ fitView: mockFitView });
-      }, [onInit]);
+        onInit?.({ fitView: () => mockFitView() });
+        if (fitView) mockFitView();
+      }, [onInit, fitView]);
       return React.createElement(
         "div",
         { "data-testid": "react-flow" },
