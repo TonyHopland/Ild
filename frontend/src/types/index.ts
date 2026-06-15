@@ -223,6 +223,10 @@ export interface LoopRunNode {
   executionCount: number;
   /** Template node type (e.g. "AI"); only populated by the run-detail endpoint. */
   nodeType?: string | null;
+  /** AI token/cost; null for non-AI nodes or turns with no reported usage. */
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  costUsd?: number | null;
 }
 
 export interface LoopRunAvailableSession {
@@ -257,6 +261,10 @@ export interface LoopRun {
   nodeExecutionCount: number;
   startedAt: string;
   completedAt: string | null;
+  /** Run-level token/cost totals summed from the run's nodes. */
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
+  totalCostUsd?: number | null;
   availableSessions?: LoopRunAvailableSession[];
   nodes: LoopRunNode[];
 }
@@ -463,4 +471,32 @@ export interface ConfigFieldDescriptor {
   defaultValue: string | number | boolean | null;
   description: string | null;
   options: string[] | null;
+}
+
+/** Per-loop-template analytics rollup (mirrors ILD.Data.DTOs.TemplateAnalytics). */
+export interface TemplateAnalytics {
+  templateId: string;
+  templateName: string;
+  totalRuns: number;
+  completedRuns: number;
+  failedRuns: number;
+  cancelledRuns: number;
+  /** Completed runs as a fraction (0..1) of terminal runs. */
+  successRate: number;
+  avgNodeSeconds: number | null;
+  onFailureRoutings: number;
+  rejectRoutings: number;
+  avgHumanFeedbackSeconds: number | null;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCostUsd: number;
+}
+
+/** Analytics dashboard payload (mirrors ILD.Data.DTOs.RunAnalyticsOverview). */
+export interface RunAnalyticsOverview {
+  totalRuns: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCostUsd: number;
+  templates: TemplateAnalytics[];
 }

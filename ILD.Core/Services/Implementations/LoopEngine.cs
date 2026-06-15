@@ -566,7 +566,7 @@ public sealed class LoopEngine : ILoopEngine
                         // either way (the work happened), but stop without
                         // routing when the run state changed underneath us.
                         var stillCurrent = await ReloadRunStillCurrentAsync(loopRunStore, run, entryStatus);
-                        await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.Succeeded, ok.Output, null);
+                        await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.Succeeded, ok.Output, null, ok.Usage);
                         await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Succeeded);
                         if (eventLog is not null && runNodeId is Guid id)
                             await TrySafe(() => eventLog.AppendAsync(run.Id, "NodeCompleted", ok.Output ?? string.Empty, node.Id, runNodeId: id));
@@ -758,7 +758,7 @@ public sealed class LoopEngine : ILoopEngine
             .FirstOrDefault()?.Id;
     }
 
-    private static async Task CompleteRunNodeAsync(ILoopRunStore store, Guid? runNodeId, LoopRunNodeStatus status, string? output, string? error)
+    private static async Task CompleteRunNodeAsync(ILoopRunStore store, Guid? runNodeId, LoopRunNodeStatus status, string? output, string? error, ILD.Data.DTOs.TokenUsage? usage = null)
     {
         if (runNodeId is null) return;
         var rn = await store.GetRunNodeByIdAsync(runNodeId.Value);
@@ -767,6 +767,12 @@ public sealed class LoopEngine : ILoopEngine
         rn.Output = output;
         rn.Error = error;
         rn.CompletedAt = DateTime.UtcNow;
+        if (usage is not null && usage.HasData)
+        {
+            rn.InputTokens = usage.InputTokens;
+            rn.OutputTokens = usage.OutputTokens;
+            rn.CostUsd = usage.CostUsd;
+        }
         await store.UpdateRunNodeAsync(rn);
     }
 

@@ -178,7 +178,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                 return NodeExecutionResult.Fail(response);
 
             return p.ExitCode == 0
-                ? NodeExecutionResult.Ok(response, rendered, effectiveSessionId, ctx.IncomingSessionId)
+                ? NodeExecutionResult.Ok(response, rendered, effectiveSessionId, ctx.IncomingSessionId, AdapterUsageParser.Parse(stdout))
                 : NodeExecutionResult.Fail($"exit={p.ExitCode} stderr={stderr}", response);
         }
         catch (Exception ex)

@@ -64,6 +64,11 @@ public class AppDbContext : DbContext
 
     private void ConfigureEnumConversions(ModelBuilder modelBuilder)
     {
+        // AI cost is money: fix the precision so Postgres stores a numeric(18,6)
+        // rather than defaulting to a lossy/ambiguous column.
+        modelBuilder.Entity<LoopRunNode>()
+            .Property(rn => rn.CostUsd)
+            .HasPrecision(18, 6);
         modelBuilder.Entity<LoopTemplate>()
             .Property(t => t.RecoveryPolicy)
             .HasConversion<string>()

@@ -21,7 +21,12 @@ public sealed record LoopRunNodeResponse(
     // The template node's type (e.g. "AI"), when the LoopNode navigation was
     // eager-loaded. Null on the list endpoint, which doesn't load it. Drives
     // the live-view Halt affordance, which is AI-node only.
-    string? NodeType)
+    string? NodeType,
+    // AI token/cost accounting captured from the agent CLI; null for non-AI
+    // nodes or turns where the provider reported no usage.
+    long? InputTokens,
+    long? OutputTokens,
+    decimal? CostUsd)
 {
     public static LoopRunNodeResponse From(LoopRunNode rn) => new(
         rn.Id,
@@ -34,5 +39,8 @@ public sealed record LoopRunNodeResponse(
         rn.StartedAt,
         rn.CompletedAt,
         0,
-        rn.LoopNode?.NodeType.ToString());
+        rn.LoopNode?.NodeType.ToString(),
+        rn.InputTokens,
+        rn.OutputTokens,
+        rn.CostUsd);
 }

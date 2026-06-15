@@ -9,6 +9,7 @@ import Taskboard from "./pages/Taskboard";
 const LoopEditor = lazy(() => import("./pages/LoopEditor"));
 const LoopRunMonitor = lazy(() => import("./pages/LoopRunMonitor"));
 import EventLogViewer from "./pages/EventLogViewer";
+import Analytics from "./pages/Analytics";
 import Settings from "./pages/Settings";
 import Repositories from "./pages/Repositories";
 import RemoteProviders from "./pages/RemoteProviders";
@@ -111,6 +112,14 @@ function AppRoutes() {
             element={
               <ProtectedRoute>
                 <EventLogViewer />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/analytics"
+            element={
+              <ProtectedRoute>
+                <Analytics />
               </ProtectedRoute>
             }
           />

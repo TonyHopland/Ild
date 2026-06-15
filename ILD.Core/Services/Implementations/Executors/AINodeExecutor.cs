@@ -157,12 +157,12 @@ public sealed class AINodeExecutor : INodeExecutor
                     if (!string.IsNullOrWhiteSpace(rule.Pattern) && !string.IsNullOrWhiteSpace(rule.EdgeName)
                         && System.Text.RegularExpressions.Regex.IsMatch(result.Output, rule.Pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase))
                     {
-                        yield return new NodeOutcome.Success(EdgeType.Custom, result.Output, rule.EdgeName);
+                        yield return new NodeOutcome.Success(EdgeType.Custom, result.Output, rule.EdgeName, result.Usage);
                         yield break;
                     }
                 }
             }
-            yield return new NodeOutcome.Success(EdgeType.OnSuccess, result.Output);
+            yield return new NodeOutcome.Success(EdgeType.OnSuccess, result.Output, Usage: result.Usage);
         }
         else
         {

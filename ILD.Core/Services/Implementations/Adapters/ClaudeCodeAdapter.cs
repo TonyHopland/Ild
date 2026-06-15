@@ -129,7 +129,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
                 await TryPersistSessionJsonlAsync(ctx, effectiveSessionId!, worktreePath);
 
             return process.ExitCode == 0
-                ? NodeExecutionResult.Ok(response, rendered, effectiveSessionId, ctx.IncomingSessionId)
+                ? NodeExecutionResult.Ok(response, rendered, effectiveSessionId, ctx.IncomingSessionId, AdapterUsageParser.Parse(stdout.RawStdout))
                 : NodeExecutionResult.Fail($"exit={process.ExitCode} stderr={stderr}", response);
         }
         catch (Exception ex)

@@ -20,6 +20,7 @@ import {
   WorktreeFileContent,
   AppSetting,
   WorkItemServerConfig,
+  RunAnalyticsOverview,
 } from "../types";
 
 interface BackendLoginResponse {
@@ -425,6 +426,12 @@ export const aiProviderService = {
 
   setDefault: async (id: string): Promise<AiProvider> => {
     return api.post<AiProvider>(`/aiproviders/${id}/set-default`, {});
+  },
+};
+
+export const analyticsService = {
+  getOverview: async (): Promise<RunAnalyticsOverview> => {
+    return api.get<RunAnalyticsOverview>("/analytics");
   },
 };
 
