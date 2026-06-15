@@ -11,6 +11,14 @@ public interface ILoopRunStore
     Task<IReadOnlyList<LoopRun>> GetAllByWorkItemAsync(string workItemId);
     Task<IReadOnlyList<LoopRun>> GetByWorkItemPagedAsync(string workItemId, int skip, int take);
     Task<LoopRun?> GetCurrentByWorkItemAsync(string workItemId);
+
+    /// <summary>
+    /// The work item's single active run, if any: the most recent run whose
+    /// status the engine considers alive (<c>Running</c> or <c>WaitingHuman</c>).
+    /// Used to enforce the at-most-one-active-run-per-work-item invariant.
+    /// </summary>
+    Task<LoopRun?> GetActiveByWorkItemAsync(string workItemId);
+
     Task<IReadOnlyList<LoopRun>> GetAllAsync(int skip = 0, int take = 100);
     Task<IReadOnlyList<LoopRun>> GetRunningRunsAsync();
 

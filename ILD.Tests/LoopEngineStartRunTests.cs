@@ -42,6 +42,61 @@ public class LoopEngineStartRunTests
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
     }
 
+    [Theory]
+    [InlineData(LoopRunStatus.Running)]
+    [InlineData(LoopRunStatus.WaitingHuman)]
+    public async Task StartRun_does_not_start_a_second_run_when_one_is_already_active(LoopRunStatus existingStatus)
+    {
+        // At-most-one-active-run invariant: a work item must never have two
+        // runs alive at once. WaitingHuman covers the parked-run race (a
+        // resumed run re-claimed by the stale-heartbeat reclaimer).
+        using var db = new TestDb();
+        var workItemId = $"WI-{Guid.NewGuid():N}";
+        var (engine, _) = BuildEngine(db, workItemId, RecoveryPolicy.AutoResume, seedVersionAndStartNode: true);
+        var existing = SeedRun(db, workItemId, existingStatus);
+
+        await engine.StartRunAsync(workItemId);
+        await DrainAsync(engine);
+
+        var run = Assert.Single(db.Fresh().LoopRuns.Where(r => r.WorkItemId == workItemId));
+        Assert.Equal(existing.Id, run.Id);
+    }
+
+    [Fact]
+    public async Task StartRun_starts_a_new_run_when_the_prior_run_is_terminal()
+    {
+        // The guard only blocks on alive runs — a completed prior run must not
+        // prevent the next run on the same work item.
+        using var db = new TestDb();
+        var workItemId = $"WI-{Guid.NewGuid():N}";
+        var (engine, _) = BuildEngine(db, workItemId, RecoveryPolicy.AutoResume, seedVersionAndStartNode: true);
+        var completed = SeedRun(db, workItemId, LoopRunStatus.Completed);
+
+        await engine.StartRunAsync(workItemId);
+        await DrainAsync(engine);
+
+        var runs = db.Fresh().LoopRuns.Where(r => r.WorkItemId == workItemId).ToList();
+        Assert.Equal(2, runs.Count);
+        Assert.Contains(runs, r => r.Id != completed.Id);
+    }
+
+    private static LoopRun SeedRun(TestDb db, string workItemId, LoopRunStatus status)
+    {
+        var versionId = db.Context.LoopTemplateVersions.Select(v => v.Id).First();
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = workItemId,
+            LoopTemplateVersionId = versionId,
+            Status = status,
+            RecoveryPolicy = RecoveryPolicy.AutoResume,
+            StartedAt = DateTime.UtcNow,
+        };
+        db.Context.LoopRuns.Add(run);
+        db.Context.SaveChanges();
+        return run;
+    }
+
     private static (ILoopEngine engine, Mock<IWorkItemManager> workItems) BuildEngine(
         TestDb db, string workItemId, RecoveryPolicy templatePolicy, bool seedVersionAndStartNode)
     {
