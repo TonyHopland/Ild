@@ -15,6 +15,32 @@ import {
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
 
+// The real terminal spins up an xterm instance and a WebSocket, neither of which
+// jsdom provides. Stub it with a marker that echoes the props the modal passes so
+// the tab wiring (open/close, embedded rendering, session persistence) can be
+// asserted without a live PTY.
+vi.mock("../LoopRunTerminal", () => ({
+  default: ({
+    loopRunId,
+    embedded,
+    onClose,
+  }: {
+    loopRunId: string;
+    embedded?: boolean;
+    onClose: () => void;
+  }) => (
+    <div
+      data-testid="embedded-terminal"
+      data-loop-run-id={loopRunId}
+      data-embedded={String(!!embedded)}
+    >
+      <button type="button" onClick={onClose}>
+        terminal-close
+      </button>
+    </div>
+  ),
+}));
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -476,5 +502,71 @@ describe("WorkItemModalV2", () => {
       await Promise.resolve();
     });
     expect(screen.getByText("done")).toBeTruthy();
+  });
+
+  test("shows a Terminal tab only once the run has a worktree", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem({ currentLoopRunId: "run-1", worktreePath: "/tmp/wt/wi-1" }));
+    expect(screen.getByRole("tab", { name: /Terminal/ })).toBeTruthy();
+  });
+
+  test("hides the Terminal tab when the run has no worktree", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem({ currentLoopRunId: "run-1", worktreePath: null }));
+    expect(screen.queryByRole("tab", { name: /Terminal/ })).toBeNull();
+  });
+
+  test("opens the terminal in its tab and keeps the session mounted across tab switches", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem({ currentLoopRunId: "run-1", worktreePath: "/tmp/wt/wi-1" }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Terminal/ }));
+      await Promise.resolve();
+    });
+    // The tab opens on a prompt, not a live session.
+    expect(screen.getByRole("button", { name: "Open Terminal" })).toBeTruthy();
+    expect(screen.queryByTestId("embedded-terminal")).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Open Terminal" }));
+      await Promise.resolve();
+    });
+    const term = screen.getByTestId("embedded-terminal");
+    // Rendered inline inside the tab, wired to the current run.
+    expect(term.getAttribute("data-embedded")).toBe("true");
+    expect(term.getAttribute("data-loop-run-id")).toBe("run-1");
+
+    // Navigating to another tab must not tear down the session — the panel is
+    // only hidden, so the same terminal node stays mounted.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
+      await Promise.resolve();
+    });
+    const stillThere = screen.getByTestId("embedded-terminal");
+    expect(stillThere).toBe(term);
+    expect(stillThere.closest("[role='tabpanel']")?.hasAttribute("hidden")).toBe(true);
+  });
+
+  test("closing the terminal tears down the session and returns to the open prompt", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem({ currentLoopRunId: "run-1", worktreePath: "/tmp/wt/wi-1" }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Terminal/ }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Open Terminal" }));
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("embedded-terminal")).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "terminal-close" }));
+      await Promise.resolve();
+    });
+    expect(screen.queryByTestId("embedded-terminal")).toBeNull();
+    expect(screen.getByRole("button", { name: "Open Terminal" })).toBeTruthy();
   });
 });

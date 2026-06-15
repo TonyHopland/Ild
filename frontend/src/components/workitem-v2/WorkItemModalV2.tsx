@@ -20,7 +20,7 @@ import HaltSteerControls from "./HaltSteerControls";
 import EditPanel from "./EditPanel";
 import FilesPanel from "./FilesPanel";
 
-type TabId = "overview" | "runs" | "conversation" | "files" | "preview";
+type TabId = "overview" | "runs" | "conversation" | "files" | "preview" | "terminal";
 
 interface WorkItemModalV2Props {
   workItem: WorkItem;
@@ -81,10 +81,24 @@ export default function WorkItemModalV2({
     setEditMode(false);
     setEditDirty(false);
     setActiveTab("overview");
+    // A terminal session belongs to the item it was opened on; switching items
+    // must tear it down rather than leak the previous worktree's shell.
+    setShowTerminal(false);
     // Only reset when switching to a different item — status changes on the
     // same item must not yank the user away from the tab they are reading.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workItem.id]);
+
+  // The terminal connects to the run's worktree, so the tab only exists once a
+  // run has created one. Gating on the worktree (not the status) keeps the tab —
+  // and any live session — stable as the item moves between statuses.
+  const canUseTerminal = Boolean(workItem.currentLoopRunId && workItem.worktreePath);
+
+  // If the worktree is reclaimed while the Terminal tab is open, the tab (and its
+  // panel) disappear — fall back to Overview so the content area is never blank.
+  useEffect(() => {
+    if (activeTab === "terminal" && !canUseTerminal) setActiveTab("overview");
+  }, [activeTab, canUseTerminal]);
 
   // Rendered prompt for the currently-suspended Human/PR node, same as classic.
   const runId = workItem.currentLoopRunId ?? undefined;
@@ -128,6 +142,9 @@ export default function WorkItemModalV2({
     },
     { id: "files", label: "Files" },
     { id: "preview", label: `Preview${detail.preview?.state === "running" ? " ●" : ""}` },
+    ...(canUseTerminal
+      ? [{ id: "terminal" as TabId, label: `Terminal${showTerminal ? " ●" : ""}` }]
+      : []),
   ];
 
   const showCleanupButtons =
@@ -223,6 +240,38 @@ export default function WorkItemModalV2({
       >
         <PreviewPanel workItem={workItem} detail={detail} />
       </section>
+      {canUseTerminal && workItem.currentLoopRunId && (
+        <section
+          role="tabpanel"
+          id="wiv2-panel-terminal"
+          aria-labelledby="wiv2-tab-terminal"
+          className="wiv2-tabpanel wiv2-tabpanel-terminal"
+          hidden={activeTab !== "terminal"}
+        >
+          {/* The session stays mounted while the panel is merely hidden, so
+              switching tabs never tears down the shell — only the Close button
+              (or closing the dialog) does. */}
+          {showTerminal ? (
+            <LoopRunTerminal
+              loopRunId={workItem.currentLoopRunId}
+              title={`#${workItem.id} — ${workItem.title}`}
+              embedded
+              onClose={() => setShowTerminal(false)}
+            />
+          ) : (
+            <div className="wiv2-terminal-empty">
+              <p>Open a shell in {workItem.worktreePath}</p>
+              <button
+                type="button"
+                className="btn btn-sm btn-secondary"
+                onClick={() => setShowTerminal(true)}
+              >
+                Open Terminal
+              </button>
+            </div>
+          )}
+        </section>
+      )}
     </>
   );
 
@@ -269,18 +318,6 @@ export default function WorkItemModalV2({
               </div>
             </div>
             <div className="wiv2-header-actions">
-              {workItem.status === WorkItemStatus.HumanFeedback &&
-                workItem.currentLoopRunId &&
-                workItem.worktreePath && (
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-secondary"
-                    onClick={() => setShowTerminal(true)}
-                    title={`Open a shell in ${workItem.worktreePath}`}
-                  >
-                    Open Terminal
-                  </button>
-                )}
               {!editMode && (
                 <button
                   type="button"
@@ -374,13 +411,6 @@ export default function WorkItemModalV2({
         }}
         onCancel={() => setShowCloseConfirm(false)}
       />
-      {showTerminal && workItem.currentLoopRunId && (
-        <LoopRunTerminal
-          loopRunId={workItem.currentLoopRunId}
-          title={`#${workItem.id} — ${workItem.title}`}
-          onClose={() => setShowTerminal(false)}
-        />
-      )}
     </>
   );
 }
