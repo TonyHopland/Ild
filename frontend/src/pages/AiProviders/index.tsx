@@ -60,9 +60,9 @@ export default function AiProviders() {
     setParallelism(0);
   };
 
-  // Provider types whose auth is handled by the CLI itself (e.g.
-  // claude-code logs in via `claude /login` and stores creds in ~/.claude),
-  // so the BaseUrl / API key / model fields are not applicable.
+  // Provider types whose auth is handled by the CLI itself (e.g. claude-code
+  // logs in via the `/login` slash command inside its TUI and stores creds in
+  // ~/.claude), so the BaseUrl / API key / model fields are not applicable.
   const isCliAuthProvider = (t: string) => t === "claude-code";
 
   const handleSetDefault = async (provider: AiProvider) => {
@@ -226,9 +226,12 @@ export default function AiProviders() {
               </div>
               {isCliAuthProvider(type) ? (
                 <div className="ap-cli-note">
-                  This provider type authenticates via the locally-installed Claude Code CLI (e.g.{" "}
-                  <code>claude /login</code> with a Max subscription). Base URL, API key and model
-                  are configured by the CLI itself and are not needed here.
+                  This provider type authenticates via the locally-installed Claude Code CLI. The
+                  first time you set it up, save the provider and then use{" "}
+                  <strong>Open terminal</strong> to launch the Claude Code TUI. Inside it, run the{" "}
+                  <code>/login</code> slash command to sign in (use a Max subscription). Until you
+                  complete that one-time login, this provider will not work. Base URL, API key and
+                  model are configured by the CLI itself and are not needed here.
                 </div>
               ) : (
                 <>
