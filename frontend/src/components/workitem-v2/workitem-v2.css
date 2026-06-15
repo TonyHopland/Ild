@@ -512,6 +512,24 @@
   overflow: hidden;
 }
 
+/* The Terminal panel hosts an embedded xterm that fills the column, so drop the
+   default padding/scroll the same way the Files panel does. */
+.wiv2-tabpanel-terminal {
+  padding: 0;
+  overflow: hidden;
+}
+
+.wiv2-terminal-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  height: 100%;
+  color: #a0a0b0;
+  font-size: 0.85rem;
+}
+
 .wiv2-files {
   display: flex;
   height: 100%;

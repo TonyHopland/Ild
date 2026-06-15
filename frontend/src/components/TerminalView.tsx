@@ -15,6 +15,11 @@ interface Props {
   errorHint?: string;
   /** Optional aria-label override. Defaults to "Interactive terminal for {title}". */
   ariaLabel?: string;
+  /**
+   * Render inline (filling the parent) instead of as a centered modal overlay.
+   * Used when the terminal lives inside a tab panel rather than on top of one.
+   */
+  embedded?: boolean;
   onClose: () => void;
 }
 
@@ -24,6 +29,7 @@ export default function TerminalView({
   title,
   errorHint,
   ariaLabel,
+  embedded = false,
   onClose,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -133,35 +139,39 @@ export default function TerminalView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectionKey]);
 
-  return (
-    <div className="modal-overlay" onMouseDown={onClose}>
-      <div
-        className="pt-modal"
-        onMouseDown={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-label={ariaLabel ?? `Interactive terminal for ${title}`}
-      >
-        <div className="pt-header">
-          <div className="pt-title">
-            <span className="pt-name">{title}</span>
-            <span className={`pt-status pt-status-${status}`}>
-              {status === "connecting"
-                ? "Connecting…"
-                : status === "open"
-                  ? "Connected"
-                  : status === "closed"
-                    ? "Closed"
-                    : "Error"}
-            </span>
-          </div>
-          <button className="btn btn-secondary btn-small" onClick={onClose}>
-            Close
-          </button>
+  const inner = (
+    <>
+      <div className="pt-header">
+        <div className="pt-title">
+          <span className="pt-name">{title}</span>
+          <span className={`pt-status pt-status-${status}`}>
+            {status === "connecting"
+              ? "Connecting…"
+              : status === "open"
+                ? "Connected"
+                : status === "closed"
+                  ? "Closed"
+                  : "Error"}
+          </span>
         </div>
-        <div className="pt-body" ref={containerRef} />
-        {errorText && <div className="pt-error">{errorText}</div>}
+        <button className="btn btn-secondary btn-small" onClick={onClose}>
+          Close
+        </button>
       </div>
-      <style>{`
+      <div className="pt-body" ref={containerRef} />
+      {errorText && <div className="pt-error">{errorText}</div>}
+    </>
+  );
+
+  const styles = (
+    <style>{`
+        .pt-embedded {
+          width: 100%;
+          height: 100%;
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+        }
         .pt-modal {
           background-color: #0f0f1f;
           border-radius: 0.5rem;
@@ -216,6 +226,32 @@ export default function TerminalView({
           border-top: 1px solid #5b1f1f;
         }
       `}</style>
+  );
+
+  if (embedded) {
+    return (
+      <div
+        className="pt-embedded"
+        role="group"
+        aria-label={ariaLabel ?? `Interactive terminal for ${title}`}
+      >
+        {inner}
+        {styles}
+      </div>
+    );
+  }
+
+  return (
+    <div className="modal-overlay" onMouseDown={onClose}>
+      <div
+        className="pt-modal"
+        onMouseDown={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-label={ariaLabel ?? `Interactive terminal for ${title}`}
+      >
+        {inner}
+      </div>
+      {styles}
     </div>
   );
 }

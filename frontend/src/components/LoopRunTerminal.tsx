@@ -5,6 +5,8 @@ const API_BASE: string = (import.meta.env?.VITE_API_BASE as string | undefined) 
 interface Props {
   loopRunId: string;
   title: string;
+  /** Render inline inside a tab panel instead of as a centered modal overlay. */
+  embedded?: boolean;
   onClose: () => void;
 }
 
@@ -19,7 +21,7 @@ function buildWebSocketUrl(loopRunId: string, cols: number, rows: number): strin
   return url.toString();
 }
 
-export default function LoopRunTerminal({ loopRunId, title, onClose }: Props) {
+export default function LoopRunTerminal({ loopRunId, title, embedded, onClose }: Props) {
   return (
     <TerminalView
       connectionKey={loopRunId}
@@ -27,6 +29,7 @@ export default function LoopRunTerminal({ loopRunId, title, onClose }: Props) {
       title={title}
       errorHint="Connection error. The worktree may have been cleaned up."
       ariaLabel={`Worktree terminal for ${title}`}
+      embedded={embedded}
       onClose={onClose}
     />
   );
