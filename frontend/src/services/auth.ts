@@ -16,6 +16,8 @@ import {
   PrComment,
   LoopRunSessionPreview,
   WorktreePreview,
+  WorktreeFiles,
+  WorktreeFileContent,
   AppSetting,
   WorkItemServerConfig,
 } from "../types";
@@ -211,6 +213,16 @@ export const workItemService = {
 
   stopPreview: async (id: string): Promise<WorktreePreview> => {
     return api.post<WorktreePreview>(`/workitems/${id}/preview/stop`, {});
+  },
+
+  getFiles: async (id: string): Promise<WorktreeFiles> => {
+    return api.get<WorktreeFiles>(`/workitems/${id}/files`);
+  },
+
+  getFileContent: async (id: string, path: string): Promise<WorktreeFileContent> => {
+    return api.get<WorktreeFileContent>(
+      `/workitems/${id}/files/content?path=${encodeURIComponent(path)}`,
+    );
   },
 };
 

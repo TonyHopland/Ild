@@ -18,8 +18,9 @@ import {
 import RunsPanel from "./RunsPanel";
 import HaltSteerControls from "./HaltSteerControls";
 import EditPanel from "./EditPanel";
+import FilesPanel from "./FilesPanel";
 
-type TabId = "overview" | "runs" | "conversation" | "preview";
+type TabId = "overview" | "runs" | "conversation" | "files" | "preview";
 
 interface WorkItemModalV2Props {
   workItem: WorkItem;
@@ -30,9 +31,10 @@ interface WorkItemModalV2Props {
 
 /**
  * Near-fullscreen work item detail dialog: a horizontal tab bar (Overview,
- * Runs, Conversation, Preview) over the full width, with run history shown
- * inline rather than on a separate page. New items are still created through
- * the classic modal — this dialog is the detail/edit view for existing items.
+ * Runs, Conversation, Files, Preview) over the full width, with run history
+ * shown inline rather than on a separate page. New items are still created
+ * through the classic modal — this dialog is the detail/edit view for existing
+ * items.
  */
 export default function WorkItemModalV2({
   workItem,
@@ -124,6 +126,7 @@ export default function WorkItemModalV2({
       id: "conversation",
       label: `Conversation${conversationCount > 0 ? ` (${conversationCount})` : ""}`,
     },
+    { id: "files", label: "Files" },
     { id: "preview", label: `Preview${detail.preview?.state === "running" ? " ●" : ""}` },
   ];
 
@@ -201,6 +204,15 @@ export default function WorkItemModalV2({
         hidden={activeTab !== "conversation"}
       >
         <ConversationPanel workItem={workItem} />
+      </section>
+      <section
+        role="tabpanel"
+        id="wiv2-panel-files"
+        aria-labelledby="wiv2-tab-files"
+        className="wiv2-tabpanel wiv2-tabpanel-files"
+        hidden={activeTab !== "files"}
+      >
+        <FilesPanel workItem={workItem} />
       </section>
       <section
         role="tabpanel"

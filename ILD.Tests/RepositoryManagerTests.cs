@@ -234,6 +234,110 @@ public class RepositoryManagerTests : IDisposable
         Assert.True(File.Exists(Path.Combine(_repo, "file-a.txt")));
     }
 
+    [Fact]
+    public async Task ListWorktreeFiles_tags_each_file_with_its_change_status()
+    {
+        var (work, mgr) = CloneWithOrigin();
+        var wt = await mgr.CreateWorktreeAsync(work, "feature-files");
+
+        // Committed changes on the branch: add, modify, delete.
+        File.WriteAllText(Path.Combine(wt, "added.txt"), "new file\n");
+        File.WriteAllText(Path.Combine(wt, "mod.txt"), "changed\n");
+        File.Delete(Path.Combine(wt, "gone.txt"));
+        Git(wt, "add", "-A");
+        Git(wt, "commit", "-m", "branch work");
+        // An uncommitted, untracked file must still register as added.
+        File.WriteAllText(Path.Combine(wt, "untracked.txt"), "scratch\n");
+
+        var files = await mgr.ListWorktreeFilesAsync(wt);
+        var byPath = files.ToDictionary(f => f.Path, f => f.ChangeStatus);
+
+        Assert.Equal("added", byPath["added.txt"]);
+        Assert.Equal("added", byPath["untracked.txt"]);
+        Assert.Equal("modified", byPath["mod.txt"]);
+        Assert.Equal("deleted", byPath["gone.txt"]);
+        Assert.Equal("none", byPath["keep.txt"]);
+    }
+
+    [Fact]
+    public async Task ReadWorktreeFile_returns_content_and_diff_for_changed_files()
+    {
+        var (work, mgr) = CloneWithOrigin();
+        var wt = await mgr.CreateWorktreeAsync(work, "feature-read");
+
+        File.WriteAllText(Path.Combine(wt, "mod.txt"), "changed\n");
+        File.Delete(Path.Combine(wt, "gone.txt"));
+        Git(wt, "add", "-A");
+        Git(wt, "commit", "-m", "edit");
+        File.WriteAllText(Path.Combine(wt, "untracked.txt"), "scratch\n");
+
+        var modified = await mgr.ReadWorktreeFileAsync(wt, "mod.txt");
+        Assert.NotNull(modified);
+        Assert.Equal("modified", modified!.ChangeStatus);
+        Assert.Contains("changed", modified.Content);
+        Assert.Contains("+changed", modified.Diff);
+
+        var untracked = await mgr.ReadWorktreeFileAsync(wt, "untracked.txt");
+        Assert.NotNull(untracked);
+        Assert.Equal("added", untracked!.ChangeStatus);
+        Assert.Contains("scratch", untracked.Content);
+        Assert.Contains("+scratch", untracked.Diff);
+
+        var deleted = await mgr.ReadWorktreeFileAsync(wt, "gone.txt");
+        Assert.NotNull(deleted);
+        Assert.Equal("deleted", deleted!.ChangeStatus);
+        Assert.Null(deleted.Content);
+        Assert.NotNull(deleted.Diff);
+
+        var unchanged = await mgr.ReadWorktreeFileAsync(wt, "keep.txt");
+        Assert.NotNull(unchanged);
+        Assert.Equal("none", unchanged!.ChangeStatus);
+        Assert.Null(unchanged.Diff);
+        Assert.Contains("keep", unchanged.Content);
+    }
+
+    [Fact]
+    public async Task ReadWorktreeFile_flags_binary_and_blocks_path_traversal()
+    {
+        var (work, mgr) = CloneWithOrigin();
+        var wt = await mgr.CreateWorktreeAsync(work, "feature-binary");
+
+        // A NUL byte makes the file binary — content is withheld.
+        File.WriteAllBytes(Path.Combine(wt, "blob.bin"), new byte[] { 1, 2, 0, 3, 4 });
+
+        var binary = await mgr.ReadWorktreeFileAsync(wt, "blob.bin");
+        Assert.NotNull(binary);
+        Assert.True(binary!.IsBinary);
+        Assert.Null(binary.Content);
+
+        Assert.Null(await mgr.ReadWorktreeFileAsync(wt, "../README.md"));
+        Assert.Null(await mgr.ReadWorktreeFileAsync(wt, "does-not-exist.txt"));
+    }
+
+    // Builds a repo with a real "origin" remote so origin/HEAD (the diff base)
+    // resolves the way it does for a cloned-on-demand base repo in production.
+    private (string Work, RepositoryManager Mgr) CloneWithOrigin()
+    {
+        var origin = Path.Combine(_tmp, "origin-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(origin);
+        Git(origin, "init", "-b", "main");
+        Git(origin, "config", "user.email", "t@t.io");
+        Git(origin, "config", "user.name", "Tester");
+        File.WriteAllText(Path.Combine(origin, "keep.txt"), "keep\n");
+        File.WriteAllText(Path.Combine(origin, "mod.txt"), "original\n");
+        File.WriteAllText(Path.Combine(origin, "gone.txt"), "doomed\n");
+        Git(origin, "add", "-A");
+        Git(origin, "commit", "-m", "seed");
+
+        var work = Path.Combine(_tmp, "work-" + Guid.NewGuid().ToString("N"));
+        Git(_tmp, "clone", origin, work);
+        Git(work, "config", "user.email", "t@t.io");
+        Git(work, "config", "user.name", "Tester");
+
+        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt-" + Guid.NewGuid().ToString("N")));
+        return (work, mgr);
+    }
+
     private static string GitOutput(string cwd, params string[] args)
     {
         var psi = new ProcessStartInfo("git") { WorkingDirectory = cwd, UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true };
