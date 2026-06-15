@@ -70,7 +70,14 @@ export function FeedbackBanner({
         onApprove={detail.handleApprove}
         onReject={detail.handleReject}
         onEdge={detail.handleEdge}
+        onMerge={isPr ? detail.handleMerge : undefined}
       />
+      {isPr && detail.mergeError && (
+        <div className="preview-message preview-error">{detail.mergeError}</div>
+      )}
+      {isPr && !detail.mergeError && detail.mergeMessage && (
+        <div className="preview-message">{detail.mergeMessage}</div>
+      )}
     </div>
   );
 }

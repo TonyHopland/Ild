@@ -365,6 +365,19 @@ public class WorkItemsController : ControllerBase
         return Ok();
     }
 
+    [HttpPost("{id}/pr/merge")]
+    public async Task<IActionResult> MergePr(string id, [FromBody] MergePrRequest? request = null)
+    {
+        var result = await _workItemManager.MergePullRequestAsync(id, request?.DeleteBranch ?? true);
+        if (result == null) return NotFound();
+        if (!result.Merged)
+            return BadRequest(new { error = result.Error });
+
+        // Branch deletion is best effort: surface a warning but report success
+        // so the UI advances the loop just like Approve.
+        return Ok(new { branchDeleted = result.BranchDeleted, warning = result.BranchWarning });
+    }
+
     [HttpGet("{id}/pr-comments")]
     public async Task<IActionResult> GetPrComments(string id)
     {
@@ -475,6 +488,16 @@ public class HumanFeedbackEdgeRequest
     /// </summary>
     [System.ComponentModel.DataAnnotations.StringLength(8192)]
     public string? Input { get; set; }
+}
+
+public class MergePrRequest
+{
+    /// <summary>
+    /// When true (the default), the source branch is deleted after a
+    /// successful merge. Branch deletion is best effort and never blocks the
+    /// loop from continuing.
+    /// </summary>
+    public bool DeleteBranch { get; set; } = true;
 }
 
 public class HumanFeedbackRejectRequest

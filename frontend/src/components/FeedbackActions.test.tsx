@@ -46,4 +46,70 @@ describe("FeedbackActions", () => {
     // No custom edge tokens => only the two role buttons render.
     expect(screen.getAllByRole("button")).toHaveLength(2);
   });
+
+  test("no Merge button when onMerge is not provided", () => {
+    render(
+      <FeedbackActions actions={null} onApprove={vi.fn()} onReject={vi.fn()} onEdge={vi.fn()} />,
+    );
+    expect(screen.queryByText("Merge")).toBeNull();
+  });
+
+  test("confirming Merge calls onMerge with delete-branch checked by default", () => {
+    const onMerge = vi.fn();
+    render(
+      <FeedbackActions
+        actions="OnSuccess,OnFailure"
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onEdge={vi.fn()}
+        onMerge={onMerge}
+      />,
+    );
+
+    // The confirmation popup is only shown after clicking Merge.
+    expect(screen.queryByText("Delete branch after merge")).toBeNull();
+    fireEvent.click(screen.getByText("Merge"));
+
+    const checkbox = screen.getByRole("checkbox") as HTMLInputElement;
+    expect(checkbox.checked).toBe(true);
+
+    fireEvent.click(screen.getByText("Confirm Merge"));
+    expect(onMerge).toHaveBeenCalledWith(true);
+  });
+
+  test("unchecking the box merges without deleting the branch", () => {
+    const onMerge = vi.fn();
+    render(
+      <FeedbackActions
+        actions="OnSuccess,OnFailure"
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onEdge={vi.fn()}
+        onMerge={onMerge}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Merge"));
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByText("Confirm Merge"));
+    expect(onMerge).toHaveBeenCalledWith(false);
+  });
+
+  test("cancelling the Merge confirmation does not call onMerge", () => {
+    const onMerge = vi.fn();
+    render(
+      <FeedbackActions
+        actions="OnSuccess,OnFailure"
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onEdge={vi.fn()}
+        onMerge={onMerge}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Merge"));
+    fireEvent.click(screen.getByText("Cancel"));
+    expect(onMerge).not.toHaveBeenCalled();
+    expect(screen.queryByText("Delete branch after merge")).toBeNull();
+  });
 });

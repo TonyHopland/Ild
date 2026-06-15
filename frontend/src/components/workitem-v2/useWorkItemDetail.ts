@@ -37,6 +37,9 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const [pushBranchLoading, setPushBranchLoading] = useState(false);
   const [pushBranchError, setPushBranchError] = useState<string | null>(null);
   const [pushBranchMessage, setPushBranchMessage] = useState<string | null>(null);
+  const [mergeLoading, setMergeLoading] = useState(false);
+  const [mergeError, setMergeError] = useState<string | null>(null);
+  const [mergeMessage, setMergeMessage] = useState<string | null>(null);
 
   useEffect(() => {
     repositoryService
@@ -378,6 +381,31 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const handleEdge = (name: string) =>
     runAction((id) => workItemService.humanFeedbackEdge(id, name, feedbackInput || ""), "respond");
 
+  // Merge the linked PR on the remote (and optionally delete the branch), then
+  // continue the loop along OnSuccess. A merge failure leaves the item parked,
+  // so the error is surfaced rather than swallowed like the other actions.
+  const handleMerge = useCallback(
+    async (deleteBranch: boolean) => {
+      if (!workItem) return;
+      setMergeLoading(true);
+      setMergeError(null);
+      setMergeMessage(null);
+      try {
+        const result = await workItemService.mergePr(workItem.id, deleteBranch);
+        setMergeMessage(
+          result.warning ?? (deleteBranch ? "PR merged and branch deleted." : "PR merged."),
+        );
+        const updated = await workItemService.getById(workItem.id);
+        onSave(updated);
+      } catch (error) {
+        setMergeError((error as { message?: string })?.message ?? "Failed to merge PR.");
+      } finally {
+        setMergeLoading(false);
+      }
+    },
+    [workItem?.id, onSave],
+  );
+
   // Halt/steer act on the work item's current run, not the work item itself,
   // but reuse runAction's refetch-and-save so the dialog reflects the new state.
   const handleHalt = () => {
@@ -448,6 +476,10 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     handleApprove,
     handleReject,
     handleEdge,
+    mergeLoading,
+    mergeError,
+    mergeMessage,
+    handleMerge,
     handleHalt,
     handleResumeSteer,
     handleCleanupDone,

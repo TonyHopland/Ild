@@ -55,7 +55,7 @@ public class WorkItemManagerTests
     private static (WorkItemManager mgr, TestDb db, Guid repoId, Mock<IRepositoryManager> repoMgr, Mock<IEventLogService> eventLog) SetupWithEngine(out Mock<ILoopEngine> engine)
         => SetupCore(out engine);
 
-    private static (WorkItemManager mgr, TestDb db, Guid repoId, Mock<IRepositoryManager> repoMgr, Mock<IEventLogService> eventLog) SetupCore(out Mock<ILoopEngine> engine)
+    private static (WorkItemManager mgr, TestDb db, Guid repoId, Mock<IRepositoryManager> repoMgr, Mock<IEventLogService> eventLog) SetupCore(out Mock<ILoopEngine> engine, Mock<IRemoteProvider>? remoteProvider = null)
     {
         var db = new TestDb();
         var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
@@ -69,7 +69,55 @@ public class WorkItemManagerTests
             .ReturnsAsync(1L);
         engine = new Mock<ILoopEngine>();
         return (new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions,
-            engine: engine.Object), db, repo.Id, repoMgr, eventLog);
+            engine: engine.Object, remoteProvider: remoteProvider?.Object), db, repo.Id, repoMgr, eventLog);
+    }
+
+    // Park a work item at a PR node awaiting merge: a running run carrying the
+    // PR URL + branch, plus a WaitingHuman run node so the OnSuccess
+    // continuation has a node to signal. The CloneUrl is fixed by SetupCore.
+    private const string MergeRepoCloneUrl = "https://example/repo.git";
+
+    private static (string workItemId, Guid runId, Guid runNodeId) SeedPrAwaitingMerge(
+        WorkItemManager mgr, TestDb db, Guid repoId, string prUrl, string branchName)
+    {
+        var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "pr" };
+        var ltv = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = lt.Id, VersionNumber = 1, CreatedAt = DateTime.UtcNow };
+        db.Context.LoopTemplates.Add(lt);
+        db.Context.LoopTemplateVersions.Add(ltv);
+        db.Context.SaveChanges();
+
+        var id = mgr.CreateWorkItemAsync("merge me", "", repoId).GetAwaiter().GetResult();
+        var runId = Guid.NewGuid();
+        var prNodeId = Guid.NewGuid();
+        db.Context.LoopRuns.Add(new LoopRun
+        {
+            Id = runId,
+            WorkItemId = id,
+            LoopTemplateVersionId = ltv.Id,
+            Status = LoopRunStatus.Running,
+            StartedAt = DateTime.UtcNow,
+            CurrentNodeId = prNodeId,
+            PrUrl = prUrl,
+            BranchName = branchName,
+        });
+        db.Context.LoopNodes.Add(new LoopNode
+        {
+            Id = prNodeId,
+            LoopTemplateVersionId = ltv.Id,
+            NodeType = NodeType.PR,
+            Label = "pr",
+        });
+        var runNodeId = Guid.NewGuid();
+        db.Context.LoopRunNodes.Add(new LoopRunNode
+        {
+            Id = runNodeId,
+            LoopRunId = runId,
+            LoopNodeId = prNodeId,
+            Status = LoopRunNodeStatus.WaitingHuman,
+        });
+        db.Context.SaveChanges();
+        mgr.TransitionToHumanFeedbackAsync(id, HumanFeedbackReasons.PrAwaitingMerge).GetAwaiter().GetResult();
+        return (id, runId, runNodeId);
     }
 
     [Fact]
@@ -984,6 +1032,107 @@ public class WorkItemManagerTests
         eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "please revise the approach", null), Times.Once);
         engine.Verify(eng => eng.SignalNodeResultAsync(runId, runNode.Id,
             It.Is<NodeSignal>(s => s.EdgeName == "Respond" && s.Output == "please revise the approach")), Times.Once);
+    }
+
+    // ---- MergePullRequestAsync -------------------------------------------
+
+    [Fact]
+    public async Task MergePullRequest_merges_deletes_branch_and_advances_OnSuccess()
+    {
+        var remote = new Mock<IRemoteProvider>();
+        remote.Setup(r => r.MergePullRequestAsync(MergeRepoCloneUrl, "42")).ReturnsAsync(true);
+        remote.Setup(r => r.DeleteBranchAsync(MergeRepoCloneUrl, "ild/wi-x-run-1")).ReturnsAsync(true);
+        var (mgr, db, repoId, _, _) = SetupCore(out var engine, remote);
+        using var _ = db;
+
+        var (id, runId, runNodeId) = SeedPrAwaitingMerge(
+            mgr, db, repoId, "https://example/repo/pulls/42", "ild/wi-x-run-1");
+
+        var result = await mgr.MergePullRequestAsync(id, deleteBranch: true);
+
+        Assert.NotNull(result);
+        Assert.True(result!.Merged);
+        Assert.True(result.BranchDeleted);
+        Assert.Null(result.BranchWarning);
+        remote.Verify(r => r.MergePullRequestAsync(MergeRepoCloneUrl, "42"), Times.Once);
+        remote.Verify(r => r.DeleteBranchAsync(MergeRepoCloneUrl, "ild/wi-x-run-1"), Times.Once);
+        // OnSuccess continuation is identical to Approve: signal Success on the parked node.
+        engine.Verify(eng => eng.SignalNodeResultAsync(runId, runNodeId,
+            It.Is<NodeSignal>(s => s.Type == ExternalActionResultType.Success)), Times.Once);
+    }
+
+    [Fact]
+    public async Task MergePullRequest_does_not_delete_branch_when_not_requested()
+    {
+        var remote = new Mock<IRemoteProvider>();
+        remote.Setup(r => r.MergePullRequestAsync(MergeRepoCloneUrl, "7")).ReturnsAsync(true);
+        var (mgr, db, repoId, _, _) = SetupCore(out var engine, remote);
+        using var _ = db;
+
+        var (id, runId, runNodeId) = SeedPrAwaitingMerge(
+            mgr, db, repoId, "https://example/repo/pulls/7", "ild/wi-x-run-2");
+
+        var result = await mgr.MergePullRequestAsync(id, deleteBranch: false);
+
+        Assert.True(result!.Merged);
+        Assert.False(result.BranchDeleted);
+        remote.Verify(r => r.DeleteBranchAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        engine.Verify(eng => eng.SignalNodeResultAsync(runId, runNodeId,
+            It.Is<NodeSignal>(s => s.Type == ExternalActionResultType.Success)), Times.Once);
+    }
+
+    [Fact]
+    public async Task MergePullRequest_failed_merge_leaves_item_parked_and_does_not_advance()
+    {
+        var remote = new Mock<IRemoteProvider>();
+        remote.Setup(r => r.MergePullRequestAsync(MergeRepoCloneUrl, "9")).ReturnsAsync(false);
+        var (mgr, db, repoId, _, _) = SetupCore(out var engine, remote);
+        using var _ = db;
+
+        var (id, _, _) = SeedPrAwaitingMerge(
+            mgr, db, repoId, "https://example/repo/pulls/9", "ild/wi-x-run-3");
+
+        var result = await mgr.MergePullRequestAsync(id, deleteBranch: true);
+
+        Assert.NotNull(result);
+        Assert.False(result!.Merged);
+        Assert.NotNull(result.Error);
+        // No branch delete and no loop continuation when the merge fails.
+        remote.Verify(r => r.DeleteBranchAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        engine.Verify(eng => eng.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task MergePullRequest_branch_delete_failure_is_reported_but_does_not_block_continuation()
+    {
+        var remote = new Mock<IRemoteProvider>();
+        remote.Setup(r => r.MergePullRequestAsync(MergeRepoCloneUrl, "11")).ReturnsAsync(true);
+        remote.Setup(r => r.DeleteBranchAsync(MergeRepoCloneUrl, "ild/wi-x-run-4")).ReturnsAsync(false);
+        var (mgr, db, repoId, _, _) = SetupCore(out var engine, remote);
+        using var _ = db;
+
+        var (id, runId, runNodeId) = SeedPrAwaitingMerge(
+            mgr, db, repoId, "https://example/repo/pulls/11", "ild/wi-x-run-4");
+
+        var result = await mgr.MergePullRequestAsync(id, deleteBranch: true);
+
+        Assert.True(result!.Merged);
+        Assert.False(result.BranchDeleted);
+        Assert.NotNull(result.BranchWarning);
+        // The merge succeeded, so the loop still advances along OnSuccess.
+        engine.Verify(eng => eng.SignalNodeResultAsync(runId, runNodeId,
+            It.Is<NodeSignal>(s => s.Type == ExternalActionResultType.Success)), Times.Once);
+    }
+
+    [Fact]
+    public async Task MergePullRequest_returns_null_for_unknown_workitem()
+    {
+        var remote = new Mock<IRemoteProvider>();
+        var (mgr, db, _, _, _) = SetupCore(out var engine, remote);
+        using var dispose = db;
+
+        Assert.Null(await mgr.MergePullRequestAsync(Guid.NewGuid().ToString(), deleteBranch: true));
+        engine.Verify(eng => eng.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
     }
 
     // ---- TransitionAsync (canonical generic transition) ------------------
