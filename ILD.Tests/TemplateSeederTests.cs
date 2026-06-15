@@ -1,5 +1,6 @@
 using ILD.Api.Configuration;
 using ILD.Core.Services.Implementations;
+using ILD.Data.Enums;
 using System.Text.Json;
 
 namespace ILD.Tests;
@@ -7,64 +8,60 @@ namespace ILD.Tests;
 public class TemplateSeederTests
 {
     [Fact]
-    public async Task SeedAsync_creates_templates_with_single_ai_prompt_shape()
+    public async Task SeedAsync_seeds_the_example_loops()
     {
         using var db = new TestDb();
         var mgr = new LoopTemplateManager(db.LoopTemplates);
 
         await TemplateSeeder.SeedAsync(db.LoopTemplates, mgr);
 
-        var templates = await db.LoopTemplates.GetAllAsync();
-        Assert.Equal(3, templates.Count());
+        var templates = (await db.LoopTemplates.GetAllAsync()).ToList();
+        var names = templates.Select(t => t.Name).OrderBy(n => n).ToArray();
+        Assert.Equal(new[] { "Development", "Plan", "Q&A" }, names);
 
-        var aiFeature = templates.Single(t => t.Name == "AI-Assisted Feature");
-        var aiFeatureGraph = await mgr.GetVersionGraphAsync(aiFeature.Id, 1);
-        Assert.NotNull(aiFeatureGraph);
-        var implementConfig = aiFeatureGraph!.Nodes.Single(n => n.Label == "AI Implement").Config;
-        Assert.True(ReadBool(implementConfig, "useSession"));
-        Assert.Equal("{{PreviousNode.Output}}", ReadString(implementConfig, "prompt"));
-        Assert.Equal("implementation", ReadString(implementConfig, "sessionPlaceholder"));
-        Assert.False(implementConfig.ContainsKey("initialPrompt"));
-        Assert.False(implementConfig.ContainsKey("sessionPrompt"));
+        // The pre-example seed loops must no longer be created.
+        Assert.DoesNotContain("Simple Code Change", names);
+        Assert.DoesNotContain("AI-Assisted Feature", names);
+    }
 
-        var implementInitialConfig = aiFeatureGraph.Nodes.Single(n => n.Label == "Prompt implement initial").Config;
-        Assert.Contains("You are in charge of implementing this workitem", ReadString(implementInitialConfig, "prompt"));
+    [Fact]
+    public async Task SeedAsync_carries_node_config_and_recovery_policy_from_the_json()
+    {
+        using var db = new TestDb();
+        var mgr = new LoopTemplateManager(db.LoopTemplates);
 
-        var implementRetryConfig = aiFeatureGraph.Nodes.Single(n => n.Label == "Prompt implement retry").Config;
-        Assert.Contains("Your implementation was rejected", ReadString(implementRetryConfig, "prompt"));
+        await TemplateSeeder.SeedAsync(db.LoopTemplates, mgr);
 
-        var reviewConfig = aiFeatureGraph.Nodes.Single(n => n.Label == "AI Review").Config;
-        Assert.False(reviewConfig.ContainsKey("useSession"));
-        Assert.Contains("Do a thorough review of this change.", ReadString(reviewConfig, "prompt"));
-        Assert.False(reviewConfig.ContainsKey("sessionPrompt"));
-        Assert.False(reviewConfig.ContainsKey("sessionPlaceholder"));
+        var development = (await db.LoopTemplates.GetAllAsync()).Single(t => t.Name == "Development");
+        Assert.Equal(RecoveryPolicy.AutoResume, development.RecoveryPolicy);
 
-        var plan = templates.Single(t => t.Name == "Plan");
-        var planGraph = await mgr.GetVersionGraphAsync(plan.Id, 1);
-        Assert.NotNull(planGraph);
+        var graph = await mgr.GetVersionGraphAsync(development.Id, 1);
+        Assert.NotNull(graph);
 
-        var grillConfig = planGraph!.Nodes.Single(n => n.Label == "AI Grill").Config;
-        Assert.True(ReadBool(grillConfig, "useSession"));
-        Assert.Equal("{{PreviousNode.Output}}", ReadString(grillConfig, "prompt"));
-        Assert.Equal("plan", ReadString(grillConfig, "sessionPlaceholder"));
-        Assert.False(grillConfig.ContainsKey("initialPrompt"));
-        Assert.False(grillConfig.ContainsKey("sessionPrompt"));
+        // The strict reviewer keeps its named Reject custom edge wired to a match rule.
+        var review = graph!.Nodes.Single(n => n.Label == "Strict Code Review");
+        Assert.Equal("AI", review.NodeType);
+        Assert.Contains("strict, independent code reviewer", ReadString(review.Config, "prompt"));
+        Assert.Contains(graph.Edges, e => e.SourceNodeId == review.Id && e.Name == "Reject");
 
-        var grillInitialConfig = planGraph.Nodes.Single(n => n.Label == "Prompt grill initial").Config;
-        Assert.Contains("Interview me relentlessly", ReadString(grillInitialConfig, "prompt"));
+        // The Start node's worktree flags survive the round-trip.
+        var start = graph.Nodes.Single(n => n.NodeType == "Start");
+        Assert.True(ReadBool(start.Config, "createWorktree"));
+    }
 
-        var grillFollowupConfig = planGraph.Nodes.Single(n => n.Label == "Prompt grill followup").Config;
-        Assert.Equal("{{PreviousNode.Output}}", ReadString(grillFollowupConfig, "prompt"));
+    [Fact]
+    public async Task SeedAsync_is_a_no_op_when_templates_already_exist()
+    {
+        using var db = new TestDb();
+        var mgr = new LoopTemplateManager(db.LoopTemplates);
 
-        var promptCreateTasksConfig = planGraph.Nodes.Single(n => n.Label == "Prompt create tasks").Config;
-        Assert.Contains("name: to-issues", ReadString(promptCreateTasksConfig, "prompt"));
+        await TemplateSeeder.SeedAsync(db.LoopTemplates, mgr);
+        var firstCount = (await db.LoopTemplates.GetAllAsync()).Count();
 
-        var createTasksConfig = planGraph.Nodes.Single(n => n.Label == "AI create tasks").Config;
-        Assert.True(ReadBool(createTasksConfig, "useSession"));
-        Assert.Equal("{{PreviousNode.Output}}", ReadString(createTasksConfig, "prompt"));
-        Assert.Equal("plan", ReadString(createTasksConfig, "sessionPlaceholder"));
-        Assert.False(createTasksConfig.ContainsKey("initialPrompt"));
-        Assert.False(createTasksConfig.ContainsKey("sessionPrompt"));
+        await TemplateSeeder.SeedAsync(db.LoopTemplates, mgr);
+        var secondCount = (await db.LoopTemplates.GetAllAsync()).Count();
+
+        Assert.Equal(firstCount, secondCount);
     }
 
     private static bool ReadBool(Dictionary<string, object> config, string key)

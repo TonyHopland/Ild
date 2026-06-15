@@ -25,6 +25,18 @@
     <None Remove="data/**/*" />
   </ItemGroup>
 
+  <!--
+    Seed loop templates ship as embedded resources so a fresh install gets the
+    curated example-loops regardless of the working directory. The repo's
+    example-loops/ folder is the single source of truth; TemplateSeeder reads
+    them back out by the "ExampleLoops." logical-name prefix.
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\example-loops\*.json">
+      <LogicalName>ExampleLoops.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\ILD.Core\ILD.Core.csproj" />
     <ProjectReference Include="..\ILD.Data\ILD.Data.csproj" />
