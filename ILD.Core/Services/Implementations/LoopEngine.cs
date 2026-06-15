@@ -767,11 +767,17 @@ public sealed class LoopEngine : ILoopEngine
         rn.Output = output;
         rn.Error = error;
         rn.CompletedAt = DateTime.UtcNow;
-        if (usage is not null && usage.HasData)
+        if (usage is not null)
         {
-            rn.InputTokens = usage.InputTokens;
-            rn.OutputTokens = usage.OutputTokens;
-            rn.CostUsd = usage.CostUsd;
+            // Stamp the provider even when no tokens were reported so the run
+            // can still be attributed to a provider on the dashboard.
+            rn.AiProvider = usage.AiProvider;
+            if (usage.HasData)
+            {
+                rn.InputTokens = usage.InputTokens;
+                rn.OutputTokens = usage.OutputTokens;
+                rn.CostUsd = usage.CostUsd;
+            }
         }
         await store.UpdateRunNodeAsync(rn);
     }

@@ -1,4 +1,5 @@
 using ILD.Core.Services.Interfaces;
+using ILD.Data.Analytics;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -7,11 +8,15 @@ using Microsoft.EntityFrameworkCore;
 namespace ILD.Core.Services.Implementations;
 
 /// <summary>
-/// Computes the analytics dashboard's per-template figures by reading the run
-/// data already persisted. Like <see cref="MetricsCollector"/>, it pulls the
-/// rows it needs and aggregates in memory — the row counts are small (one set
-/// per run) and this keeps the queries provider-agnostic (SQLite in tests,
-/// Postgres in production) and free of decimal-<c>Sum</c> translation quirks.
+/// Computes the analytics dashboard's figures from the run data already
+/// persisted. Two sources are merged: still-live runs (reduced from
+/// <c>LoopRunNode</c>/event-log rows via <see cref="RunAnalyticsAggregator"/>)
+/// and the durable <c>LoopRunAnalyticsBucket</c> archive of reclaimed runs. A run
+/// is in exactly one source — live until deleted, archived after — so they never
+/// double-count, and the dashboard keeps reporting history after cleanup.
+/// Filtering (date range, provider) and rollup (template, provider, time series)
+/// happen in memory over the small per-run contribution set, which keeps the
+/// queries provider-agnostic (SQLite in tests, Postgres in production).
 /// </summary>
 public sealed class RunAnalyticsService : IRunAnalyticsService
 {
@@ -22,146 +27,182 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
         _db = db;
     }
 
-    public async Task<RunAnalyticsOverview> GetOverviewAsync(CancellationToken cancellationToken = default)
+    public async Task<RunAnalyticsOverview> GetOverviewAsync(AnalyticsQuery query, CancellationToken cancellationToken = default)
     {
-        var templateNames = await _db.LoopTemplates
-            .Select(t => new { t.Id, t.Name })
-            .ToDictionaryAsync(t => t.Id, t => t.Name, cancellationToken);
+        var contributions = new List<RunContribution>();
+        contributions.AddRange(await BuildLiveContributionsAsync(cancellationToken));
+        contributions.AddRange(await LoadArchivedContributionsAsync(cancellationToken));
 
+        // Provider list for the filter control is the full (unfiltered) set so a
+        // provider stays selectable even after its only runs fall outside the range.
+        var availableProviders = contributions
+            .Select(c => c.AiProvider)
+            .Distinct()
+            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var filtered = contributions.Where(c => Matches(c, query)).ToList();
+
+        var templates = filtered
+            .GroupBy(c => c.TemplateId)
+            .Select(g =>
+            {
+                var metrics = Sum(g.Select(c => c.Metrics));
+                var name = g.OrderByDescending(c => c.BucketDate).First().TemplateName;
+                return new TemplateAnalytics(
+                    g.Key, name,
+                    metrics.RunCount, metrics.CompletedRuns, metrics.FailedRuns, metrics.CancelledRuns,
+                    metrics.SuccessRate, metrics.AvgNodeSeconds,
+                    metrics.OnFailureRoutings, metrics.RejectRoutings, metrics.AvgFeedbackSeconds,
+                    metrics.TotalInputTokens, metrics.TotalOutputTokens, metrics.TotalCostUsd);
+            })
+            .OrderByDescending(t => t.TotalCostUsd)
+            .ThenByDescending(t => t.TotalRuns)
+            .ToList();
+
+        var providers = filtered
+            .GroupBy(c => c.AiProvider)
+            .Select(g =>
+            {
+                var metrics = Sum(g.Select(c => c.Metrics));
+                return new ProviderAnalytics(
+                    g.Key, metrics.RunCount, metrics.TotalInputTokens, metrics.TotalOutputTokens, metrics.TotalCostUsd);
+            })
+            .OrderByDescending(p => p.TotalCostUsd)
+            .ThenByDescending(p => p.TotalRuns)
+            .ToList();
+
+        var series = filtered
+            .GroupBy(c => PeriodStart(c.BucketDate, query.Granularity))
+            .OrderBy(g => g.Key)
+            .Select(g =>
+            {
+                var metrics = Sum(g.Select(c => c.Metrics));
+                return new AnalyticsSeriesPoint(
+                    DateOnly.FromDateTime(g.Key),
+                    metrics.RunCount, metrics.TotalInputTokens, metrics.TotalOutputTokens, metrics.TotalCostUsd);
+            })
+            .ToList();
+
+        var totals = Sum(filtered.Select(c => c.Metrics));
+
+        return new RunAnalyticsOverview(
+            totals.RunCount,
+            totals.TotalInputTokens,
+            totals.TotalOutputTokens,
+            totals.TotalCostUsd,
+            templates,
+            providers,
+            series,
+            availableProviders,
+            query.Granularity);
+    }
+
+    private async Task<List<RunContribution>> BuildLiveContributionsAsync(CancellationToken ct)
+    {
         var runs = await _db.LoopRuns
-            .Select(r => new RunRow(
+            .Select(r => new
+            {
                 r.Id,
-                r.LoopTemplateVersion.LoopTemplateId,
+                TemplateId = r.LoopTemplateVersion.LoopTemplateId,
+                TemplateName = r.LoopTemplateVersion.LoopTemplate.Name,
                 r.Status,
-                r.StartedAt ?? r.CreatedAt))
-            .ToListAsync(cancellationToken);
+                Started = r.StartedAt ?? r.CreatedAt,
+            })
+            .ToListAsync(ct);
 
         var nodes = await _db.LoopRunNodes
-            .Select(n => new NodeRow(
+            .Select(n => new
+            {
                 n.LoopRunId,
                 n.StartedAt,
                 n.CompletedAt,
                 n.IncomingEdgeId,
-                n.InputTokens ?? 0,
-                n.OutputTokens ?? 0,
-                n.CostUsd ?? 0m))
-            .ToListAsync(cancellationToken);
+                n.InputTokens,
+                n.OutputTokens,
+                n.CostUsd,
+                n.AiProvider,
+            })
+            .ToListAsync(ct);
 
         var edges = await _db.LoopNodeEdges
             .Select(e => new { e.Id, e.EdgeType, e.Name })
-            .ToDictionaryAsync(e => e.Id, e => (e.EdgeType, e.Name), cancellationToken);
+            .ToDictionaryAsync(e => e.Id, e => new EdgeInfo(e.EdgeType, e.Name), ct);
 
-        var feedbackEvents = await _db.EventLogs
+        var feedback = await _db.EventLogs
             .Where(e => e.LoopRunId != null
                 && (e.EventType == EventType.HumanFeedbackRequested
                     || e.EventType == EventType.HumanFeedbackReceived))
-            .Select(e => new FeedbackRow(e.LoopRunId!.Value, e.EventType, e.Sequence, e.Timestamp))
-            .ToListAsync(cancellationToken);
+            .Select(e => new { RunId = e.LoopRunId!.Value, e.EventType, e.Sequence, e.Timestamp })
+            .ToListAsync(ct);
 
-        var runTemplate = runs.ToDictionary(r => r.RunId, r => r.TemplateId);
-        var nodesByRun = nodes.ToLookup(n => n.RunId);
-        var feedbackByRun = feedbackEvents.ToLookup(f => f.RunId);
+        var nodesByRun = nodes.ToLookup(n => n.LoopRunId);
+        var feedbackByRun = feedback.ToLookup(f => f.RunId);
 
-        var templates = new List<TemplateAnalytics>();
-        foreach (var group in runs.GroupBy(r => r.TemplateId))
-        {
-            var templateRuns = group.ToList();
-            var templateNodes = templateRuns.SelectMany(r => nodesByRun[r.RunId]).ToList();
-
-            var completed = templateRuns.Count(r => r.Status == LoopRunStatus.Completed);
-            var failed = templateRuns.Count(r => r.Status == LoopRunStatus.Failed);
-            var cancelled = templateRuns.Count(r => r.Status == LoopRunStatus.Cancelled);
-            var terminal = completed + failed + cancelled;
-
-            var durations = templateNodes
-                .Where(n => n.StartedAt.HasValue && n.CompletedAt.HasValue)
-                .Select(n => (n.CompletedAt!.Value - n.StartedAt!.Value).TotalSeconds)
-                .ToList();
-
-            var onFailure = templateNodes.Count(n => EdgeIs(edges, n.IncomingEdgeId, EdgeType.OnFailure, null));
-            var reject = templateNodes.Count(n => EdgeIs(edges, n.IncomingEdgeId, EdgeType.Custom, "Reject"));
-
-            var turnaround = ComputeFeedbackTurnaround(templateRuns, feedbackByRun);
-
-            templates.Add(new TemplateAnalytics(
-                TemplateId: group.Key,
-                TemplateName: templateNames.GetValueOrDefault(group.Key, "(deleted template)"),
-                TotalRuns: templateRuns.Count,
-                CompletedRuns: completed,
-                FailedRuns: failed,
-                CancelledRuns: cancelled,
-                SuccessRate: terminal > 0 ? (double)completed / terminal : 0,
-                AvgNodeSeconds: durations.Count > 0 ? durations.Average() : null,
-                OnFailureRoutings: onFailure,
-                RejectRoutings: reject,
-                AvgHumanFeedbackSeconds: turnaround,
-                TotalInputTokens: templateNodes.Sum(n => n.InputTokens),
-                TotalOutputTokens: templateNodes.Sum(n => n.OutputTokens),
-                TotalCostUsd: templateNodes.Sum(n => n.CostUsd)));
-        }
-
-        // Newest activity first so the most-used templates lead the dashboard.
-        templates = templates
-            .OrderByDescending(t => runs.Where(r => r.TemplateId == t.TemplateId).Max(r => r.StartedAt))
-            .ToList();
-
-        return new RunAnalyticsOverview(
-            TotalRuns: runs.Count,
-            TotalInputTokens: nodes.Sum(n => n.InputTokens),
-            TotalOutputTokens: nodes.Sum(n => n.OutputTokens),
-            TotalCostUsd: nodes.Sum(n => n.CostUsd),
-            Templates: templates);
-    }
-
-    private static bool EdgeIs(
-        IReadOnlyDictionary<Guid, (EdgeType Type, string? Name)> edges,
-        Guid? edgeId,
-        EdgeType type,
-        string? name)
-    {
-        if (edgeId is not Guid id || !edges.TryGetValue(id, out var edge))
-            return false;
-        return edge.Type == type
-            && string.Equals(edge.Name, name, StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
-    /// Mean seconds between each human-feedback request and the next response,
-    /// paired per run by event sequence. Returns null when no pair exists.
-    /// </summary>
-    private static double? ComputeFeedbackTurnaround(
-        IEnumerable<RunRow> runs,
-        ILookup<Guid, FeedbackRow> feedbackByRun)
-    {
-        var deltas = new List<double>();
+        var result = new List<RunContribution>(runs.Count);
         foreach (var run in runs)
         {
-            var ordered = feedbackByRun[run.RunId].OrderBy(f => f.Sequence).ToList();
-            DateTime? pendingRequest = null;
-            foreach (var evt in ordered)
-            {
-                if (evt.EventType == EventType.HumanFeedbackRequested)
-                    pendingRequest = evt.Timestamp;
-                else if (evt.EventType == EventType.HumanFeedbackReceived && pendingRequest is DateTime requested)
-                {
-                    deltas.Add((evt.Timestamp - requested).TotalSeconds);
-                    pendingRequest = null;
-                }
-            }
+            var nodeFacts = nodesByRun[run.Id]
+                .Select(n => new NodeFact(
+                    n.StartedAt, n.CompletedAt, n.IncomingEdgeId,
+                    n.InputTokens ?? 0, n.OutputTokens ?? 0, n.CostUsd ?? 0m, n.AiProvider))
+                .ToList();
+            var feedbackFacts = feedbackByRun[run.Id]
+                .Select(f => new FeedbackFact(f.EventType, f.Sequence, f.Timestamp))
+                .ToList();
+            result.Add(RunAnalyticsAggregator.BuildContribution(
+                run.TemplateId, run.TemplateName, run.Status, run.Started, nodeFacts, edges, feedbackFacts));
         }
-        return deltas.Count > 0 ? deltas.Average() : null;
+        return result;
     }
 
-    private sealed record RunRow(Guid RunId, Guid TemplateId, LoopRunStatus Status, DateTime StartedAt);
+    private async Task<List<RunContribution>> LoadArchivedContributionsAsync(CancellationToken ct)
+    {
+        var buckets = await _db.LoopRunAnalyticsBuckets.ToListAsync(ct);
+        return buckets.Select(b => new RunContribution(
+            b.BucketDate, b.LoopTemplateId, b.TemplateName, b.AiProvider,
+            new AnalyticsMetrics
+            {
+                RunCount = b.RunCount,
+                CompletedRuns = b.CompletedRuns,
+                FailedRuns = b.FailedRuns,
+                CancelledRuns = b.CancelledRuns,
+                NodeCount = b.NodeCount,
+                TotalNodeSeconds = b.TotalNodeSeconds,
+                OnFailureRoutings = b.OnFailureRoutings,
+                RejectRoutings = b.RejectRoutings,
+                FeedbackCount = b.FeedbackCount,
+                TotalFeedbackSeconds = b.TotalFeedbackSeconds,
+                TotalInputTokens = b.TotalInputTokens,
+                TotalOutputTokens = b.TotalOutputTokens,
+                TotalCostUsd = b.TotalCostUsd,
+            })).ToList();
+    }
 
-    private sealed record NodeRow(
-        Guid RunId,
-        DateTime? StartedAt,
-        DateTime? CompletedAt,
-        Guid? IncomingEdgeId,
-        long InputTokens,
-        long OutputTokens,
-        decimal CostUsd);
+    private static bool Matches(RunContribution c, AnalyticsQuery query)
+    {
+        var day = DateOnly.FromDateTime(c.BucketDate);
+        if (query.From is DateOnly from && day < from) return false;
+        if (query.To is DateOnly to && day > to) return false;
+        if (!string.IsNullOrEmpty(query.Provider)
+            && !string.Equals(c.AiProvider, query.Provider, StringComparison.OrdinalIgnoreCase))
+            return false;
+        return true;
+    }
 
-    private sealed record FeedbackRow(Guid RunId, EventType EventType, int Sequence, DateTime Timestamp);
+    private static AnalyticsMetrics Sum(IEnumerable<AnalyticsMetrics> metrics)
+    {
+        var total = new AnalyticsMetrics();
+        foreach (var m in metrics) total.Add(m);
+        return total;
+    }
+
+    /// <summary>First UTC day of the bucket containing <paramref name="date"/> at the given granularity.</summary>
+    private static DateTime PeriodStart(DateTime date, AnalyticsGranularity granularity) => granularity switch
+    {
+        AnalyticsGranularity.Week => date.Date.AddDays(-(((int)date.DayOfWeek + 6) % 7)), // ISO week, Monday start
+        AnalyticsGranularity.Month => new DateTime(date.Year, date.Month, 1, 0, 0, 0, DateTimeKind.Utc),
+        AnalyticsGranularity.Year => new DateTime(date.Year, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+        _ => date.Date,
+    };
 }

@@ -1,3 +1,4 @@
+using ILD.Data.Analytics;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
@@ -291,11 +292,90 @@ public class LoopRunStore : ILoopRunStore
             catch { /* best effort */ }
         }
 
+        // Archive this run's analytics into the durable rollup before its rows
+        // are cascade-deleted, so token/cost/timing history survives reclaim.
+        await ArchiveRunAnalyticsAsync(run, eventLogs);
+
         if (eventLogs.Count > 0)
             _db.EventLogs.RemoveRange(eventLogs);
 
         _db.LoopRuns.Remove(run);
         await _db.SaveChangesAsync();
         return true;
+    }
+
+    /// <summary>
+    /// Fold a soon-to-be-deleted run's metrics into the daily analytics rollup
+    /// keyed by (date, template, primary provider). Queued on the context and
+    /// committed by the caller's <c>SaveChanges</c> alongside the deletion.
+    /// </summary>
+    private async Task ArchiveRunAnalyticsAsync(LoopRun run, IReadOnlyList<EventLog> eventLogs)
+    {
+        var nodes = await _db.LoopRunNodes
+            .Where(n => n.LoopRunId == run.Id)
+            .Select(n => new NodeFact(
+                n.StartedAt, n.CompletedAt, n.IncomingEdgeId,
+                n.InputTokens ?? 0, n.OutputTokens ?? 0, n.CostUsd ?? 0m, n.AiProvider))
+            .ToListAsync();
+
+        var edgeIds = nodes.Where(n => n.IncomingEdgeId.HasValue).Select(n => n.IncomingEdgeId!.Value).Distinct().ToList();
+        var edges = edgeIds.Count == 0
+            ? new Dictionary<Guid, EdgeInfo>()
+            : await _db.LoopNodeEdges
+                .Where(e => edgeIds.Contains(e.Id))
+                .ToDictionaryAsync(e => e.Id, e => new EdgeInfo(e.EdgeType, e.Name));
+
+        var template = await _db.LoopTemplateVersions
+            .Where(v => v.Id == run.LoopTemplateVersionId)
+            .Select(v => new { v.LoopTemplateId, v.LoopTemplate.Name })
+            .FirstOrDefaultAsync();
+
+        var feedback = eventLogs
+            .Where(e => e.EventType == EventType.HumanFeedbackRequested || e.EventType == EventType.HumanFeedbackReceived)
+            .Select(e => new FeedbackFact(e.EventType, e.Sequence, e.Timestamp))
+            .ToList();
+
+        var contribution = RunAnalyticsAggregator.BuildContribution(
+            template?.LoopTemplateId ?? Guid.Empty,
+            template?.Name ?? "(deleted template)",
+            run.Status,
+            run.StartedAt ?? run.CreatedAt,
+            nodes,
+            edges,
+            feedback);
+
+        var bucket = await _db.LoopRunAnalyticsBuckets.FirstOrDefaultAsync(b =>
+            b.BucketDate == contribution.BucketDate
+            && b.LoopTemplateId == contribution.TemplateId
+            && b.AiProvider == contribution.AiProvider);
+
+        if (bucket is null)
+        {
+            bucket = new LoopRunAnalyticsBucket
+            {
+                Id = Guid.NewGuid(),
+                BucketDate = contribution.BucketDate,
+                LoopTemplateId = contribution.TemplateId,
+                TemplateName = contribution.TemplateName,
+                AiProvider = contribution.AiProvider,
+            };
+            _db.LoopRunAnalyticsBuckets.Add(bucket);
+        }
+
+        var m = contribution.Metrics;
+        bucket.TemplateName = contribution.TemplateName;
+        bucket.RunCount += m.RunCount;
+        bucket.CompletedRuns += m.CompletedRuns;
+        bucket.FailedRuns += m.FailedRuns;
+        bucket.CancelledRuns += m.CancelledRuns;
+        bucket.NodeCount += m.NodeCount;
+        bucket.TotalNodeSeconds += m.TotalNodeSeconds;
+        bucket.OnFailureRoutings += m.OnFailureRoutings;
+        bucket.RejectRoutings += m.RejectRoutings;
+        bucket.FeedbackCount += m.FeedbackCount;
+        bucket.TotalFeedbackSeconds += m.TotalFeedbackSeconds;
+        bucket.TotalInputTokens += m.TotalInputTokens;
+        bucket.TotalOutputTokens += m.TotalOutputTokens;
+        bucket.TotalCostUsd += m.TotalCostUsd;
     }
 }

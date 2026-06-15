@@ -492,6 +492,35 @@ export interface TemplateAnalytics {
   totalCostUsd: number;
 }
 
+/** Per agent-provider rollup (mirrors ILD.Data.DTOs.ProviderAnalytics). */
+export interface ProviderAnalytics {
+  provider: string;
+  totalRuns: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCostUsd: number;
+}
+
+/** One point in the cost/token/run time series (PeriodStart is a yyyy-MM-dd date). */
+export interface AnalyticsSeriesPoint {
+  periodStart: string;
+  runs: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+}
+
+/** Time-series bucket size. Matches the backend AnalyticsGranularity enum (PascalCase). */
+export type AnalyticsGranularity = "Day" | "Week" | "Month" | "Year";
+
+/** Dashboard filter sent to the analytics endpoint. */
+export interface AnalyticsFilters {
+  from?: string | null;
+  to?: string | null;
+  provider?: string | null;
+  granularity?: AnalyticsGranularity;
+}
+
 /** Analytics dashboard payload (mirrors ILD.Data.DTOs.RunAnalyticsOverview). */
 export interface RunAnalyticsOverview {
   totalRuns: number;
@@ -499,4 +528,8 @@ export interface RunAnalyticsOverview {
   totalOutputTokens: number;
   totalCostUsd: number;
   templates: TemplateAnalytics[];
+  providers: ProviderAnalytics[];
+  series: AnalyticsSeriesPoint[];
+  availableProviders: string[];
+  granularity: AnalyticsGranularity;
 }

@@ -1,12 +1,32 @@
 import { useEffect, useMemo, useState } from "react";
-import { RunAnalyticsOverview, TemplateAnalytics } from "../../types";
+import {
+  AnalyticsGranularity,
+  AnalyticsSeriesPoint,
+  ProviderAnalytics,
+  RunAnalyticsOverview,
+  TemplateAnalytics,
+} from "../../types";
 import { analyticsService } from "../../services/auth";
 import { formatCost, formatPercent, formatTokens } from "../../utils/cost";
 import { formatDurationMs } from "../../utils/duration";
 
+const GRANULARITIES: AnalyticsGranularity[] = ["Day", "Week", "Month", "Year"];
+const ALL_PROVIDERS = "";
+
 function seconds(value: number | null): string {
   if (value == null) return "—";
   return formatDurationMs(value * 1000) ?? "—";
+}
+
+/** Label a series bucket's start date according to the active granularity. */
+function formatPeriod(periodStart: string, granularity: AnalyticsGranularity): string {
+  const d = new Date(`${periodStart}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return periodStart;
+  if (granularity === "Year") return String(d.getUTCFullYear());
+  if (granularity === "Month")
+    return d.toLocaleDateString(undefined, { month: "short", year: "numeric", timeZone: "UTC" });
+  const base = d.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+  return granularity === "Week" ? `wk ${base}` : base;
 }
 
 /** A labelled horizontal bar, width proportional to value/max. */
@@ -34,6 +54,64 @@ function Bar({
       </span>
       <span className="analytics-bar-value">{text}</span>
     </div>
+  );
+}
+
+/**
+ * Cost is the headline metric, but subscription-auth providers report no cost —
+ * fall back to run counts so the chart is never empty.
+ */
+function chartByCost<T>(items: T[], cost: (t: T) => number): boolean {
+  return items.some((t) => cost(t) > 0);
+}
+
+function TimeSeriesChart({
+  series,
+  granularity,
+}: {
+  series: AnalyticsSeriesPoint[];
+  granularity: AnalyticsGranularity;
+}) {
+  const byCost = chartByCost(series, (p) => p.costUsd);
+  const max = Math.max(0, ...series.map((p) => (byCost ? p.costUsd : p.runs)));
+  return (
+    <section className="analytics-chart">
+      <h2 className="analytics-section-title">{byCost ? "Cost over time" : "Runs over time"}</h2>
+      {series.map((p) => (
+        <Bar
+          key={p.periodStart}
+          label={formatPeriod(p.periodStart, granularity)}
+          value={byCost ? p.costUsd : p.runs}
+          max={max}
+          text={byCost ? (formatCost(p.costUsd) ?? "—") : `${p.runs} runs`}
+          tone="#8b5cf6"
+        />
+      ))}
+    </section>
+  );
+}
+
+function ProviderChart({ providers }: { providers: ProviderAnalytics[] }) {
+  const byCost = chartByCost(providers, (p) => p.totalCostUsd);
+  const max = Math.max(0, ...providers.map((p) => (byCost ? p.totalCostUsd : p.totalRuns)));
+  return (
+    <section className="analytics-chart">
+      <h2 className="analytics-section-title">By agent provider</h2>
+      {providers.map((p) => (
+        <Bar
+          key={p.provider}
+          label={p.provider}
+          value={byCost ? p.totalCostUsd : p.totalRuns}
+          max={max}
+          text={
+            byCost
+              ? (formatCost(p.totalCostUsd) ?? "—")
+              : `${formatTokens(p.totalInputTokens + p.totalOutputTokens)} tok`
+          }
+          tone="#f59e0b"
+        />
+      ))}
+    </section>
   );
 }
 
@@ -103,10 +181,22 @@ export default function Analytics() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const [granularity, setGranularity] = useState<AnalyticsGranularity>("Day");
+  const [provider, setProvider] = useState<string>(ALL_PROVIDERS);
+  const [from, setFrom] = useState<string>("");
+  const [to, setTo] = useState<string>("");
+
   useEffect(() => {
     let cancelled = false;
+    setIsLoading(true);
+    setError(null);
     analyticsService
-      .getOverview()
+      .getOverview({
+        granularity,
+        provider: provider || null,
+        from: from || null,
+        to: to || null,
+      })
       .then((data) => {
         if (!cancelled) setOverview(data);
       })
@@ -119,7 +209,7 @@ export default function Analytics() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [granularity, provider, from, to]);
 
   const maxCost = useMemo(
     () => Math.max(0, ...(overview?.templates.map((t) => t.totalCostUsd) ?? [])),
@@ -130,7 +220,64 @@ export default function Analytics() {
     <div className="page-container analytics">
       <h1 className="page-title">Run Analytics &amp; Cost</h1>
 
-      {isLoading && <p>Loading analytics…</p>}
+      <div className="analytics-filters">
+        <div className="analytics-granularity" role="group" aria-label="Time granularity">
+          {GRANULARITIES.map((g) => (
+            <button
+              key={g}
+              type="button"
+              className={`analytics-gran-btn ${g === granularity ? "active" : ""}`}
+              onClick={() => setGranularity(g)}
+            >
+              {g}
+            </button>
+          ))}
+        </div>
+        <label className="analytics-filter">
+          <span>Provider</span>
+          <select value={provider} onChange={(e) => setProvider(e.target.value)}>
+            <option value={ALL_PROVIDERS}>All providers</option>
+            {overview?.availableProviders.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="analytics-filter">
+          <span>From</span>
+          <input
+            type="date"
+            value={from}
+            onChange={(e) => setFrom(e.target.value)}
+            max={to || undefined}
+          />
+        </label>
+        <label className="analytics-filter">
+          <span>To</span>
+          <input
+            type="date"
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+            min={from || undefined}
+          />
+        </label>
+        {(from || to || provider) && (
+          <button
+            type="button"
+            className="analytics-clear"
+            onClick={() => {
+              setFrom("");
+              setTo("");
+              setProvider(ALL_PROVIDERS);
+            }}
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
+
+      {isLoading && !overview && <p>Loading analytics…</p>}
       {error && (
         <div className="analytics-error" role="alert">
           {error}
@@ -164,12 +311,18 @@ export default function Analytics() {
             </div>
           </div>
 
-          {overview.templates.length === 0 ? (
+          {overview.totalRuns === 0 ? (
             <p className="analytics-empty">
-              No run data yet. Metrics appear once loops have executed.
+              No run data for this filter. Metrics appear once loops have executed.
             </p>
           ) : (
             <>
+              {overview.series.length > 0 && (
+                <TimeSeriesChart series={overview.series} granularity={overview.granularity} />
+              )}
+
+              {overview.providers.length > 0 && <ProviderChart providers={overview.providers} />}
+
               {maxCost > 0 && (
                 <section className="analytics-chart">
                   <h2 className="analytics-section-title">Cost by template</h2>
@@ -200,6 +353,28 @@ export default function Analytics() {
       )}
 
       <style>{`
+        .analytics-filters {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: flex-end;
+          gap: 0.75rem 1rem;
+          margin-bottom: 1.5rem;
+        }
+        .analytics-granularity { display: inline-flex; border: 1px solid #2d2d44; border-radius: 0.375rem; overflow: hidden; }
+        .analytics-gran-btn {
+          padding: 0.4rem 0.8rem; background-color: #242438; color: #a0a0b0;
+          border: none; cursor: pointer; font-size: 0.85rem;
+        }
+        .analytics-gran-btn.active { background-color: #3b82f6; color: #fff; }
+        .analytics-filter { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.75rem; color: #a0a0b0; }
+        .analytics-filter select, .analytics-filter input {
+          padding: 0.35rem 0.5rem; background-color: #2a2a3e; color: #e0e0e0;
+          border: 1px solid #3a3a5c; border-radius: 0.375rem; font-size: 0.85rem;
+        }
+        .analytics-clear {
+          padding: 0.4rem 0.8rem; background-color: transparent; color: #a0a0b0;
+          border: 1px solid #3a3a5c; border-radius: 0.375rem; cursor: pointer; font-size: 0.8rem;
+        }
         .analytics-summary {
           display: grid;
           grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));

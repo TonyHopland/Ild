@@ -21,6 +21,7 @@ import {
   AppSetting,
   WorkItemServerConfig,
   RunAnalyticsOverview,
+  AnalyticsFilters,
 } from "../types";
 
 interface BackendLoginResponse {
@@ -430,8 +431,14 @@ export const aiProviderService = {
 };
 
 export const analyticsService = {
-  getOverview: async (): Promise<RunAnalyticsOverview> => {
-    return api.get<RunAnalyticsOverview>("/analytics");
+  getOverview: async (filters?: AnalyticsFilters): Promise<RunAnalyticsOverview> => {
+    const params = new URLSearchParams();
+    if (filters?.from) params.set("from", filters.from);
+    if (filters?.to) params.set("to", filters.to);
+    if (filters?.provider) params.set("provider", filters.provider);
+    if (filters?.granularity) params.set("granularity", filters.granularity);
+    const qs = params.toString();
+    return api.get<RunAnalyticsOverview>(`/analytics${qs ? `?${qs}` : ""}`);
   },
 };
 

@@ -51,6 +51,11 @@ public class LoopRunNode
 
     public decimal? CostUsd { get; set; }
 
+    // The AI provider (by configured name) that executed this node, stamped on
+    // every successful AI node so the analytics dashboard can attribute
+    // tokens/cost per provider. Null for non-AI nodes.
+    public string? AiProvider { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     [ForeignKey(nameof(LoopRunId))]
