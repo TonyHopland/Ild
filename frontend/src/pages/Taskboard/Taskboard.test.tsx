@@ -553,6 +553,69 @@ describe("Taskboard work item URL", () => {
   });
 });
 
+describe("Taskboard toolbar", () => {
+  function mockSignalR() {
+    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+      on: vi.fn(),
+      off: vi.fn(),
+      invoke: vi.fn(),
+      connectionState: "connected",
+    });
+  }
+
+  test("drops the page heading and groups the filter with the running toggle in one toolbar", async () => {
+    mockSignalR();
+    vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
+    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([makeItem()]);
+    vi.spyOn(authServices.settingsService, "get").mockResolvedValue({
+      key: "scheduler.isPaused",
+      value: "false",
+    });
+
+    const { container } = renderTaskboard();
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Item")).toBeTruthy();
+    });
+
+    // The heading is gone entirely.
+    expect(screen.queryByRole("heading", { name: "Taskboard" })).toBeNull();
+
+    // The search field and the running toggle now share a single toolbar.
+    const toolbar = container.querySelector(".taskboard-toolbar");
+    expect(toolbar).toBeTruthy();
+    expect(within(toolbar as HTMLElement).getByLabelText("Search work items")).toBeTruthy();
+    expect(within(toolbar as HTMLElement).getByLabelText("Scheduler running")).toBeTruthy();
+  });
+
+  test("the running toggle still flips the scheduler from its toolbar home", async () => {
+    mockSignalR();
+    vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
+    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([makeItem()]);
+    vi.spyOn(authServices.settingsService, "get").mockResolvedValue({
+      key: "scheduler.isPaused",
+      value: "false",
+    });
+    const putSpy = vi
+      .spyOn(authServices.settingsService, "put")
+      .mockResolvedValue({ key: "scheduler.isPaused", value: "true" });
+
+    renderTaskboard();
+
+    const toggle = await screen.findByLabelText("Scheduler running");
+    expect((toggle as HTMLInputElement).checked).toBe(true);
+
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(putSpy).toHaveBeenCalledWith(authServices.SchedulerSettingKeys.IsPaused, "true");
+    });
+    await waitFor(() => {
+      expect(screen.getByText("Paused")).toBeTruthy();
+    });
+  });
+});
+
 describe("Taskboard filter", () => {
   function mockSignalR() {
     vi.spyOn(signalRHook, "useSignalR").mockReturnValue({

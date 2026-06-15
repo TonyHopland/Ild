@@ -270,93 +270,90 @@ export default function Taskboard() {
 
   return (
     <div className="page-container taskboard-page">
-      <div className="taskboard-header">
-        <h1 className="page-title">Taskboard</h1>
-        <div className="taskboard-header-actions">
-          <label
-            className={`scheduler-pause-toggle${isPaused ? "" : " is-running"}`}
-            title="Toggle the scheduler — when paused, Ready items stay queued until resumed."
-          >
-            <input
-              type="checkbox"
-              className="scheduler-pause-toggle-input"
-              checked={!isPaused}
-              disabled={pauseBusy}
-              aria-label="Scheduler running"
-              onChange={async (e) => {
-                const running = e.target.checked;
-                const next = !running;
-                setPauseBusy(true);
-                try {
-                  await settingsService.put(SchedulerSettingKeys.IsPaused, next ? "true" : "false");
-                  setIsPaused(next);
-                } catch (err) {
-                  setErrorText(errorMessage(err, "Failed to update scheduler state."));
-                } finally {
-                  setPauseBusy(false);
-                }
-              }}
-            />
-            <span className="scheduler-pause-toggle-track" aria-hidden="true">
-              <span className="scheduler-pause-toggle-thumb" />
-            </span>
-            <span className="scheduler-pause-toggle-label">{isPaused ? "Paused" : "Running"}</span>
-          </label>
-        </div>
-      </div>
       <ErrorBanner message={errorText} onDismiss={() => setErrorText("")} />
-      <div className="taskboard-filter" role="search">
-        <input
-          type="search"
-          className="taskboard-filter-search"
-          placeholder="Search work items..."
-          aria-label="Search work items"
-          value={filter.search}
-          onChange={(e) => setFilter((prev) => ({ ...prev, search: e.target.value }))}
-        />
-        <select
-          className="taskboard-filter-repo"
-          aria-label="Filter by repository"
-          value={filter.repositoryId}
-          onChange={(e) => setFilter((prev) => ({ ...prev, repositoryId: e.target.value }))}
-        >
-          <option value="">All repositories</option>
-          {repositoryOptions.map((repo) => (
-            <option key={repo.id} value={repo.id}>
-              {repo.name}
-            </option>
-          ))}
-        </select>
-        {tagOptions.length > 0 && (
-          <div className="taskboard-filter-tags" role="group" aria-label="Filter by tag">
-            {tagOptions.map((tag) => {
-              const active = filter.tags.includes(tag);
-              const loop = isLoopTag(tag);
-              return (
-                <button
-                  key={tag}
-                  type="button"
-                  className={`taskboard-filter-tag${loop ? " taskboard-filter-tag--loop" : ""}${
-                    active ? " is-active" : ""
-                  }`}
-                  aria-pressed={active}
-                  onClick={() => toggleTagFilter(tag)}
-                >
-                  {tag}
-                </button>
-              );
-            })}
-          </div>
-        )}
-        {filterActive && (
-          <button
-            type="button"
-            className="taskboard-filter-clear"
-            onClick={() => setFilter(EMPTY_TASKBOARD_FILTER)}
+      <div className="taskboard-toolbar">
+        <div className="taskboard-filter" role="search">
+          <input
+            type="search"
+            className="taskboard-filter-search"
+            placeholder="Search work items..."
+            aria-label="Search work items"
+            value={filter.search}
+            onChange={(e) => setFilter((prev) => ({ ...prev, search: e.target.value }))}
+          />
+          <select
+            className="taskboard-filter-repo"
+            aria-label="Filter by repository"
+            value={filter.repositoryId}
+            onChange={(e) => setFilter((prev) => ({ ...prev, repositoryId: e.target.value }))}
           >
-            Clear filters
-          </button>
-        )}
+            <option value="">All repositories</option>
+            {repositoryOptions.map((repo) => (
+              <option key={repo.id} value={repo.id}>
+                {repo.name}
+              </option>
+            ))}
+          </select>
+          {tagOptions.length > 0 && (
+            <div className="taskboard-filter-tags" role="group" aria-label="Filter by tag">
+              {tagOptions.map((tag) => {
+                const active = filter.tags.includes(tag);
+                const loop = isLoopTag(tag);
+                return (
+                  <button
+                    key={tag}
+                    type="button"
+                    className={`taskboard-filter-tag${loop ? " taskboard-filter-tag--loop" : ""}${
+                      active ? " is-active" : ""
+                    }`}
+                    aria-pressed={active}
+                    onClick={() => toggleTagFilter(tag)}
+                  >
+                    {tag}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {filterActive && (
+            <button
+              type="button"
+              className="taskboard-filter-clear"
+              onClick={() => setFilter(EMPTY_TASKBOARD_FILTER)}
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
+        <label
+          className={`scheduler-pause-toggle${isPaused ? "" : " is-running"}`}
+          title="Toggle the scheduler — when paused, Ready items stay queued until resumed."
+        >
+          <input
+            type="checkbox"
+            className="scheduler-pause-toggle-input"
+            checked={!isPaused}
+            disabled={pauseBusy}
+            aria-label="Scheduler running"
+            onChange={async (e) => {
+              const running = e.target.checked;
+              const next = !running;
+              setPauseBusy(true);
+              try {
+                await settingsService.put(SchedulerSettingKeys.IsPaused, next ? "true" : "false");
+                setIsPaused(next);
+              } catch (err) {
+                setErrorText(errorMessage(err, "Failed to update scheduler state."));
+              } finally {
+                setPauseBusy(false);
+              }
+            }}
+          />
+          <span className="scheduler-pause-toggle-track" aria-hidden="true">
+            <span className="scheduler-pause-toggle-thumb" />
+          </span>
+          <span className="scheduler-pause-toggle-label">{isPaused ? "Paused" : "Running"}</span>
+        </label>
       </div>
       <div role="status" aria-live="polite" className="taskboard-live-region">
         {announcement}
@@ -404,17 +401,22 @@ export default function Taskboard() {
         onDelete={handleDeleted}
       />
       <style>{`
-        .taskboard-header {
+        .taskboard-toolbar {
           display: flex;
-          justify-content: space-between;
+          flex-wrap: wrap;
           align-items: center;
+          gap: 0.75rem 1rem;
           margin-bottom: 1rem;
+          padding: 0.6rem 0.75rem;
+          background-color: #23233b;
+          border: 1px solid #3a3a5c;
+          border-radius: 0.5rem;
         }
 
-        .taskboard-header-actions {
-          display: flex;
-          align-items: center;
-          gap: 1rem;
+        /* Push the running toggle to the trailing edge of the toolbar, leaving
+           the filter controls flush left. */
+        .taskboard-toolbar .scheduler-pause-toggle {
+          margin-left: auto;
         }
 
         .scheduler-pause-toggle {
@@ -486,10 +488,10 @@ export default function Taskboard() {
 
         .taskboard-filter {
           display: flex;
+          flex: 1 1 auto;
           flex-wrap: wrap;
           align-items: center;
           gap: 0.5rem;
-          margin-bottom: 1rem;
         }
 
         .taskboard-filter-search,
