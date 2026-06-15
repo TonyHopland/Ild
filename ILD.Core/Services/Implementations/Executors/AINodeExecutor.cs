@@ -142,6 +142,10 @@ public sealed class AINodeExecutor : INodeExecutor
 
         if (result.Success)
         {
+            // Stamp the provider onto the usage so the node row records which
+            // provider ran it — even when the CLI reported no tokens. Adapters
+            // leave AiProvider null; the executor owns the provider identity.
+            var usage = (result.Usage ?? new ILD.Data.DTOs.TokenUsage(0, 0, null)) with { AiProvider = provider.Name };
             if (cfg.UseSession ?? false
                 && !string.IsNullOrWhiteSpace(cfg.SessionPlaceholder)
                 && !string.IsNullOrWhiteSpace(result.SessionId))
@@ -157,12 +161,12 @@ public sealed class AINodeExecutor : INodeExecutor
                     if (!string.IsNullOrWhiteSpace(rule.Pattern) && !string.IsNullOrWhiteSpace(rule.EdgeName)
                         && System.Text.RegularExpressions.Regex.IsMatch(result.Output, rule.Pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase))
                     {
-                        yield return new NodeOutcome.Success(EdgeType.Custom, result.Output, rule.EdgeName);
+                        yield return new NodeOutcome.Success(EdgeType.Custom, result.Output, rule.EdgeName, usage);
                         yield break;
                     }
                 }
             }
-            yield return new NodeOutcome.Success(EdgeType.OnSuccess, result.Output);
+            yield return new NodeOutcome.Success(EdgeType.OnSuccess, result.Output, Usage: usage);
         }
         else
         {

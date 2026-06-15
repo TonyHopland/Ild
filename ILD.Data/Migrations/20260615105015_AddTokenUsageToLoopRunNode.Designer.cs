@@ -3,6 +3,7 @@ using System;
 using ILD.Data.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace ILD.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260615105015_AddTokenUsageToLoopRunNode")]
+    partial class AddTokenUsageToLoopRunNode
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -51,7 +54,7 @@ namespace ILD.Data.Migrations
 
                     b.HasIndex("LoopRunId", "AdapterName");
 
-                    b.ToTable("AdapterSessionSnapshots", (string)null);
+                    b.ToTable("AdapterSessionSnapshots");
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.AiProvider", b =>
@@ -105,7 +108,7 @@ namespace ILD.Data.Migrations
 
                     b.HasIndex("Name");
 
-                    b.ToTable("AiProviders", (string)null);
+                    b.ToTable("AiProviders");
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.AppSetting", b =>
@@ -132,7 +135,7 @@ namespace ILD.Data.Migrations
                     b.HasIndex("Key")
                         .IsUnique();
 
-                    b.ToTable("AppSettings", (string)null);
+                    b.ToTable("AppSettings");
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.EventLog", b =>
@@ -172,7 +175,7 @@ namespace ILD.Data.Migrations
 
                     b.HasIndex("LoopRunId", "Sequence");
 
-                    b.ToTable("EventLogs", (string)null);
+                    b.ToTable("EventLogs");
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.LoopNode", b =>
@@ -204,7 +207,7 @@ namespace ILD.Data.Migrations
 
                     b.HasIndex("LoopTemplateVersionId");
 
-                    b.ToTable("LoopNodes", (string)null);
+                    b.ToTable("LoopNodes");
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.LoopNodeEdge", b =>
@@ -240,7 +243,7 @@ namespace ILD.Data.Migrations
 
                     b.HasIndex("SourceNodeId", "TargetNodeId");
 
-                    b.ToTable("LoopNodeEdges", (string)null);
+                    b.ToTable("LoopNodeEdges");
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.LoopRun", b =>
@@ -354,79 +357,7 @@ namespace ILD.Data.Migrations
 
                     b.HasIndex("WorkItemId");
 
-                    b.ToTable("LoopRuns", (string)null);
-                });
-
-            modelBuilder.Entity("ILD.Data.Entities.LoopRunAnalyticsBucket", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("AiProvider")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
-
-                    b.Property<DateTime>("BucketDate")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("CancelledRuns")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("CompletedRuns")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("FailedRuns")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("FeedbackCount")
-                        .HasColumnType("integer");
-
-                    b.Property<Guid>("LoopTemplateId")
-                        .HasColumnType("uuid");
-
-                    b.Property<int>("NodeCount")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("OnFailureRoutings")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("RejectRoutings")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("RunCount")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("TemplateName")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
-
-                    b.Property<decimal>("TotalCostUsd")
-                        .HasPrecision(18, 6)
-                        .HasColumnType("numeric(18,6)");
-
-                    b.Property<double>("TotalFeedbackSeconds")
-                        .HasColumnType("double precision");
-
-                    b.Property<long>("TotalInputTokens")
-                        .HasColumnType("bigint");
-
-                    b.Property<double>("TotalNodeSeconds")
-                        .HasColumnType("double precision");
-
-                    b.Property<long>("TotalOutputTokens")
-                        .HasColumnType("bigint");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("BucketDate");
-
-                    b.HasIndex("BucketDate", "LoopTemplateId", "AiProvider")
-                        .IsUnique();
-
-                    b.ToTable("LoopRunAnalyticsBuckets", (string)null);
+                    b.ToTable("LoopRuns");
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.LoopRunNode", b =>
@@ -434,9 +365,6 @@ namespace ILD.Data.Migrations
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
-
-                    b.Property<string>("AiProvider")
-                        .HasColumnType("text");
 
                     b.Property<DateTime?>("CompletedAt")
                         .HasColumnType("timestamp with time zone");
@@ -492,7 +420,7 @@ namespace ILD.Data.Migrations
 
                     b.HasIndex("Status");
 
-                    b.ToTable("LoopRunNodes", (string)null);
+                    b.ToTable("LoopRunNodes");
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.LoopRunSessionBinding", b =>
@@ -525,7 +453,7 @@ namespace ILD.Data.Migrations
 
                     b.HasIndex("LoopRunId", "AdapterName", "SessionId");
 
-                    b.ToTable("LoopRunSessionBindings", (string)null);
+                    b.ToTable("LoopRunSessionBindings");
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.LoopTemplate", b =>
@@ -566,7 +494,7 @@ namespace ILD.Data.Migrations
 
                     b.HasIndex("Name");
 
-                    b.ToTable("LoopTemplates", (string)null);
+                    b.ToTable("LoopTemplates");
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.LoopTemplateVersion", b =>
@@ -591,7 +519,7 @@ namespace ILD.Data.Migrations
                     b.HasIndex("LoopTemplateId", "VersionNumber")
                         .IsUnique();
 
-                    b.ToTable("LoopTemplateVersions", (string)null);
+                    b.ToTable("LoopTemplateVersions");
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.RemoteProvider", b =>
@@ -638,7 +566,7 @@ namespace ILD.Data.Migrations
 
                     b.HasIndex("Name");
 
-                    b.ToTable("RemoteProviders", (string)null);
+                    b.ToTable("RemoteProviders");
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.Repository", b =>
@@ -685,7 +613,7 @@ namespace ILD.Data.Migrations
 
                     b.HasIndex("RemoteProviderId");
 
-                    b.ToTable("Repositories", (string)null);
+                    b.ToTable("Repositories");
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.User", b =>
@@ -723,7 +651,7 @@ namespace ILD.Data.Migrations
                     b.HasIndex("Username")
                         .IsUnique();
 
-                    b.ToTable("Users", (string)null);
+                    b.ToTable("Users");
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.AdapterSessionSnapshot", b =>

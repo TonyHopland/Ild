@@ -12,6 +12,7 @@ import { loopRunService } from "../../services/auth";
 import { formatDuration } from "../../utils/duration";
 import LiveStream from "../NodeTimeline/LiveStream";
 import HaltSteerControls from "./HaltSteerControls";
+import RunCostSummary from "./RunCostSummary";
 
 interface EffectiveInput {
   nodeType?: string;
@@ -307,6 +308,7 @@ export default function RunsPanel({
                 Open full run view ↗
               </Link>
             </div>
+            <RunCostSummary run={runDetail} />
             <HaltSteerControls
               run={runDetail}
               workItemStatus={workItem.status}

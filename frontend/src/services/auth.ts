@@ -20,6 +20,8 @@ import {
   WorktreeFileContent,
   AppSetting,
   WorkItemServerConfig,
+  RunAnalyticsOverview,
+  AnalyticsFilters,
 } from "../types";
 
 interface BackendLoginResponse {
@@ -425,6 +427,18 @@ export const aiProviderService = {
 
   setDefault: async (id: string): Promise<AiProvider> => {
     return api.post<AiProvider>(`/aiproviders/${id}/set-default`, {});
+  },
+};
+
+export const analyticsService = {
+  getOverview: async (filters?: AnalyticsFilters): Promise<RunAnalyticsOverview> => {
+    const params = new URLSearchParams();
+    if (filters?.from) params.set("from", filters.from);
+    if (filters?.to) params.set("to", filters.to);
+    if (filters?.provider) params.set("provider", filters.provider);
+    if (filters?.granularity) params.set("granularity", filters.granularity);
+    const qs = params.toString();
+    return api.get<RunAnalyticsOverview>(`/analytics${qs ? `?${qs}` : ""}`);
   },
 };
 

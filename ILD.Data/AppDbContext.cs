@@ -20,6 +20,7 @@ public class AppDbContext : DbContext
 
     public DbSet<LoopRun> LoopRuns => Set<LoopRun>();
     public DbSet<LoopRunNode> LoopRunNodes => Set<LoopRunNode>();
+    public DbSet<LoopRunAnalyticsBucket> LoopRunAnalyticsBuckets => Set<LoopRunAnalyticsBucket>();
     public DbSet<AdapterSessionSnapshot> AdapterSessionSnapshots => Set<AdapterSessionSnapshot>();
     public DbSet<LoopRunSessionBinding> LoopRunSessionBindings => Set<LoopRunSessionBinding>();
     public DbSet<EventLog> EventLogs => Set<EventLog>();
@@ -64,6 +65,14 @@ public class AppDbContext : DbContext
 
     private void ConfigureEnumConversions(ModelBuilder modelBuilder)
     {
+        // AI cost is money: fix the precision so Postgres stores a numeric(18,6)
+        // rather than defaulting to a lossy/ambiguous column.
+        modelBuilder.Entity<LoopRunNode>()
+            .Property(rn => rn.CostUsd)
+            .HasPrecision(18, 6);
+        modelBuilder.Entity<LoopRunAnalyticsBucket>()
+            .Property(b => b.TotalCostUsd)
+            .HasPrecision(18, 6);
         modelBuilder.Entity<LoopTemplate>()
             .Property(t => t.RecoveryPolicy)
             .HasConversion<string>()
@@ -120,6 +129,12 @@ public class AppDbContext : DbContext
             e.HasIndex(l => l.LoopRunId);
             e.HasIndex(l => l.LoopNodeId);
             e.HasIndex(l => l.Status);
+        });
+
+        modelBuilder.Entity<LoopRunAnalyticsBucket>(e =>
+        {
+            e.HasIndex(b => new { b.BucketDate, b.LoopTemplateId, b.AiProvider }).IsUnique();
+            e.HasIndex(b => b.BucketDate);
         });
 
         modelBuilder.Entity<AdapterSessionSnapshot>(e =>

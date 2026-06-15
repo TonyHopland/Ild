@@ -41,21 +41,28 @@ public class LoopRunsController : ControllerBase
         if (take <= 0) take = 100;
         if (take > 500) take = 500;
         var runs = await _loopRunStore.GetAllAsync(skip, take);
-        var result = runs.Select(r => new
+        var result = runs.Select(r =>
         {
-            id = r.Id,
-            workItemId = r.WorkItemId,
-            loopTemplateId = r.LoopTemplateVersion?.LoopTemplateId,
-            templateVersion = r.LoopTemplateVersion?.VersionNumber ?? 0,
-            status = r.Status.ToString(),
-            currentNodeId = r.CurrentNodeId,
-            isPaused = r.IsPaused,
-            isHalted = r.IsHalted,
-            retain = r.Retain,
-            nodeExecutionCount = r.NodeExecutionCount,
-            startedAt = r.StartedAt,
-            completedAt = r.CompletedAt,
-            nodes = r.RunNodes.OrderBy(rn => rn.CreatedAt).Select(LoopRunNodeResponse.From).ToList(),
+            var totals = RunCostTotals.From(r.RunNodes);
+            return new
+            {
+                id = r.Id,
+                workItemId = r.WorkItemId,
+                loopTemplateId = r.LoopTemplateVersion?.LoopTemplateId,
+                templateVersion = r.LoopTemplateVersion?.VersionNumber ?? 0,
+                status = r.Status.ToString(),
+                currentNodeId = r.CurrentNodeId,
+                isPaused = r.IsPaused,
+                isHalted = r.IsHalted,
+                retain = r.Retain,
+                nodeExecutionCount = r.NodeExecutionCount,
+                startedAt = r.StartedAt,
+                completedAt = r.CompletedAt,
+                totalInputTokens = totals.TotalInputTokens,
+                totalOutputTokens = totals.TotalOutputTokens,
+                totalCostUsd = totals.TotalCostUsd,
+                nodes = r.RunNodes.OrderBy(rn => rn.CreatedAt).Select(LoopRunNodeResponse.From).ToList(),
+            };
         }).ToList();
 
         return Ok(result);
@@ -79,6 +86,7 @@ public class LoopRunsController : ControllerBase
         var currentSessionIds = sessionBindings
             .Select(b => $"{b.AdapterName}\n{b.SessionId}")
             .ToHashSet(StringComparer.Ordinal);
+        var totals = RunCostTotals.From(runNodes);
 
         return Ok(new
         {
@@ -96,6 +104,9 @@ public class LoopRunsController : ControllerBase
             nodeExecutionCount = run.NodeExecutionCount,
             startedAt = run.StartedAt,
             completedAt = run.CompletedAt,
+            totalInputTokens = totals.TotalInputTokens,
+            totalOutputTokens = totals.TotalOutputTokens,
+            totalCostUsd = totals.TotalCostUsd,
             availableSessions = sessionSnapshots.Select(s => new
             {
                 adapterName = s.AdapterName,
