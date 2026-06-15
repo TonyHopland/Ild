@@ -1,6 +1,6 @@
 {
   "$schema": "ild-loop-template/v1",
-  "name": "Development-loop",
+  "name": "Development",
   "description": "Full implementation flow: AI implements with tests, a strict independent AI reviewer gates every change, then a PR where human merge is the final gate. Review rejections and PR feedback loop back into the same implementation session.",
   "recoveryPolicy": "AutoResume",
   "nodes": [

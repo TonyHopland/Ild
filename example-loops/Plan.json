@@ -1,0 +1,145 @@
+{
+  "$schema": "ild-loop-template/v1",
+  "name": "Plan",
+  "description": "Interactive planning loop: an AI interviewer stress-tests your plan one question at a time against the existing domain model and codebase, sharpening terminology and capturing decisions in CONTEXT.md and ADRs as they crystallise. Each human answer feeds back into the same session; at any point you can have the same session break the refined plan into ILD work items. Self-contained — the grilling methodology is embedded in the prompts and assumes nothing about the target repository.",
+  "recoveryPolicy": "AutoResume",
+  "nodes": [
+    {
+      "id": "cde8026f-a623-47de-b494-fc7dd420af71",
+      "type": "Start",
+      "label": "Start",
+      "config": {
+        "__pos": {
+          "x": -660,
+          "y": 128
+        },
+        "createWorktree": true,
+        "runInstall": false
+      }
+    },
+    {
+      "id": "aa0c8b62-ab22-4648-aed8-562661a68e06",
+      "type": "Prompt",
+      "label": "Plan brief",
+      "config": {
+        "prompt": "You are a relentless planning interviewer. Stress-test the plan for this work item against the project's existing domain model and code, sharpen its terminology, and capture decisions in documentation as they crystallise.\n\nTitle: {{WorkItem.Title}}\nDescription: {{WorkItem.Description}}\n\n## What to do\n\nInterview me relentlessly about every aspect of this plan until we reach a shared understanding. Walk down each branch of the design tree, resolving dependencies between decisions one by one. For each question, provide your recommended answer. Ask the questions ONE AT A TIME, and after each question stop and end your turn so I can answer — do not ask the next question until I have replied. If a question can be answered by exploring the codebase, explore the codebase instead of asking me.\n\nBefore the first question, explore the repo: read the code around the area this plan touches, plus any README / AGENTS.md, and any existing domain docs — a root CONTEXT.md (glossary), a root CONTEXT-MAP.md (lists multiple contexts and where each lives), and ADRs under docs/adr/. Grill against the project's real language and documented decisions.\n\n## During the session\n\n- Challenge against the glossary: when I use a term that conflicts with the existing language in CONTEXT.md, call it out immediately.\n- Sharpen fuzzy language: when I use vague or overloaded terms, propose a precise canonical term (e.g. 'account' — do you mean the Customer or the User?).\n- Discuss concrete scenarios: stress-test domain relationships with specific scenarios that probe edge cases and force precision about boundaries between concepts.\n- Cross-reference with code: when I state how something works, check whether the code agrees, and surface any contradiction.\n\n## Capture decisions inline\n\nUpdate CONTEXT.md right as a term is resolved — don't batch. CONTEXT.md is a GLOSSARY ONLY, totally devoid of implementation details: one or two sentences per term defining what it IS, listing aliases to avoid, only for terms specific to this project (not general programming concepts). Create CONTEXT.md lazily only once the first term is resolved; if a CONTEXT-MAP.md exists, update the CONTEXT.md of the relevant context instead.\n\nOffer to write an ADR (in docs/adr/, sequential numbering NNNN-slug.md, a 1-3 sentence record of what was decided and why) ONLY when all three are true: (1) hard to reverse, (2) surprising without context, (3) the result of a real trade-off with genuine alternatives. If any is missing, skip it. Create docs/adr/ lazily only when the first ADR is needed.\n\nWhen we have reached a shared understanding and there is nothing left to resolve, say so and summarise the refined plan and the documentation you updated.",
+        "__pos": {
+          "x": -468,
+          "y": 128
+        }
+      }
+    },
+    {
+      "id": "826eaaf1-f247-4b10-a192-205fdf2d45bf",
+      "type": "AI",
+      "label": "Grill & document",
+      "config": {
+        "prompt": "{{Node.Input}}",
+        "useSession": true,
+        "sessionPlaceholder": "plan",
+        "aiProviderId": "",
+        "toolAllowlist": ["read", "write", "execute", "ild"],
+        "adapterConfig": {},
+        "__pos": {
+          "x": -270,
+          "y": 128
+        }
+      }
+    },
+    {
+      "id": "dff488a6-9c85-40fa-8ba3-08e1dc9c1035",
+      "type": "Human",
+      "label": "Human",
+      "config": {
+        "inputLabel": "",
+        "prompt": "{{Node.Input}}",
+        "__pos": {
+          "x": -70,
+          "y": 128
+        },
+        "customEdges": ["Respond", "Create work items", "Complete"]
+      }
+    },
+    {
+      "id": "3c470362-5e54-49d0-ade0-067308932854",
+      "type": "Prompt",
+      "label": "Create work items brief",
+      "config": {
+        "prompt": "Turn the plan we have refined so far into ILD work items.\n\n1. Call list_repositories and pick the repository this plan belongs to (it is the repository you have been grilling against) — every work item needs its repositoryId.\n2. Break the refined plan into the smallest set of independently shippable work items. Each item gets a clear, action-oriented title and a description capturing the acceptance criteria, the decisions we reached, and any relevant terminology or ADRs from CONTEXT.md / docs/adr.\n3. Order the work: when an item can only start after another is done, set its dependencies to the ids of the items it depends on (create the prerequisites first so their ids exist). Do not create dependency cycles.\n4. Create each item with create_workitem. Do not invent a tag unless it matches an existing loop template name.\n\nDo not re-open the design discussion or create work items for decisions we explicitly rejected. When finished, reply with a summary listing every work item you created — its title and id — and the dependency edges between them, so I can review before we wrap up.",
+        "__pos": {
+          "x": -270,
+          "y": 320
+        }
+      }
+    },
+    {
+      "id": "826e69fb-4eca-4f03-9bd9-2bc886997285",
+      "type": "Cleanup",
+      "label": "Cleanup",
+      "config": {
+        "__pos": {
+          "x": 150,
+          "y": 128
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "7c188846-9f0b-4d83-9735-f3492915a8e4",
+      "sourceNodeId": "cde8026f-a623-47de-b494-fc7dd420af71",
+      "targetNodeId": "aa0c8b62-ab22-4648-aed8-562661a68e06",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "ad9b37c2-8b91-48ac-8b7c-4c90279712ba",
+      "sourceNodeId": "aa0c8b62-ab22-4648-aed8-562661a68e06",
+      "targetNodeId": "826eaaf1-f247-4b10-a192-205fdf2d45bf",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "d2cc21b4-5c51-4ec4-87c8-2f2791cabc43",
+      "sourceNodeId": "826eaaf1-f247-4b10-a192-205fdf2d45bf",
+      "targetNodeId": "dff488a6-9c85-40fa-8ba3-08e1dc9c1035",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "086933f3-f459-4cba-b78e-92ca92518950",
+      "sourceNodeId": "dff488a6-9c85-40fa-8ba3-08e1dc9c1035",
+      "targetNodeId": "826eaaf1-f247-4b10-a192-205fdf2d45bf",
+      "edgeType": "Custom",
+      "name": "Respond"
+    },
+    {
+      "id": "e9657cff-65b7-4647-a625-828606adc5e5",
+      "sourceNodeId": "dff488a6-9c85-40fa-8ba3-08e1dc9c1035",
+      "targetNodeId": "3c470362-5e54-49d0-ade0-067308932854",
+      "edgeType": "Custom",
+      "name": "Create work items"
+    },
+    {
+      "id": "3258c0b6-5fc1-4a34-b434-0658324802eb",
+      "sourceNodeId": "3c470362-5e54-49d0-ade0-067308932854",
+      "targetNodeId": "826eaaf1-f247-4b10-a192-205fdf2d45bf",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "0def370d-dce9-41da-ae05-43a88e670a2a",
+      "sourceNodeId": "dff488a6-9c85-40fa-8ba3-08e1dc9c1035",
+      "targetNodeId": "826e69fb-4eca-4f03-9bd9-2bc886997285",
+      "edgeType": "Custom",
+      "name": "Complete"
+    },
+    {
+      "id": "fafb5977-6331-42d8-9a07-9378ba2a70c1",
+      "sourceNodeId": "dff488a6-9c85-40fa-8ba3-08e1dc9c1035",
+      "targetNodeId": "826e69fb-4eca-4f03-9bd9-2bc886997285",
+      "edgeType": "OnSuccess",
+      "name": null
+    }
+  ]
+}
