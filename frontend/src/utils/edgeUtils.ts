@@ -130,6 +130,10 @@ export function buildEdge(config: EdgeConfig): Edge {
     target: config.target,
     sourceHandle: config.sourceHandle,
     targetHandle: config.targetHandle,
+    // Rounded orthogonal routing; offset pushes the stub clear of the node so
+    // 180° turns don't clip it.
+    type: "smoothstep",
+    pathOptions: { borderRadius: 20, offset: 20 },
     animated: config.edgeType === EdgeType.OnSuccess,
     data: { edgeType: config.edgeType, name },
     style: edgeVisualStyle(config.edgeType),

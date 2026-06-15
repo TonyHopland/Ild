@@ -63,6 +63,10 @@ export function templateToEdges(template: LoopTemplate): Edge[] {
       target: edge.targetNodeId,
       sourceHandle,
       targetHandle: "target-handle",
+      // Rounded orthogonal routing; offset pushes the stub clear of the node so
+      // 180° turns don't clip it.
+      type: "smoothstep",
+      pathOptions: { borderRadius: 20, offset: 20 },
       data: { edgeType: edge.edgeType, name: edge.name ?? null },
       animated: edge.edgeType === EdgeType.OnSuccess,
       style: strokeStyle,
