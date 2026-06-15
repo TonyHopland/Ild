@@ -318,15 +318,6 @@ export default function WorkItemModalV2({
               </div>
             </div>
             <div className="wiv2-header-actions">
-              {!editMode && (
-                <button
-                  type="button"
-                  className="btn btn-sm btn-edit"
-                  onClick={() => setEditMode(true)}
-                >
-                  Edit
-                </button>
-              )}
               <button className="modal-close" onClick={requestClose} aria-label="Close">
                 &times;
               </button>
@@ -341,6 +332,7 @@ export default function WorkItemModalV2({
                 onSave={onSave}
                 onDone={exitEdit}
                 onDirtyChange={setEditDirty}
+                onRequestDelete={() => setShowDeleteConfirm(true)}
               />
             </div>
           ) : (
@@ -351,13 +343,6 @@ export default function WorkItemModalV2({
                 <div className="wiv2-content">{renderPanels()}</div>
               </div>
               <div className="wiv2-footer">
-                <button
-                  type="button"
-                  className="btn btn-sm btn-danger"
-                  onClick={() => setShowDeleteConfirm(true)}
-                >
-                  Delete
-                </button>
                 {showCleanupButtons && (
                   <>
                     <button
@@ -377,6 +362,13 @@ export default function WorkItemModalV2({
                   </>
                 )}
                 <span className="wiv2-footer-spacer" />
+                <button
+                  type="button"
+                  className="btn btn-sm btn-edit"
+                  onClick={() => setEditMode(true)}
+                >
+                  Edit
+                </button>
                 <button type="button" className="btn btn-secondary" onClick={requestClose}>
                   Close
                 </button>

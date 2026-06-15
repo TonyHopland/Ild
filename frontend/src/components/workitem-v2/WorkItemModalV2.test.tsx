@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, act, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import WorkItemModalV2 from "./WorkItemModalV2";
 import {
@@ -431,6 +431,77 @@ describe("WorkItemModalV2", () => {
 
     expect(screen.getByLabelText("Title")).toBeTruthy();
     expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Test Work Item");
+  });
+
+  test("Edit lives in the footer next to Close, and Delete is not in the detail view", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem());
+
+    const editButton = screen.getByRole("button", { name: "Edit" });
+    const footer = editButton.closest(".wiv2-footer");
+    // Edit and Close share the footer; Delete has moved out of the detail view.
+    expect(footer).not.toBeNull();
+    expect(footer?.querySelector(".modal-close")).toBeNull();
+    expect([...(footer?.querySelectorAll("button") ?? [])].map((b) => b.textContent)).toEqual([
+      "Edit",
+      "Close",
+    ]);
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+  });
+
+  test("Delete is shown inside the edit view and confirming it deletes the item", async () => {
+    mockServices();
+    const deleteSpy = vi.spyOn(authServices.workItemService, "delete").mockResolvedValue(undefined);
+    const onClose = vi.fn();
+    const onDelete = vi.fn();
+    await renderDialog(makeWorkItem(), { onClose, onDelete });
+
+    // No Delete button until the edit view is open.
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+      await Promise.resolve();
+    });
+
+    const deleteButton = screen.getByRole("button", { name: "Delete" });
+    expect(deleteButton.closest(".wiv2-edit-actions")).not.toBeNull();
+
+    await act(async () => {
+      fireEvent.click(deleteButton);
+      await Promise.resolve();
+    });
+
+    // Deleting goes through the confirmation dialog.
+    const confirmDialog = screen.getByRole("dialog", { name: "Delete Work Item" });
+    expect(within(confirmDialog).getByText(/Are you sure you want to delete/)).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(within(confirmDialog).getByRole("button", { name: "Delete" }));
+      await Promise.resolve();
+    });
+
+    expect(deleteSpy).toHaveBeenCalledWith("wi-1");
+    expect(onDelete).toHaveBeenCalledWith("wi-1");
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  test("Delete stays out of the footer even when cleanup buttons are present", async () => {
+    mockServices();
+    await renderDialog(
+      makeWorkItem({
+        status: WorkItemStatus.HumanFeedback,
+        humanFeedbackReason: "PR Closed",
+        currentLoopRunId: "run-1",
+      }),
+    );
+
+    // Cleanup buttons render in the footer, but Delete does not.
+    const footer = screen.getByRole("button", { name: "Edit" }).closest(".wiv2-footer");
+    expect(
+      within(footer as HTMLElement).getByRole("button", { name: /Cleanup -> Done/ }),
+    ).toBeTruthy();
+    expect(within(footer as HTMLElement).queryByRole("button", { name: "Delete" })).toBeNull();
   });
 
   test("Escape closes immediately when there are no unsaved changes", async () => {
