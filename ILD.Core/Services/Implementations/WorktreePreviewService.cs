@@ -383,6 +383,12 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 throw new InvalidOperationException($"Preview install command failed: {resolved.Command}\n{result.StdErr}".Trim());
             }
         }
+
+        // The install steps above ran with their own augmented PATH, but the
+        // agents (Cmd nodes and AI CLI adapters) launch later with the inherited
+        // host-process environment. Surface the npm global bin directory there so
+        // tools an install step put on disk are actually resolvable to those nodes.
+        EnsureInstalledToolsOnProcessPath();
     }
 
     private async Task<ManagedPreviewProcess> StartServiceAsync(PreviewServiceConfig service, PreviewRuntime runtime, CancellationToken cancellationToken)
@@ -616,16 +622,9 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     {
         var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-        var home = Environment.GetEnvironmentVariable("HOME");
-        if (string.IsNullOrWhiteSpace(home))
-        {
-            home = Path.Combine(Path.GetTempPath(), "ild-home");
-        }
-
-        Directory.CreateDirectory(home);
-
+        var home = ResolveHomeDirectory();
         var npmPrefix = Path.Combine(home, ".local");
-        var npmBin = Path.Combine(npmPrefix, "bin");
+        var npmBin = GetNpmGlobalBinDirectory();
         var npmCache = Path.Combine(runtime.StateDirectory, "npm-cache");
 
         Directory.CreateDirectory(npmPrefix);
@@ -639,9 +638,54 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         environment["NPM_CONFIG_CACHE"] = npmCache;
         environment["PATH"] = string.IsNullOrWhiteSpace(currentPath)
             ? npmBin
-            : $"{npmBin}:{currentPath}";
+            : $"{npmBin}{Path.PathSeparator}{currentPath}";
 
         return environment;
+    }
+
+    private static string ResolveHomeDirectory()
+    {
+        var home = Environment.GetEnvironmentVariable("HOME");
+        if (string.IsNullOrWhiteSpace(home))
+        {
+            home = Path.Combine(Path.GetTempPath(), "ild-home");
+        }
+
+        Directory.CreateDirectory(home);
+        return home;
+    }
+
+    /// <summary>
+    /// The directory where <c>npm install -g</c> places executables during an
+    /// install step (<see cref="BuildDefaultEnvironment"/> points
+    /// <c>NPM_CONFIG_PREFIX</c> at <c>$HOME/.local</c>, so global CLIs such as
+    /// <c>vp</c> land in <c>$HOME/.local/bin</c>).
+    /// </summary>
+    private static string GetNpmGlobalBinDirectory()
+        => Path.Combine(ResolveHomeDirectory(), ".local", "bin");
+
+    /// <summary>
+    /// Prepend the npm global bin directory onto the host process PATH so the
+    /// agents can resolve tools an install step put there. Cmd nodes and the AI
+    /// CLI adapters launch their processes with the inherited host-process
+    /// environment, which does not otherwise include <c>$HOME/.local/bin</c>;
+    /// without this, <c>npm install -g</c>'d binaries are invisible to every
+    /// node that runs after the Start node's install. Idempotent.
+    /// </summary>
+    private static void EnsureInstalledToolsOnProcessPath()
+    {
+        var npmBin = GetNpmGlobalBinDirectory();
+        var currentPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+
+        var alreadyPresent = currentPath
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Any(segment => string.Equals(segment, npmBin, StringComparison.Ordinal));
+        if (alreadyPresent)
+            return;
+
+        Environment.SetEnvironmentVariable(
+            "PATH",
+            string.IsNullOrWhiteSpace(currentPath) ? npmBin : $"{npmBin}{Path.PathSeparator}{currentPath}");
     }
 
     private string ResolveHealthUrl(PreviewServiceConfig service, PreviewRuntime runtime)

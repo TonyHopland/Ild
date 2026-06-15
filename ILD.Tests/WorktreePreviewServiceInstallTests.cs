@@ -10,6 +10,7 @@ namespace ILD.Tests;
 /// Start node uses when "Run ild.config install" is enabled — the executor tests
 /// only mock the preview service, so the install runner itself is proven here.
 /// </summary>
+[Collection("EnvironmentPath")]
 public class WorktreePreviewServiceInstallTests : IDisposable
 {
     private readonly string _worktree;
@@ -84,5 +85,67 @@ public class WorktreePreviewServiceInstallTests : IDisposable
 
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => service.InstallAsync(_worktree, cancellationToken: CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task InstallAsync_exposes_npm_global_bin_on_the_host_process_path()
+    {
+        // npm install -g lands global CLIs in $HOME/.local/bin; the agents that
+        // run after the Start node inherit the host process PATH, so install must
+        // surface that directory there or the installed tools stay invisible.
+        var originalPath = Environment.GetEnvironmentVariable("PATH");
+        var originalHome = Environment.GetEnvironmentVariable("HOME");
+        try
+        {
+            // Pin HOME to a fresh temp dir so the expected bin path is deterministic
+            // and provably absent from PATH before install runs.
+            var home = Path.Combine(Path.GetTempPath(), "ild-install-home-" + Guid.NewGuid().ToString("N"));
+            Environment.SetEnvironmentVariable("HOME", home);
+            var expectedBin = Path.Combine(home, ".local", "bin");
+            Assert.DoesNotContain(
+                expectedBin,
+                (Environment.GetEnvironmentVariable("PATH") ?? string.Empty).Split(Path.PathSeparator));
+
+            WriteConfig("true");
+            var service = BuildService();
+
+            await service.InstallAsync(_worktree, cancellationToken: CancellationToken.None);
+
+            var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+            Assert.Contains(expectedBin, path.Split(Path.PathSeparator));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", originalPath);
+            Environment.SetEnvironmentVariable("HOME", originalHome);
+        }
+    }
+
+    [Fact]
+    public async Task InstallAsync_does_not_duplicate_npm_global_bin_on_repeated_installs()
+    {
+        var originalPath = Environment.GetEnvironmentVariable("PATH");
+        var originalHome = Environment.GetEnvironmentVariable("HOME");
+        try
+        {
+            var home = Path.Combine(Path.GetTempPath(), "ild-install-home-" + Guid.NewGuid().ToString("N"));
+            Environment.SetEnvironmentVariable("HOME", home);
+            var expectedBin = Path.Combine(home, ".local", "bin");
+
+            WriteConfig("true");
+            var service = BuildService();
+
+            await service.InstallAsync(_worktree, cancellationToken: CancellationToken.None);
+            await service.InstallAsync(_worktree, cancellationToken: CancellationToken.None);
+
+            var segments = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+                .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
+            Assert.Single(segments, segment => segment == expectedBin);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", originalPath);
+            Environment.SetEnvironmentVariable("HOME", originalHome);
+        }
     }
 }
