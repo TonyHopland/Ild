@@ -740,6 +740,14 @@ export default function LoopEditor() {
     reactFlowInstance.current = flow;
   }, []);
 
+  // Re-fit the viewport whenever a different loop (or version) is opened so the
+  // graph is never drawn outside the visible canvas.
+  const openedTemplateId = selectedTemplate?.id ?? null;
+  useEffect(() => {
+    if (openedTemplateId === null) return;
+    reactFlowInstance.current?.fitView();
+  }, [openedTemplateId, readOnlyVersion]);
+
   const onDrop = useCallback(
     (event: React.DragEvent) => {
       event.preventDefault();
