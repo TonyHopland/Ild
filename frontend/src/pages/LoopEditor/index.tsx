@@ -740,6 +740,14 @@ export default function LoopEditor() {
     reactFlowInstance.current = flow;
   }, []);
 
+  // Identifies the loop currently open in the canvas. Used as the ReactFlow
+  // `key` so that opening a different loop (or version) remounts the canvas and
+  // re-runs the `fitView` prop — otherwise only the first loop opened gets
+  // fitted and later loops risk being drawn outside the viewport.
+  const canvasKey = isNewTemplate
+    ? "new"
+    : `${selectedTemplate?.id ?? "none"}:${readOnlyVersion ?? "latest"}`;
+
   const onDrop = useCallback(
     (event: React.DragEvent) => {
       event.preventDefault();
@@ -1300,6 +1308,7 @@ export default function LoopEditor() {
           >
             {selectedTemplate || isNewTemplate ? (
               <ReactFlow
+                key={canvasKey}
                 nodes={nodes}
                 edges={edges}
                 onNodesChange={onNodesChange}
