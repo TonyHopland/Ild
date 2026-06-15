@@ -15,6 +15,24 @@ Work flows through a taskboard and resolves via versioned, visual loop templates
 - Adapter-driven AI execution across the `opencode`, `pi`, and `claude-code` provider types.
 - QA preview orchestration for active worktrees, and realtime updates over SignalR for run events, work-item changes, and node progress.
 
+## Screenshots
+
+**Loop Editor** — build loop templates visually by wiring together `Start`, `Prompt`, `AI`, `PR`, `Cleanup`, and other node types. Edges carry success, failure, and custom routing so you can model retries, human gates, and multi-stage review flows without touching config files.
+
+![Loop Editor](docs/screenshots/LoopEditorExample.png)
+
+**Live output** — the Overview tab on a running work item streams the AI agent's tool calls and reasoning in real time alongside run metadata: status, priority, repository, loop assignment, branch, and dependencies.
+
+![Live output](docs/screenshots/OverviewLiveOutput.png)
+
+**Files diff** — the Files tab shows the exact git diff produced by the AI agent inside its isolated worktree, so you can review every addition and deletion before the branch is pushed or a PR is opened.
+
+![Files diff](docs/screenshots/FilesDiffView.png)
+
+**QA preview** — the Preview tab boots the project's full stack (API, app, WorkItem Server) inside the run's worktree and gives you a direct link to open and test the AI's changes live before they are merged.
+
+![QA preview](docs/screenshots/PreviewRunning.png)
+
 ## Quickstart
 
 The supported deployment path is the checked-in Docker Compose stack:
