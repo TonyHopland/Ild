@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   WorkItem,
   WorktreeFileChangeStatus,
@@ -25,35 +25,79 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [changesOnly, setChangesOnly] = useState(false);
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // Folder expansion defaults differ by scope: the "All files" view starts
+  // collapsed (VS-style), while the "Changes" view starts expanded (PR-style).
+  // This set holds the folders the user has flipped away from the current
+  // view's default; it survives the background refreshes below (so manual
+  // choices and newly appearing folders behave) and is reset when the scope
+  // changes. A folder is therefore open when its presence in the set differs
+  // from the view's default-open state.
+  const [toggledFolders, setToggledFolders] = useState<Set<string>>(new Set());
 
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const selectedPathRef = useRef<string | null>(null);
   const [content, setContent] = useState<WorktreeFileContent | null>(null);
   const [contentLoading, setContentLoading] = useState(false);
   const [contentError, setContentError] = useState<string | null>(null);
   const [showDiff, setShowDiff] = useState(false);
 
-  const refresh = useCallback(async () => {
-    if (!workItem.worktreePath) {
-      setFiles([]);
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await workItemService.getFiles(workItem.id);
-      setFiles(Array.isArray(result?.files) ? result.files : []);
-    } catch (e) {
-      setError((e as { message?: string })?.message ?? "Failed to load files.");
-      setFiles([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [workItem.id, workItem.worktreePath]);
+  const refresh = useCallback(
+    async (showLoading: boolean) => {
+      if (!workItem.worktreePath) {
+        setFiles([]);
+        return;
+      }
+      if (showLoading) setLoading(true);
+      setError(null);
+      try {
+        const result = await workItemService.getFiles(workItem.id);
+        setFiles(Array.isArray(result?.files) ? result.files : []);
+      } catch (e) {
+        setError((e as { message?: string })?.message ?? "Failed to load files.");
+        setFiles([]);
+      } finally {
+        if (showLoading) setLoading(false);
+      }
+    },
+    [workItem.id, workItem.worktreePath],
+  );
 
+  const loadContent = useCallback(
+    async (path: string, showLoading: boolean) => {
+      setContentError(null);
+      if (showLoading) {
+        setContent(null);
+        setContentLoading(true);
+      }
+      try {
+        const result = await workItemService.getFileContent(workItem.id, path);
+        setContent(result);
+      } catch (e) {
+        setContentError((e as { message?: string })?.message ?? "Failed to load file.");
+      } finally {
+        if (showLoading) setContentLoading(false);
+      }
+    },
+    [workItem.id],
+  );
+
+  // The parent refetches the work item every time the run advances (node/run
+  // state changes) and passes down a fresh object, so re-pull the file list and
+  // the open file whenever the work item updates. This keeps the explorer in
+  // sync with the worktree without a manual page refresh. The first load (and
+  // switching to a different item) shows the loading state; later background
+  // refreshes are silent so the tree and viewer don't flicker.
+  const lastKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    const key = `${workItem.id}:${workItem.worktreePath ?? ""}`;
+    const isNewItem = lastKeyRef.current !== key;
+    lastKeyRef.current = key;
+    void refresh(isNewItem);
+    if (!isNewItem && selectedPathRef.current) {
+      void loadContent(selectedPathRef.current, false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workItem]);
 
   const changedCount = useMemo(
     () => files.filter((f) => f.changeStatus !== "none").length,
@@ -68,31 +112,39 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   const tree = useMemo(() => buildFileTree(visibleFiles), [visibleFiles]);
 
   const selectFile = useCallback(
-    async (path: string) => {
+    (path: string) => {
       setSelectedPath(path);
-      setContent(null);
-      setContentError(null);
-      setContentLoading(true);
-      try {
-        const result = await workItemService.getFileContent(workItem.id, path);
-        setContent(result);
-      } catch (e) {
-        setContentError((e as { message?: string })?.message ?? "Failed to load file.");
-      } finally {
-        setContentLoading(false);
-      }
+      selectedPathRef.current = path;
+      void loadContent(path, true);
     },
-    [workItem.id],
+    [loadContent],
   );
 
   const toggleFolder = useCallback((path: string) => {
-    setCollapsed((prev) => {
+    setToggledFolders((prev) => {
       const next = new Set(prev);
       if (next.has(path)) next.delete(path);
       else next.add(path);
       return next;
     });
   }, []);
+
+  // Switching scope resets folders to that view's default expansion.
+  const selectScope = useCallback(
+    (next: boolean) => {
+      if (next === changesOnly) return;
+      setChangesOnly(next);
+      setToggledFolders(new Set());
+    },
+    [changesOnly],
+  );
+
+  // A folder is open when its toggled state differs from the view's default:
+  // collapsed by default for "All files", expanded by default for "Changes".
+  const isFolderExpanded = useCallback(
+    (path: string) => changesOnly !== toggledFolders.has(path),
+    [changesOnly, toggledFolders],
+  );
 
   if (!workItem.worktreePath) {
     return (
@@ -106,7 +158,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
     nodes.map((node) => {
       const indent = { paddingLeft: `${depth * 0.85 + 0.5}rem` };
       if (node.type === "folder") {
-        const isCollapsed = collapsed.has(node.path);
+        const isExpanded = isFolderExpanded(node.path);
         return (
           <div key={`d:${node.path}`}>
             <button
@@ -114,12 +166,12 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
               className="wiv2-file-row wiv2-file-folder"
               style={indent}
               onClick={() => toggleFolder(node.path)}
-              aria-expanded={!isCollapsed}
+              aria-expanded={isExpanded}
             >
-              <span className="wiv2-file-caret">{isCollapsed ? "▸" : "▾"}</span>
+              <span className="wiv2-file-caret">{isExpanded ? "▾" : "▸"}</span>
               <span className="wiv2-file-name">{node.name}</span>
             </button>
-            {!isCollapsed && renderNodes(node.children, depth + 1)}
+            {isExpanded && renderNodes(node.children, depth + 1)}
           </div>
         );
       }
@@ -132,7 +184,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
             selectedPath === node.path ? " wiv2-file-selected" : ""
           }`}
           style={indent}
-          onClick={() => void selectFile(node.path)}
+          onClick={() => selectFile(node.path)}
         >
           <span className="wiv2-file-name">{node.name}</span>
           {status !== "none" && (
@@ -152,7 +204,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
             <button
               type="button"
               className={`wiv2-toggle${!changesOnly ? " wiv2-toggle-active" : ""}`}
-              onClick={() => setChangesOnly(false)}
+              onClick={() => selectScope(false)}
               aria-pressed={!changesOnly}
             >
               All files
@@ -160,7 +212,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
             <button
               type="button"
               className={`wiv2-toggle${changesOnly ? " wiv2-toggle-active" : ""}`}
-              onClick={() => setChangesOnly(true)}
+              onClick={() => selectScope(true)}
               aria-pressed={changesOnly}
             >
               Changes{changedCount > 0 ? ` (${changedCount})` : ""}

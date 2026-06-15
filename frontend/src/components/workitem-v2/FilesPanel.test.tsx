@@ -56,6 +56,12 @@ describe("FilesPanel", () => {
 
     await renderPanel(makeWorkItem());
 
+    // Folders start collapsed — open src to reveal its files.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /src/ }));
+      await Promise.resolve();
+    });
+
     expect(screen.getByText("changed.ts")).toBeTruthy();
     expect(screen.getByText("untouched.ts")).toBeTruthy();
 
@@ -107,5 +113,151 @@ describe("FilesPanel", () => {
 
     expect(screen.getByText(/No worktree/)).toBeTruthy();
     expect(getFiles).not.toHaveBeenCalled();
+  });
+
+  test("starts with every folder collapsed and expands on demand", async () => {
+    vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: [{ path: "src/nested/deep.ts", changeStatus: "none" }],
+    });
+
+    await renderPanel(makeWorkItem());
+
+    // The top-level folder shows, but its contents stay hidden until expanded.
+    expect(screen.getByText("src")).toBeTruthy();
+    expect(screen.queryByText("nested")).toBeNull();
+    expect(screen.queryByText("deep.ts")).toBeNull();
+
+    // Expanding reveals the next level — which is itself still collapsed.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /src/ }));
+      await Promise.resolve();
+    });
+    expect(screen.getByText("nested")).toBeTruthy();
+    expect(screen.queryByText("deep.ts")).toBeNull();
+  });
+
+  test("expands folders by default in the Changes view but stays collapsible", async () => {
+    vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: [
+        { path: "src/changed.ts", changeStatus: "modified" },
+        { path: "src/untouched.ts", changeStatus: "none" },
+      ],
+    });
+
+    await renderPanel(makeWorkItem());
+
+    // The All-files view starts collapsed, so the file is hidden under src.
+    expect(screen.queryByText("changed.ts")).toBeNull();
+
+    // The Changes view starts expanded — changed files show without a click.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Changes \(1\)/ }));
+      await Promise.resolve();
+    });
+    expect(screen.getByText("changed.ts")).toBeTruthy();
+
+    // It can still be collapsed from there.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /src/ }));
+      await Promise.resolve();
+    });
+    expect(screen.queryByText("changed.ts")).toBeNull();
+  });
+
+  test("refreshes the file list and open file when the work item updates", async () => {
+    const getFiles = vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: [{ path: "a.ts", changeStatus: "modified" }],
+    });
+    const getFileContent = vi
+      .spyOn(authServices.workItemService, "getFileContent")
+      .mockResolvedValue({
+        path: "a.ts",
+        changeStatus: "modified",
+        content: "before",
+        diff: null,
+        isBinary: false,
+      });
+
+    const workItem = makeWorkItem();
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(<FilesPanel workItem={workItem} />);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("a.ts"));
+      await Promise.resolve();
+    });
+    expect(screen.getByText("before")).toBeTruthy();
+
+    // The worktree changes underneath: a new file appears and a.ts is rewritten.
+    getFiles.mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: [
+        { path: "a.ts", changeStatus: "modified" },
+        { path: "b.ts", changeStatus: "added" },
+      ],
+    });
+    getFileContent.mockResolvedValue({
+      path: "a.ts",
+      changeStatus: "modified",
+      content: "after",
+      diff: null,
+      isBinary: false,
+    });
+
+    // The parent refetches the work item and hands down a fresh object (same id).
+    await act(async () => {
+      view.rerender(<FilesPanel workItem={{ ...workItem }} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("b.ts")).toBeTruthy();
+    expect(screen.getByText("after")).toBeTruthy();
+    expect(screen.queryByText("before")).toBeNull();
+  });
+
+  test("keeps expanded folders open across a background refresh", async () => {
+    const getFiles = vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: [{ path: "src/a.ts", changeStatus: "none" }],
+    });
+
+    const workItem = makeWorkItem();
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(<FilesPanel workItem={workItem} />);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /src/ }));
+      await Promise.resolve();
+    });
+    expect(screen.getByText("a.ts")).toBeTruthy();
+
+    // A background refresh brings in a new sibling file under the same folder.
+    getFiles.mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: [
+        { path: "src/a.ts", changeStatus: "none" },
+        { path: "src/b.ts", changeStatus: "added" },
+      ],
+    });
+
+    await act(async () => {
+      view.rerender(<FilesPanel workItem={{ ...workItem }} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The folder the user opened stays open and now lists both files.
+    expect(screen.getByText("a.ts")).toBeTruthy();
+    expect(screen.getByText("b.ts")).toBeTruthy();
   });
 });
