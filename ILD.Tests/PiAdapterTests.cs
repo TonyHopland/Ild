@@ -11,6 +11,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Tests;
 
+[Collection("EnvironmentPath")]
 public class PiAdapterTests
 {
     [Fact]
