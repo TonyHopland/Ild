@@ -25,11 +25,14 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [changesOnly, setChangesOnly] = useState(false);
-  // Folders start collapsed: a folder is rendered open only while its path is
-  // in this set. Tracking explicit expansions (rather than collapses) keeps the
-  // user's choices intact across the background refreshes below — newly
-  // appearing folders default to collapsed.
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Folder expansion defaults differ by scope: the "All files" view starts
+  // collapsed (VS-style), while the "Changes" view starts expanded (PR-style).
+  // This set holds the folders the user has flipped away from the current
+  // view's default; it survives the background refreshes below (so manual
+  // choices and newly appearing folders behave) and is reset when the scope
+  // changes. A folder is therefore open when its presence in the set differs
+  // from the view's default-open state.
+  const [toggledFolders, setToggledFolders] = useState<Set<string>>(new Set());
 
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const selectedPathRef = useRef<string | null>(null);
@@ -118,13 +121,30 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   );
 
   const toggleFolder = useCallback((path: string) => {
-    setExpanded((prev) => {
+    setToggledFolders((prev) => {
       const next = new Set(prev);
       if (next.has(path)) next.delete(path);
       else next.add(path);
       return next;
     });
   }, []);
+
+  // Switching scope resets folders to that view's default expansion.
+  const selectScope = useCallback(
+    (next: boolean) => {
+      if (next === changesOnly) return;
+      setChangesOnly(next);
+      setToggledFolders(new Set());
+    },
+    [changesOnly],
+  );
+
+  // A folder is open when its toggled state differs from the view's default:
+  // collapsed by default for "All files", expanded by default for "Changes".
+  const isFolderExpanded = useCallback(
+    (path: string) => changesOnly !== toggledFolders.has(path),
+    [changesOnly, toggledFolders],
+  );
 
   if (!workItem.worktreePath) {
     return (
@@ -138,7 +158,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
     nodes.map((node) => {
       const indent = { paddingLeft: `${depth * 0.85 + 0.5}rem` };
       if (node.type === "folder") {
-        const isExpanded = expanded.has(node.path);
+        const isExpanded = isFolderExpanded(node.path);
         return (
           <div key={`d:${node.path}`}>
             <button
@@ -184,7 +204,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
             <button
               type="button"
               className={`wiv2-toggle${!changesOnly ? " wiv2-toggle-active" : ""}`}
-              onClick={() => setChangesOnly(false)}
+              onClick={() => selectScope(false)}
               aria-pressed={!changesOnly}
             >
               All files
@@ -192,7 +212,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
             <button
               type="button"
               className={`wiv2-toggle${changesOnly ? " wiv2-toggle-active" : ""}`}
-              onClick={() => setChangesOnly(true)}
+              onClick={() => selectScope(true)}
               aria-pressed={changesOnly}
             >
               Changes{changedCount > 0 ? ` (${changedCount})` : ""}

@@ -137,6 +137,35 @@ describe("FilesPanel", () => {
     expect(screen.queryByText("deep.ts")).toBeNull();
   });
 
+  test("expands folders by default in the Changes view but stays collapsible", async () => {
+    vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: [
+        { path: "src/changed.ts", changeStatus: "modified" },
+        { path: "src/untouched.ts", changeStatus: "none" },
+      ],
+    });
+
+    await renderPanel(makeWorkItem());
+
+    // The All-files view starts collapsed, so the file is hidden under src.
+    expect(screen.queryByText("changed.ts")).toBeNull();
+
+    // The Changes view starts expanded — changed files show without a click.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Changes \(1\)/ }));
+      await Promise.resolve();
+    });
+    expect(screen.getByText("changed.ts")).toBeTruthy();
+
+    // It can still be collapsed from there.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /src/ }));
+      await Promise.resolve();
+    });
+    expect(screen.queryByText("changed.ts")).toBeNull();
+  });
+
   test("refreshes the file list and open file when the work item updates", async () => {
     const getFiles = vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
       worktreePath: "/tmp/wt",
