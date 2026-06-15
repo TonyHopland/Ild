@@ -15,6 +15,21 @@ Work flows through a taskboard and resolves via versioned, visual loop templates
 - Adapter-driven AI execution across the `opencode`, `pi`, and `claude-code` provider types.
 - QA preview orchestration for active worktrees, and realtime updates over SignalR for run events, work-item changes, and node progress.
 
+## Quickstart
+
+The supported deployment path is the checked-in Docker Compose stack:
+
+```bash
+git clone <this repo> ild && cd ild
+cp .env.example .env
+# set ILD_PASSWORD before continuing
+docker compose up --build
+```
+
+This starts `postgres` (5432), `workitem-server` (8081), and `ild` (8080). Open <http://localhost:8080> and log in with `admin` (or your `ILD_USERNAME`) and the `ILD_PASSWORD` you supplied.
+
+See [docs/deployment.md](docs/deployment.md) for volumes, bind mounts, and first-startup behavior, and [docs/development.md](docs/development.md) to run from source.
+
 ## Screenshots
 
 **Loop Editor** — build loop templates visually by wiring together `Start`, `Prompt`, `AI`, `PR`, `Cleanup`, and other node types. Edges carry success, failure, and custom routing so you can model retries, human gates, and multi-stage review flows without touching config files.
@@ -32,21 +47,6 @@ Work flows through a taskboard and resolves via versioned, visual loop templates
 **QA preview** — the Preview tab boots the project's full stack (API, app, WorkItem Server) inside the run's worktree and gives you a direct link to open and test the AI's changes live before they are merged.
 
 ![QA preview](docs/screenshots/PreviewRunning.png)
-
-## Quickstart
-
-The supported deployment path is the checked-in Docker Compose stack:
-
-```bash
-git clone <this repo> ild && cd ild
-cp .env.example .env
-# set ILD_PASSWORD before continuing
-docker compose up --build
-```
-
-This starts `postgres` (5432), `workitem-server` (8081), and `ild` (8080). Open <http://localhost:8080> and log in with `admin` (or your `ILD_USERNAME`) and the `ILD_PASSWORD` you supplied.
-
-See [docs/deployment.md](docs/deployment.md) for volumes, bind mounts, and first-startup behavior, and [docs/development.md](docs/development.md) to run from source.
 
 ## Documentation
 
