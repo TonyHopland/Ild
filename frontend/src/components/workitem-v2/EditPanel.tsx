@@ -13,6 +13,9 @@ interface EditPanelProps {
   /** Reports whether any field differs from the work item, so the dialog can
    *  guard close paths against discarding unsaved edits. */
   onDirtyChange?: (dirty: boolean) => void;
+  /** Opens the dialog's delete confirmation — the delete control lives here in
+   *  the edit view rather than the detail footer. */
+  onRequestDelete: () => void;
 }
 
 /**
@@ -25,6 +28,7 @@ export default function EditPanel({
   onSave,
   onDone,
   onDirtyChange,
+  onRequestDelete,
 }: EditPanelProps) {
   const [title, setTitle] = useState(workItem.title);
   const [description, setDescription] = useState(workItem.description);
@@ -177,6 +181,15 @@ export default function EditPanel({
         </div>
       )}
       <div className="wiv2-edit-actions">
+        <button
+          type="button"
+          className="btn btn-sm btn-danger"
+          onClick={onRequestDelete}
+          disabled={submitting}
+        >
+          Delete
+        </button>
+        <span className="wiv2-edit-actions-spacer" />
         <button type="button" className="btn btn-secondary" onClick={onDone} disabled={submitting}>
           Cancel
         </button>

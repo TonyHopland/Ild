@@ -498,9 +498,14 @@
 
 .wiv2-edit-actions {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
   gap: 0.5rem;
   margin-top: 1rem;
+}
+
+/* Pushes Delete to the left while Cancel/Update stay on the right. */
+.wiv2-edit-actions-spacer {
+  flex: 1;
 }
 
 /* ---------- files explorer ---------- */
