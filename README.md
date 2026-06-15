@@ -44,7 +44,7 @@ See [docs/deployment.md](docs/deployment.md) for volumes, bind mounts, and first
 
 ![Files diff](docs/screenshots/FilesDiffView.png)
 
-**QA preview** — the Preview tab boots the project's full stack (API, app, WorkItem Server) inside the run's worktree and gives you a direct link to open and test the AI's changes live before they are merged.
+**QA preview** — the Preview tab boots the project's full stack (API, app, WorkItem Server) inside the run's worktree and gives you a direct link to open and test the AI's changes live before they are merged. Configured via [`ild.config.json`](docs/configuration.md#ildconfigjson) in the repository root.
 
 ![QA preview](docs/screenshots/PreviewRunning.png)
 

@@ -40,6 +40,131 @@ Behaviour is backwards-compatible so you can adopt it on an existing database wi
 
 Other credentials follow their own paths: the bootstrap password is hashed (PBKDF2), and the WorkItem Server shared key is supplied at runtime via `WORKITEM_API_KEYS` / `ILD_WORKITEM_SERVER_API_KEY` rather than relying on database storage.
 
+## ild.config.json
+
+Place an `ild.config.json` file in the root of a repository to enable QA preview for that repo. ILD reads this file from the worktree whenever a preview is started.
+
+```json
+{
+  "preview": {
+    "defaultProfile": "app",
+    "profiles": {
+      "app": {
+        "install": [...],
+        "services": [...]
+      }
+    }
+  }
+}
+```
+
+### Top-level fields
+
+| Field                    | Type   | Description                                                    |
+| ------------------------ | ------ | -------------------------------------------------------------- |
+| `preview.defaultProfile` | string | Profile used when `profileName` is omitted from the start call |
+| `preview.profiles`       | object | Map of profile name → profile definition                       |
+
+### Profile fields
+
+| Field      | Type  | Description                                                                    |
+| ---------- | ----- | ------------------------------------------------------------------------------ |
+| `install`  | array | Ordered list of one-time setup commands run before services start (idempotent) |
+| `services` | array | Ordered list of long-running services to start; each must become healthy       |
+
+### Install step fields
+
+| Field     | Type   | Description                                     |
+| --------- | ------ | ----------------------------------------------- |
+| `cwd`     | string | Working directory relative to the worktree root |
+| `command` | string | Shell command to run                            |
+
+### Service fields
+
+| Field           | Type    | Description                                                                                       |
+| --------------- | ------- | ------------------------------------------------------------------------------------------------- |
+| `name`          | string  | Unique service name within the profile; used to reference this service's port in other services   |
+| `cwd`           | string  | Working directory relative to the worktree root                                                   |
+| `command`       | string  | Shell command to start the service                                                                |
+| `port`          | string  | Logical port name assigned to this service (resolved to a free port at runtime)                   |
+| `suggestedPort` | integer | Preferred port number; ILD uses it if free, otherwise picks another                               |
+| `env`           | object  | Environment variables injected into the service process (values may use token syntax — see below) |
+| `healthUrl`     | string  | URL polled after startup; the service is considered ready once it returns HTTP 2xx                |
+| `public`        | boolean | When `true`, this service's port is exposed as the primary preview URL in the UI                  |
+
+### Token syntax
+
+String values in `command`, `env`, and `healthUrl` may contain tokens that ILD expands at runtime:
+
+| Token          | Expands to                                                                        |
+| -------------- | --------------------------------------------------------------------------------- |
+| `${HOST}`      | The bind host (loopback by default, overridable via `publicHost` on start)        |
+| `${PORT}`      | The port allocated to this service                                                |
+| `${PORT:name}` | The port allocated to the named service (for wiring services together)            |
+| `${STATE_DIR}` | A per-preview state directory for data files that should not land in the worktree |
+
+### Example
+
+The repository's own `ild.config.json` defines an `app` profile that boots three services — a WorkItem Server, the ILD API, and the Vite frontend — and wires them together via `${PORT:name}` references:
+
+```json
+{
+  "preview": {
+    "defaultProfile": "app",
+    "profiles": {
+      "app": {
+        "install": [
+          { "cwd": ".", "command": "command -v vp >/dev/null 2>&1 || npm install -g vite-plus" },
+          { "cwd": "frontend", "command": "[ -d node_modules ] || vp install" }
+        ],
+        "services": [
+          {
+            "name": "workitem-server",
+            "cwd": ".",
+            "command": "dotnet run --project ILD.WorkItemServer --no-launch-profile",
+            "port": "workitem-server",
+            "env": {
+              "WORKITEM_DATA_PATH": "${STATE_DIR}/workitem-data",
+              "WORKITEM_API_KEYS": "preview-api-key",
+              "ASPNETCORE_URLS": "http://${HOST}:${PORT}"
+            },
+            "healthUrl": "http://127.0.0.1:${PORT}/health"
+          },
+          {
+            "name": "api",
+            "cwd": ".",
+            "command": "dotnet run --project ILD.Api --no-launch-profile",
+            "port": "backend",
+            "suggestedPort": 5100,
+            "env": {
+              "ILD_PASSWORD": "letmein",
+              "ILD_DATA_PATH": "${STATE_DIR}/data",
+              "ILD_WORKTREES_PATH": "${STATE_DIR}/worktrees",
+              "ILD_WORKITEM_SERVER_URL": "http://127.0.0.1:${PORT:workitem-server}",
+              "ILD_WORKITEM_SERVER_API_KEY": "preview-api-key",
+              "ASPNETCORE_URLS": "http://${HOST}:${PORT}"
+            },
+            "healthUrl": "http://127.0.0.1:${PORT}/api/v1/health"
+          },
+          {
+            "name": "app",
+            "cwd": "frontend",
+            "command": "vp dev --host ${HOST} --port ${PORT}",
+            "port": "frontend",
+            "suggestedPort": 3100,
+            "env": {
+              "ILD_API_PROXY_TARGET": "http://127.0.0.1:${PORT:backend}"
+            },
+            "healthUrl": "http://127.0.0.1:${PORT}/",
+            "public": true
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
 ## Build-time container options
 
 Set as build args (e.g. in `.env` consumed by `docker compose build`):
