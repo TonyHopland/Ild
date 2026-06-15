@@ -472,30 +472,10 @@ describe("WorkItemModal", () => {
     });
   });
 
-  test("detail view shows Mark Merged button only when PR URL is set", async () => {
+  test("detail view never shows a Mark Merged button, even when a PR URL is set", async () => {
     const workItem = makeWorkItem({
       status: WorkItemStatus.HumanFeedback,
       prUrl: "https://forgejo.example.com/repo/pull/42",
-    });
-
-    const fetchMock = mockFetch([]);
-
-    vi.stubGlobal("fetch", fetchMock);
-
-    const onClose = vi.fn();
-    const onSave = vi.fn();
-
-    await renderWithEffectsSettled(
-      <WorkItemModal workItem={workItem} isOpen={true} onClose={onClose} onSave={onSave} />,
-    );
-
-    expect(screen.getByText("Mark Merged")).toBeTruthy();
-  });
-
-  test("detail view hides Mark Merged button when no PR URL", async () => {
-    const workItem = makeWorkItem({
-      status: WorkItemStatus.Running,
-      prUrl: null,
     });
 
     const fetchMock = mockFetch([]);

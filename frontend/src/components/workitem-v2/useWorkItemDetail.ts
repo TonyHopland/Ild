@@ -361,8 +361,6 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     [workItem?.id, onSave],
   );
 
-  const handleMarkMerged = () => runAction((id) => workItemService.markMerged(id), "mark merged");
-
   const handleApprove = () =>
     runAction(
       (id) => workItemService.humanFeedbackInput(id, feedbackInput || ""),
@@ -447,7 +445,6 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     pushBranchError,
     pushBranchMessage,
     handlePushBranch,
-    handleMarkMerged,
     handleApprove,
     handleReject,
     handleEdge,

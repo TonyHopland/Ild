@@ -172,8 +172,7 @@ public class WorkItemManagerTests
         depRun!.Status = LoopRunStatus.Failed;
         await db.Context.SaveChangesAsync();
 
-        await mgr.LinkPullRequestAsync(dep, "https://forgejo/pr/1");
-        await mgr.ManuallyMarkMergedAsync(dep);
+        await mgr.CleanupToDoneAsync(dep);
 
         Assert.True((await mgr.IsReadyAsync(child)));
     }
@@ -391,27 +390,6 @@ public class WorkItemManagerTests
     }
 
     [Fact]
-    public async Task ManuallyMarkMerged_transitions_workitem_to_Done()
-    {
-        var (mgr, db, repoId, _, _) = Setup();
-        using var _ = db;
-
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
-        var runId = SeedLoopRun(db, id);
-        // Set the run to Failed so ManuallyMarkMerged transitions to Done
-        var run = await db.Context.LoopRuns.FindAsync(runId);
-        run!.Status = LoopRunStatus.Failed;
-        await db.Context.SaveChangesAsync();
-
-        await mgr.LinkPullRequestAsync(id, "https://forgejo/pr/2");
-        await mgr.ManuallyMarkMergedAsync(id);
-
-        var after = await mgr.GetWorkItemAsync(id);
-        Assert.Equal(RemoteWorkItemStatus.Done, after!.Status);
-        Assert.True(after.IsPrMerged);
-    }
-
-    [Fact]
     public async Task TransitionToHumanFeedback_sets_reason_on_workitem()
     {
         var (mgr, db, repoId, _, _) = Setup();
@@ -428,83 +406,6 @@ public class WorkItemManagerTests
         var wi = await mgr.GetWorkItemAsync(id);
         Assert.Equal(RemoteWorkItemStatus.HumanFeedback, wi!.Status);
         Assert.Equal("PR Awaiting Merge", wi.HumanFeedbackReason);
-    }
-
-    [Fact]
-    public async Task ManuallyMarkMerged_does_not_set_Done_when_running_LoopRun_exists()
-    {
-        var (mgr, db, repoId, _, _) = Setup();
-        using var _ = db;
-
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
-        await mgr.TransitionToRunningAsync(id);
-
-        var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
-        db.Context.LoopTemplates.Add(lt);
-        var ltv = new LoopTemplateVersion
-        {
-            Id = Guid.NewGuid(),
-            LoopTemplateId = lt.Id,
-            VersionNumber = 1,
-            CreatedAt = DateTime.UtcNow,
-        };
-        db.Context.LoopTemplateVersions.Add(ltv);
-
-        var run = new LoopRun
-        {
-            Id = Guid.NewGuid(),
-            WorkItemId = id,
-            LoopTemplateVersionId = ltv.Id,
-            Status = LoopRunStatus.Running,
-            StartedAt = DateTime.UtcNow,
-        };
-        db.Context.LoopRuns.Add(run);
-        await db.Context.SaveChangesAsync();
-
-        await mgr.ManuallyMarkMergedAsync(id);
-
-        var after = await mgr.GetWorkItemAsync(id);
-        Assert.True(after!.IsPrMerged);
-        Assert.NotEqual(RemoteWorkItemStatus.Done, after.Status);
-    }
-
-    [Fact]
-    public async Task ManuallyMarkMerged_sets_Done_when_LoopRun_is_Failed()
-    {
-        var (mgr, db, repoId, _, _) = Setup();
-        using var _ = db;
-
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
-        await mgr.TransitionToReadyAsync(id);
-        await mgr.TransitionToRunningAsync(id);
-
-        var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
-        db.Context.LoopTemplates.Add(lt);
-        var ltv = new LoopTemplateVersion
-        {
-            Id = Guid.NewGuid(),
-            LoopTemplateId = lt.Id,
-            VersionNumber = 1,
-            CreatedAt = DateTime.UtcNow,
-        };
-        db.Context.LoopTemplateVersions.Add(ltv);
-
-        var run = new LoopRun
-        {
-            Id = Guid.NewGuid(),
-            WorkItemId = id,
-            LoopTemplateVersionId = ltv.Id,
-            Status = LoopRunStatus.Failed,
-            StartedAt = DateTime.UtcNow,
-        };
-        db.Context.LoopRuns.Add(run);
-        await db.Context.SaveChangesAsync();
-
-        await mgr.ManuallyMarkMergedAsync(id);
-
-        var after = await mgr.GetWorkItemAsync(id);
-        Assert.True(after!.IsPrMerged);
-        Assert.Equal(RemoteWorkItemStatus.Done, after.Status);
     }
 
     [Fact]
@@ -1344,52 +1245,6 @@ public class WorkItemManagerTests
 
         preview.Verify(p => p.StopAsync("/tmp/worktrees/cleanup-wi", It.IsAny<CancellationToken>()), Times.Once);
         notifier.Verify(n => n.PreviewStateChangedAsync(id), Times.Once);
-    }
-
-    [Fact]
-    public async Task ManuallyMarkMergedAsync_stops_running_preview_when_it_transitions_to_Done()
-    {
-        var (mgr, db, repoId, preview, notifier) = SetupWithPreview();
-        using var _ = db;
-
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
-        var runId = SeedLoopRun(db, id);
-        // A non-Running run (here Failed) makes ManuallyMarkMerged transition to Done.
-        var run = await db.Context.LoopRuns.FindAsync(runId);
-        run!.Status = LoopRunStatus.Failed;
-        run.WorktreePath = "/tmp/worktrees/merged-wi";
-        await db.Context.SaveChangesAsync();
-
-        preview.Setup(p => p.IsPreviewRunning("/tmp/worktrees/merged-wi")).Returns(true);
-
-        await mgr.LinkPullRequestAsync(id, "https://forgejo/pr/7");
-        await mgr.ManuallyMarkMergedAsync(id);
-
-        var after = await mgr.GetWorkItemAsync(id);
-        Assert.Equal(RemoteWorkItemStatus.Done, after!.Status);
-        preview.Verify(p => p.StopAsync("/tmp/worktrees/merged-wi", It.IsAny<CancellationToken>()), Times.Once);
-        notifier.Verify(n => n.PreviewStateChangedAsync(id), Times.Once);
-    }
-
-    [Fact]
-    public async Task ManuallyMarkMergedAsync_leaves_preview_alone_when_run_still_Running()
-    {
-        var (mgr, db, repoId, preview, _) = SetupWithPreview();
-        using var _ = db;
-
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
-        var runId = SeedLoopRun(db, id); // Running — does not transition to Done.
-        var run = await db.Context.LoopRuns.FindAsync(runId);
-        run!.WorktreePath = "/tmp/worktrees/merged-running-wi";
-        await db.Context.SaveChangesAsync();
-
-        preview.Setup(p => p.IsPreviewRunning(It.IsAny<string>())).Returns(true);
-
-        await mgr.LinkPullRequestAsync(id, "https://forgejo/pr/8");
-        await mgr.ManuallyMarkMergedAsync(id);
-
-        // Still Running → no Done transition → preview must keep running.
-        preview.Verify(p => p.StopAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

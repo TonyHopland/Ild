@@ -274,13 +274,6 @@ public class WorkItemsController : ControllerBase
         return ok ? Ok() : NotFound();
     }
 
-    [HttpPost("{id}/mark-merged")]
-    public async Task<IActionResult> MarkMerged(string id)
-    {
-        var ok = await _workItemManager.MarkMergedAndAdvanceAsync(id);
-        return ok ? Ok() : NotFound();
-    }
-
     [HttpPost("{id}/human-feedback/input")]
     public async Task<IActionResult> HumanFeedbackInput(string id, [FromBody] HumanFeedbackInputRequest request)
     {

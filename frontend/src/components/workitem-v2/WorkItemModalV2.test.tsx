@@ -381,6 +381,19 @@ describe("WorkItemModalV2", () => {
     expect(screen.getByRole("button", { name: "Reject" })).toBeTruthy();
   });
 
+  test("footer never shows a Mark Merged button, even when a PR URL is set", async () => {
+    mockServices();
+    await renderDialog(
+      makeWorkItem({
+        status: WorkItemStatus.HumanFeedback,
+        currentLoopRunId: "run-1",
+        prUrl: "https://forgejo.example.com/repo/pull/42",
+      }),
+    );
+
+    expect(screen.queryByRole("button", { name: "Mark Merged" })).toBeNull();
+  });
+
   test("edit button switches to the inline edit form", async () => {
     mockServices();
     await renderDialog(makeWorkItem());

@@ -146,10 +146,6 @@ export const workItemService = {
     return api.post<void>(`/workitems/${id}/link-pr`, { prUrl });
   },
 
-  markMerged: async (id: string): Promise<void> => {
-    return api.post<void>(`/workitems/${id}/mark-merged`, {});
-  },
-
   humanFeedbackInput: async (id: string, input: string): Promise<void> => {
     return api.post<void>(`/workitems/${id}/human-feedback/input`, { input });
   },

@@ -48,9 +48,9 @@ public class PrSyncService : IPrSyncService
         {
             // Per-run PRs (ADR-0008) mean a webhook can arrive for an *old*
             // run's still-open PR. Merge bookkeeping must stay on the run that
-            // owns the PR — going through the work item (ManuallyMarkMergedAsync)
-            // would mark the current run merged instead and could flip the item
-            // to Done while another run is mid-flight.
+            // owns the PR — tagging whatever run is "current" instead could
+            // mark the wrong run merged and flip the item to Done while another
+            // run is mid-flight.
             run.IsPrMerged = true;
             run.UpdatedAt = DateTime.UtcNow;
             await _loopRunStore.UpdateRunAsync(run);

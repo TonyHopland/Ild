@@ -340,8 +340,6 @@ export default function WorkItemModal({
     }
   };
 
-  const handleMarkMerged = () => runAction((id) => workItemService.markMerged(id), "mark merged");
-
   const handleContinue = () =>
     runAction(
       (id) => workItemService.humanFeedbackInput(id, feedbackInput || ""),
@@ -977,11 +975,6 @@ export default function WorkItemModal({
 
             {/* Footer */}
             <div className="modal-footer">
-              {workItem.prUrl && (
-                <button type="button" className="btn btn-success" onClick={handleMarkMerged}>
-                  Mark Merged
-                </button>
-              )}
               <button type="button" className="btn btn-secondary" onClick={onClose}>
                 Close
               </button>
