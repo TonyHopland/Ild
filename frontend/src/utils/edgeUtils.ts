@@ -121,7 +121,14 @@ function edgeLabelFor(edgeType: EdgeType, name?: string | null): string {
   return name?.trim() || "custom";
 }
 
-export function buildEdge(config: EdgeConfig): Edge {
+// React Flow v12 dropped `pathOptions` from the generic `Edge` type; it only
+// lives on the built-in smoothstep variant, which isn't exported. Re-declare it
+// here so the smoothstep routing options below type-check.
+type SmoothStepEdge = Edge & {
+  pathOptions?: { borderRadius?: number; offset?: number };
+};
+
+export function buildEdge(config: EdgeConfig): SmoothStepEdge {
   const name = config.edgeType === EdgeType.Custom ? (config.name ?? null) : null;
 
   return {
