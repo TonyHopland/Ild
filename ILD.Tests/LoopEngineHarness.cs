@@ -33,7 +33,7 @@ internal sealed class LoopEngineHarness : IDisposable
     private readonly ServiceProvider _sp;
     private readonly LoopEngine _engine;
 
-    public LoopEngineHarness()
+    public LoopEngineHarness(IRunNotifier? notifier = null)
     {
         Db = new TestDb();
 
@@ -62,7 +62,7 @@ internal sealed class LoopEngineHarness : IDisposable
         services.AddSingleton<ILoopRunStore>(Db.LoopRuns);
         services.AddSingleton<ILoopTemplateStore>(Db.LoopTemplates);
         services.AddSingleton<IEventLogStore>(Db.EventLogs);
-        services.AddSingleton<IRunNotifier, NoopRunNotifier>();
+        services.AddSingleton<IRunNotifier>(notifier ?? new NoopRunNotifier());
         services.AddSingleton<IWorkItemManager>(WorkItemsMock.Object);
         services.AddSingleton<IWorkItemNotifier>(WorkItemNotifierMock.Object);
         services.AddSingleton<INodeExecutorRegistry>(Registry);
