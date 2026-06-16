@@ -6,7 +6,7 @@ import MarkdownRenderer from "../MarkdownRenderer";
 import FeedbackActions from "../FeedbackActions";
 import type { WorkItemDetail } from "./useWorkItemDetail";
 
-/** Prominent feedback banner pinned above the tab content while the item waits on a human. */
+/** Prominent feedback banner shown in the Action tab while the item waits on a human. */
 export function FeedbackBanner({
   workItem,
   detail,
