@@ -164,6 +164,21 @@
   flex: 1;
 }
 
+/* ---------- action tab ---------- */
+
+.wiv2-action {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* The feedback banner no longer floats above the tabs, so drop the pinning
+   margin and height cap — the Action tabpanel owns scrolling now. */
+.wiv2-action .wiv2-feedback {
+  margin: 0;
+  max-height: none;
+}
+
 /* ---------- overview tab ---------- */
 
 .wiv2-overview-cols {

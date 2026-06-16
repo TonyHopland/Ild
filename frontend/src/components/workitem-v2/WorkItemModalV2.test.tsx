@@ -168,6 +168,7 @@ describe("WorkItemModalV2", () => {
 
     expect(screen.getByText("Test Work Item")).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Overview" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Action" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: /Runs/ })).toBeTruthy();
     expect(screen.getByRole("tab", { name: /Conversation/ })).toBeTruthy();
     expect(screen.getByRole("tab", { name: /Preview/ })).toBeTruthy();
@@ -392,7 +393,7 @@ describe("WorkItemModalV2", () => {
     expect(screen.queryByRole("button", { name: "Push branch" })).toBeNull();
   });
 
-  test("feedback banner is pinned while waiting on a human", async () => {
+  test("feedback pane lives in the Action tab while waiting on a human", async () => {
     mockServices();
     await renderDialog(
       makeWorkItem({
@@ -402,9 +403,68 @@ describe("WorkItemModalV2", () => {
       }),
     );
 
-    expect(screen.getByText("Human Feedback")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Approve" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Reject" })).toBeTruthy();
+    // The dialog still opens on Overview; the feedback pane no longer floats
+    // above the tabs but is parked inside the (hidden) Action panel.
+    expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    const actionPanel = document.getElementById("wiv2-panel-action");
+    expect(actionPanel).not.toBeNull();
+    expect(within(actionPanel as HTMLElement).getByText("Human Feedback")).toBeTruthy();
+
+    // Switching to the Action tab reveals the feedback controls.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Action/ }));
+      await Promise.resolve();
+    });
+    expect((actionPanel as HTMLElement).hasAttribute("hidden")).toBe(false);
+    expect(
+      within(actionPanel as HTMLElement).getByRole("button", { name: "Approve" }),
+    ).toBeTruthy();
+    expect(within(actionPanel as HTMLElement).getByRole("button", { name: "Reject" })).toBeTruthy();
+  });
+
+  test("Action tab shows the indicator when the item needs human action", async () => {
+    mockServices();
+    await renderDialog(
+      makeWorkItem({
+        status: WorkItemStatus.HumanFeedback,
+        humanFeedbackReason: "Human Input Needed",
+        currentLoopRunId: "run-1",
+      }),
+    );
+
+    expect(screen.getByRole("tab", { name: "Action ●" })).toBeTruthy();
+  });
+
+  test("Action tab has no indicator and shows an empty state when no action is required", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem());
+
+    expect(screen.getByRole("tab", { name: "Action" })).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "Action ●" })).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: "Action" }));
+      await Promise.resolve();
+    });
+    expect(screen.getByText("No action required.")).toBeTruthy();
+  });
+
+  test("live progress stream lives in the Action tab for a running item", async () => {
+    mockServices([makeRun({ status: LoopRunStatus.Running, completedAt: null })]);
+    await renderDialog(makeWorkItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1" }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Action/ }));
+      await Promise.resolve();
+    });
+
+    const actionPanel = document.getElementById("wiv2-panel-action");
+    expect(within(actionPanel as HTMLElement).getByText("Live Output")).toBeTruthy();
+    // The live stream is no longer duplicated in the Overview panel.
+    const overviewPanel = document.getElementById("wiv2-panel-overview");
+    expect(within(overviewPanel as HTMLElement).queryByText("Live Output")).toBeNull();
   });
 
   test("footer never shows a Mark Merged button, even when a PR URL is set", async () => {

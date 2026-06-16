@@ -20,7 +20,7 @@ import HaltSteerControls from "./HaltSteerControls";
 import EditPanel from "./EditPanel";
 import FilesPanel from "./FilesPanel";
 
-type TabId = "overview" | "runs" | "conversation" | "files" | "preview" | "terminal";
+type TabId = "overview" | "action" | "runs" | "conversation" | "files" | "preview" | "terminal";
 
 interface WorkItemModalV2Props {
   workItem: WorkItem;
@@ -31,10 +31,12 @@ interface WorkItemModalV2Props {
 
 /**
  * Near-fullscreen work item detail dialog: a horizontal tab bar (Overview,
- * Runs, Conversation, Files, Preview) over the full width, with run history
- * shown inline rather than on a separate page. New items are still created
- * through the classic modal — this dialog is the detail/edit view for existing
- * items.
+ * Action, Runs, Conversation, Files, Preview) over the full width, with run
+ * history shown inline rather than on a separate page. The Action tab holds the
+ * live progress stream and the human-feedback pane — both space-hungry — and
+ * flags itself with an indicator while the item waits on a human. New items are
+ * still created through the classic modal — this dialog is the detail/edit view
+ * for existing items.
  */
 export default function WorkItemModalV2({
   workItem,
@@ -133,8 +135,15 @@ export default function WorkItemModalV2({
 
   const conversationCount = parseConversation(workItem).length;
 
+  // "Action required" mirrors the FeedbackBanner's render condition: the item is
+  // waiting on a human. The Action tab flags this with the same ● indicator the
+  // Preview tab uses for a running preview.
+  const actionRequired =
+    workItem.status === WorkItemStatus.HumanFeedback && !!workItem.humanFeedbackReason;
+
   const tabs: { id: TabId; label: string }[] = [
     { id: "overview", label: "Overview" },
+    { id: "action", label: `Action${actionRequired ? " ●" : ""}` },
     { id: "runs", label: `Runs${detail.runs.length > 0 ? ` (${detail.runs.length})` : ""}` },
     {
       id: "conversation",
@@ -178,7 +187,6 @@ export default function WorkItemModalV2({
       >
         <div className="wiv2-overview wiv2-overview-cols">
           <div className="wiv2-overview-main">
-            {detail.shouldStream && <LiveStream text={detail.progressText} />}
             <HaltSteerControls
               run={detail.currentRun}
               workItemStatus={workItem.status}
@@ -193,6 +201,21 @@ export default function WorkItemModalV2({
           <aside className="wiv2-overview-aside">
             <MetaPanel workItem={workItem} detail={detail} />
           </aside>
+        </div>
+      </section>
+      <section
+        role="tabpanel"
+        id="wiv2-panel-action"
+        aria-labelledby="wiv2-tab-action"
+        className="wiv2-tabpanel"
+        hidden={activeTab !== "action"}
+      >
+        <div className="wiv2-action">
+          {detail.shouldStream && <LiveStream text={detail.progressText} />}
+          <FeedbackBanner workItem={workItem} detail={detail} prompt={feedbackPrompt} />
+          {!detail.shouldStream && !actionRequired && (
+            <div className="wiv2-empty">No action required.</div>
+          )}
         </div>
       </section>
       <section
@@ -337,7 +360,6 @@ export default function WorkItemModalV2({
             </div>
           ) : (
             <>
-              <FeedbackBanner workItem={workItem} detail={detail} prompt={feedbackPrompt} />
               <div className="wiv2-body wiv2-body-top">
                 {tabBar}
                 <div className="wiv2-content">{renderPanels()}</div>
