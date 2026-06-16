@@ -23,7 +23,8 @@ import FilesPanel from "./FilesPanel";
 type TabId = "overview" | "action" | "runs" | "conversation" | "files" | "preview" | "terminal";
 
 interface WorkItemModalV2Props {
-  workItem: WorkItem;
+  /** The item to show, or null to render the new-item creation form. */
+  workItem: WorkItem | null;
   onClose: () => void;
   onSave: (workItem: WorkItem) => void;
   onDelete?: (id: string) => void;
@@ -34,9 +35,9 @@ interface WorkItemModalV2Props {
  * Action, Runs, Conversation, Files, Preview) over the full width, with run
  * history shown inline rather than on a separate page. The Action tab holds the
  * live progress stream and the human-feedback pane — both space-hungry — and
- * flags itself with an indicator while the item waits on a human. New items are
- * still created through the classic modal — this dialog is the detail/edit view
- * for existing items.
+ * flags itself with an indicator while the item waits on a human. With a null
+ * workItem the dialog drops the tabs and shows the creation form instead, so a
+ * single dialog covers both creating and viewing/editing work items.
  */
 export default function WorkItemModalV2({
   workItem,
@@ -60,8 +61,12 @@ export default function WorkItemModalV2({
     setEditDirty(false);
   }, []);
 
-  // Closing must not silently discard an in-progress edit or typed feedback.
-  const hasUnsavedChanges = (editMode && editDirty) || detail.feedbackInput.trim().length > 0;
+  // Closing must not silently discard an in-progress edit, the create form, or
+  // typed feedback. The create form (null workItem) is always an open form, so
+  // its dirty flag counts the same as an edit's.
+  const isCreate = workItem === null;
+  const hasUnsavedChanges =
+    ((editMode || isCreate) && editDirty) || detail.feedbackInput.trim().length > 0;
 
   const requestClose = useCallback(() => {
     if (hasUnsavedChanges) {
@@ -89,12 +94,12 @@ export default function WorkItemModalV2({
     // Only reset when switching to a different item — status changes on the
     // same item must not yank the user away from the tab they are reading.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workItem.id]);
+  }, [workItem?.id]);
 
   // The terminal connects to the run's worktree, so the tab only exists once a
   // run has created one. Gating on the worktree (not the status) keeps the tab —
   // and any live session — stable as the item moves between statuses.
-  const canUseTerminal = Boolean(workItem.currentLoopRunId && workItem.worktreePath);
+  const canUseTerminal = Boolean(workItem?.currentLoopRunId && workItem?.worktreePath);
 
   // If the worktree is reclaimed while the Terminal tab is open, the tab (and its
   // panel) disappear — fall back to Overview so the content area is never blank.
@@ -103,25 +108,26 @@ export default function WorkItemModalV2({
   }, [activeTab, canUseTerminal]);
 
   // Rendered prompt for the currently-suspended Human/PR node, same as classic.
-  const runId = workItem.currentLoopRunId ?? undefined;
+  const runId = workItem?.currentLoopRunId ?? undefined;
   const humanPrompt = useRenderedPrompt(
-    workItem.status === WorkItemStatus.HumanFeedback &&
-      workItem.humanFeedbackReason === "Human Input Needed"
+    workItem?.status === WorkItemStatus.HumanFeedback &&
+      workItem?.humanFeedbackReason === "Human Input Needed"
       ? runId
       : undefined,
     "NodeStarted",
   );
   const prPrompt = useRenderedPrompt(
-    workItem.status === WorkItemStatus.HumanFeedback &&
-      workItem.humanFeedbackReason === "PR Awaiting Merge"
+    workItem?.status === WorkItemStatus.HumanFeedback &&
+      workItem?.humanFeedbackReason === "PR Awaiting Merge"
       ? runId
       : undefined,
     "NodeStarted",
   );
   const feedbackPrompt =
-    workItem.humanFeedbackReason === "PR Awaiting Merge" ? prPrompt : humanPrompt;
+    workItem?.humanFeedbackReason === "PR Awaiting Merge" ? prPrompt : humanPrompt;
 
   const handleDeleteConfirm = async () => {
+    if (!workItem) return;
     try {
       await workItemService.delete(workItem.id);
       onDelete?.(workItem.id);
@@ -132,6 +138,58 @@ export default function WorkItemModalV2({
       setShowDeleteConfirm(false);
     }
   };
+
+  // A new item has no runs, conversation or live state, so it skips the tabbed
+  // layout entirely and shows only the creation form. Placed after every hook so
+  // the detail view below can treat workItem as non-null.
+  if (!workItem) {
+    return (
+      <>
+        <div className="modal-overlay" onMouseDown={requestClose}>
+          <div
+            className="wiv2-dialog"
+            onMouseDown={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="New work item"
+          >
+            <div className="wiv2-header">
+              <div className="wiv2-header-copy">
+                <div className="wiv2-header-title-row">
+                  <h2>New Work Item</h2>
+                </div>
+              </div>
+              <div className="wiv2-header-actions">
+                <button className="modal-close" onClick={requestClose} aria-label="Close">
+                  &times;
+                </button>
+              </div>
+            </div>
+            <div className="wiv2-body wiv2-body-edit">
+              <EditPanel
+                workItem={null}
+                detail={detail}
+                onSave={onSave}
+                onDone={onClose}
+                onDirtyChange={setEditDirty}
+              />
+            </div>
+          </div>
+        </div>
+        <ConfirmModal
+          isOpen={showCloseConfirm}
+          title="Discard unsaved changes?"
+          message="You have unsaved changes. Close the dialog and discard them?"
+          confirmText="Discard"
+          onConfirm={() => {
+            setShowCloseConfirm(false);
+            onClose();
+          }}
+          onCancel={() => setShowCloseConfirm(false)}
+        />
+      </>
+    );
+  }
 
   const conversationCount = parseConversation(workItem).length;
 
