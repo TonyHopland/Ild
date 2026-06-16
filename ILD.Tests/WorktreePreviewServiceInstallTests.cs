@@ -78,13 +78,27 @@ public class WorktreePreviewServiceInstallTests : IDisposable
     }
 
     [Fact]
-    public async Task InstallAsync_throws_when_no_ild_config_is_present()
+    public async Task InstallAsync_skips_best_effort_when_no_ild_config_is_present()
     {
-        // No ild.config.json written — install must surface a clear failure.
+        // No ild.config.json written — most projects ship none, so install must
+        // skip best-effort rather than throw, reporting the reason for a warning.
         var service = BuildService();
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
-            () => service.InstallAsync(_worktree, cancellationToken: CancellationToken.None));
+        var result = await service.InstallAsync(_worktree, cancellationToken: CancellationToken.None);
+
+        Assert.False(result.Installed);
+        Assert.Contains("No ild.config.json", result.Message);
+    }
+
+    [Fact]
+    public async Task InstallAsync_reports_installed_when_a_profile_is_present()
+    {
+        WriteConfig("true");
+        var service = BuildService();
+
+        var result = await service.InstallAsync(_worktree, cancellationToken: CancellationToken.None);
+
+        Assert.True(result.Installed);
     }
 
     [Fact]

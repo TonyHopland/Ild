@@ -8,6 +8,15 @@ public sealed record WorktreePreviewStartOptions(
     string? PublicHost = null,
     IReadOnlyDictionary<string, int>? PortOverrides = null);
 
+/// <summary>
+/// Result of <see cref="IWorktreePreviewService.InstallAsync"/>.
+/// <see cref="Installed"/> is true when install steps actually ran; false when
+/// the worktree has no <c>ild.config.json</c> preview profile to install — a
+/// best-effort no-op, not a failure. <see cref="Message"/> carries the skip
+/// reason so callers can surface it as a warning.
+/// </summary>
+public sealed record WorktreeInstallResult(bool Installed, string? Message = null);
+
 public interface IWorktreePreviewService
 {
     Task<WorktreePreviewResponse> GetStatusAsync(string worktreePath, CancellationToken cancellationToken = default);
@@ -17,11 +26,14 @@ public interface IWorktreePreviewService
     /// <summary>
     /// Runs the install steps of an <c>ild.config.json</c> preview profile in the
     /// given worktree without starting any services. <paramref name="profileName"/>
-    /// defaults to the config's default profile when null. Throws if the config or
-    /// profile is missing, or an install step exits non-zero. Used by the Start node
-    /// to provision a worktree on run start.
+    /// defaults to the config's default profile when null. When the worktree has no
+    /// <c>ild.config.json</c> preview profile the install is skipped best-effort and
+    /// the returned result reports <see cref="WorktreeInstallResult.Installed"/> as
+    /// false — most projects ship no such file, so a missing config is not a failure.
+    /// Throws only when a requested profile is missing or an install step exits
+    /// non-zero. Used by the Start node to provision a worktree on run start.
     /// </summary>
-    Task InstallAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default);
+    Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Lightweight O(1) check whether a preview runtime is active for the given worktree path.
@@ -42,7 +54,7 @@ public sealed class NoopPreviewService : IWorktreePreviewService
         => throw new NotImplementedException();
     public Task<WorktreePreviewResponse> StopAsync(string worktreePath, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
-    public Task InstallAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
+    public Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
     public bool IsPreviewRunning(string worktreePath) => false;
 }

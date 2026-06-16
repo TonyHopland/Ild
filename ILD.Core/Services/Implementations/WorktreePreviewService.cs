@@ -160,13 +160,16 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         }
     }
 
-    public async Task InstallAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
+    public async Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
     {
         var normalized = NormalizeWorktreePath(worktreePath);
         var loaded = await LoadConfigAsync(normalized, cancellationToken);
         if (!loaded.Configured || loaded.Config == null)
         {
-            throw new InvalidOperationException(loaded.Message ?? "No ild.config.json preview profile found.");
+            // Best effort: most repositories ship no ild.config.json preview
+            // profile, so there is nothing to install. Skip instead of failing
+            // and let the caller surface the reason as a warning.
+            return new WorktreeInstallResult(false, loaded.Message ?? "No ild.config.json preview profile found.");
         }
 
         var resolvedProfileName = SelectProfileName(loaded.Config, profileName);
@@ -191,6 +194,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             new List<ManagedPreviewProcess>());
 
         await RunInstallStepsAsync(profile.Install, runtime, cancellationToken);
+        return new WorktreeInstallResult(true);
     }
 
     public bool IsPreviewRunning(string worktreePath)
