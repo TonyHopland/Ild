@@ -467,6 +467,96 @@ describe("WorkItemModalV2", () => {
     expect(within(overviewPanel as HTMLElement).queryByText("Live Output")).toBeNull();
   });
 
+  test("halt AI node button lives in the Action tab for a running AI node", async () => {
+    const runningRun = makeRun({
+      status: LoopRunStatus.Running,
+      completedAt: null,
+      currentNodeId: "n-1",
+      nodes: [
+        {
+          id: "rn-1",
+          nodeId: "n-1",
+          nodeLabel: "Implement",
+          nodeType: "AI",
+          status: LoopRunNodeStatus.Running,
+          effectiveInput: JSON.stringify({ prompt: "do the thing" }),
+          output: null,
+          error: null,
+          startedAt: "2025-01-02T00:00:00Z",
+          completedAt: null,
+          executionCount: 1,
+        },
+      ],
+    });
+    mockServices([runningRun]);
+    await renderDialog(makeWorkItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1" }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Action/ }));
+      await Promise.resolve();
+    });
+
+    // The Halt button now lives in the Action panel, not the Overview panel.
+    const actionPanel = document.getElementById("wiv2-panel-action");
+    const haltButton = within(actionPanel as HTMLElement).getByRole("button", {
+      name: "Halt AI node",
+    });
+    const overviewPanel = document.getElementById("wiv2-panel-overview");
+    expect(
+      within(overviewPanel as HTMLElement).queryByRole("button", { name: "Halt AI node" }),
+    ).toBeNull();
+
+    // The halt control sits beneath the live view, not above it.
+    const liveOutput = within(actionPanel as HTMLElement).getByText("Live Output");
+    expect(liveOutput.compareDocumentPosition(haltButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
+
+  test("halted run shows the steer-and-resume window in the Action tab", async () => {
+    const haltedRun = makeRun({
+      status: LoopRunStatus.WaitingHuman,
+      completedAt: null,
+      currentNodeId: "n-1",
+      isHalted: true,
+      nodes: [
+        {
+          id: "rn-1",
+          nodeId: "n-1",
+          nodeLabel: "Implement",
+          nodeType: "AI",
+          status: LoopRunNodeStatus.Interrupted,
+          effectiveInput: JSON.stringify({ prompt: "do the thing" }),
+          output: null,
+          error: null,
+          startedAt: "2025-01-02T00:00:00Z",
+          completedAt: null,
+          executionCount: 1,
+        },
+      ],
+    });
+    mockServices([haltedRun]);
+    await renderDialog(
+      makeWorkItem({
+        status: WorkItemStatus.HumanFeedback,
+        humanFeedbackReason: "Run Halted",
+        currentLoopRunId: "run-1",
+      }),
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Action/ }));
+      await Promise.resolve();
+    });
+
+    const actionPanel = document.getElementById("wiv2-panel-action");
+    expect(within(actionPanel as HTMLElement).getByText(/Halted — steer/)).toBeTruthy();
+    expect(within(actionPanel as HTMLElement).getByRole("button", { name: "Resume" })).toBeTruthy();
+    // The steer window is no longer rendered in the Overview panel.
+    const overviewPanel = document.getElementById("wiv2-panel-overview");
+    expect(within(overviewPanel as HTMLElement).queryByText(/Halted — steer/)).toBeNull();
+  });
+
   test("footer never shows a Mark Merged button, even when a PR URL is set", async () => {
     mockServices();
     await renderDialog(
