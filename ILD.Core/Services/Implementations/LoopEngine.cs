@@ -487,11 +487,21 @@ public sealed class LoopEngine : ILoopEngine
         // Capture the complete live stream into the per-run buffer (which both
         // backs the mid-run replay and assigns the sequence number) before
         // broadcasting each chunk, so the live and backlog views stay in sync.
+        // The first chunk a node emits is preceded by an `[Ild: <label>]`
+        // transition marker (styled like the adapters' `[tool: ...]` markers)
+        // so the live view makes the hand-off between nodes obvious.
+        var headerEmitted = 0;
         var ctx = new NodeExecutionContext(run, node, sp, ct,
-            line =>
+            async line =>
             {
+                if (Interlocked.Exchange(ref headerEmitted, 1) == 0)
+                {
+                    var header = $"\n[Ild: {NodeDisplayName(node)}]\n";
+                    var headerSeq = _progressBuffer.Append(run.Id, header);
+                    await _notifier.NodeProgressAsync(run.Id, node.Id, header, headerSeq);
+                }
                 var seq = _progressBuffer.Append(run.Id, line);
-                return _notifier.NodeProgressAsync(run.Id, node.Id, line, seq);
+                await _notifier.NodeProgressAsync(run.Id, node.Id, line, seq);
             });
 
         IAsyncEnumerator<NodeOutcome>? enumerator = null;
@@ -748,6 +758,11 @@ public sealed class LoopEngine : ILoopEngine
         catch { return false; }
         return run.Status == entryStatus;
     }
+
+    /// <summary>Human-readable name for a node's live-output transition marker,
+    /// falling back to the node type when the template left the label blank.</summary>
+    private static string NodeDisplayName(LoopNode node)
+        => string.IsNullOrWhiteSpace(node.Label) ? node.NodeType.ToString() : node.Label;
 
     private static async Task<Guid?> FindPreviousRunNodeIdAsync(ILoopRunStore store, Guid runId)
     {
