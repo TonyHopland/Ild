@@ -132,7 +132,7 @@ public class StartNodeExecutorTests : IDisposable
     {
         var preview = new Mock<IWorktreePreviewService>();
         preview.Setup(p => p.InstallAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
+            .ReturnsAsync(new WorktreeInstallResult(true));
 
         var (_, sp, run, node) = BuildContext(HappyRepoManager(), preview);
         node.Config = "{\"runInstall\":true}";
@@ -146,6 +146,30 @@ public class StartNodeExecutorTests : IDisposable
         Assert.Contains(outcomes, o => o is NodeOutcome.Success);
         // Install must run against the freshly prepared worktree, not the base repo.
         preview.Verify(p => p.InstallAsync("/tmp/worktree", null, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task When_run_install_requested_but_no_ild_config_present_node_warns_and_succeeds()
+    {
+        // A project without an ild.config.json preview profile must not fail the
+        // run — the install is skipped best-effort and the reason is surfaced as a
+        // warning on the node output.
+        var preview = new Mock<IWorktreePreviewService>();
+        preview.Setup(p => p.InstallAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new WorktreeInstallResult(false, "No ild.config.json found in worktree root."));
+
+        var (_, sp, run, node) = BuildContext(HappyRepoManager(), preview);
+        node.Config = "{\"runInstall\":true}";
+
+        var executor = new StartNodeExecutor();
+        var outcomes = new List<NodeOutcome>();
+        await foreach (var o in executor.ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+            outcomes.Add(o);
+
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+        var success = outcomes.OfType<NodeOutcome.Success>().Single();
+        Assert.Contains("ild.config install skipped", success.Output);
+        Assert.Contains("No ild.config.json found in worktree root.", success.Output);
     }
 
     [Fact]
@@ -174,7 +198,7 @@ public class StartNodeExecutorTests : IDisposable
     {
         var preview = new Mock<IWorktreePreviewService>();
         preview.Setup(p => p.InstallAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
-            .Returns(Task.CompletedTask);
+            .ReturnsAsync(new WorktreeInstallResult(true));
 
         // Default Start config — runInstall absent — must not touch the preview service.
         var (_, sp, run, node) = BuildContext(HappyRepoManager(), preview);

@@ -69,6 +69,7 @@ public sealed class StartNodeExecutor : INodeExecutor
         }
 
         var config = NodeConfig.Parse<NodeConfig.Start>(ctx.Node.Config);
+        string? installWarning = null;
         if (config.RunInstall == true)
         {
             var preview = sp.GetService<IWorktreePreviewService>();
@@ -79,28 +80,36 @@ public sealed class StartNodeExecutor : INodeExecutor
                 yield break;
             }
 
-            var installError = await RunInstallAsync(preview, worktreePath, ctx.CancellationToken);
+            var (installError, warning) = await RunInstallAsync(preview, worktreePath, ctx.CancellationToken);
             if (installError is not null)
             {
                 yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"ild.config install failed: {installError}");
                 yield break;
             }
+            installWarning = warning;
         }
 
-        yield return new NodeOutcome.Success(EdgeType.OnSuccess, $"worktree={worktreePath}");
+        var successOutput = installWarning is null
+            ? $"worktree={worktreePath}"
+            : $"worktree={worktreePath}; warning: {installWarning}";
+        yield return new NodeOutcome.Success(EdgeType.OnSuccess, successOutput);
     }
 
-    private static async Task<string?> RunInstallAsync(
+    private static async Task<(string? Error, string? Warning)> RunInstallAsync(
         IWorktreePreviewService preview, string worktreePath, CancellationToken ct)
     {
         try
         {
-            await preview.InstallAsync(worktreePath, cancellationToken: ct);
-            return null;
+            var result = await preview.InstallAsync(worktreePath, cancellationToken: ct);
+            // A missing ild.config.json is expected for most projects — surface a
+            // warning rather than failing the run on it.
+            return result.Installed
+                ? (null, null)
+                : (null, $"ild.config install skipped: {result.Message}");
         }
         catch (Exception ex)
         {
-            return ex.Message;
+            return (ex.Message, null);
         }
     }
 
