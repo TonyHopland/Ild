@@ -459,7 +459,6 @@
   flex-direction: column-reverse;
   gap: 0.5rem;
   margin-top: 0.25rem;
-  max-height: 320px;
   overflow-y: auto;
 }
 
