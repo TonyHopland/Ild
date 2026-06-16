@@ -17,9 +17,11 @@ import {
 import { useSignalR } from "../../hooks/useSignalR";
 
 /**
- * Shared data + actions for the V2 work item dialog mockups. Mirrors the
- * behaviour of the classic WorkItemModal so each layout variant stays
- * functionally identical while we compare layouts.
+ * Shared data + actions for the V2 work item dialog. Loads the runs, repositories,
+ * loop templates, preview and live run state a work item's detail view needs, and
+ * exposes the feedback/PR/cleanup actions that act on it. Accepts a null work item
+ * (the creation form), where it loads only the repositories and templates the form
+ * offers and leaves the item-specific state empty.
  */
 export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkItem) => void) {
   const [runs, setRuns] = useState<LoopRun[]>([]);

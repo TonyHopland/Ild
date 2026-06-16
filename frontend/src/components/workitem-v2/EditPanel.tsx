@@ -6,21 +6,24 @@ import TagAutocomplete from "../TagAutocomplete";
 import type { WorkItemDetail } from "./useWorkItemDetail";
 
 interface EditPanelProps {
-  workItem: WorkItem;
+  /** The item being edited, or null to create a new one. */
+  workItem: WorkItem | null;
   detail: WorkItemDetail;
   onSave: (workItem: WorkItem) => void;
   onDone: () => void;
-  /** Reports whether any field differs from the work item, so the dialog can
+  /** Reports whether any field differs from its initial value, so the dialog can
    *  guard close paths against discarding unsaved edits. */
   onDirtyChange?: (dirty: boolean) => void;
   /** Opens the dialog's delete confirmation — the delete control lives here in
-   *  the edit view rather than the detail footer. */
-  onRequestDelete: () => void;
+   *  the edit view rather than the detail footer. Omitted in create mode, where
+   *  there is no item to delete. */
+  onRequestDelete?: () => void;
 }
 
 /**
- * Inline edit form for the V2 dialog — same fields and save behaviour as the
- * classic modal's edit mode, but rendered inside the full-screen layout.
+ * Work item form for the V2 dialog — the same fields and save behaviour for
+ * both editing an existing item and creating a new one (when workItem is null),
+ * rendered inside the full-screen layout.
  */
 export default function EditPanel({
   workItem,
@@ -30,22 +33,30 @@ export default function EditPanel({
   onDirtyChange,
   onRequestDelete,
 }: EditPanelProps) {
-  const [title, setTitle] = useState(workItem.title);
-  const [description, setDescription] = useState(workItem.description);
-  const [status, setStatus] = useState<WorkItemStatus>(workItem.status);
-  const [priority, setPriority] = useState<WorkItemPriority>(workItem.priority);
-  const [tags, setTags] = useState(parseTags(workItem).join(", "));
-  const [repositoryId, setRepositoryId] = useState(workItem.repositoryId);
+  // Baselines double as the create-form defaults and the dirty-check reference.
+  const baseTitle = workItem?.title ?? "";
+  const baseDescription = workItem?.description ?? "";
+  const baseStatus = workItem?.status ?? WorkItemStatus.Backlog;
+  const basePriority = workItem?.priority ?? WorkItemPriority.Medium;
+  const baseTags = workItem ? parseTags(workItem).join(", ") : "";
+  const baseRepositoryId = workItem?.repositoryId ?? "";
+
+  const [title, setTitle] = useState(baseTitle);
+  const [description, setDescription] = useState(baseDescription);
+  const [status, setStatus] = useState<WorkItemStatus>(baseStatus);
+  const [priority, setPriority] = useState<WorkItemPriority>(basePriority);
+  const [tags, setTags] = useState(baseTags);
+  const [repositoryId, setRepositoryId] = useState(baseRepositoryId);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const dirty =
-    title !== workItem.title ||
-    description !== workItem.description ||
-    status !== workItem.status ||
-    priority !== workItem.priority ||
-    tags !== parseTags(workItem).join(", ") ||
-    repositoryId !== workItem.repositoryId;
+    title !== baseTitle ||
+    description !== baseDescription ||
+    status !== baseStatus ||
+    priority !== basePriority ||
+    tags !== baseTags ||
+    repositoryId !== baseRepositoryId;
 
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -72,17 +83,22 @@ export default function EditPanel({
     };
 
     try {
-      let saved = await workItemService.update(workItem.id, data as Partial<WorkItem>);
-      if (workItem.status !== status) {
-        try {
-          await workItemService.transition(workItem.id, status);
-          saved = await workItemService.getById(workItem.id);
-        } catch (err) {
-          console.error("Failed to transition status:", err);
-          setSubmitError(
-            `Status transition failed: ${err instanceof Error ? err.message : "Unknown error"}`,
-          );
+      let saved: WorkItem;
+      if (workItem) {
+        saved = await workItemService.update(workItem.id, data as Partial<WorkItem>);
+        if (workItem.status !== status) {
+          try {
+            await workItemService.transition(workItem.id, status);
+            saved = await workItemService.getById(workItem.id);
+          } catch (err) {
+            console.error("Failed to transition status:", err);
+            setSubmitError(
+              `Status transition failed: ${err instanceof Error ? err.message : "Unknown error"}`,
+            );
+          }
         }
+      } else {
+        saved = await workItemService.create(data as Partial<WorkItem>);
       }
       onSave(saved);
       onDone();
@@ -181,20 +197,22 @@ export default function EditPanel({
         </div>
       )}
       <div className="wiv2-edit-actions">
-        <button
-          type="button"
-          className="btn btn-sm btn-danger"
-          onClick={onRequestDelete}
-          disabled={submitting}
-        >
-          Delete
-        </button>
+        {workItem && onRequestDelete && (
+          <button
+            type="button"
+            className="btn btn-sm btn-danger"
+            onClick={onRequestDelete}
+            disabled={submitting}
+          >
+            Delete
+          </button>
+        )}
         <span className="wiv2-edit-actions-spacer" />
         <button type="button" className="btn btn-secondary" onClick={onDone} disabled={submitting}>
           Cancel
         </button>
         <button type="submit" className="btn btn-primary" disabled={submitting}>
-          {submitting ? "Saving..." : "Update"}
+          {submitting ? "Saving..." : workItem ? "Update" : "Create"}
         </button>
       </div>
     </form>

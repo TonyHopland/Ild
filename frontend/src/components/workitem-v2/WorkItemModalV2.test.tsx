@@ -701,3 +701,86 @@ describe("WorkItemModalV2", () => {
     expect(screen.getByRole("button", { name: "Open Terminal" })).toBeTruthy();
   });
 });
+
+async function renderCreateDialog(
+  props: Partial<React.ComponentProps<typeof WorkItemModalV2>> = {},
+) {
+  await act(async () => {
+    render(
+      <MemoryRouter>
+        <WorkItemModalV2 workItem={null} onClose={vi.fn()} onSave={vi.fn()} {...props} />
+      </MemoryRouter>,
+    );
+    await Promise.resolve();
+  });
+}
+
+describe("WorkItemModalV2 creation", () => {
+  test("with a null work item shows the creation form instead of the tabs", async () => {
+    mockServices();
+    await renderCreateDialog();
+
+    expect(screen.getByText("New Work Item")).toBeTruthy();
+    // A brand-new item has no runs/conversation/live state, so the tabbed detail
+    // view is dropped entirely.
+    expect(screen.queryByRole("tab", { name: "Overview" })).toBeNull();
+    // The form starts empty and offers Create — not Update — with no Delete.
+    expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("");
+    expect(screen.getByRole("button", { name: "Create" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Update" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+  });
+
+  test("submitting the form creates the work item, reports it and closes", async () => {
+    mockServices();
+    const created = makeWorkItem({ id: "wi-new", title: "Fresh item" });
+    const createSpy = vi.spyOn(authServices.workItemService, "create").mockResolvedValue(created);
+    const onSave = vi.fn();
+    const onClose = vi.fn();
+    await renderCreateDialog({ onSave, onClose });
+
+    // The repository options load from the mocked service before they can be picked.
+    await screen.findByRole("option", { name: "my-repo" });
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Fresh item" } });
+      fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "repo-1" } });
+      fireEvent.change(screen.getByLabelText(/Tags/), { target: { value: "build, deploy" } });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Create" }));
+      await Promise.resolve();
+    });
+
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    expect(createSpy.mock.calls[0][0]).toMatchObject({
+      title: "Fresh item",
+      repositoryId: "repo-1",
+      status: WorkItemStatus.Backlog,
+      priority: WorkItemPriority.Medium,
+      tags: ["build", "deploy"],
+    });
+    expect(onSave).toHaveBeenCalledWith(created);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  test("Escape after typing in the create form prompts to discard rather than closing", async () => {
+    mockServices();
+    const onClose = vi.fn();
+    await renderCreateDialog({ onClose });
+
+    // An untouched form closes immediately; once a field is dirty the close is guarded.
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Half-typed" } });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Escape" });
+      await Promise.resolve();
+    });
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText(/Discard unsaved changes/)).toBeTruthy();
+  });
+});

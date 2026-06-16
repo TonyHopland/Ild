@@ -10,7 +10,6 @@ import {
   SchedulerSettingKeys,
 } from "../../services/auth";
 import TaskboardColumn from "../../components/TaskboardColumn";
-import WorkItemModal from "../../components/WorkItemModal";
 import WorkItemModalV2 from "../../components/workitem-v2/WorkItemModalV2";
 import ErrorBanner from "../../components/ErrorBanner";
 import { useSignalR } from "../../hooks/useSignalR";
@@ -383,8 +382,8 @@ export default function Taskboard() {
         })}
       </div>
       {/* Existing items open in the tabbed detail dialog, keyed by the URL so the
-          link matches the open item; creating a new item still uses the classic
-          form (the detail dialog needs an existing item). */}
+          link matches the open item; a new item opens the same dialog with no
+          work item, which renders its creation form. */}
       {editingItem && (
         <WorkItemModalV2
           workItem={editingItem}
@@ -393,13 +392,14 @@ export default function Taskboard() {
           onDelete={handleDeleted}
         />
       )}
-      <WorkItemModal
-        workItem={null}
-        isOpen={createModalOpen}
-        onClose={() => setCreateModalOpen(false)}
-        onSave={handleSave}
-        onDelete={handleDeleted}
-      />
+      {createModalOpen && (
+        <WorkItemModalV2
+          workItem={null}
+          onClose={() => setCreateModalOpen(false)}
+          onSave={handleSave}
+          onDelete={handleDeleted}
+        />
+      )}
       <style>{`
         .taskboard-toolbar {
           display: flex;
