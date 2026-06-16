@@ -73,6 +73,14 @@ services:
       - ILD_WORKITEM_SERVER_URL=${ILD_WORKITEM_SERVER_URL:-http://workitem-server:8081}
       - "ILD_WORKITEM_SERVER_API_KEY=${ILD_WORKITEM_SERVER_API_KEY:-${WORKITEM_API_KEYS:?Set WORKITEM_API_KEYS in your .env (generate one with: openssl rand -hex 32)}}"
       - ASPNETCORE_URLS=http://+:8080
+      # Agent commits default to the host ~/.gitconfig mounted below. Set any
+      # of these in your .env to override that identity — git reads them
+      # natively and they win over the mounted file. The bare keys pass
+      # through only when present in your .env / host environment.
+      - GIT_AUTHOR_NAME
+      - GIT_AUTHOR_EMAIL
+      - GIT_COMMITTER_NAME
+      - GIT_COMMITTER_EMAIL
     volumes:
       - ild-data:/data
       - ild-worktrees:/worktrees
@@ -81,6 +89,9 @@ services:
       # symlinks each name listed in AGENT_CONFIG_DIRS from $HOME into
       # this store, so binary installs in the image stay updatable.
       - ild-config:/home/ild/.agent-config
+      # Host .gitconfig provides the default commit identity. Point GIT_CONFIG
+      # at a different file, or override just the name/email via the
+      # GIT_AUTHOR_*/GIT_COMMITTER_* env vars above.
       - ${GIT_CONFIG:-~/.gitconfig}:/home/ild/.gitconfig:ro
     depends_on:
       postgres:
