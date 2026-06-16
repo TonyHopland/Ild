@@ -21,7 +21,9 @@ Remote providers, the WorkItem Server connection, repositories, AI providers, an
 | `WORKITEM_API_KEYS`             | Accepted bearer keys for the WorkItem Server (comma-separated)                           |
 | `WORKITEM_DATA_PATH`            | Base data directory for WorkItem Server runtime files                                    |
 | `WORKITEM_LOG_LEVEL`            | Serilog level for the WorkItem Server (docker compose defaults it to `ILD_LOG_LEVEL`)    |
-| `GIT_CONFIG`                    | Path to the host `.gitconfig` mounted into the ILD container so commits inherit identity |
+| `GIT_CONFIG`                                 | Path to the host `.gitconfig` mounted into the ILD container (default `~/.gitconfig`) so commits inherit identity |
+| `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL`       | Override the git author identity for agent commits (defaults to the mounted host `.gitconfig`) |
+| `GIT_COMMITTER_NAME` / `GIT_COMMITTER_EMAIL` | Override the git committer identity for agent commits |
 | `ASPNETCORE_URLS`               | HTTP bind address for each .NET host (standard ASP.NET Core variable)                    |
 
 The ILD API log level is also changeable at runtime through `PUT /api/v1/logging/level` without restarting; `ILD_LOG_LEVEL` only sets the starting level. The WorkItem Server has no runtime endpoint; its level is fixed at startup.

@@ -28,7 +28,7 @@ Open <http://localhost:8080> and log in with the configured username (`admin` by
 | `ild-worktrees` | Per-run git worktrees                                  |
 | `workitem-data` | Additional WorkItem Server runtime files under `/data` |
 
-Your host `~/.gitconfig` is mounted read-only into the ILD container so commits inherit your local name and email unless you override `GIT_CONFIG`.
+Your host `~/.gitconfig` is mounted read-only into the ILD container, so agent commits inherit your local name and email by default. Point `GIT_CONFIG` at a different file, or override just the identity with `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` (and the matching `GIT_COMMITTER_*` vars) in your `.env` — git reads those natively and they take precedence over the mounted file.
 
 For host bind mounts instead of named volumes:
 
