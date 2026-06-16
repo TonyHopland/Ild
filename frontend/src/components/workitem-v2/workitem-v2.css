@@ -179,6 +179,12 @@
   max-height: none;
 }
 
+/* The halt control sits beneath the live view; pin its button to the right so
+   it reads as an action on the stream above rather than a header for it. */
+.wiv2-action .wiv2-halt-bar {
+  justify-content: flex-end;
+}
+
 /* ---------- overview tab ---------- */
 
 .wiv2-overview-cols {

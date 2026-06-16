@@ -498,13 +498,19 @@ describe("WorkItemModalV2", () => {
 
     // The Halt button now lives in the Action panel, not the Overview panel.
     const actionPanel = document.getElementById("wiv2-panel-action");
-    expect(
-      within(actionPanel as HTMLElement).getByRole("button", { name: "Halt AI node" }),
-    ).toBeTruthy();
+    const haltButton = within(actionPanel as HTMLElement).getByRole("button", {
+      name: "Halt AI node",
+    });
     const overviewPanel = document.getElementById("wiv2-panel-overview");
     expect(
       within(overviewPanel as HTMLElement).queryByRole("button", { name: "Halt AI node" }),
     ).toBeNull();
+
+    // The halt control sits beneath the live view, not above it.
+    const liveOutput = within(actionPanel as HTMLElement).getByText("Live Output");
+    expect(liveOutput.compareDocumentPosition(haltButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
   });
 
   test("halted run shows the steer-and-resume window in the Action tab", async () => {

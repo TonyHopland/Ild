@@ -34,9 +34,9 @@ interface WorkItemModalV2Props {
  * Near-fullscreen work item detail dialog: a horizontal tab bar (Overview,
  * Action, Runs, Conversation, Files, Preview) over the full width, with run
  * history shown inline rather than on a separate page. The Action tab holds the
- * halt-and-steer control, the live progress stream, and the human-feedback pane
- * — all space-hungry — and flags itself with an indicator while the item waits
- * on a human. With a null
+ * live progress stream, the halt-and-steer control beneath it, and the
+ * human-feedback pane — all space-hungry — and flags itself with an indicator
+ * while the item waits on a human. With a null
  * workItem the dialog drops the tabs and shows the creation form instead, so a
  * single dialog covers both creating and viewing/editing work items.
  */
@@ -262,6 +262,7 @@ export default function WorkItemModalV2({
         hidden={activeTab !== "action"}
       >
         <div className="wiv2-action">
+          {detail.shouldStream && <LiveStream text={detail.progressText} />}
           <HaltSteerControls
             run={detail.currentRun}
             workItemStatus={workItem.status}
@@ -270,7 +271,6 @@ export default function WorkItemModalV2({
             onCleanupDone={detail.handleCleanupDone}
             onCleanupBacklog={detail.handleCleanupBacklog}
           />
-          {detail.shouldStream && <LiveStream text={detail.progressText} />}
           <FeedbackBanner workItem={workItem} detail={detail} prompt={feedbackPrompt} />
           {!detail.shouldStream && !actionRequired && (
             <div className="wiv2-empty">No action required.</div>
