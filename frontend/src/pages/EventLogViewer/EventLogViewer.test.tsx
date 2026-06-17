@@ -103,6 +103,14 @@ const mockRun = {
       placeholders: ["research"],
     },
   ],
+  availableVariables: [
+    {
+      name: "handoff_note",
+      value: "# Handoff\n\nShip **it**",
+      createdAt: "2025-01-01T00:00:00Z",
+      updatedAt: "2025-01-01T00:01:30Z",
+    },
+  ],
   nodes: [
     {
       id: "run-node-1",
@@ -359,6 +367,18 @@ describe("EventLogViewer", () => {
     expect(screen.getByText("ses_current")).toBeTruthy();
     expect(screen.getByText(/Placeholders: research/)).toBeTruthy();
     expect(screen.getByText("Current")).toBeTruthy();
+  });
+
+  test("renders available variables for the run as markdown", async () => {
+    renderComponent();
+    await waitFor(() => {
+      expect(screen.getByText("Available Variables")).toBeTruthy();
+    });
+    expect(screen.getByText("handoff_note")).toBeTruthy();
+    // The value is rendered through the markdown pipeline, so the heading and
+    // emphasis produce real elements rather than literal "#" / "**" text.
+    expect(screen.getByRole("heading", { name: "Handoff" })).toBeTruthy();
+    expect(screen.getByText("it").tagName).toBe("STRONG");
   });
 
   test("opens a formatted session preview", async () => {

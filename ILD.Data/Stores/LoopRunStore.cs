@@ -142,6 +142,33 @@ public class LoopRunStore : ILoopRunStore
         await _db.SaveChangesAsync();
     }
 
+    public async Task<IReadOnlyList<LoopRunVariable>> GetVariablesAsync(Guid runId)
+        => await _db.LoopRunVariables
+            .Where(v => v.LoopRunId == runId)
+            .OrderBy(v => v.Name)
+            .ToListAsync();
+
+    public async Task SetVariableAsync(Guid runId, string name, string value)
+    {
+        var existing = await _db.LoopRunVariables
+            .FirstOrDefaultAsync(v => v.LoopRunId == runId && v.Name == name);
+        if (existing is null)
+        {
+            _db.LoopRunVariables.Add(new LoopRunVariable
+            {
+                LoopRunId = runId,
+                Name = name,
+                Value = value,
+            });
+        }
+        else
+        {
+            existing.Value = value;
+        }
+
+        await _db.SaveChangesAsync();
+    }
+
     public async Task<LoopRunNode?> GetRunNodeAsync(Guid runId, Guid nodeId)
         => await _db.LoopRunNodes
             .Where(rn => rn.LoopRunId == runId && rn.LoopNodeId == nodeId)

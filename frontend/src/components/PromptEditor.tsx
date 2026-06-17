@@ -37,6 +37,11 @@ const PLACEHOLDERS = [
     label: "WorkTree.File:<path>",
     desc: "Contents of a file in the worktree",
   },
+  {
+    key: "Var.",
+    label: "Var.<name>",
+    desc: "A loop variable read/written by AI nodes",
+  },
 ];
 
 interface PromptEditorProps {

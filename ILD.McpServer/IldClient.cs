@@ -41,4 +41,13 @@ public sealed class IldClient
             throw new HttpRequestException($"POST {path} failed: {(int)resp.StatusCode} {resp.ReasonPhrase} — {text}");
         return text;
     }
+
+    public async Task<string> PutJsonAsync(string path, object body, CancellationToken ct = default)
+    {
+        using var resp = await _http.PutAsJsonAsync(path, body, JsonOptions, ct);
+        var text = await resp.Content.ReadAsStringAsync(ct);
+        if (!resp.IsSuccessStatusCode)
+            throw new HttpRequestException($"PUT {path} failed: {(int)resp.StatusCode} {resp.ReasonPhrase} — {text}");
+        return text;
+    }
 }

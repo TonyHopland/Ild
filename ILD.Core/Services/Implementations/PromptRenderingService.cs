@@ -10,18 +10,18 @@ public sealed class PromptRenderingService : IPromptRenderingService
 {
     private readonly IPromptTemplateResolver _resolver;
     private readonly IEventLogService _eventLog;
-    private readonly ILoopRunStore _loopRunStore;
+    private readonly ILoopRunStore _runs;
     private readonly ILogger<PromptRenderingService>? _logger;
 
     public PromptRenderingService(
         IPromptTemplateResolver resolver,
         IEventLogService eventLog,
-        ILoopRunStore loopRunStore,
+        ILoopRunStore runs,
         ILogger<PromptRenderingService>? logger = null)
     {
         _resolver = resolver;
         _eventLog = eventLog;
-        _loopRunStore = loopRunStore;
+        _runs = runs;
         _logger = logger;
     }
 
@@ -57,7 +57,7 @@ public sealed class PromptRenderingService : IPromptRenderingService
 
         try
         {
-            var runNodes = await _loopRunStore.GetRunNodesWithNodeAsync(runId);
+            var runNodes = await _runs.GetRunNodesWithNodeAsync(runId);
             aiMessages.AddRange(runNodes
                 .Where(rn => rn.LoopNode?.NodeType == NodeType.AI
                              && !string.IsNullOrEmpty(rn.Output))
@@ -78,6 +78,15 @@ public sealed class PromptRenderingService : IPromptRenderingService
 
         LogConversationSize(runId, conversationFull);
 
+        IReadOnlyDictionary<string, string>? variables = null;
+        try
+        {
+            var vars = await _runs.GetVariablesAsync(runId);
+            if (vars.Count > 0)
+                variables = vars.ToDictionary(v => v.Name, v => v.Value, StringComparer.OrdinalIgnoreCase);
+        }
+        catch { /* loop variables are best-effort, like the event log */ }
+
         return _resolver.Render(template, new PromptContext(
             WorkItemTitle: workItem.Title,
             WorkItemDescription: workItem.Description,
@@ -86,7 +95,8 @@ public sealed class PromptRenderingService : IPromptRenderingService
             WorktreePath: workItem.WorktreePath,
             ConversationFull: conversationFull,
             ConversationAI: conversationAi,
-            ConversationHuman: conversationHuman));
+            ConversationHuman: conversationHuman,
+            RunVariables: variables));
     }
 
     // Attribution for the Full and AI views: author plus source node, stable and

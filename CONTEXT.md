@@ -117,6 +117,7 @@ _Avoid_: draft, planned
 - A **Worktree** (and its branch) is created per **LoopRun** by the Start node and kept after the run finishes for inspection; the `WorktreeRetentionSweeper` reclaims worktree, branch, and run once terminal longer than `run.retentionDays` (settings-driven; `0` disables; runs marked `Retain` are never reclaimed). See [ADR-0008](docs/adr/0008-worktree-and-branch-per-run.md)
 - `{{PreviousNode.Output}}` resolves to the source node of the incoming edge, not the chronologically previous execution
 - `{{EventLog.LastN}}` returns the last 10 event-log summary entries (fixed — not parameterizable)
+- `{{Var.<name>}}` resolves a **Loop Variable** — a named, mutable string scoped to the LoopRun, read/written by AI nodes via the agent API (`GET`/`PUT /api/v1/agent/variables`) and the MCP `get_loop_variables`/`set_loop_variable` tools. An unset variable renders empty (the producing node may run after the template is rendered). Names must match `[A-Za-z][A-Za-z0-9_]*`. Used for cross-node hand-off (e.g. one AI writes a summary the PR node consumes)
 - AI node always uses its single `prompt`; graph structure controls prompt variation across turns
 - `AiProvider.Config` is a free-form JSON blob; each adapter reads what it needs
 - Rebase happens only at loop start, not before each node

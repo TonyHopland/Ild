@@ -33,6 +33,13 @@ public sealed class PromptTemplateResolver : IPromptTemplateResolver
                 var full = string.IsNullOrEmpty(context.WorktreePath) ? null : Path.Combine(context.WorktreePath, rel);
                 return full != null && File.Exists(full) ? File.ReadAllText(full) : "";
             }
+            if (key.StartsWith(PromptPlaceholderRegistry.VariablePrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                // A loop variable that has not been written yet renders empty —
+                // the handoff producer may run after this template is rendered.
+                var name = key.Substring(PromptPlaceholderRegistry.VariablePrefix.Length);
+                return context.RunVariables != null && context.RunVariables.TryGetValue(name, out var val) ? val : "";
+            }
             return m.Value;
         });
     }

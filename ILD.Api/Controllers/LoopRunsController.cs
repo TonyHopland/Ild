@@ -83,6 +83,7 @@ public class LoopRunsController : ControllerBase
         var runNodes = await _loopRunStore.GetRunNodesWithNodeAsync(guid);
         var sessionSnapshots = await _loopRunStore.GetSessionSnapshotsAsync(guid);
         var sessionBindings = await _loopRunStore.GetSessionBindingsAsync(guid);
+        var variables = await _loopRunStore.GetVariablesAsync(guid);
         var currentSessionIds = sessionBindings
             .Select(b => $"{b.AdapterName}\n{b.SessionId}")
             .ToHashSet(StringComparer.Ordinal);
@@ -120,6 +121,13 @@ public class LoopRunsController : ControllerBase
                     .Distinct()
                     .OrderBy(v => v)
                     .ToList(),
+            }).ToList(),
+            availableVariables = variables.Select(v => new
+            {
+                name = v.Name,
+                value = v.Value,
+                createdAt = v.CreatedAt,
+                updatedAt = v.UpdatedAt,
             }).ToList(),
             nodes = runNodes.Select(LoopRunNodeResponse.From).ToList(),
         });
