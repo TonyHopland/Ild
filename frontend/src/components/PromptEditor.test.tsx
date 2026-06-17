@@ -37,7 +37,22 @@ describe("PromptEditor", () => {
     fireEvent.change(textarea, { target: { value: "{{" } });
 
     const listItems = screen.getAllByRole("listitem");
-    expect(listItems.length).toBe(8);
+    expect(listItems.length).toBe(11);
+  });
+
+  test("typing {{Conversation. filters to the three Conversation placeholders", () => {
+    const onChange = vi.fn();
+    render(<PromptEditor value="" onChange={onChange} />);
+
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    setCursor(textarea, 15);
+    fireEvent.change(textarea, { target: { value: "{{Conversation." } });
+
+    const listItems = screen.getAllByRole("listitem");
+    expect(listItems.length).toBe(3);
+    expect(listItems[0].textContent).toContain("Conversation.Full");
+    expect(listItems[1].textContent).toContain("Conversation.AI");
+    expect(listItems[2].textContent).toContain("Conversation.Human");
   });
 
   test("typing {{WorkItem. filters to WorkItem placeholders", () => {
@@ -98,7 +113,7 @@ describe("PromptEditor", () => {
     setCursor(textarea, 2);
     fireEvent.change(textarea, { target: { value: "{{" } });
 
-    expect(screen.getAllByRole("listitem").length).toBe(8);
+    expect(screen.getAllByRole("listitem").length).toBe(11);
 
     fireEvent.keyDown(textarea, { key: "Enter" });
 
@@ -126,7 +141,7 @@ describe("PromptEditor", () => {
     setCursor(textarea, 2);
     fireEvent.change(textarea, { target: { value: "{{" } });
 
-    expect(screen.getAllByRole("listitem").length).toBe(8);
+    expect(screen.getAllByRole("listitem").length).toBe(11);
 
     fireEvent.keyDown(textarea, { key: "Escape" });
 

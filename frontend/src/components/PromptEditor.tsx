@@ -16,6 +16,21 @@ const PLACEHOLDERS = [
     label: "PreviousNode.Output",
     desc: "Output from the previous node",
   },
+  {
+    key: "Conversation.Full",
+    label: "Conversation.Full",
+    desc: "Full run history, author-attributed and chronological",
+  },
+  {
+    key: "Conversation.AI",
+    label: "Conversation.AI",
+    desc: "AI-node messages from this run only",
+  },
+  {
+    key: "Conversation.Human",
+    label: "Conversation.Human",
+    desc: "Human feedback from this run, verbatim",
+  },
   { key: "WorkTree.Diff", label: "WorkTree.Diff", desc: "Git diff of the worktree" },
   {
     key: "WorkTree.File:",
