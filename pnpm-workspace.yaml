@@ -8,7 +8,9 @@ catalog:
 overrides:
   vite: "catalog:"
   vitest: "catalog:"
+  "vite@>=8.0.0 <8.0.16": "^8.0.16"
   ws@7: "^7.5.11"
+  ws@8: "^8.21.0"
 peerDependencyRules:
   allowAny:
     - vite
