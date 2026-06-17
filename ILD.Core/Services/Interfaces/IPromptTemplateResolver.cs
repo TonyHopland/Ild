@@ -26,4 +26,5 @@ public sealed record PromptContext(
     string? WorkItemDescription = null,
     string? PreviousNodeOutput = null,
     IReadOnlyList<string>? EventLogSummary = null,
-    string? WorktreePath = null);
+    string? WorktreePath = null,
+    IReadOnlyDictionary<string, string>? RunVariables = null);

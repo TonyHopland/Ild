@@ -42,10 +42,32 @@ public static class PromptPlaceholderRegistry
     public const string WorkTreeFilePrefix = "WorkTree.File:";
 
     /// <summary>
-    /// True for any name the resolver knows how to render — either a fixed
-    /// known name or the <c>WorkTree.File:&lt;rel&gt;</c> dynamic prefix.
+    /// Prefix for per-run loop variables: <c>{{Var.&lt;name&gt;}}</c>. The name
+    /// after the prefix is matched against <see cref="VariableNamePattern"/>.
+    /// </summary>
+    public const string VariablePrefix = "Var.";
+
+    /// <summary>
+    /// Legal loop-variable name: a letter followed by 0..127 letters, digits or
+    /// underscores. Kept deliberately narrow (no dots/colons) so a name can
+    /// never collide with the placeholder grammar or another namespace, and
+    /// upper-bounded at 128 chars to match the <c>LoopRunVariable.Name</c>
+    /// column so a pattern-valid name can never overflow it at write time.
+    /// </summary>
+    public static readonly Regex VariableNamePattern =
+        new(@"^[A-Za-z][A-Za-z0-9_]{0,127}$", RegexOptions.Compiled);
+
+    /// <summary>True when <paramref name="name"/> is a valid loop-variable name.</summary>
+    public static bool IsValidVariableName(string name) => VariableNamePattern.IsMatch(name);
+
+    /// <summary>
+    /// True for any name the resolver knows how to render — a fixed known name,
+    /// the <c>WorkTree.File:&lt;rel&gt;</c> prefix, or a <c>Var.&lt;name&gt;</c>
+    /// loop variable with a valid name.
     /// </summary>
     public static bool IsKnown(string name)
         => KnownNames.Contains(name)
-           || name.StartsWith(WorkTreeFilePrefix, StringComparison.OrdinalIgnoreCase);
+           || name.StartsWith(WorkTreeFilePrefix, StringComparison.OrdinalIgnoreCase)
+           || (name.StartsWith(VariablePrefix, StringComparison.OrdinalIgnoreCase)
+               && IsValidVariableName(name.Substring(VariablePrefix.Length)));
 }
