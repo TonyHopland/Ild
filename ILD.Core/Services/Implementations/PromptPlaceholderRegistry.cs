@@ -48,12 +48,14 @@ public static class PromptPlaceholderRegistry
     public const string VariablePrefix = "Var.";
 
     /// <summary>
-    /// Legal loop-variable name: a letter followed by letters, digits or
+    /// Legal loop-variable name: a letter followed by 0..127 letters, digits or
     /// underscores. Kept deliberately narrow (no dots/colons) so a name can
-    /// never collide with the placeholder grammar or another namespace.
+    /// never collide with the placeholder grammar or another namespace, and
+    /// upper-bounded at 128 chars to match the <c>LoopRunVariable.Name</c>
+    /// column so a pattern-valid name can never overflow it at write time.
     /// </summary>
     public static readonly Regex VariableNamePattern =
-        new(@"^[A-Za-z][A-Za-z0-9_]*$", RegexOptions.Compiled);
+        new(@"^[A-Za-z][A-Za-z0-9_]{0,127}$", RegexOptions.Compiled);
 
     /// <summary>True when <paramref name="name"/> is a valid loop-variable name.</summary>
     public static bool IsValidVariableName(string name) => VariableNamePattern.IsMatch(name);

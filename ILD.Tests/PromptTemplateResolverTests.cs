@@ -54,4 +54,17 @@ public class PromptTemplateResolverTests
 
         Assert.Equal("[]", result);
     }
+
+    [Theory]
+    [InlineData(1, true)]
+    [InlineData(128, true)]
+    [InlineData(129, false)]
+    public void IsValidVariableName_bounds_length_to_the_name_column(int length, bool expected)
+    {
+        // Names are capped at 128 chars to match the LoopRunVariable.Name
+        // column, so a pattern-shaped but over-long name can never overflow it.
+        var name = new string('a', length);
+
+        Assert.Equal(expected, PromptPlaceholderRegistry.IsValidVariableName(name));
+    }
 }

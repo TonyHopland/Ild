@@ -196,6 +196,25 @@ public class AgentApiIntegrationTests
     }
 
     [Fact]
+    public async Task SetVariable_rejects_a_name_longer_than_the_column_bound()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var runId = await SeedRunAsync(factory);
+
+        // 129 chars: pattern-shaped but one over the 128-char Name column, so it
+        // must surface as a clean 400 rather than overflowing the column.
+        var tooLong = "a" + new string('b', 128);
+        var put = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/agent/variables/{tooLong}")
+        {
+            Content = JsonContent.Create(new { value = "x" }),
+        };
+        put.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        var resp = await client.SendAsync(put);
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    [Fact]
     public async Task SetVariable_for_unknown_run_returns_not_found()
     {
         await using var factory = new ApiFactory();
