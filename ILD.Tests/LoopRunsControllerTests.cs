@@ -216,6 +216,7 @@ public class LoopRunsControllerTests
                 SessionId = "ses_current",
             },
         });
+        store.Setup(s => s.GetVariablesAsync(runId)).ReturnsAsync(Array.Empty<LoopRunVariable>());
 
         var engine = new Mock<ILoopEngine>();
         var events = new Mock<IEventLogService>();
@@ -235,6 +236,53 @@ public class LoopRunsControllerTests
         Assert.Equal(true, current.GetType().GetProperty("isCurrent")!.GetValue(current));
         var placeholders = (System.Collections.IEnumerable)current.GetType().GetProperty("placeholders")!.GetValue(current)!;
         Assert.Equal("research", Assert.Single(placeholders.Cast<object>()));
+    }
+
+    [Fact]
+    public async Task GetById_includes_available_variables_for_run()
+    {
+        var runId = Guid.NewGuid();
+        var run = new LoopRun
+        {
+            Id = runId,
+            WorkItemId = Guid.NewGuid().ToString(),
+            LoopTemplateVersionId = Guid.NewGuid(),
+            Status = LoopRunStatus.Running,
+            RecoveryPolicy = RecoveryPolicy.AutoResume,
+            CreatedAt = DateTime.UtcNow,
+            StartedAt = DateTime.UtcNow,
+        };
+
+        var store = new Mock<ILoopRunStore>();
+        store.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(run);
+        store.Setup(s => s.GetRunNodesWithNodeAsync(runId)).ReturnsAsync(Array.Empty<LoopRunNode>());
+        store.Setup(s => s.GetSessionSnapshotsAsync(runId)).ReturnsAsync(Array.Empty<AdapterSessionSnapshot>());
+        store.Setup(s => s.GetSessionBindingsAsync(runId)).ReturnsAsync(Array.Empty<LoopRunSessionBinding>());
+        store.Setup(s => s.GetVariablesAsync(runId)).ReturnsAsync(new[]
+        {
+            new LoopRunVariable
+            {
+                LoopRunId = runId,
+                Name = "handoff",
+                Value = "# Summary\n\nall done",
+                CreatedAt = DateTime.UtcNow.AddMinutes(-5),
+                UpdatedAt = DateTime.UtcNow.AddMinutes(-1),
+            },
+        });
+
+        var engine = new Mock<ILoopEngine>();
+        var events = new Mock<IEventLogService>();
+        var snapshots = new Mock<IAdapterSessionSnapshotStore>();
+        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance), new Mock<ILD.Core.Services.Interfaces.IRunReclaimer>().Object);
+
+        var result = await controller.GetById(runId.ToString());
+
+        Assert.IsType<OkObjectResult>(result);
+        var payload = ((OkObjectResult)result).Value!;
+        var variables = (System.Collections.IEnumerable)payload.GetType().GetProperty("availableVariables")!.GetValue(payload)!;
+        var item = Assert.Single(variables.Cast<object>());
+        Assert.Equal("handoff", item.GetType().GetProperty("name")!.GetValue(item));
+        Assert.Equal("# Summary\n\nall done", item.GetType().GetProperty("value")!.GetValue(item));
     }
 
     [Fact]

@@ -248,6 +248,13 @@ export interface LoopRunSessionPreview {
   sessionJson: string;
 }
 
+export interface LoopRunVariable {
+  name: string;
+  value: string;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
 export interface LoopRun {
   id: string;
   workItemId: string;
@@ -268,6 +275,7 @@ export interface LoopRun {
   totalOutputTokens?: number;
   totalCostUsd?: number | null;
   availableSessions?: LoopRunAvailableSession[];
+  availableVariables?: LoopRunVariable[];
   nodes: LoopRunNode[];
 }
 
