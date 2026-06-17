@@ -8,6 +8,7 @@ catalog:
 overrides:
   vite: "catalog:"
   vitest: "catalog:"
+  ws@7: "^7.5.11"
 peerDependencyRules:
   allowAny:
     - vite
