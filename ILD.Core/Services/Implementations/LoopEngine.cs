@@ -612,6 +612,12 @@ public sealed class LoopEngine : ILoopEngine
                         run.CurrentNodeId = successEdge.TargetNodeId;
                         run.IncomingEdgeId = successEdge.Id;
                         await loopRunStore.UpdateRunAsync(run);
+                        // Surface the edge taken so the run timeline/log shows the
+                        // edge's name ("true"/"false", "Respond", a custom edge
+                        // name) instead of only the node's Succeeded/Failed status.
+                        // Best-effort; attributed to the node the edge left.
+                        if (eventLog is not null && runNodeId is Guid successFromId)
+                            await TrySafe(() => eventLog.AppendAsync(run.Id, "EdgeTraversed", EdgeDisplayName(successEdge), node.Id, runNodeId: successFromId));
                         return ParkResult.Continue;
                     }
                     case NodeOutcome.Fail f:
@@ -652,6 +658,10 @@ public sealed class LoopEngine : ILoopEngine
                         run.CurrentNodeId = failEdge.TargetNodeId;
                         run.IncomingEdgeId = failEdge.Id;
                         await loopRunStore.UpdateRunAsync(run);
+                        // Surface the edge taken on the failure route too (see the
+                        // Success branch). Best-effort.
+                        if (eventLog is not null && runNodeId is Guid failFromId)
+                            await TrySafe(() => eventLog.AppendAsync(run.Id, "EdgeTraversed", EdgeDisplayName(failEdge), node.Id, runNodeId: failFromId));
                         return ParkResult.Continue;
                     }
                     case NodeOutcome.WaitingAction wa:
@@ -763,6 +773,14 @@ public sealed class LoopEngine : ILoopEngine
     /// falling back to the node type when the template left the label blank.</summary>
     private static string NodeDisplayName(LoopNode node)
         => string.IsNullOrWhiteSpace(node.Label) ? node.NodeType.ToString() : node.Label;
+
+    /// <summary>Human-readable label for a traversed edge: custom edges surface by
+    /// their name (e.g. "Respond", "true"/"false"); default and fallback edges
+    /// surface by their role. Mirrors how Human-node actions are labelled.</summary>
+    private static string EdgeDisplayName(LoopNodeEdge edge)
+        => edge.EdgeType == EdgeType.Custom && !string.IsNullOrEmpty(edge.Name)
+            ? edge.Name!
+            : edge.EdgeType.ToString();
 
     private static async Task<Guid?> FindPreviousRunNodeIdAsync(ILoopRunStore store, Guid runId)
     {

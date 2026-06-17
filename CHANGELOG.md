@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The run timeline/event log now records an `EdgeTraversed` entry naming the edge the engine took out of each node — a custom edge's name (e.g. `Respond`, `true`/`false`), or the role (`OnSuccess`/`OnFailure`) for default and fallback edges — so routings are visible as the edge taken rather than only the node's Succeeded/Failed status. Best-effort and attributed to the node the edge left; routing behavior is unchanged.
+
 ## [0.2.0] - 2026-06-15
 
 ### Fixed
