@@ -10,6 +10,7 @@ import {
   NodeType,
   EventLogEntry,
   LoopNode,
+  LoopNodeEdge,
   EdgeType,
 } from "../../types";
 import type { TypedSignalRMessage } from "../../types/signalr";
@@ -112,6 +113,7 @@ export default function EventLogViewer() {
   const [run, setRun] = useState<LoopRun | null>(null);
   const [runNodes, setRunNodes] = useState<LoopRunNode[]>([]);
   const [templateNodes, setTemplateNodes] = useState<LoopNode[]>([]);
+  const [templateEdges, setTemplateEdges] = useState<LoopNodeEdge[]>([]);
   const [events, setEvents] = useState<EventLogEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorText, setErrorText] = useState("");
@@ -143,6 +145,7 @@ export default function EventLogViewer() {
             data.templateVersion,
           );
           setTemplateNodes(graph.nodes);
+          setTemplateEdges(graph.edges);
         } catch {
           console.error("Failed to load template graph");
         }
@@ -589,6 +592,7 @@ export default function EventLogViewer() {
           const effectiveInput = getEffectiveInputForRunNode(rn.id);
 
           let edgeType: EdgeType | undefined;
+          let edgeName: string | null | undefined;
           let edgeVariant: "retry" | undefined;
           if (index > 0) {
             const prevNode = runNodes[index - 1];
@@ -597,10 +601,18 @@ export default function EventLogViewer() {
             const isRetryBoundary = events.some(
               (e) => e.eventType === "RetryFromNode" && e.runNodeId === prevNode.id,
             );
+            const incomingEdge = templateEdges.find((e) => e.id === rn.incomingEdgeId);
             if (isRetryBoundary) {
               edgeType = EdgeType.OnSuccess;
               edgeVariant = "retry";
+            } else if (incomingEdge) {
+              // Prefer the edge the engine actually recorded, so custom edges
+              // show their name (e.g. "Respond") instead of a guessed role.
+              edgeType = incomingEdge.edgeType;
+              edgeName = incomingEdge.name;
             } else {
+              // Fall back to inferring from the previous node's status for runs
+              // predating IncomingEdgeId persistence (or an unloaded graph).
               const prevType = getTemplateNodeType(prevNode.nodeId);
               const prevHuman = prevType === NodeType.Human;
               if (prevNode.status === LoopRunNodeStatus.Succeeded) {
@@ -615,7 +627,9 @@ export default function EventLogViewer() {
 
           return (
             <div key={rn.id} className="node-execution-block">
-              {edgeType !== undefined && <EdgeArrow edgeType={edgeType} variant={edgeVariant} />}
+              {edgeType !== undefined && (
+                <EdgeArrow edgeType={edgeType} edgeName={edgeName} variant={edgeVariant} />
+              )}
               <NodeItem
                 runNode={rn}
                 templateNodeType={templateNodeType}

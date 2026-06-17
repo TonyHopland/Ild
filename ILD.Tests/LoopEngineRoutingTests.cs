@@ -434,6 +434,72 @@ public class LoopEngineRoutingTests
         Assert.Equal(LoopRunNodeStatus.Succeeded, nodes[0].Status);
     }
 
+    [Fact]
+    public async Task Traversing_a_custom_edge_logs_the_edge_name()
+    {
+        using var h = new LoopEngineHarness();
+        h.AddNode("a", NodeType.AI);
+        h.AddNode("c", NodeType.Cleanup);
+        h.AddEdge("a", "c", EdgeType.Custom, "Escalate");
+
+        h.Registry.Register(new ScriptedExecutor(NodeType.AI,
+            new NodeOutcome.NodeStarting("a"),
+            new NodeOutcome.Success(EdgeType.Custom, "needs a human", "Escalate")));
+        h.Registry.Register(new ScriptedExecutor(NodeType.Cleanup,
+            new NodeOutcome.NodeStarting("c"),
+            new NodeOutcome.Terminal("done")));
+
+        h.SeedRun("a");
+        await h.RunAsync();
+
+        Assert.Equal(LoopRunStatus.Completed, h.ReloadRun().Status);
+
+        // The traversal of the custom "Escalate" edge is logged by its name and
+        // attributed to the node it left (a). The terminal edge into the Cleanup
+        // sink traverses no graph edge, so only one EdgeTraversed event exists.
+        var aNodeId = h.NodesById["a"].Id;
+        var aRunNodeId = h.ReloadRunNodes().Single(rn => rn.LoopNodeId == aNodeId).Id;
+        var edgeEvents = h.ReloadEvents().Where(e => e.EventType == EventType.EdgeTraversed).ToList();
+        var escalate = Assert.Single(edgeEvents);
+        Assert.Equal("Escalate", escalate.Data);
+        Assert.Equal(aNodeId, escalate.NodeId);
+        Assert.Equal(aRunNodeId, escalate.RunNodeId);
+    }
+
+    [Fact]
+    public async Task Traversing_default_and_fallback_edges_logs_the_edge_role()
+    {
+        using var h = new LoopEngineHarness();
+        h.AddNode("s", NodeType.Start);
+        h.AddNode("a", NodeType.Cmd);
+        h.AddNode("recover", NodeType.Cmd);
+        h.AddEdge("s", "a", EdgeType.OnSuccess);
+        h.AddEdge("a", "recover", EdgeType.OnFailure);
+
+        h.Registry.Register(new ScriptedExecutor(NodeType.Start,
+            new NodeOutcome.NodeStarting("s"),
+            new NodeOutcome.Success(EdgeType.OnSuccess, "started")));
+        // "a" fails to the OnFailure route; "recover" is a success sink (no outgoing edge).
+        h.Registry.Register(new ScriptedExecutor(NodeType.Cmd,
+            new NodeOutcome.NodeStarting("a"),
+            new NodeOutcome.Fail(EdgeType.OnFailure, "boom", "stderr"))
+            .Then(
+                new NodeOutcome.NodeStarting("recover"),
+                new NodeOutcome.Success(EdgeType.OnSuccess, "recovered")));
+
+        h.SeedRun("s");
+        await h.RunAsync();
+
+        // OnSuccess (s→a) and OnFailure (a→recover) are surfaced by their role
+        // names; the success out of the "recover" sink completes the run without
+        // a graph edge, so it logs nothing.
+        var edgeNames = h.ReloadEvents()
+            .Where(e => e.EventType == EventType.EdgeTraversed)
+            .Select(e => e.Data)
+            .ToList();
+        Assert.Equal(new[] { "OnSuccess", "OnFailure" }, edgeNames);
+    }
+
     private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
