@@ -18,6 +18,9 @@ public sealed class PromptTemplateResolver : IPromptTemplateResolver
             ["EventLog.LastN"] = string.Join("\n", summary.TakeLast(10)),
             ["Node.Input"] = context.PreviousNodeOutput,
             ["PreviousNode.Output"] = context.PreviousNodeOutput,
+            ["Conversation.Full"] = context.ConversationFull,
+            ["Conversation.AI"] = context.ConversationAI,
+            ["Conversation.Human"] = context.ConversationHuman,
         };
 
         return PromptPlaceholderRegistry.Pattern.Replace(template, m =>

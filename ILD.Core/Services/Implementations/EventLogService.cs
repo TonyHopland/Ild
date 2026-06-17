@@ -101,13 +101,14 @@ public class EventLogService : IEventLogService
             e.EventType.ToString(),
             e.Data ?? string.Empty,
             e.PayloadPath,
-            e.RunNodeId));
+            e.RunNodeId,
+            e.Timestamp));
     }
 
     public async Task<EventLogEntry?> GetBySequenceAsync(Guid runId, long sequence)
     {
         var entry = await _eventLogStore.GetBySequenceAsync(runId, (int)sequence);
-        return entry == null ? null : new EventLogEntry(entry.LoopRunId, entry.EventType.ToString(), entry.Data ?? string.Empty, entry.PayloadPath, entry.RunNodeId);
+        return entry == null ? null : new EventLogEntry(entry.LoopRunId, entry.EventType.ToString(), entry.Data ?? string.Empty, entry.PayloadPath, entry.RunNodeId, entry.Timestamp);
     }
 
     public async Task<int> EnforceRetentionPolicyAsync(DateTimeOffset before, ISet<Guid> eligibleRunIds)

@@ -27,4 +27,7 @@ public sealed record PromptContext(
     string? PreviousNodeOutput = null,
     IReadOnlyList<string>? EventLogSummary = null,
     string? WorktreePath = null,
+    string? ConversationFull = null,
+    string? ConversationAI = null,
+    string? ConversationHuman = null,
     IReadOnlyDictionary<string, string>? RunVariables = null);

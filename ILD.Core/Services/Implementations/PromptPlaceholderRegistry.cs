@@ -29,6 +29,9 @@ public static class PromptPlaceholderRegistry
             "EventLog.LastN",
             "Node.Input",
             "PreviousNode.Output",
+            "Conversation.Full",
+            "Conversation.AI",
+            "Conversation.Human",
         };
 
     /// <summary>
