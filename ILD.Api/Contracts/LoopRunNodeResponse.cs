@@ -26,7 +26,11 @@ public sealed record LoopRunNodeResponse(
     // nodes or turns where the provider reported no usage.
     long? InputTokens,
     long? OutputTokens,
-    decimal? CostUsd)
+    decimal? CostUsd,
+    // The edge the engine traversed to reach this node, so the run timeline can
+    // label the routing by the edge's name (e.g. "Respond") rather than guessing
+    // from node status. Null for the run's first node.
+    Guid? IncomingEdgeId)
 {
     public static LoopRunNodeResponse From(LoopRunNode rn) => new(
         rn.Id,
@@ -42,5 +46,6 @@ public sealed record LoopRunNodeResponse(
         rn.LoopNode?.NodeType.ToString(),
         rn.InputTokens,
         rn.OutputTokens,
-        rn.CostUsd);
+        rn.CostUsd,
+        rn.IncomingEdgeId);
 }

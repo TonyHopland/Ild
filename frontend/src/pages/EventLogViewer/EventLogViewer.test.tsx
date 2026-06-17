@@ -543,4 +543,125 @@ describe("EventLogViewer", () => {
       expect(screen.getByText("Live Output")).toBeTruthy();
     });
   });
+
+  describe("edge labels", () => {
+    const mockRunCustomEdge = {
+      id: "test-run-custom",
+      workItemId: "work-1",
+      loopTemplateId: "template-1",
+      templateVersion: 1,
+      status: "Completed",
+      currentNodeId: null,
+      isPaused: false,
+      nodeExecutionCount: 2,
+      startedAt: "2025-01-01T00:00:00Z",
+      completedAt: "2025-01-01T00:02:00Z",
+      availableSessions: [],
+      nodes: [
+        {
+          id: "rn-human",
+          nodeId: "node-human",
+          nodeLabel: "Ask Human",
+          // Succeeded via the "Respond" outlet: the exact case where the old
+          // guess-from-status logic mislabeled the edge as "custom".
+          status: "Succeeded",
+          output: "prompt",
+          error: null,
+          startedAt: "2025-01-01T00:00:00Z",
+          completedAt: "2025-01-01T00:01:00Z",
+          executionCount: 1,
+        },
+        {
+          id: "rn-after",
+          nodeId: "node-after",
+          nodeLabel: "After Human",
+          status: "Succeeded",
+          output: "done",
+          error: null,
+          startedAt: "2025-01-01T00:01:00Z",
+          completedAt: "2025-01-01T00:02:00Z",
+          executionCount: 1,
+          incomingEdgeId: "edge-respond",
+        },
+      ],
+    };
+
+    const mockGraphCustomEdge = {
+      nodes: [
+        { id: "node-human", type: "Human", label: "Ask Human", config: {}, maxTraversals: null },
+        { id: "node-after", type: "Cmd", label: "After Human", config: {}, maxTraversals: null },
+      ],
+      edges: [
+        {
+          id: "edge-respond",
+          sourceNodeId: "node-human",
+          targetNodeId: "node-after",
+          edgeType: "Custom",
+          name: "Respond",
+          maxTraversals: null,
+        },
+      ],
+    };
+
+    function renderViewer(runId: string) {
+      render(
+        <MemoryRouter initialEntries={[`/loop-runs/${runId}/events`]}>
+          <Routes>
+            <Route path="/loop-runs/:runId/events" element={<EventLogViewer />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+    }
+
+    test("labels a custom-edge routing by the edge name, not 'custom'", async () => {
+      (loopRunService.getById as ReturnType<typeof vi.fn>).mockResolvedValue(mockRunCustomEdge);
+      (loopRunService.getEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+        entries: [],
+        nextCursor: 0,
+        hasMore: false,
+      });
+      (loopTemplateService.getVersionGraph as ReturnType<typeof vi.fn>).mockResolvedValue(
+        mockGraphCustomEdge,
+      );
+
+      renderViewer("test-run-custom");
+
+      await waitFor(() => {
+        expect(screen.getByText("After Human")).toBeTruthy();
+      });
+      // The edge taken (the Human node's "Respond" outlet) is surfaced by name.
+      expect(screen.getByText("Respond")).toBeTruthy();
+      // The old guess-from-status behavior would have shown the generic role.
+      expect(screen.queryByText("custom")).toBeNull();
+    });
+
+    test("falls back to the inferred role when the incoming edge is unknown", async () => {
+      // A run predating IncomingEdgeId persistence: the second node carries no
+      // incomingEdgeId, so the timeline infers from the failed predecessor.
+      const legacyRun = {
+        ...mockRunCustomEdge,
+        id: "test-run-legacy",
+        nodes: [
+          { ...mockRunCustomEdge.nodes[0], status: "Failed", error: "boom" },
+          { ...mockRunCustomEdge.nodes[1], incomingEdgeId: undefined },
+        ],
+      };
+      (loopRunService.getById as ReturnType<typeof vi.fn>).mockResolvedValue(legacyRun);
+      (loopRunService.getEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+        entries: [],
+        nextCursor: 0,
+        hasMore: false,
+      });
+      (loopTemplateService.getVersionGraph as ReturnType<typeof vi.fn>).mockResolvedValue(
+        mockGraphCustomEdge,
+      );
+
+      renderViewer("test-run-legacy");
+
+      await waitFor(() => {
+        expect(screen.getByText("After Human")).toBeTruthy();
+      });
+      expect(screen.getByText("failure")).toBeTruthy();
+    });
+  });
 });
