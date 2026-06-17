@@ -136,6 +136,128 @@ public class AgentApiIntegrationTests
         Assert.Equal(HttpStatusCode.NotFound, trResp.StatusCode);
     }
 
+    [Fact]
+    public async Task SetVariable_then_ListVariables_round_trips_for_the_run()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var runId = await SeedRunAsync(factory);
+
+        var put = new HttpRequestMessage(HttpMethod.Put, "/api/v1/agent/variables/handoff")
+        {
+            Content = JsonContent.Create(new { value = "ready for review" }),
+        };
+        put.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        var putResp = await client.SendAsync(put);
+        Assert.Equal(HttpStatusCode.OK, putResp.StatusCode);
+
+        var get = new HttpRequestMessage(HttpMethod.Get, "/api/v1/agent/variables");
+        get.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        var getResp = await client.SendAsync(get);
+        getResp.EnsureSuccessStatusCode();
+
+        var arr = JsonDocument.Parse(await getResp.Content.ReadAsStringAsync()).RootElement;
+        Assert.Equal(1, arr.GetArrayLength());
+        Assert.Equal("handoff", arr[0].GetProperty("name").GetString());
+        Assert.Equal("ready for review", arr[0].GetProperty("value").GetString());
+    }
+
+    [Fact]
+    public async Task SetVariable_overwrites_an_existing_value()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var runId = await SeedRunAsync(factory);
+
+        await PutVariableAsync(client, runId, "summary", "draft");
+        await PutVariableAsync(client, runId, "summary", "final");
+
+        var get = new HttpRequestMessage(HttpMethod.Get, "/api/v1/agent/variables");
+        get.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        var arr = JsonDocument.Parse(await (await client.SendAsync(get)).Content.ReadAsStringAsync()).RootElement;
+        Assert.Equal(1, arr.GetArrayLength());
+        Assert.Equal("final", arr[0].GetProperty("value").GetString());
+    }
+
+    [Fact]
+    public async Task SetVariable_rejects_an_illegal_name()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var runId = await SeedRunAsync(factory);
+
+        var put = new HttpRequestMessage(HttpMethod.Put, "/api/v1/agent/variables/bad-name")
+        {
+            Content = JsonContent.Create(new { value = "x" }),
+        };
+        put.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        var resp = await client.SendAsync(put);
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task SetVariable_for_unknown_run_returns_not_found()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+
+        var put = new HttpRequestMessage(HttpMethod.Put, "/api/v1/agent/variables/handoff")
+        {
+            Content = JsonContent.Create(new { value = "x" }),
+        };
+        put.Headers.Add("X-ILD-Run-Id", Guid.NewGuid().ToString());
+        var resp = await client.SendAsync(put);
+        Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task ListVariables_without_run_header_is_rejected()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+
+        var resp = await client.GetAsync("/api/v1/agent/variables");
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    private static async Task PutVariableAsync(HttpClient client, Guid runId, string name, string value)
+    {
+        var put = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/agent/variables/{name}")
+        {
+            Content = JsonContent.Create(new { value }),
+        };
+        put.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        (await client.SendAsync(put)).EnsureSuccessStatusCode();
+    }
+
+    private static async Task<Guid> SeedRunAsync(ApiFactory factory)
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "vars-template" };
+        db.LoopTemplates.Add(template);
+        var version = new LoopTemplateVersion
+        {
+            Id = Guid.NewGuid(),
+            LoopTemplateId = template.Id,
+            VersionNumber = 1,
+            CreatedAt = DateTime.UtcNow,
+        };
+        db.LoopTemplateVersions.Add(version);
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = Guid.NewGuid().ToString(),
+            LoopTemplateVersionId = version.Id,
+            Status = LoopRunStatus.Running,
+            RecoveryPolicy = RecoveryPolicy.AutoResume,
+            StartedAt = DateTime.UtcNow,
+        };
+        db.LoopRuns.Add(run);
+        await db.SaveChangesAsync();
+        return run.Id;
+    }
+
     private static async Task<string> CreateAsync(HttpClient client, string title, Guid? runId, Guid repositoryId)
     {
         var req = new HttpRequestMessage(HttpMethod.Post, "/api/v1/agent/workitems")

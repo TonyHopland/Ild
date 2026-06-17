@@ -37,7 +37,21 @@ describe("PromptEditor", () => {
     fireEvent.change(textarea, { target: { value: "{{" } });
 
     const listItems = screen.getAllByRole("listitem");
-    expect(listItems.length).toBe(8);
+    expect(listItems.length).toBe(9);
+  });
+
+  test("typing {{Var filters to the loop-variable placeholder", () => {
+    const onChange = vi.fn();
+    render(<PromptEditor value="" onChange={onChange} />);
+
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    setCursor(textarea, 5);
+    fireEvent.change(textarea, { target: { value: "{{Var" } });
+
+    const listItems = screen.getAllByRole("listitem");
+    expect(listItems.length).toBe(1);
+    expect(listItems[0].textContent).toContain("{{Var.}}");
+    expect(listItems[0].textContent).toContain("loop variable");
   });
 
   test("typing {{WorkItem. filters to WorkItem placeholders", () => {
@@ -98,7 +112,7 @@ describe("PromptEditor", () => {
     setCursor(textarea, 2);
     fireEvent.change(textarea, { target: { value: "{{" } });
 
-    expect(screen.getAllByRole("listitem").length).toBe(8);
+    expect(screen.getAllByRole("listitem").length).toBe(9);
 
     fireEvent.keyDown(textarea, { key: "Enter" });
 
@@ -126,7 +140,7 @@ describe("PromptEditor", () => {
     setCursor(textarea, 2);
     fireEvent.change(textarea, { target: { value: "{{" } });
 
-    expect(screen.getAllByRole("listitem").length).toBe(8);
+    expect(screen.getAllByRole("listitem").length).toBe(9);
 
     fireEvent.keyDown(textarea, { key: "Escape" });
 
@@ -158,7 +172,7 @@ describe("PromptEditor", () => {
     fireEvent.keyDown(textarea, { key: "ArrowUp" });
     fireEvent.keyDown(textarea, { key: "Enter" });
 
-    expect(onChange).toHaveBeenCalledWith("{{WorkTree.File:}}");
+    expect(onChange).toHaveBeenCalledWith("{{Var.}}");
   });
 
   test("clicking a suggestion inserts it", () => {

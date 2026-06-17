@@ -23,6 +23,7 @@ public class AppDbContext : DbContext
     public DbSet<LoopRunAnalyticsBucket> LoopRunAnalyticsBuckets => Set<LoopRunAnalyticsBucket>();
     public DbSet<AdapterSessionSnapshot> AdapterSessionSnapshots => Set<AdapterSessionSnapshot>();
     public DbSet<LoopRunSessionBinding> LoopRunSessionBindings => Set<LoopRunSessionBinding>();
+    public DbSet<LoopRunVariable> LoopRunVariables => Set<LoopRunVariable>();
     public DbSet<EventLog> EventLogs => Set<EventLog>();
     public DbSet<AiProvider> AiProviders => Set<AiProvider>();
     public DbSet<User> Users => Set<User>();
@@ -149,6 +150,11 @@ public class AppDbContext : DbContext
             e.HasIndex(s => new { s.LoopRunId, s.AdapterName, s.SessionId });
         });
 
+        modelBuilder.Entity<LoopRunVariable>(e =>
+        {
+            e.HasKey(v => new { v.LoopRunId, v.Name });
+        });
+
         modelBuilder.Entity<EventLog>(e =>
         {
             e.HasIndex(e => new { e.LoopRunId, e.Sequence });
@@ -219,6 +225,11 @@ public class AppDbContext : DbContext
             e.Property(s => s.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
         });
 
+        modelBuilder.Entity<LoopRunVariable>(e =>
+        {
+            e.Property(v => v.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
+        });
+
         modelBuilder.Entity<AiProvider>(e =>
         {
             e.Property(a => a.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
@@ -260,6 +271,12 @@ public class AppDbContext : DbContext
             .HasOne(s => s.LoopRun)
             .WithMany()
             .HasForeignKey(s => s.LoopRunId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<LoopRunVariable>()
+            .HasOne(v => v.LoopRun)
+            .WithMany(lr => lr.Variables)
+            .HasForeignKey(v => v.LoopRunId)
             .OnDelete(DeleteBehavior.Cascade);
     }
 

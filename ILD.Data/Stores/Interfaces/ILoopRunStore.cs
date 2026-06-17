@@ -43,6 +43,20 @@ public interface ILoopRunStore
     Task<IReadOnlyList<LoopRunSessionBinding>> GetSessionBindingsAsync(Guid runId);
     Task<LoopRunSessionBinding?> GetSessionBindingAsync(Guid runId, string adapterName, string placeholderId);
     Task UpsertSessionBindingAsync(Guid runId, string adapterName, string placeholderId, string sessionId);
+
+    /// <summary>
+    /// All loop variables for a run, ordered by name. Returns an empty list when
+    /// the run has none. Backs <c>{{Var.&lt;name&gt;}}</c> placeholder rendering and
+    /// the agent variable-listing endpoint.
+    /// </summary>
+    Task<IReadOnlyList<LoopRunVariable>> GetVariablesAsync(Guid runId);
+
+    /// <summary>
+    /// Create or overwrite a single loop variable by (runId, name), touching only
+    /// that row so concurrent writes to other variables / control-plane columns
+    /// are never clobbered.
+    /// </summary>
+    Task SetVariableAsync(Guid runId, string name, string value);
     Task<LoopRunNode?> GetRunNodeAsync(Guid runId, Guid nodeId);
     Task<LoopRunNode?> GetRunNodeByIdAsync(Guid runNodeId);
     Task CreateRunAsync(LoopRun run);
