@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Repository, WorkItem, WorkItemStatus } from "../../types";
 import type { TypedSignalRMessage } from "../../types/signalr";
@@ -47,6 +47,13 @@ export default function Taskboard() {
   const [loopTemplateNames, setLoopTemplateNames] = useState<string[]>([]);
   const [filter, setFilter] = useState<TaskboardFilter>(EMPTY_TASKBOARD_FILTER);
   const { on, off } = useSignalR();
+  // Highest getById request ordinal issued per work item. A newly created item
+  // receives a burst of hub events (create → claim → run-progressed → human),
+  // each firing a getById; an early fetch the server answered with an older
+  // status can resolve *after* a later one and clobber the fresher state. We
+  // apply a fetch's result only when it is still the latest request for that
+  // item, so a late, stale response is dropped instead of reverting the card.
+  const syncSeqRef = useRef<Map<string, number>>(new Map());
 
   useEffect(() => {
     void loadWorkItems();
@@ -68,9 +75,15 @@ export default function Taskboard() {
     const delayedTimers: number[] = [];
 
     const syncWorkItem = (workItemId: string) => {
+      const seq = (syncSeqRef.current.get(workItemId) ?? 0) + 1;
+      syncSeqRef.current.set(workItemId, seq);
       void workItemService
         .getById(workItemId)
         .then((wi) => {
+          // Drop a response that a newer request has already superseded — the
+          // later request reflects a fresher server state, so honoring this one
+          // would revert the card to a stale status.
+          if (syncSeqRef.current.get(workItemId) !== seq) return;
           setWorkItems((items) => {
             const exists = items.some((item) => item.id === wi.id);
             if (!exists) return [...items, wi];
@@ -106,24 +119,15 @@ export default function Taskboard() {
 
     const onWorkItemStateChanged = async (message: TypedSignalRMessage<"WorkItemStateChanged">) => {
       const { workItemId, newStatus } = message.payload;
-      setWorkItems((prev) => {
-        const exists = prev.find((item) => item.id === workItemId);
-        if (!exists) {
-          // New work item — load it
-          void workItemService
-            .getById(workItemId)
-            .then((wi) =>
-              setWorkItems((items) =>
-                items.some((item) => item.id === wi.id) ? items : [...items, wi],
-              ),
-            )
-            .catch(() => {});
-          return prev;
-        }
-        return prev.map((item) =>
+      // Optimistically reflect the new status on a card already on the board; an
+      // item we have not seen yet is added by the syncWorkItem fetch below. Both
+      // the optimistic write and the fetch are reconciled by that fetch, so the
+      // status never lingers behind the event.
+      setWorkItems((prev) =>
+        prev.map((item) =>
           item.id === workItemId ? { ...item, status: normalizeWorkItemStatus(newStatus) } : item,
-        );
-      });
+        ),
+      );
       syncWorkItem(workItemId);
       delayedTimers.push(setTimeout(() => syncWorkItem(workItemId), 500));
     };

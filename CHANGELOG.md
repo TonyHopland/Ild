@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The taskboard no longer gets stuck showing a stale status (e.g. a newly created work item parking for human input still showing "Running") when a burst of work-item-hub events arrives in quick succession. Each event triggered a `getById`, and an earlier fetch the server answered with an older status could resolve _after_ a later one and clobber the fresher state, with nothing to correct it. Each fetch now carries a per-item request ordinal and its result is applied only while it is still the latest request for that item, so a late, stale response is dropped instead of reverting the card.
+
 ## [0.2.0] - 2026-06-15
 
 ### Fixed
