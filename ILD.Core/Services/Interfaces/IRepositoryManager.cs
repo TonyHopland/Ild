@@ -6,6 +6,16 @@ namespace ILD.Core.Services.Interfaces;
 
 public sealed record GitAuthOptions(string RemoteUrl, string? ApiKey, string? ProviderType = null);
 
+/// <summary>
+/// Outcome of a <see cref="IRepositoryManager.MergeAsync"/>. On a clean merge
+/// <see cref="Success"/> is true and the lists are empty. On a conflict it is
+/// false and <see cref="ConflictedFiles"/> names the unmerged paths; the markers
+/// are left in the worktree (call <see cref="IRepositoryManager.AbortMergeAsync"/>
+/// to discard them). A non-zero exit with no conflicted files (e.g. an unknown
+/// ref) is reported via <see cref="Error"/>.
+/// </summary>
+public sealed record GitMergeResult(bool Success, IReadOnlyList<string> ConflictedFiles, string? Error = null);
+
 public interface IRepositoryManager
 {
     /// <summary>
@@ -15,6 +25,26 @@ public interface IRepositoryManager
     Task<(bool Success, string? Error)> CloneAsync(string cloneUrl, string targetPath, CancellationToken cancellationToken = default, GitAuthOptions? auth = null);
 
     Task<string> CreateWorktreeAsync(string repoPath, string branchName);
+
+    /// <summary>
+    /// Create a worktree on a fresh branch <paramref name="branchName"/> based at
+    /// <paramref name="baseRef"/> (e.g. <c>origin/main</c>), without disturbing the
+    /// base repo's own checked-out branch. Any pre-existing worktree/branch at the
+    /// target is torn down first so the result is a clean composition surface —
+    /// used to build throwaway integration worktrees for combined previews.
+    /// </summary>
+    Task<string> CreateWorktreeFromAsync(string repoPath, string branchName, string baseRef);
+
+    /// <summary>
+    /// Merge <paramref name="branchRef"/> into the worktree's current branch as a
+    /// merge commit with <paramref name="commitMessage"/>. See <see cref="GitMergeResult"/>
+    /// for the conflict contract.
+    /// </summary>
+    Task<GitMergeResult> MergeAsync(string worktreePath, string branchRef, string commitMessage, CancellationToken cancellationToken = default);
+
+    /// <summary>Abort an in-progress merge, restoring the worktree to its pre-merge state.</summary>
+    Task AbortMergeAsync(string worktreePath, CancellationToken cancellationToken = default);
+
     Task DestroyWorktreeAsync(string worktreePath);
     Task<bool> ValidateWorktreeHealthAsync(string worktreePath);
     Task<bool> CheckoutBranchAsync(string worktreePath, string branchName);

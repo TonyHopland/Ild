@@ -100,6 +100,31 @@ export interface WorktreePreview {
   services: WorktreePreviewService[];
 }
 
+/** How a member branch fared when merged into the combined integration branch. */
+export type CombinedPreviewMergeStatus = "pending" | "clean" | "conflict" | "skipped" | "missing";
+
+export interface CombinedPreviewMember {
+  workItemId: string;
+  title: string | null;
+  branchName: string | null;
+  mergeStatus: CombinedPreviewMergeStatus;
+  conflictedFiles: string[];
+  stale: boolean;
+}
+
+/** Lifecycle of a "Preview together" integration preview. */
+export type CombinedPreviewState = "notStarted" | "running" | "partial" | "conflict" | "stopped";
+
+export interface CombinedPreview {
+  integrationBranch: string;
+  state: CombinedPreviewState;
+  stale: boolean;
+  worktreePath: string | null;
+  message: string | null;
+  members: CombinedPreviewMember[];
+  preview: WorktreePreview | null;
+}
+
 /** A file's change status relative to the default branch's fork point. */
 export type WorktreeFileChangeStatus = "none" | "added" | "modified" | "deleted";
 

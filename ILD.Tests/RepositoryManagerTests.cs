@@ -314,6 +314,58 @@ public class RepositoryManagerTests : IDisposable
         Assert.Null(await mgr.ReadWorktreeFileAsync(wt, "does-not-exist.txt"));
     }
 
+    [Fact]
+    public async Task CreateWorktreeFrom_bases_the_branch_on_the_given_ref()
+    {
+        var (work, mgr) = CloneWithOrigin();
+        var path = await mgr.CreateWorktreeFromAsync(work, "ild/combined-1-2", "origin/main");
+
+        Assert.True(Directory.Exists(path));
+        Assert.True(File.Exists(Path.Combine(path, "keep.txt")));
+        Assert.Equal("ild/combined-1-2", GitOutput(path, "rev-parse", "--abbrev-ref", "HEAD").Trim());
+    }
+
+    [Fact]
+    public async Task MergeAsync_merges_a_clean_branch()
+    {
+        var (work, mgr) = CloneWithOrigin();
+        Git(work, "checkout", "-b", "feature", "origin/main");
+        File.WriteAllText(Path.Combine(work, "feat.txt"), "x\n");
+        Git(work, "add", "-A");
+        Git(work, "commit", "-m", "feat");
+        Git(work, "checkout", "main");
+
+        var integ = await mgr.CreateWorktreeFromAsync(work, "integ", "origin/main");
+        var result = await mgr.MergeAsync(integ, "feature", "merge feature");
+
+        Assert.True(result.Success);
+        Assert.Empty(result.ConflictedFiles);
+        Assert.True(File.Exists(Path.Combine(integ, "feat.txt")));
+    }
+
+    [Fact]
+    public async Task MergeAsync_reports_conflicted_files_and_can_abort()
+    {
+        var (work, mgr) = CloneWithOrigin();
+        Git(work, "checkout", "-b", "feat-x", "origin/main");
+        File.WriteAllText(Path.Combine(work, "mod.txt"), "x-change\n");
+        Git(work, "add", "-A");
+        Git(work, "commit", "-m", "x");
+        Git(work, "checkout", "main");
+
+        var integ = await mgr.CreateWorktreeFromAsync(work, "integ", "origin/main");
+        File.WriteAllText(Path.Combine(integ, "mod.txt"), "y-change\n");
+        Git(integ, "add", "-A");
+        Git(integ, "commit", "-m", "y");
+
+        var result = await mgr.MergeAsync(integ, "feat-x", "merge feat-x");
+        Assert.False(result.Success);
+        Assert.Contains("mod.txt", result.ConflictedFiles);
+
+        await mgr.AbortMergeAsync(integ);
+        Assert.Equal("y-change\n", File.ReadAllText(Path.Combine(integ, "mod.txt")));
+    }
+
     // Builds a repo with a real "origin" remote so origin/HEAD (the diff base)
     // resolves the way it does for a cloned-on-demand base repo in production.
     private (string Work, RepositoryManager Mgr) CloneWithOrigin()

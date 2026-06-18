@@ -16,6 +16,7 @@ import {
   PrComment,
   LoopRunSessionPreview,
   WorktreePreview,
+  CombinedPreview,
   WorktreeFiles,
   WorktreeFileContent,
   AppSetting,
@@ -235,6 +236,38 @@ export const workItemService = {
     return api.get<WorktreeFileContent>(
       `/workitems/${id}/files/content?path=${encodeURIComponent(path)}`,
     );
+  },
+};
+
+/**
+ * "Preview together": compose several work items' current run branches into one
+ * throwaway integration worktree and preview the set. A combined preview is
+ * identified by its member id set; the same selection always maps to the same
+ * integration branch regardless of order.
+ */
+export const combinedPreviewService = {
+  get: async (workItemIds: string[]): Promise<CombinedPreview> => {
+    return api.get<CombinedPreview>(
+      `/combined-preview?ids=${encodeURIComponent(workItemIds.join(","))}`,
+    );
+  },
+
+  start: async (
+    workItemIds: string[],
+    options?: {
+      skip?: string[];
+      onConflict?: "Stop" | "ResolveInWorktree";
+    },
+  ): Promise<CombinedPreview> => {
+    return api.post<CombinedPreview>(`/combined-preview/start`, {
+      workItemIds,
+      skip: options?.skip,
+      onConflict: options?.onConflict ?? "Stop",
+    });
+  },
+
+  stop: async (workItemIds: string[]): Promise<CombinedPreview> => {
+    return api.post<CombinedPreview>(`/combined-preview/stop`, { workItemIds });
   },
 };
 

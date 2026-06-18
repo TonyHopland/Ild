@@ -73,6 +73,54 @@ public class RepositoryManager : IRepositoryManager
         return worktreePath;
     }
 
+    public async Task<string> CreateWorktreeFromAsync(string repoPath, string branchName, string baseRef)
+    {
+        Directory.CreateDirectory(_worktreesRoot);
+        var worktreePath = Path.GetFullPath(Path.Combine(_worktreesRoot, branchName));
+        var parent = Path.GetDirectoryName(worktreePath);
+        if (!string.IsNullOrEmpty(parent))
+            Directory.CreateDirectory(parent);
+
+        // An integration worktree is throwaway and rebuilt on demand, so always
+        // start from a clean slate: drop any prior worktree and its branch.
+        await RunAsync(repoPath, "worktree", "prune");
+        if (Directory.Exists(worktreePath))
+        {
+            await DestroyWorktreeAsync(worktreePath);
+            await RunAsync(repoPath, "worktree", "prune");
+        }
+        await RunAsync(repoPath, "branch", "-D", branchName);
+
+        var (code, _, stderr) = await RunAsync(repoPath, "worktree", "add", "-b", branchName, worktreePath, baseRef);
+        if (code != 0)
+            throw new InvalidOperationException(
+                $"Failed to create integration worktree at {worktreePath} from {baseRef}: {FormatGitError(stderr)}");
+
+        // Pin project root so opencode --dir works and doesn't walk up to parent workspace.
+        var opencodeConfig = Path.Combine(worktreePath, "opencode.json");
+        if (!File.Exists(opencodeConfig))
+            File.WriteAllText(opencodeConfig, "{\"$schema\":\"https://opencode.ai/config.json\"}");
+
+        return worktreePath;
+    }
+
+    public async Task<GitMergeResult> MergeAsync(string worktreePath, string branchRef, string commitMessage, CancellationToken cancellationToken = default)
+    {
+        var (code, _, stderr) = await RunAsync(worktreePath, new[] { "merge", "--no-ff", "-m", commitMessage, branchRef }, cancellationToken);
+        if (code == 0)
+            return new GitMergeResult(true, Array.Empty<string>());
+
+        // A conflict leaves the unmerged paths listed by diff-filter=U; anything
+        // else (e.g. an unknown ref) is a hard error with no conflicted files.
+        var conflicted = await ListZeroSeparatedAsync(worktreePath, "diff", "--name-only", "--diff-filter=U", "-z");
+        return new GitMergeResult(false, conflicted, conflicted.Count == 0 ? FormatGitError(stderr) : null);
+    }
+
+    public async Task AbortMergeAsync(string worktreePath, CancellationToken cancellationToken = default)
+    {
+        await RunAsync(worktreePath, new[] { "merge", "--abort" }, cancellationToken);
+    }
+
     public async Task DestroyWorktreeAsync(string worktreePath)
     {
         if (!Directory.Exists(worktreePath)) return;

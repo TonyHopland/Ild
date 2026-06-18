@@ -45,6 +45,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IRemoteProvider, RemoteProviderService>();
         services.AddHttpClient<IAIProviderService, AIProviderService>();
         services.AddSingleton<IWorktreePreviewService, WorktreePreviewService>();
+        services.AddSingleton<CombinedPreviewRegistry>();
+        services.AddScoped<ICombinedPreviewService, CombinedPreviewService>();
         services.AddSingleton<EventLogOptions>();
         services.AddScoped<IEventLogService, EventLogService>();
         services.AddHostedService<EventLogRetentionSweeper>();
