@@ -15,6 +15,14 @@ public sealed class CombinedPreviewEntry
     public required string WorktreePath { get; init; }
     public required string BaseRepoPath { get; init; }
     public required Guid RepositoryId { get; init; }
+
+    /// <summary>
+    /// When the preview was last started or inspected. The combined-preview
+    /// sweeper reaps entries idle past the retention window — these worktrees
+    /// have no <c>LoopRun</c>, so the run-based sweeper cannot see them.
+    /// </summary>
+    public DateTime LastActivityAt { get; set; }
+
     public List<CombinedPreviewMemberRecord> Members { get; init; } = new();
 }
 
@@ -46,4 +54,8 @@ public sealed class CombinedPreviewRegistry
 
     public void Remove(string key)
         => _entries.TryRemove(key, out _);
+
+    /// <summary>Snapshot of all tracked entries (for the retention sweeper).</summary>
+    public IReadOnlyList<CombinedPreviewEntry> All()
+        => _entries.Values.ToList();
 }

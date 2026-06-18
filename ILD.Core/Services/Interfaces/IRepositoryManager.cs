@@ -19,6 +19,12 @@ public sealed record GitMergeResult(bool Success, IReadOnlyList<string> Conflict
 public interface IRepositoryManager
 {
     /// <summary>
+    /// Root directory under which per-run and integration worktrees are created.
+    /// Lets a sweeper enumerate worktrees orphaned on disk (e.g. by a restart).
+    /// </summary>
+    string WorktreesRoot { get; }
+
+    /// <summary>
     /// Clone <paramref name="cloneUrl"/> into <paramref name="targetPath"/>.
     /// Returns false on failure (caller decides whether to abort the run).
     /// </summary>

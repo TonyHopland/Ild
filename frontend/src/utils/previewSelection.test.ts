@@ -30,14 +30,16 @@ describe("isPreviewEligible", () => {
     expect(isPreviewEligible(workItem({ branchName: "ild/wi-1-run-abc" }))).toBe(true);
   });
 
-  test("is true for run-bearing statuses without an explicit branch", () => {
-    for (const status of [
-      WorkItemStatus.Running,
-      WorkItemStatus.HumanFeedback,
-      WorkItemStatus.Done,
-    ]) {
+  test("is true for active run-bearing statuses without an explicit branch", () => {
+    for (const status of [WorkItemStatus.Running, WorkItemStatus.HumanFeedback]) {
       expect(isPreviewEligible(workItem({ status }))).toBe(true);
     }
+  });
+
+  test("is false for Done without a branch — its run is no longer composable", () => {
+    // A finished run is excluded by the backend's current-run resolution, so the
+    // UI must not advertise it as previewable.
+    expect(isPreviewEligible(workItem({ status: WorkItemStatus.Done }))).toBe(false);
   });
 
   test("is false for pre-run statuses with no branch", () => {
@@ -59,5 +61,9 @@ describe("ineligibleReason", () => {
 
   test("explains why a pre-run item cannot be previewed", () => {
     expect(ineligibleReason(workItem({ status: WorkItemStatus.Ready }))).toMatch(/no run yet/i);
+  });
+
+  test("explains that a Done item's run has finished", () => {
+    expect(ineligibleReason(workItem({ status: WorkItemStatus.Done }))).toMatch(/finished/i);
   });
 });

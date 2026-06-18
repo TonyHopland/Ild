@@ -47,6 +47,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IWorktreePreviewService, WorktreePreviewService>();
         services.AddSingleton<CombinedPreviewRegistry>();
         services.AddScoped<ICombinedPreviewService, CombinedPreviewService>();
+        services.AddHostedService<CombinedPreviewSweeper>();
         services.AddSingleton<EventLogOptions>();
         services.AddScoped<IEventLogService, EventLogService>();
         services.AddHostedService<EventLogRetentionSweeper>();

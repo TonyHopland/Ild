@@ -94,6 +94,7 @@ public sealed class CombinedPreviewService : ICombinedPreviewService
                 WorktreePath = worktreePath,
                 BaseRepoPath = basePath,
                 RepositoryId = repo.Id,
+                LastActivityAt = DateTime.UtcNow,
             };
             // Persist before merging so a conflict (or hard failure) still leaves a
             // tracked entry that resume/stop can act on, never an orphan worktree.
@@ -139,6 +140,7 @@ public sealed class CombinedPreviewService : ICombinedPreviewService
             var entry = _registry.Get(key);
             if (entry == null)
                 throw new InvalidOperationException("There is no combined preview to resume — start one first.");
+            entry.LastActivityAt = DateTime.UtcNow;
 
             // Still-unresolved markers? Surface them and keep waiting for the human.
             var unmerged = await _repoManager.GetUnmergedFilesAsync(entry.WorktreePath, cancellationToken);
@@ -191,6 +193,7 @@ public sealed class CombinedPreviewService : ICombinedPreviewService
             var entry = _registry.Get(key);
             if (entry == null)
                 return await BuildPlanAsync(ids);
+            entry.LastActivityAt = DateTime.UtcNow; // inspected — not abandoned
 
             // Staleness: a member that re-ran since composition now resolves to a
             // different current branch. The user rebuilds; nothing auto-refreshes.
@@ -242,24 +245,99 @@ public sealed class CombinedPreviewService : ICombinedPreviewService
             if (entry == null)
                 return await BuildPlanAsync(ids, state: "stopped");
 
-            try
-            {
-                await _previewService.StopAsync(entry.WorktreePath, cancellationToken);
-            }
-            catch (InvalidOperationException)
-            {
-                // Nothing running — proceed to tear down the worktree anyway.
-            }
-
-            // The integration branch is throwaway; tear it down on stop. Member
-            // branches and their PRs are never touched.
-            await _repoManager.DestroyWorktreeAsync(entry.WorktreePath);
-            await _repoManager.DeleteLocalBranchAsync(entry.BaseRepoPath, entry.IntegrationBranch);
-            await _repoManager.PruneWorktreesAsync(entry.BaseRepoPath);
+            await TeardownAsync(_previewService, _repoManager, entry.WorktreePath, entry.BaseRepoPath, entry.IntegrationBranch, cancellationToken);
             _registry.Remove(key);
 
             return BuildResponse(entry, "stopped", preview: null, message: null);
         }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Stop the preview (if running) and tear down the throwaway integration
+    /// worktree and branch. Member branches and PRs are never touched. Shared by
+    /// the stop endpoint and the combined-preview retention sweeper.
+    /// </summary>
+    internal static async Task TeardownAsync(
+        IWorktreePreviewService previewService,
+        IRepositoryManager repoManager,
+        string worktreePath,
+        string? baseRepoPath,
+        string? integrationBranch,
+        CancellationToken ct)
+    {
+        try
+        {
+            await previewService.StopAsync(worktreePath, ct);
+        }
+        catch (InvalidOperationException)
+        {
+            // Nothing running — proceed to tear down the worktree anyway.
+        }
+
+        await repoManager.DestroyWorktreeAsync(worktreePath);
+        if (!string.IsNullOrEmpty(baseRepoPath) && !string.IsNullOrEmpty(integrationBranch))
+        {
+            await repoManager.DeleteLocalBranchAsync(baseRepoPath, integrationBranch);
+            await repoManager.PruneWorktreesAsync(baseRepoPath);
+        }
+    }
+
+    /// <summary>
+    /// Reap a tracked entry idle since before <paramref name="cutoff"/>. Runs
+    /// under the same per-key gate as start/stop, re-checking activity inside it
+    /// so a preview inspected concurrently is never torn down. Returns true when
+    /// reaped.
+    /// </summary>
+    internal static Task<bool> ReapEntryAsync(
+        CombinedPreviewRegistry registry,
+        IWorktreePreviewService previewService,
+        IRepositoryManager repoManager,
+        string key,
+        DateTime cutoff,
+        CancellationToken ct)
+        => WithGateAsync(key, async () =>
+        {
+            var entry = registry.Get(key);
+            if (entry == null || entry.LastActivityAt > cutoff)
+                return false;
+            await TeardownAsync(previewService, repoManager, entry.WorktreePath, entry.BaseRepoPath, entry.IntegrationBranch, ct);
+            registry.Remove(key);
+            return true;
+        }, ct);
+
+    /// <summary>
+    /// Reap an integration worktree found on disk with no live entry (e.g.
+    /// orphaned by a restart) that has sat untouched since before
+    /// <paramref name="cutoff"/>. Keyed by the worktree's id-set so a concurrent
+    /// start for the same selection is serialized and never clobbered.
+    /// </summary>
+    internal static Task<bool> ReapOrphanWorktreeAsync(
+        CombinedPreviewRegistry registry,
+        IWorktreePreviewService previewService,
+        IRepositoryManager repoManager,
+        string worktreePath,
+        DateTime cutoff,
+        CancellationToken ct)
+    {
+        var full = Path.GetFullPath(worktreePath);
+        var name = Path.GetFileName(full); // combined-<key>
+        const string prefix = "combined-";
+        if (!name.StartsWith(prefix, StringComparison.Ordinal))
+            return Task.FromResult(false);
+
+        var key = name[prefix.Length..];
+        return WithGateAsync(key, async () =>
+        {
+            // A live (or freshly started) entry now owns this path — leave it.
+            if (registry.Get(key) != null)
+                return false;
+            if (!Directory.Exists(full) || Directory.GetLastWriteTimeUtc(full) > cutoff)
+                return false;
+
+            var baseRepo = await repoManager.ResolveBaseRepoPathAsync(full);
+            await TeardownAsync(previewService, repoManager, full, baseRepo, $"ild/{name}", ct);
+            return true;
+        }, ct);
     }
 
     // --- helpers -----------------------------------------------------------

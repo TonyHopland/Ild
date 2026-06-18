@@ -28,6 +28,8 @@ public class RepositoryManager : IRepositoryManager
     {
     }
 
+    public string WorktreesRoot => _worktreesRoot;
+
     public async Task<(bool Success, string? Error)> CloneAsync(string cloneUrl, string targetPath, CancellationToken cancellationToken = default, GitAuthOptions? auth = null)
     {
         var parent = Path.GetDirectoryName(targetPath);
