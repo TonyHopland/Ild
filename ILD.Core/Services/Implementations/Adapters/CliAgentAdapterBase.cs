@@ -88,6 +88,51 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
         await store.UpsertAsync(loopRunId, Name, sessionId, sessionJson, ct);
     }
 
+    /// <summary>
+    /// Fork primitive shared by every CLI adapter: materialize a copy of the
+    /// <paramref name="sourceSessionId"/> snapshot under <paramref name="destSessionId"/>,
+    /// rewriting the transcript's embedded session ids to the destination so each
+    /// CLI accepts the copy as its own resumable session. The source snapshot is
+    /// only read, never written — leaving it byte-for-byte unchanged. After this
+    /// call the adapter's normal restore path (keyed by the destination id)
+    /// rehydrates the on-disk session and the CLI continues on the copy.
+    /// </summary>
+    /// <returns>
+    /// <c>true</c> when a copy was materialized; <c>false</c> when there is no DI
+    /// scope or the source has no snapshot — in which case the caller starts a
+    /// fresh session, matching the "source has no bound session" behavior.
+    /// </returns>
+    protected async Task<bool> ForkSessionSnapshotAsync(Guid loopRunId, string sourceSessionId, string destSessionId, CancellationToken ct)
+    {
+        if (ScopeFactory is null) return false;
+        await using var scope = ScopeFactory.CreateAsyncScope();
+        var store = scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>();
+        var source = await store.GetAsync(loopRunId, Name, sourceSessionId, ct);
+        if (source is null || string.IsNullOrWhiteSpace(source.SessionJson)) return false;
+
+        var copy = RewriteSessionTranscript(source.SessionJson, sourceSessionId, destSessionId);
+        await store.UpsertAsync(loopRunId, Name, destSessionId, copy, ct);
+        return true;
+    }
+
+    /// <summary>
+    /// Rewrite a session snapshot so every occurrence of the source session id
+    /// becomes the destination id. Session ids are opaque, unique tokens (GUIDs /
+    /// ULIDs), so a textual replace correctly retargets both the wrapping
+    /// metadata and the per-event/per-message references across every adapter's
+    /// snapshot format (claude wrapped JSONL, pi raw JSONL, opencode export JSON)
+    /// without parsing each shape. Returns the input unchanged when either id is
+    /// blank or they are equal.
+    /// </summary>
+    public static string RewriteSessionTranscript(string sessionJson, string sourceSessionId, string destSessionId)
+    {
+        if (string.IsNullOrEmpty(sessionJson)
+            || string.IsNullOrEmpty(sourceSessionId)
+            || string.Equals(sourceSessionId, destSessionId, StringComparison.Ordinal))
+            return sessionJson;
+        return sessionJson.Replace(sourceSessionId, destSessionId, StringComparison.Ordinal);
+    }
+
     /// <summary>Try to read a string property from a JSON object element.</summary>
     protected static bool TryGetString(JsonElement element, string propertyName, out string? value)
     {

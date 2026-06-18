@@ -46,6 +46,11 @@ public sealed class PiAdapter : CliAgentAdapterBase
 
             string? sessionIdToUse = ctx.SessionId;
             string? sessionPathToUse = null;
+            // Fork: seed a copy of the source session under the destination id
+            // before restore, so the restore below rehydrates the copy and pi
+            // continues on the fork while the source stays frozen.
+            if (ctx.ManageSession && !string.IsNullOrWhiteSpace(sessionIdToUse) && !string.IsNullOrWhiteSpace(ctx.ForkFromSessionId))
+                await ForkSessionSnapshotAsync(ctx.RunContext.LoopRunId, ctx.ForkFromSessionId!, sessionIdToUse!, ctx.Cancel);
             if (ctx.ManageSession && !string.IsNullOrWhiteSpace(sessionIdToUse))
             {
                 var restoreResult = await RestoreManagedSessionAsync(sessionDirectory, ctx, sessionIdToUse);

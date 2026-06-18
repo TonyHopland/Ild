@@ -12,5 +12,6 @@ Short records of architectural decisions that are **hard to reverse, surprising 
 | [0006](./0006-run-isolation-clean-origin-base.md)     | Every run starts from a clean `origin/<default>` base                |
 | [0007](./0007-ai-execution-delegated-to-adapters.md)  | AI execution is delegated wholesale to pluggable CLI adapters        |
 | [0008](./0008-worktree-and-branch-per-run.md)         | One worktree and branch per run, reclaimed by retention              |
+| [0009](./0009-adapter-feature-parity.md)              | Every agent adapter stays feature-complete (incl. session fork)      |
 
 New ADRs use the next sequential number; see the format in `.agents/skills/grill-with-docs/ADR-FORMAT.md`.

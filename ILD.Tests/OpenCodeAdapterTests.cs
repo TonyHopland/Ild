@@ -1061,6 +1061,54 @@ public class OpenCodeAdapterTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_forks_source_snapshot_under_new_id_leaving_source_unchanged()
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-fork-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "fork.sh");
+        // Minimal opencode stub: succeed with no output for every subcommand
+        // (run/export/import), so the only snapshot writes come from the fork.
+        File.WriteAllText(scriptPath, "#!/bin/sh\nexit 0\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        const string sourceJson = "{\"id\":\"source-sess\",\"messages\":[1]}";
+        try
+        {
+            await using var harness = await CreateSessionHarnessAsync();
+            var runId = Guid.NewGuid();
+            await harness.SeedRunAsync(runId);
+            await harness.SeedSnapshotAsync(runId, "OpenCode", "source-sess", sourceJson);
+
+            var adapter = new OpenCodeAdapter(harness.Services.GetRequiredService<IServiceScopeFactory>());
+            var ctx = BuildContext(
+                binaryPath: scriptPath,
+                prompt: "ignored",
+                worktreePath: worktreeDir,
+                sessionId: "fork-dest",
+                executionCount: 1,
+                runId: runId,
+                manageSession: true) with { ForkFromSessionId = "source-sess" };
+
+            await adapter.ExecuteAsync(ctx);
+
+            await using var verifyDb = harness.CreateDbContext();
+            // Source session is byte-for-byte unchanged after the fork.
+            var source = await verifyDb.AdapterSessionSnapshots.FindAsync(runId, "OpenCode", "source-sess");
+            Assert.NotNull(source);
+            Assert.Equal(sourceJson, source!.SessionJson);
+            // A copy now exists under the fork's id, retargeted to that id.
+            var fork = await verifyDb.AdapterSessionSnapshots.FindAsync(runId, "OpenCode", "fork-dest");
+            Assert.NotNull(fork);
+            Assert.Contains("fork-dest", fork!.SessionJson);
+            Assert.DoesNotContain("source-sess", fork.SessionJson);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_extracts_text_from_typed_text_event_part()
     {
         // opencode --format json emits `{"type":"text","part":{"type":"text","text":"..."}}`
