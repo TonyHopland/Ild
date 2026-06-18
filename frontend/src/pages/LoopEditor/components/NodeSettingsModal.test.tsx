@@ -102,37 +102,65 @@ describe("NodeSettingsModal install-on-start option", () => {
   });
 });
 
-describe("NodeSettingsModal fork-from field", () => {
+describe("NodeSettingsModal session memory mode", () => {
   afterEach(() => {
     cleanup();
   });
 
-  test("hides the fork-from field until Use Session is enabled", () => {
+  test("defaults to None for an AI node without a session", () => {
     renderModal({ selectedNode: makeNode(NodeType.AI), aiUseSession: false });
 
-    expect(screen.queryByLabelText("Fork From")).toBeNull();
+    expect(screen.getByRole("radio", { name: "None" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.queryByLabelText("Session name")).toBeNull();
+    expect(screen.queryByLabelText("Fork from")).toBeNull();
   });
 
-  test("shows the fork-from field for a session-managed AI node", () => {
+  test("enables a session when Continue is selected", () => {
+    const props = renderModal({ selectedNode: makeNode(NodeType.AI), aiUseSession: false });
+
+    fireEvent.click(screen.getByRole("radio", { name: "Continue a session" }));
+
+    expect(props.onAiUseSessionChange).toHaveBeenCalledWith(true);
+    expect(props.onAiForkFromPlaceholderChange).toHaveBeenCalledWith("");
+  });
+
+  test("shows the session name field when continuing a session", () => {
+    renderModal({
+      selectedNode: makeNode(NodeType.AI),
+      aiUseSession: true,
+      aiSessionPlaceholder: "research",
+    });
+
+    const input = screen.getByLabelText("Session name") as HTMLInputElement;
+    expect(input.value).toBe("research");
+  });
+
+  test("renders the source picker and destination when forking", () => {
     renderModal({
       selectedNode: makeNode(NodeType.AI),
       aiUseSession: true,
       aiForkFromPlaceholder: "base",
+      aiSessionPlaceholder: "variant-a",
+      sessionPlaceholderUsages: [{ name: "base", count: 1 }],
     });
 
-    const input = screen.getByLabelText("Fork From") as HTMLInputElement;
-    expect(input.value).toBe("base");
+    expect((screen.getByLabelText("Fork from") as HTMLSelectElement).value).toBe("base");
+    expect((screen.getByLabelText("Into new session") as HTMLInputElement).value).toBe("variant-a");
   });
 
-  test("notifies when the fork-from source is edited", () => {
+  test("notifies when the fork source is chosen", () => {
     const props = renderModal({
       selectedNode: makeNode(NodeType.AI),
       aiUseSession: true,
-      aiForkFromPlaceholder: "",
+      aiForkFromPlaceholder: "base",
+      sessionPlaceholderUsages: [
+        { name: "base", count: 1 },
+        { name: "other", count: 2 },
+      ],
     });
 
-    fireEvent.change(screen.getByLabelText("Fork From"), { target: { value: "base" } });
+    fireEvent.change(screen.getByLabelText("Fork from"), { target: { value: "other" } });
 
-    expect(props.onAiForkFromPlaceholderChange).toHaveBeenCalledWith("base");
+    expect(props.onAiForkFromPlaceholderChange).toHaveBeenCalledWith("other");
   });
 });
