@@ -68,6 +68,24 @@ public class WorktreePreviewServiceInstallTests : IDisposable
     }
 
     [Fact]
+    public async Task RemoveStateAsync_deletes_the_worktree_preview_state_directory()
+    {
+        var service = BuildService();
+        // The state directory is keyed by SHA-256 of the worktree's full path.
+        var stateDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "ild-preview",
+            Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(_worktree)))).ToLowerInvariant());
+        Directory.CreateDirectory(stateDirectory);
+        File.WriteAllText(Path.Combine(stateDirectory, "web.log"), "log output\n");
+
+        await service.RemoveStateAsync(_worktree, CancellationToken.None);
+
+        Assert.False(Directory.Exists(stateDirectory), "preview state directory must be deleted, leaving nothing on disk");
+    }
+
+    [Fact]
     public async Task InstallAsync_throws_when_an_install_step_exits_non_zero()
     {
         WriteConfig("exit 7");

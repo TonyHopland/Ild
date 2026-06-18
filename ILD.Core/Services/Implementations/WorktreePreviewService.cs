@@ -160,6 +160,31 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         }
     }
 
+    public async Task RemoveStateAsync(string worktreePath, CancellationToken cancellationToken = default)
+    {
+        var normalized = NormalizeWorktreePath(worktreePath);
+
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (_runtimes.TryRemove(normalized, out var runtime))
+                await StopRuntimeAsync(runtime, cancellationToken);
+
+            // The state directory is keyed by the worktree path, so deleting it
+            // here leaves nothing behind once the worktree itself is destroyed.
+            var stateDirectory = BuildStateDirectory(normalized);
+            if (Directory.Exists(stateDirectory))
+            {
+                try { Directory.Delete(stateDirectory, recursive: true); }
+                catch { /* best effort — never block teardown on a stuck file */ }
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
     {
         var normalized = NormalizeWorktreePath(worktreePath);

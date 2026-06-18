@@ -253,9 +253,11 @@ public sealed class CombinedPreviewService : ICombinedPreviewService
     }
 
     /// <summary>
-    /// Stop the preview (if running) and tear down the throwaway integration
-    /// worktree and branch. Member branches and PRs are never touched. Shared by
-    /// the stop endpoint and the combined-preview retention sweeper.
+    /// Stop the preview and delete everything the combined preview put on disk —
+    /// its preview state directory (logs/caches), the throwaway integration
+    /// worktree, and the integration branch — so nothing is left behind. Member
+    /// branches and PRs are never touched. Shared by the stop endpoint and the
+    /// combined-preview retention sweeper.
     /// </summary>
     internal static async Task TeardownAsync(
         IWorktreePreviewService previewService,
@@ -267,7 +269,9 @@ public sealed class CombinedPreviewService : ICombinedPreviewService
     {
         try
         {
-            await previewService.StopAsync(worktreePath, ct);
+            // Stops the runtime (if any) and removes the per-worktree state dir,
+            // unlike StopAsync which keeps logs for a restartable preview.
+            await previewService.RemoveStateAsync(worktreePath, ct);
         }
         catch (InvalidOperationException)
         {

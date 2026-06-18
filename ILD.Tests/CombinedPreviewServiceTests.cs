@@ -269,7 +269,8 @@ public class CombinedPreviewServiceTests : IDisposable
         // Member branches and their work are untouched.
         Assert.True(await _repoMgr.LocalBranchExistsAsync(_base, "ild/wi-1-run-a"));
         Assert.True(await _repoMgr.LocalBranchExistsAsync(_base, "ild/wi-2-run-b"));
-        preview.Verify(p => p.StopAsync(started.WorktreePath!, It.IsAny<CancellationToken>()), Times.Once);
+        // Teardown removes the preview state (logs/caches), not just stops it.
+        preview.Verify(p => p.RemoveStateAsync(started.WorktreePath!, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -345,6 +346,8 @@ public class CombinedPreviewServiceTests : IDisposable
             .ReturnsAsync(running);
         preview.Setup(p => p.StopAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new WorktreePreviewResponse { State = "stopped" });
+        preview.Setup(p => p.RemoveStateAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
         return preview;
     }
 

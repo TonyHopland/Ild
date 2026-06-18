@@ -24,6 +24,16 @@ public interface IWorktreePreviewService
     Task<WorktreePreviewResponse> StopAsync(string worktreePath, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Stop the preview (if running) and delete its on-disk state directory —
+    /// the per-worktree logs, npm caches and other scratch under
+    /// <c>{temp}/ild-preview/&lt;hash&gt;</c>. Unlike <see cref="StopAsync"/>, which keeps
+    /// that state so a stopped preview can be restarted with its logs intact, this
+    /// leaves nothing behind. Used when the worktree itself is being destroyed
+    /// (e.g. a throwaway combined-preview integration worktree).
+    /// </summary>
+    Task RemoveStateAsync(string worktreePath, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Runs the install steps of an <c>ild.config.json</c> preview profile in the
     /// given worktree without starting any services. <paramref name="profileName"/>
     /// defaults to the config's default profile when null. When the worktree has no
@@ -53,6 +63,8 @@ public sealed class NoopPreviewService : IWorktreePreviewService
     public Task<WorktreePreviewResponse> StartAsync(string worktreePath, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
     public Task<WorktreePreviewResponse> StopAsync(string worktreePath, CancellationToken cancellationToken = default)
+        => throw new NotImplementedException();
+    public Task RemoveStateAsync(string worktreePath, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
     public Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
