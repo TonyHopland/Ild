@@ -312,6 +312,11 @@ public sealed class LoopEngine : ILoopEngine
         run.ExternalActionResult = signal.Output ?? signal.Error ?? string.Empty;
         run.ExternalActionResultType = signal.Type;
         run.ExternalActionEdgeName = signal.EdgeName;
+        // Clear the parked reason now that the human has responded; otherwise the
+        // stale reason keeps the "Human Input Needed" badge visible in the running
+        // view (the badge keys off HumanFeedbackReason, not status) until some
+        // later transition happens to null it. Mirrors ResumeFromHaltAsync.
+        run.HumanFeedbackReason = null;
         var old = run.Status;
         run.Status = LoopRunStatus.Running;
         await loopRunStore.UpdateRunAsync(run);

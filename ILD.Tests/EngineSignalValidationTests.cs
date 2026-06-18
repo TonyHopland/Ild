@@ -103,6 +103,46 @@ public class EngineSignalValidationTests
         Assert.Equal(LoopRunStatus.Completed, run.Status);
     }
 
+    [Fact]
+    public async Task SignalNodeResultAsync_clears_HumanFeedbackReason_on_resume()
+    {
+        using var h = new LoopEngineHarness();
+        h.AddNode("h", NodeType.Human);
+        h.AddNode("after", NodeType.Cmd);
+        h.AddEdge("h", "after", EdgeType.Custom, "Respond");
+
+        var humanExec = new ScriptedExecutor(NodeType.Human,
+            new NodeOutcome.NodeStarting("ask"),
+            new NodeOutcome.WaitingAction("Needs your call", "prompt"));
+        humanExec.Then(
+            new NodeOutcome.NodeStarting("re-entry"),
+            new NodeOutcome.Success(EdgeType.Custom, "human-said-yes", "Respond"));
+        h.Registry.Register(humanExec);
+        h.Registry.Register(new ScriptedExecutor(NodeType.Cmd,
+            new NodeOutcome.NodeStarting("after"),
+            new NodeOutcome.Terminal("done")));
+
+        h.SeedRun("h");
+        await h.RunAsync();
+
+        // While parked, the reason is set so the "Human Input Needed" badge shows.
+        var parked = h.ReloadRun();
+        Assert.Equal(LoopRunStatus.WaitingHuman, parked.Status);
+        Assert.Equal("Needs your call", parked.HumanFeedbackReason);
+
+        var waitingNode = h.ReloadRunNodes().Single(rn => rn.Status == LoopRunNodeStatus.WaitingHuman);
+        await h.Engine.SignalNodeResultAsync(h.RunId, waitingNode.Id,
+            NodeSignal.Custom("Respond", "user-text"));
+
+        await WaitUntilAsync(() => h.ReloadRun().Status != LoopRunStatus.Running, TimeSpan.FromSeconds(5));
+
+        // Once the human responds and the run resumes, the reason must be cleared
+        // so the badge disappears in the running view.
+        var run = h.ReloadRun();
+        Assert.Equal(LoopRunStatus.Completed, run.Status);
+        Assert.Null(run.HumanFeedbackReason);
+    }
+
     private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
