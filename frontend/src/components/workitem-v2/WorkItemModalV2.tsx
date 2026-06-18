@@ -22,6 +22,16 @@ import FilesPanel from "./FilesPanel";
 
 type TabId = "overview" | "action" | "runs" | "conversation" | "files" | "preview" | "terminal";
 
+/**
+ * An item is awaiting human action when it is parked in HumanFeedback with a
+ * reason set — the same condition the Action tab's ● indicator and feedback pane
+ * render on. The dialog opens straight to the Action tab in this case so the
+ * pending prompt is front and centre instead of buried behind Overview.
+ */
+function awaitingHumanAction(workItem: WorkItem | null): boolean {
+  return workItem?.status === WorkItemStatus.HumanFeedback && !!workItem.humanFeedbackReason;
+}
+
 interface WorkItemModalV2Props {
   /** The item to show, or null to render the new-item creation form. */
   workItem: WorkItem | null;
@@ -36,7 +46,8 @@ interface WorkItemModalV2Props {
  * history shown inline rather than on a separate page. The Action tab holds the
  * live progress stream, the halt-and-steer control beneath it, and the
  * human-feedback pane — all space-hungry — and flags itself with an indicator
- * while the item waits on a human. With a null
+ * while the item waits on a human. An item opened while waiting on a human lands
+ * directly on the Action tab so the pending prompt is immediately visible. With a null
  * workItem the dialog drops the tabs and shows the creation form instead, so a
  * single dialog covers both creating and viewing/editing work items.
  */
@@ -47,9 +58,12 @@ export default function WorkItemModalV2({
   onDelete,
 }: WorkItemModalV2Props) {
   const detail = useWorkItemDetail(workItem, onSave);
-  // The detail dialog always opens on Overview, regardless of status or which
-  // tab was last viewed on a previously-opened item.
-  const [activeTab, setActiveTab] = useState<TabId>("overview");
+  // An item waiting on a human opens straight to the Action tab; everything else
+  // opens on Overview, regardless of which tab was last viewed on a
+  // previously-opened item.
+  const [activeTab, setActiveTab] = useState<TabId>(
+    awaitingHumanAction(workItem) ? "action" : "overview",
+  );
   const [editMode, setEditMode] = useState(false);
   const [editDirty, setEditDirty] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -88,7 +102,7 @@ export default function WorkItemModalV2({
   useEffect(() => {
     setEditMode(false);
     setEditDirty(false);
-    setActiveTab("overview");
+    setActiveTab(awaitingHumanAction(workItem) ? "action" : "overview");
     // A terminal session belongs to the item it was opened on; switching items
     // must tear it down rather than leak the previous worktree's shell.
     setShowTerminal(false);
@@ -196,9 +210,8 @@ export default function WorkItemModalV2({
 
   // "Action required" mirrors the FeedbackBanner's render condition: the item is
   // waiting on a human. The Action tab flags this with the same ● indicator the
-  // Preview tab uses for a running preview.
-  const actionRequired =
-    workItem.status === WorkItemStatus.HumanFeedback && !!workItem.humanFeedbackReason;
+  // Preview tab uses for a running preview, and the dialog opens onto it.
+  const actionRequired = awaitingHumanAction(workItem);
 
   const tabs: { id: TabId; label: string }[] = [
     { id: "overview", label: "Overview" },

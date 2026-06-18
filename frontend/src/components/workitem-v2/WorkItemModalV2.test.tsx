@@ -403,25 +403,54 @@ describe("WorkItemModalV2", () => {
       }),
     );
 
-    // The dialog still opens on Overview; the feedback pane no longer floats
-    // above the tabs but is parked inside the (hidden) Action panel.
+    // An item waiting on a human opens straight to the Action tab, where the
+    // feedback pane and its controls are immediately visible.
+    expect(screen.getByRole("tab", { name: /Action/ }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe(
-      "true",
+      "false",
     );
     const actionPanel = document.getElementById("wiv2-panel-action");
     expect(actionPanel).not.toBeNull();
-    expect(within(actionPanel as HTMLElement).getByText("Human Feedback")).toBeTruthy();
-
-    // Switching to the Action tab reveals the feedback controls.
-    await act(async () => {
-      fireEvent.click(screen.getByRole("tab", { name: /Action/ }));
-      await Promise.resolve();
-    });
     expect((actionPanel as HTMLElement).hasAttribute("hidden")).toBe(false);
+    expect(within(actionPanel as HTMLElement).getByText("Human Feedback")).toBeTruthy();
     expect(
       within(actionPanel as HTMLElement).getByRole("button", { name: "Approve" }),
     ).toBeTruthy();
     expect(within(actionPanel as HTMLElement).getByRole("button", { name: "Reject" })).toBeTruthy();
+  });
+
+  test("opens on the Action tab when the item is waiting on human feedback", async () => {
+    mockServices();
+    await renderDialog(
+      makeWorkItem({
+        status: WorkItemStatus.HumanFeedback,
+        humanFeedbackReason: "PR Awaiting Merge",
+        currentLoopRunId: "run-1",
+      }),
+    );
+
+    expect(screen.getByRole("tab", { name: /Action/ }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe(
+      "false",
+    );
+  });
+
+  test("opens on Overview when HumanFeedback has no reason set", async () => {
+    // Edge case: an item nominally in HumanFeedback but missing a reason has no
+    // pending prompt to show, so it falls back to Overview like any other item.
+    mockServices();
+    await renderDialog(
+      makeWorkItem({
+        status: WorkItemStatus.HumanFeedback,
+        humanFeedbackReason: null,
+        currentLoopRunId: "run-1",
+      }),
+    );
+
+    expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    expect(screen.getByRole("tab", { name: /Action/ }).getAttribute("aria-selected")).toBe("false");
   });
 
   test("Action tab shows the indicator when the item needs human action", async () => {
