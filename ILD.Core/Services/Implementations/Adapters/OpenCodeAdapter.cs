@@ -38,6 +38,11 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                     "[opencode-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
 
             var sessionIdToUse = ctx.SessionId;
+            // Fork: seed a copy of the source session under the destination id
+            // before restore, so the import below brings up the copy and
+            // opencode continues on the fork while the source stays frozen.
+            if (ctx.ManageSession && !string.IsNullOrEmpty(sessionIdToUse) && !string.IsNullOrWhiteSpace(ctx.ForkFromSessionId))
+                await ForkSessionSnapshotAsync(ctx.RunContext.LoopRunId, ctx.ForkFromSessionId!, sessionIdToUse!, ctx.Cancel);
             if (ctx.ManageSession && !string.IsNullOrEmpty(sessionIdToUse))
             {
                 var restoreResult = await RestoreManagedSessionAsync(binaryPath, worktreePath, ctx, sessionIdToUse);

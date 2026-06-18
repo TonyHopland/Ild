@@ -23,6 +23,7 @@ interface NodeSettingsModalProps {
   customEdgeNames: string[];
   aiUseSession: boolean;
   aiSessionPlaceholder: string;
+  aiForkFromPlaceholder: string;
   startCreateWorktree: boolean;
   startRunInstall: boolean;
   humanInputLabel: string;
@@ -49,6 +50,7 @@ interface NodeSettingsModalProps {
   onCustomEdgeNamesChange: (value: string[]) => void;
   onAiUseSessionChange: (value: boolean) => void;
   onAiSessionPlaceholderChange: (value: string) => void;
+  onAiForkFromPlaceholderChange: (value: string) => void;
   onStartCreateWorktreeChange: (value: boolean) => void;
   onStartRunInstallChange: (value: boolean) => void;
   onHumanInputLabelChange: (value: string) => void;
@@ -114,6 +116,7 @@ export function NodeSettingsModal({
   customEdgeNames,
   aiUseSession,
   aiSessionPlaceholder,
+  aiForkFromPlaceholder,
   startCreateWorktree,
   startRunInstall,
   humanInputLabel,
@@ -140,6 +143,7 @@ export function NodeSettingsModal({
   onCustomEdgeNamesChange,
   onAiUseSessionChange,
   onAiSessionPlaceholderChange,
+  onAiForkFromPlaceholderChange,
   onStartCreateWorktreeChange,
   onStartRunInstallChange,
   onHumanInputLabelChange,
@@ -225,9 +229,11 @@ export function NodeSettingsModal({
               {aiUseSession && (
                 <AiSessionControls
                   aiSessionPlaceholder={aiSessionPlaceholder}
+                  aiForkFromPlaceholder={aiForkFromPlaceholder}
                   sessionPlaceholderUsages={sessionPlaceholderUsages}
                   selectedPlaceholderUsage={selectedPlaceholderUsage}
                   onAiSessionPlaceholderChange={onAiSessionPlaceholderChange}
+                  onAiForkFromPlaceholderChange={onAiForkFromPlaceholderChange}
                 />
               )}
 

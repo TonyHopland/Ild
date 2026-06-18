@@ -285,6 +285,53 @@ public class PiAdapterTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_forks_source_snapshot_under_new_id_leaving_source_unchanged()
+    {
+        await using var harness = await CreateSessionHarnessAsync();
+        var runId = Guid.NewGuid();
+        await harness.SeedRunAsync(runId);
+
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-pi-fork-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "fork.sh");
+        // Minimal pi stub: drain the prompt on stdin and exit, so the only
+        // snapshot writes come from the fork copy + the post-run persist.
+        File.WriteAllText(scriptPath, "#!/bin/sh\ncat >/dev/null\nexit 0\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        const string sourceJson = "{\"type\":\"session\",\"version\":3,\"id\":\"source-sess\",\"cwd\":\"/w\"}\n";
+        await harness.SeedSnapshotAsync(runId, "Pi", "source-sess", sourceJson);
+
+        try
+        {
+            var adapter = new PiAdapter(harness.Services.GetRequiredService<IServiceScopeFactory>());
+            await adapter.ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                prompt: "prompt",
+                worktreePath: worktreeDir,
+                runId: runId,
+                sessionId: "fork-dest",
+                executionCount: 1,
+                manageSession: true) with { ForkFromSessionId = "source-sess" });
+
+            await using var verifyDb = harness.CreateDbContext();
+            // Source session is byte-for-byte unchanged after the fork.
+            var source = await verifyDb.AdapterSessionSnapshots.FindAsync(runId, "Pi", "source-sess");
+            Assert.NotNull(source);
+            Assert.Equal(sourceJson, source!.SessionJson);
+            // A copy now exists under the fork's id, retargeted to that id.
+            var fork = await verifyDb.AdapterSessionSnapshots.FindAsync(runId, "Pi", "fork-dest");
+            Assert.NotNull(fork);
+            Assert.Contains("fork-dest", fork!.SessionJson);
+            Assert.DoesNotContain("source-sess", fork.SessionJson);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_restores_local_session_file_by_header_id_when_filename_differs()
     {
         var runId = Guid.NewGuid();

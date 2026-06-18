@@ -61,6 +61,16 @@ internal static class NodeConfig
 
         public JsonElement? AdapterConfig { get; init; }
         public string? SessionPlaceholder { get; init; }
+
+        /// <summary>
+        /// Optional source placeholder to <em>fork</em> from. When set, the node
+        /// re-seeds a copy of the session currently bound to this placeholder on
+        /// every execution, continues on the copy, and binds the copy to
+        /// <see cref="SessionPlaceholder"/> (a throwaway copy when that is unset).
+        /// The source session is never written to. When the source has no bound
+        /// session the node behaves like a normal new AI node and starts fresh.
+        /// </summary>
+        public string? ForkFromPlaceholder { get; init; }
     }
 
     public sealed record Human

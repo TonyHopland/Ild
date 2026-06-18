@@ -25,6 +25,7 @@ function renderModal(overrides: Partial<Parameters<typeof NodeSettingsModal>[0]>
     customEdgeNames: [],
     aiUseSession: false,
     aiSessionPlaceholder: "",
+    aiForkFromPlaceholder: "",
     startCreateWorktree: true,
     startRunInstall: false,
     humanInputLabel: "",
@@ -51,6 +52,7 @@ function renderModal(overrides: Partial<Parameters<typeof NodeSettingsModal>[0]>
     onCustomEdgeNamesChange: vi.fn(),
     onAiUseSessionChange: vi.fn(),
     onAiSessionPlaceholderChange: vi.fn(),
+    onAiForkFromPlaceholderChange: vi.fn(),
     onStartCreateWorktreeChange: vi.fn(),
     onStartRunInstallChange: vi.fn(),
     onHumanInputLabelChange: vi.fn(),
@@ -97,5 +99,40 @@ describe("NodeSettingsModal install-on-start option", () => {
     renderModal({ selectedNode: makeNode(NodeType.Cmd) });
 
     expect(screen.queryByLabelText("Run ild.config install")).toBeNull();
+  });
+});
+
+describe("NodeSettingsModal fork-from field", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  test("hides the fork-from field until Use Session is enabled", () => {
+    renderModal({ selectedNode: makeNode(NodeType.AI), aiUseSession: false });
+
+    expect(screen.queryByLabelText("Fork From")).toBeNull();
+  });
+
+  test("shows the fork-from field for a session-managed AI node", () => {
+    renderModal({
+      selectedNode: makeNode(NodeType.AI),
+      aiUseSession: true,
+      aiForkFromPlaceholder: "base",
+    });
+
+    const input = screen.getByLabelText("Fork From") as HTMLInputElement;
+    expect(input.value).toBe("base");
+  });
+
+  test("notifies when the fork-from source is edited", () => {
+    const props = renderModal({
+      selectedNode: makeNode(NodeType.AI),
+      aiUseSession: true,
+      aiForkFromPlaceholder: "",
+    });
+
+    fireEvent.change(screen.getByLabelText("Fork From"), { target: { value: "base" } });
+
+    expect(props.onAiForkFromPlaceholderChange).toHaveBeenCalledWith("base");
   });
 });

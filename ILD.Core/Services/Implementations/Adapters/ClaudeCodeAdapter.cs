@@ -53,6 +53,12 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             // no replace-only mode required here.
             mcpConfigPath = TryWriteIldMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist);
 
+            // Fork: seed a copy of the source session's transcript under the
+            // destination id (leaving the source file untouched) so the restore
+            // below rehydrates the copy and `--resume` continues on the fork.
+            if (ctx.ManageSession && !string.IsNullOrWhiteSpace(ctx.SessionId) && !string.IsNullOrWhiteSpace(ctx.ForkFromSessionId))
+                await ForkSessionSnapshotAsync(ctx.RunContext.LoopRunId, ctx.ForkFromSessionId!, ctx.SessionId!, ctx.Cancel);
+
             // Before invoking claude, if a managed session is in play and the
             // turn JSONL is missing from $HOME/.claude/projects, materialize
             // it from the snapshot store so `--resume` can pick up the
