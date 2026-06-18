@@ -123,35 +123,7 @@ public sealed class WorkItemService : IWorkItemService
 
         // Running is the only validated transition: dependency check + atomic claim.
         if (req.TargetStatus == WorkItemStatus.Running)
-        {
-            if (w.Status == WorkItemStatus.Running)
-            {
-                return new TransitionResponse
-                {
-                    Success = false,
-                    ActualStatus = w.Status,
-                    Reason = "Already claimed",
-                };
-            }
-
-            var depIds = WorkItemMapper.ReadDependencies(w);
-            if (depIds.Count > 0)
-            {
-                var deps = await _db.WorkItems
-                    .Where(x => depIds.Contains(x.Id))
-                    .Select(x => x.Status)
-                    .ToListAsync(ct);
-                if (deps.Count != depIds.Count || deps.Any(s => s != WorkItemStatus.Done))
-                {
-                    return new TransitionResponse
-                    {
-                        Success = false,
-                        ActualStatus = w.Status,
-                        Reason = "Dependencies not satisfied",
-                    };
-                }
-            }
-        }
+            return await ClaimRunningAsync(w, ct);
 
         var now = _clock.GetUtcNow().UtcDateTime;
         w.Status = req.TargetStatus;
@@ -177,15 +149,69 @@ public sealed class WorkItemService : IWorkItemService
             WorkItemMapper.WriteConversation(w, msgs);
         }
 
-        // Running → bump heartbeat so the stale detector treats this claim
-        // as fresh from the very first poll.
-        if (req.TargetStatus == WorkItemStatus.Running)
-            w.LastHeartbeatAt = now;
-        else if (req.TargetStatus == WorkItemStatus.Done || req.TargetStatus == WorkItemStatus.Ready)
+        if (req.TargetStatus == WorkItemStatus.Done || req.TargetStatus == WorkItemStatus.Ready)
             w.LastHeartbeatAt = null;
 
         await _db.SaveChangesAsync(ct);
         return new TransitionResponse { Success = true, ActualStatus = w.Status };
+    }
+
+    /// <summary>
+    /// Claim an item into <see cref="WorkItemStatus.Running"/> for exactly one
+    /// caller. The claim is a single conditional UPDATE (<c>WHERE Id == id AND
+    /// Status != Running</c>): when two clients read the same item as unclaimed
+    /// and both try to claim, the database serializes the writes so only the
+    /// first flips a row — every later attempt updates zero rows and is rejected
+    /// with "Already claimed". This is the atomicity the read-then-write guard
+    /// could not provide.
+    /// </summary>
+    private async Task<TransitionResponse> ClaimRunningAsync(WorkItem w, CancellationToken ct)
+    {
+        var depIds = WorkItemMapper.ReadDependencies(w);
+        if (depIds.Count > 0)
+        {
+            var deps = await _db.WorkItems
+                .Where(x => depIds.Contains(x.Id))
+                .Select(x => x.Status)
+                .ToListAsync(ct);
+            if (deps.Count != depIds.Count || deps.Any(s => s != WorkItemStatus.Done))
+            {
+                return new TransitionResponse
+                {
+                    Success = false,
+                    ActualStatus = w.Status,
+                    Reason = "Dependencies not satisfied",
+                };
+            }
+        }
+
+        // Running bumps the heartbeat so the stale detector treats the claim as
+        // fresh from the very first poll, and clears any prior HumanFeedback
+        // actions — mirroring the shared transition path for non-Running states.
+        var now = _clock.GetUtcNow().UtcDateTime;
+        var claimed = await _db.WorkItems
+            .Where(x => x.Id == w.Id && x.Status != WorkItemStatus.Running)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(x => x.Status, WorkItemStatus.Running)
+                .SetProperty(x => x.UpdatedAt, now)
+                .SetProperty(x => x.LastHeartbeatAt, now)
+                .SetProperty(x => x.HumanFeedbackActions, (string?)null), ct);
+
+        if (claimed == 0)
+        {
+            return new TransitionResponse
+            {
+                Success = false,
+                ActualStatus = WorkItemStatus.Running,
+                Reason = "Already claimed",
+            };
+        }
+
+        // The conditional UPDATE bypasses the change tracker, so the entity we
+        // loaded above still holds its pre-claim state. Reload it from the row
+        // we just wrote so any further use of this context sees the claim.
+        await _db.Entry(w).ReloadAsync(ct);
+        return new TransitionResponse { Success = true, ActualStatus = WorkItemStatus.Running };
     }
 
     private static bool IsResponseState(WorkItemStatus s)
