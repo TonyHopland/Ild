@@ -97,6 +97,43 @@ public class WorkItemServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Concurrent_claims_for_same_item_yield_exactly_one_success()
+    {
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest
+        {
+            Title = "x",
+            ForceStatus = WorkItemStatus.Ready,
+        });
+
+        // Two independent clients, each its own context over the same database.
+        // Both load the item while it is still Ready and hold that snapshot —
+        // exactly the read-then-write window the old in-memory guard could not
+        // close. EF returns the already-tracked (stale) Ready instance to each
+        // service, so both clients believe the item is unclaimed when they act.
+        var clientA = NewContext();
+        var clientB = NewContext();
+        await using var _a = clientA;
+        await using var _b = clientB;
+        await clientA.WorkItems.FirstAsync(w => w.Id == dto.Id);
+        await clientB.WorkItems.FirstAsync(w => w.Id == dto.Id);
+
+        var first = await new WorkItemService(clientA, _clock)
+            .TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running });
+        var second = await new WorkItemService(clientB, _clock)
+            .TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running });
+
+        // Exactly one wins; the loser is rejected as already claimed.
+        Assert.True(first.Success);
+        Assert.Equal(WorkItemStatus.Running, first.ActualStatus);
+        Assert.False(second.Success);
+        Assert.Equal("Already claimed", second.Reason);
+        Assert.Equal(WorkItemStatus.Running, second.ActualStatus);
+    }
+
+    private WorkItemServerDbContext NewContext()
+        => new(new DbContextOptionsBuilder<WorkItemServerDbContext>().UseSqlite(_conn).Options);
+
+    [Fact]
     public async Task Transition_to_Running_fails_when_dependency_not_done()
     {
         var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" });
