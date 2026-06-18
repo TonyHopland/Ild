@@ -55,6 +55,23 @@ public class CombinedPreviewController : ControllerBase
         }
     }
 
+    [HttpPost("resume")]
+    public async Task<IActionResult> Resume([FromBody] CombinedPreviewRequest request)
+    {
+        if (request.WorkItemIds.Count == 0)
+            return BadRequest(new { error = "workItemIds is required." });
+        try
+        {
+            var response = await _service.ResumeAsync(request.WorkItemIds);
+            await NotifyMembersAsync(request.WorkItemIds);
+            return Ok(response);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
     [HttpPost("stop")]
     public async Task<IActionResult> Stop([FromBody] CombinedPreviewRequest request)
     {

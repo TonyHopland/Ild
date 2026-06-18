@@ -119,6 +119,8 @@ export interface CombinedPreview {
   integrationBranch: string;
   state: CombinedPreviewState;
   stale: boolean;
+  /** A conflict left markers in the worktree; the human resolves + commits, then resumes. */
+  awaitingResolution: boolean;
   worktreePath: string | null;
   message: string | null;
   members: CombinedPreviewMember[];

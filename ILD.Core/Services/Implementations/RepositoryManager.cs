@@ -121,6 +121,20 @@ public class RepositoryManager : IRepositoryManager
         await RunAsync(worktreePath, new[] { "merge", "--abort" }, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<string>> GetUnmergedFilesAsync(string worktreePath, CancellationToken cancellationToken = default)
+    {
+        var (code, stdout, _) = await RunAsync(worktreePath, new[] { "diff", "--name-only", "--diff-filter=U", "-z" }, cancellationToken);
+        return code != 0
+            ? Array.Empty<string>()
+            : stdout.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+    }
+
+    public async Task<bool> IsMergeInProgressAsync(string worktreePath, CancellationToken cancellationToken = default)
+    {
+        var (code, _, _) = await RunAsync(worktreePath, new[] { "rev-parse", "-q", "--verify", "MERGE_HEAD" }, cancellationToken);
+        return code == 0;
+    }
+
     public async Task DestroyWorktreeAsync(string worktreePath)
     {
         if (!Directory.Exists(worktreePath)) return;

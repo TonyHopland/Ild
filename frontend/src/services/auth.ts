@@ -266,6 +266,10 @@ export const combinedPreviewService = {
     });
   },
 
+  resume: async (workItemIds: string[]): Promise<CombinedPreview> => {
+    return api.post<CombinedPreview>(`/combined-preview/resume`, { workItemIds });
+  },
+
   stop: async (workItemIds: string[]): Promise<CombinedPreview> => {
     return api.post<CombinedPreview>(`/combined-preview/stop`, { workItemIds });
   },

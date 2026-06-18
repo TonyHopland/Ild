@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
@@ -11,7 +10,16 @@ namespace ILD.Core.Services.Implementations;
 /// <inheritdoc cref="ICombinedPreviewService"/>
 public sealed class CombinedPreviewService : ICombinedPreviewService
 {
-    private static readonly ConcurrentDictionary<string, SemaphoreSlim> Locks = new(StringComparer.Ordinal);
+    // Per-selection mutex, ref-counted so a gate is dropped once no operation
+    // holds it — the dictionary never grows past the set of in-flight keys.
+    private sealed class Gate
+    {
+        public readonly SemaphoreSlim Semaphore = new(1, 1);
+        public int RefCount;
+    }
+
+    private static readonly Dictionary<string, Gate> Gates = new(StringComparer.Ordinal);
+    private static readonly object GatesLock = new();
 
     private readonly IWorkItemManager _workItems;
     private readonly IProviderStore _providerStore;
@@ -49,9 +57,7 @@ public sealed class CombinedPreviewService : ICombinedPreviewService
         var branch = CombinedPreviewNaming.BranchFor(ids);
         var skip = new HashSet<string>(request.Skip ?? Enumerable.Empty<string>(), StringComparer.Ordinal);
 
-        var gate = Locks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync(cancellationToken);
-        try
+        return await WithGateAsync(key, async () =>
         {
             var resolved = await ResolveMembersAsync(ids);
             var repo = await ResolveRepositoryAsync(resolved);
@@ -89,51 +95,19 @@ public sealed class CombinedPreviewService : ICombinedPreviewService
                 BaseRepoPath = basePath,
                 RepositoryId = repo.Id,
             };
-
-            string? conflictMessage = null;
-            foreach (var m in mergeable)
-            {
-                var rec = records[m.WorkItemId];
-                var result = await _repoManager.MergeAsync(
-                    worktreePath, m.BranchName!, $"combined preview: merge {m.BranchName}", cancellationToken);
-                if (result.Success)
-                {
-                    rec.MergeStatus = "clean";
-                    continue;
-                }
-                if (result.ConflictedFiles.Count == 0)
-                {
-                    await _repoManager.AbortMergeAsync(worktreePath, cancellationToken);
-                    throw new InvalidOperationException(
-                        $"Failed to merge {m.BranchName} into the integration branch: {result.Error}");
-                }
-
-                // Conflict is signal, not failure: stop at the first one and report it.
-                rec.MergeStatus = "conflict";
-                rec.ConflictedFiles = result.ConflictedFiles.ToList();
-                if (request.OnConflict == CombinedPreviewConflictMode.ResolveInWorktree)
-                {
-                    conflictMessage =
-                        $"Merge conflict in #{m.WorkItemId} ({m.BranchName}). Markers were left in the integration worktree for manual resolution.";
-                }
-                else
-                {
-                    await _repoManager.AbortMergeAsync(worktreePath, cancellationToken);
-                    conflictMessage =
-                        $"Merge conflict in #{m.WorkItemId} ({m.BranchName}). Skip this branch or resolve it in the worktree.";
-                }
-                break;
-            }
-
+            // Persist before merging so a conflict (or hard failure) still leaves a
+            // tracked entry that resume/stop can act on, never an orphan worktree.
             entry.Members.AddRange(OrderedRecords(records, mergeable, resolved));
             _registry.Set(entry);
 
-            var conflicted = entry.Members.Any(r => r.MergeStatus == "conflict");
-            if (conflicted)
+            var pending = mergeable.Select(m => records[m.WorkItemId]).ToList();
+            var (conflictMessage, awaiting) = await MergePendingAsync(entry, pending, request.OnConflict, cancellationToken);
+
+            if (entry.Members.Any(r => r.MergeStatus == "conflict"))
             {
                 // A conflict halts the composition: no preview is started until it
                 // is skipped or resolved. The worktree is retained for inspection.
-                return BuildResponse(entry, "conflict", preview: null, message: conflictMessage);
+                return BuildResponse(entry, "conflict", preview: null, message: conflictMessage, awaitingResolution: awaiting);
             }
 
             var preview = await _previewService.StartAsync(
@@ -150,11 +124,59 @@ public sealed class CombinedPreviewService : ICombinedPreviewService
                 ? "Partial preview — some members were excluded from the merge."
                 : null;
             return BuildResponse(entry, excluded ? "partial" : "running", preview, message);
-        }
-        finally
+        }, cancellationToken);
+    }
+
+    public async Task<CombinedPreviewResponse> ResumeAsync(IReadOnlyList<string> workItemIds, CancellationToken cancellationToken = default)
+    {
+        var ids = NormalizeIds(workItemIds);
+        if (ids.Count == 0)
+            throw new InvalidOperationException("Select at least one work item to preview together.");
+
+        var key = CombinedPreviewNaming.KeyFor(ids);
+        return await WithGateAsync(key, async () =>
         {
-            gate.Release();
-        }
+            var entry = _registry.Get(key);
+            if (entry == null)
+                throw new InvalidOperationException("There is no combined preview to resume — start one first.");
+
+            // Still-unresolved markers? Surface them and keep waiting for the human.
+            var unmerged = await _repoManager.GetUnmergedFilesAsync(entry.WorktreePath, cancellationToken);
+            if (unmerged.Count > 0)
+            {
+                var stillConflicted = entry.Members.FirstOrDefault(r => r.MergeStatus == "conflict");
+                if (stillConflicted != null)
+                    stillConflicted.ConflictedFiles = unmerged.ToList();
+                return BuildResponse(entry, "conflict", preview: null,
+                    message: "The integration worktree still has unresolved conflicts. Resolve the marked files and commit them, then continue.",
+                    awaitingResolution: true);
+            }
+
+            // The human resolved the conflict; finish the merge commit if they left it staged.
+            if (await _repoManager.IsMergeInProgressAsync(entry.WorktreePath, cancellationToken))
+            {
+                if (!await _repoManager.CommitAsync(entry.WorktreePath, "combined preview: resolved merge conflict"))
+                    throw new InvalidOperationException("Failed to commit the resolved merge in the integration worktree.");
+            }
+
+            foreach (var rec in entry.Members.Where(r => r.MergeStatus == "conflict"))
+            {
+                rec.MergeStatus = "clean";
+                rec.ConflictedFiles = new List<string>();
+            }
+
+            // Continue with members the halted merge never reached.
+            var pending = entry.Members.Where(r => r.MergeStatus == "pending").ToList();
+            var (conflictMessage, awaiting) = await MergePendingAsync(
+                entry, pending, CombinedPreviewConflictMode.ResolveInWorktree, cancellationToken);
+            if (entry.Members.Any(r => r.MergeStatus == "conflict"))
+                return BuildResponse(entry, "conflict", preview: null, message: conflictMessage, awaitingResolution: awaiting);
+
+            var preview = await _previewService.StartAsync(entry.WorktreePath, new WorktreePreviewStartOptions(), cancellationToken);
+            var excluded = entry.Members.Any(r => r.MergeStatus is "skipped" or "missing");
+            return BuildResponse(entry, excluded ? "partial" : "running", preview,
+                excluded ? "Partial preview — some members were excluded from the merge." : null);
+        }, cancellationToken);
     }
 
     public async Task<CombinedPreviewResponse> GetAsync(IReadOnlyList<string> workItemIds, CancellationToken cancellationToken = default)
@@ -164,9 +186,7 @@ public sealed class CombinedPreviewService : ICombinedPreviewService
             throw new InvalidOperationException("Select at least one work item to preview together.");
 
         var key = CombinedPreviewNaming.KeyFor(ids);
-        var gate = Locks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync(cancellationToken);
-        try
+        return await WithGateAsync(key, async () =>
         {
             var entry = _registry.Get(key);
             if (entry == null)
@@ -202,12 +222,11 @@ public sealed class CombinedPreviewService : ICombinedPreviewService
                 : preview?.State == "running" ? (excluded ? "partial" : "running")
                 : "stopped";
 
-            return BuildResponse(entry, state, preview, message: null, stale: anyStale, liveBranches: current);
-        }
-        finally
-        {
-            gate.Release();
-        }
+            // Markers still in the worktree mean the conflict awaits manual resolution.
+            var awaiting = conflicted && await _repoManager.IsMergeInProgressAsync(entry.WorktreePath, cancellationToken);
+
+            return BuildResponse(entry, state, preview, message: null, stale: anyStale, liveBranches: current, awaitingResolution: awaiting);
+        }, cancellationToken);
     }
 
     public async Task<CombinedPreviewResponse> StopAsync(IReadOnlyList<string> workItemIds, CancellationToken cancellationToken = default)
@@ -217,9 +236,7 @@ public sealed class CombinedPreviewService : ICombinedPreviewService
             throw new InvalidOperationException("Select at least one work item to preview together.");
 
         var key = CombinedPreviewNaming.KeyFor(ids);
-        var gate = Locks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync(cancellationToken);
-        try
+        return await WithGateAsync(key, async () =>
         {
             var entry = _registry.Get(key);
             if (entry == null)
@@ -242,16 +259,114 @@ public sealed class CombinedPreviewService : ICombinedPreviewService
             _registry.Remove(key);
 
             return BuildResponse(entry, "stopped", preview: null, message: null);
-        }
-        finally
-        {
-            gate.Release();
-        }
+        }, cancellationToken);
     }
 
     // --- helpers -----------------------------------------------------------
 
     private sealed record ResolvedMember(string WorkItemId, string? Title, string? BranchName, Guid? RepositoryId);
+
+    /// <summary>
+    /// Run <paramref name="work"/> under the per-selection mutex. The gate is
+    /// ref-counted: acquired before the wait and released after, so the backing
+    /// dictionary holds only the keys with operations in flight.
+    /// </summary>
+    private static async Task<T> WithGateAsync<T>(string key, Func<Task<T>> work, CancellationToken ct)
+    {
+        var gate = AcquireGate(key);
+        try
+        {
+            await gate.Semaphore.WaitAsync(ct);
+            try
+            {
+                return await work();
+            }
+            finally
+            {
+                gate.Semaphore.Release();
+            }
+        }
+        finally
+        {
+            ReleaseGate(key, gate);
+        }
+    }
+
+    private static Gate AcquireGate(string key)
+    {
+        lock (GatesLock)
+        {
+            if (!Gates.TryGetValue(key, out var gate))
+            {
+                gate = new Gate();
+                Gates[key] = gate;
+            }
+            gate.RefCount++;
+            return gate;
+        }
+    }
+
+    private static void ReleaseGate(string key, Gate gate)
+    {
+        lock (GatesLock)
+        {
+            if (--gate.RefCount == 0)
+                Gates.Remove(key);
+        }
+    }
+
+    /// <summary>
+    /// Merge each pending member in order, mutating its record to clean/conflict.
+    /// Halts at the first conflict; under <see cref="CombinedPreviewConflictMode.ResolveInWorktree"/>
+    /// the markers are left in place (returns awaiting=true), otherwise the merge
+    /// is aborted. Returns the conflict message (null when all merged cleanly).
+    /// </summary>
+    private async Task<(string? Message, bool AwaitingResolution)> MergePendingAsync(
+        CombinedPreviewEntry entry,
+        IReadOnlyList<CombinedPreviewMemberRecord> pending,
+        CombinedPreviewConflictMode onConflict,
+        CancellationToken ct)
+    {
+        foreach (var rec in pending)
+        {
+            if (rec.MergedBranch is null)
+                continue;
+
+            var mergeRef = await ResolveMergeRefAsync(entry.BaseRepoPath, rec.MergedBranch);
+            var result = await _repoManager.MergeAsync(
+                entry.WorktreePath, mergeRef, $"combined preview: merge {rec.MergedBranch}", ct);
+            if (result.Success)
+            {
+                rec.MergeStatus = "clean";
+                rec.ConflictedFiles = new List<string>();
+                continue;
+            }
+            if (result.ConflictedFiles.Count == 0)
+            {
+                await _repoManager.AbortMergeAsync(entry.WorktreePath, ct);
+                throw new InvalidOperationException(
+                    $"Failed to merge {rec.MergedBranch} into the integration branch: {result.Error}");
+            }
+
+            // Conflict is signal, not failure: stop at the first one and report it.
+            rec.MergeStatus = "conflict";
+            rec.ConflictedFiles = result.ConflictedFiles.ToList();
+            if (onConflict == CombinedPreviewConflictMode.ResolveInWorktree)
+            {
+                return ($"Merge conflict in #{rec.WorkItemId} ({rec.MergedBranch}). Resolve the marked files in the integration worktree and commit them, then continue.", true);
+            }
+            await _repoManager.AbortMergeAsync(entry.WorktreePath, ct);
+            return ($"Merge conflict in #{rec.WorkItemId} ({rec.MergedBranch}). Skip this branch or resolve it in the worktree.", false);
+        }
+        return (null, false);
+    }
+
+    /// <summary>
+    /// Prefer the member's local branch; fall back to <c>origin/&lt;branch&gt;</c>
+    /// when it survives only on the remote (e.g. its worktree was reaped).
+    /// </summary>
+    private async Task<string> ResolveMergeRefAsync(string basePath, string branch)
+        => await _repoManager.LocalBranchExistsAsync(basePath, branch) ? branch : $"origin/{branch}";
 
     private static List<string> NormalizeIds(IEnumerable<string> ids)
         => ids.Where(id => !string.IsNullOrWhiteSpace(id))
@@ -391,13 +506,15 @@ public sealed class CombinedPreviewService : ICombinedPreviewService
         WorktreePreviewResponse? preview,
         string? message,
         bool stale = false,
-        IReadOnlyDictionary<string, string?>? liveBranches = null)
+        IReadOnlyDictionary<string, string?>? liveBranches = null,
+        bool awaitingResolution = false)
     {
         return new CombinedPreviewResponse
         {
             IntegrationBranch = entry.IntegrationBranch,
             State = state,
             Stale = stale,
+            AwaitingResolution = awaitingResolution,
             WorktreePath = entry.WorktreePath,
             Message = message,
             Preview = preview,

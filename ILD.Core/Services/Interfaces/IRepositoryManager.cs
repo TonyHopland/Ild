@@ -45,6 +45,16 @@ public interface IRepositoryManager
     /// <summary>Abort an in-progress merge, restoring the worktree to its pre-merge state.</summary>
     Task AbortMergeAsync(string worktreePath, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// The worktree's unmerged (conflicted) paths — empty when there is no
+    /// conflict left to resolve. Lets a caller tell a human-resolved worktree
+    /// from one that still has markers.
+    /// </summary>
+    Task<IReadOnlyList<string>> GetUnmergedFilesAsync(string worktreePath, CancellationToken cancellationToken = default);
+
+    /// <summary>True when a merge is in progress (<c>MERGE_HEAD</c> exists) but not yet committed.</summary>
+    Task<bool> IsMergeInProgressAsync(string worktreePath, CancellationToken cancellationToken = default);
+
     Task DestroyWorktreeAsync(string worktreePath);
     Task<bool> ValidateWorktreeHealthAsync(string worktreePath);
     Task<bool> CheckoutBranchAsync(string worktreePath, string branchName);

@@ -25,6 +25,13 @@ public interface ICombinedPreviewService
     Task<CombinedPreviewResponse> GetAsync(IReadOnlyList<string> workItemIds, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Continue a combined preview that halted on a conflict resolved in the
+    /// worktree: finish the merge commit, merge any members the conflict skipped
+    /// past, and start the preview. Reports the conflict again if markers remain.
+    /// </summary>
+    Task<CombinedPreviewResponse> ResumeAsync(IReadOnlyList<string> workItemIds, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Stop the combined preview and tear down its integration worktree and branch.
     /// Member branches and their PRs are never touched.
     /// </summary>

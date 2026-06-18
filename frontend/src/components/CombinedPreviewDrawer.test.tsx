@@ -57,6 +57,7 @@ function combined(overrides: Partial<CombinedPreview> = {}): CombinedPreview {
     integrationBranch: "ild/combined-1-2",
     state: "notStarted",
     stale: false,
+    awaitingResolution: false,
     worktreePath: null,
     message: null,
     members: [
@@ -199,6 +200,66 @@ describe("CombinedPreviewDrawer", () => {
     expect(start).toHaveBeenLastCalledWith(["1", "2"], { skip: ["2"], onConflict: undefined });
     await waitFor(() => {
       expect(screen.getByText("Partial preview")).toBeTruthy();
+    });
+  });
+
+  test("offers Continue when a conflict awaits resolution and resumes the preview", async () => {
+    mockSignalR();
+    vi.spyOn(authServices.combinedPreviewService, "get").mockResolvedValue(
+      combined({
+        state: "conflict",
+        awaitingResolution: true,
+        worktreePath: "/tmp/wt",
+        message: "Resolve the marked files and commit, then continue.",
+        members: [
+          member({ workItemId: "1", mergeStatus: "clean" }),
+          member({
+            workItemId: "2",
+            branchName: "ild/wi-2-run-b",
+            mergeStatus: "conflict",
+            conflictedFiles: ["base.txt"],
+          }),
+        ],
+      }),
+    );
+    const resume = vi.spyOn(authServices.combinedPreviewService, "resume").mockResolvedValue(
+      combined({
+        state: "running",
+        worktreePath: "/tmp/wt",
+        members: [
+          member({ workItemId: "1", mergeStatus: "clean" }),
+          member({ workItemId: "2", branchName: "ild/wi-2-run-b", mergeStatus: "clean" }),
+        ],
+        preview: {
+          configured: true,
+          state: "running",
+          worktreePath: "/tmp/wt",
+          configPath: null,
+          profileName: null,
+          publicHost: null,
+          stateDirectory: null,
+          message: null,
+          services: [],
+        },
+      }),
+    );
+
+    await renderDrawer([makeItem({ id: "1" }), makeItem({ id: "2" })]);
+
+    await waitFor(() => {
+      expect(screen.getByText("Continue")).toBeTruthy();
+    });
+    // Resolve-in-worktree is no longer offered once markers are awaiting resolution.
+    expect(screen.queryByText("Resolve in worktree")).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("Continue"));
+      await Promise.resolve();
+    });
+
+    expect(resume).toHaveBeenCalledWith(["1", "2"]);
+    await waitFor(() => {
+      expect(screen.getByText("Stop preview")).toBeTruthy();
     });
   });
 

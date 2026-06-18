@@ -165,6 +165,74 @@ public class CombinedPreviewServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Resume_after_resolving_a_conflict_in_the_worktree_starts_the_preview()
+    {
+        AddMember("1", "Alpha", CreateBranch("ild/wi-1-run-a", "base.txt", "one\n"));
+        AddMember("2", "Beta", CreateBranch("ild/wi-2-run-b", "base.txt", "two\n"));
+        var preview = RunningPreview();
+        var service = BuildService(preview);
+
+        var request = Request("1", "2");
+        request.OnConflict = CombinedPreviewConflictMode.ResolveInWorktree;
+        var conflict = await service.StartAsync(request);
+
+        Assert.Equal("conflict", conflict.State);
+        Assert.True(conflict.AwaitingResolution);
+
+        // The human resolves the markers and stages the fix (resume commits it).
+        File.WriteAllText(Path.Combine(conflict.WorktreePath!, "base.txt"), "resolved\n");
+        Git(conflict.WorktreePath!, "add", "base.txt");
+
+        var resumed = await service.ResumeAsync(new[] { "1", "2" });
+
+        Assert.Equal("running", resumed.State);
+        Assert.All(resumed.Members, m => Assert.Equal("clean", m.MergeStatus));
+        Assert.NotNull(resumed.Preview);
+        Assert.Equal("resolved\n", File.ReadAllText(Path.Combine(conflict.WorktreePath!, "base.txt")));
+    }
+
+    [Fact]
+    public async Task Resume_reports_unresolved_when_markers_remain()
+    {
+        AddMember("1", "Alpha", CreateBranch("ild/wi-1-run-a", "base.txt", "one\n"));
+        AddMember("2", "Beta", CreateBranch("ild/wi-2-run-b", "base.txt", "two\n"));
+        var service = BuildService(RunningPreview());
+
+        var request = Request("1", "2");
+        request.OnConflict = CombinedPreviewConflictMode.ResolveInWorktree;
+        await service.StartAsync(request);
+
+        // Resume without touching the markers — still blocked.
+        var resumed = await service.ResumeAsync(new[] { "1", "2" });
+
+        Assert.Equal("conflict", resumed.State);
+        Assert.True(resumed.AwaitingResolution);
+    }
+
+    [Fact]
+    public async Task Start_merges_from_origin_when_a_members_local_branch_was_reaped()
+    {
+        // The member survives only on origin: its local branch is gone, but the
+        // remote-tracking ref remains after fetch, so the merge must fall back.
+        const string branch = "ild/wi-1-run-remote";
+        Git(_base, "checkout", "-b", branch, "origin/main");
+        File.WriteAllText(Path.Combine(_base, "remote.txt"), "remote\n");
+        Git(_base, "add", "-A");
+        Git(_base, "commit", "-m", "remote work");
+        Git(_base, "push", "origin", branch);
+        Git(_base, "checkout", "main");
+        Git(_base, "branch", "-D", branch);
+        AddMember("1", "Alpha", branch);
+
+        var service = BuildService(RunningPreview());
+        var result = await service.StartAsync(Request("1"));
+
+        Assert.Equal("running", result.State);
+        Assert.Equal("clean", result.Members.Single().MergeStatus);
+        Assert.True(File.Exists(Path.Combine(result.WorktreePath!, "remote.txt")));
+    }
+
+    [Fact]
     public async Task Get_marks_preview_stale_after_a_member_rebranches()
     {
         AddMember("1", "Alpha", CreateBranch("ild/wi-1-run-a", "alpha.txt", "alpha\n"));

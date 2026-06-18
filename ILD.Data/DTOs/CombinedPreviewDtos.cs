@@ -69,6 +69,12 @@ public sealed class CombinedPreviewResponse
     /// <summary>True when any composed member has re-run since the preview was built; user rebuilds to refresh.</summary>
     public bool Stale { get; set; }
 
+    /// <summary>
+    /// True when a conflict left markers in the integration worktree for manual
+    /// resolution; the human fixes and commits there, then resumes to continue.
+    /// </summary>
+    public bool AwaitingResolution { get; set; }
+
     public string? WorktreePath { get; set; }
     public string? Message { get; set; }
 
