@@ -315,7 +315,11 @@ public sealed class LoopEngine : ILoopEngine
         // Clear the parked reason now that the human has responded; otherwise the
         // stale reason keeps the "Human Input Needed" badge visible in the running
         // view (the badge keys off HumanFeedbackReason, not status) until some
-        // later transition happens to null it. Mirrors ResumeFromHaltAsync.
+        // later transition happens to null it. Mirrors ResumeFromHaltAsync. The
+        // field is a transient "currently parked" pointer for display only — its
+        // sole reader is WorkItemManager.BuildView; nothing routes on it, the
+        // interaction history lives in the EventLog, and the next park writes a
+        // fresh reason — so nulling it here loses nothing.
         run.HumanFeedbackReason = null;
         var old = run.Status;
         run.Status = LoopRunStatus.Running;
