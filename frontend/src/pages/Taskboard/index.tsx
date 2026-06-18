@@ -11,6 +11,7 @@ import {
 } from "../../services/auth";
 import TaskboardColumn from "../../components/TaskboardColumn";
 import WorkItemModalV2 from "../../components/workitem-v2/WorkItemModalV2";
+import CombinedPreviewDrawer from "../../components/CombinedPreviewDrawer";
 import ErrorBanner from "../../components/ErrorBanner";
 import { useSignalR } from "../../hooks/useSignalR";
 import { WORK_ITEM_STATUSES, TASKBOARD_PAGE_SIZE } from "../../utils/constants";
@@ -46,6 +47,12 @@ export default function Taskboard() {
   const [repositories, setRepositories] = useState<Repository[]>([]);
   const [loopTemplateNames, setLoopTemplateNames] = useState<string[]>([]);
   const [filter, setFilter] = useState<TaskboardFilter>(EMPTY_TASKBOARD_FILTER);
+  // "Preview together" multi-select: while selecting, cards toggle into the
+  // selection set instead of opening; confirming opens the combined-preview
+  // drawer for the chosen items.
+  const [selecting, setSelecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [combinedPreviewOpen, setCombinedPreviewOpen] = useState(false);
   const { on, off } = useSignalR();
 
   useEffect(() => {
@@ -223,6 +230,26 @@ export default function Taskboard() {
     void navigate(`/taskboard/${wi.id}`);
   };
 
+  const toggleSelectMode = () => {
+    setSelecting((on) => {
+      if (on) setSelectedIds(new Set());
+      return !on;
+    });
+  };
+
+  const toggleSelected = (wi: WorkItem) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(wi.id)) next.delete(wi.id);
+      else next.add(wi.id);
+      return next;
+    });
+  };
+
+  // Items currently selected, resolved against the live board so the drawer and
+  // action bar always reflect real work items (and drop any that left the board).
+  const selectedItems = workItems.filter((wi) => selectedIds.has(wi.id));
+
   const handleDeleted = (id: string) => {
     setWorkItems((prev) => prev.filter((wi) => wi.id !== id));
   };
@@ -353,6 +380,15 @@ export default function Taskboard() {
           </span>
           <span className="scheduler-pause-toggle-label">{isPaused ? "Paused" : "Running"}</span>
         </label>
+        <button
+          type="button"
+          className={`taskboard-select-toggle${selecting ? " is-active" : ""}`}
+          aria-pressed={selecting}
+          onClick={toggleSelectMode}
+          title="Select multiple work items and preview them together in one integration worktree."
+        >
+          {selecting ? "✓ Selecting…" : "⊕ Preview together"}
+        </button>
       </div>
       <div role="status" aria-live="polite" className="taskboard-live-region">
         {announcement}
@@ -372,6 +408,9 @@ export default function Taskboard() {
               onMoveWorkItem={handleMoveWorkItem}
               onAddItem={status.value === "Backlog" ? openCreateModal : undefined}
               loopTemplateNames={loopTemplateNames}
+              selecting={selecting}
+              selectedIds={selectedIds}
+              onToggleSelect={toggleSelected}
               pageSize={
                 status.value === "Backlog" || status.value === "Done"
                   ? TASKBOARD_PAGE_SIZE
@@ -400,6 +439,40 @@ export default function Taskboard() {
           onDelete={handleDeleted}
         />
       )}
+      {selecting && selectedItems.length > 0 && (
+        <div className="taskboard-action-bar" role="region" aria-label="Combined preview selection">
+          <span className="taskboard-action-count">{selectedItems.length} selected</span>
+          <div className="taskboard-action-chips">
+            {selectedItems.map((item) => (
+              <span key={item.id} className="taskboard-action-chip">
+                #{item.id}
+              </span>
+            ))}
+          </div>
+          <button
+            type="button"
+            className="taskboard-action-clear"
+            onClick={() => setSelectedIds(new Set())}
+          >
+            Clear
+          </button>
+          <button
+            type="button"
+            className="taskboard-action-go"
+            onClick={() => setCombinedPreviewOpen(true)}
+          >
+            {selectedItems.length > 1
+              ? `Preview ${selectedItems.length} together →`
+              : "Preview together →"}
+          </button>
+        </div>
+      )}
+      {combinedPreviewOpen && (
+        <CombinedPreviewDrawer
+          items={selectedItems}
+          onClose={() => setCombinedPreviewOpen(false)}
+        />
+      )}
       <style>{`
         .taskboard-toolbar {
           display: flex;
@@ -414,9 +487,103 @@ export default function Taskboard() {
         }
 
         /* Push the running toggle to the trailing edge of the toolbar, leaving
-           the filter controls flush left. */
+           the filter controls flush left. The select toggle follows it so both
+           cluster at the right. */
         .taskboard-toolbar .scheduler-pause-toggle {
           margin-left: auto;
+        }
+
+        .taskboard-select-toggle {
+          font-size: 0.82rem;
+          padding: 0.4rem 0.75rem;
+          background-color: #2a2a40;
+          border: 1px solid #3a3a5c;
+          border-radius: 0.375rem;
+          color: #e0e0e0;
+          cursor: pointer;
+          white-space: nowrap;
+          transition: background-color 0.15s ease, border-color 0.15s ease;
+        }
+
+        .taskboard-select-toggle:hover {
+          background-color: #32324c;
+        }
+
+        .taskboard-select-toggle.is-active {
+          background-color: #312e81;
+          border-color: #6366f1;
+          color: #c7d2fe;
+        }
+
+        /* Floating bar that summarises the current selection and launches the
+           combined preview. Sits above the board, centred near the bottom. */
+        .taskboard-action-bar {
+          position: fixed;
+          left: 50%;
+          bottom: 1.25rem;
+          transform: translateX(-50%);
+          width: min(720px, calc(100% - 2.5rem));
+          display: flex;
+          align-items: center;
+          gap: 0.85rem;
+          padding: 0.7rem 0.9rem;
+          background-color: #23233b;
+          border: 1px solid #3a3a5c;
+          border-radius: 0.6rem;
+          box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+          z-index: 40;
+        }
+
+        .taskboard-action-count {
+          font-weight: 600;
+          color: #c7d2fe;
+          white-space: nowrap;
+        }
+
+        .taskboard-action-chips {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 0.3rem;
+          flex: 1;
+          min-width: 0;
+        }
+
+        .taskboard-action-chip {
+          font-size: 0.72rem;
+          background-color: #2d2d44;
+          border: 1px solid #3a3a5c;
+          color: #c0c0d0;
+          padding: 0.12rem 0.45rem;
+          border-radius: 999px;
+          white-space: nowrap;
+        }
+
+        .taskboard-action-clear {
+          background: none;
+          border: none;
+          color: #8a8ab0;
+          cursor: pointer;
+          font-size: 0.8rem;
+          white-space: nowrap;
+        }
+        .taskboard-action-clear:hover {
+          color: #c0c0d0;
+          text-decoration: underline;
+        }
+
+        .taskboard-action-go {
+          font-size: 0.82rem;
+          padding: 0.45rem 0.85rem;
+          background-color: #6366f1;
+          border: 1px solid #6366f1;
+          border-radius: 0.375rem;
+          color: #fff;
+          cursor: pointer;
+          white-space: nowrap;
+          transition: background-color 0.15s ease;
+        }
+        .taskboard-action-go:hover {
+          background-color: #4f52d4;
         }
 
         .scheduler-pause-toggle {

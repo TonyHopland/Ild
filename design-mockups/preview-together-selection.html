@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mockup · Select multiple workitems → Preview together</title>
+    <style>
+      /* Colors lifted from the real frontend:
+     column #1e1e30 · card #2a2a40 · border #3a3a5c · text #e0e0e0 / #a0a0b0 / #7f849c
+     accent indigo #6366f1 · preview-green #22c55e · blue #3b82f6 */
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family:
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+        background-color: #16161f;
+        color: #e0e0e0;
+        padding: 1.25rem;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* ---------- Toolbar ---------- */
+      .taskboard-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        margin-bottom: 1rem;
+      }
+      .toolbar-title {
+        font-size: 1.05rem;
+        font-weight: 600;
+        margin-right: auto;
+        color: #c0c0d0;
+      }
+      .toolbar-title small {
+        color: #7f849c;
+        font-weight: 400;
+        font-size: 0.8rem;
+      }
+
+      .btn {
+        padding: 0.45rem 0.8rem;
+        border-radius: 0.375rem;
+        border: 1px solid #3a3a5c;
+        background-color: #2a2a40;
+        color: #e0e0e0;
+        cursor: pointer;
+        font-size: 0.8rem;
+        transition:
+          background-color 0.15s ease,
+          border-color 0.15s ease;
+      }
+      .btn:hover {
+        background-color: #32324c;
+      }
+      .btn-primary {
+        background-color: #6366f1;
+        border-color: #6366f1;
+        color: #fff;
+      }
+      .btn-primary:hover {
+        background-color: #4f52d4;
+      }
+      .btn.is-active {
+        background-color: #312e81;
+        border-color: #6366f1;
+        color: #c7d2fe;
+      }
+
+      /* ---------- Board ---------- */
+      .taskboard {
+        display: flex;
+        gap: 0.75rem;
+        align-items: flex-start;
+      }
+      .taskboard-column {
+        flex: 1 1 0;
+        min-width: 0;
+        background-color: #1e1e30;
+        border-radius: 0.5rem;
+        display: flex;
+        flex-direction: column;
+      }
+      .taskboard-column-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.7rem 0.9rem;
+        border-bottom: 1px solid #2d2d44;
+      }
+      .taskboard-column-title {
+        font-size: 0.78rem;
+        font-weight: 600;
+        color: #c0c0d0;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      .taskboard-column-count {
+        font-size: 0.72rem;
+        color: #707090;
+        background-color: #2d2d44;
+        padding: 0.1rem 0.5rem;
+        border-radius: 9999px;
+      }
+      .taskboard-column-body {
+        padding: 0.5rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        min-height: 80px;
+      }
+
+      /* ---------- Card ---------- */
+      .work-item-card {
+        background-color: #2a2a40;
+        border-radius: 0.375rem;
+        padding: 0.7rem 0.7rem 0.7rem 0.7rem;
+        border: 1px solid #3a3a5c;
+        position: relative;
+        cursor: grab;
+        transition:
+          transform 0.1s ease,
+          box-shadow 0.1s ease,
+          border-color 0.1s ease,
+          padding 0.12s ease;
+      }
+      .work-item-card:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+      }
+      .work-item-id {
+        font-size: 0.7rem;
+        color: #7f849c;
+        margin-bottom: 0.3rem;
+        letter-spacing: 0.04em;
+      }
+      .work-item-title {
+        font-size: 0.85rem;
+        font-weight: 500;
+        color: #e0e0e0;
+        margin: 0 0 0.4rem;
+        line-height: 1.4;
+      }
+      .work-item-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.25rem;
+      }
+      .work-item-tag {
+        font-size: 0.66rem;
+        padding: 0.1rem 0.4rem;
+        background-color: #2d2d44;
+        border-radius: 0.25rem;
+        color: #a0a0b0;
+      }
+      .work-item-tag--loop {
+        background-color: #4c1d95;
+        color: #ddd6fe;
+      }
+      .qa-active-dot {
+        position: absolute;
+        top: 0.5rem;
+        right: 0.5rem;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background-color: #22c55e;
+        box-shadow: 0 0 4px rgba(34, 197, 94, 0.6);
+      }
+      .work-item-running-meta {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        margin-bottom: 0.4rem;
+      }
+      .work-item-step {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-size: 0.7rem;
+        color: #c0c0d0;
+      }
+      .work-item-step-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background-color: #6366f1;
+      }
+      .work-item-elapsed {
+        font-size: 0.7rem;
+        color: #7f849c;
+        font-variant-numeric: tabular-nums;
+      }
+      .human-feedback-badge {
+        font-size: 0.68rem;
+        font-weight: 600;
+        padding: 0.2rem 0.5rem;
+        border-radius: 0.25rem;
+        margin-bottom: 0.4rem;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        display: inline-block;
+      }
+
+      /* ---------- Selection mode additions ---------- */
+      /* In selection mode every eligible card reserves room for its checkbox. */
+      body.selecting .work-item-card.eligible {
+        padding-left: 2.1rem;
+        cursor: pointer;
+      }
+
+      .card-check {
+        position: absolute;
+        top: 0.6rem;
+        left: 0.6rem;
+        width: 18px;
+        height: 18px;
+        border-radius: 4px;
+        border: 1.5px solid #4a4a6a;
+        background-color: #1a1a28;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        transition:
+          background-color 0.12s ease,
+          border-color 0.12s ease;
+      }
+      body.selecting .work-item-card.eligible .card-check {
+        display: flex;
+      }
+      .card-check svg {
+        width: 12px;
+        height: 12px;
+        opacity: 0;
+      }
+
+      .work-item-card.selected {
+        border-color: #6366f1;
+        box-shadow:
+          0 0 0 1px #6366f1,
+          0 2px 10px rgba(99, 102, 241, 0.25);
+      }
+      .work-item-card.selected .card-check {
+        background-color: #6366f1;
+        border-color: #6366f1;
+      }
+      .work-item-card.selected .card-check svg {
+        opacity: 1;
+      }
+
+      /* Ineligible cards in selection mode: dimmed + not-allowed, with a small reason hint. */
+      body.selecting .work-item-card.ineligible {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      .ineligible-hint {
+        display: none;
+        margin-top: 0.4rem;
+        font-size: 0.66rem;
+        color: #7f849c;
+        font-style: italic;
+      }
+      body.selecting .work-item-card.ineligible .ineligible-hint {
+        display: block;
+      }
+
+      /* ---------- Floating action bar ---------- */
+      .action-bar {
+        position: fixed;
+        left: 50%;
+        bottom: 1.25rem;
+        transform: translateX(-50%) translateY(150%);
+        width: min(720px, calc(100% - 2.5rem));
+        background-color: #23233b;
+        border: 1px solid #3a3a5c;
+        border-radius: 0.6rem;
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+        padding: 0.7rem 0.9rem;
+        display: flex;
+        align-items: center;
+        gap: 0.85rem;
+        transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+      }
+      .action-bar.show {
+        transform: translateX(-50%) translateY(0);
+      }
+      .action-count {
+        font-weight: 600;
+        color: #c7d2fe;
+        white-space: nowrap;
+      }
+      .action-chips {
+        display: flex;
+        gap: 0.3rem;
+        flex-wrap: wrap;
+        flex: 1;
+        min-width: 0;
+      }
+      .chip {
+        font-size: 0.72rem;
+        background-color: #2d2d44;
+        border: 1px solid #3a3a5c;
+        color: #c0c0d0;
+        padding: 0.12rem 0.45rem;
+        border-radius: 9999px;
+        white-space: nowrap;
+      }
+      .action-bar .spacer {
+        flex: 1;
+      }
+      .link-btn {
+        background: none;
+        border: none;
+        color: #8a8ab0;
+        cursor: pointer;
+        font-size: 0.78rem;
+      }
+      .link-btn:hover {
+        color: #c0c0d0;
+        text-decoration: underline;
+      }
+
+      .hint-row {
+        margin-top: 0.9rem;
+        font-size: 0.78rem;
+        color: #7f849c;
+      }
+      .hint-row code {
+        background: #2a2a40;
+        padding: 0.05rem 0.3rem;
+        border-radius: 0.2rem;
+        color: #c0c0d0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="taskboard-toolbar">
+      <div class="toolbar-title">Taskboard <small>· demo-repo</small></div>
+      <button class="btn" id="toggleSelect">⊕ Preview together</button>
+      <button class="btn btn-primary">+ New workitem</button>
+    </div>
+
+    <div class="taskboard">
+      <!-- RUNNING -->
+      <div class="taskboard-column">
+        <div class="taskboard-column-header">
+          <span class="taskboard-column-title">Running</span>
+          <span class="taskboard-column-count">2</span>
+        </div>
+        <div class="taskboard-column-body">
+          <div
+            class="work-item-card eligible"
+            data-id="85"
+            data-title="Add token-refresh to auth client"
+          >
+            <span class="card-check"
+              ><svg viewBox="0 0 12 12">
+                <path
+                  d="M1 6l3.5 3.5L11 2"
+                  fill="none"
+                  stroke="#fff"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                /></svg
+            ></span>
+            <span class="qa-active-dot" title="Preview running"></span>
+            <div class="work-item-id">#85</div>
+            <h4 class="work-item-title">Add token-refresh to auth client</h4>
+            <div class="work-item-running-meta">
+              <span class="work-item-step"><span class="work-item-step-dot"></span>Implement</span>
+              <span class="work-item-elapsed">04:12</span>
+            </div>
+            <div class="work-item-tags">
+              <span class="work-item-tag work-item-tag--loop">feature-loop</span
+              ><span class="work-item-tag">auth</span>
+            </div>
+            <div class="ineligible-hint"></div>
+          </div>
+
+          <div class="work-item-card eligible" data-id="91" data-title="New login form layout">
+            <span class="card-check"
+              ><svg viewBox="0 0 12 12">
+                <path
+                  d="M1 6l3.5 3.5L11 2"
+                  fill="none"
+                  stroke="#fff"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                /></svg
+            ></span>
+            <div class="work-item-id">#91</div>
+            <h4 class="work-item-title">New login form layout</h4>
+            <div class="work-item-running-meta">
+              <span class="work-item-step"><span class="work-item-step-dot"></span>Review</span>
+              <span class="work-item-elapsed">11:48</span>
+            </div>
+            <div class="work-item-tags">
+              <span class="work-item-tag work-item-tag--loop">feature-loop</span
+              ><span class="work-item-tag">ui</span>
+            </div>
+            <div class="ineligible-hint"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- HUMAN FEEDBACK -->
+      <div class="taskboard-column">
+        <div class="taskboard-column-header">
+          <span class="taskboard-column-title">Human Feedback</span>
+          <span class="taskboard-column-count">1</span>
+        </div>
+        <div class="taskboard-column-body">
+          <div
+            class="work-item-card eligible"
+            data-id="104"
+            data-title="Persist session across reloads"
+          >
+            <span class="card-check"
+              ><svg viewBox="0 0 12 12">
+                <path
+                  d="M1 6l3.5 3.5L11 2"
+                  fill="none"
+                  stroke="#fff"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                /></svg
+            ></span>
+            <div class="work-item-id">#104</div>
+            <h4 class="work-item-title">Persist session across reloads</h4>
+            <div
+              class="human-feedback-badge"
+              style="background: #1a2744; color: #60a5fa; border-left: 3px solid #2563eb"
+            >
+              PR Awaiting Merge
+            </div>
+            <div class="work-item-tags">
+              <span class="work-item-tag">auth</span><span class="work-item-tag">storage</span>
+            </div>
+            <div class="ineligible-hint"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- READY (ineligible — no branch yet) -->
+      <div class="taskboard-column">
+        <div class="taskboard-column-header">
+          <span class="taskboard-column-title">Ready</span>
+          <span class="taskboard-column-count">2</span>
+        </div>
+        <div class="taskboard-column-body">
+          <div class="work-item-card ineligible" data-id="120">
+            <span class="card-check"
+              ><svg viewBox="0 0 12 12">
+                <path d="M1 6l3.5 3.5L11 2" fill="none" stroke="#fff" stroke-width="2" /></svg
+            ></span>
+            <div class="work-item-id">#120</div>
+            <h4 class="work-item-title">Rate-limit login attempts</h4>
+            <div class="work-item-tags"><span class="work-item-tag">auth</span></div>
+            <div class="ineligible-hint">No run yet — nothing to preview</div>
+          </div>
+
+          <div class="work-item-card ineligible" data-id="121">
+            <span class="card-check"
+              ><svg viewBox="0 0 12 12">
+                <path d="M1 6l3.5 3.5L11 2" fill="none" stroke="#fff" stroke-width="2" /></svg
+            ></span>
+            <div class="work-item-id">#121</div>
+            <h4 class="work-item-title">Audit-log auth events</h4>
+            <div class="work-item-tags"><span class="work-item-tag">logging</span></div>
+            <div class="ineligible-hint">No run yet — nothing to preview</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- DONE -->
+      <div class="taskboard-column">
+        <div class="taskboard-column-header">
+          <span class="taskboard-column-title">Done</span>
+          <span class="taskboard-column-count">1</span>
+        </div>
+        <div class="taskboard-column-body">
+          <div class="work-item-card eligible" data-id="78" data-title="Shared API error toast">
+            <span class="card-check"
+              ><svg viewBox="0 0 12 12">
+                <path
+                  d="M1 6l3.5 3.5L11 2"
+                  fill="none"
+                  stroke="#fff"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                /></svg
+            ></span>
+            <div class="work-item-id">#78</div>
+            <h4 class="work-item-title">Shared API error toast</h4>
+            <div class="work-item-tags"><span class="work-item-tag">ui</span></div>
+            <div class="ineligible-hint"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="hint-row">
+      Click <strong>⊕ Preview together</strong> to enter selection mode. Eligible cards (with a
+      run/branch) show a checkbox; <code>Ready</code> cards are dimmed because they have no branch
+      to merge yet.
+    </div>
+
+    <!-- Floating action bar -->
+    <div class="action-bar" id="actionBar">
+      <span class="action-count" id="actionCount">0 selected</span>
+      <div class="action-chips" id="actionChips"></div>
+      <div class="spacer"></div>
+      <button class="link-btn" id="clearBtn">Clear</button>
+      <button class="btn btn-primary" id="previewBtn">Preview together →</button>
+    </div>
+
+    <script>
+      const body = document.body;
+      const toggle = document.getElementById("toggleSelect");
+      const bar = document.getElementById("actionBar");
+      const count = document.getElementById("actionCount");
+      const chips = document.getElementById("actionChips");
+      const selected = new Set();
+
+      function render() {
+        count.textContent = selected.size + " selected";
+        chips.innerHTML = "";
+        [...selected].forEach((id) => {
+          const c = document.createElement("span");
+          c.className = "chip";
+          c.textContent = "wi-" + id;
+          chips.appendChild(c);
+        });
+        bar.classList.toggle("show", body.classList.contains("selecting") && selected.size > 0);
+        document.getElementById("previewBtn").textContent =
+          selected.size > 1 ? `Preview ${selected.size} together →` : "Preview together →";
+      }
+
+      toggle.addEventListener("click", () => {
+        const on = body.classList.toggle("selecting");
+        toggle.classList.toggle("is-active", on);
+        toggle.textContent = on ? "✓ Selecting…" : "⊕ Preview together";
+        if (!on) {
+          selected.clear();
+          document.querySelectorAll(".selected").forEach((e) => e.classList.remove("selected"));
+        }
+        render();
+      });
+
+      document.querySelectorAll(".work-item-card").forEach((card) => {
+        card.addEventListener("click", () => {
+          if (!body.classList.contains("selecting")) return; // normal mode → would open detail modal
+          if (card.classList.contains("ineligible")) return;
+          const id = card.dataset.id;
+          if (selected.has(id)) {
+            selected.delete(id);
+            card.classList.remove("selected");
+          } else {
+            selected.add(id);
+            card.classList.add("selected");
+          }
+          render();
+        });
+      });
+
+      document.getElementById("clearBtn").addEventListener("click", () => {
+        selected.clear();
+        document.querySelectorAll(".selected").forEach((e) => e.classList.remove("selected"));
+        render();
+      });
+
+      document.getElementById("previewBtn").addEventListener("click", () => {
+        alert(
+          "Next screen → opens the Combined-preview drawer:\n\nmerge " +
+            [...selected].map((i) => "wi-" + i).join(" + ") +
+            " into an integration branch, then start preview.",
+        );
+      });
+    </script>
+  </body>
+</html>
