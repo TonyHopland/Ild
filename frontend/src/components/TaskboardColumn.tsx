@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { WorkItem, WorkItemStatus } from "../types";
 import { workItemService } from "../services/auth";
 import WorkItemCard from "./WorkItemCard";
+import { isPreviewEligible, ineligibleReason } from "../utils/previewSelection";
 
 interface TaskboardColumnProps {
   status: WorkItemStatus;
@@ -18,6 +19,13 @@ interface TaskboardColumnProps {
   pageSize?: number;
   // Loop template names, forwarded to each card so loop tags are highlighted.
   loopTemplateNames?: string[];
+  // When true the board is in "preview together" multi-select mode and cards
+  // render selection affordances instead of opening on click.
+  selecting?: boolean;
+  // Ids of the currently selected work items.
+  selectedIds?: Set<string>;
+  // Toggle an item in/out of the selection.
+  onToggleSelect?: (workItem: WorkItem) => void;
 }
 
 export default function TaskboardColumn({
@@ -31,6 +39,9 @@ export default function TaskboardColumn({
   onAddItem,
   pageSize,
   loopTemplateNames,
+  selecting = false,
+  selectedIds,
+  onToggleSelect,
 }: TaskboardColumnProps) {
   const [dragOver, setDragOver] = useState(false);
   const [visibleCount, setVisibleCount] = useState(pageSize ?? 0);
@@ -114,6 +125,11 @@ export default function TaskboardColumn({
             onClick={onWorkItemClick}
             onMove={onMoveWorkItem}
             loopTemplateNames={loopTemplateNames}
+            selectable={selecting}
+            selected={selectedIds?.has(item.id) ?? false}
+            eligible={isPreviewEligible(item)}
+            ineligibleReason={ineligibleReason(item)}
+            onToggleSelect={onToggleSelect}
           />
         ))}
         {hasMore && (
