@@ -103,6 +103,48 @@ public class LoopTemplateValidationTests
     }
 
     [Fact]
+    public async Task ValidateGraphAsync_allows_loop_variable_placeholders()
+    {
+        var manager = new LoopTemplateManager(Mock.Of<ILD.Data.Stores.Interfaces.ILoopTemplateStore>());
+
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new[]
+            {
+                Node("s", "Start"),
+                Node("a", "AI", "Handoff so far: {{Var.handoff}} / {{Var.pr_summary}}"),
+                Node("c", "Cleanup"),
+            }.ToList(),
+            new[] { Edge("s", "a"), Edge("a", "c") }.ToList());
+
+        var result = await manager.ValidateGraphAsync(g);
+
+        Assert.True(result.Valid);
+        Assert.Empty(result.Errors);
+    }
+
+    [Fact]
+    public async Task ValidateGraphAsync_rejects_loop_variable_with_illegal_name()
+    {
+        var manager = new LoopTemplateManager(Mock.Of<ILD.Data.Stores.Interfaces.ILoopTemplateStore>());
+
+        // A dash is not a legal variable-name character, so {{Var.bad-name}}
+        // must surface as an unknown placeholder rather than render empty.
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new[]
+            {
+                Node("s", "Start"),
+                Node("a", "AI", "{{Var.bad-name}}"),
+                Node("c", "Cleanup"),
+            }.ToList(),
+            new[] { Edge("s", "a"), Edge("a", "c") }.ToList());
+
+        var result = await manager.ValidateGraphAsync(g);
+
+        Assert.False(result.Valid);
+        Assert.Contains(result.Errors, e => e.Contains("Unknown placeholder") && e.Contains("Var.bad-name"));
+    }
+
+    [Fact]
     public async Task ValidateGraphAsync_returns_error_without_start_node()
     {
         var manager = new LoopTemplateManager(Mock.Of<ILD.Data.Stores.Interfaces.ILoopTemplateStore>());

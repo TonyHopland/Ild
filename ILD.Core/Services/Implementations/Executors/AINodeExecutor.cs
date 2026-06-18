@@ -107,14 +107,31 @@ public sealed class AINodeExecutor : INodeExecutor
         {
             var manageSession = cfg.UseSession ?? false;
             string? incomingSessionId = null;
-            if (manageSession && !string.IsNullOrWhiteSpace(cfg.SessionPlaceholder))
+            string? forkFromSessionId = null;
+            if (manageSession && !isSteering && !string.IsNullOrWhiteSpace(cfg.ForkFromPlaceholder))
+            {
+                // Fork: re-seed from the source session on every execution, so a
+                // node in a loop restarts from the (frozen) base each time. The
+                // destination's own prior binding is intentionally ignored — a
+                // fresh copy is materialized under a new id and continued on.
+                var sessions = sp.GetRequiredService<ILoopRunStore>();
+                var sourceBinding = await sessions.GetSessionBindingAsync(ctx.Run.Id, ctx.Node.NodeType.ToString(), cfg.ForkFromPlaceholder!);
+                if (!string.IsNullOrWhiteSpace(sourceBinding?.SessionId))
+                {
+                    forkFromSessionId = sourceBinding!.SessionId;
+                    incomingSessionId = Guid.NewGuid().ToString();
+                }
+                // No bound source session: fall through as a normal new AI node
+                // (fresh session, no fork) — no fail-fast, no validation gate.
+            }
+            else if (manageSession && !string.IsNullOrWhiteSpace(cfg.SessionPlaceholder))
             {
                 var sessions = sp.GetRequiredService<ILoopRunStore>();
                 var sessionBinding = await sessions.GetSessionBindingAsync(ctx.Run.Id, ctx.Node.NodeType.ToString(), cfg.SessionPlaceholder!);
                 incomingSessionId = sessionBinding?.SessionId;
             }
             // Steering forces continuation of the live session captured before
-            // the halt, regardless of the node's UseSession config.
+            // the halt, regardless of the node's UseSession/fork config.
             if (isSteering)
                 incomingSessionId = ctx.Run.CurrentAiSessionId;
             var adapterConfigDict = ParseAdapterConfig(cfg.AdapterConfig);
@@ -128,7 +145,8 @@ public sealed class AINodeExecutor : INodeExecutor
                 ctx.ProgressCallback, adapterConfigDict, cfg.ToolAllowlist,
                 SessionId: incomingSessionId, IncomingSessionId: incomingSessionId,
                 ManageSession: manageSession,
-                OnSessionId: scopeFactory is null ? null : sid => PersistSessionId(scopeFactory, runId, sid));
+                OnSessionId: scopeFactory is null ? null : sid => PersistSessionId(scopeFactory, runId, sid),
+                ForkFromSessionId: forkFromSessionId);
             result = await adapter.ExecuteAsync(agentCtx);
         }
         catch (Exception ex)

@@ -120,4 +120,7 @@ public class LoopRun : IHasUpdatedAt
 
     [InverseProperty("LoopRun")]
     public ICollection<EventLog> EventLogs { get; set; } = new List<EventLog>();
+
+    [InverseProperty("LoopRun")]
+    public ICollection<LoopRunVariable> Variables { get; set; } = new List<LoopRunVariable>();
 }

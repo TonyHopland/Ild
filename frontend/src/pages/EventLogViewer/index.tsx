@@ -3,6 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import {
   LoopRun,
   LoopRunAvailableSession,
+  LoopRunVariable,
   LoopRunSessionPreview,
   LoopRunNode,
   LoopRunNodeStatus,
@@ -10,6 +11,7 @@ import {
   NodeType,
   EventLogEntry,
   LoopNode,
+  LoopNodeEdge,
   EdgeType,
 } from "../../types";
 import type { TypedSignalRMessage } from "../../types/signalr";
@@ -25,6 +27,7 @@ import {
   LiveStream,
 } from "../../components/NodeTimeline";
 import EdgeArrow from "../../components/NodeTimeline/EdgeArrow";
+import MarkdownRenderer from "../../components/MarkdownRenderer";
 import "../../components/NodeTimeline/NodeTimeline.css";
 
 interface EffectiveInput {
@@ -112,6 +115,7 @@ export default function EventLogViewer() {
   const [run, setRun] = useState<LoopRun | null>(null);
   const [runNodes, setRunNodes] = useState<LoopRunNode[]>([]);
   const [templateNodes, setTemplateNodes] = useState<LoopNode[]>([]);
+  const [templateEdges, setTemplateEdges] = useState<LoopNodeEdge[]>([]);
   const [events, setEvents] = useState<EventLogEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorText, setErrorText] = useState("");
@@ -143,6 +147,7 @@ export default function EventLogViewer() {
             data.templateVersion,
           );
           setTemplateNodes(graph.nodes);
+          setTemplateEdges(graph.edges);
         } catch {
           console.error("Failed to load template graph");
         }
@@ -353,6 +358,7 @@ export default function EventLogViewer() {
   }
 
   const availableSessions = run.availableSessions ?? [];
+  const availableVariables = run.availableVariables ?? [];
 
   const runStatusColors: Record<string, string> = {
     [LoopRunStatus.Running]: "#3b82f6",
@@ -412,6 +418,54 @@ export default function EventLogViewer() {
         <span>Executions: {run.nodeExecutionCount}</span>
         {run.completedAt && <span>Completed: {formatTimestamp(run.completedAt)}</span>}
       </div>
+      {availableVariables.length > 0 && (
+        <div
+          style={{
+            border: "1px solid #334155",
+            borderRadius: "12px",
+            padding: "0.9rem 1rem",
+            marginBottom: "1rem",
+            background: "#0f172a",
+          }}
+        >
+          <div style={{ fontWeight: 600, marginBottom: "0.5rem" }}>Available Variables</div>
+          <div style={{ color: "#94a3b8", marginBottom: "0.75rem", fontSize: "0.95rem" }}>
+            These are the loop variables written during this run. Reference them in node templates
+            as {"{{Var.<name>}}"}.
+          </div>
+          <div style={{ display: "grid", gap: "0.5rem" }}>
+            {availableVariables.map((variable: LoopRunVariable) => (
+              <div
+                key={variable.name}
+                style={{
+                  display: "grid",
+                  gap: "0.35rem",
+                  padding: "0.65rem 0.75rem",
+                  borderRadius: "10px",
+                  background: "#111827",
+                  border: "1px solid #1f2937",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: "1rem",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <div style={{ fontFamily: "monospace", fontWeight: 600 }}>{variable.name}</div>
+                  <span style={{ color: "#94a3b8", fontSize: "0.85rem" }}>
+                    Updated: {formatSessionTimestamp(variable.updatedAt ?? variable.createdAt)}
+                  </span>
+                </div>
+                <MarkdownRenderer content={variable.value} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {availableSessions.length > 0 && (
         <div
           style={{
@@ -589,6 +643,7 @@ export default function EventLogViewer() {
           const effectiveInput = getEffectiveInputForRunNode(rn.id);
 
           let edgeType: EdgeType | undefined;
+          let edgeName: string | null | undefined;
           let edgeVariant: "retry" | undefined;
           if (index > 0) {
             const prevNode = runNodes[index - 1];
@@ -597,10 +652,18 @@ export default function EventLogViewer() {
             const isRetryBoundary = events.some(
               (e) => e.eventType === "RetryFromNode" && e.runNodeId === prevNode.id,
             );
+            const incomingEdge = templateEdges.find((e) => e.id === rn.incomingEdgeId);
             if (isRetryBoundary) {
               edgeType = EdgeType.OnSuccess;
               edgeVariant = "retry";
+            } else if (incomingEdge) {
+              // Prefer the edge the engine actually recorded, so custom edges
+              // show their name (e.g. "Respond") instead of a guessed role.
+              edgeType = incomingEdge.edgeType;
+              edgeName = incomingEdge.name;
             } else {
+              // Fall back to inferring from the previous node's status for runs
+              // predating IncomingEdgeId persistence (or an unloaded graph).
               const prevType = getTemplateNodeType(prevNode.nodeId);
               const prevHuman = prevType === NodeType.Human;
               if (prevNode.status === LoopRunNodeStatus.Succeeded) {
@@ -615,7 +678,9 @@ export default function EventLogViewer() {
 
           return (
             <div key={rn.id} className="node-execution-block">
-              {edgeType !== undefined && <EdgeArrow edgeType={edgeType} variant={edgeVariant} />}
+              {edgeType !== undefined && (
+                <EdgeArrow edgeType={edgeType} edgeName={edgeName} variant={edgeVariant} />
+              )}
               <NodeItem
                 runNode={rn}
                 templateNodeType={templateNodeType}

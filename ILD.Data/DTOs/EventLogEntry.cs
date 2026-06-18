@@ -5,5 +5,6 @@ public record EventLogEntry(
     string EventType,
     string Data,
     string? PayloadPath = null,
-    Guid? RunNodeId = null
+    Guid? RunNodeId = null,
+    DateTime Timestamp = default
 );

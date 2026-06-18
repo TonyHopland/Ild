@@ -221,6 +221,8 @@ export interface LoopRunNode {
   startedAt: string | null;
   completedAt: string | null;
   executionCount: number;
+  /** Edge the engine traversed to reach this node; null for the run's first node. */
+  incomingEdgeId?: string | null;
   /** Template node type (e.g. "AI"); only populated by the run-detail endpoint. */
   nodeType?: string | null;
   /** AI token/cost; null for non-AI nodes or turns with no reported usage. */
@@ -246,6 +248,13 @@ export interface LoopRunSessionPreview {
   sessionJson: string;
 }
 
+export interface LoopRunVariable {
+  name: string;
+  value: string;
+  createdAt: string;
+  updatedAt: string | null;
+}
+
 export interface LoopRun {
   id: string;
   workItemId: string;
@@ -266,6 +275,7 @@ export interface LoopRun {
   totalOutputTokens?: number;
   totalCostUsd?: number | null;
   availableSessions?: LoopRunAvailableSession[];
+  availableVariables?: LoopRunVariable[];
   nodes: LoopRunNode[];
 }
 

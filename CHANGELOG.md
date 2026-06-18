@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The taskboard no longer gets stuck showing a stale status (e.g. a newly created work item parking for human input still showing "Running") when a burst of work-item-hub events arrives in quick succession. Each event triggered a `getById`, and an earlier fetch the server answered with an older status could resolve _after_ a later one and clobber the fresher state, with nothing to correct it. Each fetch now carries a per-item request ordinal and its result is applied only while it is still the latest request for that item, so a late, stale response is dropped instead of reverting the card.
 
+### Added
+
+- The run timeline/event log now records an `EdgeTraversed` entry naming the edge the engine took out of each node — a custom edge's name (e.g. `Respond`, `true`/`false`), or the role (`OnSuccess`/`OnFailure`) for default and fallback edges — so routings are visible as the edge taken rather than only the node's Succeeded/Failed status. Best-effort and attributed to the node the edge left; routing behavior is unchanged.
+- The run-details timeline now labels each edge by the actual edge the engine traversed (resolved from the node's persisted `IncomingEdgeId`, now exposed on the run-node API), so a custom routing shows its name (e.g. `Respond`) instead of the generic `custom`. Runs predating edge persistence fall back to the previous inferred-from-status label.
+
+
 ## [0.2.0] - 2026-06-15
 
 ### Fixed

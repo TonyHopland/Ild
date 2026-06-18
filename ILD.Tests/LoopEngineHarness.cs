@@ -32,6 +32,7 @@ internal sealed class LoopEngineHarness : IDisposable
 
     private readonly ServiceProvider _sp;
     private readonly LoopEngine _engine;
+    private readonly string _payloadDir = Path.Combine(Path.GetTempPath(), "ild-tests", Guid.NewGuid().ToString("N"));
 
     public LoopEngineHarness(IRunNotifier? notifier = null)
     {
@@ -62,6 +63,9 @@ internal sealed class LoopEngineHarness : IDisposable
         services.AddSingleton<ILoopRunStore>(Db.LoopRuns);
         services.AddSingleton<ILoopTemplateStore>(Db.LoopTemplates);
         services.AddSingleton<IEventLogStore>(Db.EventLogs);
+        // The engine resolves IEventLogService optionally; register it so node and
+        // edge-traversal events are written exactly as they are in production.
+        services.AddSingleton<IEventLogService>(new EventLogService(Db.EventLogs, Db.LoopRuns, _payloadDir));
         services.AddSingleton<IRunNotifier>(notifier ?? new NoopRunNotifier());
         services.AddSingleton<IWorkItemManager>(WorkItemsMock.Object);
         services.AddSingleton<IWorkItemNotifier>(WorkItemNotifierMock.Object);
@@ -142,10 +146,18 @@ internal sealed class LoopEngineHarness : IDisposable
             .OrderBy(rn => rn.StartedAt)
             .ToList();
 
+    /// <summary>All event-log rows written for this run, in sequence order.</summary>
+    public IReadOnlyList<EventLog> ReloadEvents()
+        => Db.Fresh().EventLogs.AsNoTracking()
+            .Where(e => e.LoopRunId == RunId)
+            .OrderBy(e => e.Sequence)
+            .ToList();
+
     public void Dispose()
     {
         _sp.Dispose();
         Db.Dispose();
+        if (Directory.Exists(_payloadDir)) Directory.Delete(_payloadDir, recursive: true);
     }
 }
 

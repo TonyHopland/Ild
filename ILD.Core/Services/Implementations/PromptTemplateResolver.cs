@@ -18,6 +18,9 @@ public sealed class PromptTemplateResolver : IPromptTemplateResolver
             ["EventLog.LastN"] = string.Join("\n", summary.TakeLast(10)),
             ["Node.Input"] = context.PreviousNodeOutput,
             ["PreviousNode.Output"] = context.PreviousNodeOutput,
+            ["Conversation.Full"] = context.ConversationFull,
+            ["Conversation.AI"] = context.ConversationAI,
+            ["Conversation.Human"] = context.ConversationHuman,
         };
 
         return PromptPlaceholderRegistry.Pattern.Replace(template, m =>
@@ -29,6 +32,13 @@ public sealed class PromptTemplateResolver : IPromptTemplateResolver
                 var rel = key.Substring(PromptPlaceholderRegistry.WorkTreeFilePrefix.Length);
                 var full = string.IsNullOrEmpty(context.WorktreePath) ? null : Path.Combine(context.WorktreePath, rel);
                 return full != null && File.Exists(full) ? File.ReadAllText(full) : "";
+            }
+            if (key.StartsWith(PromptPlaceholderRegistry.VariablePrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                // A loop variable that has not been written yet renders empty —
+                // the handoff producer may run after this template is rendered.
+                var name = key.Substring(PromptPlaceholderRegistry.VariablePrefix.Length);
+                return context.RunVariables != null && context.RunVariables.TryGetValue(name, out var val) ? val : "";
             }
             return m.Value;
         });

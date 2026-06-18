@@ -312,6 +312,15 @@ public sealed class LoopEngine : ILoopEngine
         run.ExternalActionResult = signal.Output ?? signal.Error ?? string.Empty;
         run.ExternalActionResultType = signal.Type;
         run.ExternalActionEdgeName = signal.EdgeName;
+        // Clear the parked reason now that the human has responded; otherwise the
+        // stale reason keeps the "Human Input Needed" badge visible in the running
+        // view (the badge keys off HumanFeedbackReason, not status) until some
+        // later transition happens to null it. Mirrors ResumeFromHaltAsync. The
+        // field is a transient "currently parked" pointer for display only — its
+        // sole reader is WorkItemManager.BuildView; nothing routes on it, the
+        // interaction history lives in the EventLog, and the next park writes a
+        // fresh reason — so nulling it here loses nothing.
+        run.HumanFeedbackReason = null;
         var old = run.Status;
         run.Status = LoopRunStatus.Running;
         await loopRunStore.UpdateRunAsync(run);
@@ -612,6 +621,12 @@ public sealed class LoopEngine : ILoopEngine
                         run.CurrentNodeId = successEdge.TargetNodeId;
                         run.IncomingEdgeId = successEdge.Id;
                         await loopRunStore.UpdateRunAsync(run);
+                        // Surface the edge taken so the run timeline/log shows the
+                        // edge's name ("true"/"false", "Respond", a custom edge
+                        // name) instead of only the node's Succeeded/Failed status.
+                        // Best-effort; attributed to the node the edge left.
+                        if (eventLog is not null && runNodeId is Guid successFromId)
+                            await TrySafe(() => eventLog.AppendAsync(run.Id, "EdgeTraversed", EdgeDisplayName(successEdge), node.Id, runNodeId: successFromId));
                         return ParkResult.Continue;
                     }
                     case NodeOutcome.Fail f:
@@ -652,6 +667,10 @@ public sealed class LoopEngine : ILoopEngine
                         run.CurrentNodeId = failEdge.TargetNodeId;
                         run.IncomingEdgeId = failEdge.Id;
                         await loopRunStore.UpdateRunAsync(run);
+                        // Surface the edge taken on the failure route too (see the
+                        // Success branch). Best-effort.
+                        if (eventLog is not null && runNodeId is Guid failFromId)
+                            await TrySafe(() => eventLog.AppendAsync(run.Id, "EdgeTraversed", EdgeDisplayName(failEdge), node.Id, runNodeId: failFromId));
                         return ParkResult.Continue;
                     }
                     case NodeOutcome.WaitingAction wa:
@@ -763,6 +782,14 @@ public sealed class LoopEngine : ILoopEngine
     /// falling back to the node type when the template left the label blank.</summary>
     private static string NodeDisplayName(LoopNode node)
         => string.IsNullOrWhiteSpace(node.Label) ? node.NodeType.ToString() : node.Label;
+
+    /// <summary>Human-readable label for a traversed edge: custom edges surface by
+    /// their name (e.g. "Respond", "true"/"false"); default and fallback edges
+    /// surface by their role. Mirrors how Human-node actions are labelled.</summary>
+    private static string EdgeDisplayName(LoopNodeEdge edge)
+        => edge.EdgeType == EdgeType.Custom && !string.IsNullOrEmpty(edge.Name)
+            ? edge.Name!
+            : edge.EdgeType.ToString();
 
     private static async Task<Guid?> FindPreviousRunNodeIdAsync(ILoopRunStore store, Guid runId)
     {

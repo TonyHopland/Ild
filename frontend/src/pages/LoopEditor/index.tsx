@@ -207,6 +207,7 @@ export default function LoopEditor() {
   const [customEdgeNames, setCustomEdgeNames] = useState<string[]>([]);
   const [aiUseSession, setAiUseSession] = useState(false);
   const [aiSessionPlaceholder, setAiSessionPlaceholder] = useState("");
+  const [aiForkFromPlaceholder, setAiForkFromPlaceholder] = useState("");
   const [startCreateWorktree, setStartCreateWorktree] = useState(true);
   const [startRunInstall, setStartRunInstall] = useState(false);
   const [humanInputLabel, setHumanInputLabel] = useState("");
@@ -834,6 +835,7 @@ export default function LoopEditor() {
       setCustomEdgeNames(resolvedCustomEdges);
       setAiUseSession((config.useSession as boolean | undefined) ?? false);
       setAiSessionPlaceholder((config.sessionPlaceholder as string) || "");
+      setAiForkFromPlaceholder((config.forkFromPlaceholder as string) || "");
       setStartCreateWorktree((config.createWorktree as boolean) ?? true);
       setStartRunInstall((config.runInstall as boolean) ?? false);
       setHumanInputLabel((config.inputLabel as string) || "");
@@ -860,6 +862,7 @@ export default function LoopEditor() {
         customEdgeNames: resolvedCustomEdges,
         aiUseSession: (config.useSession as boolean | undefined) ?? false,
         aiSessionPlaceholder: (config.sessionPlaceholder as string) || "",
+        aiForkFromPlaceholder: (config.forkFromPlaceholder as string) || "",
         startCreateWorktree: (config.createWorktree as boolean) ?? true,
         startRunInstall: (config.runInstall as boolean) ?? false,
         humanInputLabel: (config.inputLabel as string) || "",
@@ -906,6 +909,10 @@ export default function LoopEditor() {
         .filter((rule) => rule.pattern !== "" && rule.edgeName !== "");
       config.matchRules = cleanRules;
       config.sessionPlaceholder = aiUseSession ? aiSessionPlaceholder.trim() : undefined;
+      // A fork-from source is only meaningful with a managed session; an empty
+      // value clears it so the node grows its session in place.
+      const trimmedForkFrom = aiForkFromPlaceholder.trim();
+      config.forkFromPlaceholder = aiUseSession && trimmedForkFrom ? trimmedForkFrom : undefined;
     } else if (selectedNodeType === NodeType.Start) {
       config.createWorktree = startCreateWorktree;
       config.runInstall = startRunInstall;
@@ -949,6 +956,7 @@ export default function LoopEditor() {
     aiMatchRules,
     customEdgeNames,
     aiSessionPlaceholder,
+    aiForkFromPlaceholder,
     aiTools,
     aiUseSession,
     adapterConfigValues,
@@ -975,6 +983,7 @@ export default function LoopEditor() {
       setCustomEdgeNames(originalNodeConfig.customEdgeNames);
       setAiUseSession(originalNodeConfig.aiUseSession);
       setAiSessionPlaceholder(originalNodeConfig.aiSessionPlaceholder);
+      setAiForkFromPlaceholder(originalNodeConfig.aiForkFromPlaceholder);
       setStartCreateWorktree(originalNodeConfig.startCreateWorktree);
       setStartRunInstall(originalNodeConfig.startRunInstall);
       setHumanInputLabel(originalNodeConfig.humanInputLabel);
@@ -1355,6 +1364,7 @@ export default function LoopEditor() {
                     customEdgeNames={customEdgeNames}
                     aiUseSession={aiUseSession}
                     aiSessionPlaceholder={aiSessionPlaceholder}
+                    aiForkFromPlaceholder={aiForkFromPlaceholder}
                     startCreateWorktree={startCreateWorktree}
                     startRunInstall={startRunInstall}
                     humanInputLabel={humanInputLabel}
@@ -1381,6 +1391,7 @@ export default function LoopEditor() {
                     onCustomEdgeNamesChange={setCustomEdgeNames}
                     onAiUseSessionChange={setAiUseSession}
                     onAiSessionPlaceholderChange={setAiSessionPlaceholder}
+                    onAiForkFromPlaceholderChange={setAiForkFromPlaceholder}
                     onStartCreateWorktreeChange={setStartCreateWorktree}
                     onStartRunInstallChange={setStartRunInstall}
                     onHumanInputLabelChange={setHumanInputLabel}

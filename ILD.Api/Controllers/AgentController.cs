@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
@@ -18,7 +19,10 @@ namespace ILD.Api.Controllers;
 ///  - list loop runs so users can identify and batch-delete items
 ///    spawned by a specific run if an agent goes rogue,
 ///  - create new work items into Backlog with an optional set of
-///    dependencies, stamped with the originating loop-run id.
+///    dependencies, stamped with the originating loop-run id,
+///  - read and write per-run loop variables (scoped by the X-ILD-Run-Id
+///    header) so one node can hand off state to a later node — the values
+///    are also exposed to templates as <c>{{Var.&lt;name&gt;}}</c>.
 ///
 /// Crucially, this controller deliberately does NOT expose start,
 /// transition, link-pr, or human-feedback endpoints. Agents are not
@@ -191,6 +195,48 @@ public class AgentController : ControllerBase
             startedAt = r.StartedAt,
             completedAt = r.CompletedAt,
         }));
+    }
+
+    [HttpGet("variables")]
+    public async Task<IActionResult> ListVariables()
+    {
+        if (!TryResolveRunId(out var runId))
+            return BadRequest(new { error = $"A loop-run id is required. Send it in the {RunIdHeader} header." });
+
+        var variables = await _runs.GetVariablesAsync(runId);
+        return Ok(variables.Select(v => new
+        {
+            name = v.Name,
+            value = v.Value,
+            updatedAt = v.UpdatedAt ?? v.CreatedAt,
+        }));
+    }
+
+    [HttpPut("variables/{name}")]
+    public async Task<IActionResult> SetVariable(string name, [FromBody] AgentSetVariableRequest request)
+    {
+        if (!ModelState.IsValid)
+            return BadRequest(ModelState);
+
+        if (!TryResolveRunId(out var runId))
+            return BadRequest(new { error = $"A loop-run id is required. Send it in the {RunIdHeader} header." });
+
+        if (!PromptPlaceholderRegistry.IsValidVariableName(name))
+            return BadRequest(new { error = "Variable name must start with a letter and contain only letters, digits, and underscores." });
+
+        var runExists = await _db.LoopRuns.AsNoTracking().AnyAsync(r => r.Id == runId);
+        if (!runExists)
+            return NotFound(new { error = $"Loop run not found: {runId}" });
+
+        await _runs.SetVariableAsync(runId, name, request.Value ?? string.Empty);
+        return Ok(new { name, value = request.Value ?? string.Empty });
+    }
+
+    private bool TryResolveRunId(out Guid runId)
+    {
+        runId = Guid.Empty;
+        return Request.Headers.TryGetValue(RunIdHeader, out var hdr)
+            && Guid.TryParse(hdr.ToString(), out runId);
     }
 
     [HttpPost("workitems")]

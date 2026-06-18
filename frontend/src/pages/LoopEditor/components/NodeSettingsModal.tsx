@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { Node } from "@xyflow/react";
 import AdapterConfigFields from "../../../components/AdapterConfigFields";
 import PromptEditor from "../../../components/PromptEditor";
@@ -23,6 +24,7 @@ interface NodeSettingsModalProps {
   customEdgeNames: string[];
   aiUseSession: boolean;
   aiSessionPlaceholder: string;
+  aiForkFromPlaceholder: string;
   startCreateWorktree: boolean;
   startRunInstall: boolean;
   humanInputLabel: string;
@@ -49,6 +51,7 @@ interface NodeSettingsModalProps {
   onCustomEdgeNamesChange: (value: string[]) => void;
   onAiUseSessionChange: (value: boolean) => void;
   onAiSessionPlaceholderChange: (value: string) => void;
+  onAiForkFromPlaceholderChange: (value: string) => void;
   onStartCreateWorktreeChange: (value: boolean) => void;
   onStartRunInstallChange: (value: boolean) => void;
   onHumanInputLabelChange: (value: string) => void;
@@ -57,6 +60,16 @@ interface NodeSettingsModalProps {
   onPrDescriptionTemplateChange: (value: string) => void;
   onPrCommentTemplateChange: (value: string) => void;
   onAdapterConfigChange: (name: string, value: AdapterConfigValue) => void;
+}
+
+/** Titled group of related fields inside the node settings body. */
+function ConfigSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="config-section">
+      <h3 className="config-section-title">{title}</h3>
+      {children}
+    </section>
+  );
 }
 
 /** Repeatable list of custom edge names, rendered for Human and PR nodes. */
@@ -114,6 +127,7 @@ export function NodeSettingsModal({
   customEdgeNames,
   aiUseSession,
   aiSessionPlaceholder,
+  aiForkFromPlaceholder,
   startCreateWorktree,
   startRunInstall,
   humanInputLabel,
@@ -140,6 +154,7 @@ export function NodeSettingsModal({
   onCustomEdgeNamesChange,
   onAiUseSessionChange,
   onAiSessionPlaceholderChange,
+  onAiForkFromPlaceholderChange,
   onStartCreateWorktreeChange,
   onStartRunInstallChange,
   onHumanInputLabelChange,
@@ -201,137 +216,138 @@ export function NodeSettingsModal({
 
           {selectedNodeType === NodeType.AI && (
             <>
-              <div className="config-field">
-                <label htmlFor="ai-prompt">Prompt</label>
-                <PromptEditor
-                  id="ai-prompt"
-                  rows={4}
-                  value={aiPrompt}
-                  onChange={onAiPromptChange}
-                />
-              </div>
-
-              <div className="config-field">
-                <label className="checkbox-label">
-                  <input
-                    type="checkbox"
-                    checked={aiUseSession}
-                    onChange={(event) => onAiUseSessionChange(event.target.checked)}
+              <ConfigSection title="Prompt">
+                <div className="config-field">
+                  <PromptEditor
+                    id="ai-prompt"
+                    rows={4}
+                    value={aiPrompt}
+                    onChange={onAiPromptChange}
                   />
-                  Use Session
-                </label>
-              </div>
+                </div>
+              </ConfigSection>
 
-              {aiUseSession && (
+              <ConfigSection title="Session">
                 <AiSessionControls
+                  key={selectedNode.id}
+                  aiUseSession={aiUseSession}
                   aiSessionPlaceholder={aiSessionPlaceholder}
+                  aiForkFromPlaceholder={aiForkFromPlaceholder}
                   sessionPlaceholderUsages={sessionPlaceholderUsages}
                   selectedPlaceholderUsage={selectedPlaceholderUsage}
+                  onAiUseSessionChange={onAiUseSessionChange}
                   onAiSessionPlaceholderChange={onAiSessionPlaceholderChange}
+                  onAiForkFromPlaceholderChange={onAiForkFromPlaceholderChange}
                 />
-              )}
+              </ConfigSection>
 
-              <div className="config-field">
-                <label htmlFor="ai-provider">AI Provider</label>
-                <select
-                  id="ai-provider"
-                  value={aiProvider}
-                  onChange={(event) => onAiProviderChange(event.target.value)}
-                >
-                  <option value="">Default</option>
-                  {aiProviders.map((provider) => (
-                    <option key={provider.id} value={provider.id}>
-                      {provider.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {adapterConfigSchema.length > 0 && (
-                <AdapterConfigFields
-                  schema={adapterConfigSchema}
-                  values={adapterConfigValues}
-                  onChange={onAdapterConfigChange}
-                />
-              )}
-
-              <div className="config-field">
-                <label>Tool Allowlist</label>
-                <div className="tool-checklist">
-                  {availableAiTools.map((tool) => (
-                    <label key={tool.key} className="checkbox-label" title={tool.description}>
-                      <input
-                        type="checkbox"
-                        checked={aiTools.includes(tool.key)}
-                        onChange={(event) => {
-                          const nextTools = event.target.checked
-                            ? [...aiTools, tool.key]
-                            : aiTools.filter((value) => value !== tool.key);
-                          onAiToolsChange(nextTools);
-                        }}
-                      />
-                      {tool.label}
-                    </label>
-                  ))}
+              <ConfigSection title="Model & tools">
+                <div className="config-field">
+                  <label htmlFor="ai-provider">AI Provider</label>
+                  <select
+                    id="ai-provider"
+                    value={aiProvider}
+                    onChange={(event) => onAiProviderChange(event.target.value)}
+                  >
+                    <option value="">Default</option>
+                    {aiProviders.map((provider) => (
+                      <option key={provider.id} value={provider.id}>
+                        {provider.name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-              </div>
 
-              <div className="config-field">
-                <label>Match Rules</label>
-                <small className="config-help-text">
-                  Each rule's pattern is matched case-insensitively against the AI output. The first
-                  match routes to its named custom edge; no match takes the success edge.
-                </small>
-                {aiMatchRules.map((rule, index) => (
-                  <div key={index} className="match-rule-row">
-                    <input
-                      type="text"
-                      aria-label={`Match pattern ${index + 1}`}
-                      value={rule.pattern}
-                      onChange={(event) =>
-                        onAiMatchRulesChange(
-                          aiMatchRules.map((existing, i) =>
-                            i === index ? { ...existing, pattern: event.target.value } : existing,
-                          ),
-                        )
-                      }
-                      placeholder="Match pattern (regex)"
-                    />
-                    <input
-                      type="text"
-                      aria-label={`Edge name ${index + 1}`}
-                      value={rule.edgeName}
-                      onChange={(event) =>
-                        onAiMatchRulesChange(
-                          aiMatchRules.map((existing, i) =>
-                            i === index ? { ...existing, edgeName: event.target.value } : existing,
-                          ),
-                        )
-                      }
-                      placeholder="Edge name"
-                    />
-                    <button
-                      type="button"
-                      className="match-rule-remove"
-                      aria-label={`Remove rule ${index + 1}`}
-                      onClick={() =>
-                        onAiMatchRulesChange(aiMatchRules.filter((_, i) => i !== index))
-                      }
-                    >
-                      ×
-                    </button>
+                {adapterConfigSchema.length > 0 && (
+                  <AdapterConfigFields
+                    schema={adapterConfigSchema}
+                    values={adapterConfigValues}
+                    onChange={onAdapterConfigChange}
+                  />
+                )}
+
+                <div className="config-field">
+                  <label>Tool Allowlist</label>
+                  <div className="tool-checklist">
+                    {availableAiTools.map((tool) => (
+                      <label key={tool.key} className="checkbox-label" title={tool.description}>
+                        <input
+                          type="checkbox"
+                          checked={aiTools.includes(tool.key)}
+                          onChange={(event) => {
+                            const nextTools = event.target.checked
+                              ? [...aiTools, tool.key]
+                              : aiTools.filter((value) => value !== tool.key);
+                            onAiToolsChange(nextTools);
+                          }}
+                        />
+                        {tool.label}
+                      </label>
+                    ))}
                   </div>
-                ))}
-                <button
-                  type="button"
-                  className="match-rule-add"
-                  onClick={() =>
-                    onAiMatchRulesChange([...aiMatchRules, { pattern: "", edgeName: "" }])
-                  }
-                >
-                  + Add rule
-                </button>
-              </div>
+                </div>
+              </ConfigSection>
+
+              <ConfigSection title="Routing">
+                <div className="config-field">
+                  <label>Match Rules</label>
+                  <small className="config-help-text">
+                    Each rule's pattern is matched case-insensitively against the AI output. The
+                    first match routes to its named custom edge; no match takes the success edge.
+                  </small>
+                  {aiMatchRules.map((rule, index) => (
+                    <div key={index} className="match-rule-row">
+                      <input
+                        type="text"
+                        aria-label={`Match pattern ${index + 1}`}
+                        value={rule.pattern}
+                        onChange={(event) =>
+                          onAiMatchRulesChange(
+                            aiMatchRules.map((existing, i) =>
+                              i === index ? { ...existing, pattern: event.target.value } : existing,
+                            ),
+                          )
+                        }
+                        placeholder="Match pattern (regex)"
+                      />
+                      <input
+                        type="text"
+                        aria-label={`Edge name ${index + 1}`}
+                        value={rule.edgeName}
+                        onChange={(event) =>
+                          onAiMatchRulesChange(
+                            aiMatchRules.map((existing, i) =>
+                              i === index
+                                ? { ...existing, edgeName: event.target.value }
+                                : existing,
+                            ),
+                          )
+                        }
+                        placeholder="Edge name"
+                      />
+                      <button
+                        type="button"
+                        className="match-rule-remove"
+                        aria-label={`Remove rule ${index + 1}`}
+                        onClick={() =>
+                          onAiMatchRulesChange(aiMatchRules.filter((_, i) => i !== index))
+                        }
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    className="match-rule-add"
+                    onClick={() =>
+                      onAiMatchRulesChange([...aiMatchRules, { pattern: "", edgeName: "" }])
+                    }
+                  >
+                    + Add rule
+                  </button>
+                </div>
+              </ConfigSection>
             </>
           )}
 

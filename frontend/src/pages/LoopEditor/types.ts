@@ -24,6 +24,7 @@ export interface NodeSettingsSnapshot {
   customEdgeNames: string[];
   aiUseSession: boolean;
   aiSessionPlaceholder: string;
+  aiForkFromPlaceholder: string;
   startCreateWorktree: boolean;
   startRunInstall: boolean;
   humanInputLabel: string;
