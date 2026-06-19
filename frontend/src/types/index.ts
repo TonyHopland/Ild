@@ -128,6 +128,7 @@ export enum NodeType {
   Human = "Human",
   Prompt = "Prompt",
   PR = "PR",
+  Condition = "Condition",
   Cleanup = "Cleanup",
 }
 

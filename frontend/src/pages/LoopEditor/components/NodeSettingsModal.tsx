@@ -32,6 +32,11 @@ interface NodeSettingsModalProps {
   promptNodePrompt: string;
   prDescriptionTemplate: string;
   prCommentTemplate: string;
+  conditionVariant: string;
+  conditionSubject: string;
+  conditionPattern: string;
+  conditionTag: string;
+  conditionOutput: string;
   aiProviders: AiProvider[];
   availableAiTools: AiToolDefinition[];
   adapterConfigSchema: ConfigFieldDescriptor[];
@@ -59,6 +64,11 @@ interface NodeSettingsModalProps {
   onPromptNodePromptChange: (value: string) => void;
   onPrDescriptionTemplateChange: (value: string) => void;
   onPrCommentTemplateChange: (value: string) => void;
+  onConditionVariantChange: (value: string) => void;
+  onConditionSubjectChange: (value: string) => void;
+  onConditionPatternChange: (value: string) => void;
+  onConditionTagChange: (value: string) => void;
+  onConditionOutputChange: (value: string) => void;
   onAdapterConfigChange: (name: string, value: AdapterConfigValue) => void;
 }
 
@@ -135,6 +145,11 @@ export function NodeSettingsModal({
   promptNodePrompt,
   prDescriptionTemplate,
   prCommentTemplate,
+  conditionVariant,
+  conditionSubject,
+  conditionPattern,
+  conditionTag,
+  conditionOutput,
   aiProviders,
   availableAiTools,
   adapterConfigSchema,
@@ -162,6 +177,11 @@ export function NodeSettingsModal({
   onPromptNodePromptChange,
   onPrDescriptionTemplateChange,
   onPrCommentTemplateChange,
+  onConditionVariantChange,
+  onConditionSubjectChange,
+  onConditionPatternChange,
+  onConditionTagChange,
+  onConditionOutputChange,
   onAdapterConfigChange,
 }: NodeSettingsModalProps) {
   const selectedNodeType = (selectedNode.data as { type: NodeType }).type;
@@ -429,6 +449,77 @@ export function NodeSettingsModal({
                 />
               </div>
               <CustomEdgesEditor names={customEdgeNames} onChange={onCustomEdgeNamesChange} />
+            </>
+          )}
+
+          {selectedNodeType === NodeType.Condition && (
+            <>
+              <div className="config-field">
+                <label htmlFor="condition-variant">Variant</label>
+                <select
+                  id="condition-variant"
+                  value={conditionVariant}
+                  onChange={(event) => onConditionVariantChange(event.target.value)}
+                >
+                  <option value="TextMatches">Text matches</option>
+                  <option value="PrExists">PR exists</option>
+                  <option value="HasTag">Has tag</option>
+                </select>
+                <small className="config-help-text">
+                  Evaluates a single predicate and routes to the fixed <code>true</code> or{" "}
+                  <code>false</code> outlet. No AI, command, or worktree access.
+                </small>
+              </div>
+
+              {conditionVariant === "TextMatches" && (
+                <>
+                  <div className="config-field">
+                    <label htmlFor="condition-subject">Subject</label>
+                    <PromptEditor
+                      id="condition-subject"
+                      rows={3}
+                      value={conditionSubject}
+                      onChange={onConditionSubjectChange}
+                    />
+                  </div>
+                  <div className="config-field">
+                    <label htmlFor="condition-pattern">Pattern</label>
+                    <input
+                      id="condition-pattern"
+                      type="text"
+                      value={conditionPattern}
+                      onChange={(event) => onConditionPatternChange(event.target.value)}
+                      placeholder="Regex (case-insensitive)"
+                    />
+                  </div>
+                </>
+              )}
+
+              {conditionVariant === "HasTag" && (
+                <div className="config-field">
+                  <label htmlFor="condition-tag">Tag</label>
+                  <input
+                    id="condition-tag"
+                    type="text"
+                    value={conditionTag}
+                    onChange={(event) => onConditionTagChange(event.target.value)}
+                    placeholder="Work-item tag"
+                  />
+                </div>
+              )}
+
+              <div className="config-field">
+                <label htmlFor="condition-output">Output</label>
+                <PromptEditor
+                  id="condition-output"
+                  rows={3}
+                  value={conditionOutput}
+                  onChange={onConditionOutputChange}
+                />
+                <small className="config-help-text">
+                  Emitted on both branches. Defaults to a pass-through of the node input.
+                </small>
+              </div>
             </>
           )}
         </div>

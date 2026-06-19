@@ -33,6 +33,11 @@ function renderModal(overrides: Partial<Parameters<typeof NodeSettingsModal>[0]>
     promptNodePrompt: "",
     prDescriptionTemplate: "",
     prCommentTemplate: "",
+    conditionVariant: "TextMatches",
+    conditionSubject: "",
+    conditionPattern: "",
+    conditionTag: "",
+    conditionOutput: "{{Node.Input}}",
     aiProviders: [],
     availableAiTools: [],
     adapterConfigSchema: [],
@@ -60,6 +65,11 @@ function renderModal(overrides: Partial<Parameters<typeof NodeSettingsModal>[0]>
     onPromptNodePromptChange: vi.fn(),
     onPrDescriptionTemplateChange: vi.fn(),
     onPrCommentTemplateChange: vi.fn(),
+    onConditionVariantChange: vi.fn(),
+    onConditionSubjectChange: vi.fn(),
+    onConditionPatternChange: vi.fn(),
+    onConditionTagChange: vi.fn(),
+    onConditionOutputChange: vi.fn(),
     onAdapterConfigChange: vi.fn(),
     ...overrides,
   };
@@ -162,5 +172,60 @@ describe("NodeSettingsModal session memory mode", () => {
     fireEvent.change(screen.getByLabelText("Fork from"), { target: { value: "other" } });
 
     expect(props.onAiForkFromPlaceholderChange).toHaveBeenCalledWith("other");
+  });
+});
+
+describe("NodeSettingsModal condition node", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  test("TextMatches variant shows Subject and Pattern but not Tag", () => {
+    renderModal({
+      selectedNode: makeNode(NodeType.Condition),
+      conditionVariant: "TextMatches",
+    });
+
+    expect(screen.getByLabelText("Variant")).toBeTruthy();
+    expect(screen.getByLabelText("Subject")).toBeTruthy();
+    expect(screen.getByLabelText("Pattern")).toBeTruthy();
+    expect(screen.queryByLabelText("Tag")).toBeNull();
+    // Output is shown for every variant.
+    expect(screen.getByLabelText("Output")).toBeTruthy();
+  });
+
+  test("HasTag variant shows Tag but not Subject or Pattern", () => {
+    renderModal({
+      selectedNode: makeNode(NodeType.Condition),
+      conditionVariant: "HasTag",
+    });
+
+    expect(screen.getByLabelText("Tag")).toBeTruthy();
+    expect(screen.queryByLabelText("Subject")).toBeNull();
+    expect(screen.queryByLabelText("Pattern")).toBeNull();
+    expect(screen.getByLabelText("Output")).toBeTruthy();
+  });
+
+  test("PrExists variant shows neither sub-form but keeps Output", () => {
+    renderModal({
+      selectedNode: makeNode(NodeType.Condition),
+      conditionVariant: "PrExists",
+    });
+
+    expect(screen.queryByLabelText("Subject")).toBeNull();
+    expect(screen.queryByLabelText("Pattern")).toBeNull();
+    expect(screen.queryByLabelText("Tag")).toBeNull();
+    expect(screen.getByLabelText("Output")).toBeTruthy();
+  });
+
+  test("changing the variant dropdown notifies the parent", () => {
+    const props = renderModal({
+      selectedNode: makeNode(NodeType.Condition),
+      conditionVariant: "TextMatches",
+    });
+
+    fireEvent.change(screen.getByLabelText("Variant"), { target: { value: "HasTag" } });
+
+    expect(props.onConditionVariantChange).toHaveBeenCalledWith("HasTag");
   });
 });

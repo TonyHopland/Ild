@@ -268,4 +268,131 @@ public class LoopTemplateValidatorTests
         var errs = LoopTemplateValidator.Validate(g);
         Assert.Empty(errs);
     }
+
+    // ---- Condition node ----------------------------------------------------
+
+    private static LoopNodeDto ConditionNode(
+        string id,
+        string variant,
+        string? pattern = null,
+        string? subject = null,
+        string? tag = null,
+        string? output = null)
+    {
+        var dto = new LoopNodeDto { Id = id, NodeType = "Condition", Label = id };
+        dto.Config["variant"] = variant;
+        if (pattern != null) dto.Config["pattern"] = pattern;
+        if (subject != null) dto.Config["subject"] = subject;
+        if (tag != null) dto.Config["tag"] = tag;
+        if (output != null) dto.Config["output"] = output;
+        return dto;
+    }
+
+    // A Condition wired with both fixed outlets plus the surrounding sink.
+    private static LoopTemplateGraph ConditionGraph(LoopNodeDto cond, params LoopNodeEdgeDto[] extraEdges)
+    {
+        var edges = new List<LoopNodeEdgeDto>
+        {
+            Edge("s", cond.Id),
+            Edge(cond.Id, "c", "Custom", "true"),
+            Edge(cond.Id, "c", "Custom", "false"),
+        };
+        edges.AddRange(extraEdges);
+        return new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Node("s", "Start"), cond, Node("c", "Cleanup") },
+            edges);
+    }
+
+    [Fact]
+    public void Condition_text_matches_with_two_fixed_edges_is_valid()
+    {
+        var errs = LoopTemplateValidator.Validate(
+            ConditionGraph(ConditionNode("q", "TextMatches", pattern: "Approve")));
+        Assert.Empty(errs);
+    }
+
+    [Fact]
+    public void Condition_pr_exists_with_two_fixed_edges_is_valid()
+    {
+        var errs = LoopTemplateValidator.Validate(
+            ConditionGraph(ConditionNode("q", "PrExists")));
+        Assert.Empty(errs);
+    }
+
+    [Fact]
+    public void Condition_has_tag_with_two_fixed_edges_is_valid()
+    {
+        var errs = LoopTemplateValidator.Validate(
+            ConditionGraph(ConditionNode("q", "HasTag", tag: "needs-review")));
+        Assert.Empty(errs);
+    }
+
+    [Fact]
+    public void Condition_text_matches_with_invalid_regex_is_rejected()
+    {
+        // A literal "**Approve**" is an invalid regex (dangling quantifier).
+        var errs = LoopTemplateValidator.Validate(
+            ConditionGraph(ConditionNode("q", "TextMatches", pattern: "**Approve**")));
+        Assert.Contains(errs, e => e.Contains("invalid regex pattern"));
+    }
+
+    [Fact]
+    public void Condition_text_matches_with_empty_pattern_is_rejected()
+    {
+        var errs = LoopTemplateValidator.Validate(
+            ConditionGraph(ConditionNode("q", "TextMatches", pattern: "")));
+        Assert.Contains(errs, e => e.Contains("must set a non-empty pattern"));
+    }
+
+    [Fact]
+    public void Condition_has_tag_without_tag_is_rejected()
+    {
+        var errs = LoopTemplateValidator.Validate(
+            ConditionGraph(ConditionNode("q", "HasTag")));
+        Assert.Contains(errs, e => e.Contains("must set a non-empty tag"));
+    }
+
+    [Fact]
+    public void Condition_missing_false_edge_is_rejected()
+    {
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Node("s", "Start"), ConditionNode("q", "PrExists"), Node("c", "Cleanup") },
+            new() { Edge("s", "q"), Edge("q", "c", "Custom", "true") });
+        var errs = LoopTemplateValidator.Validate(g);
+        Assert.Contains(errs, e => e.Contains("must have a custom edge named 'false'"));
+    }
+
+    [Fact]
+    public void Condition_with_extra_custom_edge_is_rejected()
+    {
+        var errs = LoopTemplateValidator.Validate(
+            ConditionGraph(ConditionNode("q", "PrExists"),
+                Edge("q", "c", "Custom", "maybe")));
+        Assert.Contains(errs, e => e.Contains("unexpected custom edge 'maybe'"));
+    }
+
+    [Fact]
+    public void Condition_with_on_success_edge_is_rejected()
+    {
+        var errs = LoopTemplateValidator.Validate(
+            ConditionGraph(ConditionNode("q", "PrExists"),
+                Edge("q", "c", "OnSuccess")));
+        Assert.Contains(errs, e => e.Contains("must not have an OnSuccess edge"));
+    }
+
+    [Fact]
+    public void Condition_with_unknown_variant_is_rejected()
+    {
+        var errs = LoopTemplateValidator.Validate(
+            ConditionGraph(ConditionNode("q", "Bogus")));
+        Assert.Contains(errs, e => e.Contains("unknown variant 'Bogus'"));
+    }
+
+    [Fact]
+    public void Condition_with_unknown_output_placeholder_is_rejected()
+    {
+        var errs = LoopTemplateValidator.Validate(
+            ConditionGraph(ConditionNode("q", "PrExists", output: "{{Bogus.Thing}}")));
+        Assert.Contains(errs, e => e.Contains("Bogus"));
+    }
 }

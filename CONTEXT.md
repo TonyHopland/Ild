@@ -11,7 +11,7 @@ A unit of work — code change, planning session, or any task type. May or may n
 _Avoid_: task, ticket, issue, story
 
 **LoopTemplate**:
-A named, versioned workflow definition expressed as a directed graph of nodes (Start, Cmd, AI, Human, Prompt, PR, Cleanup). Auto-versioned on every save.
+A named, versioned workflow definition expressed as a directed graph of nodes (Start, Cmd, AI, Human, Prompt, PR, Condition, Cleanup). Auto-versioned on every save.
 _Avoid_: workflow, pipeline, template (without "loop")
 
 **LoopTemplateVersion**:
@@ -55,6 +55,10 @@ _Avoid_: template node, text node
 **PR Node**:
 Creates a pull request (or reuses the one already linked on the run via `LoopRun.PrUrl` — PRs are per-run, see [ADR-0008](docs/adr/0008-worktree-and-branch-per-run.md)). Before PR creation, automatically commits any uncommitted changes, pushes the branch, fetches the remote, and verifies the branch has commits ahead of the target branch — if the branch has 0 commits ahead, the node fails (no-changes guard). Waits for webhook events: merge routes to `on_success`, rejection routes to `on_failure`. Supports three template config fields, all rendered through the prompt placeholder pipeline: `prompt` (announced as the node's input), `prDescriptionTemplate` (used as the PR body on creation; falls back to `WorkItem.Description` if unset), and `prCommentTemplate` (posted as a fresh PR comment on every re-visit when the PR already exists; the node fails if the comment post fails). Makes the PR lifecycle explicit in the graph.
 _Avoid_: repository node, git node
+
+**Condition Node**:
+Evaluates a single predicate against run/work-item state and routes to a fixed `true` or `false` custom edge, without invoking AI, running a command, or touching the worktree. The **Condition Variant** picks the predicate: `TextMatches` renders `Subject` (default `{{Node.Input}}`) and tests it against `Pattern` with the same case-insensitive `Regex.IsMatch` engine as AI MatchRules; `PrExists` is true iff `LoopRun.PrUrl` is set (local, per-run — no remote call, see [ADR-0008](docs/adr/0008-worktree-and-branch-per-run.md)); `HasTag` fetches the work item fresh and is true iff its `Tags` contain `Tag` by case-insensitive whole-string equality. The templated `Output` (default `{{Node.Input}}`, a pass-through) is emitted identically on both branches. True routes to the `true` edge, false to the `false` edge (both `Succeeded`); an evaluation error (e.g. work-item fetch fails) fails the node onto `on_failure`. Save-time validation requires exactly the two fixed edges, rejects an `OnSuccess` edge, and — for `TextMatches` — rejects a missing or uncompilable `Pattern`.
+_Avoid_: branch node, if node, switch node
 
 **Cleanup Node**:
 A terminal (sink) node with only incoming edges. Marks the LoopRun finished. It deliberately **keeps** the worktree and branch so the run stays inspectable — disk is reclaimed only when the run itself is deleted (the `WorktreeRetentionSweeper`, or a manual run delete). See [ADR-0008](docs/adr/0008-worktree-and-branch-per-run.md).
