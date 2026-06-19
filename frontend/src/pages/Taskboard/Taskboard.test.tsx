@@ -50,6 +50,14 @@ async function dispatchSignalR(handler: (msg: any) => void, payload: unknown) {
   });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
 function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
   return {
     id: "wi-1",
@@ -182,6 +190,155 @@ describe("Taskboard SignalR", () => {
       expect(getByIdSpy).toHaveBeenCalledWith("wi-1");
       expect(screen.getByText("Human Input Needed")).toBeTruthy();
     });
+  });
+
+  test("adds a newly created item going Running->HumanFeedback when not yet on the board", async () => {
+    const handlers: Record<string, ((msg: any) => void)[]> = {};
+    const mockOn = vi.fn((eventType: string, handler: (msg: any) => void) => {
+      handlers[eventType] = handlers[eventType] || [];
+      handlers[eventType].push(handler);
+    });
+
+    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+      on: mockOn,
+      off: vi.fn(),
+      invoke: vi.fn(),
+      connectionState: "connected",
+    });
+
+    // Board starts empty — the item was created after the page loaded.
+    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([]);
+    const getByIdSpy = vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(
+      makeItem({
+        id: "wi-new",
+        title: "Fresh Item",
+        status: WorkItemStatus.HumanFeedback,
+        humanFeedbackReason: "Human Input Needed",
+      }),
+    );
+
+    renderTaskboard();
+
+    await waitFor(() => {
+      expect(handlers["WorkItemStateChanged"]).toBeDefined();
+    });
+
+    await dispatchSignalR(handlers["WorkItemStateChanged"]![0], {
+      workItemId: "wi-new",
+      oldStatus: "Running",
+      newStatus: "HumanFeedback",
+    });
+
+    await waitFor(() => {
+      expect(getByIdSpy).toHaveBeenCalledWith("wi-new");
+      expect(screen.getByText("Fresh Item")).toBeTruthy();
+      expect(screen.getByText("Human Input Needed")).toBeTruthy();
+    });
+  });
+
+  test("adds a newly created item on HumanFeedbackRequired when not yet on the board", async () => {
+    const handlers: Record<string, ((msg: any) => void)[]> = {};
+    const mockOn = vi.fn((eventType: string, handler: (msg: any) => void) => {
+      handlers[eventType] = handlers[eventType] || [];
+      handlers[eventType].push(handler);
+    });
+
+    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+      on: mockOn,
+      off: vi.fn(),
+      invoke: vi.fn(),
+      connectionState: "connected",
+    });
+
+    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([]);
+    const getByIdSpy = vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(
+      makeItem({
+        id: "wi-new",
+        title: "Fresh Item",
+        status: WorkItemStatus.HumanFeedback,
+        humanFeedbackReason: "Human Input Needed",
+      }),
+    );
+
+    renderTaskboard();
+
+    await waitFor(() => {
+      expect(handlers["HumanFeedbackRequired"]).toBeDefined();
+    });
+
+    await dispatchSignalR(handlers["HumanFeedbackRequired"]![0], {
+      workItemId: "wi-new",
+      reason: "Human Input Needed",
+    });
+
+    await waitFor(() => {
+      expect(getByIdSpy).toHaveBeenCalledWith("wi-new");
+      expect(screen.getByText("Fresh Item")).toBeTruthy();
+    });
+  });
+
+  test("a stale late getById does not revert a fresher status", async () => {
+    // Newly created items get a rapid burst of work-item-hub events
+    // (create -> claim -> run-progressed -> human). Each fires a getById; an
+    // early fetch the server answered with an older status can resolve *after*
+    // a later one and clobber it. This pins that the late stale write loses.
+    const handlers: Record<string, ((msg: any) => void)[]> = {};
+    const mockOn = vi.fn((eventType: string, handler: (msg: any) => void) => {
+      handlers[eventType] = handlers[eventType] || [];
+      handlers[eventType].push(handler);
+    });
+
+    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+      on: mockOn,
+      off: vi.fn(),
+      invoke: vi.fn(),
+      connectionState: "connected",
+    });
+
+    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([
+      makeItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1" }),
+    ]);
+
+    const staleRunning = makeItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1" });
+    const freshHuman = makeItem({
+      status: WorkItemStatus.HumanFeedback,
+      humanFeedbackReason: "Human Input Needed",
+    });
+
+    // First getById (issued by the earlier RunProgressed event) is held open so
+    // it resolves last; every later fetch returns the fresh HumanFeedback view.
+    const stale = deferred<WorkItem>();
+    let calls = 0;
+    vi.spyOn(authServices.workItemService, "getById").mockImplementation(() => {
+      calls += 1;
+      return calls === 1 ? stale.promise : Promise.resolve(freshHuman);
+    });
+
+    renderTaskboard();
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Item")).toBeTruthy();
+    });
+
+    // Burst: the run advances a node, then immediately parks for human input.
+    await dispatchSignalR(handlers["WorkItemRunProgressed"]![0], { workItemId: "wi-1" });
+    await dispatchSignalR(handlers["WorkItemStateChanged"]![0], {
+      workItemId: "wi-1",
+      oldStatus: "Running",
+      newStatus: "HumanFeedback",
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Human Input Needed")).toBeTruthy();
+    });
+
+    // The earlier fetch finally returns its stale Running snapshot.
+    await act(async () => {
+      stale.resolve(staleRunning);
+    });
+
+    // It must not revert the card back to Running.
+    expect(screen.queryByText("Human Input Needed")).toBeTruthy();
   });
 
   test("refreshes a running card's current step on WorkItemRunProgressed", async () => {
