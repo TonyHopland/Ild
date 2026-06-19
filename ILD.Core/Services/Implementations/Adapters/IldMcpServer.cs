@@ -15,11 +15,13 @@ public static class IldMcpServer
 
     /// <summary>
     /// Build the environment variables the MCP server needs: the ILD API URL,
-    /// an optional API token, and the current loop-run id. Returned as a
-    /// loosely-typed dictionary so each adapter can splice it directly into its
-    /// CLI config JSON.
+    /// an optional API token, and the originating context id. When
+    /// <paramref name="chatSessionId"/> is set the server is told the chat session
+    /// id (so created work items are stamped with it); otherwise it is told the
+    /// current loop-run id. Returned as a loosely-typed dictionary so each adapter
+    /// can splice it directly into its CLI config JSON.
     /// </summary>
-    public static Dictionary<string, object?> BuildEnvironment(LoopRunContext? runContext)
+    public static Dictionary<string, object?> BuildEnvironment(LoopRunContext? runContext, Guid? chatSessionId = null)
     {
         var env = new Dictionary<string, object?>
         {
@@ -30,7 +32,9 @@ public static class IldMcpServer
         if (!string.IsNullOrEmpty(apiToken))
             env["ILD_API_TOKEN"] = apiToken;
 
-        if (runContext != null)
+        if (chatSessionId is { } chatId)
+            env["ILD_CHAT_SESSION_ID"] = chatId.ToString();
+        else if (runContext != null)
             env["ILD_LOOP_RUN_ID"] = runContext.LoopRunId.ToString();
 
         return env;

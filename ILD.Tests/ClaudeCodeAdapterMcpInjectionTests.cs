@@ -75,6 +75,30 @@ public class ClaudeCodeAdapterMcpInjectionTests : IDisposable
     }
 
     [Fact]
+    public void BuildIldMcpEntry_tells_the_server_the_chat_session_id_for_a_chat_turn()
+    {
+        var chatSessionId = Guid.NewGuid();
+        var ctx = new LoopRunContext(
+            LoopRunId: chatSessionId,
+            WorkItemId: string.Empty,
+            WorkItemTitle: string.Empty,
+            WorkItemDescription: string.Empty,
+            WorktreePath: "/tmp",
+            BranchName: string.Empty,
+            EventLogSummary: new List<string>(),
+            PreviousNodeOutput: null);
+
+        var entry = ClaudeCodeAdapter.BuildIldMcpEntry(ctx, chatSessionId);
+        Assert.NotNull(entry);
+
+        var env = (Dictionary<string, object?>)entry!["env"]!;
+        // A chat turn stamps created work items with the chat session id, so the
+        // server must be told that — and NOT a loop-run id.
+        Assert.Equal(chatSessionId.ToString(), env["ILD_CHAT_SESSION_ID"]);
+        Assert.False(env.ContainsKey("ILD_LOOP_RUN_ID"));
+    }
+
+    [Fact]
     public void TryWriteIldMcpConfig_writes_temp_file_with_mcpServers_payload()
     {
         var provider = new AiProvider

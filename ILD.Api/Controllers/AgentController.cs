@@ -33,6 +33,7 @@ namespace ILD.Api.Controllers;
 public class AgentController : ControllerBase
 {
     private const string RunIdHeader = "X-ILD-Run-Id";
+    private const string ChatSessionIdHeader = "X-ILD-Chat-Session-Id";
 
     private readonly IWorkItemManager _workItems;
     private readonly ILoopTemplateManager _templates;
@@ -85,6 +86,7 @@ public class AgentController : ControllerBase
                 repositoryId = w.RepositoryId == Guid.Empty ? null : (Guid?)w.RepositoryId,
                 loopTemplateVersionId = (Guid?)null,
                 createdByLoopRunId = w.CreatedByLoopRunId,
+                createdByChatSessionId = w.CreatedByChatSessionId,
                 createdAt = w.CreatedAt,
                 updatedAt = w.UpdatedAt,
             }));
@@ -114,6 +116,7 @@ public class AgentController : ControllerBase
             repositoryId = wi.RepositoryId == Guid.Empty ? null : (Guid?)wi.RepositoryId,
                 loopTemplateVersionId = (Guid?)null,
             createdByLoopRunId = wi.CreatedByLoopRunId,
+            createdByChatSessionId = wi.CreatedByChatSessionId,
             createdAt = wi.CreatedAt,
             updatedAt = wi.UpdatedAt,
             dependencies = deps.Select(d => new { id = d.Id, title = d.Title, status = d.Status.ToString() }),
@@ -265,6 +268,14 @@ public class AgentController : ControllerBase
         else if (Request.Headers.TryGetValue(RunIdHeader, out var hdr) && Guid.TryParse(hdr.ToString(), out var headerRun))
             createdByLoopRunId = headerRun;
 
+        // A standalone Chat Session (ADR-0010) stamps via its own header instead.
+        // It is never both: when a run id is present the chat stamp is ignored.
+        Guid? createdByChatSessionId = null;
+        if (createdByLoopRunId is null
+            && Request.Headers.TryGetValue(ChatSessionIdHeader, out var chatHdr)
+            && Guid.TryParse(chatHdr.ToString(), out var headerChat))
+            createdByChatSessionId = headerChat;
+
         // Validate dependencies up-front so we don't half-create.
         var dependencyIds = new List<string>();
         if (request.Dependencies is { Count: > 0 })
@@ -290,7 +301,8 @@ public class AgentController : ControllerBase
                 repositoryId,
                 createdByLoopRunId,
                 forceBacklog: true,
-                tags: request.Tags);
+                tags: request.Tags,
+                createdByChatSessionId: createdByChatSessionId);
         }
         catch (InvalidOperationException ex)
         {
@@ -309,6 +321,7 @@ public class AgentController : ControllerBase
             id,
             status = created?.Status.ToString(),
             createdByLoopRunId = created?.CreatedByLoopRunId,
+            createdByChatSessionId = created?.CreatedByChatSessionId,
         });
     }
 }

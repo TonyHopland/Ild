@@ -694,7 +694,7 @@ public class OpenCodeAdapterTests
             Assert.Equal("managed-session", result.SessionId);
 
             await using var verifyDb = harness.CreateDbContext();
-            var snapshot = await verifyDb.AdapterSessionSnapshots.FindAsync(runId, "OpenCode", "managed-session");
+            var snapshot = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "managed-session");
             Assert.NotNull(snapshot);
             Assert.Equal("{\"id\":\"managed-session\",\"messages\":[1]}", snapshot!.SessionJson);
 
@@ -778,7 +778,7 @@ public class OpenCodeAdapterTests
             Assert.Equal("large-session", result.SessionId);
 
             await using var verifyDb = harness.CreateDbContext();
-            var snapshot = await verifyDb.AdapterSessionSnapshots.FindAsync(runId, "OpenCode", "large-session");
+            var snapshot = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "large-session");
             Assert.NotNull(snapshot);
             Assert.Equal(exportJson, snapshot!.SessionJson);
             Assert.Equal(exportJson.Length, snapshot.SessionJson.Length);
@@ -842,7 +842,7 @@ public class OpenCodeAdapterTests
             Assert.Equal("managed-session", result.SessionId);
 
             await using var verifyDb = harness.CreateDbContext();
-            var snapshot = await verifyDb.AdapterSessionSnapshots.FindAsync(runId, "OpenCode", "managed-session");
+            var snapshot = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "managed-session");
             Assert.Null(snapshot);
         }
         finally
@@ -918,7 +918,7 @@ public class OpenCodeAdapterTests
             Assert.Contains("export resume-session", log);
 
             await using var verifyDb = harness.CreateDbContext();
-            var snapshot = await verifyDb.AdapterSessionSnapshots.FindAsync(runId, "OpenCode", "resume-session");
+            var snapshot = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "resume-session");
             Assert.Equal("{\"id\":\"resume-session\",\"messages\":[2]}", snapshot!.SessionJson);
         }
         finally
@@ -992,7 +992,7 @@ public class OpenCodeAdapterTests
             Assert.Contains("export fresh-session", log);
 
             await using var verifyDb = harness.CreateDbContext();
-            var snapshot = await verifyDb.AdapterSessionSnapshots.FindAsync(runId, "OpenCode", "fresh-session");
+            var snapshot = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "fresh-session");
             Assert.Equal("{\"id\":\"fresh-session\",\"messages\":[1]}", snapshot!.SessionJson);
         }
         finally
@@ -1093,11 +1093,11 @@ public class OpenCodeAdapterTests
 
             await using var verifyDb = harness.CreateDbContext();
             // Source session is byte-for-byte unchanged after the fork.
-            var source = await verifyDb.AdapterSessionSnapshots.FindAsync(runId, "OpenCode", "source-sess");
+            var source = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "source-sess");
             Assert.NotNull(source);
             Assert.Equal(sourceJson, source!.SessionJson);
             // A copy now exists under the fork's id, retargeted to that id.
-            var fork = await verifyDb.AdapterSessionSnapshots.FindAsync(runId, "OpenCode", "fork-dest");
+            var fork = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "fork-dest");
             Assert.NotNull(fork);
             Assert.Contains("fork-dest", fork!.SessionJson);
             Assert.DoesNotContain("source-sess", fork.SessionJson);

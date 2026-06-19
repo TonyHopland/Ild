@@ -51,7 +51,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                 sessionIdToUse = restoreResult.SessionIdToUse;
             }
 
-            var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist);
+            var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId);
 
             Process? proc = null;
             try
@@ -201,7 +201,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         if (ScopeFactory is null || string.IsNullOrEmpty(sessionId))
             return ManagedSessionRestoreResult.Use(sessionId);
 
-        var snapshot = await GetSnapshotAsync(ctx.RunContext.LoopRunId, sessionId, ctx.Cancel);
+        var snapshot = await GetSnapshotAsync(ctx, sessionId, ctx.Cancel);
         if (snapshot is null || string.IsNullOrWhiteSpace(snapshot.SessionJson))
             return ManagedSessionRestoreResult.Use(sessionId);
 
@@ -244,7 +244,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         if (!IsValidJson(sessionJson))
             return ($"[opencode-error] failed to export managed session '{sessionId}': invalid JSON returned ({sessionJson.Length} chars)", null);
 
-        await UpsertSnapshotAsync(ctx.RunContext.LoopRunId, sessionId, sessionJson, ctx.Cancel);
+        await UpsertSnapshotAsync(ctx, sessionId, sessionJson, ctx.Cancel);
         return (null, sessionJson);
     }
 
@@ -621,7 +621,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         return fallback.Length > 0 ? fallback.ToString().Trim() : null;
     }
 
-    private static (string ModelRef, string ConfigJson) BuildOpenCodeConfig(AiProvider provider, LoopRunContext? runContext = null, IReadOnlyList<string>? selectedToolKeys = null)
+    private static (string ModelRef, string ConfigJson) BuildOpenCodeConfig(AiProvider provider, LoopRunContext? runContext = null, IReadOnlyList<string>? selectedToolKeys = null, Guid? chatSessionId = null)
     {
         var providerId = SanitizeProviderId(provider.Name);
         var modelId = provider.Model;
@@ -658,7 +658,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         // ~/.config/opencode/opencode.json (and any mcp entries it contains) is
         // ignored — we have to add the entry here ourselves.
         var ildMcp = enabled.Contains(AiToolCatalog.Ild)
-            ? BuildIldMcpEntry(runContext)
+            ? BuildIldMcpEntry(runContext, chatSessionId)
             : null;
         if (ildMcp != null)
         {
@@ -696,7 +696,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
     /// Returns <c>null</c> when no server DLL can be located, in which case
     /// the entry is omitted (failing open rather than poisoning the config).
     /// </summary>
-    public static Dictionary<string, object?>? BuildIldMcpEntry(LoopRunContext? runContext)
+    public static Dictionary<string, object?>? BuildIldMcpEntry(LoopRunContext? runContext, Guid? chatSessionId = null)
     {
         var dllPath = IldMcpServer.ResolveServerDll();
         if (dllPath == null) return null;
@@ -705,7 +705,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         {
             ["type"] = "local",
             ["command"] = new[] { "dotnet", dllPath },
-            ["environment"] = IldMcpServer.BuildEnvironment(runContext),
+            ["environment"] = IldMcpServer.BuildEnvironment(runContext, chatSessionId),
         };
     }
 

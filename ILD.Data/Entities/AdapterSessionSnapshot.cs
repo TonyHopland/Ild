@@ -3,11 +3,23 @@ using System.ComponentModel.DataAnnotations.Schema;
 
 namespace ILD.Data.Entities;
 
+/// <summary>
+/// A persisted adapter session transcript, keyed on EITHER a <see cref="LoopRun"/>
+/// OR a <see cref="ChatSession"/> (see ADR-0010). Exactly one of
+/// <see cref="LoopRunId"/> / <see cref="ChatSessionId"/> is set; the surrogate
+/// <see cref="Id"/> primary key lets the other be null. Both owners cascade-delete
+/// their snapshots, so reclaiming a run or ending a chat removes them.
+/// </summary>
 public class AdapterSessionSnapshot : IHasUpdatedAt
 {
-    [Required]
+    [Key]
+    public Guid Id { get; set; }
+
     [ForeignKey(nameof(LoopRun))]
-    public Guid LoopRunId { get; set; }
+    public Guid? LoopRunId { get; set; }
+
+    [ForeignKey(nameof(ChatSession))]
+    public Guid? ChatSessionId { get; set; }
 
     [Required]
     [MaxLength(128)]
@@ -24,6 +36,7 @@ public class AdapterSessionSnapshot : IHasUpdatedAt
 
     public DateTime? UpdatedAt { get; set; }
 
-    [ForeignKey(nameof(LoopRunId))]
-    public LoopRun LoopRun { get; set; } = null!;
+    public LoopRun? LoopRun { get; set; }
+
+    public ChatSession? ChatSession { get; set; }
 }

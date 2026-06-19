@@ -49,6 +49,7 @@ internal static class WorkItemMapper
         Conversation = ReadConversation(w),
         HumanFeedbackActions = w.HumanFeedbackActions,
         CreatedByLoopRunId = w.CreatedByLoopRunId,
+        CreatedByChatSessionId = w.CreatedByChatSessionId,
         RepositoryId = w.RepositoryId,
     };
 }

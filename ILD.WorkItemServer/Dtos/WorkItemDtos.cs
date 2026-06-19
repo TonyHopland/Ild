@@ -17,6 +17,7 @@ public sealed class WorkItemDto
     public IReadOnlyList<ConversationMessage> Conversation { get; set; } = Array.Empty<ConversationMessage>();
     public string? HumanFeedbackActions { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
+    public Guid? CreatedByChatSessionId { get; set; }
     public Guid? RepositoryId { get; set; }
 }
 
@@ -30,6 +31,7 @@ public sealed class CreateWorkItemRequest
     public IReadOnlyList<string>? Dependencies { get; set; }
     public WorkItemStatus? ForceStatus { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
+    public Guid? CreatedByChatSessionId { get; set; }
     public Guid? RepositoryId { get; set; }
 }
 

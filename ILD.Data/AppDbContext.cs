@@ -28,6 +28,8 @@ public class AppDbContext : DbContext
     public DbSet<AiProvider> AiProviders => Set<AiProvider>();
     public DbSet<User> Users => Set<User>();
     public DbSet<AppSetting> AppSettings => Set<AppSetting>();
+    public DbSet<ChatSession> ChatSessions => Set<ChatSession>();
+    public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -140,8 +142,26 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<AdapterSessionSnapshot>(e =>
         {
-            e.HasKey(s => new { s.LoopRunId, s.AdapterName, s.SessionId });
-            e.HasIndex(s => new { s.LoopRunId, s.AdapterName });
+            // Surrogate key: the owner (LoopRun OR ChatSession) is nullable, so a
+            // composite key over LoopRunId no longer works. Uniqueness per owner is
+            // enforced by the two filtered indexes below.
+            e.HasKey(s => s.Id);
+            e.HasIndex(s => new { s.LoopRunId, s.AdapterName, s.SessionId })
+                .IsUnique()
+                .HasFilter(null);
+            e.HasIndex(s => new { s.ChatSessionId, s.AdapterName, s.SessionId })
+                .IsUnique()
+                .HasFilter(null);
+        });
+
+        modelBuilder.Entity<ChatSession>(e =>
+        {
+            e.HasIndex(c => c.UserId).IsUnique();
+        });
+
+        modelBuilder.Entity<ChatMessage>(e =>
+        {
+            e.HasIndex(m => new { m.ChatSessionId, m.Sequence });
         });
 
         modelBuilder.Entity<LoopRunSessionBinding>(e =>
@@ -239,6 +259,16 @@ public class AppDbContext : DbContext
         {
             e.Property(u => u.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
         });
+
+        modelBuilder.Entity<ChatSession>(e =>
+        {
+            e.Property(c => c.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
+        });
+
+        modelBuilder.Entity<ChatMessage>(e =>
+        {
+            e.Property(m => m.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
+        });
     }
 
     private void ConfigureConstraints(ModelBuilder modelBuilder)
@@ -265,6 +295,18 @@ public class AppDbContext : DbContext
             .HasOne(s => s.LoopRun)
             .WithMany()
             .HasForeignKey(s => s.LoopRunId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<AdapterSessionSnapshot>()
+            .HasOne(s => s.ChatSession)
+            .WithMany()
+            .HasForeignKey(s => s.ChatSessionId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<ChatMessage>()
+            .HasOne(m => m.ChatSession)
+            .WithMany(c => c.Messages)
+            .HasForeignKey(m => m.ChatSessionId)
             .OnDelete(DeleteBehavior.Cascade);
 
         modelBuilder.Entity<LoopRunSessionBinding>()

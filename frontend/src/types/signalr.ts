@@ -21,6 +21,9 @@ import type {
   PreviewStateChangedPayload,
   WorkItemRunProgressedPayload,
   SchedulerStateChangedPayload,
+  ChatMessageAppendedPayload,
+  ChatTurnProgressPayload,
+  ChatTurnCompletedPayload,
 } from "./index";
 
 export interface SignalREventPayloads {
@@ -37,6 +40,9 @@ export interface SignalREventPayloads {
   PreviewStateChanged: PreviewStateChangedPayload;
   WorkItemRunProgressed: WorkItemRunProgressedPayload;
   SchedulerStateChanged: SchedulerStateChangedPayload;
+  ChatMessageAppended: ChatMessageAppendedPayload;
+  ChatTurnProgress: ChatTurnProgressPayload;
+  ChatTurnCompleted: ChatTurnCompletedPayload;
 }
 
 export type SignalREventName = keyof SignalREventPayloads;

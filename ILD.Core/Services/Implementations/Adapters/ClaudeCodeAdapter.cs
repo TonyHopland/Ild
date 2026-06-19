@@ -51,7 +51,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             // accepts a JSON config via `--mcp-config <file>`, which we merge
             // with whatever the user has installed in their config — there is
             // no replace-only mode required here.
-            mcpConfigPath = TryWriteIldMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist);
+            mcpConfigPath = TryWriteIldMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId);
 
             // Fork: seed a copy of the source session's transcript under the
             // destination id (leaving the source file untouched) so the restore
@@ -207,7 +207,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     /// Returns <c>null</c> when no server DLL can be located, in which case
     /// the entry is omitted (failing open rather than poisoning the config).
     /// </summary>
-    public static Dictionary<string, object?>? BuildIldMcpEntry(LoopRunContext? runContext)
+    public static Dictionary<string, object?>? BuildIldMcpEntry(LoopRunContext? runContext, Guid? chatSessionId = null)
     {
         var dllPath = IldMcpServer.ResolveServerDll();
         if (dllPath == null) return null;
@@ -216,7 +216,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         {
             ["command"] = "dotnet",
             ["args"] = new[] { dllPath },
-            ["env"] = IldMcpServer.BuildEnvironment(runContext),
+            ["env"] = IldMcpServer.BuildEnvironment(runContext, chatSessionId),
         };
     }
 
@@ -226,13 +226,13 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     /// tool isn't in the allowlist, when no server DLL can be located, or when
     /// the temp file can't be written.
     /// </summary>
-    public static string? TryWriteIldMcpConfig(AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? toolAllowlist)
+    public static string? TryWriteIldMcpConfig(AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? toolAllowlist, Guid? chatSessionId = null)
     {
         var enabledKeys = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, toolAllowlist);
         if (!enabledKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase))
             return null;
 
-        var entry = BuildIldMcpEntry(runContext);
+        var entry = BuildIldMcpEntry(runContext, chatSessionId);
         if (entry == null) return null;
 
         var config = new Dictionary<string, object?>
@@ -407,7 +407,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         AdapterSessionSnapshot? snapshot;
         try
         {
-            snapshot = await GetSnapshotAsync(ctx.RunContext.LoopRunId, sessionId, ctx.Cancel);
+            snapshot = await GetSnapshotAsync(ctx, sessionId, ctx.Cancel);
         }
         catch
         {
@@ -448,7 +448,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
 
         try
         {
-            await UpsertSnapshotAsync(ctx.RunContext.LoopRunId, sessionId, wrapped, ctx.Cancel);
+            await UpsertSnapshotAsync(ctx, sessionId, wrapped, ctx.Cancel);
         }
         catch
         {

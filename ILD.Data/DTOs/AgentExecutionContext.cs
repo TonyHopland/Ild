@@ -20,5 +20,10 @@ public record AgentExecutionContext(
     // this source session's transcript under <see cref="SessionId"/> — the fresh
     // destination id — leaving the source untouched, then continues on the copy.
     // This is the fork primitive; <see cref="SessionId"/> is the fork's id.
-    string? ForkFromSessionId = null
+    string? ForkFromSessionId = null,
+    // Set when this execution belongs to a standalone Chat Session rather than a
+    // LoopRun (see ADR-0010). When present, managed-session snapshots are keyed on
+    // the chat session, and the ILD MCP server is told the chat session id (so
+    // created work items are stamped with it) instead of a loop-run id.
+    Guid? ChatSessionId = null
 );

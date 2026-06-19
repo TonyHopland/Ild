@@ -66,26 +66,33 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     }
 
     /// <summary>
-    /// Fetch the managed-session snapshot for this adapter, keyed by run + this
-    /// adapter's <see cref="Name"/>. Returns <c>null</c> when no DI scope is
-    /// available (unit tests) or no snapshot exists. Store exceptions propagate
-    /// to the caller, matching the previous per-adapter behavior.
+    /// Fetch the managed-session snapshot for this adapter, keyed by this adapter's
+    /// <see cref="Name"/> and the execution's owner — a Chat Session when
+    /// <see cref="AgentExecutionContext.ChatSessionId"/> is set, otherwise the
+    /// LoopRun. Returns <c>null</c> when no DI scope is available (unit tests) or no
+    /// snapshot exists. Store exceptions propagate to the caller, matching the
+    /// previous per-adapter behavior.
     /// </summary>
-    protected async Task<AdapterSessionSnapshot?> GetSnapshotAsync(Guid loopRunId, string sessionId, CancellationToken ct)
+    protected async Task<AdapterSessionSnapshot?> GetSnapshotAsync(AgentExecutionContext ctx, string sessionId, CancellationToken ct)
     {
         if (ScopeFactory is null) return null;
         await using var scope = ScopeFactory.CreateAsyncScope();
         var store = scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>();
-        return await store.GetAsync(loopRunId, Name, sessionId, ct);
+        return ctx.ChatSessionId is { } chatId
+            ? await store.GetForChatAsync(chatId, Name, sessionId, ct)
+            : await store.GetAsync(ctx.RunContext.LoopRunId, Name, sessionId, ct);
     }
 
-    /// <summary>Persist a managed-session snapshot for this adapter. No-ops without a DI scope.</summary>
-    protected async Task UpsertSnapshotAsync(Guid loopRunId, string sessionId, string sessionJson, CancellationToken ct)
+    /// <summary>Persist a managed-session snapshot for this adapter's execution owner. No-ops without a DI scope.</summary>
+    protected async Task UpsertSnapshotAsync(AgentExecutionContext ctx, string sessionId, string sessionJson, CancellationToken ct)
     {
         if (ScopeFactory is null) return;
         await using var scope = ScopeFactory.CreateAsyncScope();
         var store = scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>();
-        await store.UpsertAsync(loopRunId, Name, sessionId, sessionJson, ct);
+        if (ctx.ChatSessionId is { } chatId)
+            await store.UpsertForChatAsync(chatId, Name, sessionId, sessionJson, ct);
+        else
+            await store.UpsertAsync(ctx.RunContext.LoopRunId, Name, sessionId, sessionJson, ct);
     }
 
     /// <summary>

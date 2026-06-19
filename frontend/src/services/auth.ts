@@ -8,6 +8,7 @@ import {
   RemoteProvider,
   RemoteProviderTypeOption,
   AiProvider,
+  ChatSession,
   LoopTemplateVersion,
   EventLogPage,
   ConfigFieldDescriptor,
@@ -434,6 +435,26 @@ export const aiProviderService = {
 
   setDefault: async (id: string): Promise<AiProvider> => {
     return api.post<AiProvider>(`/aiproviders/${id}/set-default`, {});
+  },
+};
+
+export const chatService = {
+  /** The current user's chat session, or null when none is active (204). */
+  get: async (): Promise<ChatSession | null> => {
+    const session = await api.get<ChatSession | undefined>("/chat");
+    return session ?? null;
+  },
+
+  start: async (aiProviderId: string, tools: string[]): Promise<ChatSession> => {
+    return api.post<ChatSession>("/chat", { aiProviderId, tools });
+  },
+
+  sendMessage: async (content: string): Promise<void> => {
+    await api.post<void>("/chat/messages", { content });
+  },
+
+  end: async (): Promise<void> => {
+    await api.delete<void>("/chat");
   },
 };
 

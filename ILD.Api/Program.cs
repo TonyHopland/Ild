@@ -173,6 +173,7 @@ try
     app.MapControllers();
     app.MapHub<LoopRunHub>("/hubs/loop-run");
     app.MapHub<WorkItemHub>("/hubs/work-item");
+    app.MapHub<ChatHub>("/hubs/chat");
 
     if (Directory.Exists(wwwroot))
     {

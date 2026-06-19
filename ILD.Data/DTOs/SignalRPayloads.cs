@@ -27,3 +27,9 @@ public record WorkItemRunProgressedPayload(string WorkItemId);
 public record NodeProgressPayload(Guid RunId, Guid NodeId, string Line, long Seq);
 
 public record SchedulerStateChangedPayload(bool IsPaused, int MaxConcurrent);
+
+public record ChatMessageAppendedPayload(Guid ChatSessionId, ChatMessageView Message);
+
+public record ChatTurnProgressPayload(Guid ChatSessionId, string Delta);
+
+public record ChatTurnCompletedPayload(Guid ChatSessionId, bool Interrupted);
