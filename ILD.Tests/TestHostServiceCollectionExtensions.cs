@@ -84,6 +84,9 @@ internal static class TestHostServiceCollectionExtensions
         public Task<WorktreePreviewResponse> StopAsync(string worktreePath, CancellationToken cancellationToken = default)
             => throw Unexpected(nameof(IWorktreePreviewService));
 
+        public Task<string?> GetServiceLogAsync(string worktreePath, string serviceName, int maxBytes = 64 * 1024, CancellationToken cancellationToken = default)
+            => throw Unexpected(nameof(IWorktreePreviewService));
+
         public Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
             => throw Unexpected(nameof(IWorktreePreviewService));
 

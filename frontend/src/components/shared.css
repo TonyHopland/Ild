@@ -518,30 +518,89 @@
   color: #f87171;
 }
 
-.preview-service-list {
+.preview-table {
   margin-top: 0.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
 }
 
-.preview-service-item {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
+.preview-table th,
+.preview-table td {
+  padding: 0.4rem 0.5rem;
+  text-align: left;
+  border-bottom: 1px solid #2a2a3a;
+  vertical-align: middle;
 }
 
-.preview-port-label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  margin-top: 0.25rem;
+.preview-table th {
   font-size: 0.75rem;
+  font-weight: 600;
+  color: #a0a0b0;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.preview-cell-name {
+  font-weight: 500;
+  color: #e0e0ec;
+}
+
+.preview-state {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 0.75rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.preview-state--running {
+  background: #14532d;
+  color: #86efac;
+}
+
+.preview-state--error {
+  background: #4c1d1d;
+  color: #f87171;
+}
+
+.preview-state--stopped {
+  background: #2a2a3a;
   color: #a0a0b0;
 }
 
+.preview-exit-code {
+  font-size: 0.7rem;
+  color: #f87171;
+}
+
 .preview-port-input {
-  max-width: 10rem;
+  max-width: 6rem;
+}
+
+.preview-log-row td {
+  background: #0d0d14;
+}
+
+.preview-log-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.35rem;
+}
+
+.preview-log-terminal {
+  max-height: 16rem;
+  overflow: auto;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  background: #000;
+  color: #d4d4d4;
+  border-radius: 0.25rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .preview-url {

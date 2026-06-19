@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { WorkItem, WorkItemStatus } from "../../types";
+import { WorkItem, WorkItemStatus, WorktreePreviewService } from "../../types";
 import { makeLoopTagMatcher, parseConversation, parseTags } from "../../utils/workItemJson";
 import MarkdownRenderer from "../MarkdownRenderer";
 import FeedbackActions from "../FeedbackActions";
@@ -107,9 +107,184 @@ export function ConversationPanel({ workItem }: { workItem: WorkItem }) {
   );
 }
 
+/** Maps a service's raw status to the State column's Stopped/Running/Error label. */
+function serviceState(status: string): { label: "Stopped" | "Running" | "Error"; tone: string } {
+  if (status === "running") return { label: "Running", tone: "running" };
+  if (status === "exited" || status === "failed" || status === "error")
+    return { label: "Error", tone: "error" };
+  return { label: "Stopped", tone: "stopped" };
+}
+
+/** One row per service: State, Name, Port (editable), Link, and a Log toggle. */
+function PreviewServiceTable({
+  services,
+  isRunning,
+  portInputs,
+  onPortChange,
+  detail,
+}: {
+  services: WorktreePreviewService[];
+  isRunning: boolean;
+  portInputs: Record<string, string>;
+  onPortChange: (alias: string, value: string) => void;
+  detail: WorkItemDetail;
+}) {
+  // The service whose log row is expanded, plus the fetched content keyed by
+  // service name so re-opening a row shows the last load until refreshed.
+  const [openLog, setOpenLog] = useState<string | null>(null);
+  const [logs, setLogs] = useState<
+    Record<string, { loading: boolean; error: string | null; content: string }>
+  >({});
+
+  const loadLog = (service: string) => {
+    setLogs((prev) => ({
+      ...prev,
+      [service]: { loading: true, error: null, content: prev[service]?.content ?? "" },
+    }));
+    detail
+      .fetchPreviewLogs(service)
+      .then((content) =>
+        setLogs((prev) => ({ ...prev, [service]: { loading: false, error: null, content } })),
+      )
+      .catch((error: { message?: string }) =>
+        setLogs((prev) => ({
+          ...prev,
+          [service]: {
+            loading: false,
+            error: error?.message ?? "Failed to load log.",
+            content: prev[service]?.content ?? "",
+          },
+        })),
+      );
+  };
+
+  const toggleLog = (service: string) => {
+    if (openLog === service) {
+      setOpenLog(null);
+      return;
+    }
+    setOpenLog(service);
+    if (!logs[service]) loadLog(service);
+  };
+
+  return (
+    <table className="preview-table">
+      <thead>
+        <tr>
+          <th>State</th>
+          <th>Name</th>
+          <th>Port</th>
+          <th>Link</th>
+          <th>Log</th>
+        </tr>
+      </thead>
+      <tbody>
+        {services.map((service) => {
+          const state = serviceState(service.status);
+          const portValue =
+            portInputs[service.portAlias] ?? String(service.port ?? service.suggestedPort ?? "");
+          const log = logs[service.name];
+          return (
+            <Fragment key={service.name}>
+              <tr>
+                <td>
+                  <span className={`preview-state preview-state--${state.tone}`}>
+                    {state.label}
+                  </span>
+                  {service.exitCode != null && (
+                    <span className="preview-exit-code"> (exit {service.exitCode})</span>
+                  )}
+                </td>
+                <td className="preview-cell-name">{service.name}</td>
+                <td>
+                  {isRunning ? (
+                    <span className="detail-value">{service.port ?? "—"}</span>
+                  ) : (
+                    <input
+                      type="number"
+                      className="preview-port-input"
+                      value={portValue}
+                      min={1}
+                      aria-label={`Port for ${service.name}`}
+                      onChange={(e) => onPortChange(service.portAlias, e.target.value)}
+                    />
+                  )}
+                </td>
+                <td>
+                  {service.publicUrl ? (
+                    <a
+                      href={service.publicUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="preview-url"
+                    >
+                      {service.publicUrl}
+                    </a>
+                  ) : (
+                    <span className="detail-value">—</span>
+                  )}
+                </td>
+                <td>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-secondary"
+                    aria-expanded={openLog === service.name}
+                    onClick={() => toggleLog(service.name)}
+                  >
+                    {openLog === service.name ? "Hide log" : "Log"}
+                  </button>
+                </td>
+              </tr>
+              {openLog === service.name && (
+                <tr className="preview-log-row">
+                  <td colSpan={5}>
+                    <div className="preview-log-toolbar">
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-secondary"
+                        onClick={() => loadLog(service.name)}
+                        disabled={log?.loading}
+                      >
+                        {log?.loading ? "Loading..." : "Refresh log"}
+                      </button>
+                    </div>
+                    {log?.error && <div className="preview-message preview-error">{log.error}</div>}
+                    <pre className="preview-log-terminal">
+                      {log?.content?.length
+                        ? log.content
+                        : log?.loading
+                          ? "Loading..."
+                          : "No log output yet."}
+                    </pre>
+                  </td>
+                </tr>
+              )}
+            </Fragment>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
 /** Preview tab: worktree preview state, services and start/stop controls. */
 export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail: WorkItemDetail }) {
   const { preview, previewLoading, previewError } = detail;
+
+  // User-edited port overrides keyed by port alias. Only touched aliases live
+  // here so untouched services keep the backend's automatic port allocation.
+  const [portInputs, setPortInputs] = useState<Record<string, string>>({});
+  const serviceAliases = preview?.services?.map((s) => s.portAlias).join(",") ?? "";
+  // Reset edits when the set of services changes (e.g. a different profile).
+  useEffect(() => {
+    setPortInputs({});
+  }, [serviceAliases]);
+
+  const isRunning = preview?.state === "running";
+  const primaryPreviewUrl = useMemo(
+    () => preview?.services?.find((service) => !!service.publicUrl)?.publicUrl ?? null,
+    [preview],
+  );
 
   if (!workItem.worktreePath) {
     return (
@@ -119,8 +294,14 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
     );
   }
 
-  const primaryPreviewUrl =
-    preview?.services.find((service) => !!service.publicUrl)?.publicUrl ?? null;
+  const startPreview = () => {
+    const overrides: Record<string, number> = {};
+    for (const [alias, raw] of Object.entries(portInputs)) {
+      const parsed = Number.parseInt(raw, 10);
+      if (Number.isFinite(parsed) && parsed > 0) overrides[alias] = parsed;
+    }
+    void detail.handleStartPreview(overrides);
+  };
 
   return (
     <div className="wiv2-preview">
@@ -134,27 +315,14 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
       {!previewError && preview?.message && (
         <div className="preview-message">{preview.message}</div>
       )}
-      {preview?.services.length ? (
-        <div className="preview-service-list">
-          {preview.services.map((service) => (
-            <div key={service.name} className="preview-service-item">
-              <span className="detail-value">
-                {service.name}: {service.status}
-                {service.port ? ` on :${service.port}` : ""}
-              </span>
-              {service.publicUrl && (
-                <a
-                  href={service.publicUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="preview-url"
-                >
-                  {service.publicUrl}
-                </a>
-              )}
-            </div>
-          ))}
-        </div>
+      {preview?.services?.length ? (
+        <PreviewServiceTable
+          services={preview.services}
+          isRunning={isRunning}
+          portInputs={portInputs}
+          onPortChange={(alias, value) => setPortInputs((prev) => ({ ...prev, [alias]: value }))}
+          detail={detail}
+        />
       ) : null}
       <div className="feedback-actions">
         <button
@@ -165,7 +333,7 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
         >
           Refresh
         </button>
-        {preview?.state === "running" ? (
+        {isRunning ? (
           <>
             {primaryPreviewUrl && (
               <a
@@ -190,15 +358,12 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
           <button
             type="button"
             className="btn btn-sm btn-primary"
-            onClick={() => void detail.handleStartPreview()}
+            onClick={startPreview}
             disabled={previewLoading}
           >
             Start Preview
           </button>
         ) : null}
-      </div>
-      <div className="preview-message">
-        Ports are chosen automatically in the mockups — use the classic dialog for port overrides.
       </div>
     </div>
   );

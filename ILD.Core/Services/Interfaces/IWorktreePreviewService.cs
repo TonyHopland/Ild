@@ -24,6 +24,19 @@ public interface IWorktreePreviewService
     Task<WorktreePreviewResponse> StopAsync(string worktreePath, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Reads the tail of a preview service's captured stdout/stderr log so a human
+    /// can see what a service printed — especially the failure output of a service
+    /// that exited. <paramref name="serviceName"/> identifies the service by its
+    /// configured name; the log lives in the worktree's preview state directory and
+    /// persists across stop/start, so it is readable whether the service is running,
+    /// exited, or fully stopped. Returns null when no log exists yet (the preview was
+    /// never started) or the name does not resolve to a log file. Only the last
+    /// <c>maxBytes</c> bytes are returned so a long-running service's log can't blow
+    /// up the response.
+    /// </summary>
+    Task<string?> GetServiceLogAsync(string worktreePath, string serviceName, int maxBytes = 64 * 1024, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Runs the install steps of an <c>ild.config.json</c> preview profile in the
     /// given worktree without starting any services. <paramref name="profileName"/>
     /// defaults to the config's default profile when null. When the worktree has no
@@ -53,6 +66,8 @@ public sealed class NoopPreviewService : IWorktreePreviewService
     public Task<WorktreePreviewResponse> StartAsync(string worktreePath, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
     public Task<WorktreePreviewResponse> StopAsync(string worktreePath, CancellationToken cancellationToken = default)
+        => throw new NotImplementedException();
+    public Task<string?> GetServiceLogAsync(string worktreePath, string serviceName, int maxBytes = 64 * 1024, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
     public Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
