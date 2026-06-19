@@ -17,8 +17,14 @@ export interface EdgeConstraintResult {
 }
 
 // Every node (except the Cleanup sink) routes success and failure. Only Human,
-// AI and PR nodes may additionally declare named custom edges.
-const customEdgeNodeTypes = new Set<NodeType>([NodeType.Human, NodeType.AI, NodeType.PR]);
+// AI, PR and Condition nodes may additionally declare named custom edges
+// (Condition declares its fixed "true"/"false" pair).
+const customEdgeNodeTypes = new Set<NodeType>([
+  NodeType.Human,
+  NodeType.AI,
+  NodeType.PR,
+  NodeType.Condition,
+]);
 
 export function nodeAllowsCustomEdges(nodeType: NodeType): boolean {
   return customEdgeNodeTypes.has(nodeType);

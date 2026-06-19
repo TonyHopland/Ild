@@ -32,6 +32,11 @@ export interface NodeSettingsSnapshot {
   promptNodePrompt: string;
   prDescriptionTemplate: string;
   prCommentTemplate: string;
+  conditionVariant: string;
+  conditionSubject: string;
+  conditionPattern: string;
+  conditionTag: string;
+  conditionOutput: string;
   adapterConfigValues: Record<string, AdapterConfigValue>;
 }
 

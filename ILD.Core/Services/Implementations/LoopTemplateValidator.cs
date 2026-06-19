@@ -9,9 +9,10 @@ namespace ILD.Core.Services.Implementations;
 public static class LoopTemplateValidator
 {
     // Every node (except the Cleanup sink) routes success and failure. Only
-    // Human, AI and PR nodes may additionally declare named custom edges.
+    // Human, AI, PR and Condition nodes may additionally declare named custom
+    // edges (Condition declares its fixed 'true'/'false' pair).
     private static readonly HashSet<string> CustomEdgeNodeTypes =
-        new(new[] { "Human", "AI", "PR" }, StringComparer.OrdinalIgnoreCase);
+        new(new[] { "Human", "AI", "PR", "Condition" }, StringComparer.OrdinalIgnoreCase);
 
     private static readonly HashSet<string> NoEdgeNodeTypes =
         new(new[] { "Cleanup" }, StringComparer.OrdinalIgnoreCase);
@@ -136,6 +137,8 @@ public static class LoopTemplateValidator
             var promptNodePrompt = string.Equals(node.NodeType, "Prompt", StringComparison.OrdinalIgnoreCase)
                 ? node.Config.GetValueOrDefault("prompt")?.ToString()
                 : null;
+            string? conditionSubject = null;
+            string? conditionOutput = null;
             if (string.Equals(node.NodeType, "AI", StringComparison.OrdinalIgnoreCase))
             {
                 var cfg = NodeConfig.Parse<NodeConfig.Ai>(System.Text.Json.JsonSerializer.Serialize(node.Config));
@@ -161,10 +164,60 @@ public static class LoopTemplateValidator
                 foreach (var missing in ruleEdgeNames.Except(customEdgeNames))
                     errors.Add($"AI node {node.Id} has a match rule routing to '{missing}' but no custom edge with that name exists.");
             }
+            else if (string.Equals(node.NodeType, "Condition", StringComparison.OrdinalIgnoreCase))
+            {
+                var cfg = NodeConfig.Parse<NodeConfig.Condition>(System.Text.Json.JsonSerializer.Serialize(node.Config));
+                conditionOutput = cfg.Output ?? ConditionNodeExecutor.DefaultTemplate;
 
-            if (string.IsNullOrEmpty(aiPrompt) && string.IsNullOrEmpty(prTemplate) && string.IsNullOrEmpty(prCommentTemplate) && string.IsNullOrEmpty(humanPrompt) && string.IsNullOrEmpty(promptNodePrompt)) continue;
+                // A Condition routes only through its two fixed custom outlets:
+                // exactly one 'true' edge and one 'false' edge, no OnSuccess, and
+                // no other custom name. Names are ordinal to mirror the engine's
+                // edge resolution (the executor emits literal "true"/"false").
+                var customNames = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var e in edges.Where(e => e.SourceNodeId == node.Id))
+                {
+                    if (!Enum.TryParse<EdgeType>(e.EdgeType, ignoreCase: true, out var role)) continue;
+                    if (role == EdgeType.OnSuccess)
+                        errors.Add($"Condition node {node.Id} must not have an OnSuccess edge; it routes via its 'true' and 'false' edges.");
+                    else if (role == EdgeType.Custom && !string.IsNullOrWhiteSpace(e.Name))
+                    {
+                        if (string.Equals(e.Name, "true", StringComparison.Ordinal) || string.Equals(e.Name, "false", StringComparison.Ordinal))
+                            customNames.Add(e.Name);
+                        else
+                            errors.Add($"Condition node {node.Id} has an unexpected custom edge '{e.Name}'; only 'true' and 'false' are allowed.");
+                    }
+                }
+                if (!customNames.Contains("true"))
+                    errors.Add($"Condition node {node.Id} must have a custom edge named 'true'.");
+                if (!customNames.Contains("false"))
+                    errors.Add($"Condition node {node.Id} must have a custom edge named 'false'.");
 
-            var templates = new[] { aiPrompt, prTemplate, prCommentTemplate, humanPrompt, promptNodePrompt }.Where(t => !string.IsNullOrEmpty(t)).ToList();
+                var variant = (cfg.Variant ?? string.Empty).Trim();
+                if (string.Equals(variant, "TextMatches", StringComparison.OrdinalIgnoreCase))
+                {
+                    conditionSubject = cfg.Subject ?? ConditionNodeExecutor.DefaultTemplate;
+                    if (string.IsNullOrWhiteSpace(cfg.Pattern))
+                        errors.Add($"Condition node {node.Id} (TextMatches) must set a non-empty pattern.");
+                    else
+                    {
+                        try { _ = new Regex(cfg.Pattern); }
+                        catch (ArgumentException ex) { errors.Add($"Condition node {node.Id} has an invalid regex pattern: {ex.Message}"); }
+                    }
+                }
+                else if (string.Equals(variant, "HasTag", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (string.IsNullOrWhiteSpace(cfg.Tag))
+                        errors.Add($"Condition node {node.Id} (HasTag) must set a non-empty tag.");
+                }
+                else if (!string.Equals(variant, "PrExists", StringComparison.OrdinalIgnoreCase))
+                {
+                    errors.Add($"Condition node {node.Id} has an unknown variant '{cfg.Variant}'.");
+                }
+            }
+
+            if (string.IsNullOrEmpty(aiPrompt) && string.IsNullOrEmpty(prTemplate) && string.IsNullOrEmpty(prCommentTemplate) && string.IsNullOrEmpty(humanPrompt) && string.IsNullOrEmpty(promptNodePrompt) && string.IsNullOrEmpty(conditionSubject) && string.IsNullOrEmpty(conditionOutput)) continue;
+
+            var templates = new[] { aiPrompt, prTemplate, prCommentTemplate, humanPrompt, promptNodePrompt, conditionSubject, conditionOutput }.Where(t => !string.IsNullOrEmpty(t)).ToList();
             foreach (var template in templates)
             {
                 foreach (Match m in PromptPlaceholderRegistry.Pattern.Matches(template!))

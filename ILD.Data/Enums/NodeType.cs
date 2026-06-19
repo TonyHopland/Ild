@@ -8,5 +8,6 @@ public enum NodeType
     Human = 3,
     Prompt = 4,
     PR = 5,
+    Condition = 6,
     Cleanup = 10
 }

@@ -80,8 +80,14 @@ const paletteItems = [
   { type: NodeType.Human, label: "Human" },
   { type: NodeType.Prompt, label: "Prompt" },
   { type: NodeType.PR, label: "PR" },
+  { type: NodeType.Condition, label: "Condition" },
   { type: NodeType.Cleanup, label: "Cleanup" },
 ];
+
+/** Pass-through default for a Condition node's Subject and Output templates. */
+const CONDITION_DEFAULT_TEMPLATE = "{{Node.Input}}";
+/** A new Condition node starts on the TextMatches variant. */
+const CONDITION_DEFAULT_VARIANT = "TextMatches";
 
 function collectSessionPlaceholderUsages(nodes: Node[]): SessionPlaceholderUsage[] {
   const counts = new Map<string, number>();
@@ -215,6 +221,11 @@ export default function LoopEditor() {
   const [promptNodePrompt, setPromptNodePrompt] = useState("");
   const [prDescriptionTemplate, setPrDescriptionTemplate] = useState("");
   const [prCommentTemplate, setPrCommentTemplate] = useState("");
+  const [conditionVariant, setConditionVariant] = useState(CONDITION_DEFAULT_VARIANT);
+  const [conditionSubject, setConditionSubject] = useState("");
+  const [conditionPattern, setConditionPattern] = useState("");
+  const [conditionTag, setConditionTag] = useState("");
+  const [conditionOutput, setConditionOutput] = useState(CONDITION_DEFAULT_TEMPLATE);
   const [labelError, setLabelError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
@@ -774,6 +785,13 @@ export default function LoopEditor() {
         y: event.clientY - bounds.top,
       });
 
+      // A Condition node ships with a usable default: the TextMatches variant
+      // and a pass-through Output, so its two fixed outlets work out of the box.
+      const initialConfig =
+        nodeType === NodeType.Condition
+          ? { variant: CONDITION_DEFAULT_VARIANT, output: CONDITION_DEFAULT_TEMPLATE }
+          : undefined;
+
       const newNode: Node = {
         id: `node-${Date.now()}`,
         type: "loopNode",
@@ -781,6 +799,7 @@ export default function LoopEditor() {
         data: {
           label: nodeType,
           type: nodeType,
+          ...(initialConfig ? { config: initialConfig } : {}),
         },
       };
 
@@ -843,6 +862,11 @@ export default function LoopEditor() {
       setPromptNodePrompt((config.prompt as string) || "");
       setPrDescriptionTemplate((config.prDescriptionTemplate as string) || "");
       setPrCommentTemplate((config.prCommentTemplate as string) || "");
+      setConditionVariant((config.variant as string) || CONDITION_DEFAULT_VARIANT);
+      setConditionSubject((config.subject as string) || "");
+      setConditionPattern((config.pattern as string) || "");
+      setConditionTag((config.tag as string) || "");
+      setConditionOutput((config.output as string) ?? CONDITION_DEFAULT_TEMPLATE);
       setAdapterConfigValues(initialAdapterValues);
 
       if (data.type === NodeType.AI) {
@@ -870,6 +894,11 @@ export default function LoopEditor() {
         promptNodePrompt: (config.prompt as string) || "",
         prDescriptionTemplate: (config.prDescriptionTemplate as string) || "",
         prCommentTemplate: (config.prCommentTemplate as string) || "",
+        conditionVariant: (config.variant as string) || CONDITION_DEFAULT_VARIANT,
+        conditionSubject: (config.subject as string) || "",
+        conditionPattern: (config.pattern as string) || "",
+        conditionTag: (config.tag as string) || "",
+        conditionOutput: (config.output as string) ?? CONDITION_DEFAULT_TEMPLATE,
         adapterConfigValues: initialAdapterValues,
       });
       setShowNodeSettingsModal(true);
@@ -926,6 +955,18 @@ export default function LoopEditor() {
       if (prDescriptionTemplate) config.prDescriptionTemplate = prDescriptionTemplate;
       if (prCommentTemplate) config.prCommentTemplate = prCommentTemplate;
       config.customEdges = cleanCustomEdgeNames(customEdgeNames);
+    } else if (selectedNodeType === NodeType.Condition) {
+      const variant = conditionVariant.trim() || CONDITION_DEFAULT_VARIANT;
+      config.variant = variant;
+      config.output = conditionOutput.trim() || CONDITION_DEFAULT_TEMPLATE;
+      // Persist only the params the chosen variant uses; clear the others so a
+      // variant switch never leaves stale Subject/Pattern/Tag behind.
+      config.subject =
+        variant === "TextMatches"
+          ? conditionSubject.trim() || CONDITION_DEFAULT_TEMPLATE
+          : undefined;
+      config.pattern = variant === "TextMatches" ? conditionPattern : undefined;
+      config.tag = variant === "HasTag" ? conditionTag.trim() : undefined;
     }
 
     setNodes((currentNodes) =>
@@ -967,6 +1008,11 @@ export default function LoopEditor() {
     prDescriptionTemplate,
     prCommentTemplate,
     promptNodePrompt,
+    conditionVariant,
+    conditionSubject,
+    conditionPattern,
+    conditionTag,
+    conditionOutput,
     setNodes,
     startCreateWorktree,
     startRunInstall,
@@ -991,6 +1037,11 @@ export default function LoopEditor() {
       setPromptNodePrompt(originalNodeConfig.promptNodePrompt);
       setPrDescriptionTemplate(originalNodeConfig.prDescriptionTemplate);
       setPrCommentTemplate(originalNodeConfig.prCommentTemplate);
+      setConditionVariant(originalNodeConfig.conditionVariant);
+      setConditionSubject(originalNodeConfig.conditionSubject);
+      setConditionPattern(originalNodeConfig.conditionPattern);
+      setConditionTag(originalNodeConfig.conditionTag);
+      setConditionOutput(originalNodeConfig.conditionOutput);
       setAdapterConfigValues(originalNodeConfig.adapterConfigValues);
     }
 
@@ -1039,6 +1090,46 @@ export default function LoopEditor() {
       const sourceNode = nodes.find((node) => node.id === connection.source);
       if (!sourceNode) return;
 
+      // Condition nodes expose two fixed outlets ("true"/"false"). They wire
+      // straight to a Custom edge whose name is the handle id — no name picker,
+      // no renaming — so the user cannot add or rename outlets.
+      if (connection.sourceHandle === "true" || connection.sourceHandle === "false") {
+        const fixedName = connection.sourceHandle;
+        const result = checkEdgeConstraints(
+          connection.source,
+          sourceNode.data?.type as NodeType,
+          EdgeType.Custom,
+          edges,
+        );
+        if (!result.allowed) {
+          setEdgeError(result.error ?? "Cannot create edge");
+          return;
+        }
+        if (
+          edges.some(
+            (edge) =>
+              edge.source === connection.source &&
+              edge.data?.edgeType === EdgeType.Custom &&
+              ((edge.data as { name?: string | null })?.name ?? "") === fixedName,
+          )
+        ) {
+          setEdgeError(`The '${fixedName}' edge is already connected from this node`);
+          return;
+        }
+        const newEdge = buildEdge({
+          source: connection.source,
+          target: connection.target,
+          edgeType: EdgeType.Custom,
+          name: fixedName,
+          maxTraversals: null,
+          sourceHandle: fixedName,
+          targetHandle: connection.targetHandle ?? "target-handle",
+        });
+        setEdges((currentEdges) => addEdge(newEdge, currentEdges));
+        setEdgeError(null);
+        return;
+      }
+
       let nextEdgeType = EdgeType.OnSuccess;
       if (connection.sourceHandle === "fail") nextEdgeType = EdgeType.OnFailure;
       // The top handle is the single custom outlet; the edge name is chosen in
@@ -1062,7 +1153,7 @@ export default function LoopEditor() {
       setEdgeError(null);
       setPendingConnection(connection);
     },
-    [edges, nodes],
+    [edges, nodes, setEdges],
   );
 
   const confirmEdge = useCallback(() => {
@@ -1372,6 +1463,11 @@ export default function LoopEditor() {
                     promptNodePrompt={promptNodePrompt}
                     prDescriptionTemplate={prDescriptionTemplate}
                     prCommentTemplate={prCommentTemplate}
+                    conditionVariant={conditionVariant}
+                    conditionSubject={conditionSubject}
+                    conditionPattern={conditionPattern}
+                    conditionTag={conditionTag}
+                    conditionOutput={conditionOutput}
                     aiProviders={aiProviders}
                     availableAiTools={availableAiTools}
                     adapterConfigSchema={adapterConfigSchema}
@@ -1399,6 +1495,11 @@ export default function LoopEditor() {
                     onPromptNodePromptChange={setPromptNodePrompt}
                     onPrDescriptionTemplateChange={setPrDescriptionTemplate}
                     onPrCommentTemplateChange={setPrCommentTemplate}
+                    onConditionVariantChange={setConditionVariant}
+                    onConditionSubjectChange={setConditionSubject}
+                    onConditionPatternChange={setConditionPattern}
+                    onConditionTagChange={setConditionTag}
+                    onConditionOutputChange={setConditionOutput}
                     onAdapterConfigChange={(name, value) =>
                       setAdapterConfigValues((current) => ({ ...current, [name]: value }))
                     }

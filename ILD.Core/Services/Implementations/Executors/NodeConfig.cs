@@ -90,4 +90,30 @@ internal static class NodeConfig
         public string? PrDescriptionTemplate { get; init; }
         public string? PrCommentTemplate { get; init; }
     }
+
+    /// <summary>
+    /// A Condition node evaluates a single predicate against run/work-item
+    /// state and routes to a fixed <c>true</c> or <c>false</c> custom edge,
+    /// without invoking AI, running a command, or touching the worktree.
+    /// </summary>
+    public sealed record Condition
+    {
+        /// <summary>Which predicate to evaluate: TextMatches | PrExists | HasTag.</summary>
+        public string? Variant { get; init; }
+
+        /// <summary>TextMatches: the templated text to test (default <c>{{Node.Input}}</c>).</summary>
+        public string? Subject { get; init; }
+
+        /// <summary>TextMatches: the case-insensitive regex matched against the rendered subject.</summary>
+        public string? Pattern { get; init; }
+
+        /// <summary>HasTag: the work-item tag tested by case-insensitive whole-string equality.</summary>
+        public string? Tag { get; init; }
+
+        /// <summary>
+        /// Templated output emitted identically on both branches (default
+        /// <c>{{Node.Input}}</c>, a pass-through of the incoming node input).
+        /// </summary>
+        public string? Output { get; init; }
+    }
 }
