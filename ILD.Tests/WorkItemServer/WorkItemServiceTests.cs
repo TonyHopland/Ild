@@ -61,6 +61,32 @@ public class WorkItemServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Description_is_mapped_with_no_max_length()
+    {
+        // The entity must map Description as unbounded text — no length cap.
+        var prop = _db.Model
+            .FindEntityType(typeof(WorkItem))!
+            .FindProperty(nameof(WorkItem.Description))!;
+
+        Assert.Null(prop.GetMaxLength());
+    }
+
+    [Fact]
+    public async Task Create_round_trips_description_far_larger_than_old_cap()
+    {
+        var description = new string('x', 20000);
+
+        var created = await _svc.CreateAsync(new CreateWorkItemRequest
+        {
+            Title = "big",
+            Description = description,
+        });
+
+        var fresh = await _svc.GetAsync(created.Id);
+        Assert.Equal(description, fresh!.Description);
+    }
+
+    [Fact]
     public async Task Create_honours_forceStatus_when_provided()
     {
         var dto = await _svc.CreateAsync(new CreateWorkItemRequest
