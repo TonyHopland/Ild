@@ -20,7 +20,7 @@ public sealed class WorkItemTools
     public Task<string> CreateWorkItem(
         [Description("Title (1..512 chars).")] string title,
         [Description("Required Repository GUID. Use list_repositories to discover ids.")] string repositoryId,
-        [Description("Description (markdown, up to 4096 chars).")] string description = "",
+        [Description("Description (markdown).")] string description = "",
         [Description("Optional list of WorkItem GUIDs this item depends on.")]
         string[]? dependencies = null,
         [Description("Optional originating LoopRun GUID. Defaults to the ILD_LOOP_RUN_ID env var.")]

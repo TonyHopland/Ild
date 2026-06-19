@@ -19,7 +19,6 @@ public class WorkItem
     [MaxLength(512)]
     public string Title { get; set; } = string.Empty;
 
-    [MaxLength(8192)]
     public string? Description { get; set; }
 
     [MaxLength(256)]

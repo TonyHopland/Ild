@@ -21,6 +21,8 @@ public sealed class WorkItemServerDbContext : DbContext
             b.HasIndex(w => w.Status);
             b.Property(w => w.Status).HasConversion<int>();
             b.Property(w => w.Priority).HasConversion<int>();
+            // Description is intentionally unbounded — map to PostgreSQL text.
+            b.Property(w => w.Description).HasColumnType("text");
         });
     }
 }

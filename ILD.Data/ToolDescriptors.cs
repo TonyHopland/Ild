@@ -97,7 +97,7 @@ public static class ToolDescriptors
         {
             new() { Name = "title", Description = "Title (1..512 chars).", TsType = "string", IsBodyParam = true },
             new() { Name = "repositoryId", Description = "Required Repository GUID.", TsType = "string", IsBodyParam = true },
-            new() { Name = "description", Description = "Description (markdown, up to 4096 chars).", TsType = "string", IsOptional = true, IsBodyParam = true },
+            new() { Name = "description", Description = "Description (markdown).", TsType = "string", IsOptional = true, IsBodyParam = true },
             new() { Name = "dependencies", Description = "Work item GUIDs this item depends on.", TsType = "string-array", IsOptional = true, IsBodyParam = true },
             new() { Name = "createdByLoopRunId", Description = "Originating LoopRun GUID. Defaults to current run.", TsType = "string", IsOptional = true, IsBodyParam = true },
             new() { Name = "tags", Description = "Tags matching loop template names.", TsType = "string-array", IsOptional = true, IsBodyParam = true },

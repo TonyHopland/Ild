@@ -81,6 +81,21 @@ public class DtoValidationTests
     }
 
     [Fact]
+    public void WorkItemCreateRequest_long_description_is_valid()
+    {
+        // Description is unbounded; a body well past the old 4096/8192 caps must validate.
+        var dto = new WorkItemCreateRequest { Title = "x", Description = new string('x', 20000) };
+        Assert.DoesNotContain(Validate(dto), r => r.MemberNames.Contains(nameof(WorkItemCreateRequest.Description)));
+    }
+
+    [Fact]
+    public void AgentWorkItemCreateRequest_long_description_is_valid()
+    {
+        var dto = new AgentWorkItemCreateRequest { Title = "x", Description = new string('x', 20000) };
+        Assert.DoesNotContain(Validate(dto), r => r.MemberNames.Contains(nameof(AgentWorkItemCreateRequest.Description)));
+    }
+
+    [Fact]
     public void WebhookPayload_missing_required_fields_produces_errors()
     {
         var dto = new WebhookPayload(EventType: "", RepositoryId: "", PullRequestId: null, PullRequestUrl: null, Comment: null, MergeStatus: null);
