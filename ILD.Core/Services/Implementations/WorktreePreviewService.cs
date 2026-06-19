@@ -160,6 +160,31 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         }
     }
 
+    public async Task<string?> GetServiceLogAsync(string worktreePath, string serviceName, int maxBytes = 64 * 1024, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(serviceName))
+            return null;
+
+        // The log file is named after the service inside the state directory, so a
+        // name with a path separator (or "..") could escape it. StartServiceAsync
+        // composes the path the same way; reject anything that isn't a bare file
+        // name rather than reading an arbitrary file off disk.
+        if (!string.Equals(serviceName, Path.GetFileName(serviceName), StringComparison.Ordinal))
+            return null;
+
+        var normalized = NormalizeWorktreePath(worktreePath);
+        var logPath = Path.Combine(BuildStateDirectory(normalized), $"{serviceName}.log");
+        if (!File.Exists(logPath))
+            return null;
+
+        await using var stream = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        if (maxBytes > 0 && stream.Length > maxBytes)
+            stream.Seek(-maxBytes, SeekOrigin.End);
+
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        return await reader.ReadToEndAsync(cancellationToken);
+    }
+
     public async Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
     {
         var normalized = NormalizeWorktreePath(worktreePath);

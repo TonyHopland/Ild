@@ -87,6 +87,12 @@ export interface WorktreePreviewService {
   exitCode: number | null;
 }
 
+/** Tail of a preview service's captured stdout/stderr log. */
+export interface WorktreePreviewLog {
+  service: string;
+  content: string | null;
+}
+
 export interface WorktreePreview {
   configured: boolean;
   state: string;

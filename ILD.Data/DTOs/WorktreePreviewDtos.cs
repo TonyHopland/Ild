@@ -21,6 +21,12 @@ public sealed class WorktreePreviewResponse
     public List<WorktreePreviewServiceResponse> Services { get; set; } = new();
 }
 
+public sealed class WorktreePreviewLogResponse
+{
+    public string Service { get; set; } = string.Empty;
+    public string? Content { get; set; }
+}
+
 public sealed class WorktreePreviewServiceResponse
 {
     public string Name { get; set; } = string.Empty;

@@ -164,19 +164,39 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     void refreshPreview();
   }, [refreshPreview]);
 
-  const handleStartPreview = useCallback(async () => {
-    if (!workItem) return;
-    setPreviewLoading(true);
-    setPreviewError(null);
-    try {
-      const result = await workItemService.startPreview(workItem.id, {});
-      setPreview(result);
-    } catch (error) {
-      setPreviewError((error as { message?: string })?.message ?? "Failed to start preview.");
-    } finally {
-      setPreviewLoading(false);
-    }
-  }, [workItem?.id]);
+  // Port overrides are keyed by the service's port alias and map onto the
+  // start request's portOverrides; an empty map starts with the suggested ports.
+  const handleStartPreview = useCallback(
+    async (portOverrides?: Record<string, number>) => {
+      if (!workItem) return;
+      setPreviewLoading(true);
+      setPreviewError(null);
+      try {
+        const hasOverrides = portOverrides && Object.keys(portOverrides).length > 0;
+        const result = await workItemService.startPreview(
+          workItem.id,
+          hasOverrides ? { portOverrides } : {},
+        );
+        setPreview(result);
+      } catch (error) {
+        setPreviewError((error as { message?: string })?.message ?? "Failed to start preview.");
+      } finally {
+        setPreviewLoading(false);
+      }
+    },
+    [workItem?.id],
+  );
+
+  // Fetch the tail of one service's captured log so the user can inspect what a
+  // service printed — most useful for a service that exited with an error.
+  const fetchPreviewLogs = useCallback(
+    async (service: string): Promise<string> => {
+      if (!workItem) return "";
+      const result = await workItemService.getPreviewLogs(workItem.id, service);
+      return result.content ?? "";
+    },
+    [workItem?.id],
+  );
 
   const handleStopPreview = useCallback(async () => {
     if (!workItem) return;
@@ -471,6 +491,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     refreshPreview,
     handleStartPreview,
     handleStopPreview,
+    fetchPreviewLogs,
     pushBranchLoading,
     pushBranchError,
     pushBranchMessage,

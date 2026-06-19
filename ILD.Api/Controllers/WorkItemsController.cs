@@ -195,6 +195,25 @@ public class WorkItemsController : ControllerBase
         }
     }
 
+    [HttpGet("{id}/preview/logs")]
+    public async Task<IActionResult> GetPreviewLog(string id, [FromQuery] string service)
+    {
+        if (string.IsNullOrWhiteSpace(service))
+            return BadRequest(new { error = "service is required." });
+
+        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
+        if (error != null) return error;
+        try
+        {
+            var content = await _worktreePreviewService.GetServiceLogAsync(workItem!.WorktreePath!, service);
+            return Ok(new WorktreePreviewLogResponse { Service = service, Content = content });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
     [HttpGet("{id}/files")]
     public async Task<IActionResult> GetFiles(string id)
     {
