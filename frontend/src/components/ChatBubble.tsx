@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSignalR } from "../hooks/useSignalR";
+import { useChatEnabled } from "../hooks/useChatEnabled";
 import { aiProviderService, chatService } from "../services/auth";
 import type {
   AiProvider,
@@ -9,8 +10,26 @@ import type {
   ChatTurnProgressPayload,
   ChatTurnCompletedPayload,
 } from "../types";
+import {
+  clampFabPosition,
+  clampPanelSize,
+  loadFabPosition,
+  loadPanelPosition,
+  loadPanelSize,
+  panelPosition,
+  saveFabPosition,
+  savePanelPosition,
+  savePanelSize,
+  viewportSize,
+  type Point,
+  type Size,
+} from "./chatPlacement";
 import MarkdownRenderer from "./MarkdownRenderer";
 import "./ChatBubble.css";
+
+// Treat tiny pointer movements as a click, not a drag, so the icon still opens
+// the panel when tapped.
+const DRAG_THRESHOLD_PX = 4;
 
 // The v1 tool catalog (read/write/execute/ild). `ild` is the only default-on
 // entry; the backend re-normalizes the selection against the provider type.
@@ -44,6 +63,117 @@ export default function ChatBubble() {
   const { connectionState, on, off, invoke } = useSignalR("/hubs/chat");
   const sessionIdRef = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  // Placement: a draggable icon position and a resizable panel size, both
+  // persisted and kept inside the viewport.
+  const chatEnabled = useChatEnabled();
+  const [fabPos, setFabPos] = useState<Point>(loadFabPosition);
+  const [panelSize, setPanelSize] = useState<Size>(loadPanelSize);
+  // The panel's own position once the user drags its header; until then it stays
+  // anchored to the icon (null).
+  const [panelOverride, setPanelOverride] = useState<Point | null>(loadPanelPosition);
+  // Set while a drag exceeds the threshold so the trailing click does not also
+  // open the panel.
+  const draggedRef = useRef(false);
+  // Latest panel size, so the window-resize handler can re-clamp the panel
+  // position without re-subscribing on every size change.
+  const panelSizeRef = useRef(panelSize);
+  panelSizeRef.current = panelSize;
+
+  // Persist placement changes and re-clamp into view whenever the window resizes.
+  useEffect(() => {
+    saveFabPosition(fabPos);
+  }, [fabPos]);
+  useEffect(() => {
+    savePanelSize(panelSize);
+  }, [panelSize]);
+  useEffect(() => {
+    if (panelOverride) savePanelPosition(panelOverride);
+  }, [panelOverride]);
+  useEffect(() => {
+    const onResize = () => {
+      const vp = viewportSize();
+      setFabPos((p) => clampFabPosition(p, vp));
+      setPanelSize((s) => clampPanelSize(s, vp));
+      setPanelOverride((p) => (p ? panelPosition(p, panelSizeRef.current, vp) : p));
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const startDrag = useCallback(
+    (e: React.PointerEvent) => {
+      draggedRef.current = false;
+      const origin = { px: e.clientX, py: e.clientY, ox: fabPos.x, oy: fabPos.y };
+      const onMove = (ev: PointerEvent) => {
+        const dx = ev.clientX - origin.px;
+        const dy = ev.clientY - origin.py;
+        if (Math.abs(dx) > DRAG_THRESHOLD_PX || Math.abs(dy) > DRAG_THRESHOLD_PX) {
+          draggedRef.current = true;
+        }
+        setFabPos(clampFabPosition({ x: origin.ox + dx, y: origin.oy + dy }, viewportSize()));
+      };
+      const onUp = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    },
+    [fabPos.x, fabPos.y],
+  );
+
+  const startResize = useCallback(
+    (e: React.PointerEvent) => {
+      e.preventDefault();
+      const origin = { px: e.clientX, py: e.clientY, w: panelSize.width, h: panelSize.height };
+      const onMove = (ev: PointerEvent) => {
+        const vp = viewportSize();
+        const next = clampPanelSize(
+          {
+            width: origin.w + (ev.clientX - origin.px),
+            height: origin.h + (ev.clientY - origin.py),
+          },
+          vp,
+        );
+        setPanelSize(next);
+        // Keep a moved panel on-screen as it grows toward the viewport edge.
+        setPanelOverride((p) => (p ? panelPosition(p, next, vp) : p));
+      };
+      const onUp = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    },
+    [panelSize.width, panelSize.height],
+  );
+
+  const startHeaderDrag = useCallback(
+    (e: React.PointerEvent) => {
+      // Let the header's own buttons (End chat / close) work without dragging.
+      if ((e.target as HTMLElement).closest("button")) return;
+      const base = panelOverride ?? panelPosition(fabPos, panelSize, viewportSize());
+      const origin = { px: e.clientX, py: e.clientY, ox: base.x, oy: base.y };
+      const onMove = (ev: PointerEvent) => {
+        setPanelOverride(
+          panelPosition(
+            { x: origin.ox + (ev.clientX - origin.px), y: origin.oy + (ev.clientY - origin.py) },
+            panelSize,
+            viewportSize(),
+          ),
+        );
+      };
+      const onUp = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    },
+    [panelOverride, fabPos, panelSize],
+  );
 
   // Load any existing session once, so the transcript rehydrates on reload.
   useEffect(() => {
@@ -126,6 +256,15 @@ export default function ChatBubble() {
     }
   }, [session, providers.length]);
 
+  const onFabClick = useCallback(() => {
+    // Swallow the click that ends a drag; a genuine click re-arms and opens.
+    if (draggedRef.current) {
+      draggedRef.current = false;
+      return;
+    }
+    void openPanel();
+  }, [openPanel]);
+
   const toggleTool = (key: string) => {
     setTools((prev) => {
       const next = new Set(prev);
@@ -178,22 +317,40 @@ export default function ChatBubble() {
     sessionIdRef.current = null;
   };
 
+  if (!chatEnabled) {
+    return null;
+  }
+
   if (!open) {
     return (
       <button
         type="button"
         className="chat-bubble-fab"
         aria-label="Open chat"
-        onClick={() => void openPanel()}
+        style={{ left: fabPos.x, top: fabPos.y }}
+        onPointerDown={startDrag}
+        onClick={onFabClick}
       >
         💬
       </button>
     );
   }
 
+  const panelPos = panelPosition(panelOverride ?? fabPos, panelSize, viewportSize());
+
   return (
-    <div className="chat-panel" role="dialog" aria-label="AI chat">
-      <div className="chat-panel-header">
+    <div
+      className="chat-panel"
+      role="dialog"
+      aria-label="AI chat"
+      style={{
+        left: panelPos.x,
+        top: panelPos.y,
+        width: panelSize.width,
+        height: panelSize.height,
+      }}
+    >
+      <div className="chat-panel-header" onPointerDown={startHeaderDrag}>
         <span className="chat-panel-title">AI Chat</span>
         <div className="chat-panel-header-actions">
           {session && (
@@ -290,6 +447,14 @@ export default function ChatBubble() {
           </form>
         </>
       )}
+
+      <div
+        className="chat-resize-handle"
+        role="button"
+        tabIndex={-1}
+        aria-label="Resize chat"
+        onPointerDown={startResize}
+      />
     </div>
   );
 }

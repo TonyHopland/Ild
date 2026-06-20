@@ -1,11 +1,13 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "../../hooks/useAuth";
+import { useChatEnabled, setChatEnabled } from "../../hooks/useChatEnabled";
 import { loggingService, settingsService, SchedulerSettingKeys } from "../../services/auth";
 
 const LOG_LEVELS = ["Debug", "Information", "Warning", "Error"] as const;
 
 export default function Settings() {
   const { user } = useAuth();
+  const chatEnabled = useChatEnabled();
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [logLevel, setLogLevel] = useState("Information");
   const [maxConcurrent, setMaxConcurrent] = useState<number>(5);
@@ -130,6 +132,24 @@ export default function Settings() {
               />{" "}
               Enable browser notifications
             </label>
+          </div>
+        </div>
+
+        <div className="settings-section">
+          <h2 className="settings-section-title">Chat</h2>
+          <div className="form-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={chatEnabled}
+                onChange={(e) => setChatEnabled(e.target.checked)}
+              />{" "}
+              Enable AI chat bubble
+            </label>
+            <p className="settings-about-desc" style={{ marginTop: "0.5rem" }}>
+              Shows the floating chat bubble in the lower corner. Disable it to hide the bubble
+              entirely so it cannot obstruct the view.
+            </p>
           </div>
         </div>
 

@@ -1,7 +1,6 @@
 .chat-bubble-fab {
   position: fixed;
-  right: 1.25rem;
-  bottom: 1.25rem;
+  /* Position is driven by inline left/top so the icon can be dragged. */
   width: 3.25rem;
   height: 3.25rem;
   border-radius: 50%;
@@ -9,23 +8,25 @@
   background: #6366f1;
   color: #fff;
   font-size: 1.4rem;
-  cursor: pointer;
+  cursor: grab;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
   z-index: 1000;
+  touch-action: none;
+  user-select: none;
 }
 
 .chat-bubble-fab:hover {
   background: #818cf8;
 }
 
+.chat-bubble-fab:active {
+  cursor: grabbing;
+}
+
 .chat-panel {
   position: fixed;
-  right: 1.25rem;
-  bottom: 1.25rem;
-  width: 24rem;
-  max-width: calc(100vw - 2rem);
-  height: 32rem;
-  max-height: calc(100vh - 2rem);
+  /* Position and size are driven by inline left/top/width/height so the panel
+     can be anchored to the dragged icon and resized. */
   display: flex;
   flex-direction: column;
   background: #1e1e30;
@@ -36,6 +37,28 @@
   overflow: hidden;
 }
 
+.chat-resize-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 1rem;
+  height: 1rem;
+  cursor: nwse-resize;
+  touch-action: none;
+  z-index: 1;
+}
+
+.chat-resize-handle::after {
+  content: "";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid #707090;
+  border-bottom: 2px solid #707090;
+}
+
 .chat-panel-header {
   display: flex;
   align-items: center;
@@ -43,6 +66,14 @@
   padding: 0.6rem 0.85rem;
   background: #2a2a40;
   border-bottom: 1px solid #2d2d44;
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+
+/* The header's buttons keep their own pointer behaviour, not the drag cursor. */
+.chat-panel-header .chat-link-btn {
+  cursor: pointer;
 }
 
 .chat-panel-title {
