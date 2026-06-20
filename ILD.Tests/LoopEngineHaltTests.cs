@@ -1,3 +1,4 @@
+using ILD.Data.Entities;
 using ILD.Data.Enums;
 
 namespace ILD.Tests;
@@ -83,6 +84,44 @@ public class LoopEngineHaltTests
         Assert.Equal("tighten the tests", run.SteeringNote);
         Assert.False(run.IsHalted);
         Assert.Equal(LoopRunStatus.Running, run.Status);
+    }
+
+    [Fact]
+    public async Task RetryFromNode_clears_halt_state_so_steer_dialog_does_not_stick()
+    {
+        using var h = new LoopEngineHarness();
+        h.Registry.Register(new ScriptedExecutor(NodeType.AI));
+        h.AddNode("ai", NodeType.AI);
+        h.SeedRun("ai");
+        await h.Engine.HaltRunAsync(h.RunId);
+
+        // Restart the run a different way than ResumeFromHalt: retry an earlier
+        // node. This is the path that left IsHalted stuck on, keeping the steer
+        // dialog visible the next time the run parked for human feedback.
+        var retryNode = SeedRunNode(h, "ai");
+        await h.Engine.RetryFromNodeAsync(h.RunId, retryNode.Id);
+        await WaitForIdleAsync(h);
+
+        var run = h.ReloadRun();
+        Assert.False(run.IsHalted);
+        Assert.Null(run.HumanFeedbackReason);
+        Assert.Null(run.SteeringNote);
+    }
+
+    // Seeds a LoopRunNode for the run so RetryFromNodeAsync has a target visit
+    // to walk back from.
+    private static LoopRunNode SeedRunNode(LoopEngineHarness h, string nodeKey)
+    {
+        var runNode = new LoopRunNode
+        {
+            Id = Guid.NewGuid(),
+            LoopRunId = h.RunId,
+            LoopNodeId = h.NodesById[nodeKey].Id,
+            Status = LoopRunNodeStatus.Interrupted,
+        };
+        h.Db.Context.LoopRunNodes.Add(runNode);
+        h.Db.Context.SaveChanges();
+        return runNode;
     }
 
     [Fact]

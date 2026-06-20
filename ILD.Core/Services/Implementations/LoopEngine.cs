@@ -353,6 +353,13 @@ public sealed class LoopEngine : ILoopEngine
         run.ExternalActionResult = null;
         run.ExternalActionResultType = ExternalActionResultType.Success;
         run.ExternalActionEdgeName = null;
+        // Clear any halt state: retrying a node is a different way of restarting a
+        // run that may have been parked by a Halt. Without this the steer/resume
+        // dialog stays stuck on (it gates on IsHalted + WaitingHuman) the next time
+        // the run parks at a genuine human-feedback node. Mirrors ResumeFromHaltAsync.
+        run.IsHalted = false;
+        run.SteeringNote = null;
+        run.HumanFeedbackReason = null;
         run.Status = LoopRunStatus.Running;
         run.IsPaused = false;
         await loopRunStore.UpdateRunAsync(run);
