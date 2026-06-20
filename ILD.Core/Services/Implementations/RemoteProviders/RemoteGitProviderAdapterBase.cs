@@ -179,15 +179,18 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     {
         var reviews = await GetArrayAsync(http, $"{apiRepo}/pulls/{prNumber}/reviews");
         var entries = new List<RemotePrConversationEntry>();
-        // The current stance of each reviewer is their latest submitted review;
-        // a since-dismissed approval no longer counts.
+        // A reviewer's stance is their latest *decisive* review (APPROVED /
+        // CHANGES_REQUESTED / DISMISSED). COMMENTED and PENDING reviews never
+        // change the decision — a comment posted after an approval must NOT drop
+        // that approval — and a since-DISMISSED approval no longer counts.
         var latestByUser = new Dictionary<string, (DateTime At, string State)>(StringComparer.OrdinalIgnoreCase);
         foreach (var review in reviews)
         {
             var author = ReadUserLogin(review);
             var normalized = NormalizeReviewState(ReadString(review, "state"));
             var at = ReadDate(review, "submitted_at") ?? DateTime.MinValue;
-            if (!latestByUser.TryGetValue(author, out var existing) || at >= existing.At)
+            if (normalized is "APPROVED" or "CHANGES_REQUESTED" or "DISMISSED"
+                && (!latestByUser.TryGetValue(author, out var existing) || at >= existing.At))
                 latestByUser[author] = (at, normalized);
 
             var body = ReadString(review, "body") ?? string.Empty;

@@ -125,6 +125,52 @@ public class RemoteProviderServiceTests
     }
 
     [Fact]
+    public async Task GetPullRequestSnapshotAsync_keeps_approval_when_a_later_comment_review_follows()
+    {
+        // A reviewer APPROVES, then later posts a COMMENTED review. GitHub keeps
+        // the approval as the reviewer's decision; a comment must not drop it.
+        using var db = new TestDb();
+        AddGitHub(db);
+
+        var handler = new RoutingHandler()
+            .Map(u => u.Contains("/pulls/7/reviews"), () =>
+                "[{\"user\":{\"login\":\"alice\"},\"state\":\"APPROVED\",\"body\":\"lgtm\",\"submitted_at\":\"2026-01-01T00:00:00Z\"},"
+                + "{\"user\":{\"login\":\"alice\"},\"state\":\"COMMENTED\",\"body\":\"nit\",\"submitted_at\":\"2026-01-02T00:00:00Z\"}]")
+            .Map(u => u.Contains("/comments") || u.Contains("/check-runs") || u.Contains("/status"), () => "[]")
+            .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () =>
+                "{\"state\":\"open\",\"merged\":false,\"mergeable\":true,\"head\":{\"sha\":\"abc\"}}");
+
+        var snapshot = await CreateService(db, handler)
+            .GetPullRequestSnapshotAsync("https://github.com/team/repo", "7");
+
+        Assert.NotNull(snapshot);
+        Assert.True(snapshot!.Approved);
+        Assert.False(snapshot.ChangesRequested);
+    }
+
+    [Fact]
+    public async Task GetPullRequestSnapshotAsync_drops_approval_once_dismissed()
+    {
+        // A reviewer APPROVES, then that review is DISMISSED: approval no longer counts.
+        using var db = new TestDb();
+        AddGitHub(db);
+
+        var handler = new RoutingHandler()
+            .Map(u => u.Contains("/pulls/7/reviews"), () =>
+                "[{\"user\":{\"login\":\"alice\"},\"state\":\"APPROVED\",\"body\":\"\",\"submitted_at\":\"2026-01-01T00:00:00Z\"},"
+                + "{\"user\":{\"login\":\"alice\"},\"state\":\"DISMISSED\",\"body\":\"\",\"submitted_at\":\"2026-01-02T00:00:00Z\"}]")
+            .Map(u => u.Contains("/comments") || u.Contains("/check-runs") || u.Contains("/status"), () => "[]")
+            .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () =>
+                "{\"state\":\"open\",\"merged\":false,\"mergeable\":true,\"head\":{\"sha\":\"abc\"}}");
+
+        var snapshot = await CreateService(db, handler)
+            .GetPullRequestSnapshotAsync("https://github.com/team/repo", "7");
+
+        Assert.NotNull(snapshot);
+        Assert.False(snapshot!.Approved);
+    }
+
+    [Fact]
     public async Task GetPullRequestSnapshotAsync_retries_while_mergeable_unknown()
     {
         using var db = new TestDb();
