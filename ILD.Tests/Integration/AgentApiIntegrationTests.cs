@@ -252,6 +252,45 @@ public class AgentApiIntegrationTests
     }
 
     [Fact]
+    public async Task UpdateWorkItem_is_scoped_to_the_creating_chat_session()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+        var chatSessionId = Guid.NewGuid();
+
+        // Create via a chat session (chat header, no run header).
+        var create = new HttpRequestMessage(HttpMethod.Post, "/api/v1/agent/workitems")
+        {
+            Content = JsonContent.Create(new { title = "chat original", description = "", repositoryId = repoId.ToString() }),
+        };
+        create.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        var createResp = await client.SendAsync(create);
+        createResp.EnsureSuccessStatusCode();
+        var itemId = JsonDocument.Parse(await createResp.Content.ReadAsStringAsync())
+            .RootElement.GetProperty("id").GetString();
+
+        // A different chat session may not edit it.
+        var forbidden = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/agent/workitems/{itemId}")
+        {
+            Content = JsonContent.Create(new { title = "hijacked", description = "" }),
+        };
+        forbidden.Headers.Add("X-ILD-Chat-Session-Id", Guid.NewGuid().ToString());
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(forbidden)).StatusCode);
+
+        // The creating chat session may.
+        var allowed = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/agent/workitems/{itemId}")
+        {
+            Content = JsonContent.Create(new { title = "chat edited", description = "by chat" }),
+        };
+        allowed.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        var resp = await client.SendAsync(allowed);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        Assert.Equal("chat edited", doc.GetProperty("title").GetString());
+    }
+
+    [Fact]
     public async Task CreateWorkItem_rejects_unknown_dependency()
     {
         await using var factory = new ApiFactory();

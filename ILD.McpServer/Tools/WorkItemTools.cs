@@ -42,7 +42,7 @@ public sealed class WorkItemTools
     }
 
     [McpServerTool(Name = "update_workitem")]
-    [Description("Edit a work item THIS session created — one whose createdByLoopRunId matches the current loop run (the ILD_LOOP_RUN_ID env var). You CANNOT edit pre-existing items or items created by other runs; the server rejects those with 403. Updates the title and description, and optionally replaces the tags (tags determine which loop template executes the item — each must match a loop template name).")]
+    [Description("Edit a work item THIS session created. In a loop run that means an item whose createdByLoopRunId matches the current run (the ILD_LOOP_RUN_ID env var); in a chat session it means an item whose createdByChatSessionId matches the current chat session (the ILD_CHAT_SESSION_ID env var). You CANNOT edit pre-existing items or items created by other runs or sessions; the server rejects those with 403. Updates the title and description, and optionally replaces the tags (tags determine which loop template executes the item — each must match a loop template name).")]
     public Task<string> UpdateWorkItem(
         [Description("Work item GUID. Must have been created by this session.")] string id,
         [Description("New title (1..512 chars).")] string title,
@@ -55,7 +55,7 @@ public sealed class WorkItemTools
     }
 
     [McpServerTool(Name = "delete_workitem")]
-    [Description("Delete a work item THIS session created — one whose createdByLoopRunId matches the current loop run (the ILD_LOOP_RUN_ID env var). You CANNOT delete pre-existing items or items created by other runs; the server rejects those with 403.")]
+    [Description("Delete a work item THIS session created. In a loop run that means an item whose createdByLoopRunId matches the current run (the ILD_LOOP_RUN_ID env var); in a chat session it means an item whose createdByChatSessionId matches the current chat session (the ILD_CHAT_SESSION_ID env var). You CANNOT delete pre-existing items or items created by other runs or sessions; the server rejects those with 403.")]
     public Task<string> DeleteWorkItem(
         [Description("Work item GUID. Must have been created by this session.")] string id)
         => _ild.DeleteAsync($"api/v1/agent/workitems/{Uri.EscapeDataString(id)}");
