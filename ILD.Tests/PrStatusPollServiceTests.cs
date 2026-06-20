@@ -84,6 +84,21 @@ public class PrStatusPollServiceTests
     }
 
     [Fact]
+    public async Task Persisted_snapshot_serializes_ci_as_string_name_not_ordinal()
+    {
+        // The frontend declares `ci` as a string union and indexes CI_LABELS[ci];
+        // a numeric enum ("ci":2) would render a blank CI badge. The persisted
+        // blob is round-tripped verbatim into the API response, so it must carry
+        // the enum's string name.
+        var h = new Harness(Snapshot(ci: RemotePrCiStatus.Passed), baseline: null);
+        await h.Build().PollOnceAsync();
+
+        Assert.NotNull(h.Run.PrSnapshot);
+        Assert.Contains("\"ci\":\"Passed\"", h.Run.PrSnapshot);
+        Assert.DoesNotContain("\"ci\":2", h.Run.PrSnapshot!);
+    }
+
+    [Fact]
     public async Task Fires_connected_edge_on_newly_true_state()
     {
         var h = new Harness(Snapshot(ci: RemotePrCiStatus.Failed), baseline: null);

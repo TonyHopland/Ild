@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace ILD.Data.DTOs;
 
 public record RemotePrResult(
@@ -23,8 +25,11 @@ public record RemotePrComment(
 
 /// <summary>
 /// Aggregate continuous-integration verdict for a PR's head commit, derived
-/// from check runs and commit statuses combined.
+/// from check runs and commit statuses combined. Serialized by its string name
+/// (not its ordinal) so the persisted snapshot's wire shape matches the
+/// frontend's <c>"None" | "Pending" | "Passed" | "Failed"</c> union.
 /// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter))]
 public enum RemotePrCiStatus
 {
     /// <summary>No check runs or commit statuses reported.</summary>
