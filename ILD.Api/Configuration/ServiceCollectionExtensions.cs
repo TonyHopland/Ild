@@ -55,6 +55,27 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPrSyncService, PrSyncService>();
         services.AddScoped<IAdapterSessionSnapshotStore, AdapterSessionSnapshotStore>();
 
+        // Standalone chat (ADR-0010): the turn runner is a singleton (owns
+        // interrupt/concurrency), the service is scoped (DbContext + adapter), and
+        // the notifier streams to the chat hub. The retention sweeper backstops
+        // abandoned sessions.
+        services.AddSingleton(sp =>
+        {
+            var config = sp.GetRequiredService<IConfiguration>();
+            var dataRoot = config["App:DataPath"]
+                ?? Environment.GetEnvironmentVariable("ILD_DATA_PATH")
+                ?? config["Storage:DataRoot"]
+                ?? "data";
+            return new ChatOptions
+            {
+                ScratchRoot = System.IO.Path.Combine(dataRoot, "chat-sessions"),
+            };
+        });
+        services.AddScoped<IChatService, ChatService>();
+        services.AddSingleton<IChatTurnRunner, ChatTurnRunner>();
+        services.AddSingleton<IChatNotifier, SignalRChatNotifier>();
+        services.AddHostedService<ChatSessionRetentionSweeper>();
+
         services.AddSingleton<IRunProgressBuffer, RunProgressBuffer>();
         services.AddSingleton<IRunNotifier, SignalRRunNotifier>();
         services.AddSingleton<IWorkItemNotifier, SignalRWorkItemNotifier>();

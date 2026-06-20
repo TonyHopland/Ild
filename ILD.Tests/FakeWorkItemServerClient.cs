@@ -39,6 +39,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             .ToList(),
         HumanFeedbackActions = dto.HumanFeedbackActions,
         CreatedByLoopRunId = dto.CreatedByLoopRunId,
+        CreatedByChatSessionId = dto.CreatedByChatSessionId,
         RepositoryId = dto.RepositoryId,
     };
 
@@ -54,6 +55,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             Dependencies = req.Dependencies?.ToList() ?? new List<string>(),
             ForceStatus = req.ForceStatus.HasValue ? Map(req.ForceStatus.Value) : null,
             CreatedByLoopRunId = req.CreatedByLoopRunId,
+            CreatedByChatSessionId = req.CreatedByChatSessionId,
             RepositoryId = req.RepositoryId,
         }, ct);
         return ToRemote(dto);

@@ -458,6 +458,43 @@ export interface SchedulerStateChangedPayload {
   maxConcurrent: number;
 }
 
+// ---- Chat (ADR-0010) ----
+
+/** A renderable transcript turn. Mirrors ILD.Data.DTOs.ChatMessageView. */
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  interrupted: boolean;
+  sequence: number;
+  createdAt: string;
+}
+
+/** The current user's chat session. Mirrors ILD.Data.DTOs.ChatSessionView. */
+export interface ChatSession {
+  id: string;
+  aiProviderId: string;
+  providerType: string;
+  tools: string[];
+  createdAt: string;
+  messages: ChatMessage[];
+}
+
+export interface ChatMessageAppendedPayload {
+  chatSessionId: string;
+  message: ChatMessage;
+}
+
+export interface ChatTurnProgressPayload {
+  chatSessionId: string;
+  delta: string;
+}
+
+export interface ChatTurnCompletedPayload {
+  chatSessionId: string;
+  interrupted: boolean;
+}
+
 export interface AppSetting {
   key: string;
   value: string;

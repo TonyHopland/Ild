@@ -30,7 +30,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
         try
         {
             var rendered = await RenderPromptAsync(ctx.Prompt, ctx.RunContext);
-            var settings = ResolveSettings(ctx.Provider, ctx.RunContext.LoopRunId, ctx.ToolAllowlist);
+            var settings = ResolveSettings(ctx.Provider, ctx.RunContext.LoopRunId, ctx.ToolAllowlist, ctx.ChatSessionId);
 
             if (string.IsNullOrWhiteSpace(settings.BinaryPath))
                 return NodeExecutionResult.Fail("[pi-error] binaryPath is not configured");
@@ -239,7 +239,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
         if (ScopeFactory is null)
             return ManagedSessionRestoreResult.StartFresh();
 
-        var snapshot = await GetSnapshotAsync(ctx.RunContext.LoopRunId, sessionId, ctx.Cancel);
+        var snapshot = await GetSnapshotAsync(ctx, sessionId, ctx.Cancel);
         if (snapshot is null || string.IsNullOrWhiteSpace(snapshot.SessionJson))
             return ManagedSessionRestoreResult.StartFresh();
 
@@ -260,7 +260,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
 
         var sessionJson = await File.ReadAllTextAsync(sessionPath, ctx.Cancel);
 
-        await UpsertSnapshotAsync(ctx.RunContext.LoopRunId, sessionId, sessionJson, ctx.Cancel);
+        await UpsertSnapshotAsync(ctx, sessionId, sessionJson, ctx.Cancel);
     }
 
     private static async Task<PiExecutionOutput> ReadStdoutAsync(StreamReader reader, Func<string, Task>? progressCallback, Action<string>? onSessionId, CancellationToken ct)
@@ -473,7 +473,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
         }
     }
 
-    private static PiAdapterSettings ResolveSettings(AiProvider provider, Guid loopRunId, IReadOnlyList<string>? selectedToolKeys)
+    private static PiAdapterSettings ResolveSettings(AiProvider provider, Guid loopRunId, IReadOnlyList<string>? selectedToolKeys, Guid? chatSessionId = null)
     {
         var config = AiProviderConfig.Parse(provider.Config);
         var binaryPath = config.BinaryPathOr("pi");
@@ -519,7 +519,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
             agentDirectory,
             modelsJsonContent,
             apiKeyEnvironmentVariableName,
-            BuildIldExtensionContent(hasAbsoluteBaseUrl, loopRunId, enabledToolKeys),
+            BuildIldExtensionContent(hasAbsoluteBaseUrl, loopRunId, enabledToolKeys, chatSessionId),
             toolNames);
     }
 
@@ -611,7 +611,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
     /// Delegates to <see cref="PiExtensionGenerator"/> which reads from the shared
     /// <see cref="ILD.Data.ToolDescriptors"/> to avoid duplicating tool definitions.
     /// </summary>
-    private static string? BuildIldExtensionContent(bool shouldGenerate, Guid loopRunId, IReadOnlyList<string> enabledToolKeys)
+    private static string? BuildIldExtensionContent(bool shouldGenerate, Guid loopRunId, IReadOnlyList<string> enabledToolKeys, Guid? chatSessionId = null)
     {
         if (!shouldGenerate || !enabledToolKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase))
             return null;
@@ -621,11 +621,14 @@ public sealed class PiAdapter : CliAgentAdapterBase
         var apiToken = Environment.GetEnvironmentVariable("ILD_API_TOKEN")
             ?? string.Empty;
 
+        var contextId = chatSessionId?.ToString() ?? loopRunId.ToString();
+
         return PiExtensionGenerator.Generate(
             apiUrl,
             apiToken,
-            loopRunId.ToString(),
-            ToolDescriptors.All.Select(tool => tool.Name).ToArray());
+            contextId,
+            ToolDescriptors.All.Select(tool => tool.Name).ToArray(),
+            isChatSession: chatSessionId is not null);
     }
 
     internal sealed record PiAdapterSettings(

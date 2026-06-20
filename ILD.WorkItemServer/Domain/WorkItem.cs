@@ -59,6 +59,14 @@ public class WorkItem
     public Guid? CreatedByLoopRunId { get; set; }
 
     /// <summary>
+    /// The Chat Session that created this work item (see ADR-0010). Mutually
+    /// exclusive with <see cref="CreatedByLoopRunId"/>. Persists with a now-orphaned
+    /// stamp after the chat is ended, exactly as run-created items keep
+    /// <see cref="CreatedByLoopRunId"/> after their run is reclaimed.
+    /// </summary>
+    public Guid? CreatedByChatSessionId { get; set; }
+
+    /// <summary>
     /// The repository this work item is associated with. Stored on the server
     /// so it round-trips and can be attached to LoopRun records on the client.
     /// </summary>

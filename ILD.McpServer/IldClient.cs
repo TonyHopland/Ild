@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace ILD.McpServer;
 
-public sealed record IldClientOptions(string ApiUrl, string ApiToken, string? LoopRunId);
+public sealed record IldClientOptions(string ApiUrl, string ApiToken, string? LoopRunId, string? ChatSessionId = null);
 
 /// <summary>
 /// Thin HTTP wrapper for the ILD agent-scoped API surface (`/api/v1/agent/...`).

@@ -52,11 +52,11 @@ public class ClaudeCodeAdapterForkTests
 
             await using var verifyDb = harness.CreateDbContext();
             // Source session is byte-for-byte unchanged after the fork.
-            var source = await verifyDb.AdapterSessionSnapshots.FindAsync(runId, "ClaudeCode", "source-sess");
+            var source = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "ClaudeCode" && s.SessionId == "source-sess");
             Assert.NotNull(source);
             Assert.Equal(sourceJson, source!.SessionJson);
             // A copy now exists under the fork's id, retargeted to that id.
-            var fork = await verifyDb.AdapterSessionSnapshots.FindAsync(runId, "ClaudeCode", "fork-dest");
+            var fork = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "ClaudeCode" && s.SessionId == "fork-dest");
             Assert.NotNull(fork);
             Assert.Contains("fork-dest", fork!.SessionJson);
             Assert.DoesNotContain("source-sess", fork.SessionJson);

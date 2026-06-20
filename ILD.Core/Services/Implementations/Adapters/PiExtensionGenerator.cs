@@ -18,7 +18,16 @@ internal static class PiExtensionGenerator
         => Generate(apiUrl, apiToken, loopRunId, allowedToolNames: null);
 
     public static string Generate(string apiUrl, string apiToken, string loopRunId, IReadOnlyCollection<string>? allowedToolNames)
+        => Generate(apiUrl, apiToken, loopRunId, allowedToolNames, isChatSession: false);
+
+    /// <param name="isChatSession">
+    /// When true the extension identifies its calls with the
+    /// <c>X-ILD-Chat-Session-Id</c> header (so created work items are stamped with
+    /// the chat session id) instead of the loop-run header.
+    /// </param>
+    public static string Generate(string apiUrl, string apiToken, string contextId, IReadOnlyCollection<string>? allowedToolNames, bool isChatSession)
     {
+        var headerName = isChatSession ? "X-ILD-Chat-Session-Id" : "X-ILD-Run-Id";
         var sb = new StringBuilder();
         var allowedToolNameSet = allowedToolNames == null
             ? null
@@ -40,12 +49,12 @@ internal static class PiExtensionGenerator
         sb.Append(EscapeTsString(apiToken));
         sb.AppendLine("\";");
         sb.Append("const LOOP_RUN_ID = \"");
-        sb.Append(EscapeTsString(loopRunId));
+        sb.Append(EscapeTsString(contextId));
         sb.AppendLine("\";");
         sb.AppendLine();
 
         // HTTP helpers
-        AppendHttpHelpers(sb);
+        AppendHttpHelpers(sb, headerName);
 
         // Extension factory
         sb.AppendLine("export default function (pi: ExtensionAPI) {");
@@ -64,7 +73,7 @@ internal static class PiExtensionGenerator
         return sb.ToString();
     }
 
-    private static void AppendHttpHelpers(StringBuilder sb)
+    private static void AppendHttpHelpers(StringBuilder sb, string headerName)
     {
         sb.AppendLine("function joinApiUrl(base: string, path: string): string {");
         sb.AppendLine("    const normalizedBase = base.endsWith(\"/\") ? base.slice(0, -1) : base;");
@@ -76,7 +85,7 @@ internal static class PiExtensionGenerator
         sb.AppendLine("    const url = joinApiUrl(API_BASE, path);");
         sb.AppendLine("    const headers: Record<string, string> = {};");
         sb.AppendLine("    if (API_TOKEN) headers[\"Authorization\"] = `Bearer ${API_TOKEN}`;");
-        sb.AppendLine("    if (LOOP_RUN_ID) headers[\"X-ILD-Run-Id\"] = LOOP_RUN_ID;");
+        sb.AppendLine($"    if (LOOP_RUN_ID) headers[\"{headerName}\"] = LOOP_RUN_ID;");
         sb.AppendLine("    const resp = await fetch(url, { headers });");
         sb.AppendLine("    const body = await resp.text();");
         sb.AppendLine("    if (!resp.ok) throw new Error(`GET ${path} failed: ${resp.status} ${resp.statusText}`);");
@@ -87,7 +96,7 @@ internal static class PiExtensionGenerator
         sb.AppendLine("    const url = joinApiUrl(API_BASE, path);");
         sb.AppendLine("    const headers: Record<string, string> = { \"Content-Type\": \"application/json\" };");
         sb.AppendLine("    if (API_TOKEN) headers[\"Authorization\"] = `Bearer ${API_TOKEN}`;");
-        sb.AppendLine("    if (LOOP_RUN_ID) headers[\"X-ILD-Run-Id\"] = LOOP_RUN_ID;");
+        sb.AppendLine($"    if (LOOP_RUN_ID) headers[\"{headerName}\"] = LOOP_RUN_ID;");
         sb.AppendLine("    const resp = await fetch(url, {");
         sb.AppendLine("        method: \"POST\",");
         sb.AppendLine("        headers,");

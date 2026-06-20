@@ -5,7 +5,7 @@ namespace ILD.Core.Services.Interfaces;
 public interface IWorkItemManager
 {
     Task<string> CreateWorkItemAsync(string title, string description, Guid? repositoryId);
-    Task<string> CreateWorkItemAsync(string title, string description, Guid? repositoryId, Guid? createdByLoopRunId, bool forceBacklog, IEnumerable<string>? tags = null);
+    Task<string> CreateWorkItemAsync(string title, string description, Guid? repositoryId, Guid? createdByLoopRunId, bool forceBacklog, IEnumerable<string>? tags = null, Guid? createdByChatSessionId = null);
     Task<bool> UpdateAsync(string workItemId, string title, string description, IEnumerable<string>? tags = null);
     Task<WorkItemView?> GetWorkItemAsync(string workItemId);
 

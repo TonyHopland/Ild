@@ -105,7 +105,8 @@ public class WorkItemManager : IWorkItemManager
         Guid? repositoryId,
         Guid? createdByLoopRunId,
         bool forceBacklog,
-        IEnumerable<string>? tags = null)
+        IEnumerable<string>? tags = null,
+        Guid? createdByChatSessionId = null)
     {
         var opts = await _options.ResolveForRepositoryAsync(repositoryId);
 
@@ -117,14 +118,19 @@ public class WorkItemManager : IWorkItemManager
             forceStatus = MapToRemote(repo.DefaultIntakeStatus);
         }
 
+        var createdBy = createdByLoopRunId.HasValue ? $"Agent-{createdByLoopRunId.Value}"
+            : createdByChatSessionId.HasValue ? $"Chat-{createdByChatSessionId.Value}"
+            : null;
+
         var serverWi = await _server.CreateAsync(opts, new RemoteCreateWorkItemRequest
         {
             Title = title,
             Description = description,
-            CreatedBy = createdByLoopRunId.HasValue ? $"Agent-{createdByLoopRunId.Value}" : null,
+            CreatedBy = createdBy,
             ForceStatus = forceStatus,
             Tags = tags?.ToList() ?? (IReadOnlyList<string>)Array.Empty<string>(),
             CreatedByLoopRunId = createdByLoopRunId,
+            CreatedByChatSessionId = createdByChatSessionId,
             RepositoryId = repositoryId,
         });
 
@@ -228,6 +234,7 @@ public class WorkItemManager : IWorkItemManager
             HumanFeedbackActions = remote.HumanFeedbackActions,
             RepositoryId = run?.RepositoryId ?? remote.RepositoryId,
             CreatedByLoopRunId = run?.CreatedByLoopRunId ?? remote.CreatedByLoopRunId,
+            CreatedByChatSessionId = remote.CreatedByChatSessionId,
             StartedAt = timingRun?.StartedAt,
             CompletedAt = timingRun?.CompletedAt,
             WorktreePath = run?.WorktreePath,

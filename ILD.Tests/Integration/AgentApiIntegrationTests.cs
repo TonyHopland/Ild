@@ -61,6 +61,30 @@ public class AgentApiIntegrationTests
     }
 
     [Fact]
+    public async Task CreateWorkItem_stamps_chat_session_id_from_header()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.WorkQueue);
+        var chatSessionId = Guid.NewGuid();
+
+        var req = new HttpRequestMessage(HttpMethod.Post, "/api/v1/agent/workitems")
+        {
+            Content = JsonContent.Create(new { title = "from chat", description = "", repositoryId = repoId.ToString() })
+        };
+        req.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+
+        var resp = await client.SendAsync(req);
+        Assert.Equal(HttpStatusCode.Created, resp.StatusCode);
+
+        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+        // Chat-created items carry the chat stamp (not a run stamp) and still land in Backlog.
+        Assert.Equal(chatSessionId.ToString(), doc.RootElement.GetProperty("createdByChatSessionId").GetString());
+        Assert.Equal("Backlog", doc.RootElement.GetProperty("status").GetString());
+        Assert.True(doc.RootElement.GetProperty("createdByLoopRunId").ValueKind == JsonValueKind.Null);
+    }
+
+    [Fact]
     public async Task ListWorkItems_filters_by_createdByLoopRunId()
     {
         await using var factory = new ApiFactory();
