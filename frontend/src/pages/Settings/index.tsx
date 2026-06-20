@@ -18,6 +18,10 @@ export default function Settings() {
   const [retentionInput, setRetentionInput] = useState<string>("30");
   const [retentionError, setRetentionError] = useState<string | null>(null);
   const [savingRetention, setSavingRetention] = useState(false);
+  const [prHeartbeat, setPrHeartbeat] = useState<number>(60);
+  const [prHeartbeatInput, setPrHeartbeatInput] = useState<string>("60");
+  const [prHeartbeatError, setPrHeartbeatError] = useState<string | null>(null);
+  const [savingPrHeartbeat, setSavingPrHeartbeat] = useState(false);
 
   useEffect(() => {
     const stored = localStorage.getItem("ild_notifications_enabled");
@@ -41,6 +45,16 @@ export default function Settings() {
         if (!Number.isNaN(n)) {
           setRetentionDays(n);
           setRetentionInput(String(n));
+        }
+      })
+      .catch(() => {});
+    void settingsService
+      .get(SchedulerSettingKeys.PrHeartbeatSeconds)
+      .then((s) => {
+        const n = parseInt(s.value, 10);
+        if (!Number.isNaN(n)) {
+          setPrHeartbeat(n);
+          setPrHeartbeatInput(String(n));
         }
       })
       .catch(() => {});
@@ -79,6 +93,24 @@ export default function Settings() {
       setRetentionError(err instanceof Error ? err.message : "Failed to save.");
     } finally {
       setSavingRetention(false);
+    }
+  };
+
+  const savePrHeartbeat = async () => {
+    const n = parseInt(prHeartbeatInput, 10);
+    if (Number.isNaN(n) || n < 5 || n > 3600) {
+      setPrHeartbeatError("Must be an integer between 5 and 3600.");
+      return;
+    }
+    setPrHeartbeatError(null);
+    setSavingPrHeartbeat(true);
+    try {
+      await settingsService.put(SchedulerSettingKeys.PrHeartbeatSeconds, String(n));
+      setPrHeartbeat(n);
+    } catch (err) {
+      setPrHeartbeatError(err instanceof Error ? err.message : "Failed to save.");
+    } finally {
+      setSavingPrHeartbeat(false);
     }
   };
 
@@ -220,6 +252,42 @@ export default function Settings() {
               How long a finished run's worktree, branch, and history are kept before being
               reclaimed. Set to <strong>0</strong> to keep runs forever. Runs pinned with “Retain”
               are never deleted.
+            </p>
+          </div>
+        </div>
+
+        <div className="settings-section">
+          <h2 className="settings-section-title">PR heartbeat</h2>
+          <div className="form-group">
+            <label htmlFor="prHeartbeat">Poll PR state every (seconds)</label>
+            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+              <input
+                id="prHeartbeat"
+                type="number"
+                min={5}
+                max={3600}
+                value={prHeartbeatInput}
+                onChange={(e) => setPrHeartbeatInput(e.target.value)}
+                style={{ width: "6rem" }}
+              />
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={savePrHeartbeat}
+                disabled={savingPrHeartbeat || prHeartbeatInput === String(prHeartbeat)}
+              >
+                Save
+              </button>
+            </div>
+            {prHeartbeatError && (
+              <div className="form-error" style={{ color: "#f87171", marginTop: "0.25rem" }}>
+                {prHeartbeatError}
+              </div>
+            )}
+            <p className="settings-about-desc" style={{ marginTop: "0.5rem" }}>
+              How often the background poller fetches PR state (CI, reviews, merge status) for runs
+              parked at a PR node awaiting merge. Lower values react faster but use more provider
+              API calls.
             </p>
           </div>
         </div>

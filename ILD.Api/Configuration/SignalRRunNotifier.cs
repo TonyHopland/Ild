@@ -108,4 +108,17 @@ public class SignalRRunNotifier : IRunNotifier
             _logger.LogError(ex, "Failed to send NodeProgress for run {RunId} node {NodeId}", runId, nodeId);
         }
     }
+
+    public async Task PrSnapshotChangedAsync(Guid runId)
+    {
+        try
+        {
+            await _runHub.Clients.Group(runId.ToString())
+                .SendAsync("PrSnapshotChanged", new PrSnapshotChangedPayload(runId));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send PrSnapshotChanged for run {RunId}", runId);
+        }
+    }
 }

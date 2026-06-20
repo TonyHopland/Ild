@@ -18,6 +18,7 @@ import type {
   RunHaltedPayload,
   DependencyResolvedPayload,
   NodeProgressPayload,
+  PrSnapshotChangedPayload,
   PreviewStateChangedPayload,
   WorkItemRunProgressedPayload,
   SchedulerStateChangedPayload,
@@ -37,6 +38,7 @@ export interface SignalREventPayloads {
   RunHalted: RunHaltedPayload;
   DependencyResolved: DependencyResolvedPayload;
   NodeProgress: NodeProgressPayload;
+  PrSnapshotChanged: PrSnapshotChangedPayload;
   PreviewStateChanged: PreviewStateChangedPayload;
   WorkItemRunProgressed: WorkItemRunProgressedPayload;
   SchedulerStateChanged: SchedulerStateChangedPayload;

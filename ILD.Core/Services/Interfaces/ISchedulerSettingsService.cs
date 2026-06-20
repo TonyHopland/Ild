@@ -27,6 +27,13 @@ public static class AppSettingKeys
 
     public const int DefaultPollIntervalSeconds = 60;
     public const int DefaultGraceIntervalSeconds = 5;
+
+    /// <summary>
+    /// Seconds between PR heartbeat poller passes. The poller fetches a fresh PR
+    /// snapshot for every run parked at a PR node awaiting merge.
+    /// </summary>
+    public const string PrHeartbeatSeconds = "pr.heartbeatSeconds";
+    public const int DefaultPrHeartbeatSeconds = 60;
 }
 
 /// <summary>
@@ -41,4 +48,7 @@ public interface ISchedulerSettingsService
     /// Run retention window in days; <c>0</c> means never auto-reclaim.
     /// </summary>
     Task<int> GetRunRetentionDaysAsync(CancellationToken ct = default);
+
+    /// <summary>Seconds between PR heartbeat poller passes (minimum 1).</summary>
+    Task<int> GetPrHeartbeatSecondsAsync(CancellationToken ct = default);
 }

@@ -15,6 +15,9 @@ public interface IRunNotifier
     Task ResumedAsync(Guid runId);
     Task HaltedAsync(Guid runId);
     Task NodeProgressAsync(Guid runId, Guid nodeId, string line, long seq);
+
+    /// <summary>The run's persisted PR snapshot was refreshed by the heartbeat poller.</summary>
+    Task PrSnapshotChangedAsync(Guid runId);
 }
 
 public sealed class NoopRunNotifier : IRunNotifier
@@ -26,4 +29,5 @@ public sealed class NoopRunNotifier : IRunNotifier
     public Task ResumedAsync(Guid runId) => Task.CompletedTask;
     public Task HaltedAsync(Guid runId) => Task.CompletedTask;
     public Task NodeProgressAsync(Guid runId, Guid nodeId, string line, long seq) => Task.CompletedTask;
+    public Task PrSnapshotChangedAsync(Guid runId) => Task.CompletedTask;
 }

@@ -284,6 +284,38 @@ export interface LoopRun {
   availableSessions?: LoopRunAvailableSession[];
   availableVariables?: LoopRunVariable[];
   nodes: LoopRunNode[];
+  /** The run's linked PR URL, if a PR node has opened one. */
+  prUrl?: string | null;
+  /** Full PR snapshot from the heartbeat poller; null until the first poll. */
+  prSnapshot?: RemotePrSnapshot | null;
+}
+
+/** Aggregate CI verdict for a PR's head commit (mirrors RemotePrCiStatus). */
+export type RemotePrCiStatus = "None" | "Pending" | "Passed" | "Failed";
+
+/** One entry in a PR's conversation (issue comment, review comment, or review). */
+export interface RemotePrConversationEntry {
+  kind: "comment" | "review_comment" | "review";
+  author: string;
+  body: string;
+  createdAt: string;
+  /** Review verdict (APPROVED / CHANGES_REQUESTED / …) when kind === "review". */
+  state: string | null;
+}
+
+/** Full point-in-time PR view, persisted per run and rendered by the feedback UI. */
+export interface RemotePrSnapshot {
+  title: string | null;
+  body: string | null;
+  state: string;
+  merged: boolean;
+  mergeable: boolean | null;
+  mergeableState: string | null;
+  ci: RemotePrCiStatus;
+  approved: boolean;
+  changesRequested: boolean;
+  conversation: RemotePrConversationEntry[];
+  fetchedAt: string;
 }
 
 export interface EventLogEntry {
@@ -443,6 +475,10 @@ export interface NodeProgressPayload {
   line: string;
   /** Monotonic per-run sequence number; used to dedupe the backlog→live handoff. */
   seq: number;
+}
+
+export interface PrSnapshotChangedPayload {
+  runId: string;
 }
 
 export interface PreviewStateChangedPayload {

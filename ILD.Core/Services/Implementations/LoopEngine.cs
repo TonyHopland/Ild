@@ -682,6 +682,12 @@ public sealed class LoopEngine : ILoopEngine
                         var oldStatus = run.Status;
                         run.Status = LoopRunStatus.WaitingHuman;
                         run.HumanFeedbackReason = wa.Reason;
+                        // Reset the PR heartbeat baseline so the poller treats a
+                        // state already true at park time (e.g. CI already red, or
+                        // a still-red state on a re-park after a fix loop) as a
+                        // transition and fires on the first poll.
+                        if (wa.Reason == HumanFeedbackReasons.PrAwaitingMerge)
+                            run.PrPolledEdgeStates = null;
                         await loopRunStore.UpdateRunAsync(run);
                         await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.WaitingHuman);
                         await _notifier.RunStateChangedAsync(run.Id, oldStatus, LoopRunStatus.WaitingHuman);

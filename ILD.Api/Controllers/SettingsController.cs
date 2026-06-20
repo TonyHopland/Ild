@@ -19,24 +19,28 @@ public class SettingsController : ControllerBase
     private readonly IWorkItemNotifier _notifier;
     private readonly IWorkItemScheduler _scheduler;
     private readonly ISchedulerSettingsService _schedulerSettings;
+    private readonly ILD.Core.Services.Remote.IPrStatusPoller _prPoller;
 
     private static readonly HashSet<string> KnownKeys = new(StringComparer.Ordinal)
     {
         AppSettingKeys.SchedulerMaxConcurrent,
         AppSettingKeys.SchedulerIsPaused,
         AppSettingKeys.RunRetentionDays,
+        AppSettingKeys.PrHeartbeatSeconds,
     };
 
     public SettingsController(
         IAppSettingStore store,
         IWorkItemNotifier notifier,
         IWorkItemScheduler scheduler,
-        ISchedulerSettingsService schedulerSettings)
+        ISchedulerSettingsService schedulerSettings,
+        ILD.Core.Services.Remote.IPrStatusPoller prPoller)
     {
         _store = store;
         _notifier = notifier;
         _scheduler = scheduler;
         _schedulerSettings = schedulerSettings;
+        _prPoller = prPoller;
     }
 
     public sealed class UpdateSettingRequest
@@ -58,6 +62,8 @@ public class SettingsController : ControllerBase
             map[AppSettingKeys.SchedulerIsPaused] = AppSettingKeys.DefaultIsPaused.ToString().ToLowerInvariant();
         if (!map.ContainsKey(AppSettingKeys.RunRetentionDays))
             map[AppSettingKeys.RunRetentionDays] = AppSettingKeys.DefaultRunRetentionDays.ToString();
+        if (!map.ContainsKey(AppSettingKeys.PrHeartbeatSeconds))
+            map[AppSettingKeys.PrHeartbeatSeconds] = AppSettingKeys.DefaultPrHeartbeatSeconds.ToString();
         return Ok(map.Select(kv => new { key = kv.Key, value = kv.Value }));
     }
 
@@ -87,6 +93,12 @@ public class SettingsController : ControllerBase
             var max = await _schedulerSettings.GetMaxConcurrentAsync(ct);
             await _notifier.SchedulerStateChangedAsync(isPaused, max);
         }
+        else if (key == AppSettingKeys.PrHeartbeatSeconds)
+        {
+            // Wake the poller so a shortened heartbeat takes effect now rather
+            // than after the previous (possibly long) interval elapses.
+            _prPoller.Pulse();
+        }
 
         return Ok(new { key, value = request.Value });
     }
@@ -96,6 +108,7 @@ public class SettingsController : ControllerBase
         AppSettingKeys.SchedulerMaxConcurrent => AppSettingKeys.DefaultMaxConcurrent.ToString(),
         AppSettingKeys.SchedulerIsPaused => AppSettingKeys.DefaultIsPaused.ToString().ToLowerInvariant(),
         AppSettingKeys.RunRetentionDays => AppSettingKeys.DefaultRunRetentionDays.ToString(),
+        AppSettingKeys.PrHeartbeatSeconds => AppSettingKeys.DefaultPrHeartbeatSeconds.ToString(),
         _ => string.Empty,
     };
 
@@ -121,6 +134,13 @@ public class SettingsController : ControllerBase
                 if (!int.TryParse(value, out var days) || days < 0 || days > 3650)
                 {
                     error = "run.retentionDays must be an integer between 0 (disabled) and 3650";
+                    return false;
+                }
+                break;
+            case AppSettingKeys.PrHeartbeatSeconds:
+                if (!int.TryParse(value, out var secs) || secs < 5 || secs > 3600)
+                {
+                    error = "pr.heartbeatSeconds must be an integer between 5 and 3600";
                     return false;
                 }
                 break;

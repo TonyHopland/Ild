@@ -29,4 +29,11 @@ public sealed class SchedulerSettingsService : ISchedulerSettingsService
         if (s != null && int.TryParse(s.Value, out var v) && v >= 0) return v;
         return AppSettingKeys.DefaultRunRetentionDays;
     }
+
+    public async Task<int> GetPrHeartbeatSecondsAsync(CancellationToken ct = default)
+    {
+        var s = await _store.GetByKeyAsync(AppSettingKeys.PrHeartbeatSeconds, ct);
+        if (s != null && int.TryParse(s.Value, out var v) && v > 0) return v;
+        return AppSettingKeys.DefaultPrHeartbeatSeconds;
+    }
 }

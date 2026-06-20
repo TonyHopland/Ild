@@ -4,6 +4,7 @@ using System.Text;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.RemoteProviders;
 using ILD.Core.Services.Interfaces;
+using ILD.Data.DTOs;
 using ILD.Data.Entities;
 
 namespace ILD.Tests;
@@ -42,6 +43,112 @@ public class RemoteProviderServiceTests
                 clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
             return clone;
         }
+    }
+
+    // Routes GitHub REST calls to canned JSON by URL, in declared order so more
+    // specific paths (…/pulls/7/reviews) match before …/pulls/7.
+    private sealed class RoutingHandler : HttpMessageHandler
+    {
+        private readonly List<(Func<string, bool> Match, Func<string> Body)> _rules = new();
+        public int PrDetailCalls { get; private set; }
+
+        public RoutingHandler Map(Func<string, bool> match, Func<string> body)
+        {
+            _rules.Add((match, body));
+            return this;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var url = request.RequestUri!.ToString();
+            if (url.EndsWith("/pulls/7", StringComparison.Ordinal)) PrDetailCalls++;
+            foreach (var (match, body) in _rules)
+            {
+                if (match(url))
+                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(body(), Encoding.UTF8, "application/json"),
+                    });
+            }
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+        }
+    }
+
+    private static void AddGitHub(TestDb db)
+    {
+        db.Context.RemoteProviders.Add(new RemoteProvider
+        {
+            Id = Guid.NewGuid(),
+            Name = "github",
+            Type = "GitHub",
+            Url = "https://github.com",
+            ApiKey = "k",
+        });
+        db.Context.SaveChanges();
+    }
+
+    [Fact]
+    public async Task GetPullRequestSnapshotAsync_aggregates_pr_reviews_ci_and_conversation()
+    {
+        using var db = new TestDb();
+        AddGitHub(db);
+
+        var handler = new RoutingHandler()
+            .Map(u => u.Contains("/pulls/7/reviews"), () =>
+                "[{\"user\":{\"login\":\"alice\"},\"state\":\"APPROVED\",\"body\":\"lgtm\",\"submitted_at\":\"2026-01-01T00:00:00Z\"}]")
+            .Map(u => u.Contains("/pulls/7/comments"), () =>
+                "[{\"user\":{\"login\":\"carol\"},\"body\":\"inline\",\"created_at\":\"2026-01-03T00:00:00Z\"}]")
+            .Map(u => u.Contains("/issues/7/comments"), () =>
+                "[{\"user\":{\"login\":\"bob\"},\"body\":\"hi\",\"created_at\":\"2026-01-02T00:00:00Z\"}]")
+            .Map(u => u.Contains("/check-runs"), () =>
+                "{\"check_runs\":[{\"status\":\"completed\",\"conclusion\":\"failure\"}]}")
+            .Map(u => u.Contains("/commits/abc/status"), () => "{\"state\":\"success\",\"statuses\":[]}")
+            .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () =>
+                "{\"title\":\"My PR\",\"body\":\"desc\",\"state\":\"open\",\"merged\":false,\"mergeable\":true,\"mergeable_state\":\"clean\",\"head\":{\"sha\":\"abc\"}}");
+
+        var snapshot = await CreateService(db, handler)
+            .GetPullRequestSnapshotAsync("https://github.com/team/repo", "7");
+
+        Assert.NotNull(snapshot);
+        Assert.Equal("My PR", snapshot!.Title);
+        Assert.Equal("open", snapshot.State);
+        Assert.False(snapshot.Merged);
+        Assert.True(snapshot.Mergeable);
+        Assert.True(snapshot.Approved);
+        Assert.False(snapshot.ChangesRequested);
+        Assert.Equal(RemotePrCiStatus.Failed, snapshot.Ci);
+        // review (Jan 1) < issue comment (Jan 2) < review comment (Jan 3).
+        Assert.Equal(3, snapshot.Conversation.Count);
+        Assert.Equal("review", snapshot.Conversation[0].Kind);
+        Assert.Equal("comment", snapshot.Conversation[1].Kind);
+        Assert.Equal("review_comment", snapshot.Conversation[2].Kind);
+    }
+
+    [Fact]
+    public async Task GetPullRequestSnapshotAsync_retries_while_mergeable_unknown()
+    {
+        using var db = new TestDb();
+        AddGitHub(db);
+
+        var prCalls = 0;
+        var handler = new RoutingHandler()
+            .Map(u => u.Contains("/reviews") || u.Contains("/comments") || u.Contains("/check-runs") || u.Contains("/status"),
+                () => "[]")
+            .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () =>
+            {
+                prCalls++;
+                // First fetch: GitHub still computing mergeability → null.
+                return prCalls == 1
+                    ? "{\"state\":\"open\",\"merged\":false,\"mergeable\":null,\"head\":{\"sha\":\"abc\"}}"
+                    : "{\"state\":\"open\",\"merged\":false,\"mergeable\":true,\"head\":{\"sha\":\"abc\"}}";
+            });
+
+        var snapshot = await CreateService(db, handler)
+            .GetPullRequestSnapshotAsync("https://github.com/team/repo", "7");
+
+        Assert.NotNull(snapshot);
+        Assert.True(snapshot!.Mergeable);
+        Assert.True(prCalls >= 2, $"expected a retry while mergeable was unknown; PR fetched {prCalls} time(s)");
     }
 
     [Fact]

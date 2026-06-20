@@ -76,6 +76,14 @@ public class RemoteProviderService : IRemoteProvider
         catch { return RemotePrStatus.Open; }
     }
 
+    public async Task<RemotePrSnapshot?> GetPullRequestSnapshotAsync(string repoUrl, string prNumber)
+    {
+        var resolved = await ResolveAsync(repoUrl);
+        if (resolved == null) return null;
+        try { return await resolved.Adapter.GetPullRequestSnapshotAsync(_http, resolved, prNumber); }
+        catch { return null; }
+    }
+
     public async Task<bool> DeleteBranchAsync(string repoUrl, string branchName)
     {
         var resolved = await ResolveAsync(repoUrl);

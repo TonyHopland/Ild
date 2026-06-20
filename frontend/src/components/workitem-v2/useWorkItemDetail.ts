@@ -75,18 +75,30 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
       .catch(() => {});
   }, [workItem?.id, refreshRuns]);
 
-  // Detail for the work item's current run — its pinned template and the node
-  // the engine is on power the loop/current-node line in the overview. The
-  // run list endpoint omits both, so the detail is fetched separately. The
-  // parent refetches the work item on every node state change, so depending on
-  // workItem identity keeps the current node fresh as the run advances.
+  // Detail for the work item's current run — its pinned template, the node the
+  // engine is on, and the persisted PR snapshot. The run list endpoint omits
+  // these, so the detail is fetched separately and refreshed live.
+  const refreshCurrentRun = useCallback(() => {
+    const runId = workItem?.currentLoopRunId;
+    if (!runId) {
+      setCurrentRun(null);
+      return Promise.resolve();
+    }
+    return loopRunService
+      .getById(runId)
+      .then((r) => setCurrentRun(r))
+      .catch(() => {});
+  }, [workItem?.currentLoopRunId]);
+
+  // The parent refetches the work item on every node state change, so depending
+  // on workItem identity keeps the current node fresh as the run advances.
   useEffect(() => {
+    let cancelled = false;
     const runId = workItem?.currentLoopRunId;
     if (!runId) {
       setCurrentRun(null);
       return;
     }
-    let cancelled = false;
     loopRunService
       .getById(runId)
       .then((r) => {
@@ -368,6 +380,44 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     runConnectionState,
     workItem?.currentLoopRunId,
     refetchWorkItem,
+  ]);
+
+  // Live PR snapshot while parked at a PR node. The run isn't "streaming" here
+  // (status is HumanFeedback, not Running), so this attaches to the run hub on
+  // its own and refetches the current run whenever the heartbeat poller pushes
+  // a fresh snapshot, keeping the full PR view current without a manual reload.
+  const isPrParked =
+    workItem?.status === WorkItemStatus.HumanFeedback &&
+    workItem?.humanFeedbackReason === "PR Awaiting Merge" &&
+    !!workItem?.currentLoopRunId;
+
+  useEffect(() => {
+    const runId = workItem?.currentLoopRunId;
+    if (!isPrParked || !runId || runConnectionState !== "connected") return;
+
+    const onPrSnapshotChanged = (message: TypedSignalRMessage<"PrSnapshotChanged">) => {
+      if (message.payload.runId !== runId) return;
+      void refreshCurrentRun();
+    };
+
+    runOn("PrSnapshotChanged", onPrSnapshotChanged);
+    void Promise.resolve(runInvoke?.("SubscribeToRun", runId)).catch(() => {});
+    // Pull the latest snapshot once on attach so the view is current even if no
+    // poll fires while the dialog is open.
+    void refreshCurrentRun();
+
+    return () => {
+      runOff("PrSnapshotChanged", onPrSnapshotChanged);
+      void Promise.resolve(runInvoke?.("UnsubscribeFromRun", runId)).catch(() => {});
+    };
+  }, [
+    isPrParked,
+    runConnectionState,
+    workItem?.currentLoopRunId,
+    runOn,
+    runOff,
+    runInvoke,
+    refreshCurrentRun,
   ]);
 
   // The PR/feedback/cleanup actions all share the same shape: invoke a service

@@ -12,6 +12,14 @@ public interface IRemoteProvider
     Task RegisterWebhookAsync(string repoUrl, string callbackUrl);
     Task UnregisterWebhookAsync(string repoUrl, string callbackUrl);
     Task<RemotePrStatus> GetPullRequestStatusAsync(string repoUrl, string prNumber);
+
+    /// <summary>
+    /// Fetch a full PR snapshot (title, description, mergeability, CI verdict,
+    /// review decision, conversation). Returns null when the PR cannot be
+    /// resolved or fetched. Backs the PR heartbeat poller and the feedback UI.
+    /// </summary>
+    Task<RemotePrSnapshot?> GetPullRequestSnapshotAsync(string repoUrl, string prNumber);
+
     Task<bool> DeleteBranchAsync(string repoUrl, string branchName);
     Task<bool> CreatePullRequestCommentAsync(string repoUrl, string prNumber, string body);
 }

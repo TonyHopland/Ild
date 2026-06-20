@@ -108,6 +108,18 @@ public class LoopRun : IHasUpdatedAt
     [MaxLength(256)]
     public string? ExternalActionEdgeName { get; set; }
 
+    // Last full PR snapshot (JSON-serialised RemotePrSnapshot) fetched by the
+    // PR heartbeat poller while parked at a PR node. Drives the feedback UI's
+    // full PR view. Null until the first poll.
+    public string? PrSnapshot { get; set; }
+
+    // Comma-separated set of PR edge-state names (on_*) that were true at the
+    // previous poll, used to fire custom edges only on state transitions. Reset
+    // to null when the run (re)parks at a PR node so an already-true state
+    // counts as a transition on the first poll after parking.
+    [MaxLength(512)]
+    public string? PrPolledEdgeStates { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     public DateTime? UpdatedAt { get; set; }

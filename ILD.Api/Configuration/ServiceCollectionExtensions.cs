@@ -118,6 +118,14 @@ public static class ServiceCollectionExtensions
         services.AddHostedService(sp => sp.GetRequiredService<WorkItemScheduler>());
         services.AddHostedService<RemoteWorkItemStartupReconciler>();
 
+        // PR heartbeat poller: refreshes the persisted PR snapshot and fires
+        // PR-node custom edges on state transitions while a run is parked at a
+        // PR node awaiting merge.
+        services.AddScoped<IPrStatusPollService, PrStatusPollService>();
+        services.AddSingleton<PrStatusPoller>();
+        services.AddSingleton<IPrStatusPoller>(sp => sp.GetRequiredService<PrStatusPoller>());
+        services.AddHostedService(sp => sp.GetRequiredService<PrStatusPoller>());
+
         return services;
     }
 }

@@ -18,4 +18,21 @@ internal static class RemotePrUrl
         }
         return null;
     }
+
+    /// <summary>
+    /// The repository base URL a PR URL belongs to — everything up to the
+    /// <c>/pull/N</c> (GitHub) or <c>/pulls/N</c> (Forgejo) segment. Returns null
+    /// when the URL carries no such segment. Feeds the provider resolver, which
+    /// parses owner/repo out of the repo URL.
+    /// </summary>
+    public static string? ExtractRepoUrl(string? prUrl)
+    {
+        if (string.IsNullOrEmpty(prUrl)) return null;
+        foreach (var marker in new[] { "/pulls/", "/pull/" })
+        {
+            var idx = prUrl.IndexOf(marker, StringComparison.Ordinal);
+            if (idx > 0) return prUrl[..idx];
+        }
+        return null;
+    }
 }

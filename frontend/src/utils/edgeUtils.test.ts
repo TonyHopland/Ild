@@ -42,6 +42,23 @@ describe("getCustomEdgeNames", () => {
   test("returns no names for a node type that cannot have custom edges", () => {
     expect(getCustomEdgeNames(node("c", NodeType.Cmd))).toEqual([]);
   });
+
+  test("PR node offers the seven reserved heartbeat edges plus any declared ones", () => {
+    const pr = node("p", NodeType.PR, { customEdges: ["custom_extra"] });
+    const names = getCustomEdgeNames(pr);
+    for (const reserved of [
+      "on_rejected",
+      "on_merge_conflict",
+      "on_ci_failed",
+      "on_approved",
+      "on_ci_passed",
+      "on_merged",
+      "on_abandoned",
+    ]) {
+      expect(names).toContain(reserved);
+    }
+    expect(names).toContain("custom_extra");
+  });
 });
 
 describe("getConnectedCustomEdgeNames", () => {

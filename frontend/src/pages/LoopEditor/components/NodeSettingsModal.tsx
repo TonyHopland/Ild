@@ -10,6 +10,7 @@ import {
   type ConfigFieldDescriptor,
 } from "../../../types";
 import { AiSessionControls } from "./AiSessionControls";
+import { PR_RESERVED_EDGE_NAMES } from "../../../utils/edgeUtils";
 import type { AdapterConfigValue, SessionPlaceholderUsage } from "../types";
 
 interface NodeSettingsModalProps {
@@ -86,10 +87,13 @@ function ConfigSection({ title, children }: { title: string; children: ReactNode
 function CustomEdgesEditor({
   names,
   onChange,
+  reserved,
 }: {
   names: string[];
   onChange: (value: string[]) => void;
+  reserved?: readonly string[];
 }) {
+  const missingReserved = (reserved ?? []).filter((r) => !names.includes(r));
   return (
     <div className="config-field">
       <label>Custom Edges</label>
@@ -97,6 +101,21 @@ function CustomEdgesEditor({
         Named outlets shown as buttons when this node waits for a human. Define them here, then
         connect each from the node's top handle.
       </small>
+      {reserved && reserved.length > 0 && (
+        <div className="pr-reserved-edges">
+          {missingReserved.map((name) => (
+            <button
+              key={name}
+              type="button"
+              className="match-rule-add"
+              aria-label={`Add reserved edge ${name}`}
+              onClick={() => onChange([...names, name])}
+            >
+              + {name}
+            </button>
+          ))}
+        </div>
+      )}
       {names.map((name, index) => (
         <div key={index} className="match-rule-row">
           <input
@@ -448,7 +467,18 @@ export function NodeSettingsModal({
                   onChange={onPrCommentTemplateChange}
                 />
               </div>
-              <CustomEdgesEditor names={customEdgeNames} onChange={onCustomEdgeNamesChange} />
+              <small className="config-help-text">
+                The PR heartbeat fires these reserved edges on PR state changes (in priority order):
+                on_rejected, on_merge_conflict, on_ci_failed, on_approved, on_ci_passed, on_merged,
+                on_abandoned. Only wired edges route; there is no fallback to on_success/on_failure,
+                so wire <strong>on_merged</strong> and <strong>on_abandoned</strong> to a Cleanup
+                path or the run parks forever once the PR closes.
+              </small>
+              <CustomEdgesEditor
+                names={customEdgeNames}
+                onChange={onCustomEdgeNamesChange}
+                reserved={PR_RESERVED_EDGE_NAMES}
+              />
             </>
           )}
 
