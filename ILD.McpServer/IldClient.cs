@@ -50,4 +50,13 @@ public sealed class IldClient
             throw new HttpRequestException($"PUT {path} failed: {(int)resp.StatusCode} {resp.ReasonPhrase} — {text}");
         return text;
     }
+
+    public async Task<string> DeleteAsync(string path, CancellationToken ct = default)
+    {
+        using var resp = await _http.DeleteAsync(path, ct);
+        var text = await resp.Content.ReadAsStringAsync(ct);
+        if (!resp.IsSuccessStatusCode)
+            throw new HttpRequestException($"DELETE {path} failed: {(int)resp.StatusCode} {resp.ReasonPhrase} — {text}");
+        return text;
+    }
 }

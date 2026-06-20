@@ -20,6 +20,10 @@ namespace ILD.Api.Controllers;
 ///    spawned by a specific run if an agent goes rogue,
 ///  - create new work items into Backlog with an optional set of
 ///    dependencies, stamped with the originating loop-run id,
+///  - edit or delete work items the caller's own session created — the
+///    item's <c>CreatedByLoopRunId</c> (or <c>CreatedByChatSessionId</c>)
+///    must match the caller's session; pre-existing items and items from
+///    other sessions are off-limits (403),
 ///  - read and write per-run loop variables (scoped by the X-ILD-Run-Id
 ///    header) so one node can hand off state to a later node — the values
 ///    are also exposed to templates as <c>{{Var.&lt;name&gt;}}</c>.
@@ -323,5 +327,62 @@ public class AgentController : ControllerBase
             createdByLoopRunId = created?.CreatedByLoopRunId,
             createdByChatSessionId = created?.CreatedByChatSessionId,
         });
+    }
+
+    [HttpPut("workitems/{id}")]
+    public async Task<IActionResult> UpdateWorkItem(string id, [FromBody] AgentWorkItemUpdateRequest request)
+    {
+        if (!ModelState.IsValid)
+            return BadRequest(ModelState);
+
+        var wi = await _workItems.GetWorkItemAsync(id);
+        if (wi == null) return NotFound();
+        if (!CallerOwns(wi))
+            return StatusCode(403, new { error = "You can only edit work items your own session created." });
+
+        var ok = await _workItems.UpdateAsync(id, request.Title, request.Description ?? string.Empty, request.Tags);
+        if (!ok)
+            return StatusCode(503, new { error = "Work item update failed." });
+
+        var updated = await _workItems.GetWorkItemAsync(id);
+        return Ok(new
+        {
+            id,
+            title = updated?.Title,
+            description = updated?.Description,
+            status = updated?.Status.ToString(),
+        });
+    }
+
+    [HttpDelete("workitems/{id}")]
+    public async Task<IActionResult> DeleteWorkItem(string id)
+    {
+        var wi = await _workItems.GetWorkItemAsync(id);
+        if (wi == null) return NotFound();
+        if (!CallerOwns(wi))
+            return StatusCode(403, new { error = "You can only delete work items your own session created." });
+
+        var ok = await _workItems.DeleteAsync(id);
+        if (!ok) return NotFound();
+        return NoContent();
+    }
+
+    /// <summary>
+    /// True iff <paramref name="wi"/> was created by the caller's current
+    /// session — the loop run identified by the <c>X-ILD-Run-Id</c> header, or
+    /// (when no run id is present) the chat session identified by the
+    /// <c>X-ILD-Chat-Session-Id</c> header. This is the gate that limits an
+    /// agent to editing or deleting only the items it created during its own
+    /// session, never pre-existing items or items from other sessions. The run
+    /// id takes precedence to mirror create-time stamping (never both).
+    /// </summary>
+    private bool CallerOwns(WorkItemView wi)
+    {
+        if (TryResolveRunId(out var runId))
+            return wi.CreatedByLoopRunId == runId;
+        if (Request.Headers.TryGetValue(ChatSessionIdHeader, out var chatHdr)
+            && Guid.TryParse(chatHdr.ToString(), out var chatId))
+            return wi.CreatedByChatSessionId == chatId;
+        return false;
     }
 }
