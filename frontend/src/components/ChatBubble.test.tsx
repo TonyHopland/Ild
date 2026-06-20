@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
 import type { AiProvider, ChatMessage, ChatSession } from "../types";
+import { FAB_POSITION_KEY, PANEL_SIZE_KEY } from "./chatPlacement";
+import { CHAT_ENABLED_KEY } from "../hooks/useChatEnabled";
 
 // Hoisted so the vi.mock factories (which are hoisted to the top) can reference
 // them without a temporal-dead-zone error.
@@ -61,6 +63,10 @@ afterEach(() => {
   cleanup();
   for (const k of Object.keys(handlers)) delete handlers[k];
   vi.clearAllMocks();
+  localStorage.clear();
+  // Restore the jsdom default viewport in case a test shrank it.
+  window.innerWidth = 1024;
+  window.innerHeight = 768;
 });
 
 describe("ChatBubble", () => {
@@ -160,5 +166,82 @@ describe("ChatBubble", () => {
     });
 
     await waitFor(() => expect(screen.getByText("interrupted")).toBeTruthy());
+  });
+});
+
+describe("ChatBubble placement", () => {
+  test("renders nothing when chat is disabled in settings", () => {
+    localStorage.setItem(CHAT_ENABLED_KEY, "false");
+    chatService.get.mockResolvedValue(null);
+
+    const { container } = render(<ChatBubble />);
+    expect(screen.queryByLabelText("Open chat")).toBeNull();
+    expect(container.firstChild).toBeNull();
+  });
+
+  test("dragging the icon moves it, persists the spot, and suppresses the open click", async () => {
+    chatService.get.mockResolvedValue(null);
+    aiProviderService.getAll.mockResolvedValue([provider]);
+
+    render(<ChatBubble />);
+    const fab = await screen.findByLabelText("Open chat");
+
+    fireEvent.pointerDown(fab, { clientX: 500, clientY: 500 });
+    fireEvent.pointerMove(window, { clientX: 450, clientY: 450 });
+    fireEvent.pointerUp(window, { clientX: 450, clientY: 450 });
+
+    // jsdom is 1024×768, so the default corner is (952, 696); a -50/-50 drag
+    // lands at (902, 646), still inside the viewport.
+    expect((fab as HTMLElement).style.left).toBe("902px");
+    expect((fab as HTMLElement).style.top).toBe("646px");
+    expect(JSON.parse(localStorage.getItem(FAB_POSITION_KEY) ?? "{}")).toEqual({ x: 902, y: 646 });
+
+    // The click that ends the drag must not open the panel.
+    fireEvent.click(fab);
+    expect(screen.queryByLabelText("AI provider")).toBeNull();
+    expect(screen.getByLabelText("Open chat")).toBeTruthy();
+  });
+
+  test("resizing the panel updates and persists its size", async () => {
+    chatService.get.mockResolvedValue(null);
+    aiProviderService.getAll.mockResolvedValue([provider]);
+
+    render(<ChatBubble />);
+    fireEvent.click(await screen.findByLabelText("Open chat"));
+
+    const panel = await screen.findByRole("dialog", { name: "AI chat" });
+    const handle = screen.getByLabelText("Resize chat");
+
+    fireEvent.pointerDown(handle, { clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(window, { clientX: 100, clientY: 80 });
+    fireEvent.pointerUp(window, { clientX: 100, clientY: 80 });
+
+    // Default size is 384×512; +100/+80 grows it to 484×592.
+    expect((panel as HTMLElement).style.width).toBe("484px");
+    expect((panel as HTMLElement).style.height).toBe("592px");
+    expect(JSON.parse(localStorage.getItem(PANEL_SIZE_KEY) ?? "{}")).toEqual({
+      width: 484,
+      height: 592,
+    });
+  });
+
+  test("a window resize clamps a now-off-screen icon back into view", async () => {
+    localStorage.setItem(FAB_POSITION_KEY, JSON.stringify({ x: 900, y: 700 }));
+    chatService.get.mockResolvedValue(null);
+
+    render(<ChatBubble />);
+    const fab = await screen.findByLabelText("Open chat");
+    expect((fab as HTMLElement).style.left).toBe("900px");
+
+    act(() => {
+      window.innerWidth = 400;
+      window.innerHeight = 400;
+      window.dispatchEvent(new Event("resize"));
+    });
+
+    // (400 - 52 - 20) = 328 is the furthest the icon can sit.
+    expect((fab as HTMLElement).style.left).toBe("328px");
+    expect((fab as HTMLElement).style.top).toBe("328px");
+    expect(JSON.parse(localStorage.getItem(FAB_POSITION_KEY) ?? "{}")).toEqual({ x: 328, y: 328 });
   });
 });

@@ -61,6 +61,45 @@ describe("Settings notifications", () => {
   });
 });
 
+describe("Settings chat toggle", () => {
+  test("shows the chat toggle enabled by default", () => {
+    render(
+      <MemoryRouter>
+        <Settings />
+      </MemoryRouter>,
+    );
+
+    const toggle = screen.getByRole("checkbox", { name: /enable ai chat bubble/i });
+    expect((toggle as HTMLInputElement).checked).toBe(true);
+  });
+
+  test("persists the chat preference to localStorage when toggled off", () => {
+    render(
+      <MemoryRouter>
+        <Settings />
+      </MemoryRouter>,
+    );
+
+    const toggle = screen.getByRole("checkbox", { name: /enable ai chat bubble/i });
+    fireEvent.click(toggle);
+    expect(localStorage.getItem("ild_chat_enabled")).toBe("false");
+    expect((toggle as HTMLInputElement).checked).toBe(false);
+  });
+
+  test("reads a disabled chat preference from localStorage on mount", () => {
+    localStorage.setItem("ild_chat_enabled", "false");
+
+    render(
+      <MemoryRouter>
+        <Settings />
+      </MemoryRouter>,
+    );
+
+    const toggle = screen.getByRole("checkbox", { name: /enable ai chat bubble/i });
+    expect((toggle as HTMLInputElement).checked).toBe(false);
+  });
+});
+
 describe("Settings log level", () => {
   test("renders log level dropdown with all options", () => {
     vi.spyOn(authServices.loggingService, "setLevel").mockResolvedValue({ level: "Debug" });
