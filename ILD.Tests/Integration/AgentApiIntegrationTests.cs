@@ -104,6 +104,154 @@ public class AgentApiIntegrationTests
     }
 
     [Fact]
+    public async Task UpdateWorkItem_succeeds_for_item_created_by_the_same_run()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+        var runId = Guid.NewGuid();
+
+        var itemId = await CreateAsync(client, "original", runId, repoId);
+
+        var put = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/agent/workitems/{itemId}")
+        {
+            Content = JsonContent.Create(new { title = "edited", description = "new body" }),
+        };
+        put.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        var resp = await client.SendAsync(put);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+
+        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        Assert.Equal("edited", doc.GetProperty("title").GetString());
+        Assert.Equal("new body", doc.GetProperty("description").GetString());
+    }
+
+    [Fact]
+    public async Task UpdateWorkItem_is_forbidden_for_item_created_by_a_different_run()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+        var ownerRun = Guid.NewGuid();
+        var otherRun = Guid.NewGuid();
+
+        var itemId = await CreateAsync(client, "owned by A", ownerRun, repoId);
+
+        var put = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/agent/workitems/{itemId}")
+        {
+            Content = JsonContent.Create(new { title = "hijacked", description = "" }),
+        };
+        put.Headers.Add("X-ILD-Run-Id", otherRun.ToString());
+        var resp = await client.SendAsync(put);
+        Assert.Equal(HttpStatusCode.Forbidden, resp.StatusCode);
+
+        // The item is untouched.
+        var detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{itemId}");
+        Assert.Equal("owned by A", detail.GetProperty("title").GetString());
+    }
+
+    [Fact]
+    public async Task UpdateWorkItem_without_a_session_header_is_forbidden()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+        var runId = Guid.NewGuid();
+
+        var itemId = await CreateAsync(client, "owned", runId, repoId);
+
+        var resp = await client.PutAsJsonAsync(
+            $"/api/v1/agent/workitems/{itemId}",
+            new { title = "anon edit", description = "" });
+        Assert.Equal(HttpStatusCode.Forbidden, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task UpdateWorkItem_for_unknown_item_returns_not_found()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+
+        var put = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/agent/workitems/{Guid.NewGuid()}")
+        {
+            Content = JsonContent.Create(new { title = "ghost", description = "" }),
+        };
+        put.Headers.Add("X-ILD-Run-Id", Guid.NewGuid().ToString());
+        var resp = await client.SendAsync(put);
+        Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task DeleteWorkItem_succeeds_for_item_created_by_the_same_run()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+        var runId = Guid.NewGuid();
+
+        var itemId = await CreateAsync(client, "disposable", runId, repoId);
+
+        var del = new HttpRequestMessage(HttpMethod.Delete, $"/api/v1/agent/workitems/{itemId}");
+        del.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        var resp = await client.SendAsync(del);
+        Assert.Equal(HttpStatusCode.NoContent, resp.StatusCode);
+
+        var detail = await client.GetAsync($"/api/v1/agent/workitems/{itemId}");
+        Assert.Equal(HttpStatusCode.NotFound, detail.StatusCode);
+    }
+
+    [Fact]
+    public async Task DeleteWorkItem_is_forbidden_for_item_created_by_a_different_run()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+        var ownerRun = Guid.NewGuid();
+        var otherRun = Guid.NewGuid();
+
+        var itemId = await CreateAsync(client, "protected", ownerRun, repoId);
+
+        var del = new HttpRequestMessage(HttpMethod.Delete, $"/api/v1/agent/workitems/{itemId}");
+        del.Headers.Add("X-ILD-Run-Id", otherRun.ToString());
+        var resp = await client.SendAsync(del);
+        Assert.Equal(HttpStatusCode.Forbidden, resp.StatusCode);
+
+        // Still there.
+        var detail = await client.GetAsync($"/api/v1/agent/workitems/{itemId}");
+        Assert.Equal(HttpStatusCode.OK, detail.StatusCode);
+    }
+
+    [Fact]
+    public async Task DeleteWorkItem_is_scoped_to_the_creating_chat_session()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+        var chatSessionId = Guid.NewGuid();
+
+        // Create via a chat session (chat header, no run header).
+        var create = new HttpRequestMessage(HttpMethod.Post, "/api/v1/agent/workitems")
+        {
+            Content = JsonContent.Create(new { title = "from chat", description = "", repositoryId = repoId.ToString() }),
+        };
+        create.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        var createResp = await client.SendAsync(create);
+        createResp.EnsureSuccessStatusCode();
+        var itemId = JsonDocument.Parse(await createResp.Content.ReadAsStringAsync())
+            .RootElement.GetProperty("id").GetString();
+
+        // A different chat session may not delete it.
+        var forbidden = new HttpRequestMessage(HttpMethod.Delete, $"/api/v1/agent/workitems/{itemId}");
+        forbidden.Headers.Add("X-ILD-Chat-Session-Id", Guid.NewGuid().ToString());
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(forbidden)).StatusCode);
+
+        // The creating chat session may.
+        var allowed = new HttpRequestMessage(HttpMethod.Delete, $"/api/v1/agent/workitems/{itemId}");
+        allowed.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(allowed)).StatusCode);
+    }
+
+    [Fact]
     public async Task CreateWorkItem_rejects_unknown_dependency()
     {
         await using var factory = new ApiFactory();
