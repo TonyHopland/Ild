@@ -74,6 +74,12 @@ public class LoopRunHub : Hub
             new ILD.Data.DTOs.SignalRPayloads.NodeProgressPayload(runId, nodeId, line, seq));
     }
 
+    public async Task NotifyPrSnapshotChanged(Guid runId)
+    {
+        await Clients.Group(runId.ToString()).SendAsync("PrSnapshotChanged",
+            new ILD.Data.DTOs.SignalRPayloads.PrSnapshotChangedPayload(runId));
+    }
+
     public override async Task OnConnectedAsync()
     {
         await base.OnConnectedAsync();

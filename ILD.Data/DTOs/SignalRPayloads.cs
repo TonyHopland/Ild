@@ -26,6 +26,8 @@ public record WorkItemRunProgressedPayload(string WorkItemId);
 
 public record NodeProgressPayload(Guid RunId, Guid NodeId, string Line, long Seq);
 
+public record PrSnapshotChangedPayload(Guid RunId);
+
 public record SchedulerStateChangedPayload(bool IsPaused, int MaxConcurrent);
 
 public record ChatMessageAppendedPayload(Guid ChatSessionId, ChatMessageView Message);

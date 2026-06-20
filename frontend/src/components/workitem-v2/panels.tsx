@@ -1,6 +1,12 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { WorkItem, WorkItemStatus, WorktreePreviewService } from "../../types";
+import {
+  RemotePrCiStatus,
+  RemotePrSnapshot,
+  WorkItem,
+  WorkItemStatus,
+  WorktreePreviewService,
+} from "../../types";
 import { makeLoopTagMatcher, parseConversation, parseTags } from "../../utils/workItemJson";
 import MarkdownRenderer from "../MarkdownRenderer";
 import FeedbackActions from "../FeedbackActions";
@@ -22,6 +28,7 @@ export function FeedbackBanner({
 
   const isInput = workItem.humanFeedbackReason === "Human Input Needed";
   const isPr = workItem.humanFeedbackReason === "PR Awaiting Merge";
+  const prSnapshot = isPr ? (detail.currentRun?.prSnapshot ?? null) : null;
 
   if (!isInput && !isPr) {
     return (
@@ -47,6 +54,7 @@ export function FeedbackBanner({
           </a>
         )}
       </div>
+      {prSnapshot && <PrView snapshot={prSnapshot} />}
       {prompt && (
         <div className="markdown-container feedback-prompt">
           <MarkdownRenderer content={prompt} />
@@ -78,6 +86,81 @@ export function FeedbackBanner({
       {isPr && !detail.mergeError && detail.mergeMessage && (
         <div className="preview-message">{detail.mergeMessage}</div>
       )}
+    </div>
+  );
+}
+
+const CI_LABELS: Record<RemotePrCiStatus, string> = {
+  None: "No CI",
+  Pending: "CI running",
+  Passed: "CI passed",
+  Failed: "CI failed",
+};
+
+/** Maps a CI verdict onto the shared preview-state tone classes. */
+function ciTone(ci: RemotePrCiStatus): string {
+  if (ci === "Passed") return "running";
+  if (ci === "Failed") return "error";
+  return "stopped";
+}
+
+function prStateLabel(snapshot: RemotePrSnapshot): { label: string; tone: string } {
+  if (snapshot.merged) return { label: "Merged", tone: "running" };
+  if (snapshot.state === "closed") return { label: "Closed", tone: "error" };
+  return { label: "Open", tone: "stopped" };
+}
+
+/**
+ * Full PR view rendered from the persisted heartbeat snapshot: title, state,
+ * CI/review badges, description, and the full conversation. Updates live as the
+ * poller refreshes the snapshot over the run hub.
+ */
+export function PrView({ snapshot }: { snapshot: RemotePrSnapshot }) {
+  const state = prStateLabel(snapshot);
+  const hasConflict = snapshot.mergeable === false || snapshot.mergeableState === "dirty";
+  return (
+    <div className="pr-view">
+      {snapshot.title && <div className="pr-view-title">{snapshot.title}</div>}
+      <div className="pr-view-badges">
+        <span className={`preview-state preview-state--${state.tone}`}>{state.label}</span>
+        <span className={`preview-state preview-state--${ciTone(snapshot.ci)}`}>
+          {CI_LABELS[snapshot.ci]}
+        </span>
+        {snapshot.changesRequested && (
+          <span className="preview-state preview-state--error">Changes requested</span>
+        )}
+        {snapshot.approved && (
+          <span className="preview-state preview-state--running">Approved</span>
+        )}
+        {hasConflict && <span className="preview-state preview-state--error">Merge conflict</span>}
+      </div>
+      {snapshot.body && (
+        <div className="markdown-container pr-view-description">
+          <MarkdownRenderer content={snapshot.body} />
+        </div>
+      )}
+      <div className="pr-view-conversation">
+        {snapshot.conversation.length === 0 ? (
+          <div className="wiv2-empty">No conversation yet.</div>
+        ) : (
+          snapshot.conversation.map((entry, i) => (
+            <div key={i} className={`conversation-message conversation-${entry.kind}`}>
+              <div className="conversation-message-header">
+                <strong className="conversation-message-role">{entry.author || "unknown"}</strong>
+                <span>
+                  {entry.kind === "review" && entry.state ? `${entry.state} · ` : ""}
+                  {new Date(entry.createdAt).toLocaleString()}
+                </span>
+              </div>
+              {entry.body && (
+                <div className="conversation-message-content">
+                  <MarkdownRenderer content={entry.body} />
+                </div>
+              )}
+            </div>
+          ))
+        )}
+      </div>
     </div>
   );
 }

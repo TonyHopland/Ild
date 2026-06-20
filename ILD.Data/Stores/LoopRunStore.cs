@@ -87,6 +87,13 @@ public class LoopRunStore : ILoopRunStore
             .Take(take)
             .ToListAsync();
 
+    public async Task<IReadOnlyList<LoopRun>> GetPrAwaitingMergeRunsAsync()
+        => await _db.LoopRuns
+            .Where(r => r.Status == LoopRunStatus.WaitingHuman
+                && r.PrUrl != null
+                && r.HumanFeedbackReason == HumanFeedbackReasons.PrAwaitingMerge)
+            .ToListAsync();
+
     public async Task<IReadOnlyList<LoopRunNode>> GetRunNodesAsync(Guid runId)
         => await _db.LoopRunNodes
             .Where(rn => rn.LoopRunId == runId)

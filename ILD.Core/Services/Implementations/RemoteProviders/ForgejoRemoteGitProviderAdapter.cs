@@ -21,6 +21,14 @@ public sealed class ForgejoRemoteGitProviderAdapter : RemoteGitProviderAdapterBa
     protected override string BuildApiBase(Uri providerUri)
         => providerUri.ToString().TrimEnd('/') + "/api/v1";
 
+    // Forgejo/Gitea reports a changes-requested review as "REQUEST_CHANGES";
+    // map it onto GitHub's "CHANGES_REQUESTED" so the snapshot logic is uniform.
+    protected override string NormalizeReviewState(string? state)
+    {
+        var normalized = base.NormalizeReviewState(state);
+        return normalized == "REQUEST_CHANGES" ? "CHANGES_REQUESTED" : normalized;
+    }
+
     public override async Task<bool> MergePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
     {
         ApplyHeaders(http, repo.Provider);

@@ -112,6 +112,8 @@ internal sealed class RecordingRunNotifier : IRunNotifier
         _lines.Enqueue(line);
         return Task.CompletedTask;
     }
+
+    public Task PrSnapshotChangedAsync(Guid runId) => Task.CompletedTask;
 }
 
 /// <summary>Emits a set of live-output chunks through the context's progress

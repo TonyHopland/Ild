@@ -36,6 +36,14 @@ public interface ILoopRunStore
     /// </summary>
     Task<IReadOnlyList<LoopRun>> GetReclaimableRunsAsync(DateTime cutoff, int take = 200);
 
+    /// <summary>
+    /// Runs parked at a PR node awaiting merge: <c>WaitingHuman</c> with a
+    /// <c>PrUrl</c> set and <c>HumanFeedbackReason</c> =
+    /// <see cref="ILD.Data.Enums.HumanFeedbackReasons.PrAwaitingMerge"/>. Backs
+    /// the PR heartbeat poller.
+    /// </summary>
+    Task<IReadOnlyList<LoopRun>> GetPrAwaitingMergeRunsAsync();
+
     Task<IReadOnlyList<LoopRunNode>> GetRunNodesAsync(Guid runId);
     /// <summary>Run nodes for a run with their <c>LoopNode</c> eager-loaded (left join — may be null if the template node was since removed).</summary>
     Task<IReadOnlyList<LoopRunNode>> GetRunNodesWithNodeAsync(Guid runId);

@@ -128,13 +128,6 @@
       "name": "Reject"
     },
     {
-      "id": "1bd72945-97fc-4402-9562-bda7069b1a40",
-      "sourceNodeId": "17574ffe-73fc-4662-8ca4-5f862243698a",
-      "targetNodeId": "3a429d1a-15a3-4237-98c0-3c443d846098",
-      "edgeType": "OnFailure",
-      "name": null
-    },
-    {
       "id": "2b6a2057-0c3d-48b4-bd34-f72353eb223c",
       "sourceNodeId": "3397f9fe-83f5-41a2-a608-b42130dd1892",
       "targetNodeId": "58913888-fec7-4188-b232-874b6c29b190",
@@ -175,6 +168,13 @@
       "targetNodeId": "4cb09939-133f-4348-a79d-25b28fa4d8d9",
       "edgeType": "OnSuccess",
       "name": null
+    },
+    {
+      "id": "b7e2c1a0-1111-4a22-8b33-444455556666",
+      "sourceNodeId": "17574ffe-73fc-4662-8ca4-5f862243698a",
+      "targetNodeId": "4cb09939-133f-4348-a79d-25b28fa4d8d9",
+      "edgeType": "Custom",
+      "name": "on_merged"
     },
     {
       "id": "ab5180f6-a7ec-4388-9414-7072c21135bc",

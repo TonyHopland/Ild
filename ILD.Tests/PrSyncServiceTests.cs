@@ -11,8 +11,17 @@ namespace ILD.Tests;
 
 public class PrSyncServiceTests
 {
+    private static LoopNodeEdge CustomEdge(Guid sourceNodeId, string name) => new()
+    {
+        Id = Guid.NewGuid(),
+        SourceNodeId = sourceNodeId,
+        TargetNodeId = Guid.NewGuid(),
+        EdgeType = EdgeType.Custom,
+        Name = name,
+    };
+
     [Fact]
-    public async Task HandleWebhookAsync_signals_success_and_marks_merged_for_merged_payloads()
+    public async Task HandleWebhookAsync_signals_on_merged_edge_and_marks_merged_for_merged_payloads()
     {
         var run = new LoopRun
         {
@@ -32,6 +41,8 @@ public class PrSyncServiceTests
         var loopRuns = new Mock<ILoopRunStore>();
         loopRuns.Setup(s => s.GetByPrUrlAsync(run.PrUrl!)).ReturnsAsync(run);
         loopRuns.Setup(s => s.GetRunNodeAsync(run.Id, run.CurrentNodeId.Value)).ReturnsAsync(runNode);
+        loopRuns.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
+            .ReturnsAsync(new[] { CustomEdge(runNode.LoopNodeId, PrNodeEdges.OnMerged) });
 
         var events = new Mock<IEventLogStore>();
         var workItems = new Mock<IWorkItemManager>();
@@ -42,7 +53,44 @@ public class PrSyncServiceTests
         await service.HandleWebhookAsync(new WebhookPayload("pull_request.merged", "repo-1", "7", run.PrUrl, null, "merged"));
 
         loopRuns.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.IsPrMerged)), Times.Once);
-        engine.Verify(s => s.SignalNodeResultAsync(run.Id, runNode.Id, It.Is<NodeSignal>(signal => signal.Type == ExternalActionResultType.Success)), Times.Once);
+        engine.Verify(s => s.SignalNodeResultAsync(run.Id, runNode.Id,
+            It.Is<NodeSignal>(signal => signal.EdgeName == PrNodeEdges.OnMerged)), Times.Once);
+    }
+
+    [Fact]
+    public async Task HandleWebhookAsync_does_not_signal_when_edge_unconnected()
+    {
+        // No on_merged edge wired: the merge is still recorded, but no signal is
+        // emitted (emitting an unconnected custom edge would fail the run).
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = "wi-1",
+            PrUrl = "https://github.com/team/repo/pull/7",
+            CurrentNodeId = Guid.NewGuid(),
+        };
+        var runNode = new LoopRunNode
+        {
+            Id = Guid.NewGuid(),
+            LoopRunId = run.Id,
+            LoopNodeId = run.CurrentNodeId!.Value,
+            Status = LoopRunNodeStatus.WaitingHuman,
+        };
+
+        var loopRuns = new Mock<ILoopRunStore>();
+        loopRuns.Setup(s => s.GetByPrUrlAsync(run.PrUrl!)).ReturnsAsync(run);
+        loopRuns.Setup(s => s.GetRunNodeAsync(run.Id, run.CurrentNodeId.Value)).ReturnsAsync(runNode);
+        loopRuns.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
+            .ReturnsAsync(Array.Empty<LoopNodeEdge>());
+
+        var engine = new Mock<ILoopEngine>();
+        var service = new PrSyncService(loopRuns.Object, new Mock<IEventLogStore>().Object,
+            new Mock<IWorkItemManager>().Object, engine.Object);
+
+        await service.HandleWebhookAsync(new WebhookPayload("pull_request.merged", "repo-1", "7", run.PrUrl, null, "merged"));
+
+        loopRuns.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.IsPrMerged)), Times.Once);
+        engine.Verify(s => s.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
     }
 
     [Fact]
@@ -106,7 +154,7 @@ public class PrSyncServiceTests
     }
 
     [Fact]
-    public async Task HandleWebhookAsync_signals_failure_for_rejected_payloads()
+    public async Task HandleWebhookAsync_signals_on_rejected_edge_for_changes_requested_payloads()
     {
         var run = new LoopRun
         {
@@ -126,6 +174,8 @@ public class PrSyncServiceTests
         var loopRuns = new Mock<ILoopRunStore>();
         loopRuns.Setup(s => s.GetByPrUrlAsync(run.PrUrl!)).ReturnsAsync(run);
         loopRuns.Setup(s => s.GetRunNodeAsync(run.Id, run.CurrentNodeId.Value)).ReturnsAsync(runNode);
+        loopRuns.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
+            .ReturnsAsync(new[] { CustomEdge(runNode.LoopNodeId, PrNodeEdges.OnRejected) });
 
         var events = new Mock<IEventLogStore>();
         var workItems = new Mock<IWorkItemManager>();
@@ -136,6 +186,7 @@ public class PrSyncServiceTests
         await service.HandleWebhookAsync(new WebhookPayload("pull_request.rejected", "repo-1", "7", run.PrUrl, "needs work", "changes_requested"));
 
         events.Verify(s => s.AppendAsync(It.Is<EventLog>(e => e.Data == "needs work")), Times.Once);
-        engine.Verify(s => s.SignalNodeResultAsync(run.Id, runNode.Id, It.Is<NodeSignal>(signal => signal.Type == ExternalActionResultType.Reject && signal.Error == "needs work")), Times.Once);
+        engine.Verify(s => s.SignalNodeResultAsync(run.Id, runNode.Id,
+            It.Is<NodeSignal>(signal => signal.EdgeName == PrNodeEdges.OnRejected)), Times.Once);
     }
 }

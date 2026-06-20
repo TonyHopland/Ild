@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ILD.Api.Contracts;
 using ILD.Api.Services;
 using ILD.Core.Services.Interfaces;
@@ -105,6 +106,10 @@ public class LoopRunsController : ControllerBase
             nodeExecutionCount = run.NodeExecutionCount,
             startedAt = run.StartedAt,
             completedAt = run.CompletedAt,
+            prUrl = run.PrUrl,
+            // Embedded as JSON (camelCase from the poller) so the feedback UI can
+            // render the full PR view; null until the heartbeat poller's first pass.
+            prSnapshot = ParsePrSnapshot(run.PrSnapshot),
             totalInputTokens = totals.TotalInputTokens,
             totalOutputTokens = totals.TotalOutputTokens,
             totalCostUsd = totals.TotalCostUsd,
@@ -131,6 +136,16 @@ public class LoopRunsController : ControllerBase
             }).ToList(),
             nodes = runNodes.Select(LoopRunNodeResponse.From).ToList(),
         });
+    }
+
+    // The PR snapshot is stored as a JSON string; surface it as a JSON value so
+    // it embeds in the response object rather than as an escaped string. A
+    // corrupt blob degrades to null rather than failing the whole response.
+    private static JsonElement? ParsePrSnapshot(string? json)
+    {
+        if (string.IsNullOrEmpty(json)) return null;
+        try { return JsonSerializer.Deserialize<JsonElement>(json); }
+        catch (JsonException) { return null; }
     }
 
     [HttpPost("{id}/pause")]

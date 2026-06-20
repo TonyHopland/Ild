@@ -1016,6 +1016,18 @@
   border-color: #a0a0c0;
 }
 
+/* Quick-add chips for the PR node's reserved heartbeat edges. */
+.pr-reserved-edges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  margin-top: 0.5rem;
+}
+
+.pr-reserved-edges .match-rule-add {
+  margin-top: 0;
+}
+
 /* Grouped sections inside the node settings dialog. */
 .config-section {
   padding-top: 1.25rem;

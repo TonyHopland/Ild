@@ -489,6 +489,7 @@ export const SchedulerSettingKeys = {
   MaxConcurrent: "scheduler.maxConcurrent",
   IsPaused: "scheduler.isPaused",
   RunRetentionDays: "run.retentionDays",
+  PrHeartbeatSeconds: "pr.heartbeatSeconds",
 } as const;
 
 export const settingsService = {
