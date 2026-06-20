@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
 import type { AiProvider, ChatMessage, ChatSession } from "../types";
-import { FAB_POSITION_KEY, PANEL_SIZE_KEY } from "./chatPlacement";
+import { FAB_POSITION_KEY, PANEL_POSITION_KEY, PANEL_SIZE_KEY } from "./chatPlacement";
 import { CHAT_ENABLED_KEY } from "../hooks/useChatEnabled";
 
 // Hoisted so the vi.mock factories (which are hoisted to the top) can reference
@@ -243,5 +243,63 @@ describe("ChatBubble placement", () => {
     expect((fab as HTMLElement).style.left).toBe("328px");
     expect((fab as HTMLElement).style.top).toBe("328px");
     expect(JSON.parse(localStorage.getItem(FAB_POSITION_KEY) ?? "{}")).toEqual({ x: 328, y: 328 });
+  });
+
+  test("dragging the window header moves and persists the panel position", async () => {
+    chatService.get.mockResolvedValue(null);
+    aiProviderService.getAll.mockResolvedValue([provider]);
+
+    render(<ChatBubble />);
+    fireEvent.click(await screen.findByLabelText("Open chat"));
+
+    const panel = await screen.findByRole("dialog", { name: "AI chat" });
+    const header = screen.getByText("AI Chat").closest(".chat-panel-header") as HTMLElement;
+
+    // The panel starts anchored to the default-corner icon, clamped to (620, 236).
+    expect((panel as HTMLElement).style.left).toBe("620px");
+    expect((panel as HTMLElement).style.top).toBe("236px");
+
+    fireEvent.pointerDown(header, { clientX: 200, clientY: 200 });
+    fireEvent.pointerMove(window, { clientX: 120, clientY: 140 });
+    fireEvent.pointerUp(window, { clientX: 120, clientY: 140 });
+
+    // -80/-60 from the (620, 236) anchor lands at (540, 176), still on-screen.
+    expect((panel as HTMLElement).style.left).toBe("540px");
+    expect((panel as HTMLElement).style.top).toBe("176px");
+    expect(JSON.parse(localStorage.getItem(PANEL_POSITION_KEY) ?? "{}")).toEqual({
+      x: 540,
+      y: 176,
+    });
+  });
+
+  test("a header button press does not drag the window", async () => {
+    const session: ChatSession = {
+      id: "s1",
+      aiProviderId: "p1",
+      providerType: "claude-code",
+      tools: ["ild"],
+      createdAt: "2026-01-01T00:00:00Z",
+      messages: [],
+    };
+    chatService.get.mockResolvedValue(session);
+
+    render(<ChatBubble />);
+    fireEvent.click(await screen.findByLabelText("Open chat"));
+
+    const panel = await screen.findByRole("dialog", { name: "AI chat" });
+    const endChat = await screen.findByText("End chat");
+
+    // Pressing and moving on a header button must not reposition the panel…
+    fireEvent.pointerDown(endChat, { clientX: 200, clientY: 200 });
+    fireEvent.pointerMove(window, { clientX: 50, clientY: 50 });
+    fireEvent.pointerUp(window, { clientX: 50, clientY: 50 });
+
+    expect((panel as HTMLElement).style.left).toBe("620px");
+    expect((panel as HTMLElement).style.top).toBe("236px");
+    expect(localStorage.getItem(PANEL_POSITION_KEY)).toBeNull();
+
+    // …and the button still does its job.
+    fireEvent.click(endChat);
+    expect(chatService.end).toHaveBeenCalled();
   });
 });

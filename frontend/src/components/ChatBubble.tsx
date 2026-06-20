@@ -14,9 +14,11 @@ import {
   clampFabPosition,
   clampPanelSize,
   loadFabPosition,
+  loadPanelPosition,
   loadPanelSize,
   panelPosition,
   saveFabPosition,
+  savePanelPosition,
   savePanelSize,
   viewportSize,
   type Point,
@@ -67,9 +69,16 @@ export default function ChatBubble() {
   const chatEnabled = useChatEnabled();
   const [fabPos, setFabPos] = useState<Point>(loadFabPosition);
   const [panelSize, setPanelSize] = useState<Size>(loadPanelSize);
+  // The panel's own position once the user drags its header; until then it stays
+  // anchored to the icon (null).
+  const [panelOverride, setPanelOverride] = useState<Point | null>(loadPanelPosition);
   // Set while a drag exceeds the threshold so the trailing click does not also
   // open the panel.
   const draggedRef = useRef(false);
+  // Latest panel size, so the window-resize handler can re-clamp the panel
+  // position without re-subscribing on every size change.
+  const panelSizeRef = useRef(panelSize);
+  panelSizeRef.current = panelSize;
 
   // Persist placement changes and re-clamp into view whenever the window resizes.
   useEffect(() => {
@@ -79,9 +88,14 @@ export default function ChatBubble() {
     savePanelSize(panelSize);
   }, [panelSize]);
   useEffect(() => {
+    if (panelOverride) savePanelPosition(panelOverride);
+  }, [panelOverride]);
+  useEffect(() => {
     const onResize = () => {
-      setFabPos((p) => clampFabPosition(p, viewportSize()));
-      setPanelSize((s) => clampPanelSize(s, viewportSize()));
+      const vp = viewportSize();
+      setFabPos((p) => clampFabPosition(p, vp));
+      setPanelSize((s) => clampPanelSize(s, vp));
+      setPanelOverride((p) => (p ? panelPosition(p, panelSizeRef.current, vp) : p));
     };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
@@ -114,12 +128,39 @@ export default function ChatBubble() {
       e.preventDefault();
       const origin = { px: e.clientX, py: e.clientY, w: panelSize.width, h: panelSize.height };
       const onMove = (ev: PointerEvent) => {
-        setPanelSize(
-          clampPanelSize(
-            {
-              width: origin.w + (ev.clientX - origin.px),
-              height: origin.h + (ev.clientY - origin.py),
-            },
+        const vp = viewportSize();
+        const next = clampPanelSize(
+          {
+            width: origin.w + (ev.clientX - origin.px),
+            height: origin.h + (ev.clientY - origin.py),
+          },
+          vp,
+        );
+        setPanelSize(next);
+        // Keep a moved panel on-screen as it grows toward the viewport edge.
+        setPanelOverride((p) => (p ? panelPosition(p, next, vp) : p));
+      };
+      const onUp = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    },
+    [panelSize.width, panelSize.height],
+  );
+
+  const startHeaderDrag = useCallback(
+    (e: React.PointerEvent) => {
+      // Let the header's own buttons (End chat / close) work without dragging.
+      if ((e.target as HTMLElement).closest("button")) return;
+      const base = panelOverride ?? panelPosition(fabPos, panelSize, viewportSize());
+      const origin = { px: e.clientX, py: e.clientY, ox: base.x, oy: base.y };
+      const onMove = (ev: PointerEvent) => {
+        setPanelOverride(
+          panelPosition(
+            { x: origin.ox + (ev.clientX - origin.px), y: origin.oy + (ev.clientY - origin.py) },
+            panelSize,
             viewportSize(),
           ),
         );
@@ -131,7 +172,7 @@ export default function ChatBubble() {
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", onUp);
     },
-    [panelSize.width, panelSize.height],
+    [panelOverride, fabPos, panelSize],
   );
 
   // Load any existing session once, so the transcript rehydrates on reload.
@@ -295,7 +336,7 @@ export default function ChatBubble() {
     );
   }
 
-  const panelPos = panelPosition(fabPos, panelSize, viewportSize());
+  const panelPos = panelPosition(panelOverride ?? fabPos, panelSize, viewportSize());
 
   return (
     <div
@@ -309,7 +350,7 @@ export default function ChatBubble() {
         height: panelSize.height,
       }}
     >
-      <div className="chat-panel-header">
+      <div className="chat-panel-header" onPointerDown={startHeaderDrag}>
         <span className="chat-panel-title">AI Chat</span>
         <div className="chat-panel-header-actions">
           {session && (

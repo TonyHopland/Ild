@@ -6,8 +6,10 @@ import {
   FAB_POSITION_KEY,
   FAB_SIZE,
   loadFabPosition,
+  loadPanelPosition,
   loadPanelSize,
   MIN_PANEL_SIZE,
+  PANEL_POSITION_KEY,
   PANEL_SIZE_KEY,
   panelPosition,
   VIEWPORT_MARGIN,
@@ -93,5 +95,19 @@ describe("load helpers", () => {
   test("loadPanelSize ignores corrupt JSON and uses the default", () => {
     localStorage.setItem(PANEL_SIZE_KEY, "not json");
     expect(loadPanelSize()).toEqual({ width: 384, height: 512 });
+  });
+
+  test("loadPanelPosition returns null when the window was never moved", () => {
+    expect(loadPanelPosition()).toBeNull();
+  });
+
+  test("loadPanelPosition returns the stored position", () => {
+    localStorage.setItem(PANEL_POSITION_KEY, JSON.stringify({ x: 120, y: 90 }));
+    expect(loadPanelPosition()).toEqual({ x: 120, y: 90 });
+  });
+
+  test("loadPanelPosition ignores a malformed stored value", () => {
+    localStorage.setItem(PANEL_POSITION_KEY, JSON.stringify({ x: "nope" }));
+    expect(loadPanelPosition()).toBeNull();
   });
 });

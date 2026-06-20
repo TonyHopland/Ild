@@ -22,6 +22,7 @@ export const MIN_PANEL_SIZE: Size = { width: 280, height: 320 };
 
 export const FAB_POSITION_KEY = "ild_chat_fab_pos";
 export const PANEL_SIZE_KEY = "ild_chat_panel_size";
+export const PANEL_POSITION_KEY = "ild_chat_panel_pos";
 
 function clamp(value: number, min: number, max: number): number {
   // When the available range is empty (tiny viewport) fall back to the lower
@@ -65,14 +66,15 @@ export function defaultFabPosition(vp: Size): Point {
 }
 
 /**
- * Top-left corner for the open panel. It is anchored to the icon's position but
- * clamped so the whole panel stays visible; as the panel grows the clamp pulls
- * it back into view, which keeps a corner bubble's panel on-screen.
+ * Top-left corner for the open panel, clamped so the whole panel stays visible.
+ * The anchor is either where the user dragged the window's header or, until
+ * then, the icon's position; as the panel grows the clamp pulls it back into
+ * view, which keeps a corner panel on-screen.
  */
-export function panelPosition(fab: Point, size: Size, vp: Size): Point {
+export function panelPosition(anchor: Point, size: Size, vp: Size): Point {
   return {
-    x: clamp(fab.x, VIEWPORT_MARGIN, vp.width - size.width - VIEWPORT_MARGIN),
-    y: clamp(fab.y, VIEWPORT_MARGIN, vp.height - size.height - VIEWPORT_MARGIN),
+    x: clamp(anchor.x, VIEWPORT_MARGIN, vp.width - size.width - VIEWPORT_MARGIN),
+    y: clamp(anchor.y, VIEWPORT_MARGIN, vp.height - size.height - VIEWPORT_MARGIN),
   };
 }
 
@@ -115,4 +117,17 @@ export function loadPanelSize(): Size {
 
 export function savePanelSize(size: Size): void {
   localStorage.setItem(PANEL_SIZE_KEY, JSON.stringify(size));
+}
+
+/**
+ * Load the panel's own dragged position, or `null` when the user has never
+ * moved the window — in that case the panel falls back to anchoring on the icon.
+ */
+export function loadPanelPosition(): Point | null {
+  const pair = readPair(readJson(PANEL_POSITION_KEY), "x", "y");
+  return pair ? { x: pair[0], y: pair[1] } : null;
+}
+
+export function savePanelPosition(pos: Point): void {
+  localStorage.setItem(PANEL_POSITION_KEY, JSON.stringify(pos));
 }

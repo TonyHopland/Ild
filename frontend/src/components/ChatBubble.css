@@ -66,6 +66,14 @@
   padding: 0.6rem 0.85rem;
   background: #2a2a40;
   border-bottom: 1px solid #2d2d44;
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+
+/* The header's buttons keep their own pointer behaviour, not the drag cursor. */
+.chat-panel-header .chat-link-btn {
+  cursor: pointer;
 }
 
 .chat-panel-title {
