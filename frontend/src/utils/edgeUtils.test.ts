@@ -7,8 +7,8 @@ import {
   buildEdge,
   parallelEdgeRoute,
   parallelEdgeOffset,
-  getBowedEdgePath,
-  PARALLEL_EDGE_GAP,
+  getParallelEdgePath,
+  PARALLEL_EDGE_SPREAD,
   LOOP_EDGE_TYPE,
 } from "./edgeUtils";
 import { EdgeType, NodeType } from "../types";
@@ -160,34 +160,44 @@ describe("parallelEdgeOffset", () => {
     expect(parallelEdgeOffset(0, 1)).toBe(0);
   });
 
-  test("two siblings spread symmetrically a full gap apart", () => {
-    expect(parallelEdgeOffset(0, 2)).toBe(-PARALLEL_EDGE_GAP / 2);
-    expect(parallelEdgeOffset(1, 2)).toBe(PARALLEL_EDGE_GAP / 2);
-    expect(parallelEdgeOffset(1, 2) - parallelEdgeOffset(0, 2)).toBe(PARALLEL_EDGE_GAP);
+  test("two siblings spread symmetrically a full lane apart", () => {
+    expect(parallelEdgeOffset(0, 2)).toBe(-PARALLEL_EDGE_SPREAD / 2);
+    expect(parallelEdgeOffset(1, 2)).toBe(PARALLEL_EDGE_SPREAD / 2);
+    expect(parallelEdgeOffset(1, 2) - parallelEdgeOffset(0, 2)).toBe(PARALLEL_EDGE_SPREAD);
   });
 
-  test("three siblings keep the middle on the chord and the outer two a gap out", () => {
-    expect(parallelEdgeOffset(0, 3)).toBe(-PARALLEL_EDGE_GAP);
+  test("three siblings keep the middle on the chord and the outer two a lane out", () => {
+    expect(parallelEdgeOffset(0, 3)).toBe(-PARALLEL_EDGE_SPREAD);
     expect(parallelEdgeOffset(1, 3)).toBe(0);
-    expect(parallelEdgeOffset(2, 3)).toBe(PARALLEL_EDGE_GAP);
+    expect(parallelEdgeOffset(2, 3)).toBe(PARALLEL_EDGE_SPREAD);
   });
 });
 
-describe("getBowedEdgePath", () => {
+describe("getParallelEdgePath", () => {
   test("a zero offset rides the straight chord with the label at its midpoint", () => {
-    const bowed = getBowedEdgePath(0, 0, 100, 0, 0);
-    expect(bowed.labelX).toBe(50);
-    expect(bowed.labelY).toBe(0);
+    const fanned = getParallelEdgePath(0, 0, 100, 0, 0);
+    expect(fanned.labelX).toBe(50);
+    expect(fanned.labelY).toBe(0);
   });
 
-  test("opposite offsets bow to opposite sides so labels never overlap", () => {
-    const up = getBowedEdgePath(0, 0, 100, 0, -PARALLEL_EDGE_GAP / 2);
-    const down = getBowedEdgePath(0, 0, 100, 0, PARALLEL_EDGE_GAP / 2);
+  test("opposite offsets flare to opposite sides so labels stay far apart", () => {
+    const up = getParallelEdgePath(0, 0, 100, 0, -PARALLEL_EDGE_SPREAD / 2);
+    const down = getParallelEdgePath(0, 0, 100, 0, PARALLEL_EDGE_SPREAD / 2);
 
-    // Labels land a full gap apart on the perpendicular axis.
-    expect(down.labelY - up.labelY).toBe(PARALLEL_EDGE_GAP);
-    // And the two edges trace different curves, so each is its own click target.
+    // The two labels sit well over half a lane apart on the perpendicular axis —
+    // wide enough that neither the labels nor the curves can be confused.
+    const labelSeparation = down.labelY - up.labelY;
+    expect(labelSeparation).toBeGreaterThan(PARALLEL_EDGE_SPREAD / 2);
+    // The two edges trace different curves, so each is its own click target.
     expect(up.path).not.toBe(down.path);
+  });
+
+  test("flares the control points a quarter and three-quarters along the run", () => {
+    // Control points carry the full lane offset (here +50 on the y axis) while
+    // the endpoints stay pinned to the handles, so the band — not just a peak —
+    // is separated along the central half of the edge.
+    const { path } = getParallelEdgePath(0, 0, 100, 0, 50);
+    expect(path).toBe("M 0,0 C 25,50 75,50 100,0");
   });
 });
 

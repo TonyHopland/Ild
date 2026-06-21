@@ -7,7 +7,7 @@ import {
   type EdgeProps,
 } from "@xyflow/react";
 import {
-  getBowedEdgePath,
+  getParallelEdgePath,
   parallelEdgeOffset,
   parallelEdgeRoute,
   PARALLEL_EDGE_INTERACTION_WIDTH,
@@ -66,16 +66,16 @@ export default function LoopEdgeComponent({
       offset: SMOOTHSTEP_OFFSET,
     });
   } else {
-    const bowed = getBowedEdgePath(
+    const fanned = getParallelEdgePath(
       sourceX,
       sourceY,
       targetX,
       targetY,
       parallelEdgeOffset(index, count),
     );
-    edgePath = bowed.path;
-    labelX = bowed.labelX;
-    labelY = bowed.labelY;
+    edgePath = fanned.path;
+    labelX = fanned.labelX;
+    labelY = fanned.labelY;
   }
 
   return (
