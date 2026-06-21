@@ -90,6 +90,9 @@ internal static class TestHostServiceCollectionExtensions
         public Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
             => throw Unexpected(nameof(IWorktreePreviewService));
 
+        public Task<WorktreePreviewValidationResult> ValidateConfigAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
+            => throw Unexpected(nameof(IWorktreePreviewService));
+
         public bool IsPreviewRunning(string worktreePath)
             => false;
     }
