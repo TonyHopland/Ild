@@ -17,6 +17,21 @@ public sealed record WorktreePreviewStartOptions(
 /// </summary>
 public sealed record WorktreeInstallResult(bool Installed, string? Message = null);
 
+/// <summary>
+/// Result of <see cref="IWorktreePreviewService.ValidateConfigAsync"/>.
+/// <see cref="Configured"/> is false when the worktree ships no
+/// <c>ild.config.json</c> preview profile (a best-effort no-op, with the reason
+/// in <see cref="Message"/>). When configured, <see cref="ProfileName"/> is the
+/// resolved profile and <see cref="Services"/> lists its service names. The call
+/// throws <see cref="InvalidOperationException"/> when a config is present but
+/// invalid, so the precise reason can be surfaced to the author.
+/// </summary>
+public sealed record WorktreePreviewValidationResult(
+    bool Configured,
+    string? ProfileName,
+    IReadOnlyList<string> Services,
+    string? Message = null);
+
 public interface IWorktreePreviewService
 {
     Task<WorktreePreviewResponse> GetStatusAsync(string worktreePath, CancellationToken cancellationToken = default);
@@ -49,6 +64,18 @@ public interface IWorktreePreviewService
     Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Loads and validates the worktree's <c>ild.config.json</c> preview config
+    /// without installing, starting, or otherwise touching the worktree. Use it as
+    /// a dry run after authoring or editing the file: it parses the config exactly
+    /// as the preview-start path does and applies the same per-service validation
+    /// (unique names, required command/port/healthUrl, positive suggestedPort).
+    /// Returns <see cref="WorktreePreviewValidationResult.Configured"/> false when
+    /// no preview profile is present, and throws <see cref="InvalidOperationException"/>
+    /// with the precise reason when a config is present but invalid.
+    /// </summary>
+    Task<WorktreePreviewValidationResult> ValidateConfigAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Lightweight O(1) check whether a preview runtime is active for the given worktree path.
     /// Does not load config files — only inspects the in-memory runtime dictionary.
     /// </summary>
@@ -70,6 +97,8 @@ public sealed class NoopPreviewService : IWorktreePreviewService
     public Task<string?> GetServiceLogAsync(string worktreePath, string serviceName, int maxBytes = 64 * 1024, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
     public Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
+        => throw new NotImplementedException();
+    public Task<WorktreePreviewValidationResult> ValidateConfigAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
     public bool IsPreviewRunning(string worktreePath) => false;
 }

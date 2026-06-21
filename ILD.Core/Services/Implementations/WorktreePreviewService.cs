@@ -222,6 +222,31 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         return new WorktreeInstallResult(true);
     }
 
+    public async Task<WorktreePreviewValidationResult> ValidateConfigAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
+    {
+        var normalized = NormalizeWorktreePath(worktreePath);
+        var loaded = await LoadConfigAsync(normalized, cancellationToken);
+        if (!loaded.Configured || loaded.Config == null)
+        {
+            return new WorktreePreviewValidationResult(false, null, Array.Empty<string>(), loaded.Message);
+        }
+
+        var resolvedProfileName = SelectProfileName(loaded.Config, profileName);
+        if (!loaded.Config.Preview!.Profiles.TryGetValue(resolvedProfileName, out var profile) || profile == null)
+        {
+            throw new InvalidOperationException($"Preview profile '{resolvedProfileName}' not found.");
+        }
+
+        // Same validation the preview-start path applies, but without allocating
+        // ports or launching anything — a pure dry run over the parsed config.
+        ValidateProfile(resolvedProfileName, profile);
+        return new WorktreePreviewValidationResult(
+            true,
+            resolvedProfileName,
+            profile.Services.Select(s => s.Name).ToList(),
+            null);
+    }
+
     public bool IsPreviewRunning(string worktreePath)
     {
         if (string.IsNullOrWhiteSpace(worktreePath))
