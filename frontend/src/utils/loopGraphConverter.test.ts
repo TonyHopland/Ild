@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vite-plus/test";
 import type { Edge } from "@xyflow/react";
 import { templateToEdges, edgesToLoopNodeEdges } from "./loopGraphConverter";
+import { LOOP_EDGE_TYPE } from "./edgeUtils";
 import { EdgeType, type LoopTemplate } from "../types";
 
 function template(edges: LoopTemplate["edges"]): LoopTemplate {
@@ -37,6 +38,37 @@ describe("loopGraphConverter custom edges", () => {
     expect(edge.label).toBe("Escalate");
     // Reuses the existing top/respond handle as the single custom outlet.
     expect(edge.sourceHandle).toBe("respond");
+  });
+
+  test("two custom edges from one node to the same target keep distinct labels and a shared route", () => {
+    const edges = templateToEdges(
+      template([
+        {
+          id: "e-ci",
+          sourceNodeId: "pr",
+          targetNodeId: "fix",
+          edgeType: EdgeType.Custom,
+          name: "on_ci_failed",
+          maxTraversals: null,
+        },
+        {
+          id: "e-reject",
+          sourceNodeId: "pr",
+          targetNodeId: "fix",
+          edgeType: EdgeType.Custom,
+          name: "on_rejected",
+          maxTraversals: null,
+        },
+      ]),
+    );
+
+    // Each edge keeps its own readable label rather than stacking one over the other.
+    expect(edges.map((edge) => edge.label)).toEqual(["on_ci_failed", "on_rejected"]);
+    // They share the same source/target handles, so the custom edge component
+    // fans them apart by route.
+    expect(edges.every((edge) => edge.type === LOOP_EDGE_TYPE)).toBe(true);
+    expect(edges.every((edge) => edge.sourceHandle === "respond")).toBe(true);
+    expect(edges.every((edge) => edge.targetHandle === "target-handle")).toBe(true);
   });
 
   test("a custom edge with no name falls back to a generic 'custom' label", () => {

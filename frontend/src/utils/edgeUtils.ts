@@ -1,6 +1,10 @@
 import type { Edge, Node } from "@xyflow/react";
 import { AiMatchRule, EdgeType, NodeType } from "../types";
 
+// Every loop edge renders through the custom LoopEdgeComponent (registered under
+// this type) so siblings that share one source/target route can fan apart.
+export const LOOP_EDGE_TYPE = "loopEdge";
+
 export interface EdgeConfig {
   source: string;
   target: string;
@@ -147,14 +151,7 @@ function edgeLabelFor(edgeType: EdgeType, name?: string | null): string {
   return name?.trim() || "custom";
 }
 
-// React Flow v12 dropped `pathOptions` from the generic `Edge` type; it only
-// lives on the built-in smoothstep variant, which isn't exported. Re-declare it
-// here so the smoothstep routing options below type-check.
-type SmoothStepEdge = Edge & {
-  pathOptions?: { borderRadius?: number; offset?: number };
-};
-
-export function buildEdge(config: EdgeConfig): SmoothStepEdge {
+export function buildEdge(config: EdgeConfig): Edge {
   const name = config.edgeType === EdgeType.Custom ? (config.name ?? null) : null;
 
   return {
@@ -163,17 +160,91 @@ export function buildEdge(config: EdgeConfig): SmoothStepEdge {
     target: config.target,
     sourceHandle: config.sourceHandle,
     targetHandle: config.targetHandle,
-    // Rounded orthogonal routing; offset pushes the stub clear of the node so
-    // 180° turns don't clip it.
-    type: "smoothstep",
-    pathOptions: { borderRadius: 20, offset: 20 },
+    type: LOOP_EDGE_TYPE,
     animated: config.edgeType === EdgeType.OnSuccess,
     data: { edgeType: config.edgeType, name },
     style: edgeVisualStyle(config.edgeType),
     label: edgeLabelFor(config.edgeType, name),
-    labelStyle: { fill: "#a0a0b0", fontSize: "0.7rem" },
-    labelBgStyle: { fill: "#1e1e30" },
-    labelBgPadding: [4, 2] as [number, number],
-    labelBgBorderRadius: 4,
+  };
+}
+
+// Perpendicular distance (flow units) between adjacent parallel lanes. Because
+// each lane shifts BOTH of its endpoints (see getParallelEdgePath), siblings stay
+// exactly this far apart along their whole length — not just at a midpoint — so
+// the gap is the real, constant separation a user clicks into. Earlier attempts
+// that only bowed the middle (36px, then 64px, then a 120px peak) still pinched
+// back together near the nodes; this keeps them apart end to end.
+export const PARALLEL_EDGE_SPREAD = 120;
+
+// The transparent hit-area width React Flow draws under each parallel edge so
+// any one in the fan can be clicked, not just the topmost path.
+export const PARALLEL_EDGE_INTERACTION_WIDTH = 34;
+
+/**
+ * Where {@link edge} sits among the edges sharing its exact route — same
+ * source/target node and the same source/target handle. A lone edge is
+ * `{ index: 0, count: 1 }`; siblings get a stable index ordered by edge id so
+ * every edge in the fan picks a different lane on every render.
+ */
+export function parallelEdgeRoute(edges: Edge[], edge: Edge): { index: number; count: number } {
+  const siblings = edges
+    .filter(
+      (candidate) =>
+        candidate.source === edge.source &&
+        candidate.target === edge.target &&
+        (candidate.sourceHandle ?? null) === (edge.sourceHandle ?? null) &&
+        (candidate.targetHandle ?? null) === (edge.targetHandle ?? null),
+    )
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return {
+    index: Math.max(
+      0,
+      siblings.findIndex((candidate) => candidate.id === edge.id),
+    ),
+    count: siblings.length,
+  };
+}
+
+/**
+ * The perpendicular offset (flow units) a parallel edge is shifted onto its own
+ * lane, away from the straight source→target chord. Lanes spread symmetrically
+ * around the chord and widen with the sibling count, so two edges run at ±{@link
+ * PARALLEL_EDGE_SPREAD}/2 and never share a path.
+ */
+export function parallelEdgeOffset(index: number, count: number): number {
+  if (count <= 1) return 0;
+  return (index - (count - 1) / 2) * PARALLEL_EDGE_SPREAD;
+}
+
+/**
+ * Routes a parallel edge along its own lane: BOTH endpoints are shifted `offset`
+ * flow units perpendicular to the source→target chord, giving each edge a
+ * distinct departure and landing point. The result is a straight track that runs
+ * a constant `offset` clear of its siblings end to end — so they never re-converge
+ * and overlap near the nodes the way a midpoint-only bow did. The label rides the
+ * centre of the shifted track.
+ */
+export function getParallelEdgePath(
+  sourceX: number,
+  sourceY: number,
+  targetX: number,
+  targetY: number,
+  offset: number,
+): { path: string; labelX: number; labelY: number } {
+  const deltaX = targetX - sourceX;
+  const deltaY = targetY - sourceY;
+  const length = Math.hypot(deltaX, deltaY) || 1;
+  const perpX = (-deltaY / length) * offset;
+  const perpY = (deltaX / length) * offset;
+
+  const startX = sourceX + perpX;
+  const startY = sourceY + perpY;
+  const endX = targetX + perpX;
+  const endY = targetY + perpY;
+
+  return {
+    path: `M ${startX},${startY} L ${endX},${endY}`,
+    labelX: (startX + endX) / 2,
+    labelY: (startY + endY) / 2,
   };
 }
