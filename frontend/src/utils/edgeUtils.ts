@@ -168,20 +168,13 @@ export function buildEdge(config: EdgeConfig): Edge {
   };
 }
 
-// Perpendicular distance (flow units) between adjacent parallel lanes, applied
-// to the control points of each edge's curve. A cubic reaches ~0.75x its control
-// offset at the centre, so adjacent lanes sit ~0.75 * this value apart across the
-// whole middle of the run — wide enough to read every label and click every edge.
-// Earlier ~36px and ~64px peak-only attempts left the lanes too close to pick one.
+// Perpendicular distance (flow units) between adjacent parallel lanes. Because
+// each lane shifts BOTH of its endpoints (see getParallelEdgePath), siblings stay
+// exactly this far apart along their whole length — not just at a midpoint — so
+// the gap is the real, constant separation a user clicks into. Earlier attempts
+// that only bowed the middle (36px, then 64px, then a 120px peak) still pinched
+// back together near the nodes; this keeps them apart end to end.
 export const PARALLEL_EDGE_SPREAD = 120;
-
-// Fraction of the centre separation kept clickable: the cubic's control points
-// sit a quarter and three-quarters along the chord so the lanes stay roughly
-// parallel (not pinched to a single peak) across the central half of the run.
-const PARALLEL_EDGE_CONTROL_T = 0.25;
-
-// How far a cubic Bézier travels toward its control offset at the midpoint.
-const CUBIC_MIDPOINT_FACTOR = 0.75;
 
 // The transparent hit-area width React Flow draws under each parallel edge so
 // any one in the fan can be clicked, not just the topmost path.
@@ -213,9 +206,9 @@ export function parallelEdgeRoute(edges: Edge[], edge: Edge): { index: number; c
 }
 
 /**
- * The perpendicular control offset (flow units) a parallel edge bows away from
- * the straight source→target chord. Lanes spread symmetrically around the chord
- * and widen with the sibling count, so two edges land at ±{@link
+ * The perpendicular offset (flow units) a parallel edge is shifted onto its own
+ * lane, away from the straight source→target chord. Lanes spread symmetrically
+ * around the chord and widen with the sibling count, so two edges run at ±{@link
  * PARALLEL_EDGE_SPREAD}/2 and never share a path.
  */
 export function parallelEdgeOffset(index: number, count: number): number {
@@ -224,12 +217,12 @@ export function parallelEdgeOffset(index: number, count: number): number {
 }
 
 /**
- * A cubic Bézier from (sourceX, sourceY) to (targetX, targetY) whose two control
- * points are pushed `offset` flow units perpendicular to the chord — one a
- * quarter along, one three-quarters along. Keeping the endpoints on the handles
- * but flaring the middle gives each parallel edge a broad, near-parallel central
- * band (rather than a single crossing point) that stays separated enough to click
- * any one of them. The label rides the centre of that band.
+ * Routes a parallel edge along its own lane: BOTH endpoints are shifted `offset`
+ * flow units perpendicular to the source→target chord, giving each edge a
+ * distinct departure and landing point. The result is a straight track that runs
+ * a constant `offset` clear of its siblings end to end — so they never re-converge
+ * and overlap near the nodes the way a midpoint-only bow did. The label rides the
+ * centre of the shifted track.
  */
 export function getParallelEdgePath(
   sourceX: number,
@@ -241,22 +234,17 @@ export function getParallelEdgePath(
   const deltaX = targetX - sourceX;
   const deltaY = targetY - sourceY;
   const length = Math.hypot(deltaX, deltaY) || 1;
-  const unitX = deltaX / length;
-  const unitY = deltaY / length;
-  const perpX = -unitY;
-  const perpY = unitX;
+  const perpX = (-deltaY / length) * offset;
+  const perpY = (deltaX / length) * offset;
 
-  const along = length * PARALLEL_EDGE_CONTROL_T;
-  const control1X = sourceX + unitX * along + perpX * offset;
-  const control1Y = sourceY + unitY * along + perpY * offset;
-  const control2X = targetX - unitX * along + perpX * offset;
-  const control2Y = targetY - unitY * along + perpY * offset;
+  const startX = sourceX + perpX;
+  const startY = sourceY + perpY;
+  const endX = targetX + perpX;
+  const endY = targetY + perpY;
 
-  const labelX = (sourceX + targetX) / 2 + perpX * offset * CUBIC_MIDPOINT_FACTOR;
-  const labelY = (sourceY + targetY) / 2 + perpY * offset * CUBIC_MIDPOINT_FACTOR;
   return {
-    path: `M ${sourceX},${sourceY} C ${control1X},${control1Y} ${control2X},${control2Y} ${targetX},${targetY}`,
-    labelX,
-    labelY,
+    path: `M ${startX},${startY} L ${endX},${endY}`,
+    labelX: (startX + endX) / 2,
+    labelY: (startY + endY) / 2,
   };
 }

@@ -180,24 +180,26 @@ describe("getParallelEdgePath", () => {
     expect(fanned.labelY).toBe(0);
   });
 
-  test("opposite offsets flare to opposite sides so labels stay far apart", () => {
+  test("shifts both endpoints onto the lane so the track is separated end to end", () => {
+    // A +50 offset moves the whole edge — both endpoints and its label — onto a
+    // lane 50 units off the chord, giving it distinct departure/landing points
+    // rather than sharing the handles.
+    const { path, labelX, labelY } = getParallelEdgePath(0, 0, 100, 0, 50);
+    expect(path).toBe("M 0,50 L 100,50");
+    expect(labelX).toBe(50);
+    expect(labelY).toBe(50);
+  });
+
+  test("opposite lanes stay a full, constant spread apart end to end", () => {
     const up = getParallelEdgePath(0, 0, 100, 0, -PARALLEL_EDGE_SPREAD / 2);
     const down = getParallelEdgePath(0, 0, 100, 0, PARALLEL_EDGE_SPREAD / 2);
 
-    // The two labels sit well over half a lane apart on the perpendicular axis —
-    // wide enough that neither the labels nor the curves can be confused.
-    const labelSeparation = down.labelY - up.labelY;
-    expect(labelSeparation).toBeGreaterThan(PARALLEL_EDGE_SPREAD / 2);
-    // The two edges trace different curves, so each is its own click target.
-    expect(up.path).not.toBe(down.path);
-  });
-
-  test("flares the control points a quarter and three-quarters along the run", () => {
-    // Control points carry the full lane offset (here +50 on the y axis) while
-    // the endpoints stay pinned to the handles, so the band — not just a peak —
-    // is separated along the central half of the edge.
-    const { path } = getParallelEdgePath(0, 0, 100, 0, 50);
-    expect(path).toBe("M 0,0 C 25,50 75,50 100,0");
+    // The lanes are parallel translates of the chord, so the separation is the
+    // full spread at every point — the start, the label, and the end alike —
+    // never pinching back together near the nodes.
+    expect(down.labelY - up.labelY).toBe(PARALLEL_EDGE_SPREAD);
+    expect(up.path).toBe(`M 0,${-PARALLEL_EDGE_SPREAD / 2} L 100,${-PARALLEL_EDGE_SPREAD / 2}`);
+    expect(down.path).toBe(`M 0,${PARALLEL_EDGE_SPREAD / 2} L 100,${PARALLEL_EDGE_SPREAD / 2}`);
   });
 });
 
