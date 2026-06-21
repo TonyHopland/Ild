@@ -1,10 +1,12 @@
 using ILD.Core.Services.Remote;
+using ILD.Data.DTOs;
 using ILD.Data.Enums;
 using ILD.Data.Entities;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using Moq;
+using System.Text.Json;
 
 namespace ILD.Tests;
 
@@ -1469,5 +1471,73 @@ public class WorkItemManagerTests
         var id = await mgr.CreateWorkItemAsync("t", "", repo.Id, runId, forceBacklog: true);
 
         notifier.Verify(n => n.WorkItemStateChangedAsync(id, RemoteWorkItemStatus.Backlog, RemoteWorkItemStatus.Backlog), Times.Once);
+    }
+
+    private static string SerializePrSnapshot(RemotePrSnapshot snapshot)
+        => JsonSerializer.Serialize(snapshot, JsonSerializerOptions.Web);
+
+    [Fact]
+    public async Task GetWorkItemAsync_leaves_PrStatus_null_when_run_has_no_snapshot()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        SeedRunWithVersion(db, id);
+
+        var wi = await mgr.GetWorkItemAsync(id);
+        Assert.Null(wi!.PrStatus);
+    }
+
+    [Fact]
+    public async Task GetWorkItemAsync_projects_PrStatus_from_run_snapshot()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var (runId, _) = SeedRunWithVersion(db, id);
+        var run = await db.Context.LoopRuns.FindAsync(runId);
+        run!.PrSnapshot = SerializePrSnapshot(new RemotePrSnapshot(
+            Title: "Add feature",
+            Body: "body",
+            State: "open",
+            Merged: false,
+            Mergeable: false,
+            MergeableState: "dirty",
+            Ci: RemotePrCiStatus.Passed,
+            Approved: true,
+            ChangesRequested: true,
+            Conversation: Array.Empty<RemotePrConversationEntry>(),
+            FetchedAt: DateTime.UtcNow));
+        await db.Context.SaveChangesAsync();
+
+        // Only the badge-relevant fields are projected — title/body/conversation
+        // are intentionally dropped so the board card stays lightweight.
+        var status = (await mgr.GetWorkItemAsync(id))!.PrStatus;
+        Assert.NotNull(status);
+        Assert.Equal("open", status!.State);
+        Assert.False(status.Merged);
+        Assert.False(status.Mergeable);
+        Assert.Equal("dirty", status.MergeableState);
+        Assert.Equal(RemotePrCiStatus.Passed, status.Ci);
+        Assert.True(status.Approved);
+        Assert.True(status.ChangesRequested);
+    }
+
+    [Fact]
+    public async Task GetWorkItemAsync_degrades_corrupt_PrSnapshot_to_null_PrStatus()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var (runId, _) = SeedRunWithVersion(db, id);
+        var run = await db.Context.LoopRuns.FindAsync(runId);
+        run!.PrSnapshot = "{ not valid json";
+        await db.Context.SaveChangesAsync();
+
+        var wi = await mgr.GetWorkItemAsync(id);
+        Assert.Null(wi!.PrStatus);
     }
 }
