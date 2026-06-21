@@ -1,6 +1,7 @@
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Remote;
+using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
@@ -245,7 +246,41 @@ public class WorkItemManager : IWorkItemManager
             CurrentLoopRunId = run?.Id,
             CurrentNodeLabel = ResolveCurrentNodeLabel(run),
             IsPreviewRunning = isPreviewRunning,
+            PrStatus = ResolvePrStatus(run),
         };
+    }
+
+    // The poller persists the snapshot with the web (camelCase) options, so
+    // deserialize with the same to round-trip the property names and the
+    // string-named CI enum.
+    private static readonly JsonSerializerOptions PrSnapshotJson = JsonSerializerOptions.Web;
+
+    /// <summary>
+    /// Projects the run's persisted PR snapshot onto the badge-relevant subset
+    /// the taskboard card renders. Returns null when there is no snapshot yet;
+    /// a corrupt blob degrades to null rather than failing the whole view.
+    /// </summary>
+    private static WorkItemPrStatus? ResolvePrStatus(LoopRun? run)
+    {
+        if (string.IsNullOrEmpty(run?.PrSnapshot)) return null;
+        RemotePrSnapshot? snapshot;
+        try
+        {
+            snapshot = JsonSerializer.Deserialize<RemotePrSnapshot>(run.PrSnapshot, PrSnapshotJson);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+        if (snapshot is null) return null;
+        return new WorkItemPrStatus(
+            snapshot.State,
+            snapshot.Merged,
+            snapshot.Mergeable,
+            snapshot.MergeableState,
+            snapshot.Ci,
+            snapshot.Approved,
+            snapshot.ChangesRequested);
     }
 
     /// <summary>

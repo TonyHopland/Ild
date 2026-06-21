@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { WorkItem, WorkItemStatus } from "../types";
 import { makeLoopTagMatcher, parseTags } from "../utils/workItemJson";
 import { formatDurationMs } from "../utils/duration";
+import { prStatusBadges } from "../utils/prStatusBadges";
 
 interface WorkItemCardProps {
   workItem: WorkItem;
@@ -69,6 +70,15 @@ export default function WorkItemCard({
       })
     : null;
 
+  // While parked at a PR node, surface the same CI/review/merge tags the detail
+  // dialog's PR view shows so the board gives a fast read on the PR's state.
+  const prBadges =
+    workItem.status === WorkItemStatus.HumanFeedback &&
+    workItem.humanFeedbackReason === "PR Awaiting Merge" &&
+    workItem.prStatus
+      ? prStatusBadges(workItem.prStatus)
+      : [];
+
   return (
     <div
       className="work-item-card"
@@ -95,6 +105,15 @@ export default function WorkItemCard({
           }}
         >
           {workItem.humanFeedbackReason}
+        </div>
+      )}
+      {prBadges.length > 0 && (
+        <div className="work-item-pr-badges">
+          {prBadges.map((badge) => (
+            <span key={badge.label} className={`preview-state preview-state--${badge.tone}`}>
+              {badge.label}
+            </span>
+          ))}
         </div>
       )}
       {showRunningMeta && (
@@ -169,6 +188,13 @@ export default function WorkItemCard({
           margin-bottom: 0.375rem;
           text-transform: uppercase;
           letter-spacing: 0.03em;
+        }
+
+        .work-item-pr-badges {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 0.25rem;
+          margin-bottom: 0.375rem;
         }
 
         .work-item-running-meta {

@@ -72,6 +72,26 @@ export interface WorkItem {
   dependencyIds: string[];
   dependentIds: string[];
   isPreviewRunning?: boolean;
+  /**
+   * Badge-relevant PR status from the current run's heartbeat snapshot, surfaced
+   * so the taskboard card can show the PR's CI/review/merge tags while the item
+   * is parked awaiting human feedback. Null/undefined when there is no snapshot.
+   */
+  prStatus?: WorkItemPrStatus | null;
+}
+
+/**
+ * Compact PR status carried on a {@link WorkItem} (mirrors the backend's
+ * WorkItemPrStatus). A badge-relevant subset of {@link RemotePrSnapshot}.
+ */
+export interface WorkItemPrStatus {
+  state: string;
+  merged: boolean;
+  mergeable: boolean | null;
+  mergeableState: string | null;
+  ci: RemotePrCiStatus;
+  approved: boolean;
+  changesRequested: boolean;
 }
 
 export interface WorktreePreviewService {

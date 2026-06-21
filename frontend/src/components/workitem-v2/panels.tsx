@@ -1,13 +1,8 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import {
-  RemotePrCiStatus,
-  RemotePrSnapshot,
-  WorkItem,
-  WorkItemStatus,
-  WorktreePreviewService,
-} from "../../types";
+import { RemotePrSnapshot, WorkItem, WorkItemStatus, WorktreePreviewService } from "../../types";
 import { makeLoopTagMatcher, parseConversation, parseTags } from "../../utils/workItemJson";
+import { prStatusBadges } from "../../utils/prStatusBadges";
 import MarkdownRenderer from "../MarkdownRenderer";
 import FeedbackActions from "../FeedbackActions";
 import type { WorkItemDetail } from "./useWorkItemDetail";
@@ -90,49 +85,21 @@ export function FeedbackBanner({
   );
 }
 
-const CI_LABELS: Record<RemotePrCiStatus, string> = {
-  None: "No CI",
-  Pending: "CI running",
-  Passed: "CI passed",
-  Failed: "CI failed",
-};
-
-/** Maps a CI verdict onto the shared preview-state tone classes. */
-function ciTone(ci: RemotePrCiStatus): string {
-  if (ci === "Passed") return "running";
-  if (ci === "Failed") return "error";
-  return "stopped";
-}
-
-function prStateLabel(snapshot: RemotePrSnapshot): { label: string; tone: string } {
-  if (snapshot.merged) return { label: "Merged", tone: "running" };
-  if (snapshot.state === "closed") return { label: "Closed", tone: "error" };
-  return { label: "Open", tone: "stopped" };
-}
-
 /**
  * Full PR view rendered from the persisted heartbeat snapshot: title, state,
  * CI/review badges, description, and the full conversation. Updates live as the
  * poller refreshes the snapshot over the run hub.
  */
 export function PrView({ snapshot }: { snapshot: RemotePrSnapshot }) {
-  const state = prStateLabel(snapshot);
-  const hasConflict = snapshot.mergeable === false || snapshot.mergeableState === "dirty";
   return (
     <div className="pr-view">
       {snapshot.title && <div className="pr-view-title">{snapshot.title}</div>}
       <div className="pr-view-badges">
-        <span className={`preview-state preview-state--${state.tone}`}>{state.label}</span>
-        <span className={`preview-state preview-state--${ciTone(snapshot.ci)}`}>
-          {CI_LABELS[snapshot.ci]}
-        </span>
-        {snapshot.changesRequested && (
-          <span className="preview-state preview-state--error">Changes requested</span>
-        )}
-        {snapshot.approved && (
-          <span className="preview-state preview-state--running">Approved</span>
-        )}
-        {hasConflict && <span className="preview-state preview-state--error">Merge conflict</span>}
+        {prStatusBadges(snapshot).map((badge) => (
+          <span key={badge.label} className={`preview-state preview-state--${badge.tone}`}>
+            {badge.label}
+          </span>
+        ))}
       </div>
       {snapshot.body && (
         <div className="markdown-container pr-view-description">

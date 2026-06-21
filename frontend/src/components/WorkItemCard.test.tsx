@@ -127,6 +127,88 @@ describe("WorkItemCard", () => {
     expect(screen.getByText("bug fix").className).not.toContain("work-item-tag--loop");
   });
 
+  test("shows PR status badges while parked awaiting merge", () => {
+    render(
+      <WorkItemCard
+        workItem={makeItem({
+          status: WorkItemStatus.HumanFeedback,
+          humanFeedbackReason: "PR Awaiting Merge",
+          prStatus: {
+            state: "open",
+            merged: false,
+            mergeable: true,
+            mergeableState: "clean",
+            ci: "Passed",
+            approved: true,
+            changesRequested: false,
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText("Open")).toBeTruthy();
+    expect(screen.getByText("CI passed")).toBeTruthy();
+    expect(screen.getByText("Approved")).toBeTruthy();
+    // A clean, non-rejected PR shows neither of the failure-tone badges.
+    expect(screen.queryByText("Changes requested")).toBeNull();
+    expect(screen.queryByText("Merge conflict")).toBeNull();
+  });
+
+  test("surfaces a failing PR's conflict and changes-requested badges", () => {
+    render(
+      <WorkItemCard
+        workItem={makeItem({
+          status: WorkItemStatus.HumanFeedback,
+          humanFeedbackReason: "PR Awaiting Merge",
+          prStatus: {
+            state: "open",
+            merged: false,
+            mergeable: false,
+            mergeableState: "dirty",
+            ci: "Failed",
+            approved: false,
+            changesRequested: true,
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText("CI failed")).toBeTruthy();
+    expect(screen.getByText("Changes requested")).toBeTruthy();
+    expect(screen.getByText("Merge conflict")).toBeTruthy();
+  });
+
+  test("hides PR status badges when not parked awaiting merge", () => {
+    const prStatus = {
+      state: "open",
+      merged: false,
+      mergeable: true,
+      mergeableState: "clean",
+      ci: "Passed" as const,
+      approved: false,
+      changesRequested: false,
+    };
+
+    // Same snapshot, but a running item must not surface the PR tags — they are
+    // scoped to the awaiting-merge park.
+    render(<WorkItemCard workItem={makeItem({ status: WorkItemStatus.Running, prStatus })} />);
+    expect(screen.queryByText("CI passed")).toBeNull();
+
+    cleanup();
+
+    // Parked for a different reason: still no PR tags.
+    render(
+      <WorkItemCard
+        workItem={makeItem({
+          status: WorkItemStatus.HumanFeedback,
+          humanFeedbackReason: "Node Failed",
+          prStatus,
+        })}
+      />,
+    );
+    expect(screen.queryByText("CI passed")).toBeNull();
+  });
+
   test("omits the step when a running item has no current node label", () => {
     const base = new Date("2026-06-14T12:00:00Z").getTime();
     vi.useFakeTimers();

@@ -1,4 +1,5 @@
 using ILD.Core.Services.Remote;
+using ILD.Data.DTOs;
 
 namespace ILD.Core.Services.Interfaces;
 
@@ -41,4 +42,26 @@ public sealed class WorkItemView
     /// </summary>
     public string? CurrentNodeLabel { get; set; }
     public bool IsPreviewRunning { get; set; }
+
+    /// <summary>
+    /// Badge-relevant PR status, projected from the current run's persisted PR
+    /// snapshot. Lets the taskboard card surface the same CI/review/merge tags
+    /// the detail dialog's PR view shows while the item is parked awaiting human
+    /// feedback. Null when the current run has no PR snapshot yet.
+    /// </summary>
+    public WorkItemPrStatus? PrStatus { get; set; }
 }
+
+/// <summary>
+/// Badge-relevant subset of a <see cref="RemotePrSnapshot"/>, projected onto a
+/// work item so the taskboard card can show a PR's CI verdict, review decision,
+/// and mergeability without carrying the full snapshot (body, conversation).
+/// </summary>
+public sealed record WorkItemPrStatus(
+    string State,
+    bool Merged,
+    bool? Mergeable,
+    string? MergeableState,
+    RemotePrCiStatus Ci,
+    bool Approved,
+    bool ChangesRequested);
