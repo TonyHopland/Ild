@@ -17,6 +17,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import LoopNodeComponent from "../../components/LoopNodeComponent";
+import LoopEdgeComponent from "../../components/LoopEdgeComponent";
 import ErrorBanner from "../../components/ErrorBanner";
 import { loopTemplateService, agentAdapterService, aiProviderService } from "../../services/auth";
 import {
@@ -37,6 +38,7 @@ import {
   buildEdge,
   getCustomEdgeNames,
   getConnectedCustomEdgeNames,
+  LOOP_EDGE_TYPE,
 } from "../../utils/edgeUtils";
 import {
   type AiMatchRule,
@@ -71,6 +73,10 @@ function loadErrorMessage(error: unknown, fallback: string): string {
 
 const nodeTypes = {
   loopNode: LoopNodeComponent,
+};
+
+const edgeTypes = {
+  [LOOP_EDGE_TYPE]: LoopEdgeComponent,
 };
 
 const paletteItems = [
@@ -1414,6 +1420,7 @@ export default function LoopEditor() {
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChangeCustom}
                 nodeTypes={nodeTypes}
+                edgeTypes={edgeTypes}
                 onInit={onInit}
                 onNodeClick={onNodeClick}
                 onConnect={onConnect}

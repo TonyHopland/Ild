@@ -1,6 +1,10 @@
 import type { Edge, Node } from "@xyflow/react";
 import { AiMatchRule, EdgeType, NodeType } from "../types";
 
+// Every loop edge renders through the custom LoopEdgeComponent (registered under
+// this type) so siblings that share one source/target route can fan apart.
+export const LOOP_EDGE_TYPE = "loopEdge";
+
 export interface EdgeConfig {
   source: string;
   target: string;
@@ -147,14 +151,7 @@ function edgeLabelFor(edgeType: EdgeType, name?: string | null): string {
   return name?.trim() || "custom";
 }
 
-// React Flow v12 dropped `pathOptions` from the generic `Edge` type; it only
-// lives on the built-in smoothstep variant, which isn't exported. Re-declare it
-// here so the smoothstep routing options below type-check.
-type SmoothStepEdge = Edge & {
-  pathOptions?: { borderRadius?: number; offset?: number };
-};
-
-export function buildEdge(config: EdgeConfig): SmoothStepEdge {
+export function buildEdge(config: EdgeConfig): Edge {
   const name = config.edgeType === EdgeType.Custom ? (config.name ?? null) : null;
 
   return {
@@ -163,17 +160,86 @@ export function buildEdge(config: EdgeConfig): SmoothStepEdge {
     target: config.target,
     sourceHandle: config.sourceHandle,
     targetHandle: config.targetHandle,
-    // Rounded orthogonal routing; offset pushes the stub clear of the node so
-    // 180° turns don't clip it.
-    type: "smoothstep",
-    pathOptions: { borderRadius: 20, offset: 20 },
+    type: LOOP_EDGE_TYPE,
     animated: config.edgeType === EdgeType.OnSuccess,
     data: { edgeType: config.edgeType, name },
     style: edgeVisualStyle(config.edgeType),
     label: edgeLabelFor(config.edgeType, name),
-    labelStyle: { fill: "#a0a0b0", fontSize: "0.7rem" },
-    labelBgStyle: { fill: "#1e1e30" },
-    labelBgPadding: [4, 2] as [number, number],
-    labelBgBorderRadius: 4,
+  };
+}
+
+// Spacing between adjacent parallel edges at their bowed midpoint, in flow
+// units. Wider than a label so stacked edges separate into clickable lanes; an
+// earlier ~36px attempt left them too close to reliably pick one.
+export const PARALLEL_EDGE_GAP = 64;
+
+// The transparent hit-area width React Flow draws under each parallel edge so
+// any one in the fan can be clicked, not just the topmost path.
+export const PARALLEL_EDGE_INTERACTION_WIDTH = 34;
+
+/**
+ * Where {@link edge} sits among the edges sharing its exact route — same
+ * source/target node and the same source/target handle. A lone edge is
+ * `{ index: 0, count: 1 }`; siblings get a stable index ordered by edge id so
+ * every edge in the fan picks a different lane on every render.
+ */
+export function parallelEdgeRoute(edges: Edge[], edge: Edge): { index: number; count: number } {
+  const siblings = edges
+    .filter(
+      (candidate) =>
+        candidate.source === edge.source &&
+        candidate.target === edge.target &&
+        (candidate.sourceHandle ?? null) === (edge.sourceHandle ?? null) &&
+        (candidate.targetHandle ?? null) === (edge.targetHandle ?? null),
+    )
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return {
+    index: Math.max(
+      0,
+      siblings.findIndex((candidate) => candidate.id === edge.id),
+    ),
+    count: siblings.length,
+  };
+}
+
+/**
+ * The perpendicular offset (flow units) a parallel edge bows away from the
+ * straight source→target chord. Lanes spread symmetrically around the chord and
+ * widen with the sibling count, so two edges land at ±{@link PARALLEL_EDGE_GAP}/2
+ * and never on the same path.
+ */
+export function parallelEdgeOffset(index: number, count: number): number {
+  if (count <= 1) return 0;
+  return (index - (count - 1) / 2) * PARALLEL_EDGE_GAP;
+}
+
+/**
+ * A quadratic bow from (sourceX, sourceY) to (targetX, targetY) that deviates
+ * `offset` flow units perpendicular to the chord at its midpoint, with the label
+ * placed at that peak. The control point sits at twice the offset because a
+ * quadratic curve reaches only half its control distance at the midpoint.
+ */
+export function getBowedEdgePath(
+  sourceX: number,
+  sourceY: number,
+  targetX: number,
+  targetY: number,
+  offset: number,
+): { path: string; labelX: number; labelY: number } {
+  const deltaX = targetX - sourceX;
+  const deltaY = targetY - sourceY;
+  const length = Math.hypot(deltaX, deltaY) || 1;
+  const perpX = -deltaY / length;
+  const perpY = deltaX / length;
+  const midX = (sourceX + targetX) / 2;
+  const midY = (sourceY + targetY) / 2;
+  const controlX = midX + perpX * offset * 2;
+  const controlY = midY + perpY * offset * 2;
+  const labelX = midX + perpX * offset;
+  const labelY = midY + perpY * offset;
+  return {
+    path: `M ${sourceX},${sourceY} Q ${controlX},${controlY} ${targetX},${targetY}`,
+    labelX,
+    labelY,
   };
 }

@@ -1,6 +1,7 @@
 import type { Node, Edge } from "@xyflow/react";
 import type { LoopTemplate, LoopNodeEdge, LoopNode } from "../types";
 import { EdgeType, NodeType } from "../types";
+import { LOOP_EDGE_TYPE } from "./edgeUtils";
 
 function layoutPosition(index: number): { x: number; y: number } {
   const columns = 2;
@@ -63,18 +64,11 @@ export function templateToEdges(template: LoopTemplate): Edge[] {
       target: edge.targetNodeId,
       sourceHandle,
       targetHandle: "target-handle",
-      // Rounded orthogonal routing; offset pushes the stub clear of the node so
-      // 180° turns don't clip it.
-      type: "smoothstep",
-      pathOptions: { borderRadius: 20, offset: 20 },
+      type: LOOP_EDGE_TYPE,
       data: { edgeType: edge.edgeType, name: edge.name ?? null },
       animated: edge.edgeType === EdgeType.OnSuccess,
       style: strokeStyle,
       label,
-      labelStyle: { fill: "#a0a0b0", fontSize: "0.7rem" },
-      labelBgStyle: { fill: "#1e1e30" },
-      labelBgPadding: [4, 2] as [number, number],
-      labelBgBorderRadius: 4,
     };
   });
 }
