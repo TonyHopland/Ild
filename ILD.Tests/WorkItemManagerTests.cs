@@ -181,6 +181,57 @@ public class WorkItemManagerTests
     }
 
     [Fact]
+    public async Task UpdateAsync_notifies_state_change_so_clients_refresh_the_card_live()
+    {
+        var db = new TestDb();
+        using var _ = db;
+        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/repo.git", DefaultIntakeStatus = WorkItemStatus.WorkQueue };
+        db.Context.RemoteProviders.Add(remote);
+        db.Context.Repositories.Add(repo);
+        db.Context.SaveChanges();
+        var repoMgr = new Mock<IRepositoryManager>();
+        var eventLog = new Mock<IEventLogService>();
+        var notifier = new Mock<IWorkItemNotifier>();
+        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, notifier.Object);
+
+        var id = await mgr.CreateWorkItemAsync("orig", "origdesc", repo.Id);
+        notifier.Invocations.Clear();
+
+        var ok = await mgr.UpdateAsync(id, "new title", "new desc");
+        Assert.True(ok);
+
+        // An edit keeps the status, so old and new are both the current status.
+        // The Taskboard's WorkItemStateChanged handler re-fetches the item, which
+        // is what surfaces the new title/description without a page refresh. This
+        // is the AI/MCP edit path the bug report was about.
+        notifier.Verify(n => n.WorkItemStateChangedAsync(id, RemoteWorkItemStatus.WorkQueue, RemoteWorkItemStatus.WorkQueue), Times.Once);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_does_not_notify_for_unknown_id()
+    {
+        var db = new TestDb();
+        using var _ = db;
+        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/repo.git" };
+        db.Context.RemoteProviders.Add(remote);
+        db.Context.Repositories.Add(repo);
+        db.Context.SaveChanges();
+        var repoMgr = new Mock<IRepositoryManager>();
+        var eventLog = new Mock<IEventLogService>();
+        var notifier = new Mock<IWorkItemNotifier>();
+        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, notifier.Object);
+
+        var ok = await mgr.UpdateAsync(Guid.NewGuid().ToString(), "t", "d");
+        Assert.False(ok);
+
+        // A no-op update (item gone) must not broadcast — a phantom refresh would
+        // make clients re-fetch an item that does not exist.
+        notifier.Verify(n => n.WorkItemStateChangedAsync(It.IsAny<string>(), It.IsAny<RemoteWorkItemStatus>(), It.IsAny<RemoteWorkItemStatus>()), Times.Never);
+    }
+
+    [Fact]
     public async Task IsReady_true_for_workitem_with_no_dependencies()
     {
         var (mgr, db, repoId, _, _) = Setup();

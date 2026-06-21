@@ -274,7 +274,17 @@ public class WorkItemManager : IWorkItemManager
             Description = description,
             Tags = tags?.ToList(),
         });
-        return updated != null;
+        if (updated == null) return false;
+
+        // Broadcast the edit so connected clients (e.g. the Taskboard) refresh
+        // the card live instead of only on a manual page reload. An edit doesn't
+        // change status, so old and new are both the current status; the
+        // Taskboard's WorkItemStateChanged handler re-fetches the item, which
+        // surfaces the new title/description/tags. Covers every update path —
+        // UI and agent/MCP alike — since both flow through here.
+        await _notifier.WorkItemStateChangedAsync(updated.Id, updated.Status, updated.Status);
+
+        return true;
     }
 
     // ──────────────────────────────────────────────────────────────────
