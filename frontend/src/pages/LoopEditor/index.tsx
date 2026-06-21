@@ -18,6 +18,7 @@ import "@xyflow/react/dist/style.css";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import LoopNodeComponent from "../../components/LoopNodeComponent";
 import LoopEdgeComponent from "../../components/LoopEdgeComponent";
+import { LoopEdgeInteractionContext } from "../../components/loopEdgeInteraction";
 import ErrorBanner from "../../components/ErrorBanner";
 import { loopTemplateService, agentAdapterService, aiProviderService } from "../../services/auth";
 import {
@@ -1218,12 +1219,30 @@ export default function LoopEditor() {
     setShowEdgeDeletePanel(false);
   }, []);
 
-  const onEdgeClick = useCallback((_event: React.MouseEvent, edge: Edge) => {
-    setSelectedEdge(edge);
-    setSelectedNode(null);
-    setShowNodeSettingsModal(false);
-    setShowEdgeDeletePanel(true);
-  }, []);
+  const selectEdge = useCallback(
+    (edge: Edge) => {
+      setSelectedEdge(edge);
+      setSelectedNode(null);
+      setShowNodeSettingsModal(false);
+      setShowEdgeDeletePanel(true);
+      // Mirror React Flow's own path-click selection so a label-selected edge is
+      // highlighted too, single-selecting just this one.
+      setEdges((currentEdges) =>
+        currentEdges.map((candidate) => {
+          const shouldSelect = candidate.id === edge.id;
+          return candidate.selected === shouldSelect
+            ? candidate
+            : { ...candidate, selected: shouldSelect };
+        }),
+      );
+    },
+    [setEdges],
+  );
+
+  const onEdgeClick = useCallback(
+    (_event: React.MouseEvent, edge: Edge) => selectEdge(edge),
+    [selectEdge],
+  );
 
   const deleteSelectedEdge = useCallback(() => {
     if (!selectedEdge) return;
@@ -1413,125 +1432,127 @@ export default function LoopEditor() {
             onDragOver={onDragOver}
           >
             {selectedTemplate || isNewTemplate ? (
-              <ReactFlow
-                key={canvasKey}
-                nodes={nodes}
-                edges={edges}
-                onNodesChange={onNodesChange}
-                onEdgesChange={onEdgesChangeCustom}
-                nodeTypes={nodeTypes}
-                edgeTypes={edgeTypes}
-                onInit={onInit}
-                onNodeClick={onNodeClick}
-                onConnect={onConnect}
-                onEdgeClick={onEdgeClick}
-                fitView
-                panOnDrag={true}
-                zoomOnScroll={true}
-                elementsSelectable={true}
-              >
-                <Background />
-                <Controls />
-
-                <Panel position="top-right" className="loop-canvas-info">
-                  <span>{selectedTemplateName}</span>
-                  <span>v{selectedTemplate?.version ?? "new"}</span>
-                </Panel>
-
-                {validationErrors.length > 0 && (
-                  <Panel position="top-center" className="validation-errors-panel">
-                    <div className="validation-errors-header">Validation Errors</div>
-                    {validationErrors.map((error, index) => (
-                      <div key={index} className="validation-error-badge">
-                        {error}
-                      </div>
-                    ))}
-                  </Panel>
-                )}
-
-                {showNodeSettingsModal && selectedNode && (
-                  <NodeSettingsModal
-                    selectedNode={selectedNode}
-                    labelError={labelError}
-                    nodeLabel={nodeLabel}
-                    cmdCommand={cmdCommand}
-                    aiPrompt={aiPrompt}
-                    aiProvider={aiProvider}
-                    aiTools={aiTools}
-                    aiMatchRules={aiMatchRules}
-                    customEdgeNames={customEdgeNames}
-                    aiUseSession={aiUseSession}
-                    aiSessionPlaceholder={aiSessionPlaceholder}
-                    aiForkFromPlaceholder={aiForkFromPlaceholder}
-                    startCreateWorktree={startCreateWorktree}
-                    startRunInstall={startRunInstall}
-                    humanInputLabel={humanInputLabel}
-                    humanPrompt={humanPrompt}
-                    promptNodePrompt={promptNodePrompt}
-                    prDescriptionTemplate={prDescriptionTemplate}
-                    prCommentTemplate={prCommentTemplate}
-                    conditionVariant={conditionVariant}
-                    conditionSubject={conditionSubject}
-                    conditionPattern={conditionPattern}
-                    conditionTag={conditionTag}
-                    conditionOutput={conditionOutput}
-                    aiProviders={aiProviders}
-                    availableAiTools={availableAiTools}
-                    adapterConfigSchema={adapterConfigSchema}
-                    adapterConfigValues={adapterConfigValues}
-                    sessionPlaceholderUsages={sessionPlaceholderUsages}
-                    selectedPlaceholderUsage={selectedPlaceholderUsage}
-                    onClose={handleCancelNodeSettings}
-                    onDeleteNode={deleteSelectedNode}
-                    onSave={handleSaveNodeSettings}
-                    onValidateLabel={validateLabel}
-                    onNodeLabelChange={setNodeLabel}
-                    onCmdCommandChange={setCmdCommand}
-                    onAiPromptChange={setAiPrompt}
-                    onAiProviderChange={handleAiProviderChange}
-                    onAiToolsChange={setAiTools}
-                    onAiMatchRulesChange={setAiMatchRules}
-                    onCustomEdgeNamesChange={setCustomEdgeNames}
-                    onAiUseSessionChange={setAiUseSession}
-                    onAiSessionPlaceholderChange={setAiSessionPlaceholder}
-                    onAiForkFromPlaceholderChange={setAiForkFromPlaceholder}
-                    onStartCreateWorktreeChange={setStartCreateWorktree}
-                    onStartRunInstallChange={setStartRunInstall}
-                    onHumanInputLabelChange={setHumanInputLabel}
-                    onHumanPromptChange={setHumanPrompt}
-                    onPromptNodePromptChange={setPromptNodePrompt}
-                    onPrDescriptionTemplateChange={setPrDescriptionTemplate}
-                    onPrCommentTemplateChange={setPrCommentTemplate}
-                    onConditionVariantChange={setConditionVariant}
-                    onConditionSubjectChange={setConditionSubject}
-                    onConditionPatternChange={setConditionPattern}
-                    onConditionTagChange={setConditionTag}
-                    onConditionOutputChange={setConditionOutput}
-                    onAdapterConfigChange={(name, value) =>
-                      setAdapterConfigValues((current) => ({ ...current, [name]: value }))
-                    }
-                  />
-                )}
-
-                <EdgePanels
-                  pendingConnection={pendingConnection !== null}
-                  edgeType={edgeType}
-                  edgeName={edgeName}
-                  customEdgeOptions={getCustomEdgeNames(
-                    nodes.find((node) => node.id === pendingConnection?.source),
-                  )}
-                  edgeMaxTraversals={edgeMaxTraversals}
-                  edgeError={edgeError}
-                  showEdgeDeletePanel={showEdgeDeletePanel}
-                  selectedEdge={selectedEdge}
+              <LoopEdgeInteractionContext.Provider value={selectEdge}>
+                <ReactFlow
+                  key={canvasKey}
                   nodes={nodes}
-                  onEdgeNameChange={setEdgeName}
-                  onEdgeMaxTraversalsChange={setEdgeMaxTraversals}
-                  onConfirmEdge={confirmEdge}
-                  onCancelEdge={cancelEdge}
-                  onDeleteEdge={deleteSelectedEdge}
-                />
-              </ReactFlow>
+                  edges={edges}
+                  onNodesChange={onNodesChange}
+                  onEdgesChange={onEdgesChangeCustom}
+                  nodeTypes={nodeTypes}
+                  edgeTypes={edgeTypes}
+                  onInit={onInit}
+                  onNodeClick={onNodeClick}
+                  onConnect={onConnect}
+                  onEdgeClick={onEdgeClick}
+                  fitView
+                  panOnDrag={true}
+                  zoomOnScroll={true}
+                  elementsSelectable={true}
+                >
+                  <Background />
+                  <Controls />
+
+                  <Panel position="top-right" className="loop-canvas-info">
+                    <span>{selectedTemplateName}</span>
+                    <span>v{selectedTemplate?.version ?? "new"}</span>
+                  </Panel>
+
+                  {validationErrors.length > 0 && (
+                    <Panel position="top-center" className="validation-errors-panel">
+                      <div className="validation-errors-header">Validation Errors</div>
+                      {validationErrors.map((error, index) => (
+                        <div key={index} className="validation-error-badge">
+                          {error}
+                        </div>
+                      ))}
+                    </Panel>
+                  )}
+
+                  {showNodeSettingsModal && selectedNode && (
+                    <NodeSettingsModal
+                      selectedNode={selectedNode}
+                      labelError={labelError}
+                      nodeLabel={nodeLabel}
+                      cmdCommand={cmdCommand}
+                      aiPrompt={aiPrompt}
+                      aiProvider={aiProvider}
+                      aiTools={aiTools}
+                      aiMatchRules={aiMatchRules}
+                      customEdgeNames={customEdgeNames}
+                      aiUseSession={aiUseSession}
+                      aiSessionPlaceholder={aiSessionPlaceholder}
+                      aiForkFromPlaceholder={aiForkFromPlaceholder}
+                      startCreateWorktree={startCreateWorktree}
+                      startRunInstall={startRunInstall}
+                      humanInputLabel={humanInputLabel}
+                      humanPrompt={humanPrompt}
+                      promptNodePrompt={promptNodePrompt}
+                      prDescriptionTemplate={prDescriptionTemplate}
+                      prCommentTemplate={prCommentTemplate}
+                      conditionVariant={conditionVariant}
+                      conditionSubject={conditionSubject}
+                      conditionPattern={conditionPattern}
+                      conditionTag={conditionTag}
+                      conditionOutput={conditionOutput}
+                      aiProviders={aiProviders}
+                      availableAiTools={availableAiTools}
+                      adapterConfigSchema={adapterConfigSchema}
+                      adapterConfigValues={adapterConfigValues}
+                      sessionPlaceholderUsages={sessionPlaceholderUsages}
+                      selectedPlaceholderUsage={selectedPlaceholderUsage}
+                      onClose={handleCancelNodeSettings}
+                      onDeleteNode={deleteSelectedNode}
+                      onSave={handleSaveNodeSettings}
+                      onValidateLabel={validateLabel}
+                      onNodeLabelChange={setNodeLabel}
+                      onCmdCommandChange={setCmdCommand}
+                      onAiPromptChange={setAiPrompt}
+                      onAiProviderChange={handleAiProviderChange}
+                      onAiToolsChange={setAiTools}
+                      onAiMatchRulesChange={setAiMatchRules}
+                      onCustomEdgeNamesChange={setCustomEdgeNames}
+                      onAiUseSessionChange={setAiUseSession}
+                      onAiSessionPlaceholderChange={setAiSessionPlaceholder}
+                      onAiForkFromPlaceholderChange={setAiForkFromPlaceholder}
+                      onStartCreateWorktreeChange={setStartCreateWorktree}
+                      onStartRunInstallChange={setStartRunInstall}
+                      onHumanInputLabelChange={setHumanInputLabel}
+                      onHumanPromptChange={setHumanPrompt}
+                      onPromptNodePromptChange={setPromptNodePrompt}
+                      onPrDescriptionTemplateChange={setPrDescriptionTemplate}
+                      onPrCommentTemplateChange={setPrCommentTemplate}
+                      onConditionVariantChange={setConditionVariant}
+                      onConditionSubjectChange={setConditionSubject}
+                      onConditionPatternChange={setConditionPattern}
+                      onConditionTagChange={setConditionTag}
+                      onConditionOutputChange={setConditionOutput}
+                      onAdapterConfigChange={(name, value) =>
+                        setAdapterConfigValues((current) => ({ ...current, [name]: value }))
+                      }
+                    />
+                  )}
+
+                  <EdgePanels
+                    pendingConnection={pendingConnection !== null}
+                    edgeType={edgeType}
+                    edgeName={edgeName}
+                    customEdgeOptions={getCustomEdgeNames(
+                      nodes.find((node) => node.id === pendingConnection?.source),
+                    )}
+                    edgeMaxTraversals={edgeMaxTraversals}
+                    edgeError={edgeError}
+                    showEdgeDeletePanel={showEdgeDeletePanel}
+                    selectedEdge={selectedEdge}
+                    nodes={nodes}
+                    onEdgeNameChange={setEdgeName}
+                    onEdgeMaxTraversalsChange={setEdgeMaxTraversals}
+                    onConfirmEdge={confirmEdge}
+                    onCancelEdge={cancelEdge}
+                    onDeleteEdge={deleteSelectedEdge}
+                  />
+                </ReactFlow>
+              </LoopEdgeInteractionContext.Provider>
             ) : (
               <div className="loop-canvas-empty">Select a template to view its graph</div>
             )}
