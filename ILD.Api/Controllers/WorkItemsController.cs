@@ -195,6 +195,96 @@ public class WorkItemsController : ControllerBase
         }
     }
 
+    [HttpPost("{id}/preview/services/{service}/start")]
+    public async Task<IActionResult> StartPreviewService(string id, string service, [FromBody] WorktreePreviewStartRequest? request)
+    {
+        if (string.IsNullOrWhiteSpace(service))
+            return BadRequest(new { error = "service is required." });
+
+        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
+        if (error != null) return error;
+        try
+        {
+            var response = await _worktreePreviewService.StartServiceAsync(
+                workItem!.WorktreePath!,
+                service,
+                new WorktreePreviewStartOptions(
+                    request?.ProfileName,
+                    request?.SkipInstall == true,
+                    request?.PublicHost,
+                    request?.PortOverrides));
+            await _notifier.PreviewStateChangedAsync(id);
+            return Ok(response);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpPost("{id}/preview/services/{service}/stop")]
+    public async Task<IActionResult> StopPreviewService(string id, string service)
+    {
+        if (string.IsNullOrWhiteSpace(service))
+            return BadRequest(new { error = "service is required." });
+
+        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
+        if (error != null) return error;
+        try
+        {
+            var response = await _worktreePreviewService.StopServiceAsync(workItem!.WorktreePath!, service);
+            await _notifier.PreviewStateChangedAsync(id);
+            return Ok(response);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpGet("{id}/preview/services/{service}/config")]
+    public async Task<IActionResult> GetPreviewServiceConfig(string id, string service)
+    {
+        if (string.IsNullOrWhiteSpace(service))
+            return BadRequest(new { error = "service is required." });
+
+        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
+        if (error != null) return error;
+        try
+        {
+            var config = await _worktreePreviewService.GetServiceConfigAsync(workItem!.WorktreePath!, service);
+            if (config == null)
+                return NotFound(new { error = $"No preview config found for service '{service}'." });
+            return Ok(new WorktreePreviewServiceConfigResponse { Service = service, Config = config });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpPut("{id}/preview/services/{service}/config")]
+    public async Task<IActionResult> UpdatePreviewServiceConfig(string id, string service, [FromBody] WorktreePreviewServiceConfigUpdateRequest? request)
+    {
+        if (string.IsNullOrWhiteSpace(service))
+            return BadRequest(new { error = "service is required." });
+        if (request == null || string.IsNullOrWhiteSpace(request.Config))
+            return BadRequest(new { error = "config is required." });
+
+        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
+        if (error != null) return error;
+        try
+        {
+            await _worktreePreviewService.UpdateServiceConfigAsync(workItem!.WorktreePath!, service, request.Config);
+            var config = await _worktreePreviewService.GetServiceConfigAsync(workItem!.WorktreePath!, service);
+            return Ok(new WorktreePreviewServiceConfigResponse { Service = service, Config = config });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
     [HttpGet("{id}/preview/logs")]
     public async Task<IActionResult> GetPreviewLog(string id, [FromQuery] string service)
     {

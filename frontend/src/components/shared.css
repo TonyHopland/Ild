@@ -603,6 +603,43 @@
   word-break: break-word;
 }
 
+.preview-row-actions {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.preview-config-row td {
+  background: #0d0d14;
+}
+
+.preview-config-editor {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 0.5rem 0.75rem;
+  background: #000;
+  color: #d4d4d4;
+  border: 1px solid #2a2a3a;
+  border-radius: 0.25rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.preview-config-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.35rem;
+}
+
+.preview-config-buttons {
+  display: flex;
+  gap: 0.35rem;
+}
+
 .preview-url {
   color: #818cf8;
   font-size: 0.75rem;

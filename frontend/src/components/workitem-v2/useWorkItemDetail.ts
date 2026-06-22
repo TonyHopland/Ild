@@ -199,6 +199,70 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     [workItem?.id],
   );
 
+  // Start a single preview service, leaving the others as they are. Any port the
+  // user typed into that row's input is passed through as an override so the new
+  // runtime (if this is the first service started) honours it.
+  const handleStartService = useCallback(
+    async (service: string, portOverrides?: Record<string, number>) => {
+      if (!workItem) return;
+      setPreviewLoading(true);
+      setPreviewError(null);
+      try {
+        const hasOverrides = portOverrides && Object.keys(portOverrides).length > 0;
+        const result = await workItemService.startPreviewService(
+          workItem.id,
+          service,
+          hasOverrides ? { portOverrides } : {},
+        );
+        setPreview(result);
+      } catch (error) {
+        setPreviewError((error as { message?: string })?.message ?? "Failed to start service.");
+      } finally {
+        setPreviewLoading(false);
+      }
+    },
+    [workItem?.id],
+  );
+
+  const handleStopService = useCallback(
+    async (service: string) => {
+      if (!workItem) return;
+      setPreviewLoading(true);
+      setPreviewError(null);
+      try {
+        const result = await workItemService.stopPreviewService(workItem.id, service);
+        setPreview(result);
+      } catch (error) {
+        setPreviewError((error as { message?: string })?.message ?? "Failed to stop service.");
+      } finally {
+        setPreviewLoading(false);
+      }
+    },
+    [workItem?.id],
+  );
+
+  // Load one service's ild.config.json entry for the Config editor row.
+  const fetchServiceConfig = useCallback(
+    async (service: string): Promise<string> => {
+      if (!workItem) return "";
+      const result = await workItemService.getPreviewServiceConfig(workItem.id, service);
+      return result.config ?? "";
+    },
+    [workItem?.id],
+  );
+
+  // Persist an edited service config. Errors propagate so the editor can surface a
+  // validation message; on success the preview status is refreshed to reflect any
+  // config-driven change (e.g. a new suggested port).
+  const saveServiceConfig = useCallback(
+    async (service: string, config: string): Promise<void> => {
+      if (!workItem) return;
+      await workItemService.updatePreviewServiceConfig(workItem.id, service, config);
+      await refreshPreview();
+    },
+    [workItem?.id, refreshPreview],
+  );
+
   // Fetch the tail of one service's captured log so the user can inspect what a
   // service printed — most useful for a service that exited with an error.
   const fetchPreviewLogs = useCallback(
@@ -541,6 +605,10 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     refreshPreview,
     handleStartPreview,
     handleStopPreview,
+    handleStartService,
+    handleStopService,
+    fetchServiceConfig,
+    saveServiceConfig,
     fetchPreviewLogs,
     pushBranchLoading,
     pushBranchError,

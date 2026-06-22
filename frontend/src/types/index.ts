@@ -113,6 +113,12 @@ export interface WorktreePreviewLog {
   content: string | null;
 }
 
+/** One service's entry in ild.config.json, as raw JSON for in-place editing. */
+export interface WorktreePreviewServiceConfig {
+  service: string;
+  config: string | null;
+}
+
 export interface WorktreePreview {
   configured: boolean;
   state: string;
