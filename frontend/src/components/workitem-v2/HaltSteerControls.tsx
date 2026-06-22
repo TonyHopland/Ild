@@ -40,7 +40,11 @@ function isNodeRunning(value: unknown): boolean {
  * is shown. While an AI node is in flight it renders a Halt button; once the run
  * is halted it renders the steer window (note + Resume + Cleanup) so the human
  * can continue the same agent session or wind the run down — right where they
- * were watching, not buried in a node detail.
+ * were watching, not buried in a node detail. Whenever the run is still live —
+ * actively running or parked for human feedback — it also renders an Abandon
+ * button that stops the run and resets the work item to Backlog, so a run
+ * heading the wrong way can be dropped and retried fresh after editing the
+ * description, even when the AI is not currently running.
  */
 export default function HaltSteerControls({
   run,
@@ -52,21 +56,26 @@ export default function HaltSteerControls({
 }: HaltSteerControlsProps) {
   const [halting, setHalting] = useState(false);
   const [resuming, setResuming] = useState(false);
+  const [abandoning, setAbandoning] = useState(false);
+  const [confirmingAbandon, setConfirmingAbandon] = useState(false);
   const [steerNote, setSteerNote] = useState("");
   const [errorText, setErrorText] = useState("");
 
   if (!run) return null;
 
+  const isRunningStatus = isRunStatus(run.status, LoopRunStatus.Running);
+  const isWaitingHuman = isRunStatus(run.status, LoopRunStatus.WaitingHuman);
   const runningAiNode = run.nodes?.find((n) => n.nodeType === "AI" && isNodeRunning(n.status));
   const canHalt =
-    !!onHalt &&
-    workItemStatus === WorkItemStatus.Running &&
-    isRunStatus(run.status, LoopRunStatus.Running) &&
-    !!runningAiNode;
-  const isHalted =
-    !!onResumeSteer && isRunStatus(run.status, LoopRunStatus.WaitingHuman) && !!run.isHalted;
+    !!onHalt && workItemStatus === WorkItemStatus.Running && isRunningStatus && !!runningAiNode;
+  const isHalted = !!onResumeSteer && isWaitingHuman && !!run.isHalted;
+  // Abandon applies to any non-terminal run — actively running OR parked for
+  // human feedback — so a run heading the wrong way can be dropped without
+  // first halting it, even when the AI is not currently running. A halted run
+  // is excluded because its steer window already offers Cleanup -> Backlog.
+  const canAbandon = !!onCleanupBacklog && (isRunningStatus || isWaitingHuman) && !isHalted;
 
-  if (!canHalt && !isHalted) return null;
+  if (!canHalt && !canAbandon && !isHalted) return null;
 
   const handleHalt = async () => {
     if (!onHalt) return;
@@ -95,6 +104,20 @@ export default function HaltSteerControls({
     }
   };
 
+  const handleAbandon = async () => {
+    if (!onCleanupBacklog) return;
+    setErrorText("");
+    setAbandoning(true);
+    try {
+      await onCleanupBacklog();
+      setConfirmingAbandon(false);
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : "Failed to abandon run.");
+    } finally {
+      setAbandoning(false);
+    }
+  };
+
   return (
     <div className="wiv2-halt-steer">
       {errorText && (
@@ -105,17 +128,52 @@ export default function HaltSteerControls({
           </button>
         </div>
       )}
-      {canHalt && (
+      {(canHalt || canAbandon) && (
         <div className="wiv2-halt-bar">
-          <button
-            type="button"
-            className="btn btn-sm btn-warning"
-            onClick={() => void handleHalt()}
-            disabled={halting}
-            title="Interrupt this AI node now, then resume it with optional guidance"
-          >
-            {halting ? "Halting…" : "Halt AI node"}
-          </button>
+          {canHalt && (
+            <button
+              type="button"
+              className="btn btn-sm btn-warning"
+              onClick={() => void handleHalt()}
+              disabled={halting}
+              title="Interrupt this AI node now, then resume it with optional guidance"
+            >
+              {halting ? "Halting…" : "Halt AI node"}
+            </button>
+          )}
+          {canAbandon &&
+            (confirmingAbandon ? (
+              <span className="wiv2-abandon-confirm" role="group" aria-label="Confirm abandon run">
+                <span className="wiv2-abandon-prompt">
+                  Abandon this run and reset the work item to Backlog?
+                </span>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-danger"
+                  onClick={() => void handleAbandon()}
+                  disabled={abandoning}
+                >
+                  {abandoning ? "Abandoning…" : "Confirm abandon"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-secondary"
+                  onClick={() => setConfirmingAbandon(false)}
+                  disabled={abandoning}
+                >
+                  Cancel
+                </button>
+              </span>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-sm btn-danger"
+                onClick={() => setConfirmingAbandon(true)}
+                title="Stop this run and send the work item back to Backlog so you can edit the description and try again on a new run"
+              >
+                Abandon run
+              </button>
+            ))}
         </div>
       )}
       {isHalted && (

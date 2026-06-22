@@ -89,6 +89,80 @@ describe("HaltSteerControls", () => {
     expect(onResumeSteer).toHaveBeenCalledWith("focus on the bug");
   });
 
+  test("abandons a running run after confirming, even on a non-AI node", () => {
+    const onCleanupBacklog = vi.fn();
+    render(
+      <HaltSteerControls
+        run={run({ nodes: [node({ nodeType: "Cmd" })] })}
+        workItemStatus={WorkItemStatus.Running}
+        onCleanupBacklog={onCleanupBacklog}
+      />,
+    );
+    // No Halt button on a non-AI node, but Abandon is still available.
+    expect(screen.queryByRole("button", { name: /halt/i })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /abandon run/i }));
+    // Click is a two-step confirm: the first click only reveals the prompt.
+    expect(onCleanupBacklog).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /confirm abandon/i }));
+    expect(onCleanupBacklog).toHaveBeenCalledTimes(1);
+  });
+
+  test("abandon confirm can be cancelled without stopping the run", () => {
+    const onCleanupBacklog = vi.fn();
+    render(
+      <HaltSteerControls
+        run={run()}
+        workItemStatus={WorkItemStatus.Running}
+        onHalt={vi.fn()}
+        onCleanupBacklog={onCleanupBacklog}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /abandon run/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+    expect(onCleanupBacklog).not.toHaveBeenCalled();
+    // The Abandon button comes back so the run can still be dropped later.
+    expect(screen.getByRole("button", { name: /abandon run/i })).toBeTruthy();
+  });
+
+  test("abandons a run parked for human feedback while the AI is not running", () => {
+    const onCleanupBacklog = vi.fn();
+    render(
+      <HaltSteerControls
+        run={run({
+          status: LoopRunStatus.WaitingHuman,
+          nodes: [node({ nodeType: "Human", status: LoopRunNodeStatus.WaitingHuman })],
+        })}
+        workItemStatus={WorkItemStatus.HumanFeedback}
+        onCleanupBacklog={onCleanupBacklog}
+      />,
+    );
+    // The run is parked at a human-feedback node (no AI in flight), so there is
+    // no Halt button, but Abandon is still offered so the run can be dropped.
+    expect(screen.queryByRole("button", { name: /halt/i })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /abandon run/i }));
+    fireEvent.click(screen.getByRole("button", { name: /confirm abandon/i }));
+    expect(onCleanupBacklog).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not duplicate Abandon when the run is halted", () => {
+    const onCleanupBacklog = vi.fn();
+    render(
+      <HaltSteerControls
+        run={run({
+          status: LoopRunStatus.WaitingHuman,
+          isHalted: true,
+          nodes: [node({ status: LoopRunNodeStatus.Interrupted })],
+        })}
+        workItemStatus={WorkItemStatus.HumanFeedback}
+        onResumeSteer={vi.fn()}
+        onCleanupBacklog={onCleanupBacklog}
+      />,
+    );
+    // A halted run already exposes "Cleanup -> Backlog" in the steer window, so
+    // the standalone Abandon affordance must not appear alongside it.
+    expect(screen.queryByRole("button", { name: /abandon run/i })).toBeNull();
+  });
+
   test("renders nothing for a completed run", () => {
     const { container } = render(
       <HaltSteerControls
