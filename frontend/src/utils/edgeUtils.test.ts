@@ -5,10 +5,10 @@ import {
   getCustomEdgeNames,
   getConnectedCustomEdgeNames,
   buildEdge,
+  appendEdge,
   parallelEdgeRoute,
-  parallelEdgeOffset,
-  getParallelEdgePath,
-  PARALLEL_EDGE_SPREAD,
+  parallelLabelOffset,
+  PARALLEL_LABEL_STAGGER,
   LOOP_EDGE_TYPE,
 } from "./edgeUtils";
 import { EdgeType, NodeType } from "../types";
@@ -155,51 +155,23 @@ describe("parallelEdgeRoute", () => {
   });
 });
 
-describe("parallelEdgeOffset", () => {
-  test("a lone edge stays on the chord", () => {
-    expect(parallelEdgeOffset(0, 1)).toBe(0);
+describe("parallelLabelOffset", () => {
+  test("a lone edge keeps its label centred on the path", () => {
+    expect(parallelLabelOffset(0, 1)).toBe(0);
   });
 
-  test("two siblings spread symmetrically a full lane apart", () => {
-    expect(parallelEdgeOffset(0, 2)).toBe(-PARALLEL_EDGE_SPREAD / 2);
-    expect(parallelEdgeOffset(1, 2)).toBe(PARALLEL_EDGE_SPREAD / 2);
-    expect(parallelEdgeOffset(1, 2) - parallelEdgeOffset(0, 2)).toBe(PARALLEL_EDGE_SPREAD);
+  test("two siblings stagger their labels symmetrically a full step apart", () => {
+    expect(parallelLabelOffset(0, 2)).toBe(-PARALLEL_LABEL_STAGGER / 2);
+    expect(parallelLabelOffset(1, 2)).toBe(PARALLEL_LABEL_STAGGER / 2);
+    expect(parallelLabelOffset(1, 2) - parallelLabelOffset(0, 2)).toBe(PARALLEL_LABEL_STAGGER);
   });
 
-  test("three siblings keep the middle on the chord and the outer two a lane out", () => {
-    expect(parallelEdgeOffset(0, 3)).toBe(-PARALLEL_EDGE_SPREAD);
-    expect(parallelEdgeOffset(1, 3)).toBe(0);
-    expect(parallelEdgeOffset(2, 3)).toBe(PARALLEL_EDGE_SPREAD);
-  });
-});
-
-describe("getParallelEdgePath", () => {
-  test("a zero offset rides the straight chord with the label at its midpoint", () => {
-    const fanned = getParallelEdgePath(0, 0, 100, 0, 0);
-    expect(fanned.labelX).toBe(50);
-    expect(fanned.labelY).toBe(0);
-  });
-
-  test("shifts both endpoints onto the lane so the track is separated end to end", () => {
-    // A +50 offset moves the whole edge — both endpoints and its label — onto a
-    // lane 50 units off the chord, giving it distinct departure/landing points
-    // rather than sharing the handles.
-    const { path, labelX, labelY } = getParallelEdgePath(0, 0, 100, 0, 50);
-    expect(path).toBe("M 0,50 L 100,50");
-    expect(labelX).toBe(50);
-    expect(labelY).toBe(50);
-  });
-
-  test("opposite lanes stay a full, constant spread apart end to end", () => {
-    const up = getParallelEdgePath(0, 0, 100, 0, -PARALLEL_EDGE_SPREAD / 2);
-    const down = getParallelEdgePath(0, 0, 100, 0, PARALLEL_EDGE_SPREAD / 2);
-
-    // The lanes are parallel translates of the chord, so the separation is the
-    // full spread at every point — the start, the label, and the end alike —
-    // never pinching back together near the nodes.
-    expect(down.labelY - up.labelY).toBe(PARALLEL_EDGE_SPREAD);
-    expect(up.path).toBe(`M 0,${-PARALLEL_EDGE_SPREAD / 2} L 100,${-PARALLEL_EDGE_SPREAD / 2}`);
-    expect(down.path).toBe(`M 0,${PARALLEL_EDGE_SPREAD / 2} L 100,${PARALLEL_EDGE_SPREAD / 2}`);
+  test("three siblings keep the middle label centred and the outer two a step out", () => {
+    // The odd-count edge case: the centre label stays on the path midpoint while
+    // its neighbours stagger above and below it.
+    expect(parallelLabelOffset(0, 3)).toBe(-PARALLEL_LABEL_STAGGER);
+    expect(parallelLabelOffset(1, 3)).toBe(0);
+    expect(parallelLabelOffset(2, 3)).toBe(PARALLEL_LABEL_STAGGER);
   });
 });
 
@@ -241,5 +213,46 @@ describe("buildEdge", () => {
     });
     expect((success.data as { name?: string | null }).name).toBeNull();
     expect(success.label).toBe("success");
+  });
+});
+
+describe("appendEdge", () => {
+  test("keeps a sibling edge that shares the same connectors as an existing one", () => {
+    // The reviewer's case: a second custom edge from the same handle into the
+    // same target node. React Flow's addEdge would drop this as a duplicate
+    // (same source/target/handles), preventing the staggered parallel edges from
+    // ever being created; appendEdge keeps it.
+    const config = {
+      source: "pr",
+      target: "cleanup",
+      edgeType: EdgeType.Custom,
+      maxTraversals: null,
+      sourceHandle: "respond",
+      targetHandle: "target-handle",
+    };
+    const onMerged = buildEdge({ ...config, name: "on_merged" });
+    const onRejected = buildEdge({ ...config, name: "on_rejected" });
+
+    const result = appendEdge(onRejected, [onMerged]);
+    expect(result).toHaveLength(2);
+    expect(result).toContain(onMerged);
+    expect(result).toContain(onRejected);
+    // Sharing their route, the two are now siblings that fan apart on render.
+    expect(parallelEdgeRoute(result, onRejected).count).toBe(2);
+  });
+
+  test("does not mutate the original edges array", () => {
+    const edges: Edge[] = [];
+    const built = buildEdge({
+      source: "a",
+      target: "b",
+      edgeType: EdgeType.OnSuccess,
+      name: null,
+      maxTraversals: null,
+      sourceHandle: "success",
+      targetHandle: "target-handle",
+    });
+    expect(appendEdge(built, edges)).toEqual([built]);
+    expect(edges).toHaveLength(0);
   });
 });

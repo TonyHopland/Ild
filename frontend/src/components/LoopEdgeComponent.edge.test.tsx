@@ -89,16 +89,22 @@ describe("LoopEdgeComponent label selection", () => {
     expect((label as HTMLElement).style.cursor).toBe("pointer");
   });
 
-  test("parallel siblings each render their own shifted track, not a shared path", () => {
+  test("parallel siblings share one smooth-step path but stagger their labels", () => {
     renderEdge("e-ci", "ci_failure", vi.fn());
     renderEdge("e-reject", "reject", vi.fn());
 
     const ciPath = screen.getByTestId("edge-path-e-ci").getAttribute("d");
     const rejectPath = screen.getByTestId("edge-path-e-reject").getAttribute("d");
-    // Two siblings → the parallel-lane path is used (a straight "L" track), and
-    // the two tracks differ because each rides its own perpendicular offset.
-    expect(ciPath).toContain(" L ");
-    expect(rejectPath).toContain(" L ");
-    expect(ciPath).not.toBe(rejectPath);
+    // Both siblings draw the same smooth-step path a lone edge would, so each
+    // still connects cleanly at its handles instead of being pulled onto a far
+    // straight lane.
+    expect(ciPath).toBe("M 0,0 L 1,1");
+    expect(rejectPath).toBe(ciPath);
+
+    // They are told apart by staggering their labels vertically, so the two
+    // names don't sit on top of each other on the shared path.
+    const ciLabel = screen.getByText("ci_failure");
+    const rejectLabel = screen.getByText("reject");
+    expect(ciLabel.style.transform).not.toBe(rejectLabel.style.transform);
   });
 });

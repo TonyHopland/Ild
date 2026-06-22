@@ -12,7 +12,6 @@ import {
   type Connection,
   type OnEdgesChange,
   applyEdgeChanges,
-  addEdge,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
@@ -37,6 +36,7 @@ import {
 import {
   checkEdgeConstraints,
   buildEdge,
+  appendEdge,
   getCustomEdgeNames,
   getConnectedCustomEdgeNames,
   LOOP_EDGE_TYPE,
@@ -1132,7 +1132,7 @@ export default function LoopEditor() {
           sourceHandle: fixedName,
           targetHandle: connection.targetHandle ?? "target-handle",
         });
-        setEdges((currentEdges) => addEdge(newEdge, currentEdges));
+        setEdges((currentEdges) => appendEdge(newEdge, currentEdges));
         setEdgeError(null);
         return;
       }
@@ -1203,7 +1203,7 @@ export default function LoopEditor() {
       targetHandle: pendingConnection.targetHandle ?? "target-handle",
     });
 
-    setEdges((currentEdges) => addEdge(newEdge, currentEdges));
+    setEdges((currentEdges) => appendEdge(newEdge, currentEdges));
     setPendingConnection(null);
     setEdgeName("");
     setEdgeMaxTraversals("");
