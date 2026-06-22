@@ -18,6 +18,7 @@ import {
   LoopRunSessionPreview,
   WorktreePreview,
   WorktreePreviewLog,
+  WorktreePreviewServiceConfig,
   WorktreeFiles,
   WorktreeFileContent,
   AppSetting,
@@ -227,6 +228,44 @@ export const workItemService = {
 
   stopPreview: async (id: string): Promise<WorktreePreview> => {
     return api.post<WorktreePreview>(`/workitems/${id}/preview/stop`, {});
+  },
+
+  startPreviewService: async (
+    id: string,
+    service: string,
+    request?: { portOverrides?: Record<string, number> },
+  ): Promise<WorktreePreview> => {
+    return api.post<WorktreePreview>(
+      `/workitems/${id}/preview/services/${encodeURIComponent(service)}/start`,
+      request ?? {},
+    );
+  },
+
+  stopPreviewService: async (id: string, service: string): Promise<WorktreePreview> => {
+    return api.post<WorktreePreview>(
+      `/workitems/${id}/preview/services/${encodeURIComponent(service)}/stop`,
+      {},
+    );
+  },
+
+  getPreviewServiceConfig: async (
+    id: string,
+    service: string,
+  ): Promise<WorktreePreviewServiceConfig> => {
+    return api.get<WorktreePreviewServiceConfig>(
+      `/workitems/${id}/preview/services/${encodeURIComponent(service)}/config`,
+    );
+  },
+
+  updatePreviewServiceConfig: async (
+    id: string,
+    service: string,
+    config: string,
+  ): Promise<WorktreePreviewServiceConfig> => {
+    return api.put<WorktreePreviewServiceConfig>(
+      `/workitems/${id}/preview/services/${encodeURIComponent(service)}/config`,
+      { config },
+    );
   },
 
   getPreviewLogs: async (id: string, service: string): Promise<WorktreePreviewLog> => {

@@ -39,6 +39,46 @@ public interface IWorktreePreviewService
     Task<WorktreePreviewResponse> StopAsync(string worktreePath, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Starts a single preview service by its configured name, leaving any other
+    /// running services untouched. The first service started for a worktree creates
+    /// the shared runtime (allocating every profile service's port up front so
+    /// cross-service <c>${PORT:&lt;alias&gt;}</c> references resolve, and running the
+    /// profile's install steps unless <see cref="WorktreePreviewStartOptions.SkipInstall"/>
+    /// is set); later calls reuse it. A service that is already running is returned
+    /// as-is. Throws <see cref="InvalidOperationException"/> when the worktree has no
+    /// preview config or the name does not resolve to a service.
+    /// </summary>
+    Task<WorktreePreviewResponse> StartServiceAsync(string worktreePath, string serviceName, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Stops a single running preview service by name, leaving the others running.
+    /// Stopping the last running service tears down the shared runtime. A name that
+    /// is not currently running is a no-op that returns the current status.
+    /// </summary>
+    Task<WorktreePreviewResponse> StopServiceAsync(string worktreePath, string serviceName, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns one service's entry in the worktree's <c>ild.config.json</c> as the
+    /// raw (pretty-printed) JSON of that service object, so the Preview tab can edit
+    /// it in place. <paramref name="profileName"/> defaults to the config's default
+    /// profile. Returns null when the worktree has no preview config or the name does
+    /// not resolve to a service.
+    /// </summary>
+    Task<string?> GetServiceConfigAsync(string worktreePath, string serviceName, string? profileName = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Replaces one service's entry in the worktree's <c>ild.config.json</c> with the
+    /// supplied JSON, persisting the change to disk. The JSON is parsed and validated
+    /// with the same per-service rules as the preview-start path (name/command/port
+    /// alias/healthUrl/positive suggestedPort), and its <c>name</c> must match
+    /// <paramref name="serviceName"/> — this editor updates a service in place, it does
+    /// not rename or add one. Throws <see cref="InvalidOperationException"/> when the
+    /// config is missing, the JSON is invalid, validation fails, or the service is not
+    /// found. The change takes effect the next time the service is started.
+    /// </summary>
+    Task UpdateServiceConfigAsync(string worktreePath, string serviceName, string serviceConfigJson, string? profileName = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Reads the tail of a preview service's captured stdout/stderr log so a human
     /// can see what a service printed — especially the failure output of a service
     /// that exited. <paramref name="serviceName"/> identifies the service by its
@@ -93,6 +133,14 @@ public sealed class NoopPreviewService : IWorktreePreviewService
     public Task<WorktreePreviewResponse> StartAsync(string worktreePath, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
     public Task<WorktreePreviewResponse> StopAsync(string worktreePath, CancellationToken cancellationToken = default)
+        => throw new NotImplementedException();
+    public Task<WorktreePreviewResponse> StartServiceAsync(string worktreePath, string serviceName, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default)
+        => throw new NotImplementedException();
+    public Task<WorktreePreviewResponse> StopServiceAsync(string worktreePath, string serviceName, CancellationToken cancellationToken = default)
+        => throw new NotImplementedException();
+    public Task<string?> GetServiceConfigAsync(string worktreePath, string serviceName, string? profileName = null, CancellationToken cancellationToken = default)
+        => throw new NotImplementedException();
+    public Task UpdateServiceConfigAsync(string worktreePath, string serviceName, string serviceConfigJson, string? profileName = null, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
     public Task<string?> GetServiceLogAsync(string worktreePath, string serviceName, int maxBytes = 64 * 1024, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();

@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
@@ -96,31 +97,11 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
             ValidateProfile(profileName, profile);
 
-            var publicHost = string.IsNullOrWhiteSpace(options.PublicHost)
-                ? (_configuration["ILD_PREVIEW_PUBLIC_HOST"] ?? "127.0.0.1")
-                : options.PublicHost.Trim();
-
-            var stateDirectory = BuildStateDirectory(normalized);
-            Directory.CreateDirectory(stateDirectory);
-
-            var ports = AllocatePorts(profile, options.PortOverrides);
-            var runtime = new PreviewRuntime(
-                normalized,
-                loaded.ConfigPath!,
-                profileName,
-                stateDirectory,
-                publicHost,
-                ports,
-                new List<ManagedPreviewProcess>());
-
-            if (!options.SkipInstall)
-            {
-                await RunInstallStepsAsync(profile.Install, runtime, cancellationToken);
-            }
+            var runtime = await CreateRuntimeAsync(normalized, loaded, profileName, profile, options, cancellationToken);
 
             foreach (var service in profile.Services)
             {
-                runtime.Processes.Add(await StartServiceAsync(service, runtime, cancellationToken));
+                runtime.Processes.Add(await LaunchServiceProcessAsync(service, runtime, cancellationToken));
             }
 
             foreach (var service in profile.Services)
@@ -158,6 +139,164 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         {
             _gate.Release();
         }
+    }
+
+    public async Task<WorktreePreviewResponse> StartServiceAsync(string worktreePath, string serviceName, WorktreePreviewStartOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        var normalized = NormalizeWorktreePath(worktreePath);
+        options ??= new WorktreePreviewStartOptions();
+
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var loaded = await LoadConfigAsync(normalized, cancellationToken);
+            if (!loaded.Configured || loaded.Config == null)
+            {
+                throw new InvalidOperationException(loaded.Message ?? "No ild.config.json preview profile found.");
+            }
+
+            var profileName = SelectProfileName(loaded.Config, options.ProfileName);
+            if (!loaded.Config.Preview!.Profiles.TryGetValue(profileName, out var profile) || profile == null)
+            {
+                throw new InvalidOperationException($"Preview profile '{profileName}' not found.");
+            }
+
+            ValidateProfile(profileName, profile);
+
+            var service = profile.Services.FirstOrDefault(s => string.Equals(s.Name, serviceName, StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException($"Preview service '{serviceName}' not found in profile '{profileName}'.");
+
+            if (_runtimes.TryGetValue(normalized, out var runtime))
+            {
+                var existing = runtime.Processes.FirstOrDefault(p => string.Equals(p.Service.Name, service.Name, StringComparison.OrdinalIgnoreCase));
+                if (existing != null)
+                {
+                    if (!existing.Process.HasExited)
+                        return BuildResponse(loaded, runtime);
+
+                    // An exited process lingers in the runtime so its log/exit code
+                    // stays visible; restarting the service replaces it cleanly.
+                    await StopProcessAsync(existing, cancellationToken);
+                    runtime.Processes.Remove(existing);
+                }
+
+                EnsureServicePortAllocated(service, runtime, options.PortOverrides);
+            }
+            else
+            {
+                runtime = await CreateRuntimeAsync(normalized, loaded, profileName, profile, options, cancellationToken);
+                _runtimes[normalized] = runtime;
+            }
+
+            runtime.Processes.Add(await LaunchServiceProcessAsync(service, runtime, cancellationToken));
+            await WaitForHealthAsync(service.Name, ResolveHealthUrl(service, runtime), cancellationToken);
+
+            return BuildResponse(loaded, runtime);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<WorktreePreviewResponse> StopServiceAsync(string worktreePath, string serviceName, CancellationToken cancellationToken = default)
+    {
+        var normalized = NormalizeWorktreePath(worktreePath);
+
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var loaded = await LoadConfigAsync(normalized, cancellationToken);
+            if (!_runtimes.TryGetValue(normalized, out var runtime))
+                return BuildStoppedResponse(loaded);
+
+            var process = runtime.Processes.FirstOrDefault(p => string.Equals(p.Service.Name, serviceName, StringComparison.OrdinalIgnoreCase));
+            if (process != null)
+            {
+                await StopProcessAsync(process, cancellationToken);
+                runtime.Processes.Remove(process);
+            }
+
+            if (runtime.Processes.Count == 0)
+            {
+                _runtimes.TryRemove(normalized, out _);
+                return BuildStoppedResponse(loaded, runtime.ProfileName, runtime.PublicHost, runtime.StateDirectory, loaded.ConfigPath);
+            }
+
+            return BuildResponse(loaded, runtime);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<string?> GetServiceConfigAsync(string worktreePath, string serviceName, string? profileName = null, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(serviceName))
+            return null;
+
+        var normalized = NormalizeWorktreePath(worktreePath);
+        var loaded = await LoadConfigAsync(normalized, cancellationToken);
+        if (!loaded.Configured || loaded.Config == null)
+            return null;
+
+        var resolvedProfileName = SelectProfileName(loaded.Config, profileName);
+        var node = await LoadConfigNodeAsync(loaded.ConfigPath!, cancellationToken);
+        var serviceNode = FindServiceNode(node, resolvedProfileName, serviceName);
+        return serviceNode?.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    public async Task UpdateServiceConfigAsync(string worktreePath, string serviceName, string serviceConfigJson, string? profileName = null, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(serviceName))
+            throw new InvalidOperationException("A service name is required.");
+
+        var normalized = NormalizeWorktreePath(worktreePath);
+        var loaded = await LoadConfigAsync(normalized, cancellationToken);
+        if (!loaded.Configured || loaded.Config == null)
+            throw new InvalidOperationException(loaded.Message ?? "No ild.config.json preview profile found.");
+
+        var resolvedProfileName = SelectProfileName(loaded.Config, profileName);
+
+        // Parse and validate the edited service through the same model and rules the
+        // preview-start path uses, so a config that would fail to start is rejected
+        // here rather than silently written to disk.
+        PreviewServiceConfig edited;
+        try
+        {
+            edited = JsonSerializer.Deserialize<PreviewServiceConfig>(serviceConfigJson, _jsonOptions)
+                ?? throw new InvalidOperationException("Service config is empty.");
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException($"Service config is not valid JSON: {ex.Message}");
+        }
+
+        if (!string.Equals(edited.Name, serviceName, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Service config name '{edited.Name}' must match '{serviceName}'; this editor updates a service in place.");
+
+        ValidateService(resolvedProfileName, edited);
+
+        var node = await LoadConfigNodeAsync(loaded.ConfigPath!, cancellationToken);
+        if (node?["preview"]?["profiles"]?[resolvedProfileName]?["services"] is not JsonArray services)
+            throw new InvalidOperationException($"Preview profile '{resolvedProfileName}' not found.");
+
+        var index = -1;
+        for (var i = 0; i < services.Count; i++)
+        {
+            if (string.Equals(services[i]?["name"]?.GetValue<string>(), serviceName, StringComparison.OrdinalIgnoreCase))
+            {
+                index = i;
+                break;
+            }
+        }
+
+        if (index < 0)
+            throw new InvalidOperationException($"Preview service '{serviceName}' not found in profile '{resolvedProfileName}'.");
+
+        services[index] = JsonNode.Parse(serviceConfigJson);
+        await File.WriteAllTextAsync(loaded.ConfigPath!, node!.ToJsonString(new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
     }
 
     public async Task<string?> GetServiceLogAsync(string worktreePath, string serviceName, int maxBytes = 64 * 1024, CancellationToken cancellationToken = default)
@@ -299,6 +438,29 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         return new LoadedPreviewConfig(true, worktreePath, configPath, config, null);
     }
 
+    // Parses ild.config.json into a mutable DOM so a single service entry can be read
+    // or replaced without re-serializing the strongly-typed model (which would drop
+    // fields the model does not surface). Tolerates comments and trailing commas, the
+    // same as the strongly-typed loader.
+    private static async Task<JsonNode?> LoadConfigNodeAsync(string configPath, CancellationToken cancellationToken)
+    {
+        await using var stream = File.OpenRead(configPath);
+        return await JsonNode.ParseAsync(
+            stream,
+            nodeOptions: null,
+            documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true },
+            cancellationToken);
+    }
+
+    private static JsonNode? FindServiceNode(JsonNode? root, string profileName, string serviceName)
+    {
+        if (root?["preview"]?["profiles"]?[profileName]?["services"] is not JsonArray services)
+            return null;
+
+        return services.FirstOrDefault(node =>
+            string.Equals(node?["name"]?.GetValue<string>(), serviceName, StringComparison.OrdinalIgnoreCase));
+    }
+
     private static string SelectProfileName(IldWorkspaceConfig config, string? requestedProfile)
     {
         if (!string.IsNullOrWhiteSpace(requestedProfile))
@@ -318,19 +480,30 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var service in profile.Services)
         {
-            if (string.IsNullOrWhiteSpace(service.Name))
-                throw new InvalidOperationException($"Preview profile '{profileName}' has a service with no name.");
-            if (string.IsNullOrWhiteSpace(service.Command))
-                throw new InvalidOperationException($"Preview service '{service.Name}' has no command.");
-            if (string.IsNullOrWhiteSpace(service.Port))
-                throw new InvalidOperationException($"Preview service '{service.Name}' has no port alias.");
+            ValidateService(profileName, service);
             if (!seenNames.Add(service.Name))
                 throw new InvalidOperationException($"Preview profile '{profileName}' defines duplicate service name '{service.Name}'.");
-            if (string.IsNullOrWhiteSpace(service.HealthUrl))
-                throw new InvalidOperationException($"Preview service '{service.Name}' must define healthUrl.");
-            if (service.SuggestedPort is <= 0)
-                throw new InvalidOperationException($"Preview service '{service.Name}' has invalid suggestedPort '{service.SuggestedPort}'.");
         }
+    }
+
+    /// <summary>
+    /// Per-service validation shared by <see cref="ValidateProfile"/> and the config
+    /// editor's <see cref="UpdateServiceConfigAsync"/> — every rule a service must
+    /// satisfy to be started. Duplicate-name detection across a profile stays in
+    /// <see cref="ValidateProfile"/> since it is inherently cross-service.
+    /// </summary>
+    private static void ValidateService(string profileName, PreviewServiceConfig service)
+    {
+        if (string.IsNullOrWhiteSpace(service.Name))
+            throw new InvalidOperationException($"Preview profile '{profileName}' has a service with no name.");
+        if (string.IsNullOrWhiteSpace(service.Command))
+            throw new InvalidOperationException($"Preview service '{service.Name}' has no command.");
+        if (string.IsNullOrWhiteSpace(service.Port))
+            throw new InvalidOperationException($"Preview service '{service.Name}' has no port alias.");
+        if (string.IsNullOrWhiteSpace(service.HealthUrl))
+            throw new InvalidOperationException($"Preview service '{service.Name}' must define healthUrl.");
+        if (service.SuggestedPort is <= 0)
+            throw new InvalidOperationException($"Preview service '{service.Name}' has invalid suggestedPort '{service.SuggestedPort}'.");
     }
 
     private static Dictionary<string, int> AllocatePorts(PreviewProfileConfig profile, IReadOnlyDictionary<string, int>? overrides)
@@ -412,6 +585,80 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         }
     }
 
+    /// <summary>
+    /// Builds the shared runtime for a worktree: resolves the public host, creates the
+    /// state directory, allocates every profile service's port up front (so per-service
+    /// starts resolve cross-service <c>${PORT:&lt;alias&gt;}</c> references), and runs the
+    /// install steps unless skipped. Does not launch any service or store the runtime —
+    /// the caller owns process startup and dictionary insertion.
+    /// </summary>
+    private async Task<PreviewRuntime> CreateRuntimeAsync(
+        string normalized,
+        LoadedPreviewConfig loaded,
+        string profileName,
+        PreviewProfileConfig profile,
+        WorktreePreviewStartOptions options,
+        CancellationToken cancellationToken)
+    {
+        var publicHost = ResolvePublicHost(options.PublicHost);
+        var stateDirectory = BuildStateDirectory(normalized);
+        Directory.CreateDirectory(stateDirectory);
+
+        var ports = AllocatePorts(profile, options.PortOverrides);
+        var runtime = new PreviewRuntime(
+            normalized,
+            loaded.ConfigPath!,
+            profileName,
+            stateDirectory,
+            publicHost,
+            ports,
+            new List<ManagedPreviewProcess>());
+
+        if (!options.SkipInstall)
+        {
+            await RunInstallStepsAsync(profile.Install, runtime, cancellationToken);
+        }
+
+        return runtime;
+    }
+
+    private string ResolvePublicHost(string? requestedHost)
+        => string.IsNullOrWhiteSpace(requestedHost)
+            ? (_configuration["ILD_PREVIEW_PUBLIC_HOST"] ?? "127.0.0.1")
+            : requestedHost.Trim();
+
+    /// <summary>
+    /// Allocates a port for a single service whose alias is not already reserved on a
+    /// running runtime — the case where a service was added to the config after the
+    /// runtime was created. Honours an explicit override, otherwise prefers the
+    /// service's suggested port and falls back to a free one.
+    /// </summary>
+    private static void EnsureServicePortAllocated(PreviewServiceConfig service, PreviewRuntime runtime, IReadOnlyDictionary<string, int>? overrides)
+    {
+        if (runtime.Ports.ContainsKey(service.Port))
+            return;
+
+        var reserved = new HashSet<int>(runtime.Ports.Values);
+        int port;
+        if (overrides != null && overrides.TryGetValue(service.Port, out var overridden))
+        {
+            if (overridden <= 0)
+                throw new InvalidOperationException($"Preview port override for alias '{service.Port}' must be greater than zero.");
+            if (reserved.Contains(overridden) || !IsPortAvailable(overridden))
+                throw new InvalidOperationException($"Preview port '{overridden}' for alias '{service.Port}' is already in use.");
+            port = overridden;
+        }
+        else
+        {
+            var suggested = service.SuggestedPort;
+            port = suggested is > 0 && !reserved.Contains(suggested.Value) && IsPortAvailable(suggested.Value)
+                ? suggested.Value
+                : FindFreePort(reserved);
+        }
+
+        runtime.Ports[service.Port] = port;
+    }
+
     private async Task RunInstallStepsAsync(IReadOnlyList<PreviewCommandConfig> installSteps, PreviewRuntime runtime, CancellationToken cancellationToken)
     {
         if (installSteps.Count == 0)
@@ -445,7 +692,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         EnsureInstalledToolsOnProcessPath();
     }
 
-    private async Task<ManagedPreviewProcess> StartServiceAsync(PreviewServiceConfig service, PreviewRuntime runtime, CancellationToken cancellationToken)
+    private async Task<ManagedPreviewProcess> LaunchServiceProcessAsync(PreviewServiceConfig service, PreviewRuntime runtime, CancellationToken cancellationToken)
     {
         var resolved = BuildResolvedStep(service, runtime, service.Port);
         var logPath = Path.Combine(runtime.StateDirectory, $"{service.Name}.log");
@@ -484,75 +731,67 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     {
         foreach (var process in runtime.Processes)
         {
-            try
-            {
-                if (!process.Process.HasExited)
-                {
-                    process.Process.Kill(entireProcessTree: true);
-                    await process.Process.WaitForExitAsync(cancellationToken);
-                }
-            }
-            catch (InvalidOperationException)
-            {
-                // Process already exited.
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to stop preview service {Service}", process.Service.Name);
-            }
-
-            try
-            {
-                await Task.WhenAll(process.StdOutPump, process.StdErrPump);
-            }
-            catch
-            {
-                // Ignore log pump failures during shutdown.
-            }
-
-            process.Writer.Dispose();
-            process.WriteGate.Dispose();
-            process.Process.Dispose();
+            await StopProcessAsync(process, cancellationToken);
         }
 
         runtime.Processes.Clear();
     }
 
+    private async Task StopProcessAsync(ManagedPreviewProcess process, CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (!process.Process.HasExited)
+            {
+                process.Process.Kill(entireProcessTree: true);
+                await process.Process.WaitForExitAsync(cancellationToken);
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // Process already exited.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to stop preview service {Service}", process.Service.Name);
+        }
+
+        try
+        {
+            await Task.WhenAll(process.StdOutPump, process.StdErrPump);
+        }
+        catch
+        {
+            // Ignore log pump failures during shutdown.
+        }
+
+        process.Writer.Dispose();
+        process.WriteGate.Dispose();
+        process.Process.Dispose();
+    }
+
     private WorktreePreviewResponse BuildResponse(LoadedPreviewConfig loaded, PreviewRuntime runtime)
     {
-        var serviceResponses = runtime.Processes.Select(process =>
+        // List every service in the profile — not just the ones with a live process —
+        // so the Preview tab can show and individually start services that are stopped.
+        // Started services map from their process; the rest report as stopped with the
+        // runtime's already-allocated port.
+        var profileServices = loaded.Config?.Preview?.Profiles.TryGetValue(runtime.ProfileName, out var profile) == true
+            ? profile.Services
+            : runtime.Processes.Select(p => p.Service).ToList();
+
+        var serviceResponses = profileServices.Select(service =>
         {
-            var healthUrl = ResolveHealthUrl(process.Service, runtime);
-            var publicUrl = process.Service.Public
-                ? ResolveOptionalTemplate(process.Service.PublicUrl, runtime, process.Service.Port)
-                    ?? $"http://{runtime.PublicHost}:{runtime.Ports[process.Service.Port]}"
-                : null;
-
-            return new WorktreePreviewServiceResponse
-            {
-                Name = process.Service.Name,
-                PortAlias = process.Service.Port,
-                Status = process.Process.HasExited ? "exited" : "running",
-                Port = runtime.Ports.TryGetValue(process.Service.Port, out var port) ? port : null,
-                SuggestedPort = process.Service.SuggestedPort,
-                HealthUrl = healthUrl,
-                PublicUrl = publicUrl,
-                LogFilePath = process.LogFilePath,
-                ProcessId = process.Process.Id,
-                ExitCode = process.Process.HasExited ? process.Process.ExitCode : null,
-            };
+            var process = runtime.Processes.FirstOrDefault(p => string.Equals(p.Service.Name, service.Name, StringComparison.OrdinalIgnoreCase));
+            return process != null
+                ? BuildServiceResponse(process, runtime)
+                : BuildStoppedServiceResponse(service, runtime);
         }).ToList();
-
-        var state = serviceResponses.Count == 0
-            ? "stopped"
-            : serviceResponses.Any(s => string.Equals(s.Status, "exited", StringComparison.OrdinalIgnoreCase))
-                ? "failed"
-                : "running";
 
         return new WorktreePreviewResponse
         {
             Configured = true,
-            State = state,
+            State = ComputeRuntimeState(serviceResponses),
             WorktreePath = runtime.WorktreePath,
             ConfigPath = loaded.ConfigPath,
             ProfileName = runtime.ProfileName,
@@ -560,6 +799,55 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             StateDirectory = runtime.StateDirectory,
             Services = serviceResponses,
         };
+    }
+
+    private WorktreePreviewServiceResponse BuildServiceResponse(ManagedPreviewProcess process, PreviewRuntime runtime)
+    {
+        var healthUrl = ResolveHealthUrl(process.Service, runtime);
+        var publicUrl = process.Service.Public
+            ? ResolveOptionalTemplate(process.Service.PublicUrl, runtime, process.Service.Port)
+                ?? $"http://{runtime.PublicHost}:{runtime.Ports[process.Service.Port]}"
+            : null;
+
+        return new WorktreePreviewServiceResponse
+        {
+            Name = process.Service.Name,
+            PortAlias = process.Service.Port,
+            Status = process.Process.HasExited ? "exited" : "running",
+            Port = runtime.Ports.TryGetValue(process.Service.Port, out var port) ? port : null,
+            SuggestedPort = process.Service.SuggestedPort,
+            HealthUrl = healthUrl,
+            PublicUrl = publicUrl,
+            LogFilePath = process.LogFilePath,
+            ProcessId = process.Process.Id,
+            ExitCode = process.Process.HasExited ? process.Process.ExitCode : null,
+        };
+    }
+
+    // A configured-but-not-running service in an otherwise live runtime. Health and
+    // public URLs are left null: their templates can reference other services' ports
+    // and resolving them for a service that isn't up adds no value.
+    private static WorktreePreviewServiceResponse BuildStoppedServiceResponse(PreviewServiceConfig service, PreviewRuntime runtime)
+        => new()
+        {
+            Name = service.Name,
+            PortAlias = service.Port,
+            Status = "stopped",
+            Port = runtime.Ports.TryGetValue(service.Port, out var port) ? port : null,
+            SuggestedPort = service.SuggestedPort,
+        };
+
+    private static string ComputeRuntimeState(IReadOnlyList<WorktreePreviewServiceResponse> services)
+    {
+        if (services.Count == 0)
+            return "stopped";
+        if (services.Any(s => string.Equals(s.Status, "exited", StringComparison.OrdinalIgnoreCase)))
+            return "failed";
+        if (services.All(s => string.Equals(s.Status, "running", StringComparison.OrdinalIgnoreCase)))
+            return "running";
+        if (services.Any(s => string.Equals(s.Status, "running", StringComparison.OrdinalIgnoreCase)))
+            return "partial";
+        return "stopped";
     }
 
     private WorktreePreviewResponse BuildStoppedResponse(

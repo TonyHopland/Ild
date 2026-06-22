@@ -165,16 +165,18 @@ function serviceState(status: string): { label: "Stopped" | "Running" | "Error";
   return { label: "Stopped", tone: "stopped" };
 }
 
-/** One row per service: State, Name, Port (editable), Link, and a Log toggle. */
+/**
+ * One row per service: State, Name, Port (editable while that service is stopped),
+ * Link, and an Actions column with the per-service Start/Stop, Config and Log
+ * toggles. Config and Log each expand the row beneath it like the original Log row.
+ */
 function PreviewServiceTable({
   services,
-  isRunning,
   portInputs,
   onPortChange,
   detail,
 }: {
   services: WorktreePreviewService[];
-  isRunning: boolean;
   portInputs: Record<string, string>;
   onPortChange: (alias: string, value: string) => void;
   detail: WorkItemDetail;
@@ -184,6 +186,22 @@ function PreviewServiceTable({
   const [openLog, setOpenLog] = useState<string | null>(null);
   const [logs, setLogs] = useState<
     Record<string, { loading: boolean; error: string | null; content: string }>
+  >({});
+
+  // The service whose config editor is expanded, plus the edited JSON keyed by
+  // service name so an open editor keeps unsaved edits while another row is used.
+  const [openConfig, setOpenConfig] = useState<string | null>(null);
+  const [configs, setConfigs] = useState<
+    Record<
+      string,
+      {
+        loading: boolean;
+        error: string | null;
+        content: string;
+        saving: boolean;
+        saveError: string | null;
+      }
+    >
   >({});
 
   const loadLog = (service: string) => {
@@ -217,6 +235,85 @@ function PreviewServiceTable({
     if (!logs[service]) loadLog(service);
   };
 
+  const loadConfig = (service: string) => {
+    setConfigs((prev) => ({
+      ...prev,
+      [service]: {
+        loading: true,
+        error: null,
+        content: prev[service]?.content ?? "",
+        saving: false,
+        saveError: null,
+      },
+    }));
+    detail
+      .fetchServiceConfig(service)
+      .then((content) =>
+        setConfigs((prev) => ({
+          ...prev,
+          [service]: { loading: false, error: null, content, saving: false, saveError: null },
+        })),
+      )
+      .catch((error: { message?: string }) =>
+        setConfigs((prev) => ({
+          ...prev,
+          [service]: {
+            loading: false,
+            error: error?.message ?? "Failed to load config.",
+            content: prev[service]?.content ?? "",
+            saving: false,
+            saveError: null,
+          },
+        })),
+      );
+  };
+
+  const toggleConfig = (service: string) => {
+    if (openConfig === service) {
+      setOpenConfig(null);
+      return;
+    }
+    setOpenConfig(service);
+    if (!configs[service]) loadConfig(service);
+  };
+
+  const saveConfig = (service: string) => {
+    const current = configs[service];
+    if (!current) return;
+    setConfigs((prev) => ({
+      ...prev,
+      [service]: { ...prev[service], saving: true, saveError: null },
+    }));
+    detail
+      .saveServiceConfig(service, current.content)
+      .then(() =>
+        setConfigs((prev) => ({
+          ...prev,
+          [service]: { ...prev[service], saving: false, saveError: null },
+        })),
+      )
+      .catch((error: { message?: string }) =>
+        setConfigs((prev) => ({
+          ...prev,
+          [service]: {
+            ...prev[service],
+            saving: false,
+            saveError: error?.message ?? "Failed to save config.",
+          },
+        })),
+      );
+  };
+
+  const startService = (service: WorktreePreviewService) => {
+    const raw = portInputs[service.portAlias];
+    const overrides: Record<string, number> = {};
+    if (raw !== undefined) {
+      const parsed = Number.parseInt(raw, 10);
+      if (Number.isFinite(parsed) && parsed > 0) overrides[service.portAlias] = parsed;
+    }
+    void detail.handleStartService(service.name, overrides);
+  };
+
   return (
     <table className="preview-table">
       <thead>
@@ -225,15 +322,17 @@ function PreviewServiceTable({
           <th>Name</th>
           <th>Port</th>
           <th>Link</th>
-          <th>Log</th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody>
         {services.map((service) => {
           const state = serviceState(service.status);
+          const running = service.status === "running";
           const portValue =
             portInputs[service.portAlias] ?? String(service.port ?? service.suggestedPort ?? "");
           const log = logs[service.name];
+          const config = configs[service.name];
           return (
             <Fragment key={service.name}>
               <tr>
@@ -247,7 +346,7 @@ function PreviewServiceTable({
                 </td>
                 <td className="preview-cell-name">{service.name}</td>
                 <td>
-                  {isRunning ? (
+                  {running ? (
                     <span className="detail-value">{service.port ?? "—"}</span>
                   ) : (
                     <input
@@ -275,16 +374,96 @@ function PreviewServiceTable({
                   )}
                 </td>
                 <td>
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-secondary"
-                    aria-expanded={openLog === service.name}
-                    onClick={() => toggleLog(service.name)}
-                  >
-                    {openLog === service.name ? "Hide log" : "Log"}
-                  </button>
+                  <div className="preview-row-actions">
+                    <button
+                      type="button"
+                      className={`btn btn-sm ${running ? "btn-warning" : "btn-primary"}`}
+                      onClick={() =>
+                        running
+                          ? void detail.handleStopService(service.name)
+                          : startService(service)
+                      }
+                      disabled={detail.previewLoading}
+                    >
+                      {running ? "Stop" : "Start"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-secondary"
+                      aria-expanded={openConfig === service.name}
+                      onClick={() => toggleConfig(service.name)}
+                    >
+                      {openConfig === service.name ? "Hide config" : "Config"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-secondary"
+                      aria-expanded={openLog === service.name}
+                      onClick={() => toggleLog(service.name)}
+                    >
+                      {openLog === service.name ? "Hide log" : "Log"}
+                    </button>
+                  </div>
                 </td>
               </tr>
+              {openConfig === service.name && (
+                <tr className="preview-config-row">
+                  <td colSpan={5}>
+                    <textarea
+                      className="preview-config-editor"
+                      value={config?.content ?? ""}
+                      aria-label={`Config for ${service.name}`}
+                      spellCheck={false}
+                      rows={12}
+                      disabled={config?.loading || config?.saving}
+                      onChange={(e) =>
+                        setConfigs((prev) => {
+                          const existing = prev[service.name] ?? {
+                            loading: false,
+                            error: null,
+                            content: "",
+                            saving: false,
+                            saveError: null,
+                          };
+                          return {
+                            ...prev,
+                            [service.name]: { ...existing, content: e.target.value },
+                          };
+                        })
+                      }
+                    />
+                    <div className="preview-config-toolbar">
+                      <span className="preview-message">
+                        Changes apply the next time this service is started.
+                      </span>
+                      <div className="preview-config-buttons">
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-secondary"
+                          onClick={() => loadConfig(service.name)}
+                          disabled={config?.loading || config?.saving}
+                        >
+                          {config?.loading ? "Loading..." : "Reload"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-primary"
+                          onClick={() => saveConfig(service.name)}
+                          disabled={config?.loading || config?.saving}
+                        >
+                          {config?.saving ? "Saving..." : "Save"}
+                        </button>
+                      </div>
+                    </div>
+                    {config?.error && (
+                      <div className="preview-message preview-error">{config.error}</div>
+                    )}
+                    {config?.saveError && (
+                      <div className="preview-message preview-error">{config.saveError}</div>
+                    )}
+                  </td>
+                </tr>
+              )}
               {openLog === service.name && (
                 <tr className="preview-log-row">
                   <td colSpan={5}>
@@ -330,7 +509,10 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
     setPortInputs({});
   }, [serviceAliases]);
 
-  const isRunning = preview?.state === "running";
+  // Any running service keeps the bottom Stop control (stop everything) in view;
+  // the bulk Start control shows only when nothing is running. Per-service rows
+  // own the granular start/stop in between.
+  const anyRunning = preview?.services?.some((service) => service.status === "running") ?? false;
   const primaryPreviewUrl = useMemo(
     () => preview?.services?.find((service) => !!service.publicUrl)?.publicUrl ?? null,
     [preview],
@@ -368,7 +550,6 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
       {preview?.services?.length ? (
         <PreviewServiceTable
           services={preview.services}
-          isRunning={isRunning}
           portInputs={portInputs}
           onPortChange={(alias, value) => setPortInputs((prev) => ({ ...prev, [alias]: value }))}
           detail={detail}
@@ -383,7 +564,7 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
         >
           Refresh
         </button>
-        {isRunning ? (
+        {anyRunning ? (
           <>
             {primaryPreviewUrl && (
               <a

@@ -1064,4 +1064,184 @@ describe("WorkItemModalV2 creation", () => {
     expect(logSpy).toHaveBeenCalledWith("wi-1", "api");
     expect(await screen.findByText("Error: port already in use")).toBeTruthy();
   });
+
+  test("the per-row Start button starts only that service, passing its edited port", async () => {
+    mockServices();
+    vi.spyOn(authServices.workItemService, "getPreview").mockResolvedValue({
+      configured: true,
+      state: "stopped",
+      worktreePath: "/wt",
+      configPath: "/wt/ild.config.json",
+      profileName: "app",
+      publicHost: null,
+      stateDirectory: null,
+      message: null,
+      services: [
+        {
+          name: "web",
+          portAlias: "web",
+          status: "stopped",
+          port: null,
+          suggestedPort: 5173,
+          healthUrl: null,
+          publicUrl: null,
+          logFilePath: null,
+          processId: null,
+          exitCode: null,
+        },
+        {
+          name: "api",
+          portAlias: "api",
+          status: "stopped",
+          port: null,
+          suggestedPort: 8080,
+          healthUrl: null,
+          publicUrl: null,
+          logFilePath: null,
+          processId: null,
+          exitCode: null,
+        },
+      ],
+    });
+    const startServiceSpy = vi
+      .spyOn(authServices.workItemService, "startPreviewService")
+      .mockResolvedValue({
+        configured: true,
+        state: "partial",
+        worktreePath: "/wt",
+        configPath: "/wt/ild.config.json",
+        profileName: "app",
+        publicHost: "127.0.0.1",
+        stateDirectory: "/state",
+        message: null,
+        services: [],
+      });
+    await renderDialog(makeWorkItem({ worktreePath: "/wt" }));
+    await openPreviewTab();
+
+    const portInput = (await screen.findByLabelText("Port for web")) as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(portInput, { target: { value: "4000" } });
+      await Promise.resolve();
+    });
+
+    // Two rows each have a "Start" button; the first belongs to the "web" row.
+    const startButtons = screen.getAllByRole("button", { name: "Start" });
+    await act(async () => {
+      fireEvent.click(startButtons[0]);
+      await Promise.resolve();
+    });
+
+    expect(startServiceSpy).toHaveBeenCalledWith("wi-1", "web", { portOverrides: { web: 4000 } });
+  });
+
+  test("the per-row Stop button stops only that service", async () => {
+    mockServices();
+    vi.spyOn(authServices.workItemService, "getPreview").mockResolvedValue({
+      configured: true,
+      state: "running",
+      worktreePath: "/wt",
+      configPath: "/wt/ild.config.json",
+      profileName: "app",
+      publicHost: "127.0.0.1",
+      stateDirectory: "/state",
+      message: null,
+      services: [
+        {
+          name: "web",
+          portAlias: "web",
+          status: "running",
+          port: 5173,
+          suggestedPort: 5173,
+          healthUrl: "http://127.0.0.1:5173/",
+          publicUrl: "http://127.0.0.1:5173",
+          logFilePath: "/state/web.log",
+          processId: 42,
+          exitCode: null,
+        },
+      ],
+    });
+    const stopServiceSpy = vi
+      .spyOn(authServices.workItemService, "stopPreviewService")
+      .mockResolvedValue({
+        configured: true,
+        state: "stopped",
+        worktreePath: "/wt",
+        configPath: "/wt/ild.config.json",
+        profileName: "app",
+        publicHost: "127.0.0.1",
+        stateDirectory: "/state",
+        message: null,
+        services: [],
+      });
+    await renderDialog(makeWorkItem({ worktreePath: "/wt" }));
+    await openPreviewTab();
+
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
+      await Promise.resolve();
+    });
+
+    expect(stopServiceSpy).toHaveBeenCalledWith("wi-1", "web");
+  });
+
+  test("the config toggle loads a service's config and saving persists the edit", async () => {
+    mockServices();
+    vi.spyOn(authServices.workItemService, "getPreview").mockResolvedValue({
+      configured: true,
+      state: "stopped",
+      worktreePath: "/wt",
+      configPath: "/wt/ild.config.json",
+      profileName: "app",
+      publicHost: null,
+      stateDirectory: null,
+      message: null,
+      services: [
+        {
+          name: "web",
+          portAlias: "web",
+          status: "stopped",
+          port: null,
+          suggestedPort: 5173,
+          healthUrl: null,
+          publicUrl: null,
+          logFilePath: null,
+          processId: null,
+          exitCode: null,
+        },
+      ],
+    });
+    const configSpy = vi
+      .spyOn(authServices.workItemService, "getPreviewServiceConfig")
+      .mockResolvedValue({ service: "web", config: '{\n  "name": "web"\n}' });
+    const saveSpy = vi
+      .spyOn(authServices.workItemService, "updatePreviewServiceConfig")
+      .mockResolvedValue({
+        service: "web",
+        config: '{\n  "name": "web",\n  "suggestedPort": 4000\n}',
+      });
+    await renderDialog(makeWorkItem({ worktreePath: "/wt" }));
+    await openPreviewTab();
+
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: "Config" }));
+      await Promise.resolve();
+    });
+
+    expect(configSpy).toHaveBeenCalledWith("wi-1", "web");
+    const editor = (await screen.findByLabelText("Config for web")) as HTMLTextAreaElement;
+    expect(editor.value).toBe('{\n  "name": "web"\n}');
+
+    const edited = '{\n  "name": "web",\n  "suggestedPort": 4000\n}';
+    await act(async () => {
+      fireEvent.change(editor, { target: { value: edited } });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await Promise.resolve();
+    });
+
+    expect(saveSpy).toHaveBeenCalledWith("wi-1", "web", edited);
+  });
 });

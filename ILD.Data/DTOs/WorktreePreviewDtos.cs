@@ -27,6 +27,23 @@ public sealed class WorktreePreviewLogResponse
     public string? Content { get; set; }
 }
 
+/// <summary>
+/// One service's entry in the worktree's <c>ild.config.json</c>, returned as the
+/// raw (pretty-printed) JSON of that service object so the Preview tab can edit it
+/// in place. <see cref="Config"/> is null when the service has no config entry.
+/// </summary>
+public sealed class WorktreePreviewServiceConfigResponse
+{
+    public string Service { get; set; } = string.Empty;
+    public string? Config { get; set; }
+}
+
+/// <summary>Edited JSON for a single service's <c>ild.config.json</c> entry.</summary>
+public sealed class WorktreePreviewServiceConfigUpdateRequest
+{
+    public string Config { get; set; } = string.Empty;
+}
+
 public sealed class WorktreePreviewServiceResponse
 {
     public string Name { get; set; } = string.Empty;
