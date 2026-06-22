@@ -85,6 +85,22 @@ function AppRoutes() {
             }
           />
           <Route
+            path="/loop-editor/:templateId"
+            element={
+              <ProtectedRoute>
+                <Suspense
+                  fallback={
+                    <div className="page-container">
+                      <p>Loading...</p>
+                    </div>
+                  }
+                >
+                  <LoopEditor />
+                </Suspense>
+              </ProtectedRoute>
+            }
+          />
+          <Route
             path="/loop-runs"
             element={
               <ProtectedRoute>

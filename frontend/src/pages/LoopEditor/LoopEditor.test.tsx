@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
 import type { Edge } from "@xyflow/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
 import { AuthContext } from "../../hooks/useAuth";
 import { NodeType, EdgeType, RecoveryPolicy } from "../../types";
 import LoopEditor from "./index";
@@ -19,7 +19,15 @@ function mockFetch(json: unknown, status = 200) {
   });
 }
 
-function renderPage(mockFetchFn: ReturnType<typeof mockFetch>) {
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location">{location.pathname}</div>;
+}
+
+// The editor reads the open template from the URL, so tests mount it behind the
+// same two routes the app wires up (bare editor + per-template deep link). The
+// location probe lets a test assert the URL matches the open template.
+function renderPage(mockFetchFn: ReturnType<typeof mockFetch>, initialPath = "/loop-editor") {
   vi.stubGlobal("fetch", mockFetchFn);
 
   const authValue = {
@@ -32,9 +40,13 @@ function renderPage(mockFetchFn: ReturnType<typeof mockFetch>) {
   };
 
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[initialPath]}>
       <AuthContext.Provider value={authValue}>
-        <LoopEditor />
+        <Routes>
+          <Route path="/loop-editor" element={<LoopEditor />} />
+          <Route path="/loop-editor/:templateId" element={<LoopEditor />} />
+        </Routes>
+        <LocationProbe />
       </AuthContext.Provider>
     </MemoryRouter>,
   );
@@ -814,5 +826,43 @@ describe("Loop Editor responsive sidebar", () => {
     });
 
     expect(screen.queryByRole("button", { name: /show loop menu/i })).toBeNull();
+  });
+});
+
+describe("Loop Editor URL persistence", () => {
+  test("a link to a template opens its graph directly", async () => {
+    renderPage(mockFetch([sampleTemplate]), `/loop-editor/${sampleTemplate.id}`);
+
+    // No click needed — the id in the URL drives the selection.
+    await waitFor(() => {
+      expect(screen.getByText("Initialize")).toBeTruthy();
+    });
+    expect(screen.getByText("Code")).toBeTruthy();
+    expect(screen.getByText("Tidy Up")).toBeTruthy();
+  });
+
+  test("selecting a template writes its id to the URL", async () => {
+    renderPage(mockFetch([sampleTemplate]), "/loop-editor");
+
+    await waitFor(() => {
+      expect(screen.getByText("Dev Loop")).toBeTruthy();
+    });
+    expect(screen.getByTestId("location").textContent).toBe("/loop-editor");
+
+    fireEvent.click(screen.getByText("Dev Loop"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("location").textContent).toBe(`/loop-editor/${sampleTemplate.id}`);
+    });
+    expect(screen.getByText("Initialize")).toBeTruthy();
+  });
+
+  test("a link to a missing template bounces back to the bare editor", async () => {
+    renderPage(mockFetch([sampleTemplate]), "/loop-editor/does-not-exist");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("location").textContent).toBe("/loop-editor");
+    });
+    expect(screen.getByText("Select a template to view its graph")).toBeTruthy();
   });
 });

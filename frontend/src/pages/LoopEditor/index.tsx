@@ -1,5 +1,6 @@
 import "./LoopEditor.css";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import {
   ReactFlow,
   Background,
@@ -190,7 +191,10 @@ function cleanCustomEdgeNames(names: string[]): string[] {
 }
 
 export default function LoopEditor() {
+  const navigate = useNavigate();
+  const { templateId: routeTemplateId } = useParams<{ templateId?: string }>();
   const [templates, setTemplates] = useState<LoopTemplate[]>([]);
+  const [templatesLoaded, setTemplatesLoaded] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState<LoopTemplate | null>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges] = useEdgesState<Edge>([]);
@@ -362,6 +366,8 @@ export default function LoopEditor() {
       templatesRef.current = data;
     } catch (error) {
       setErrorText(loadErrorMessage(error, "Failed to load loop templates."));
+    } finally {
+      setTemplatesLoaded(true);
     }
   }, []);
 
@@ -388,6 +394,31 @@ export default function LoopEditor() {
     [setEdges, setNodes],
   );
 
+  // The URL is the source of truth for which template is open, so a link to
+  // `/loop-editor/<id>` opens that template's graph directly. Tracking the id we
+  // last opened keeps an unrelated `templates` refresh (save, clone, archive)
+  // from re-loading — and clobbering — the canvas the user is editing.
+  const openedTemplateIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!routeTemplateId) {
+      openedTemplateIdRef.current = null;
+      return;
+    }
+    if (openedTemplateIdRef.current === routeTemplateId) return;
+
+    const match = templates.find((template) => template.id === routeTemplateId);
+    if (match) {
+      openedTemplateIdRef.current = routeTemplateId;
+      selectTemplate(match);
+      return;
+    }
+    // A link to a template that no longer exists bounces back to the bare editor
+    // so the URL always matches what is actually open.
+    if (templatesLoaded) {
+      void navigate("/loop-editor", { replace: true });
+    }
+  }, [routeTemplateId, templates, templatesLoaded, selectTemplate, navigate]);
+
   const handleNewTemplate = () => {
     setSelectedTemplate(null);
     setNodes([]);
@@ -397,6 +428,7 @@ export default function LoopEditor() {
     setIsNewTemplate(true);
     setNewTemplateName("");
     setReadOnlyVersion(null);
+    if (routeTemplateId) void navigate("/loop-editor");
   };
 
   const handleSave = async () => {
@@ -482,6 +514,7 @@ export default function LoopEditor() {
           setNodes([]);
           setEdges([]);
           setReadOnlyVersion(null);
+          if (routeTemplateId) void navigate("/loop-editor");
         }
       }
       void loadTemplates();
@@ -528,6 +561,7 @@ export default function LoopEditor() {
     setSelectedTemplate(null);
     setNodes([]);
     setEdges([]);
+    if (routeTemplateId) void navigate("/loop-editor");
   };
 
   // --- Export ---
@@ -1376,7 +1410,7 @@ export default function LoopEditor() {
             onCreateTemplate={handleNewTemplate}
             onImport={triggerImportFilePicker}
             onShowArchivedChange={setShowArchived}
-            onSelectTemplate={selectTemplate}
+            onSelectTemplate={(template) => navigate(`/loop-editor/${template.id}`)}
             onStartClone={(template) => {
               setCloningTemplateId(template.id);
               setCloneName(`Copy of ${template.name}`);

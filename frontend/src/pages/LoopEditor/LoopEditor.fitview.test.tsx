@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { AuthContext } from "../../hooks/useAuth";
 import { NodeType, EdgeType } from "../../types";
 import LoopEditor from "./index";
@@ -139,9 +139,12 @@ function renderEditor() {
   };
 
   render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={["/loop-editor"]}>
       <AuthContext.Provider value={authValue}>
-        <LoopEditor />
+        <Routes>
+          <Route path="/loop-editor" element={<LoopEditor />} />
+          <Route path="/loop-editor/:templateId" element={<LoopEditor />} />
+        </Routes>
       </AuthContext.Provider>
     </MemoryRouter>,
   );
