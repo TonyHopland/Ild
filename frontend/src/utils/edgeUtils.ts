@@ -168,13 +168,12 @@ export function buildEdge(config: EdgeConfig): Edge {
   };
 }
 
-// Perpendicular distance (flow units) between adjacent parallel lanes. Because
-// each lane shifts BOTH of its endpoints (see getParallelEdgePath), siblings stay
-// exactly this far apart along their whole length — not just at a midpoint — so
-// the gap is the real, constant separation a user clicks into. Earlier attempts
-// that only bowed the middle (36px, then 64px, then a 120px peak) still pinched
-// back together near the nodes; this keeps them apart end to end.
-export const PARALLEL_EDGE_SPREAD = 120;
+// Perpendicular gap (flow units) between adjacent siblings at their bowed peak.
+// Each edge keeps its real endpoints on the shared handles and bows out by this
+// much in the middle, where its label rides — so the lines stay attached to the
+// nodes (not floating free of them) yet separate just enough that every label is
+// offset onto its own spot and can be clicked individually.
+export const PARALLEL_EDGE_GAP = 48;
 
 // The transparent hit-area width React Flow draws under each parallel edge so
 // any one in the fan can be clicked, not just the topmost path.
@@ -203,25 +202,26 @@ export function parallelEdgeRoute(edges: Edge[], edge: Edge): { index: number; c
 }
 
 /**
- * The perpendicular offset (flow units) a parallel edge is shifted onto its own
- * lane, away from the straight source→target chord. Lanes spread symmetrically
- * around the chord and widen with the sibling count, so two edges run at ±{@link
- * PARALLEL_EDGE_SPREAD}/2 and never share a path.
+ * The perpendicular offset (flow units) a sibling bows away from the straight
+ * source→target chord at its peak. Lanes spread symmetrically around the chord
+ * and widen with the sibling count, so two edges bow to ±{@link
+ * PARALLEL_EDGE_GAP}/2 and their peaks never land on the same spot.
  */
 export function parallelEdgeOffset(index: number, count: number): number {
   if (count <= 1) return 0;
-  return (index - (count - 1) / 2) * PARALLEL_EDGE_SPREAD;
+  return (index - (count - 1) / 2) * PARALLEL_EDGE_GAP;
 }
 
 /**
- * Routes a parallel edge along its own lane: BOTH endpoints are shifted `offset`
- * flow units perpendicular to the source→target chord, giving each edge a
- * distinct departure and landing point. The result is a straight track that runs
- * a constant `offset` clear of its siblings end to end — so they never re-converge
- * and overlap near the nodes the way a midpoint-only bow did. The label rides the
- * centre of the shifted track.
+ * A quadratic bow from (sourceX, sourceY) to (targetX, targetY) that keeps both
+ * endpoints anchored on the real handles and deviates `offset` flow units
+ * perpendicular to the chord at its midpoint, where the label sits. Because the
+ * ends stay pinned to the nodes the edge never floats free of them; the bow only
+ * opens up in the middle, giving each sibling a distinct, offset label to click.
+ * The control point sits at twice the offset because a quadratic curve reaches
+ * only half its control distance at the midpoint.
  */
-export function getParallelEdgePath(
+export function getBowedEdgePath(
   sourceX: number,
   sourceY: number,
   targetX: number,
@@ -231,17 +231,18 @@ export function getParallelEdgePath(
   const deltaX = targetX - sourceX;
   const deltaY = targetY - sourceY;
   const length = Math.hypot(deltaX, deltaY) || 1;
-  const perpX = (-deltaY / length) * offset;
-  const perpY = (deltaX / length) * offset;
-
-  const startX = sourceX + perpX;
-  const startY = sourceY + perpY;
-  const endX = targetX + perpX;
-  const endY = targetY + perpY;
+  const perpX = -deltaY / length;
+  const perpY = deltaX / length;
+  const midX = (sourceX + targetX) / 2;
+  const midY = (sourceY + targetY) / 2;
+  const controlX = midX + perpX * offset * 2;
+  const controlY = midY + perpY * offset * 2;
+  const labelX = midX + perpX * offset;
+  const labelY = midY + perpY * offset;
 
   return {
-    path: `M ${startX},${startY} L ${endX},${endY}`,
-    labelX: (startX + endX) / 2,
-    labelY: (startY + endY) / 2,
+    path: `M ${sourceX},${sourceY} Q ${controlX},${controlY} ${targetX},${targetY}`,
+    labelX,
+    labelY,
   };
 }

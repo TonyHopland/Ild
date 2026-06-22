@@ -89,16 +89,20 @@ describe("LoopEdgeComponent label selection", () => {
     expect((label as HTMLElement).style.cursor).toBe("pointer");
   });
 
-  test("parallel siblings each render their own shifted track, not a shared path", () => {
+  test("parallel siblings each bow onto their own curve, not a shared path", () => {
     renderEdge("e-ci", "ci_failure", vi.fn());
     renderEdge("e-reject", "reject", vi.fn());
 
     const ciPath = screen.getByTestId("edge-path-e-ci").getAttribute("d");
     const rejectPath = screen.getByTestId("edge-path-e-reject").getAttribute("d");
-    // Two siblings → the parallel-lane path is used (a straight "L" track), and
-    // the two tracks differ because each rides its own perpendicular offset.
-    expect(ciPath).toContain(" L ");
-    expect(rejectPath).toContain(" L ");
+    // Two siblings → each renders a quadratic bow ("Q"), anchored at the shared
+    // handles (0,0 → 200,0) but bowed to its own peak, so the curves differ.
+    expect(ciPath).toContain(" Q ");
+    expect(rejectPath).toContain(" Q ");
+    expect(ciPath?.startsWith("M 0,0 ")).toBe(true);
+    expect(rejectPath?.startsWith("M 0,0 ")).toBe(true);
+    expect(ciPath?.endsWith(" 200,0")).toBe(true);
+    expect(rejectPath?.endsWith(" 200,0")).toBe(true);
     expect(ciPath).not.toBe(rejectPath);
   });
 });

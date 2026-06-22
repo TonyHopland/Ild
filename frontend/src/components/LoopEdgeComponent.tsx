@@ -8,7 +8,7 @@ import {
   type EdgeProps,
 } from "@xyflow/react";
 import {
-  getParallelEdgePath,
+  getBowedEdgePath,
   parallelEdgeOffset,
   parallelEdgeRoute,
   PARALLEL_EDGE_INTERACTION_WIDTH,
@@ -22,10 +22,12 @@ const SMOOTHSTEP_OFFSET = 20;
 
 /**
  * Renders a loop edge. A lone edge keeps the original smooth-step path. When two
- * or more edges share the same source/target route (e.g. several PR custom edges
- * into one node) they each shift onto a separate lane so every label stays
- * readable. The label is itself the click target — selecting it picks that exact
- * edge, so neighbouring lines can't steal the click.
+ * or more edges run between the same pair of nodes (e.g. several PR custom edges
+ * into one node, or a success and a custom edge into the same target) they each
+ * bow gently apart — endpoints still anchored on the nodes — so every label is
+ * offset onto its own spot and stays readable. The label is itself the click
+ * target — selecting it picks that exact edge, so neighbouring lines can't steal
+ * the click.
  */
 export default function LoopEdgeComponent({
   id,
@@ -81,16 +83,16 @@ export default function LoopEdgeComponent({
       offset: SMOOTHSTEP_OFFSET,
     });
   } else {
-    const fanned = getParallelEdgePath(
+    const bowed = getBowedEdgePath(
       sourceX,
       sourceY,
       targetX,
       targetY,
       parallelEdgeOffset(index, count),
     );
-    edgePath = fanned.path;
-    labelX = fanned.labelX;
-    labelY = fanned.labelY;
+    edgePath = bowed.path;
+    labelX = bowed.labelX;
+    labelY = bowed.labelY;
   }
 
   return (
