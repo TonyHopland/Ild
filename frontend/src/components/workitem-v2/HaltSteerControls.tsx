@@ -12,6 +12,12 @@ interface HaltSteerControlsProps {
   /** Cleanup handlers reused for a halted run. */
   onCleanupDone?: () => void | Promise<unknown>;
   onCleanupBacklog?: () => void | Promise<unknown>;
+  /**
+   * Whether to offer the standalone Abandon-run affordance. Defaults to true;
+   * pass false where abandoning does not belong (e.g. the action tab, which is
+   * only for steering the live run — abandoning lives on the run tab).
+   */
+  showAbandon?: boolean;
 }
 
 // The run/node status fields arrive as strings from the API but can be numeric
@@ -44,7 +50,8 @@ function isNodeRunning(value: unknown): boolean {
  * actively running or parked for human feedback — it also renders an Abandon
  * button that stops the run and resets the work item to Backlog, so a run
  * heading the wrong way can be dropped and retried fresh after editing the
- * description, even when the AI is not currently running.
+ * description, even when the AI is not currently running. The Abandon button is
+ * opt-out via `showAbandon` so it only appears on the run tab, not the action tab.
  */
 export default function HaltSteerControls({
   run,
@@ -53,6 +60,7 @@ export default function HaltSteerControls({
   onResumeSteer,
   onCleanupDone,
   onCleanupBacklog,
+  showAbandon = true,
 }: HaltSteerControlsProps) {
   const [halting, setHalting] = useState(false);
   const [resuming, setResuming] = useState(false);
@@ -73,7 +81,8 @@ export default function HaltSteerControls({
   // human feedback — so a run heading the wrong way can be dropped without
   // first halting it, even when the AI is not currently running. A halted run
   // is excluded because its steer window already offers Cleanup -> Backlog.
-  const canAbandon = !!onCleanupBacklog && (isRunningStatus || isWaitingHuman) && !isHalted;
+  const canAbandon =
+    showAbandon && !!onCleanupBacklog && (isRunningStatus || isWaitingHuman) && !isHalted;
 
   if (!canHalt && !canAbandon && !isHalted) return null;
 
