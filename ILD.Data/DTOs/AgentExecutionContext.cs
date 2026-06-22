@@ -25,5 +25,11 @@ public record AgentExecutionContext(
     // LoopRun (see ADR-0010). When present, managed-session snapshots are keyed on
     // the chat session, and the ILD MCP server is told the chat session id (so
     // created work items are stamped with it) instead of a loop-run id.
-    Guid? ChatSessionId = null
+    Guid? ChatSessionId = null,
+    // Extra absolute directories the agent may read/write outside its working
+    // directory, granted per-turn (ADR-0011). The Chat Context uses this to expose
+    // the open work item's active-run worktree without relocating the agent's cwd:
+    // claude maps each to an extra `--add-dir`, opencode/pi to their allowed-dir
+    // config. Null/empty means scratch (cwd) only.
+    IReadOnlyList<string>? AdditionalAllowedDirectories = null
 );

@@ -266,6 +266,29 @@ public class ClaudeCodeAdapterTests
     }
 
     [Fact]
+    public void BuildRunProcessStartInfo_grants_extra_allowed_directories_as_add_dir()
+    {
+        // ADR-0011: the Chat Context's open work item active-run worktree is
+        // granted via an additional --add-dir without changing the cwd. The
+        // worktree itself is already added once and must not be duplicated.
+        var psi = ClaudeCodeAdapter.BuildRunProcessStartInfo(
+            binaryPath: "claude",
+            worktreePath: "/tmp/wt",
+            renderedPrompt: "fix it",
+            sessionId: null,
+            mcpConfigPath: null,
+            additionalAllowedDirectories: new[] { "/tmp/wt", "/data/worktrees/wi-99" });
+
+        var args = psi.ArgumentList.ToList();
+        // Two --add-dir occurrences: the cwd worktree + the one extra grant.
+        Assert.Equal(2, args.Count(a => a == "--add-dir"));
+        Assert.Contains("/data/worktrees/wi-99", args);
+        // The extra dir is added after the cwd worktree's --add-dir pair.
+        var extraIndex = args.IndexOf("/data/worktrees/wi-99");
+        Assert.Equal("--add-dir", args[extraIndex - 1]);
+    }
+
+    [Fact]
     public void EncodeWorktreePath_replaces_slashes_with_dashes()
     {
         Assert.Equal("-workspaces-Ild", ClaudeCodeAdapter.EncodeWorktreePath("/workspaces/Ild"));

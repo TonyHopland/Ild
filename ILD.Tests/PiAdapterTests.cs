@@ -227,7 +227,7 @@ public class PiAdapterTests
             Assert.Contains("--session-dir", result.Output);
             Assert.Contains("--session", result.Output);
             Assert.Contains("--tools", result.Output);
-            Assert.Contains("read,grep,find,ls,edit,write,bash,ild_list_workitems,ild_get_workitem,ild_create_workitem,ild_list_repositories,ild_list_loop_templates,ild_list_loop_runs", result.Output);
+            Assert.Contains("read,grep,find,ls,edit,write,bash,ild_list_workitems,ild_get_workitem,ild_create_workitem,ild_list_repositories,ild_list_loop_templates,ild_list_loop_runs,ild_get_preview,ild_start_preview,ild_stop_preview,ild_start_preview_service,ild_stop_preview_service,ild_get_preview_service_config,ild_update_preview_service_config,ild_get_preview_logs", result.Output);
             Assert.Contains("openai/gpt-5", result.Output);
             Assert.Contains("sk-test", result.Output);
             Assert.DoesNotContain("\n--\n", result.Output);
@@ -434,10 +434,33 @@ public class PiAdapterTests
         Assert.Contains("function joinApiUrl(base: string, path: string): string {", extensionContent);
         Assert.Contains("const url = joinApiUrl(API_BASE, path);", extensionContent);
         Assert.DoesNotContain("const url = API_BASE + path;", extensionContent);
-        Assert.Contains("if (params.status != null) qs.set(\"status\", params.status);", extensionContent);
+        Assert.Contains("if (params.status != null) qs.set(\"status\", String(params.status));", extensionContent);
         Assert.Contains("if (params.skip !== undefined) qs.set(\"skip\", String(params.skip));", extensionContent);
-        Assert.Contains("const url = qs.toString() ? `api/v1/agent/workitems?${qs.toString()}` : \"api/v1/agent/workitems\";", extensionContent);
+        Assert.Contains("let path = \"api/v1/agent/workitems\";", extensionContent);
+        Assert.Contains("const url = qs.toString() ? `${path}?${qs.toString()}` : path;", extensionContent);
         Assert.DoesNotContain("qs.set(\"\nstatus", extensionContent);
+    }
+
+    [Fact]
+    public void ExecuteAsync_generates_path_params_query_and_put_for_preview_tools()
+    {
+        var extensionContent = GeneratePiExtension(
+            "http://localhost:1234/v1",
+            "Local",
+            Guid.NewGuid().ToString());
+
+        // A PUT helper exists and the config-update tool calls it after
+        // substituting both {workItemId} and {service} path placeholders.
+        Assert.Contains("async function ildPut(path: string, body: object): Promise<string> {", extensionContent);
+        Assert.Contains("let path = \"api/v1/agent/workitems/{workItemId}/preview/services/{service}/config\";", extensionContent);
+        Assert.Contains("path = path.replace(\"{workItemId}\", encodeURIComponent(String(params.workItemId)));", extensionContent);
+        Assert.Contains("path = path.replace(\"{service}\", encodeURIComponent(String(params.service)));", extensionContent);
+        Assert.Contains("await ildPut(url, body)", extensionContent);
+
+        // The logs tool keeps {workItemId} as a path param but passes `service`
+        // as a query param (it is not a placeholder in that endpoint).
+        Assert.Contains("let path = \"api/v1/agent/workitems/{workItemId}/preview/logs\";", extensionContent);
+        Assert.Contains("if (params.service != null) qs.set(\"service\", String(params.service));", extensionContent);
     }
 
     [Fact]

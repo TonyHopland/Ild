@@ -40,6 +40,14 @@ public sealed class PiAdapter : CliAgentAdapterBase
                 return NodeExecutionResult.Fail(
                     "[pi-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
 
+            // ADR-0011 parity note: claude/opencode sandbox file tools to their
+            // working directory and need an explicit grant (claude `--add-dir`,
+            // opencode `external_directory`) to reach an extra path like the Chat
+            // Context's open-work-item worktree. Pi's file tools take absolute
+            // paths and are not directory-sandboxed, so the path supplied in the
+            // turn's Chat Context preamble is already reachable — there is no
+            // per-directory config to set for ctx.AdditionalAllowedDirectories.
+
             var sessionDirectory = BuildSessionDirectory(ctx.RunContext.LoopRunId);
             Directory.CreateDirectory(sessionDirectory);
             PrepareRuntimeFiles(settings);

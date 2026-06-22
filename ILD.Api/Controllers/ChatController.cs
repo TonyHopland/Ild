@@ -59,7 +59,7 @@ public class ChatController : ControllerBase
         if (session is null)
             return NotFound(new { error = "No active chat session. Start one first." });
 
-        await _runner.SubmitAsync(session.Id, request.Content);
+        await _runner.SubmitAsync(session.Id, request.Content, request.OpenWorkItemId);
         return Accepted();
     }
 
@@ -105,4 +105,11 @@ public sealed class StartChatRequest
 public sealed class ChatMessageRequest
 {
     public string Content { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The ambient per-turn Chat Context (ADR-0011): the id of the work item the
+    /// user has open when sending this message, or null when none is open. A thin
+    /// pointer only — the agent pulls the heavy data via tools on demand.
+    /// </summary>
+    public string? OpenWorkItemId { get; set; }
 }
