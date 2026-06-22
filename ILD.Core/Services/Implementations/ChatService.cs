@@ -28,6 +28,7 @@ public sealed class ChatService : IChatService
     private readonly IChatNotifier _notifier;
     private readonly ChatOptions _options;
     private readonly ILoopRunStore _runs;
+    private readonly IChatLoopScratchpad _loopScratchpad;
 
     public ChatService(
         AppDbContext db,
@@ -35,7 +36,8 @@ public sealed class ChatService : IChatService
         IAgentAdapterRegistry registry,
         IChatNotifier notifier,
         ChatOptions options,
-        ILoopRunStore runs)
+        ILoopRunStore runs,
+        IChatLoopScratchpad loopScratchpad)
     {
         _db = db;
         _providers = providers;
@@ -43,6 +45,7 @@ public sealed class ChatService : IChatService
         _notifier = notifier;
         _options = options;
         _runs = runs;
+        _loopScratchpad = loopScratchpad;
     }
 
     public async Task<ChatSessionView?> GetForUserAsync(string userId, CancellationToken ct = default)
@@ -93,12 +96,18 @@ public sealed class ChatService : IChatService
     }
 
     public Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, CancellationToken ct)
-        => ExecuteTurnAsync(chatSessionId, userMessage, openWorkItemId: null, ct);
+        => ExecuteTurnAsync(chatSessionId, userMessage, openWorkItemId: null, openLoopDocument: null, ct);
 
-    public async Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, CancellationToken ct)
+    public async Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, string? openLoopDocument, CancellationToken ct)
     {
         var session = await _db.ChatSessions.FirstOrDefaultAsync(c => c.Id == chatSessionId, ct);
         if (session is null) return;
+
+        // Stash the live loop document for this turn, overwriting any prior entry
+        // (a null/empty document clears it). The agent reads it back through the
+        // get_current_loop tool — only the "loop editor is open" flag below enters
+        // the model context unprompted.
+        _loopScratchpad.Set(chatSessionId, openLoopDocument);
 
         var nextSeq = await NextSequenceAsync(chatSessionId, ct);
 
@@ -135,7 +144,7 @@ public sealed class ChatService : IChatService
         // active-run worktree path granted as an extra allowed directory when the
         // session also holds a filesystem grant.
         var (contextPreamble, additionalAllowedDirectories) =
-            await BuildChatContextAsync(openWorkItemId, tools);
+            await BuildChatContextAsync(openWorkItemId, !string.IsNullOrWhiteSpace(openLoopDocument), tools);
         var promptForAgent = contextPreamble is null
             ? userMessage
             : $"{contextPreamble}\n\n{userMessage}";
@@ -202,49 +211,61 @@ public sealed class ChatService : IChatService
     }
 
     /// <summary>
-    /// Build the per-turn Chat Context (ADR-0011) for the open work item: a small
-    /// preamble pushed into the model context, and the extra allowed directories
-    /// granting access to the open item's active-run worktree. Returns
-    /// <c>(null, null)</c> when no work item is open. The worktree path is granted
-    /// only when BOTH a filesystem grant is held AND the open item has an active
-    /// (non-terminal) run with a worktree on disk; otherwise the agent gets the
-    /// id-only preamble and scratch access alone.
+    /// Build the per-turn Chat Context (ADR-0011): a small preamble pushed into the
+    /// model context, and the extra allowed directories granting access to the open
+    /// work item's active-run worktree. Returns <c>(null, null)</c> when nothing is
+    /// open. The worktree path is granted only when BOTH a filesystem grant is held
+    /// AND the open item has an active (non-terminal) run with a worktree on disk;
+    /// otherwise the agent gets the id-only preamble and scratch access alone. When
+    /// <paramref name="loopEditorOpen"/> is set, the preamble names the open Loop
+    /// Editor as a thin pointer — the agent reads/edits the loop via the
+    /// <c>get_current_loop</c>/<c>update_current_loop</c> tools.
     /// </summary>
     private async Task<(string? Preamble, IReadOnlyList<string>? AllowedDirectories)> BuildChatContextAsync(
-        string? openWorkItemId, IReadOnlyList<string> tools)
+        string? openWorkItemId, bool loopEditorOpen, IReadOnlyList<string> tools)
     {
-        if (string.IsNullOrWhiteSpace(openWorkItemId))
+        var hasWorkItem = !string.IsNullOrWhiteSpace(openWorkItemId);
+        if (!hasWorkItem && !loopEditorOpen)
             return (null, null);
 
-        var lines = new List<string>
-        {
-            "[Chat Context]",
-            $"The user currently has work item {openWorkItemId} open in the UI. Use the ILD tools "
-                + "(e.g. get_workitem, the preview controls) with this work item id to inspect or act on it.",
-        };
-
+        var lines = new List<string> { "[Chat Context]" };
         IReadOnlyList<string>? allowedDirectories = null;
 
-        // Filesystem access must be granted on the session before exposing any
-        // worktree path — without a read/write/execute tool the directory grant
-        // would be inert anyway.
-        var hasFilesystemGrant = tools.Any(t =>
-            string.Equals(t, AiToolCatalog.Read, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(t, AiToolCatalog.Write, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(t, AiToolCatalog.Execute, StringComparison.OrdinalIgnoreCase));
-
-        if (hasFilesystemGrant)
+        if (hasWorkItem)
         {
-            // Active run only (ADR-0011): finished-run worktrees are kept on disk
-            // per ADR-0008 but are not exposed to the chat.
-            var activeRun = await _runs.GetActiveByWorkItemAsync(openWorkItemId);
-            var worktreePath = activeRun?.WorktreePath;
-            if (!string.IsNullOrWhiteSpace(worktreePath) && Directory.Exists(worktreePath))
+            lines.Add(
+                $"The user currently has work item {openWorkItemId} open in the UI. Use the ILD tools "
+                + "(e.g. get_workitem, the preview controls) with this work item id to inspect or act on it.");
+
+            // Filesystem access must be granted on the session before exposing any
+            // worktree path — without a read/write/execute tool the directory grant
+            // would be inert anyway.
+            var hasFilesystemGrant = tools.Any(t =>
+                string.Equals(t, AiToolCatalog.Read, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(t, AiToolCatalog.Write, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(t, AiToolCatalog.Execute, StringComparison.OrdinalIgnoreCase));
+
+            if (hasFilesystemGrant)
             {
-                lines.Add($"Its active run's worktree is checked out at: {worktreePath}");
-                lines.Add("You may read and edit files there directly with your filesystem tools using that absolute path.");
-                allowedDirectories = new[] { worktreePath };
+                // Active run only (ADR-0011): finished-run worktrees are kept on disk
+                // per ADR-0008 but are not exposed to the chat.
+                var activeRun = await _runs.GetActiveByWorkItemAsync(openWorkItemId!);
+                var worktreePath = activeRun?.WorktreePath;
+                if (!string.IsNullOrWhiteSpace(worktreePath) && Directory.Exists(worktreePath))
+                {
+                    lines.Add($"Its active run's worktree is checked out at: {worktreePath}");
+                    lines.Add("You may read and edit files there directly with your filesystem tools using that absolute path.");
+                    allowedDirectories = new[] { worktreePath };
+                }
             }
+        }
+
+        if (loopEditorOpen)
+        {
+            lines.Add(
+                "The user has a loop open in the Loop Editor. Call get_current_loop to read it as the "
+                + "ild-loop-template/v1 document, and update_current_loop with a complete document to edit "
+                + "it live (full replacement — the canvas updates immediately). Only the human can save.");
         }
 
         return (string.Join("\n", lines), allowedDirectories);
@@ -276,7 +297,9 @@ public sealed class ChatService : IChatService
 
     private async Task DeleteSessionAsync(ChatSession session, CancellationToken ct)
     {
-        // Messages and adapter snapshots cascade-delete via their FKs.
+        // Messages and adapter snapshots cascade-delete via their FKs; the loop
+        // scratchpad is in-memory only, so drop its entry explicitly.
+        _loopScratchpad.Clear(session.Id);
         _db.ChatSessions.Remove(session);
         await _db.SaveChangesAsync(ct);
 

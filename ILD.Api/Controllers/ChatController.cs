@@ -59,7 +59,7 @@ public class ChatController : ControllerBase
         if (session is null)
             return NotFound(new { error = "No active chat session. Start one first." });
 
-        await _runner.SubmitAsync(session.Id, request.Content, request.OpenWorkItemId);
+        await _runner.SubmitAsync(session.Id, request.Content, request.OpenWorkItemId, request.OpenLoopDocument);
         return Accepted();
     }
 
@@ -112,4 +112,14 @@ public sealed class ChatMessageRequest
     /// pointer only — the agent pulls the heavy data via tools on demand.
     /// </summary>
     public string? OpenWorkItemId { get; set; }
+
+    /// <summary>
+    /// The live <c>ild-loop-template/v1</c> document of the loop open in the Loop
+    /// Editor when sending this message, or null when none is open (loop editor
+    /// context, ADR-0011). Stashed server-side in the per-session loop scratchpad,
+    /// overwritten every message; the agent reads it on demand via
+    /// <c>get_current_loop</c>. Carries the diverged, possibly-unsaved client state,
+    /// not the persisted version.
+    /// </summary>
+    public string? OpenLoopDocument { get; set; }
 }

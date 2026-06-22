@@ -30,6 +30,9 @@ public class SignalRChatNotifier : IChatNotifier
     public Task TurnCompletedAsync(Guid chatSessionId, bool interrupted)
         => SendAsync(chatSessionId, "ChatTurnCompleted", new ChatTurnCompletedPayload(chatSessionId, interrupted));
 
+    public Task LoopUpdateRequestedAsync(Guid chatSessionId, string document)
+        => SendAsync(chatSessionId, "ChatLoopUpdate", new ChatLoopUpdatePayload(chatSessionId, document));
+
     private async Task SendAsync(Guid chatSessionId, string eventName, object payload)
     {
         try

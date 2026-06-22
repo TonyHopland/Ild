@@ -25,6 +25,7 @@ import type {
   ChatMessageAppendedPayload,
   ChatTurnProgressPayload,
   ChatTurnCompletedPayload,
+  ChatLoopUpdatePayload,
 } from "./index";
 
 export interface SignalREventPayloads {
@@ -45,6 +46,7 @@ export interface SignalREventPayloads {
   ChatMessageAppended: ChatMessageAppendedPayload;
   ChatTurnProgress: ChatTurnProgressPayload;
   ChatTurnCompleted: ChatTurnCompletedPayload;
+  ChatLoopUpdate: ChatLoopUpdatePayload;
 }
 
 export type SignalREventName = keyof SignalREventPayloads;

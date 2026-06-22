@@ -18,6 +18,7 @@ public sealed class ChatServiceTests : IDisposable
 {
     private readonly TestDb _db = new();
     private readonly RecordingChatNotifier _notifier = new();
+    private readonly ChatLoopScratchpad _loopScratchpad = new();
     private readonly string _scratchRoot = Path.Combine(Path.GetTempPath(), "ild-chat-tests", Guid.NewGuid().ToString("N"));
 
     private ChatOptions Options => new() { ScratchRoot = _scratchRoot };
@@ -72,6 +73,14 @@ public sealed class ChatServiceTests : IDisposable
             Completed.Add(interrupted);
             return Task.CompletedTask;
         }
+
+        public List<string> LoopUpdates { get; } = new();
+
+        public Task LoopUpdateRequestedAsync(Guid chatSessionId, string document)
+        {
+            LoopUpdates.Add(document);
+            return Task.CompletedTask;
+        }
     }
 
     private static IAgentAdapterRegistry RegistryFor(IAgentAdapter adapter)
@@ -96,7 +105,7 @@ public sealed class ChatServiceTests : IDisposable
     }
 
     private ChatService NewService(IAgentAdapter adapter)
-        => new(_db.Context, _db.Providers, RegistryFor(adapter), _notifier, Options, _db.LoopRuns);
+        => new(_db.Context, _db.Providers, RegistryFor(adapter), _notifier, Options, _db.LoopRuns, _loopScratchpad);
 
     /// <summary>
     /// Seed an active (Running) run for <paramref name="workItemId"/> pointing at a
@@ -246,7 +255,7 @@ public sealed class ChatServiceTests : IDisposable
         var svc = NewService(adapter);
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild", "read" });
 
-        await svc.ExecuteTurnAsync(started.Id, "plain message", openWorkItemId: null, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, "plain message", openWorkItemId: null, openLoopDocument: null, CancellationToken.None);
 
         Assert.Equal("plain message", adapter.LastContext!.Prompt);
         Assert.Null(adapter.LastContext.AdditionalAllowedDirectories);
@@ -261,7 +270,7 @@ public sealed class ChatServiceTests : IDisposable
         // No filesystem grant and no active run: id-only context, scratch alone.
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
 
-        await svc.ExecuteTurnAsync(started.Id, "what is open?", "wi-42", CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, "what is open?", "wi-42", openLoopDocument: null, CancellationToken.None);
 
         var prompt = adapter.LastContext!.Prompt;
         Assert.Contains("[Chat Context]", prompt);
@@ -286,7 +295,7 @@ public sealed class ChatServiceTests : IDisposable
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild", "write" });
         var worktreePath = await SeedActiveRunAsync("wi-99");
 
-        await svc.ExecuteTurnAsync(started.Id, "edit it", "wi-99", CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, "edit it", "wi-99", openLoopDocument: null, CancellationToken.None);
 
         Assert.NotNull(adapter.LastContext!.AdditionalAllowedDirectories);
         Assert.Contains(worktreePath, adapter.LastContext.AdditionalAllowedDirectories!);
@@ -304,7 +313,7 @@ public sealed class ChatServiceTests : IDisposable
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
         var worktreePath = await SeedActiveRunAsync("wi-99");
 
-        await svc.ExecuteTurnAsync(started.Id, "edit it", "wi-99", CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, "edit it", "wi-99", openLoopDocument: null, CancellationToken.None);
 
         Assert.Null(adapter.LastContext!.AdditionalAllowedDirectories);
         Assert.DoesNotContain(worktreePath, adapter.LastContext.Prompt);
@@ -321,9 +330,59 @@ public sealed class ChatServiceTests : IDisposable
         // so the chat must not expose it (ADR-0011 active-run-only).
         await SeedActiveRunAsync("wi-7", LoopRunStatus.Completed);
 
-        await svc.ExecuteTurnAsync(started.Id, "look", "wi-7", CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, "look", "wi-7", openLoopDocument: null, CancellationToken.None);
 
         Assert.Null(adapter.LastContext!.AdditionalAllowedDirectories);
+    }
+
+    [Fact]
+    public async Task ExecuteTurnAsync_stashes_the_open_loop_and_flags_it_without_inlining_the_json()
+    {
+        var provider = await SeedProviderAsync();
+        var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
+        var svc = NewService(adapter);
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+
+        const string document = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"My Loop\",\"nodes\":[]}";
+        await svc.ExecuteTurnAsync(started.Id, "tidy this loop", openWorkItemId: null, document, CancellationToken.None);
+
+        // The flag enters the model context, the heavy JSON does not (it is pulled
+        // on demand via get_current_loop).
+        var prompt = adapter.LastContext!.Prompt;
+        Assert.Contains("[Chat Context]", prompt);
+        Assert.Contains("Loop Editor", prompt);
+        Assert.Contains("get_current_loop", prompt);
+        // The heavy document body (its name/nodes) is not inlined — only the flag.
+        Assert.DoesNotContain("My Loop", prompt);
+        Assert.EndsWith("tidy this loop", prompt);
+
+        // The document itself is stashed in the scratchpad for the agent to pull.
+        Assert.Equal(document, _loopScratchpad.Get(started.Id));
+    }
+
+    [Fact]
+    public async Task ExecuteTurnAsync_overwrites_then_clears_the_loop_scratchpad_per_message()
+    {
+        var provider = await SeedProviderAsync();
+        var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
+        var svc = NewService(adapter);
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+
+        const string first = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"v1\",\"nodes\":[]}";
+        const string second = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"v2\",\"nodes\":[]}";
+
+        await svc.ExecuteTurnAsync(started.Id, "first", openWorkItemId: null, first, CancellationToken.None);
+        Assert.Equal(first, _loopScratchpad.Get(started.Id));
+
+        // A later message with a new document overwrites the prior snapshot…
+        await svc.ExecuteTurnAsync(started.Id, "second", openWorkItemId: null, second, CancellationToken.None);
+        Assert.Equal(second, _loopScratchpad.Get(started.Id));
+
+        // …and a message sent with the editor closed clears it so the agent sees no
+        // loop, and the preamble no longer mentions the Loop Editor.
+        await svc.ExecuteTurnAsync(started.Id, "third", openWorkItemId: null, openLoopDocument: null, CancellationToken.None);
+        Assert.Null(_loopScratchpad.Get(started.Id));
+        Assert.DoesNotContain("Loop Editor", adapter.LastContext!.Prompt);
     }
 
     [Fact]

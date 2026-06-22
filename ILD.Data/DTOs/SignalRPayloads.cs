@@ -35,3 +35,5 @@ public record ChatMessageAppendedPayload(Guid ChatSessionId, ChatMessageView Mes
 public record ChatTurnProgressPayload(Guid ChatSessionId, string Delta);
 
 public record ChatTurnCompletedPayload(Guid ChatSessionId, bool Interrupted);
+
+public record ChatLoopUpdatePayload(Guid ChatSessionId, string Document);

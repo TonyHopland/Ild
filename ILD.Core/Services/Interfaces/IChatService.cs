@@ -31,9 +31,14 @@ public interface IChatService
     /// <paramref name="openWorkItemId"/> is the work item the user currently has
     /// open, pushed into the model context as a thin pointer and used to grant the
     /// item's active-run worktree as an extra allowed directory (gated by the
-    /// session's filesystem tools). A null/empty id runs a context-free turn.
+    /// session's filesystem tools). <paramref name="openLoopDocument"/> is the live
+    /// <c>ild-loop-template/v1</c> document of the loop open in the Loop Editor (or
+    /// null when none is open); it is stashed in the per-session loop scratchpad,
+    /// overwritten every message, and only a "loop editor is open" flag enters the
+    /// model context — the agent pulls the JSON on demand via <c>get_current_loop</c>.
+    /// A null/empty work item and document run a context-free turn.
     /// </summary>
-    Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, CancellationToken ct);
+    Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, string? openLoopDocument, CancellationToken ct);
 
     /// <summary>
     /// Hard-delete all chat-local state for the user — the session row, its adapter

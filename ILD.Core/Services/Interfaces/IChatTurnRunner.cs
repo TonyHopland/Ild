@@ -13,11 +13,12 @@ public interface IChatTurnRunner
     /// Interrupt any in-flight turn for the session, then start a new background
     /// turn for <paramref name="userMessage"/>. Returns once the new turn has
     /// started (it streams to completion in the background).
-    /// <paramref name="openWorkItemId"/> is the ambient per-turn Chat Context
-    /// (ADR-0011): the work item the user has open when they send the message, or
-    /// null when none is open.
+    /// <paramref name="openWorkItemId"/> and <paramref name="openLoopDocument"/> are
+    /// the ambient per-turn Chat Context (ADR-0011): the work item the user has open
+    /// and the live loop document of the open Loop Editor, or null when neither is
+    /// open.
     /// </summary>
-    Task SubmitAsync(Guid chatSessionId, string userMessage, string? openWorkItemId = null);
+    Task SubmitAsync(Guid chatSessionId, string userMessage, string? openWorkItemId = null, string? openLoopDocument = null);
 
     /// <summary>Cancel any in-flight turn for the session and await its finalization.</summary>
     Task InterruptAsync(Guid chatSessionId);

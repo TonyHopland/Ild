@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -494,6 +495,87 @@ public class AgentApiIntegrationTests
         Assert.Equal(1.0m, run.GetProperty("costUsd").GetDecimal());
         Assert.Equal(100, run.GetProperty("inputTokens").GetInt64());
         Assert.Equal(200, run.GetProperty("outputTokens").GetInt64());
+    }
+
+    [Fact]
+    public async Task GetCurrentLoop_returns_the_session_scratchpad_document()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var chatSessionId = Guid.NewGuid();
+
+        const string document = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"Live Loop\",\"nodes\":[]}";
+        factory.Services.GetRequiredService<IChatLoopScratchpad>().Set(chatSessionId, document);
+
+        var get = new HttpRequestMessage(HttpMethod.Get, "/api/v1/agent/current-loop");
+        get.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        var resp = await client.SendAsync(get);
+        resp.EnsureSuccessStatusCode();
+
+        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        Assert.Equal("ild-loop-template/v1", doc.GetProperty("$schema").GetString());
+        Assert.Equal("Live Loop", doc.GetProperty("name").GetString());
+    }
+
+    [Fact]
+    public async Task GetCurrentLoop_reports_not_open_when_no_loop_is_stashed()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+
+        var get = new HttpRequestMessage(HttpMethod.Get, "/api/v1/agent/current-loop");
+        get.Headers.Add("X-ILD-Chat-Session-Id", Guid.NewGuid().ToString());
+        var resp = await client.SendAsync(get);
+        resp.EnsureSuccessStatusCode();
+
+        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        Assert.False(doc.GetProperty("loopEditorOpen").GetBoolean());
+    }
+
+    [Fact]
+    public async Task GetCurrentLoop_without_a_chat_session_header_is_rejected()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+
+        var resp = await client.GetAsync("/api/v1/agent/current-loop");
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task UpdateCurrentLoop_accepts_a_document_for_the_chat_session()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+
+        var put = new HttpRequestMessage(HttpMethod.Put, "/api/v1/agent/current-loop")
+        {
+            Content = JsonContent.Create(new
+            {
+                document = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"Edited\",\"nodes\":[]}",
+            }),
+        };
+        put.Headers.Add("X-ILD-Chat-Session-Id", Guid.NewGuid().ToString());
+        var resp = await client.SendAsync(put);
+
+        // Fire-and-forget: the push is best-effort (no editor connected here), so the
+        // endpoint only acknowledges acceptance.
+        Assert.Equal(HttpStatusCode.Accepted, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task UpdateCurrentLoop_rejects_an_empty_document()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+
+        var put = new HttpRequestMessage(HttpMethod.Put, "/api/v1/agent/current-loop")
+        {
+            Content = JsonContent.Create(new { document = "" }),
+        };
+        put.Headers.Add("X-ILD-Chat-Session-Id", Guid.NewGuid().ToString());
+        var resp = await client.SendAsync(put);
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
     }
 
     private static async Task<(Guid RunId, string WorkItemId)> SeedRunWithUsageAsync(ApiFactory factory)

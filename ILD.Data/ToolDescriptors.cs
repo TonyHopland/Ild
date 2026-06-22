@@ -224,6 +224,36 @@ public static class ToolDescriptors
         },
     };
 
+    // -- Loop Editor context (ADR-0011) --
+    //
+    // Mirror the MCP LoopTools and the agent-API current-loop endpoints. Scoped to
+    // the chat session via the X-ILD-Chat-Session-Id header the generated client
+    // sends. update_current_loop is a full-document replacement applied to the open
+    // editor's transient client state — there is no persist tool.
+
+    public static readonly ToolDescriptor GetCurrentLoop = new()
+    {
+        Name = "ild_get_current_loop",
+        Label = "Get Current Loop",
+        Description = "Read the loop the user currently has open in the Loop Editor as an ild-loop-template/v1 JSON document (its live, possibly-unsaved nodes and edges). Returns {\"loopEditorOpen\": false} when no loop editor is open.",
+        EndpointPath = "api/v1/agent/current-loop",
+        HttpMethod = HttpMethod.Get,
+        Parameters = Array.Empty<ToolParameterDescriptor>(),
+    };
+
+    public static readonly ToolDescriptor UpdateCurrentLoop = new()
+    {
+        Name = "ild_update_current_loop",
+        Label = "Update Current Loop",
+        Description = "Replace the loop open in the Loop Editor with a complete ild-loop-template/v1 document (full replacement, NOT a patch). The open editor validates and direct-applies it to the live canvas; on a validation error the loop is left untouched. Edits transient client state only — it never saves and returns no structured ack; re-read with ild_get_current_loop on a later turn to confirm.",
+        EndpointPath = "api/v1/agent/current-loop",
+        HttpMethod = HttpMethod.Put,
+        Parameters = new ToolParameterDescriptor[]
+        {
+            new() { Name = "document", Description = "A complete ild-loop-template/v1 document as JSON.", TsType = "string", IsBodyParam = true },
+        },
+    };
+
     // -- Aggregate (must be last to ensure all above are initialized first) --
 
     public static readonly ToolDescriptor[] All =
@@ -242,5 +272,7 @@ public static class ToolDescriptors
         GetPreviewServiceConfig,
         UpdatePreviewServiceConfig,
         GetPreviewLogs,
+        GetCurrentLoop,
+        UpdateCurrentLoop,
     ];
 }
