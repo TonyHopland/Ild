@@ -192,6 +192,66 @@ public class WorkItemServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Transition_dependency_to_Done_promotes_waiting_WorkQueue_item_to_Ready()
+    {
+        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" });
+        var child = await _svc.CreateAsync(new CreateWorkItemRequest
+        {
+            Title = "child",
+            ForceStatus = WorkItemStatus.WorkQueue,
+            Dependencies = new[] { dep.Id },
+        });
+
+        await _svc.TransitionAsync(dep.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Done });
+
+        var fresh = await _svc.GetAsync(child.Id);
+        Assert.Equal(WorkItemStatus.Ready, fresh!.Status);
+    }
+
+    [Fact]
+    public async Task Transition_dependency_to_Done_leaves_item_with_unfinished_deps_in_WorkQueue()
+    {
+        var dep1 = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep1" });
+        var dep2 = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep2" });
+        var child = await _svc.CreateAsync(new CreateWorkItemRequest
+        {
+            Title = "child",
+            ForceStatus = WorkItemStatus.WorkQueue,
+            Dependencies = new[] { dep1.Id, dep2.Id },
+        });
+
+        // Only one of the two dependencies is finished.
+        await _svc.TransitionAsync(dep1.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Done });
+
+        var fresh = await _svc.GetAsync(child.Id);
+        Assert.Equal(WorkItemStatus.WorkQueue, fresh!.Status);
+
+        // Finishing the last dependency promotes it.
+        await _svc.TransitionAsync(dep2.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Done });
+
+        var promoted = await _svc.GetAsync(child.Id);
+        Assert.Equal(WorkItemStatus.Ready, promoted!.Status);
+    }
+
+    [Fact]
+    public async Task Transition_dependency_to_Done_does_not_promote_Backlog_dependents()
+    {
+        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" });
+        // Backlog items still require human approval to enter the work queue.
+        var child = await _svc.CreateAsync(new CreateWorkItemRequest
+        {
+            Title = "child",
+            ForceStatus = WorkItemStatus.Backlog,
+            Dependencies = new[] { dep.Id },
+        });
+
+        await _svc.TransitionAsync(dep.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Done });
+
+        var fresh = await _svc.GetAsync(child.Id);
+        Assert.Equal(WorkItemStatus.Backlog, fresh!.Status);
+    }
+
+    [Fact]
     public async Task Transition_to_HumanFeedback_appends_AI_conversation_entry_with_reason()
     {
         var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
