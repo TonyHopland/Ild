@@ -181,20 +181,17 @@ export const PARALLEL_EDGE_SPREAD = 120;
 export const PARALLEL_EDGE_INTERACTION_WIDTH = 34;
 
 /**
- * Where {@link edge} sits among the edges sharing its exact route — same
- * source/target node and the same source/target handle. A lone edge is
- * `{ index: 0, count: 1 }`; siblings get a stable index ordered by edge id so
- * every edge in the fan picks a different lane on every render.
+ * Where {@link edge} sits among the edges running between its own pair of nodes —
+ * same source node and same target node, regardless of which handle each leaves
+ * or enters. Grouping by handle is too narrow: a node's success/failure/custom
+ * outlets all converge on one target's single inlet, so an OnSuccess and a Custom
+ * edge into the same node still overlap even though their source handles differ.
+ * A lone edge is `{ index: 0, count: 1 }`; siblings get a stable index ordered by
+ * edge id so every edge in the fan picks a different lane on every render.
  */
 export function parallelEdgeRoute(edges: Edge[], edge: Edge): { index: number; count: number } {
   const siblings = edges
-    .filter(
-      (candidate) =>
-        candidate.source === edge.source &&
-        candidate.target === edge.target &&
-        (candidate.sourceHandle ?? null) === (edge.sourceHandle ?? null) &&
-        (candidate.targetHandle ?? null) === (edge.targetHandle ?? null),
-    )
+    .filter((candidate) => candidate.source === edge.source && candidate.target === edge.target)
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return {
     index: Math.max(

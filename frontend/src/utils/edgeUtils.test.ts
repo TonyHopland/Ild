@@ -143,15 +143,28 @@ describe("parallelEdgeRoute", () => {
     expect(parallelEdgeRoute(edges, reject).index).toBe(1);
   });
 
-  test("edges to different targets or from different handles are not siblings", () => {
+  test("edges between the same node pair are siblings even when their handles differ", () => {
+    // The seed-template case: an OnSuccess edge (success handle) and a Custom edge
+    // (respond handle) both run into the same target node and overlap, because
+    // every outlet converges on the target's single inlet.
+    const fromSuccess = routedEdge("e1", "pr", "fix", "success", "target-handle");
+    const fromRespond = routedEdge("e2", "pr", "fix", "respond", "target-handle");
+    const edges = [fromSuccess, fromRespond];
+
+    expect(parallelEdgeRoute(edges, fromSuccess).count).toBe(2);
+    expect(parallelEdgeRoute(edges, fromRespond).count).toBe(2);
+    // Ordered by id, so each occupies its own lane deterministically.
+    expect(parallelEdgeRoute(edges, fromSuccess).index).toBe(0);
+    expect(parallelEdgeRoute(edges, fromRespond).index).toBe(1);
+  });
+
+  test("edges to different targets are not siblings", () => {
     const toFix = routedEdge("e1", "pr", "fix", "respond", "target-handle");
     const toReview = routedEdge("e2", "pr", "review", "respond", "target-handle");
-    const fromSuccess = routedEdge("e3", "pr", "fix", "success", "target-handle");
-    const edges = [toFix, toReview, fromSuccess];
+    const edges = [toFix, toReview];
 
     expect(parallelEdgeRoute(edges, toFix)).toEqual({ index: 0, count: 1 });
     expect(parallelEdgeRoute(edges, toReview)).toEqual({ index: 0, count: 1 });
-    expect(parallelEdgeRoute(edges, fromSuccess)).toEqual({ index: 0, count: 1 });
   });
 });
 
