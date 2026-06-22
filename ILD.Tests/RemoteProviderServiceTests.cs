@@ -292,6 +292,92 @@ public class RemoteProviderServiceTests
         Assert.Contains(handler.Requests[0].Headers.UserAgent, h => h.Product?.Name == "ILD");
     }
 
+    // Records each request's method, URL and body, returning a caller-supplied
+    // response per request — used to inspect the multi-call auto-merge flows.
+    private sealed class AutoMergeHandler : HttpMessageHandler
+    {
+        private readonly Func<HttpRequestMessage, HttpResponseMessage> _responder;
+        public List<(HttpMethod Method, string Url, string Body)> Calls { get; } = new();
+
+        public AutoMergeHandler(Func<HttpRequestMessage, HttpResponseMessage> responder) => _responder = responder;
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var body = request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync();
+            Calls.Add((request.Method, request.RequestUri!.ToString(), body));
+            return _responder(request);
+        }
+    }
+
+    private static HttpResponseMessage Json(string body)
+        => new(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+
+    [Fact]
+    public async Task EnablePullRequestAutoMergeAsync_forgejo_schedules_merge_when_checks_succeed()
+    {
+        using var db = new TestDb();
+        db.Context.RemoteProviders.Add(new RemoteProvider
+        {
+            Id = Guid.NewGuid(),
+            Name = "gitea",
+            Type = "Forgejo",
+            Url = "https://gitea.example",
+            ApiKey = "provider-key",
+        });
+        db.Context.SaveChanges();
+
+        var handler = new AutoMergeHandler(_ => Json("{}"));
+        var service = CreateService(db, handler);
+
+        var enabled = await service.EnablePullRequestAutoMergeAsync("https://gitea.example/team/repo.git", "5");
+
+        Assert.True(enabled);
+        var call = Assert.Single(handler.Calls);
+        Assert.Equal(HttpMethod.Post, call.Method);
+        Assert.Equal("https://gitea.example/api/v1/repos/team/repo/pulls/5/merge", call.Url);
+        Assert.Contains("merge_when_checks_succeed", call.Body);
+    }
+
+    [Fact]
+    public async Task EnablePullRequestAutoMergeAsync_github_enables_via_graphql_using_node_id()
+    {
+        using var db = new TestDb();
+        AddGitHub(db);
+
+        var handler = new AutoMergeHandler(req => req.Method == HttpMethod.Get
+            ? Json("{\"node_id\":\"PR_node_1\"}")
+            : Json("{\"data\":{\"enablePullRequestAutoMerge\":{\"clientMutationId\":null}}}"));
+        var service = CreateService(db, handler);
+
+        var enabled = await service.EnablePullRequestAutoMergeAsync("https://github.com/team/repo.git", "11");
+
+        Assert.True(enabled);
+        Assert.Equal(2, handler.Calls.Count);
+        Assert.Equal(HttpMethod.Get, handler.Calls[0].Method);
+        Assert.Equal("https://api.github.com/repos/team/repo/pulls/11", handler.Calls[0].Url);
+        Assert.Equal("https://api.github.com/graphql", handler.Calls[1].Url);
+        Assert.Contains("enablePullRequestAutoMerge", handler.Calls[1].Body);
+        Assert.Contains("PR_node_1", handler.Calls[1].Body);
+    }
+
+    [Fact]
+    public async Task EnablePullRequestAutoMergeAsync_github_returns_false_when_repository_disallows_it()
+    {
+        using var db = new TestDb();
+        AddGitHub(db);
+
+        // GitHub answers the mutation with HTTP 200 + an errors array when the
+        // repository has auto-merge disabled.
+        var handler = new AutoMergeHandler(req => req.Method == HttpMethod.Get
+            ? Json("{\"node_id\":\"PR_node_1\"}")
+            : Json("{\"errors\":[{\"message\":\"Auto-merge is not allowed for this repository\"}]}"));
+        var service = CreateService(db, handler);
+
+        var enabled = await service.EnablePullRequestAutoMergeAsync("https://github.com/team/repo.git", "11");
+
+        Assert.False(enabled);
+    }
+
     [Fact]
     public async Task CreatePullRequestAsync_matches_github_repo_urls_when_provider_uses_api_host()
     {

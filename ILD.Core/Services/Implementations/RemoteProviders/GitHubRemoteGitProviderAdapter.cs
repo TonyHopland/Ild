@@ -25,6 +25,34 @@ public sealed class GitHubRemoteGitProviderAdapter : RemoteGitProviderAdapterBas
         return resp.IsSuccessStatusCode;
     }
 
+    public override async Task<bool> EnablePullRequestAutoMergeAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+    {
+        ApplyHeaders(http, repo.Provider);
+
+        // Auto-merge is a GraphQL-only mutation keyed by the PR's global node id,
+        // which the REST PR resource carries as "node_id".
+        using var prResp = await http.GetAsync($"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/pulls/{prNumber}");
+        if (!prResp.IsSuccessStatusCode)
+            return false;
+        using var prDoc = JsonDocument.Parse(await prResp.Content.ReadAsStringAsync());
+        if (!prDoc.RootElement.TryGetProperty("node_id", out var nodeId) || nodeId.ValueKind != JsonValueKind.String)
+            return false;
+
+        const string mutation = "mutation($pr: ID!) { enablePullRequestAutoMerge(input: { pullRequestId: $pr }) { clientMutationId } }";
+        using var resp = await http.PostAsJsonAsync(
+            GraphQlEndpoint(repo.ApiBase),
+            new { query = mutation, variables = new { pr = nodeId.GetString() } });
+        if (!resp.IsSuccessStatusCode)
+            return false;
+
+        // GitHub returns HTTP 200 with an "errors" array when the repository has
+        // auto-merge disabled; treat that as "not supported" rather than success.
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+        return !doc.RootElement.TryGetProperty("errors", out var errors)
+            || errors.ValueKind != JsonValueKind.Array
+            || errors.GetArrayLength() == 0;
+    }
+
     public override async Task RegisterWebhookAsync(HttpClient http, ResolvedRemoteRepository repo, string callbackUrl)
     {
         ApplyHeaders(http, repo.Provider);
@@ -95,6 +123,13 @@ public sealed class GitHubRemoteGitProviderAdapter : RemoteGitProviderAdapterBas
 
         return baseUrl + "/api/v3";
     }
+
+    // The GraphQL endpoint sits beside the REST base: github.com →
+    // https://api.github.com/graphql; GitHub Enterprise → .../api/graphql.
+    private static string GraphQlEndpoint(string apiBase)
+        => apiBase.EndsWith("/api/v3", StringComparison.OrdinalIgnoreCase)
+            ? apiBase[..^"/api/v3".Length].TrimEnd('/') + "/api/graphql"
+            : apiBase.TrimEnd('/') + "/graphql";
 
     private static string NormalizeGitHubHost(string host)
         => host.Equals("api.github.com", StringComparison.OrdinalIgnoreCase) ? "github.com" : host;

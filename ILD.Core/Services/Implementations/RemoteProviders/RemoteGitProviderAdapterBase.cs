@@ -329,6 +329,15 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         => VerifyHmacSha256(body, GetHeader(headers, SignatureHeaderName), secret);
 
     public abstract Task<bool> MergePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber);
+
+    /// <summary>
+    /// Turn on auto-merge for a pull request so the provider merges it once its
+    /// branch protections (CI, reviews) are satisfied. Best-effort: returns
+    /// <c>false</c> when the repository or provider does not support auto-merge,
+    /// without throwing — the PR is left open for a manual or heartbeat-driven
+    /// merge.
+    /// </summary>
+    public abstract Task<bool> EnablePullRequestAutoMergeAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber);
     public abstract Task RegisterWebhookAsync(HttpClient http, ResolvedRemoteRepository repo, string callbackUrl);
     public abstract Task<bool> DeleteBranchAsync(HttpClient http, ResolvedRemoteRepository repo, string branchName);
     public abstract WebhookPayload? ParseWebhookPayload(string body, IReadOnlyDictionary<string, string> headers);
