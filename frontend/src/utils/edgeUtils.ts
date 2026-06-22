@@ -168,6 +168,20 @@ export function buildEdge(config: EdgeConfig): Edge {
   };
 }
 
+/**
+ * Appends {@link edge} to {@link edges}. Unlike React Flow's `addEdge`, this does
+ * NOT drop an edge whose source/target/handles match an existing one. Loop nodes
+ * legitimately fan several differently-named custom edges between the very same
+ * connectors (e.g. a PR node's on_merged / on_rejected / … into one node), and
+ * LoopEdgeComponent renders those siblings with staggered labels — but `addEdge`
+ * treats same source/target/handles as a duplicate and silently refuses the second
+ * one even when its id and name differ. Per-name and per-type uniqueness is still
+ * enforced upstream by {@link checkEdgeConstraints} and the connection handlers.
+ */
+export function appendEdge(edge: Edge, edges: Edge[]): Edge[] {
+  return [...edges, edge];
+}
+
 // Vertical gap (flow units) between adjacent parallel-edge labels. Siblings that
 // share one source/target route all ride the exact same smooth-step path (so each
 // still connects cleanly at its handles, just like a lone edge), which would stack

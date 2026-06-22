@@ -5,6 +5,7 @@ import {
   getCustomEdgeNames,
   getConnectedCustomEdgeNames,
   buildEdge,
+  appendEdge,
   parallelEdgeRoute,
   parallelLabelOffset,
   PARALLEL_LABEL_STAGGER,
@@ -212,5 +213,46 @@ describe("buildEdge", () => {
     });
     expect((success.data as { name?: string | null }).name).toBeNull();
     expect(success.label).toBe("success");
+  });
+});
+
+describe("appendEdge", () => {
+  test("keeps a sibling edge that shares the same connectors as an existing one", () => {
+    // The reviewer's case: a second custom edge from the same handle into the
+    // same target node. React Flow's addEdge would drop this as a duplicate
+    // (same source/target/handles), preventing the staggered parallel edges from
+    // ever being created; appendEdge keeps it.
+    const config = {
+      source: "pr",
+      target: "cleanup",
+      edgeType: EdgeType.Custom,
+      maxTraversals: null,
+      sourceHandle: "respond",
+      targetHandle: "target-handle",
+    };
+    const onMerged = buildEdge({ ...config, name: "on_merged" });
+    const onRejected = buildEdge({ ...config, name: "on_rejected" });
+
+    const result = appendEdge(onRejected, [onMerged]);
+    expect(result).toHaveLength(2);
+    expect(result).toContain(onMerged);
+    expect(result).toContain(onRejected);
+    // Sharing their route, the two are now siblings that fan apart on render.
+    expect(parallelEdgeRoute(result, onRejected).count).toBe(2);
+  });
+
+  test("does not mutate the original edges array", () => {
+    const edges: Edge[] = [];
+    const built = buildEdge({
+      source: "a",
+      target: "b",
+      edgeType: EdgeType.OnSuccess,
+      name: null,
+      maxTraversals: null,
+      sourceHandle: "success",
+      targetHandle: "target-handle",
+    });
+    expect(appendEdge(built, edges)).toEqual([built]);
+    expect(edges).toHaveLength(0);
   });
 });
