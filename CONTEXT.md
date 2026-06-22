@@ -113,6 +113,16 @@ _Avoid_: available, queued
 WorkItem status for items requiring human approval before entering the work queue. Whether new items land here or in Work Queue depends on a per-Repository setting.
 _Avoid_: draft, planned
 
+### Chat
+
+**Chat Session**:
+A standalone, one-per-user interactive conversation with a configured AiProvider, opened from the in-app chat bubble. Deliberately **not** a LoopRun: it has no WorkItem, worktree, branch, or PR of its own, and runs the agent in a durable per-session scratch directory that stays its working directory for the session's whole life. Reuses the loop's agent-adapter execution layer. See [ADR-0010](docs/adr/0010-standalone-chat-session.md).
+_Avoid_: chat thread, conversation, chat run
+
+**Chat Context**:
+The ambient snapshot of what the user currently has open in the UI — the open WorkItem (and, when it has an active run, that run's worktree path) and/or the open Loop Editor's loop — attached to **each chat message** so the agent can act on whatever the human is looking at when they send it. It is per-message, not bound to the Chat Session, and survives the user navigating between work items and the editor. It informs the agent of the open work item's worktree **path** (added as an allowed directory) rather than relocating where the agent runs — the Chat Session's working directory stays its scratch directory.
+_Avoid_: chat scope, session context, focus
+
 ## Relationships
 
 - A **WorkItem** has zero or more **LoopRun**s, but at most one active run at a time
