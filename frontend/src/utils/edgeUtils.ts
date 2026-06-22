@@ -168,23 +168,18 @@ export function buildEdge(config: EdgeConfig): Edge {
   };
 }
 
-// Perpendicular distance (flow units) between adjacent parallel lanes. Because
-// each lane shifts BOTH of its endpoints (see getParallelEdgePath), siblings stay
-// exactly this far apart along their whole length — not just at a midpoint — so
-// the gap is the real, constant separation a user clicks into. Earlier attempts
-// that only bowed the middle (36px, then 64px, then a 120px peak) still pinched
-// back together near the nodes; this keeps them apart end to end.
-export const PARALLEL_EDGE_SPREAD = 120;
-
-// The transparent hit-area width React Flow draws under each parallel edge so
-// any one in the fan can be clicked, not just the topmost path.
-export const PARALLEL_EDGE_INTERACTION_WIDTH = 34;
+// Vertical gap (flow units) between adjacent parallel-edge labels. Siblings that
+// share one source/target route all ride the exact same smooth-step path (so each
+// still connects cleanly at its handles, just like a lone edge), which would stack
+// their labels directly on top of one another; staggering each label by its lane
+// keeps every name readable without pulling the lines off their connection points.
+export const PARALLEL_LABEL_STAGGER = 22;
 
 /**
  * Where {@link edge} sits among the edges sharing its exact route — same
  * source/target node and the same source/target handle. A lone edge is
  * `{ index: 0, count: 1 }`; siblings get a stable index ordered by edge id so
- * every edge in the fan picks a different lane on every render.
+ * every edge's label staggers to a different slot on every render.
  */
 export function parallelEdgeRoute(edges: Edge[], edge: Edge): { index: number; count: number } {
   const siblings = edges
@@ -206,45 +201,12 @@ export function parallelEdgeRoute(edges: Edge[], edge: Edge): { index: number; c
 }
 
 /**
- * The perpendicular offset (flow units) a parallel edge is shifted onto its own
- * lane, away from the straight source→target chord. Lanes spread symmetrically
- * around the chord and widen with the sibling count, so two edges run at ±{@link
- * PARALLEL_EDGE_SPREAD}/2 and never share a path.
+ * The vertical offset (flow units) a parallel edge's label is staggered from the
+ * shared path's midpoint so siblings' labels don't overlap. Labels stagger
+ * symmetrically around the midpoint and widen with the sibling count, so two edges
+ * sit at ±{@link PARALLEL_LABEL_STAGGER}/2 and a lone edge stays centred.
  */
-export function parallelEdgeOffset(index: number, count: number): number {
+export function parallelLabelOffset(index: number, count: number): number {
   if (count <= 1) return 0;
-  return (index - (count - 1) / 2) * PARALLEL_EDGE_SPREAD;
-}
-
-/**
- * Routes a parallel edge along its own lane: BOTH endpoints are shifted `offset`
- * flow units perpendicular to the source→target chord, giving each edge a
- * distinct departure and landing point. The result is a straight track that runs
- * a constant `offset` clear of its siblings end to end — so they never re-converge
- * and overlap near the nodes the way a midpoint-only bow did. The label rides the
- * centre of the shifted track.
- */
-export function getParallelEdgePath(
-  sourceX: number,
-  sourceY: number,
-  targetX: number,
-  targetY: number,
-  offset: number,
-): { path: string; labelX: number; labelY: number } {
-  const deltaX = targetX - sourceX;
-  const deltaY = targetY - sourceY;
-  const length = Math.hypot(deltaX, deltaY) || 1;
-  const perpX = (-deltaY / length) * offset;
-  const perpY = (deltaX / length) * offset;
-
-  const startX = sourceX + perpX;
-  const startY = sourceY + perpY;
-  const endX = targetX + perpX;
-  const endY = targetY + perpY;
-
-  return {
-    path: `M ${startX},${startY} L ${endX},${endY}`,
-    labelX: (startX + endX) / 2,
-    labelY: (startY + endY) / 2,
-  };
+  return (index - (count - 1) / 2) * PARALLEL_LABEL_STAGGER;
 }

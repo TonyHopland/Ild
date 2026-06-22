@@ -7,12 +7,7 @@ import {
   useStore,
   type EdgeProps,
 } from "@xyflow/react";
-import {
-  getParallelEdgePath,
-  parallelEdgeOffset,
-  parallelEdgeRoute,
-  PARALLEL_EDGE_INTERACTION_WIDTH,
-} from "../utils/edgeUtils";
+import { parallelEdgeRoute, parallelLabelOffset } from "../utils/edgeUtils";
 import { LoopEdgeInteractionContext } from "./loopEdgeInteraction";
 
 // Mirrors the rounded orthogonal routing the editor used before parallel edges
@@ -21,11 +16,12 @@ const SMOOTHSTEP_BORDER_RADIUS = 20;
 const SMOOTHSTEP_OFFSET = 20;
 
 /**
- * Renders a loop edge. A lone edge keeps the original smooth-step path. When two
- * or more edges share the same source/target route (e.g. several PR custom edges
- * into one node) they each shift onto a separate lane so every label stays
- * readable. The label is itself the click target — selecting it picks that exact
- * edge, so neighbouring lines can't steal the click.
+ * Renders a loop edge. Every edge — lone or one of several sharing the same
+ * source/target route (e.g. several PR custom edges into one node) — draws the
+ * same smooth-step path, so each connects cleanly at its handles. Siblings are
+ * told apart by staggering their labels vertically rather than pulling the lines
+ * onto distant lanes. The label is itself the click target — selecting it picks
+ * that exact edge, so the overlapping lines can't steal the click.
  */
 export default function LoopEdgeComponent({
   id,
@@ -66,42 +62,24 @@ export default function LoopEdgeComponent({
   );
   const [index, count] = route.split("|").map(Number);
 
-  let edgePath: string;
-  let labelX: number;
-  let labelY: number;
-  if (count <= 1) {
-    [edgePath, labelX, labelY] = getSmoothStepPath({
-      sourceX,
-      sourceY,
-      sourcePosition,
-      targetX,
-      targetY,
-      targetPosition,
-      borderRadius: SMOOTHSTEP_BORDER_RADIUS,
-      offset: SMOOTHSTEP_OFFSET,
-    });
-  } else {
-    const fanned = getParallelEdgePath(
-      sourceX,
-      sourceY,
-      targetX,
-      targetY,
-      parallelEdgeOffset(index, count),
-    );
-    edgePath = fanned.path;
-    labelX = fanned.labelX;
-    labelY = fanned.labelY;
-  }
+  const [edgePath, pathLabelX, pathLabelY] = getSmoothStepPath({
+    sourceX,
+    sourceY,
+    sourcePosition,
+    targetX,
+    targetY,
+    targetPosition,
+    borderRadius: SMOOTHSTEP_BORDER_RADIUS,
+    offset: SMOOTHSTEP_OFFSET,
+  });
+  // Siblings share this path exactly, so stagger each label off the midpoint to
+  // keep the overlapping names readable.
+  const labelX = pathLabelX;
+  const labelY = pathLabelY + parallelLabelOffset(index, count);
 
   return (
     <>
-      <BaseEdge
-        id={id}
-        path={edgePath}
-        markerEnd={markerEnd}
-        style={style}
-        interactionWidth={count > 1 ? PARALLEL_EDGE_INTERACTION_WIDTH : undefined}
-      />
+      <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={style} />
       {label && (
         <EdgeLabelRenderer>
           <div

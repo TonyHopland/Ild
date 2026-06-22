@@ -6,9 +6,8 @@ import {
   getConnectedCustomEdgeNames,
   buildEdge,
   parallelEdgeRoute,
-  parallelEdgeOffset,
-  getParallelEdgePath,
-  PARALLEL_EDGE_SPREAD,
+  parallelLabelOffset,
+  PARALLEL_LABEL_STAGGER,
   LOOP_EDGE_TYPE,
 } from "./edgeUtils";
 import { EdgeType, NodeType } from "../types";
@@ -155,51 +154,23 @@ describe("parallelEdgeRoute", () => {
   });
 });
 
-describe("parallelEdgeOffset", () => {
-  test("a lone edge stays on the chord", () => {
-    expect(parallelEdgeOffset(0, 1)).toBe(0);
+describe("parallelLabelOffset", () => {
+  test("a lone edge keeps its label centred on the path", () => {
+    expect(parallelLabelOffset(0, 1)).toBe(0);
   });
 
-  test("two siblings spread symmetrically a full lane apart", () => {
-    expect(parallelEdgeOffset(0, 2)).toBe(-PARALLEL_EDGE_SPREAD / 2);
-    expect(parallelEdgeOffset(1, 2)).toBe(PARALLEL_EDGE_SPREAD / 2);
-    expect(parallelEdgeOffset(1, 2) - parallelEdgeOffset(0, 2)).toBe(PARALLEL_EDGE_SPREAD);
+  test("two siblings stagger their labels symmetrically a full step apart", () => {
+    expect(parallelLabelOffset(0, 2)).toBe(-PARALLEL_LABEL_STAGGER / 2);
+    expect(parallelLabelOffset(1, 2)).toBe(PARALLEL_LABEL_STAGGER / 2);
+    expect(parallelLabelOffset(1, 2) - parallelLabelOffset(0, 2)).toBe(PARALLEL_LABEL_STAGGER);
   });
 
-  test("three siblings keep the middle on the chord and the outer two a lane out", () => {
-    expect(parallelEdgeOffset(0, 3)).toBe(-PARALLEL_EDGE_SPREAD);
-    expect(parallelEdgeOffset(1, 3)).toBe(0);
-    expect(parallelEdgeOffset(2, 3)).toBe(PARALLEL_EDGE_SPREAD);
-  });
-});
-
-describe("getParallelEdgePath", () => {
-  test("a zero offset rides the straight chord with the label at its midpoint", () => {
-    const fanned = getParallelEdgePath(0, 0, 100, 0, 0);
-    expect(fanned.labelX).toBe(50);
-    expect(fanned.labelY).toBe(0);
-  });
-
-  test("shifts both endpoints onto the lane so the track is separated end to end", () => {
-    // A +50 offset moves the whole edge — both endpoints and its label — onto a
-    // lane 50 units off the chord, giving it distinct departure/landing points
-    // rather than sharing the handles.
-    const { path, labelX, labelY } = getParallelEdgePath(0, 0, 100, 0, 50);
-    expect(path).toBe("M 0,50 L 100,50");
-    expect(labelX).toBe(50);
-    expect(labelY).toBe(50);
-  });
-
-  test("opposite lanes stay a full, constant spread apart end to end", () => {
-    const up = getParallelEdgePath(0, 0, 100, 0, -PARALLEL_EDGE_SPREAD / 2);
-    const down = getParallelEdgePath(0, 0, 100, 0, PARALLEL_EDGE_SPREAD / 2);
-
-    // The lanes are parallel translates of the chord, so the separation is the
-    // full spread at every point — the start, the label, and the end alike —
-    // never pinching back together near the nodes.
-    expect(down.labelY - up.labelY).toBe(PARALLEL_EDGE_SPREAD);
-    expect(up.path).toBe(`M 0,${-PARALLEL_EDGE_SPREAD / 2} L 100,${-PARALLEL_EDGE_SPREAD / 2}`);
-    expect(down.path).toBe(`M 0,${PARALLEL_EDGE_SPREAD / 2} L 100,${PARALLEL_EDGE_SPREAD / 2}`);
+  test("three siblings keep the middle label centred and the outer two a step out", () => {
+    // The odd-count edge case: the centre label stays on the path midpoint while
+    // its neighbours stagger above and below it.
+    expect(parallelLabelOffset(0, 3)).toBe(-PARALLEL_LABEL_STAGGER);
+    expect(parallelLabelOffset(1, 3)).toBe(0);
+    expect(parallelLabelOffset(2, 3)).toBe(PARALLEL_LABEL_STAGGER);
   });
 });
 
