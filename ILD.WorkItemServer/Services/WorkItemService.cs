@@ -154,7 +154,59 @@ public sealed class WorkItemService : IWorkItemService
             w.LastHeartbeatAt = null;
 
         await _db.SaveChangesAsync(ct);
+
+        // Once an item is Done, any WorkQueue item that was waiting on it may now
+        // have all its dependencies satisfied. Promote those to Ready so the
+        // scheduler picks them up on its next poll, instead of waiting for a
+        // human nudge or the stale-reclaim sweep. Done is persisted above first
+        // so the readiness check below reads the up-to-date dependency status.
+        if (req.TargetStatus == WorkItemStatus.Done)
+            await PromoteReadyDependentsAsync(w.Id, ct);
+
         return new TransitionResponse { Success = true, ActualStatus = w.Status };
+    }
+
+    /// <summary>
+    /// Promote every <see cref="WorkItemStatus.WorkQueue"/> item whose
+    /// dependencies are now all <see cref="WorkItemStatus.Done"/> to
+    /// <see cref="WorkItemStatus.Ready"/>. Called after a work item reaches Done
+    /// so its dependents auto-flow into the run queue. Backlog dependents are
+    /// deliberately left untouched — they still require human approval to enter
+    /// the work queue.
+    /// </summary>
+    private async Task PromoteReadyDependentsAsync(string completedId, CancellationToken ct)
+    {
+        var dependents = (await _db.WorkItems
+                .Where(w => w.Status == WorkItemStatus.WorkQueue)
+                .ToListAsync(ct))
+            .Where(w => WorkItemMapper.ReadDependencies(w).Contains(completedId))
+            .ToList();
+        if (dependents.Count == 0) return;
+
+        var depIds = dependents
+            .SelectMany(WorkItemMapper.ReadDependencies)
+            .Distinct()
+            .ToList();
+        var statusById = await _db.WorkItems
+            .Where(w => depIds.Contains(w.Id))
+            .Select(w => new { w.Id, w.Status })
+            .ToDictionaryAsync(x => x.Id, x => x.Status, ct);
+
+        var now = _clock.GetUtcNow().UtcDateTime;
+        var promoted = 0;
+        foreach (var w in dependents)
+        {
+            var allDone = WorkItemMapper.ReadDependencies(w)
+                .All(id => statusById.TryGetValue(id, out var s) && s == WorkItemStatus.Done);
+            if (!allDone) continue;
+            w.Status = WorkItemStatus.Ready;
+            w.UpdatedAt = now;
+            w.LastHeartbeatAt = null;
+            promoted++;
+        }
+
+        if (promoted > 0)
+            await _db.SaveChangesAsync(ct);
     }
 
     /// <summary>
