@@ -40,10 +40,11 @@ function isNodeRunning(value: unknown): boolean {
  * is shown. While an AI node is in flight it renders a Halt button; once the run
  * is halted it renders the steer window (note + Resume + Cleanup) so the human
  * can continue the same agent session or wind the run down — right where they
- * were watching, not buried in a node detail. Whenever the run is actively
- * running (any node type) it also renders an Abandon button that stops the run
- * and resets the work item to Backlog, so a run heading the wrong way can be
- * dropped and retried fresh after editing the description.
+ * were watching, not buried in a node detail. Whenever the run is still live —
+ * actively running or parked for human feedback — it also renders an Abandon
+ * button that stops the run and resets the work item to Backlog, so a run
+ * heading the wrong way can be dropped and retried fresh after editing the
+ * description, even when the AI is not currently running.
  */
 export default function HaltSteerControls({
   run,
@@ -62,15 +63,17 @@ export default function HaltSteerControls({
 
   if (!run) return null;
 
-  const isRunning =
-    workItemStatus === WorkItemStatus.Running && isRunStatus(run.status, LoopRunStatus.Running);
+  const isRunningStatus = isRunStatus(run.status, LoopRunStatus.Running);
+  const isWaitingHuman = isRunStatus(run.status, LoopRunStatus.WaitingHuman);
   const runningAiNode = run.nodes?.find((n) => n.nodeType === "AI" && isNodeRunning(n.status));
-  const canHalt = !!onHalt && isRunning && !!runningAiNode;
-  // Abandon applies to any actively-running run, not just AI nodes, so a run
-  // stuck heading the wrong way can always be dropped without first halting it.
-  const canAbandon = !!onCleanupBacklog && isRunning;
-  const isHalted =
-    !!onResumeSteer && isRunStatus(run.status, LoopRunStatus.WaitingHuman) && !!run.isHalted;
+  const canHalt =
+    !!onHalt && workItemStatus === WorkItemStatus.Running && isRunningStatus && !!runningAiNode;
+  const isHalted = !!onResumeSteer && isWaitingHuman && !!run.isHalted;
+  // Abandon applies to any non-terminal run — actively running OR parked for
+  // human feedback — so a run heading the wrong way can be dropped without
+  // first halting it, even when the AI is not currently running. A halted run
+  // is excluded because its steer window already offers Cleanup -> Backlog.
+  const canAbandon = !!onCleanupBacklog && (isRunningStatus || isWaitingHuman) && !isHalted;
 
   if (!canHalt && !canAbandon && !isHalted) return null;
 

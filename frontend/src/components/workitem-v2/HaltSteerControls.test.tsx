@@ -124,7 +124,27 @@ describe("HaltSteerControls", () => {
     expect(screen.getByRole("button", { name: /abandon run/i })).toBeTruthy();
   });
 
-  test("does not offer Abandon once the run has stopped running", () => {
+  test("abandons a run parked for human feedback while the AI is not running", () => {
+    const onCleanupBacklog = vi.fn();
+    render(
+      <HaltSteerControls
+        run={run({
+          status: LoopRunStatus.WaitingHuman,
+          nodes: [node({ nodeType: "Human", status: LoopRunNodeStatus.WaitingHuman })],
+        })}
+        workItemStatus={WorkItemStatus.HumanFeedback}
+        onCleanupBacklog={onCleanupBacklog}
+      />,
+    );
+    // The run is parked at a human-feedback node (no AI in flight), so there is
+    // no Halt button, but Abandon is still offered so the run can be dropped.
+    expect(screen.queryByRole("button", { name: /halt/i })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /abandon run/i }));
+    fireEvent.click(screen.getByRole("button", { name: /confirm abandon/i }));
+    expect(onCleanupBacklog).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not duplicate Abandon when the run is halted", () => {
     const onCleanupBacklog = vi.fn();
     render(
       <HaltSteerControls
@@ -139,7 +159,7 @@ describe("HaltSteerControls", () => {
       />,
     );
     // A halted run already exposes "Cleanup -> Backlog" in the steer window, so
-    // the running-only Abandon affordance must not appear here.
+    // the standalone Abandon affordance must not appear alongside it.
     expect(screen.queryByRole("button", { name: /abandon run/i })).toBeNull();
   });
 
