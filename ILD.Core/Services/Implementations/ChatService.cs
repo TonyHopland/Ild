@@ -12,6 +12,13 @@ namespace ILD.Core.Services.Implementations;
 /// <see cref="ExecuteTurnAsync"/> replaces the graph plumbing of the AI node
 /// executor: it synthesizes an <see cref="AgentExecutionContext"/> over the
 /// session's scratch directory and drives the bound adapter session directly.
+///
+/// Context-aware chat (ADR-0011): each turn carries an ambient, per-turn Chat
+/// Context — the open work item id, and (when it has an active run and the
+/// session holds a filesystem grant) that run's worktree path. The id is pushed
+/// into the model context via a small prompt preamble; the worktree is reached
+/// by absolute path through an extra allowed directory, never by relocating the
+/// agent's working directory off its durable scratch dir.
 /// </summary>
 public sealed class ChatService : IChatService
 {
@@ -20,19 +27,22 @@ public sealed class ChatService : IChatService
     private readonly IAgentAdapterRegistry _registry;
     private readonly IChatNotifier _notifier;
     private readonly ChatOptions _options;
+    private readonly ILoopRunStore _runs;
 
     public ChatService(
         AppDbContext db,
         IProviderStore providers,
         IAgentAdapterRegistry registry,
         IChatNotifier notifier,
-        ChatOptions options)
+        ChatOptions options,
+        ILoopRunStore runs)
     {
         _db = db;
         _providers = providers;
         _registry = registry;
         _notifier = notifier;
         _options = options;
+        _runs = runs;
     }
 
     public async Task<ChatSessionView?> GetForUserAsync(string userId, CancellationToken ct = default)
@@ -82,13 +92,18 @@ public sealed class ChatService : IChatService
         return ToView(session, Array.Empty<ChatMessage>());
     }
 
-    public async Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, CancellationToken ct)
+    public Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, CancellationToken ct)
+        => ExecuteTurnAsync(chatSessionId, userMessage, openWorkItemId: null, ct);
+
+    public async Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, CancellationToken ct)
     {
         var session = await _db.ChatSessions.FirstOrDefaultAsync(c => c.Id == chatSessionId, ct);
         if (session is null) return;
 
         var nextSeq = await NextSequenceAsync(chatSessionId, ct);
 
+        // Persist the human's verbatim message; the Chat Context preamble is an
+        // ambient per-turn hint for the model only, never part of the transcript.
         var userEntry = await AppendMessageAsync(chatSessionId, "user", userMessage, interrupted: false, nextSeq, ct);
         await _notifier.MessageAppendedAsync(chatSessionId, ToView(userEntry));
 
@@ -115,6 +130,16 @@ public sealed class ChatService : IChatService
         var tools = session.ToolAllowlistCsv
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
+        // Resolve the ambient per-turn Chat Context (ADR-0011): a preamble naming
+        // the open work item that is pushed into the model context, plus the
+        // active-run worktree path granted as an extra allowed directory when the
+        // session also holds a filesystem grant.
+        var (contextPreamble, additionalAllowedDirectories) =
+            await BuildChatContextAsync(openWorkItemId, tools);
+        var promptForAgent = contextPreamble is null
+            ? userMessage
+            : $"{contextPreamble}\n\n{userMessage}";
+
         var runContext = new LoopRunContext(
             LoopRunId: session.Id,
             WorkItemId: string.Empty,
@@ -130,7 +155,7 @@ public sealed class ChatService : IChatService
 
         var agentCtx = new AgentExecutionContext(
             provider,
-            userMessage,
+            promptForAgent,
             runContext,
             ExecutionCount: 0,
             Cancel: ct,
@@ -146,7 +171,8 @@ public sealed class ChatService : IChatService
             ManageSession: true,
             OnSessionId: sid => capturedSessionId = sid,
             ForkFromSessionId: null,
-            ChatSessionId: session.Id);
+            ChatSessionId: session.Id,
+            AdditionalAllowedDirectories: additionalAllowedDirectories);
 
         NodeExecutionResult result;
         try
@@ -173,6 +199,55 @@ public sealed class ChatService : IChatService
 
         var newSessionId = result.SessionId ?? capturedSessionId ?? session.CurrentSessionId;
         await FinalizeAssistantAsync(session, nextSeq + 1, content, interrupted, newSessionId, ct);
+    }
+
+    /// <summary>
+    /// Build the per-turn Chat Context (ADR-0011) for the open work item: a small
+    /// preamble pushed into the model context, and the extra allowed directories
+    /// granting access to the open item's active-run worktree. Returns
+    /// <c>(null, null)</c> when no work item is open. The worktree path is granted
+    /// only when BOTH a filesystem grant is held AND the open item has an active
+    /// (non-terminal) run with a worktree on disk; otherwise the agent gets the
+    /// id-only preamble and scratch access alone.
+    /// </summary>
+    private async Task<(string? Preamble, IReadOnlyList<string>? AllowedDirectories)> BuildChatContextAsync(
+        string? openWorkItemId, IReadOnlyList<string> tools)
+    {
+        if (string.IsNullOrWhiteSpace(openWorkItemId))
+            return (null, null);
+
+        var lines = new List<string>
+        {
+            "[Chat Context]",
+            $"The user currently has work item {openWorkItemId} open in the UI. Use the ILD tools "
+                + "(e.g. get_workitem, the preview controls) with this work item id to inspect or act on it.",
+        };
+
+        IReadOnlyList<string>? allowedDirectories = null;
+
+        // Filesystem access must be granted on the session before exposing any
+        // worktree path — without a read/write/execute tool the directory grant
+        // would be inert anyway.
+        var hasFilesystemGrant = tools.Any(t =>
+            string.Equals(t, AiToolCatalog.Read, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(t, AiToolCatalog.Write, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(t, AiToolCatalog.Execute, StringComparison.OrdinalIgnoreCase));
+
+        if (hasFilesystemGrant)
+        {
+            // Active run only (ADR-0011): finished-run worktrees are kept on disk
+            // per ADR-0008 but are not exposed to the chat.
+            var activeRun = await _runs.GetActiveByWorkItemAsync(openWorkItemId);
+            var worktreePath = activeRun?.WorktreePath;
+            if (!string.IsNullOrWhiteSpace(worktreePath) && Directory.Exists(worktreePath))
+            {
+                lines.Add($"Its active run's worktree is checked out at: {worktreePath}");
+                lines.Add("You may read and edit files there directly with your filesystem tools using that absolute path.");
+                allowedDirectories = new[] { worktreePath };
+            }
+        }
+
+        return (string.Join("\n", lines), allowedDirectories);
     }
 
     public async Task<bool> EndAsync(string userId, CancellationToken ct = default)

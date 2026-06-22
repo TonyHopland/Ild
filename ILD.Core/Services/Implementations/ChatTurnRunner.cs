@@ -29,7 +29,7 @@ public sealed class ChatTurnRunner : IChatTurnRunner
         _log = log;
     }
 
-    public async Task SubmitAsync(Guid chatSessionId, string userMessage)
+    public async Task SubmitAsync(Guid chatSessionId, string userMessage, string? openWorkItemId = null)
     {
         var gate = _gates.GetOrAdd(chatSessionId, _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync().ConfigureAwait(false);
@@ -38,7 +38,7 @@ public sealed class ChatTurnRunner : IChatTurnRunner
             await CancelActiveAsync(chatSessionId).ConfigureAwait(false);
 
             var cts = new CancellationTokenSource();
-            var task = Task.Run(() => RunTurnAsync(chatSessionId, userMessage, cts.Token));
+            var task = Task.Run(() => RunTurnAsync(chatSessionId, userMessage, openWorkItemId, cts.Token));
             _active[chatSessionId] = new ActiveTurn(cts, task);
         }
         finally
@@ -79,7 +79,7 @@ public sealed class ChatTurnRunner : IChatTurnRunner
         }
     }
 
-    private async Task RunTurnAsync(Guid chatSessionId, string userMessage, CancellationToken ct)
+    private async Task RunTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, CancellationToken ct)
     {
         // A completed turn is left in the active map until the next submit/interrupt
         // clears it; cancelling an already-finished task is a harmless no-op, so the
@@ -88,7 +88,7 @@ public sealed class ChatTurnRunner : IChatTurnRunner
         {
             using var scope = _scopes.CreateScope();
             var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
-            await chat.ExecuteTurnAsync(chatSessionId, userMessage, ct).ConfigureAwait(false);
+            await chat.ExecuteTurnAsync(chatSessionId, userMessage, openWorkItemId, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

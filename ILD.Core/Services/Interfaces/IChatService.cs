@@ -27,6 +27,15 @@ public interface IChatService
     Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, CancellationToken ct);
 
     /// <summary>
+    /// Run one turn with the ambient per-turn Chat Context (ADR-0011):
+    /// <paramref name="openWorkItemId"/> is the work item the user currently has
+    /// open, pushed into the model context as a thin pointer and used to grant the
+    /// item's active-run worktree as an extra allowed directory (gated by the
+    /// session's filesystem tools). A null/empty id runs a context-free turn.
+    /// </summary>
+    Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, CancellationToken ct);
+
+    /// <summary>
     /// Hard-delete all chat-local state for the user — the session row, its adapter
     /// snapshots (cascade), its messages (cascade), and its scratch directory.
     /// Work items the chat created persist with their orphaned stamp.

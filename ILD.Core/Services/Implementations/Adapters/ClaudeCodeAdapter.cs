@@ -69,7 +69,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             Process? proc;
             try
             {
-                proc = Process.Start(BuildRunProcessStartInfo(binaryPath, worktreePath, rendered, ctx.SessionId, mcpConfigPath));
+                proc = Process.Start(BuildRunProcessStartInfo(binaryPath, worktreePath, rendered, ctx.SessionId, mcpConfigPath, ctx.AdditionalAllowedDirectories));
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
@@ -156,7 +156,8 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         string worktreePath,
         string renderedPrompt,
         string? sessionId,
-        string? mcpConfigPath = null)
+        string? mcpConfigPath = null,
+        IReadOnlyList<string>? additionalAllowedDirectories = null)
     {
         var psi = new ProcessStartInfo(binaryPath)
         {
@@ -174,6 +175,23 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         psi.ArgumentList.Add("--verbose");
         psi.ArgumentList.Add("--add-dir");
         psi.ArgumentList.Add(worktreePath);
+
+        // Per-turn extra grants (ADR-0011): e.g. the Chat Context's open work
+        // item active-run worktree. Each becomes its own `--add-dir` so the
+        // agent can reach the absolute path without changing its cwd. Skip the
+        // worktree itself (already added) and any non-existent path.
+        if (additionalAllowedDirectories is not null)
+        {
+            foreach (var dir in additionalAllowedDirectories)
+            {
+                if (string.IsNullOrWhiteSpace(dir)
+                    || string.Equals(dir, worktreePath, StringComparison.Ordinal))
+                    continue;
+                psi.ArgumentList.Add("--add-dir");
+                psi.ArgumentList.Add(dir);
+            }
+        }
+
         psi.ArgumentList.Add("--permission-mode");
         psi.ArgumentList.Add("bypassPermissions");
 

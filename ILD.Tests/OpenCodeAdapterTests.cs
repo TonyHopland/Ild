@@ -502,6 +502,48 @@ public class OpenCodeAdapterTests
             Assert.Contains("\"edit\":\"deny\"", result.Output);
             Assert.Contains("\"bash\":\"deny\"", result.Output);
             Assert.Contains("\"mcp\"", result.Output);
+            // No extra allowed dirs ⇒ external directory access stays denied.
+            Assert.Contains("\"external_directory\":\"deny\"", result.Output);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_allows_external_directory_when_extra_dirs_granted()
+    {
+        // ADR-0011 parity: opencode's equivalent of claude's --add-dir is flipping
+        // the external_directory permission so the Chat Context's worktree path
+        // (outside the agent's --dir cwd) becomes reachable.
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-extdir-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
+        File.WriteAllText(scriptPath, "#!/bin/sh\nprintenv OPENCODE_CONFIG_CONTENT\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var adapter = new OpenCodeAdapter();
+            var result = await adapter.ExecuteAsync(new AgentExecutionContext(
+                Provider: new AiProvider
+                {
+                    Name = "test-provider",
+                    Type = "opencode",
+                    BaseUrl = "https://api.example.test/v1",
+                    Model = "gpt-5",
+                    Config = JsonSerializer.Serialize(new { binaryPath = scriptPath }),
+                },
+                Prompt: "prompt",
+                RunContext: new LoopRunContext(Guid.NewGuid(), Guid.NewGuid().ToString(), "Task", "Desc", worktreeDir, "main", new List<string>(), null),
+                ExecutionCount: 1,
+                Cancel: CancellationToken.None,
+                ToolAllowlist: ["read", "ild"],
+                AdditionalAllowedDirectories: new[] { "/data/worktrees/wi-99" }));
+
+            Assert.True(result.Success);
+            Assert.Contains("\"external_directory\":\"allow\"", result.Output);
         }
         finally
         {

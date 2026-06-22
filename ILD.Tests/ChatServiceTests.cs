@@ -2,6 +2,7 @@ using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
+using ILD.Data.Enums;
 using ILD.Data.Stores;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -95,7 +96,40 @@ public sealed class ChatServiceTests : IDisposable
     }
 
     private ChatService NewService(IAgentAdapter adapter)
-        => new(_db.Context, _db.Providers, RegistryFor(adapter), _notifier, Options);
+        => new(_db.Context, _db.Providers, RegistryFor(adapter), _notifier, Options, _db.LoopRuns);
+
+    /// <summary>
+    /// Seed an active (Running) run for <paramref name="workItemId"/> pointing at a
+    /// freshly-created worktree directory, so the Chat Context can resolve and
+    /// grant it. Returns the worktree path (cleaned up on Dispose with the root).
+    /// </summary>
+    private async Task<string> SeedActiveRunAsync(string workItemId, LoopRunStatus status = LoopRunStatus.Running)
+    {
+        var worktreePath = Path.Combine(_scratchRoot, "worktrees", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(worktreePath);
+
+        var template = new LoopTemplate { Id = Guid.NewGuid(), Name = $"t-{Guid.NewGuid():N}" };
+        _db.Context.LoopTemplates.Add(template);
+        var version = new LoopTemplateVersion
+        {
+            Id = Guid.NewGuid(),
+            LoopTemplateId = template.Id,
+            VersionNumber = 1,
+            CreatedAt = DateTime.UtcNow,
+        };
+        _db.Context.LoopTemplateVersions.Add(version);
+        _db.Context.LoopRuns.Add(new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = workItemId,
+            LoopTemplateVersionId = version.Id,
+            Status = status,
+            WorktreePath = worktreePath,
+            StartedAt = DateTime.UtcNow,
+        });
+        await _db.Context.SaveChangesAsync();
+        return worktreePath;
+    }
 
     [Fact]
     public async Task StartAsync_creates_session_with_scratch_dir_and_normalized_tools()
@@ -202,6 +236,94 @@ public sealed class ChatServiceTests : IDisposable
         Assert.True(assistant.Interrupted);
         Assert.Equal("partial answer", assistant.Content);
         Assert.True(_notifier.Completed[0], "turn-completed should report interrupted");
+    }
+
+    [Fact]
+    public async Task ExecuteTurnAsync_without_open_work_item_sends_the_raw_message_and_no_extra_dirs()
+    {
+        var provider = await SeedProviderAsync();
+        var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
+        var svc = NewService(adapter);
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild", "read" });
+
+        await svc.ExecuteTurnAsync(started.Id, "plain message", openWorkItemId: null, CancellationToken.None);
+
+        Assert.Equal("plain message", adapter.LastContext!.Prompt);
+        Assert.Null(adapter.LastContext.AdditionalAllowedDirectories);
+    }
+
+    [Fact]
+    public async Task ExecuteTurnAsync_pushes_open_work_item_id_into_the_prompt_preamble()
+    {
+        var provider = await SeedProviderAsync();
+        var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
+        var svc = NewService(adapter);
+        // No filesystem grant and no active run: id-only context, scratch alone.
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+
+        await svc.ExecuteTurnAsync(started.Id, "what is open?", "wi-42", CancellationToken.None);
+
+        var prompt = adapter.LastContext!.Prompt;
+        Assert.Contains("[Chat Context]", prompt);
+        Assert.Contains("wi-42", prompt);
+        // The human's verbatim message is still appended after the preamble.
+        Assert.EndsWith("what is open?", prompt);
+        // No active run + no filesystem grant ⇒ no worktree grant.
+        Assert.Null(adapter.LastContext.AdditionalAllowedDirectories);
+
+        // The persisted transcript keeps the human's message verbatim (no preamble).
+        var userMessage = _db.Context.ChatMessages
+            .Single(m => m.ChatSessionId == started.Id && m.Role == "user");
+        Assert.Equal("what is open?", userMessage.Content);
+    }
+
+    [Fact]
+    public async Task ExecuteTurnAsync_grants_active_run_worktree_when_filesystem_grant_held()
+    {
+        var provider = await SeedProviderAsync();
+        var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
+        var svc = NewService(adapter);
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild", "write" });
+        var worktreePath = await SeedActiveRunAsync("wi-99");
+
+        await svc.ExecuteTurnAsync(started.Id, "edit it", "wi-99", CancellationToken.None);
+
+        Assert.NotNull(adapter.LastContext!.AdditionalAllowedDirectories);
+        Assert.Contains(worktreePath, adapter.LastContext.AdditionalAllowedDirectories!);
+        Assert.Contains(worktreePath, adapter.LastContext.Prompt);
+    }
+
+    [Fact]
+    public async Task ExecuteTurnAsync_withholds_worktree_when_session_lacks_a_filesystem_grant()
+    {
+        var provider = await SeedProviderAsync();
+        var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
+        var svc = NewService(adapter);
+        // Only the `ild` tool — no read/write/execute, so the worktree stays hidden
+        // even though the open item has an active run.
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var worktreePath = await SeedActiveRunAsync("wi-99");
+
+        await svc.ExecuteTurnAsync(started.Id, "edit it", "wi-99", CancellationToken.None);
+
+        Assert.Null(adapter.LastContext!.AdditionalAllowedDirectories);
+        Assert.DoesNotContain(worktreePath, adapter.LastContext.Prompt);
+    }
+
+    [Fact]
+    public async Task ExecuteTurnAsync_withholds_worktree_for_a_finished_run()
+    {
+        var provider = await SeedProviderAsync();
+        var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
+        var svc = NewService(adapter);
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild", "read" });
+        // A completed run keeps its worktree on disk (ADR-0008) but is not active,
+        // so the chat must not expose it (ADR-0011 active-run-only).
+        await SeedActiveRunAsync("wi-7", LoopRunStatus.Completed);
+
+        await svc.ExecuteTurnAsync(started.Id, "look", "wi-7", CancellationToken.None);
+
+        Assert.Null(adapter.LastContext!.AdditionalAllowedDirectories);
     }
 
     [Fact]

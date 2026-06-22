@@ -488,8 +488,8 @@ export const chatService = {
     return api.post<ChatSession>("/chat", { aiProviderId, tools });
   },
 
-  sendMessage: async (content: string): Promise<void> => {
-    await api.post<void>("/chat/messages", { content });
+  sendMessage: async (content: string, openWorkItemId?: string | null): Promise<void> => {
+    await api.post<void>("/chat/messages", { content, openWorkItemId: openWorkItemId ?? null });
   },
 
   end: async (): Promise<void> => {

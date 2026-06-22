@@ -107,6 +107,21 @@ internal static class PiExtensionGenerator
         sb.AppendLine("    return text;");
         sb.AppendLine("}");
         sb.AppendLine();
+        sb.AppendLine("async function ildPut(path: string, body: object): Promise<string> {");
+        sb.AppendLine("    const url = joinApiUrl(API_BASE, path);");
+        sb.AppendLine("    const headers: Record<string, string> = { \"Content-Type\": \"application/json\" };");
+        sb.AppendLine("    if (API_TOKEN) headers[\"Authorization\"] = `Bearer ${API_TOKEN}`;");
+        sb.AppendLine($"    if (LOOP_RUN_ID) headers[\"{headerName}\"] = LOOP_RUN_ID;");
+        sb.AppendLine("    const resp = await fetch(url, {");
+        sb.AppendLine("        method: \"PUT\",");
+        sb.AppendLine("        headers,");
+        sb.AppendLine("        body: JSON.stringify(body),");
+        sb.AppendLine("    });");
+        sb.AppendLine("    const text = await resp.text();");
+        sb.AppendLine("    if (!resp.ok) throw new Error(`PUT ${path} failed: ${resp.status} ${resp.statusText}`);");
+        sb.AppendLine("    return text;");
+        sb.AppendLine("}");
+        sb.AppendLine();
     }
 
     private static void AppendToolRegistration(StringBuilder sb, ToolDescriptor tool)
@@ -163,92 +178,85 @@ internal static class PiExtensionGenerator
 
     private static void AppendExecuteBody(StringBuilder sb, ToolDescriptor tool)
     {
-        if (tool.HttpMethod == HttpMethod.Post)
-        {
-            AppendPostExecuteBody(sb, tool);
-        }
-        else if (tool.EndpointPath.Contains("{"))
-        {
-            AppendGetWithPathParam(sb, tool);
-        }
-        else
-        {
-            AppendGetWithQueryParams(sb, tool);
-        }
-    }
-
-    private static void AppendGetWithPathParam(StringBuilder sb, ToolDescriptor tool)
-    {
-        // e.g. api/v1/agent/workitems/{id} -> uses a required path param
-        var pathParam = tool.Parameters.FirstOrDefault(p => !p.IsOptional);
-        if (pathParam != null)
-        {
-            var endpointWithPlaceholder = tool.EndpointPath
-                .Replace("{" + pathParam.Name + "}", "${encodeURIComponent(params." + pathParam.Name + ")}");
-            sb.Append("            return { content: [{ type: \"text\", text: await ildGet(`");
-            sb.Append(endpointWithPlaceholder);
-            sb.AppendLine("`) }], details: {} };");
-        }
-        else
-        {
-            sb.Append("            return { content: [{ type: \"text\", text: await ildGet(\"");
-            sb.Append(tool.EndpointPath);
-            sb.AppendLine("\") }], details: {} };");
-        }
-    }
-
-    private static void AppendGetWithQueryParams(StringBuilder sb, ToolDescriptor tool)
-    {
-        sb.AppendLine("            const qs = new URLSearchParams();");
-        foreach (var param in tool.Parameters)
-        {
-            sb.Append("            if (params.");
-            sb.Append(param.Name);
-            if (param.TsType == "number")
-            {
-                sb.Append(" !== undefined) qs.set(\"");
-                sb.Append(param.Name);
-                sb.Append("\", String(params.");
-                sb.Append(param.Name);
-                sb.AppendLine("));");
-            }
-            else
-            {
-                sb.Append(" != null) qs.set(\"");
-                sb.Append(param.Name);
-                sb.Append("\", params.");
-                sb.Append(param.Name);
-                sb.AppendLine(");");
-            }
-        }
-        sb.Append("            const url = qs.toString() ? `");
-        sb.Append(tool.EndpointPath);
-        sb.Append("?${qs.toString()}` : \"");
-        sb.Append(tool.EndpointPath);
-        sb.AppendLine("\";");
-        sb.AppendLine("            return { content: [{ type: \"text\", text: await ildGet(url) }], details: {} };");
-    }
-
-    private static void AppendPostExecuteBody(StringBuilder sb, ToolDescriptor tool)
-    {
+        // Uniform builder: substitute {name} path placeholders, append any
+        // remaining non-body params as query string, then dispatch by verb. This
+        // covers GET/POST/PUT with any mix of path, query, and body params.
+        var pathParams = tool.Parameters
+            .Where(p => tool.EndpointPath.Contains("{" + p.Name + "}", StringComparison.Ordinal))
+            .ToArray();
+        var queryParams = tool.Parameters
+            .Where(p => !p.IsBodyParam && !tool.EndpointPath.Contains("{" + p.Name + "}", StringComparison.Ordinal))
+            .ToArray();
         var bodyParams = tool.Parameters.Where(p => p.IsBodyParam).ToArray();
 
-        sb.AppendLine("            const body: any = {");
-        foreach (var param in bodyParams)
-        {
-            sb.Append("                ");
-            sb.Append(param.Name);
-            sb.Append(": params.");
-            sb.Append(param.Name);
-            if (param.IsOptional)
-                sb.AppendLine(" ?? undefined,");
-            else
-                sb.AppendLine(",");
-        }
-        sb.AppendLine("            };");
-        sb.Append("            return { content: [{ type: \"text\", text: await ildPost(\"");
+        sb.Append("            let path = \"");
         sb.Append(tool.EndpointPath);
-        sb.AppendLine("\", body) }], details: {} };");
+        sb.AppendLine("\";");
+        foreach (var param in pathParams)
+        {
+            sb.Append("            path = path.replace(\"{");
+            sb.Append(param.Name);
+            sb.Append("}\", encodeURIComponent(String(params.");
+            sb.Append(param.Name);
+            sb.AppendLine(")));");
+        }
+
+        var hasQuery = queryParams.Length > 0;
+        if (hasQuery)
+        {
+            sb.AppendLine("            const qs = new URLSearchParams();");
+            foreach (var param in queryParams)
+            {
+                sb.Append("            if (params.");
+                sb.Append(param.Name);
+                if (param.TsType == "number")
+                {
+                    sb.Append(" !== undefined) qs.set(\"");
+                    sb.Append(param.Name);
+                    sb.Append("\", String(params.");
+                    sb.Append(param.Name);
+                    sb.AppendLine("));");
+                }
+                else
+                {
+                    sb.Append(" != null) qs.set(\"");
+                    sb.Append(param.Name);
+                    sb.Append("\", String(params.");
+                    sb.Append(param.Name);
+                    sb.AppendLine("));");
+                }
+            }
+            sb.AppendLine("            const url = qs.toString() ? `${path}?${qs.toString()}` : path;");
+        }
+        else
+        {
+            sb.AppendLine("            const url = path;");
+        }
+
+        if (tool.HttpMethod == HttpMethod.Post || tool.HttpMethod == HttpMethod.Put)
+        {
+            sb.AppendLine("            const body: any = {");
+            foreach (var param in bodyParams)
+            {
+                sb.Append("                ");
+                sb.Append(param.Name);
+                sb.Append(": params.");
+                sb.Append(param.Name);
+                if (param.IsOptional)
+                    sb.AppendLine(" ?? undefined,");
+                else
+                    sb.AppendLine(",");
+            }
+            sb.AppendLine("            };");
+            var verb = tool.HttpMethod == HttpMethod.Put ? "ildPut" : "ildPost";
+            sb.Append("            return { content: [{ type: \"text\", text: await ");
+            sb.Append(verb);
+            sb.AppendLine("(url, body) }], details: {} };");
+        }
+        else
+        {
+            sb.AppendLine("            return { content: [{ type: \"text\", text: await ildGet(url) }], details: {} };");
+        }
     }
 
     private static string TsTypeToTypeBox(string tsType) => tsType switch

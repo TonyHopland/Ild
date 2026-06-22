@@ -450,6 +450,110 @@ public class AgentApiIntegrationTests
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
     }
 
+    [Fact]
+    public async Task GetPreview_for_unknown_workitem_returns_not_found()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+
+        var resp = await client.GetAsync($"/api/v1/agent/workitems/{Guid.NewGuid()}/preview");
+        Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task GetPreview_for_workitem_without_a_worktree_returns_bad_request()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+
+        // A freshly-created agent work item has no run and therefore no worktree,
+        // so the preview surface refuses it the same way the human controller does.
+        var itemId = await CreateAsync(client, "no worktree", null, repoId);
+
+        var resp = await client.GetAsync($"/api/v1/agent/workitems/{itemId}/preview");
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task ListLoopRuns_includes_cost_and_token_totals_per_run()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+
+        var (runId, workItemId) = await SeedRunWithUsageAsync(factory);
+
+        var resp = await client.GetAsync($"/api/v1/agent/loop-runs?workItemId={workItemId}");
+        resp.EnsureSuccessStatusCode();
+        var arr = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+
+        Assert.Equal(1, arr.GetArrayLength());
+        var run = arr[0];
+        Assert.Equal(runId.ToString(), run.GetProperty("id").GetString());
+        // Two nodes contributed 0.25 + 0.75 USD and 30 + 70 = 100 input / 200 output tokens.
+        Assert.Equal(1.0m, run.GetProperty("costUsd").GetDecimal());
+        Assert.Equal(100, run.GetProperty("inputTokens").GetInt64());
+        Assert.Equal(200, run.GetProperty("outputTokens").GetInt64());
+    }
+
+    private static async Task<(Guid RunId, string WorkItemId)> SeedRunWithUsageAsync(ApiFactory factory)
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var template = new LoopTemplate { Id = Guid.NewGuid(), Name = $"cost-{Guid.NewGuid():N}" };
+        db.LoopTemplates.Add(template);
+        var version = new LoopTemplateVersion
+        {
+            Id = Guid.NewGuid(),
+            LoopTemplateId = template.Id,
+            VersionNumber = 1,
+            CreatedAt = DateTime.UtcNow,
+        };
+        db.LoopTemplateVersions.Add(version);
+        var node = new LoopNode
+        {
+            Id = Guid.NewGuid(),
+            LoopTemplateVersionId = version.Id,
+            NodeType = NodeType.AI,
+            Label = "ai",
+            CreatedAt = DateTime.UtcNow,
+        };
+        db.LoopNodes.Add(node);
+        var workItemId = Guid.NewGuid().ToString();
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = workItemId,
+            LoopTemplateVersionId = version.Id,
+            Status = LoopRunStatus.Running,
+            RecoveryPolicy = RecoveryPolicy.AutoResume,
+            StartedAt = DateTime.UtcNow,
+        };
+        db.LoopRuns.Add(run);
+        db.LoopRunNodes.Add(new LoopRunNode
+        {
+            Id = Guid.NewGuid(),
+            LoopRunId = run.Id,
+            LoopNodeId = node.Id,
+            Status = LoopRunNodeStatus.Succeeded,
+            InputTokens = 30,
+            OutputTokens = 70,
+            CostUsd = 0.25m,
+        });
+        db.LoopRunNodes.Add(new LoopRunNode
+        {
+            Id = Guid.NewGuid(),
+            LoopRunId = run.Id,
+            LoopNodeId = node.Id,
+            Status = LoopRunNodeStatus.Succeeded,
+            InputTokens = 70,
+            OutputTokens = 130,
+            CostUsd = 0.75m,
+        });
+        await db.SaveChangesAsync();
+        return (run.Id, workItemId);
+    }
+
     private static async Task PutVariableAsync(HttpClient client, Guid runId, string name, string value)
     {
         var put = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/agent/variables/{name}")

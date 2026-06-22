@@ -51,7 +51,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                 sessionIdToUse = restoreResult.SessionIdToUse;
             }
 
-            var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId);
+            var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, ctx.AdditionalAllowedDirectories);
 
             Process? proc = null;
             try
@@ -621,7 +621,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         return fallback.Length > 0 ? fallback.ToString().Trim() : null;
     }
 
-    private static (string ModelRef, string ConfigJson) BuildOpenCodeConfig(AiProvider provider, LoopRunContext? runContext = null, IReadOnlyList<string>? selectedToolKeys = null, Guid? chatSessionId = null)
+    private static (string ModelRef, string ConfigJson) BuildOpenCodeConfig(AiProvider provider, LoopRunContext? runContext = null, IReadOnlyList<string>? selectedToolKeys = null, Guid? chatSessionId = null, IReadOnlyList<string>? additionalAllowedDirectories = null)
     {
         var providerId = SanitizeProviderId(provider.Name);
         var modelId = provider.Model;
@@ -629,6 +629,14 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         var enabled = new HashSet<string>(enabledToolKeys, StringComparer.OrdinalIgnoreCase);
 
         var baseUrl = provider.BaseUrl.TrimEnd('/');
+
+        // opencode runs with `--dir <cwd>`; reads outside that root are gated by
+        // the `external_directory` permission. This is opencode's equivalent of
+        // claude's `--add-dir` (ADR-0011 parity): when the Chat Context grants an
+        // extra worktree path, allow external-directory access so the agent can
+        // reach that absolute path. With no grant it stays denied (scratch only).
+        var grantExternalDirectory = additionalAllowedDirectories is { Count: > 0 }
+            && additionalAllowedDirectories.Any(d => !string.IsNullOrWhiteSpace(d));
 
         var config = new Dictionary<string, object?>
         {
@@ -649,7 +657,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                     },
                 },
             },
-            ["permission"] = BuildPermissions(enabled),
+            ["permission"] = BuildPermissions(enabled, grantExternalDirectory),
         };
 
         // Inject the ILD MCP server entry so agents can list/create work items
@@ -673,7 +681,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         return (modelRef, configJson);
     }
 
-    private static Dictionary<string, object?> BuildPermissions(HashSet<string> enabled)
+    private static Dictionary<string, object?> BuildPermissions(HashSet<string> enabled, bool grantExternalDirectory = false)
         => new(StringComparer.OrdinalIgnoreCase)
         {
             ["read"] = enabled.Contains(AiToolCatalog.Read) ? "allow" : "deny",
@@ -687,7 +695,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             ["question"] = "deny",
             ["webfetch"] = "deny",
             ["websearch"] = "deny",
-            ["external_directory"] = "deny",
+            ["external_directory"] = grantExternalDirectory ? "allow" : "deny",
             ["doom_loop"] = "deny",
         };
 

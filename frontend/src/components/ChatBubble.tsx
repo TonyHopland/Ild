@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useMatch } from "react-router-dom";
 import { useSignalR } from "../hooks/useSignalR";
 import { useChatEnabled } from "../hooks/useChatEnabled";
 import { aiProviderService, chatService } from "../services/auth";
@@ -34,7 +35,7 @@ const DRAG_THRESHOLD_PX = 4;
 // The v1 tool catalog (read/write/execute/ild). `ild` is the only default-on
 // entry; the backend re-normalizes the selection against the provider type.
 const TOOL_OPTIONS: { key: string; label: string; defaultOn: boolean }[] = [
-  { key: "ild", label: "ILD work items", defaultOn: true },
+  { key: "ild", label: "ILD features", defaultOn: true },
   { key: "read", label: "Read", defaultOn: false },
   { key: "write", label: "Write", defaultOn: false },
   { key: "execute", label: "Execute", defaultOn: false },
@@ -63,6 +64,15 @@ export default function ChatBubble() {
   const { connectionState, on, off, invoke } = useSignalR("/hubs/chat");
   const sessionIdRef = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  // The ambient per-turn Chat Context (ADR-0011): the work item the user
+  // currently has open, read from the route. Sent with each message so the agent
+  // can act on whatever the human is looking at. Held in a ref so `send` always
+  // reads the latest value without re-creating the callback.
+  const openWorkItemMatch = useMatch("/taskboard/:workItemId");
+  const openWorkItemId = openWorkItemMatch?.params.workItemId ?? null;
+  const openWorkItemIdRef = useRef<string | null>(openWorkItemId);
+  openWorkItemIdRef.current = openWorkItemId;
 
   // Placement: a draggable icon position and a resizable panel size, both
   // persisted and kept inside the viewport.
@@ -297,7 +307,7 @@ export default function ChatBubble() {
     setInput("");
     setBusy(true);
     try {
-      await chatService.sendMessage(content);
+      await chatService.sendMessage(content, openWorkItemIdRef.current);
     } catch (e) {
       setBusy(false);
       setError((e as { message?: string })?.message ?? "Could not send message.");

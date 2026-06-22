@@ -43,17 +43,37 @@ public class AgentController : ControllerBase
     private readonly ILoopTemplateManager _templates;
     private readonly ILoopRunStore _runs;
     private readonly AppDbContext _db;
+    private readonly IWorktreePreviewService _preview;
 
     public AgentController(
         IWorkItemManager workItems,
         ILoopTemplateManager templates,
         ILoopRunStore runs,
-        AppDbContext db)
+        AppDbContext db,
+        IWorktreePreviewService preview)
     {
         _workItems = workItems;
         _templates = templates;
         _runs = runs;
         _db = db;
+        _preview = preview;
+    }
+
+    /// <summary>
+    /// Resolve a work item and its current worktree path for the preview surface,
+    /// mirroring the human <c>WorkItemsController</c> gate: 404 when the item is
+    /// unknown, 400 when it has no active worktree. The agent reads the open work
+    /// item id from its Chat Context and passes it explicitly (consistent with
+    /// <c>get_workitem</c>).
+    /// </summary>
+    private async Task<(WorkItemView? WorkItem, IActionResult? Error)> GetPreviewableWorkItemAsync(string id)
+    {
+        var workItem = await _workItems.GetWorkItemAsync(id);
+        if (workItem == null)
+            return (null, NotFound());
+        if (string.IsNullOrWhiteSpace(workItem.WorktreePath))
+            return (null, BadRequest(new { error = "Work item does not currently have an active worktree." }));
+        return (workItem, null);
     }
 
     [HttpGet("workitems")]
@@ -127,6 +147,171 @@ public class AgentController : ControllerBase
         });
     }
 
+    // -- Worktree preview controls (ADR-0011) ----------------------------------
+    //
+    // These mirror the human WorkItemsController preview surface so the chat agent
+    // can drive a work item's preview. Each takes an explicit work item id (read
+    // from the Chat Context). They fold under the `ild` grant; unlike the human
+    // controller they raise no SignalR notifications — agents act headless.
+
+    [HttpGet("workitems/{id}/preview")]
+    public async Task<IActionResult> GetPreview(string id)
+    {
+        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
+        if (error != null) return error;
+        try
+        {
+            return Ok(await _preview.GetStatusAsync(workItem!.WorktreePath!));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpPost("workitems/{id}/preview/start")]
+    public async Task<IActionResult> StartPreview(string id, [FromBody] WorktreePreviewStartRequest? request)
+    {
+        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
+        if (error != null) return error;
+        try
+        {
+            var response = await _preview.StartAsync(
+                workItem!.WorktreePath!,
+                new WorktreePreviewStartOptions(
+                    request?.ProfileName,
+                    request?.SkipInstall == true,
+                    request?.PublicHost,
+                    request?.PortOverrides));
+            return Ok(response);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpPost("workitems/{id}/preview/stop")]
+    public async Task<IActionResult> StopPreview(string id)
+    {
+        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
+        if (error != null) return error;
+        try
+        {
+            return Ok(await _preview.StopAsync(workItem!.WorktreePath!));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpPost("workitems/{id}/preview/services/{service}/start")]
+    public async Task<IActionResult> StartPreviewService(string id, string service, [FromBody] WorktreePreviewStartRequest? request)
+    {
+        if (string.IsNullOrWhiteSpace(service))
+            return BadRequest(new { error = "service is required." });
+
+        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
+        if (error != null) return error;
+        try
+        {
+            var response = await _preview.StartServiceAsync(
+                workItem!.WorktreePath!,
+                service,
+                new WorktreePreviewStartOptions(
+                    request?.ProfileName,
+                    request?.SkipInstall == true,
+                    request?.PublicHost,
+                    request?.PortOverrides));
+            return Ok(response);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpPost("workitems/{id}/preview/services/{service}/stop")]
+    public async Task<IActionResult> StopPreviewService(string id, string service)
+    {
+        if (string.IsNullOrWhiteSpace(service))
+            return BadRequest(new { error = "service is required." });
+
+        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
+        if (error != null) return error;
+        try
+        {
+            return Ok(await _preview.StopServiceAsync(workItem!.WorktreePath!, service));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpGet("workitems/{id}/preview/services/{service}/config")]
+    public async Task<IActionResult> GetPreviewServiceConfig(string id, string service)
+    {
+        if (string.IsNullOrWhiteSpace(service))
+            return BadRequest(new { error = "service is required." });
+
+        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
+        if (error != null) return error;
+        try
+        {
+            var config = await _preview.GetServiceConfigAsync(workItem!.WorktreePath!, service);
+            if (config == null)
+                return NotFound(new { error = $"No preview config found for service '{service}'." });
+            return Ok(new WorktreePreviewServiceConfigResponse { Service = service, Config = config });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpPut("workitems/{id}/preview/services/{service}/config")]
+    public async Task<IActionResult> UpdatePreviewServiceConfig(string id, string service, [FromBody] WorktreePreviewServiceConfigUpdateRequest? request)
+    {
+        if (string.IsNullOrWhiteSpace(service))
+            return BadRequest(new { error = "service is required." });
+        if (request == null || string.IsNullOrWhiteSpace(request.Config))
+            return BadRequest(new { error = "config is required." });
+
+        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
+        if (error != null) return error;
+        try
+        {
+            await _preview.UpdateServiceConfigAsync(workItem!.WorktreePath!, service, request.Config);
+            var config = await _preview.GetServiceConfigAsync(workItem!.WorktreePath!, service);
+            return Ok(new WorktreePreviewServiceConfigResponse { Service = service, Config = config });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpGet("workitems/{id}/preview/logs")]
+    public async Task<IActionResult> GetPreviewLog(string id, [FromQuery] string service)
+    {
+        if (string.IsNullOrWhiteSpace(service))
+            return BadRequest(new { error = "service is required." });
+
+        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
+        if (error != null) return error;
+        try
+        {
+            var content = await _preview.GetServiceLogAsync(workItem!.WorktreePath!, service);
+            return Ok(new WorktreePreviewLogResponse { Service = service, Content = content });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
     [HttpGet("repositories")]
     public async Task<IActionResult> ListRepositories([FromQuery] int skip = 0, [FromQuery] int take = 100)
     {
@@ -181,27 +366,60 @@ public class AgentController : ControllerBase
                 .Where(r => r.WorkItemId == workItemId)
                 .OrderByDescending(r => r.StartedAt)
                 .Skip(skip).Take(take)
-                .Select(r => new
-                {
-                    id = r.Id,
-                    workItemId = r.WorkItemId,
-                    status = r.Status.ToString(),
-                    startedAt = r.StartedAt,
-                    completedAt = r.CompletedAt,
-                })
+                .Select(r => new { r.Id, r.WorkItemId, r.Status, r.StartedAt, r.CompletedAt })
                 .ToListAsync();
-            return Ok(filtered);
+
+            var costs = await AggregateRunCostsAsync(filtered.Select(r => r.Id).ToList());
+            return Ok(filtered.Select(r => ProjectRun(r.Id, r.WorkItemId, r.Status.ToString(), r.StartedAt, r.CompletedAt, costs)));
         }
 
         var runs = await _runs.GetAllAsync(skip, take);
-        return Ok(runs.Select(r => new
+        var runList = runs.ToList();
+        var allCosts = await AggregateRunCostsAsync(runList.Select(r => r.Id).ToList());
+        return Ok(runList.Select(r => ProjectRun(r.Id, r.WorkItemId, r.Status.ToString(), r.StartedAt, r.CompletedAt, allCosts)));
+    }
+
+    private sealed record RunCost(decimal? CostUsd, long InputTokens, long OutputTokens);
+
+    /// <summary>
+    /// Roll up per-run token/cost totals from <c>LoopRunNode</c> rows for the
+    /// given run ids in one query. Backs the read-only run cost visibility the
+    /// chat agent gets (ADR-0011). Cost is null for a run whose nodes reported
+    /// no monetary figure (e.g. subscription-auth providers).
+    /// </summary>
+    private async Task<Dictionary<Guid, RunCost>> AggregateRunCostsAsync(IReadOnlyList<Guid> runIds)
+    {
+        if (runIds.Count == 0) return new Dictionary<Guid, RunCost>();
+
+        var rows = await _db.LoopRunNodes.AsNoTracking()
+            .Where(n => runIds.Contains(n.LoopRunId))
+            .GroupBy(n => n.LoopRunId)
+            .Select(g => new
+            {
+                RunId = g.Key,
+                CostUsd = g.Sum(n => n.CostUsd),
+                InputTokens = g.Sum(n => n.InputTokens ?? 0),
+                OutputTokens = g.Sum(n => n.OutputTokens ?? 0),
+            })
+            .ToListAsync();
+
+        return rows.ToDictionary(r => r.RunId, r => new RunCost(r.CostUsd, r.InputTokens, r.OutputTokens));
+    }
+
+    private static object ProjectRun(Guid id, string workItemId, string status, DateTime? startedAt, DateTime? completedAt, Dictionary<Guid, RunCost> costs)
+    {
+        costs.TryGetValue(id, out var cost);
+        return new
         {
-            id = r.Id,
-            workItemId = r.WorkItemId,
-            status = r.Status.ToString(),
-            startedAt = r.StartedAt,
-            completedAt = r.CompletedAt,
-        }));
+            id,
+            workItemId,
+            status,
+            startedAt,
+            completedAt,
+            costUsd = cost?.CostUsd,
+            inputTokens = cost?.InputTokens ?? 0,
+            outputTokens = cost?.OutputTokens ?? 0,
+        };
     }
 
     [HttpGet("variables")]

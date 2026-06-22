@@ -104,6 +104,126 @@ public static class ToolDescriptors
         },
     };
 
+    // -- Worktree preview controls (ADR-0011) --
+    //
+    // Mirror the MCP PreviewTools and the agent-API preview endpoints. Each takes
+    // an explicit workItemId (the agent reads it from the Chat Context). Path
+    // params are substituted from the matching {placeholder} in EndpointPath.
+
+    public static readonly ToolDescriptor GetPreview = new()
+    {
+        Name = "ild_get_preview",
+        Label = "Get Preview",
+        Description = "Get the worktree preview status for a work item: configured state, resolved profile, and each service's state (port, health URL, public URL).",
+        EndpointPath = "api/v1/agent/workitems/{workItemId}/preview",
+        HttpMethod = HttpMethod.Get,
+        Parameters = new ToolParameterDescriptor[]
+        {
+            new() { Name = "workItemId", Description = "Work item GUID (from the Chat Context).", TsType = "string" },
+        },
+    };
+
+    public static readonly ToolDescriptor StartPreview = new()
+    {
+        Name = "ild_start_preview",
+        Label = "Start Preview",
+        Description = "Start the worktree preview for a work item — runs install steps (unless skipInstall) and starts every service.",
+        EndpointPath = "api/v1/agent/workitems/{workItemId}/preview/start",
+        HttpMethod = HttpMethod.Post,
+        Parameters = new ToolParameterDescriptor[]
+        {
+            new() { Name = "workItemId", Description = "Work item GUID (from the Chat Context).", TsType = "string" },
+            new() { Name = "profileName", Description = "Optional profile name; defaults to the config default.", TsType = "string", IsOptional = true, IsBodyParam = true },
+            new() { Name = "skipInstall", Description = "Skip install steps (default false).", TsType = "boolean", IsOptional = true, IsBodyParam = true },
+        },
+    };
+
+    public static readonly ToolDescriptor StopPreview = new()
+    {
+        Name = "ild_stop_preview",
+        Label = "Stop Preview",
+        Description = "Stop the worktree preview for a work item — tears down all running services.",
+        EndpointPath = "api/v1/agent/workitems/{workItemId}/preview/stop",
+        HttpMethod = HttpMethod.Post,
+        Parameters = new ToolParameterDescriptor[]
+        {
+            new() { Name = "workItemId", Description = "Work item GUID (from the Chat Context).", TsType = "string" },
+        },
+    };
+
+    public static readonly ToolDescriptor StartPreviewService = new()
+    {
+        Name = "ild_start_preview_service",
+        Label = "Start Preview Service",
+        Description = "Start a single preview service by name, leaving the others untouched.",
+        EndpointPath = "api/v1/agent/workitems/{workItemId}/preview/services/{service}/start",
+        HttpMethod = HttpMethod.Post,
+        Parameters = new ToolParameterDescriptor[]
+        {
+            new() { Name = "workItemId", Description = "Work item GUID (from the Chat Context).", TsType = "string" },
+            new() { Name = "service", Description = "Service name as declared in ild.config.json.", TsType = "string" },
+            new() { Name = "profileName", Description = "Optional profile name; defaults to the config default.", TsType = "string", IsOptional = true, IsBodyParam = true },
+            new() { Name = "skipInstall", Description = "Skip install steps (default false).", TsType = "boolean", IsOptional = true, IsBodyParam = true },
+        },
+    };
+
+    public static readonly ToolDescriptor StopPreviewService = new()
+    {
+        Name = "ild_stop_preview_service",
+        Label = "Stop Preview Service",
+        Description = "Stop a single running preview service by name, leaving the others running.",
+        EndpointPath = "api/v1/agent/workitems/{workItemId}/preview/services/{service}/stop",
+        HttpMethod = HttpMethod.Post,
+        Parameters = new ToolParameterDescriptor[]
+        {
+            new() { Name = "workItemId", Description = "Work item GUID (from the Chat Context).", TsType = "string" },
+            new() { Name = "service", Description = "Service name as declared in ild.config.json.", TsType = "string" },
+        },
+    };
+
+    public static readonly ToolDescriptor GetPreviewServiceConfig = new()
+    {
+        Name = "ild_get_preview_service_config",
+        Label = "Get Preview Service Config",
+        Description = "Get one service's entry from the worktree's ild.config.json as raw JSON.",
+        EndpointPath = "api/v1/agent/workitems/{workItemId}/preview/services/{service}/config",
+        HttpMethod = HttpMethod.Get,
+        Parameters = new ToolParameterDescriptor[]
+        {
+            new() { Name = "workItemId", Description = "Work item GUID (from the Chat Context).", TsType = "string" },
+            new() { Name = "service", Description = "Service name as declared in ild.config.json.", TsType = "string" },
+        },
+    };
+
+    public static readonly ToolDescriptor UpdatePreviewServiceConfig = new()
+    {
+        Name = "ild_update_preview_service_config",
+        Label = "Update Preview Service Config",
+        Description = "Replace one service's entry in the worktree's ild.config.json with the supplied JSON. Validated like preview start; 'name' must match the service. Takes effect on the next start.",
+        EndpointPath = "api/v1/agent/workitems/{workItemId}/preview/services/{service}/config",
+        HttpMethod = HttpMethod.Put,
+        Parameters = new ToolParameterDescriptor[]
+        {
+            new() { Name = "workItemId", Description = "Work item GUID (from the Chat Context).", TsType = "string" },
+            new() { Name = "service", Description = "Service name as declared in ild.config.json.", TsType = "string" },
+            new() { Name = "config", Description = "The full service object as JSON.", TsType = "string", IsBodyParam = true },
+        },
+    };
+
+    public static readonly ToolDescriptor GetPreviewLogs = new()
+    {
+        Name = "ild_get_preview_logs",
+        Label = "Get Preview Logs",
+        Description = "Read the tail of a preview service's captured stdout/stderr log — useful to see why a service failed to start.",
+        EndpointPath = "api/v1/agent/workitems/{workItemId}/preview/logs",
+        HttpMethod = HttpMethod.Get,
+        Parameters = new ToolParameterDescriptor[]
+        {
+            new() { Name = "workItemId", Description = "Work item GUID (from the Chat Context).", TsType = "string" },
+            new() { Name = "service", Description = "Service name as declared in ild.config.json.", TsType = "string" },
+        },
+    };
+
     // -- Aggregate (must be last to ensure all above are initialized first) --
 
     public static readonly ToolDescriptor[] All =
@@ -114,5 +234,13 @@ public static class ToolDescriptors
         ListRepositories,
         ListLoopTemplates,
         ListLoopRuns,
+        GetPreview,
+        StartPreview,
+        StopPreview,
+        StartPreviewService,
+        StopPreviewService,
+        GetPreviewServiceConfig,
+        UpdatePreviewServiceConfig,
+        GetPreviewLogs,
     ];
 }

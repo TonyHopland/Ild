@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import type { AiProvider, ChatMessage, ChatSession } from "../types";
 import { FAB_POSITION_KEY, PANEL_POSITION_KEY, PANEL_SIZE_KEY } from "./chatPlacement";
 import { CHAT_ENABLED_KEY } from "../hooks/useChatEnabled";
@@ -35,6 +36,17 @@ vi.mock("../hooks/useSignalR", () => ({
 vi.mock("../services/auth", () => ({ chatService, aiProviderService }));
 
 import ChatBubble from "./ChatBubble";
+
+// The bubble reads the open work item from the route (useMatch), so every render
+// must sit inside a Router. `initialPath` lets a test simulate having a work item
+// open (e.g. "/taskboard/wi-77").
+function renderBubble(initialPath = "/") {
+  return render(
+    <MemoryRouter initialEntries={[initialPath]}>
+      <ChatBubble />
+    </MemoryRouter>,
+  );
+}
 
 const provider: AiProvider = {
   id: "p1",
@@ -74,14 +86,62 @@ describe("ChatBubble", () => {
     chatService.get.mockResolvedValue(null);
     aiProviderService.getAll.mockResolvedValue([provider]);
 
-    render(<ChatBubble />);
+    renderBubble();
     fireEvent.click(await screen.findByLabelText("Open chat"));
 
     expect(await screen.findByText("Claude (claude-code)")).toBeTruthy();
-    // `ild` is the only default-on entry.
-    const ildBox = screen.getByLabelText("ILD work items") as HTMLInputElement;
+    // `ild` is the only default-on entry; the toggle is labelled "ILD features".
+    const ildBox = screen.getByLabelText("ILD features") as HTMLInputElement;
     expect(ildBox.checked).toBe(true);
     expect((screen.getByLabelText("Read") as HTMLInputElement).checked).toBe(false);
+  });
+
+  test("sends the open work item id from the route as Chat Context", async () => {
+    const session: ChatSession = {
+      id: "s1",
+      aiProviderId: "p1",
+      providerType: "claude-code",
+      tools: ["ild"],
+      createdAt: "2026-01-01T00:00:00Z",
+      messages: [],
+    };
+    chatService.get.mockResolvedValue(session);
+    chatService.sendMessage.mockResolvedValue(undefined);
+
+    renderBubble("/taskboard/wi-77");
+    fireEvent.click(await screen.findByLabelText("Open chat"));
+
+    const input = await screen.findByLabelText("Chat message");
+    fireEvent.change(input, { target: { value: "look at this" } });
+    fireEvent.click(screen.getByText("Send"));
+
+    await waitFor(() =>
+      expect(chatService.sendMessage).toHaveBeenCalledWith("look at this", "wi-77"),
+    );
+  });
+
+  test("sends a null Chat Context when no work item is open", async () => {
+    const session: ChatSession = {
+      id: "s1",
+      aiProviderId: "p1",
+      providerType: "claude-code",
+      tools: ["ild"],
+      createdAt: "2026-01-01T00:00:00Z",
+      messages: [],
+    };
+    chatService.get.mockResolvedValue(session);
+    chatService.sendMessage.mockResolvedValue(undefined);
+
+    renderBubble("/taskboard");
+    fireEvent.click(await screen.findByLabelText("Open chat"));
+
+    const input = await screen.findByLabelText("Chat message");
+    fireEvent.change(input, { target: { value: "general question" } });
+    fireEvent.click(screen.getByText("Send"));
+
+    await waitFor(() =>
+      expect(chatService.sendMessage).toHaveBeenCalledWith("general question", null),
+    );
   });
 
   test("starting a chat locks in the session and reveals the input box", async () => {
@@ -97,7 +157,7 @@ describe("ChatBubble", () => {
     };
     chatService.start.mockResolvedValue(session);
 
-    render(<ChatBubble />);
+    renderBubble();
     fireEvent.click(await screen.findByLabelText("Open chat"));
     fireEvent.change(await screen.findByLabelText("AI provider"), { target: { value: "p1" } });
     fireEvent.click(screen.getByText("Start chat"));
@@ -121,7 +181,7 @@ describe("ChatBubble", () => {
     };
     chatService.get.mockResolvedValue(session);
 
-    render(<ChatBubble />);
+    renderBubble();
     fireEvent.click(await screen.findByLabelText("Open chat"));
 
     expect(await screen.findByText("hello")).toBeTruthy();
@@ -139,7 +199,7 @@ describe("ChatBubble", () => {
     };
     chatService.get.mockResolvedValue(session);
 
-    render(<ChatBubble />);
+    renderBubble();
     fireEvent.click(await screen.findByLabelText("Open chat"));
     await screen.findByLabelText("Chat message");
 
@@ -174,7 +234,7 @@ describe("ChatBubble placement", () => {
     localStorage.setItem(CHAT_ENABLED_KEY, "false");
     chatService.get.mockResolvedValue(null);
 
-    const { container } = render(<ChatBubble />);
+    const { container } = renderBubble();
     expect(screen.queryByLabelText("Open chat")).toBeNull();
     expect(container.firstChild).toBeNull();
   });
@@ -183,7 +243,7 @@ describe("ChatBubble placement", () => {
     chatService.get.mockResolvedValue(null);
     aiProviderService.getAll.mockResolvedValue([provider]);
 
-    render(<ChatBubble />);
+    renderBubble();
     const fab = await screen.findByLabelText("Open chat");
 
     fireEvent.pointerDown(fab, { clientX: 500, clientY: 500 });
@@ -206,7 +266,7 @@ describe("ChatBubble placement", () => {
     chatService.get.mockResolvedValue(null);
     aiProviderService.getAll.mockResolvedValue([provider]);
 
-    render(<ChatBubble />);
+    renderBubble();
     fireEvent.click(await screen.findByLabelText("Open chat"));
 
     const panel = await screen.findByRole("dialog", { name: "AI chat" });
@@ -229,7 +289,7 @@ describe("ChatBubble placement", () => {
     localStorage.setItem(FAB_POSITION_KEY, JSON.stringify({ x: 900, y: 700 }));
     chatService.get.mockResolvedValue(null);
 
-    render(<ChatBubble />);
+    renderBubble();
     const fab = await screen.findByLabelText("Open chat");
     expect((fab as HTMLElement).style.left).toBe("900px");
 
@@ -249,7 +309,7 @@ describe("ChatBubble placement", () => {
     chatService.get.mockResolvedValue(null);
     aiProviderService.getAll.mockResolvedValue([provider]);
 
-    render(<ChatBubble />);
+    renderBubble();
     fireEvent.click(await screen.findByLabelText("Open chat"));
 
     const panel = await screen.findByRole("dialog", { name: "AI chat" });
@@ -283,7 +343,7 @@ describe("ChatBubble placement", () => {
     };
     chatService.get.mockResolvedValue(session);
 
-    render(<ChatBubble />);
+    renderBubble();
     fireEvent.click(await screen.findByLabelText("Open chat"));
 
     const panel = await screen.findByRole("dialog", { name: "AI chat" });
