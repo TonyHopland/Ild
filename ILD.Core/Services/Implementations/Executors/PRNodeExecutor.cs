@@ -9,6 +9,13 @@ namespace ILD.Core.Services.Implementations.Executors;
 
 public sealed class PRNodeExecutor : INodeExecutor
 {
+    /// <summary>
+    /// Work-item tag that opts a run into turning on auto-merge for the PR this
+    /// node creates, when the repository supports it. Matched case-insensitively,
+    /// like Condition node tag checks.
+    /// </summary>
+    private const string AutoMergeTag = "AutoMerge";
+
     public NodeType NodeType => NodeType.PR;
 
     public async IAsyncEnumerable<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
@@ -116,6 +123,17 @@ public sealed class PRNodeExecutor : INodeExecutor
             }
             prUrl = prResult.HtmlUrl ?? prResult.Url ?? string.Empty;
             yield return new NodeOutcome.PrCreated(prUrl);
+
+            // Opt-in auto-merge: when the work item carries the AutoMerge tag, ask
+            // the provider to merge the PR once its checks pass. Best-effort — a
+            // repository that does not support auto-merge leaves the PR open for
+            // the heartbeat/human merge path, so a false result is not a failure.
+            if (wi.Tags.Any(t => string.Equals(t, AutoMergeTag, StringComparison.OrdinalIgnoreCase)))
+            {
+                var prNumber = RemotePrUrl.ExtractPrNumber(prUrl);
+                if (!string.IsNullOrEmpty(prNumber))
+                    await remote.EnablePullRequestAutoMergeAsync(repo.CloneUrl, prNumber);
+            }
         }
         else if (!string.IsNullOrEmpty(cfg.PrCommentTemplate))
         {

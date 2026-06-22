@@ -38,6 +38,17 @@ public sealed class ForgejoRemoteGitProviderAdapter : RemoteGitProviderAdapterBa
         return resp.IsSuccessStatusCode;
     }
 
+    public override async Task<bool> EnablePullRequestAutoMergeAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+    {
+        ApplyHeaders(http, repo.Provider);
+        // Forgejo/Gitea schedule auto-merge through the same merge endpoint by
+        // setting merge_when_checks_succeed; the PR merges once its checks pass.
+        using var resp = await http.PostAsJsonAsync(
+            $"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/pulls/{prNumber}/merge",
+            new { Do = "merge", merge_when_checks_succeed = true });
+        return resp.IsSuccessStatusCode;
+    }
+
     public override async Task RegisterWebhookAsync(HttpClient http, ResolvedRemoteRepository repo, string callbackUrl)
     {
         ApplyHeaders(http, repo.Provider);

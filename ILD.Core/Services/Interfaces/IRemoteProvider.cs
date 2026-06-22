@@ -8,6 +8,13 @@ public interface IRemoteProvider
 {
     Task<RemotePrResult> CreatePullRequestAsync(string repoUrl, string sourceBranch, string targetBranch, string title, string body);
     Task<bool> MergePullRequestAsync(string repoUrl, string prNumber);
+
+    /// <summary>
+    /// Turn on auto-merge for a pull request when the repository supports it.
+    /// Best-effort: returns <c>false</c> (never throws) when no provider matches
+    /// or the repository/provider does not support auto-merge.
+    /// </summary>
+    Task<bool> EnablePullRequestAutoMergeAsync(string repoUrl, string prNumber);
     Task<IEnumerable<RemotePrComment>> GetPullRequestCommentsAsync(string repoUrl, string prNumber);
     Task RegisterWebhookAsync(string repoUrl, string callbackUrl);
     Task UnregisterWebhookAsync(string repoUrl, string callbackUrl);

@@ -195,6 +195,132 @@ public class PRNodeExecutorTests
     }
 
     [Fact]
+    public async Task When_creating_PR_and_AutoMerge_tag_present_enables_auto_merge()
+    {
+        var repoId = Guid.NewGuid();
+        var workItem = new WorkItemView
+        {
+            Id = "WI-1",
+            Title = "T",
+            Description = "D",
+            RepositoryId = repoId,
+            Tags = new[] { "AutoMerge" },
+        };
+        var repo = new Repository { Id = repoId, Name = "r", CloneUrl = "https://example.com/o/r.git", DefaultBranch = "main", RemoteProviderId = Guid.NewGuid() };
+
+        var workItems = new Mock<IWorkItemManager>();
+        workItems.Setup(m => m.GetWorkItemAsync(It.IsAny<string>())).ReturnsAsync(workItem);
+        var providerStore = new Mock<IProviderStore>();
+        providerStore.Setup(s => s.GetRepositoryByIdAsync(repoId)).ReturnsAsync(repo);
+        providerStore.Setup(s => s.GetRemoteProviderByIdAsync(It.IsAny<Guid>())).ReturnsAsync((RemoteProvider?)null);
+
+        var remote = new Mock<IRemoteProvider>();
+        remote.Setup(r => r.CreatePullRequestAsync(repo.CloneUrl, It.IsAny<string>(), "main", "T", It.IsAny<string>()))
+            .ReturnsAsync(new RemotePrResult(null, "https://example.com/o/r/pull/42", RemotePrStatus.Open, null));
+        remote.Setup(r => r.EnablePullRequestAutoMergeAsync(repo.CloneUrl, "42")).ReturnsAsync(true);
+
+        var services = new ServiceCollection();
+        services.AddSingleton(workItems.Object);
+        services.AddSingleton(providerStore.Object);
+        services.AddSingleton(remote.Object);
+        services.AddSingleton(Mock.Of<IRepositoryManager>());
+        var sp = services.BuildServiceProvider();
+
+        var node = new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.PR, Config = "{}" };
+        // No worktree path → the commit/push prep is skipped and the node goes
+        // straight to PR creation, where auto-merge is turned on.
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = "WI-1" };
+
+        var executor = new PRNodeExecutor();
+        var outcomes = new List<NodeOutcome>();
+        await foreach (var o in executor.ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+            outcomes.Add(o);
+
+        Assert.Contains(outcomes, o => o is NodeOutcome.PrCreated);
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+        remote.Verify(r => r.EnablePullRequestAutoMergeAsync(repo.CloneUrl, "42"), Times.Once);
+    }
+
+    [Fact]
+    public async Task When_creating_PR_without_AutoMerge_tag_does_not_enable_auto_merge()
+    {
+        var repoId = Guid.NewGuid();
+        var workItem = new WorkItemView { Id = "WI-1", Title = "T", Description = "D", RepositoryId = repoId };
+        var repo = new Repository { Id = repoId, Name = "r", CloneUrl = "https://example.com/o/r.git", DefaultBranch = "main", RemoteProviderId = Guid.NewGuid() };
+
+        var workItems = new Mock<IWorkItemManager>();
+        workItems.Setup(m => m.GetWorkItemAsync(It.IsAny<string>())).ReturnsAsync(workItem);
+        var providerStore = new Mock<IProviderStore>();
+        providerStore.Setup(s => s.GetRepositoryByIdAsync(repoId)).ReturnsAsync(repo);
+        providerStore.Setup(s => s.GetRemoteProviderByIdAsync(It.IsAny<Guid>())).ReturnsAsync((RemoteProvider?)null);
+
+        var remote = new Mock<IRemoteProvider>();
+        remote.Setup(r => r.CreatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync(new RemotePrResult(null, "https://example.com/o/r/pull/42", RemotePrStatus.Open, null));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(workItems.Object);
+        services.AddSingleton(providerStore.Object);
+        services.AddSingleton(remote.Object);
+        services.AddSingleton(Mock.Of<IRepositoryManager>());
+        var sp = services.BuildServiceProvider();
+
+        var node = new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.PR, Config = "{}" };
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = "WI-1" };
+
+        var executor = new PRNodeExecutor();
+        var outcomes = new List<NodeOutcome>();
+        await foreach (var o in executor.ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+            outcomes.Add(o);
+
+        Assert.Contains(outcomes, o => o is NodeOutcome.PrCreated);
+        remote.Verify(r => r.EnablePullRequestAutoMergeAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task AutoMerge_tag_is_matched_case_insensitively()
+    {
+        var repoId = Guid.NewGuid();
+        var workItem = new WorkItemView
+        {
+            Id = "WI-1",
+            Title = "T",
+            Description = "D",
+            RepositoryId = repoId,
+            Tags = new[] { "automerge" },
+        };
+        var repo = new Repository { Id = repoId, Name = "r", CloneUrl = "https://example.com/o/r.git", DefaultBranch = "main", RemoteProviderId = Guid.NewGuid() };
+
+        var workItems = new Mock<IWorkItemManager>();
+        workItems.Setup(m => m.GetWorkItemAsync(It.IsAny<string>())).ReturnsAsync(workItem);
+        var providerStore = new Mock<IProviderStore>();
+        providerStore.Setup(s => s.GetRepositoryByIdAsync(repoId)).ReturnsAsync(repo);
+        providerStore.Setup(s => s.GetRemoteProviderByIdAsync(It.IsAny<Guid>())).ReturnsAsync((RemoteProvider?)null);
+
+        var remote = new Mock<IRemoteProvider>();
+        remote.Setup(r => r.CreatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync(new RemotePrResult(null, "https://example.com/o/r/pull/7", RemotePrStatus.Open, null));
+        remote.Setup(r => r.EnablePullRequestAutoMergeAsync(repo.CloneUrl, "7")).ReturnsAsync(true);
+
+        var services = new ServiceCollection();
+        services.AddSingleton(workItems.Object);
+        services.AddSingleton(providerStore.Object);
+        services.AddSingleton(remote.Object);
+        services.AddSingleton(Mock.Of<IRepositoryManager>());
+        var sp = services.BuildServiceProvider();
+
+        var node = new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.PR, Config = "{}" };
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = "WI-1" };
+
+        var executor = new PRNodeExecutor();
+        var outcomes = new List<NodeOutcome>();
+        await foreach (var o in executor.ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+            outcomes.Add(o);
+
+        remote.Verify(r => r.EnablePullRequestAutoMergeAsync(repo.CloneUrl, "7"), Times.Once);
+    }
+
+    [Fact]
     public async Task When_PR_exists_and_comment_post_fails_node_fails()
     {
         var repoId = Guid.NewGuid();

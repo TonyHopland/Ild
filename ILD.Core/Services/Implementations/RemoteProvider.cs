@@ -43,6 +43,14 @@ public class RemoteProviderService : IRemoteProvider
         catch { return false; }
     }
 
+    public async Task<bool> EnablePullRequestAutoMergeAsync(string repoUrl, string prNumber)
+    {
+        var resolved = await ResolveAsync(repoUrl);
+        if (resolved == null) return false;
+        try { return await resolved.Adapter.EnablePullRequestAutoMergeAsync(_http, resolved, prNumber); }
+        catch { return false; }
+    }
+
     public async Task<IEnumerable<RemotePrComment>> GetPullRequestCommentsAsync(string repoUrl, string prNumber)
     {
         var resolved = await ResolveAsync(repoUrl);
