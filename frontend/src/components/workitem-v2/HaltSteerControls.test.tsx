@@ -163,6 +163,59 @@ describe("HaltSteerControls", () => {
     expect(screen.queryByRole("button", { name: /abandon run/i })).toBeNull();
   });
 
+  test("hides Abandon when showAbandon is false but keeps Halt", () => {
+    const onCleanupBacklog = vi.fn();
+    render(
+      <HaltSteerControls
+        run={run()}
+        workItemStatus={WorkItemStatus.Running}
+        onHalt={vi.fn()}
+        onCleanupBacklog={onCleanupBacklog}
+        showAbandon={false}
+      />,
+    );
+    // The action tab opts out of Abandon, but the live Halt control remains.
+    expect(screen.queryByRole("button", { name: /abandon run/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /halt ai node/i })).toBeTruthy();
+  });
+
+  test("renders nothing when showAbandon is false and only Abandon would apply", () => {
+    const { container } = render(
+      <HaltSteerControls
+        run={run({
+          status: LoopRunStatus.WaitingHuman,
+          nodes: [node({ nodeType: "Human", status: LoopRunNodeStatus.WaitingHuman })],
+        })}
+        workItemStatus={WorkItemStatus.HumanFeedback}
+        onCleanupBacklog={vi.fn()}
+        showAbandon={false}
+      />,
+    );
+    // No AI node in flight and Abandon suppressed, so there is nothing to show.
+    expect(container.innerHTML).toBe("");
+  });
+
+  test("showAbandon false still leaves the halted steer window's Cleanup -> Backlog", () => {
+    const onCleanupBacklog = vi.fn();
+    render(
+      <HaltSteerControls
+        run={run({
+          status: LoopRunStatus.WaitingHuman,
+          isHalted: true,
+          nodes: [node({ status: LoopRunNodeStatus.Interrupted })],
+        })}
+        workItemStatus={WorkItemStatus.HumanFeedback}
+        onResumeSteer={vi.fn()}
+        onCleanupBacklog={onCleanupBacklog}
+        showAbandon={false}
+      />,
+    );
+    // The standalone Abandon is gone, but the halted run's own wind-down stays.
+    expect(screen.queryByRole("button", { name: /abandon run/i })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /cleanup -> backlog/i }));
+    expect(onCleanupBacklog).toHaveBeenCalledTimes(1);
+  });
+
   test("renders nothing for a completed run", () => {
     const { container } = render(
       <HaltSteerControls

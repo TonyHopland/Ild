@@ -283,6 +283,7 @@ export default function WorkItemModalV2({
             onResumeSteer={detail.handleResumeSteer}
             onCleanupDone={detail.handleCleanupDone}
             onCleanupBacklog={detail.handleCleanupBacklog}
+            showAbandon={false}
           />
           <FeedbackBanner workItem={workItem} detail={detail} prompt={feedbackPrompt} />
           {!detail.shouldStream && !actionRequired && (
