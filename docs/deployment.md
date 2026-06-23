@@ -43,6 +43,17 @@ volumes:
 
 The main `Dockerfile` builds the frontend, publishes the .NET host, and optionally installs additional runtime tooling used by work-item execution (see [Configuration](./configuration.md#build-time-container-options)). `Dockerfile.WorkItemServer` builds the separate WorkItem Server image.
 
+### Published images
+
+CI also builds and pushes both images to GHCR (see [ADR-0012](./adr/0012-ghcr-image-tagging-strategy.md)):
+
+- `ghcr.io/tonyhopland/ild` — batteries-included app plus the bundled MCP server
+- `ghcr.io/tonyhopland/ild-workitem-server` — the WorkItem Server
+
+A push to `main` publishes the `main` tag (amd64); a `vX.Y.Z` git tag publishes `X.Y.Z`, `X.Y`, and `latest` for both images (amd64 + arm64). The compose stack still builds locally with `--build` — it does not pull these images.
+
+**One-time setup:** the first push lands each package **private**. Flip each to **public** once in its GHCR package settings (Package → Settings → Change visibility).
+
 ## First-startup behavior
 
 On first successful ILD startup:

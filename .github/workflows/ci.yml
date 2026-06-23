@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
 
 jobs:
@@ -10,6 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Publish version-stamping tests
+        run: .github/scripts/compute-version.test.sh
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -35,3 +39,12 @@ jobs:
 
       - name: Backend tests
         run: dotnet test ILD.Tests/ILD.Tests.csproj --no-build --configuration Release --nologo
+
+  # Publish to GHCR only after the build is green, and never on PRs.
+  publish:
+    needs: build-and-test
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/publish.yml
