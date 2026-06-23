@@ -259,7 +259,11 @@ export default function ChatBubble() {
     setOpen(true);
     if (!session && providers.length === 0) {
       try {
-        setProviders(await aiProviderService.getAll());
+        const loaded = await aiProviderService.getAll();
+        setProviders(loaded);
+        // Pre-select the default provider so a new chat is ready to start.
+        const fallback = loaded.find((p) => p.isDefault);
+        if (fallback) setProviderId(fallback.id);
       } catch {
         setError("Could not load AI providers.");
       }
