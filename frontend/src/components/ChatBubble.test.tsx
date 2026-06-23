@@ -96,6 +96,32 @@ describe("ChatBubble", () => {
     expect((screen.getByLabelText("Read") as HTMLInputElement).checked).toBe(false);
   });
 
+  test("pre-selects the default provider in the dropdown", async () => {
+    chatService.get.mockResolvedValue(null);
+    const other: AiProvider = { ...provider, id: "p0", name: "GPT", isDefault: false };
+    // List the non-default first to prove selection follows isDefault, not order.
+    aiProviderService.getAll.mockResolvedValue([other, provider]);
+
+    renderBubble();
+    fireEvent.click(await screen.findByLabelText("Open chat"));
+
+    const select = (await screen.findByLabelText("AI provider")) as HTMLSelectElement;
+    expect(select.value).toBe("p1");
+  });
+
+  test("leaves the dropdown unselected when no provider is the default", async () => {
+    chatService.get.mockResolvedValue(null);
+    const a: AiProvider = { ...provider, id: "p0", name: "GPT", isDefault: false };
+    const b: AiProvider = { ...provider, id: "p2", name: "Llama", isDefault: false };
+    aiProviderService.getAll.mockResolvedValue([a, b]);
+
+    renderBubble();
+    fireEvent.click(await screen.findByLabelText("Open chat"));
+
+    const select = (await screen.findByLabelText("AI provider")) as HTMLSelectElement;
+    expect(select.value).toBe("");
+  });
+
   test("sends the open work item id from the route as Chat Context", async () => {
     const session: ChatSession = {
       id: "s1",
