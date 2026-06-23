@@ -39,24 +39,34 @@ public class AgentController : ControllerBase
     private const string RunIdHeader = "X-ILD-Run-Id";
     private const string ChatSessionIdHeader = "X-ILD-Chat-Session-Id";
 
+    // Upper bound on a pushed loop document (~1 MB). A real ild-loop-template/v1 is
+    // a few KB; this stops a rogue agent from shoving megabytes over the chat hub.
+    private const int MaxLoopDocumentChars = 1_000_000;
+
     private readonly IWorkItemManager _workItems;
     private readonly ILoopTemplateManager _templates;
     private readonly ILoopRunStore _runs;
     private readonly AppDbContext _db;
     private readonly IWorktreePreviewService _preview;
+    private readonly IChatLoopScratchpad _loopScratchpad;
+    private readonly IChatNotifier _chatNotifier;
 
     public AgentController(
         IWorkItemManager workItems,
         ILoopTemplateManager templates,
         ILoopRunStore runs,
         AppDbContext db,
-        IWorktreePreviewService preview)
+        IWorktreePreviewService preview,
+        IChatLoopScratchpad loopScratchpad,
+        IChatNotifier chatNotifier)
     {
         _workItems = workItems;
         _templates = templates;
         _runs = runs;
         _db = db;
         _preview = preview;
+        _loopScratchpad = loopScratchpad;
+        _chatNotifier = chatNotifier;
     }
 
     /// <summary>
@@ -462,6 +472,73 @@ public class AgentController : ControllerBase
         runId = Guid.Empty;
         return Request.Headers.TryGetValue(RunIdHeader, out var hdr)
             && Guid.TryParse(hdr.ToString(), out runId);
+    }
+
+    private bool TryResolveChatSessionId(out Guid chatSessionId)
+    {
+        chatSessionId = Guid.Empty;
+        return Request.Headers.TryGetValue(ChatSessionIdHeader, out var hdr)
+            && Guid.TryParse(hdr.ToString(), out chatSessionId);
+    }
+
+    // -- Loop Editor context (ADR-0011) ----------------------------------------
+    //
+    // The browser stashes the loop currently open in the Loop Editor into a
+    // per-session scratchpad on every chat message; the agent reads it here and
+    // pushes a full-document replacement back to the open editor. Both are scoped
+    // to the chat session via the X-ILD-Chat-Session-Id header. The agent is never
+    // given a persist tool — update_current_loop mutates transient client state
+    // only; the sole write to a LoopTemplateVersion stays the editor's human Save.
+
+    [HttpGet("current-loop")]
+    public async Task<IActionResult> GetCurrentLoop()
+    {
+        var (chatSessionId, error) = await ResolveChatSessionAsync();
+        if (error != null) return error;
+
+        var document = _loopScratchpad.Get(chatSessionId);
+        // No document stashed this turn means the Loop Editor is not open. Report it
+        // as data (not an error) so the tool surfaces a clean "no loop open" notice.
+        if (string.IsNullOrWhiteSpace(document))
+            return Ok(new { loopEditorOpen = false });
+
+        return Content(document, "application/json");
+    }
+
+    [HttpPut("current-loop")]
+    public async Task<IActionResult> UpdateCurrentLoop([FromBody] AgentLoopUpdateRequest? request)
+    {
+        var (chatSessionId, error) = await ResolveChatSessionAsync();
+        if (error != null) return error;
+        if (request == null || string.IsNullOrWhiteSpace(request.Document))
+            return BadRequest(new { error = "document is required — pass a complete ild-loop-template/v1 document." });
+        if (request.Document.Length > MaxLoopDocumentChars)
+            return BadRequest(new { error = $"document is too large ({request.Document.Length} chars); the limit is {MaxLoopDocumentChars}." });
+
+        // Fire-and-forget (ADR-0011): the open Loop Editor validates and applies the
+        // document client-side; a rejected document leaves the canvas untouched and
+        // the agent learns of it only by re-reading the loop on a later turn.
+        await _chatNotifier.LoopUpdateRequestedAsync(chatSessionId, request.Document);
+        return Accepted(new { accepted = true });
+    }
+
+    /// <summary>
+    /// Resolve the caller's chat session for the loop-editor endpoints: the
+    /// <c>X-ILD-Chat-Session-Id</c> header must be a valid GUID AND name a chat
+    /// session that still exists. This is the loop-tool equivalent of
+    /// <see cref="CallerOwns"/> — the MCP server is scoped to one session, so a
+    /// header that resolves to no session is not the caller's to act on (403).
+    /// </summary>
+    private async Task<(Guid ChatSessionId, IActionResult? Error)> ResolveChatSessionAsync()
+    {
+        if (!TryResolveChatSessionId(out var chatSessionId))
+            return (Guid.Empty, BadRequest(new { error = $"A chat-session id is required. Send it in the {ChatSessionIdHeader} header." }));
+
+        var exists = await _db.ChatSessions.AsNoTracking().AnyAsync(c => c.Id == chatSessionId);
+        if (!exists)
+            return (Guid.Empty, StatusCode(403, new { error = "Unknown or inactive chat session." }));
+
+        return (chatSessionId, null);
     }
 
     [HttpPost("workitems")]

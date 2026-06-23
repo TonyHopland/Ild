@@ -7,18 +7,21 @@ import { CHAT_ENABLED_KEY } from "../hooks/useChatEnabled";
 
 // Hoisted so the vi.mock factories (which are hoisted to the top) can reference
 // them without a temporal-dead-zone error.
-const { handlers, chatService, aiProviderService } = vi.hoisted(() => ({
-  handlers: {} as Record<string, (msg: { payload: unknown }) => void>,
-  chatService: {
-    get: vi.fn(),
-    start: vi.fn(),
-    sendMessage: vi.fn(),
-    end: vi.fn(),
-  },
-  aiProviderService: {
-    getAll: vi.fn(),
-  },
-}));
+const { handlers, chatService, aiProviderService, getOpenLoopDocument, setCurrentChatSessionId } =
+  vi.hoisted(() => ({
+    handlers: {} as Record<string, (msg: { payload: unknown }) => void>,
+    chatService: {
+      get: vi.fn(),
+      start: vi.fn(),
+      sendMessage: vi.fn(),
+      end: vi.fn(),
+    },
+    aiProviderService: {
+      getAll: vi.fn(),
+    },
+    getOpenLoopDocument: vi.fn(),
+    setCurrentChatSessionId: vi.fn(),
+  }));
 
 vi.mock("../hooks/useSignalR", () => ({
   useSignalR: () => ({
@@ -34,6 +37,8 @@ vi.mock("../hooks/useSignalR", () => ({
 }));
 
 vi.mock("../services/auth", () => ({ chatService, aiProviderService }));
+vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument }));
+vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId }));
 
 import ChatBubble from "./ChatBubble";
 
@@ -75,6 +80,9 @@ afterEach(() => {
   cleanup();
   for (const k of Object.keys(handlers)) delete handlers[k];
   vi.clearAllMocks();
+  // clearAllMocks keeps return-value implementations, so a per-test loop document
+  // would leak into later tests; reset it back to "no loop open".
+  getOpenLoopDocument.mockReset();
   localStorage.clear();
   // Restore the jsdom default viewport in case a test shrank it.
   window.innerWidth = 1024;
@@ -142,7 +150,37 @@ describe("ChatBubble", () => {
     fireEvent.click(screen.getByText("Send"));
 
     await waitFor(() =>
-      expect(chatService.sendMessage).toHaveBeenCalledWith("look at this", "wi-77"),
+      expect(chatService.sendMessage).toHaveBeenCalledWith("look at this", "wi-77", null),
+    );
+  });
+
+  test("sends the open Loop Editor's live document with the message", async () => {
+    const session: ChatSession = {
+      id: "s1",
+      aiProviderId: "p1",
+      providerType: "claude-code",
+      tools: ["ild"],
+      createdAt: "2026-01-01T00:00:00Z",
+      messages: [],
+    };
+    chatService.get.mockResolvedValue(session);
+    chatService.sendMessage.mockResolvedValue(undefined);
+    const liveLoop = { $schema: "ild-loop-template/v1", name: "My Loop", nodes: [], edges: [] };
+    getOpenLoopDocument.mockReturnValue(liveLoop);
+
+    renderBubble();
+    fireEvent.click(await screen.findByLabelText("Open chat"));
+
+    const input = await screen.findByLabelText("Chat message");
+    fireEvent.change(input, { target: { value: "edit the loop" } });
+    fireEvent.click(screen.getByText("Send"));
+
+    await waitFor(() =>
+      expect(chatService.sendMessage).toHaveBeenCalledWith(
+        "edit the loop",
+        null,
+        JSON.stringify(liveLoop),
+      ),
     );
   });
 
@@ -166,7 +204,7 @@ describe("ChatBubble", () => {
     fireEvent.click(screen.getByText("Send"));
 
     await waitFor(() =>
-      expect(chatService.sendMessage).toHaveBeenCalledWith("general question", null),
+      expect(chatService.sendMessage).toHaveBeenCalledWith("general question", null, null),
     );
   });
 
@@ -212,6 +250,29 @@ describe("ChatBubble", () => {
 
     expect(await screen.findByText("hello")).toBeTruthy();
     expect(screen.getByText("hi back")).toBeTruthy();
+  });
+
+  test("publishes the chat session id so the loop editor can join the same group", async () => {
+    const session: ChatSession = {
+      id: "s1",
+      aiProviderId: "p1",
+      providerType: "claude-code",
+      tools: ["ild"],
+      createdAt: "2026-01-01T00:00:00Z",
+      messages: [],
+    };
+    chatService.get.mockResolvedValue(session);
+    chatService.end.mockResolvedValue(undefined);
+
+    renderBubble();
+    fireEvent.click(await screen.findByLabelText("Open chat"));
+
+    // The loaded session is published for other components (the LoopEditor).
+    await waitFor(() => expect(setCurrentChatSessionId).toHaveBeenCalledWith("s1"));
+
+    // Ending the session publishes null so the editor leaves the group.
+    fireEvent.click(await screen.findByText("End chat"));
+    await waitFor(() => expect(setCurrentChatSessionId).toHaveBeenCalledWith(null));
   });
 
   test("streams a turn and flags an interrupted partial reply", async () => {

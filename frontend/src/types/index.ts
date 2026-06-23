@@ -557,6 +557,12 @@ export interface ChatTurnCompletedPayload {
   interrupted: boolean;
 }
 
+export interface ChatLoopUpdatePayload {
+  chatSessionId: string;
+  /** A complete `ild-loop-template/v1` document (JSON string) to apply live. */
+  document: string;
+}
+
 export interface AppSetting {
   key: string;
   value: string;

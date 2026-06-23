@@ -21,6 +21,9 @@ import LoopEdgeComponent from "../../components/LoopEdgeComponent";
 import { LoopEdgeInteractionContext } from "../../components/loopEdgeInteraction";
 import ErrorBanner from "../../components/ErrorBanner";
 import { loopTemplateService, agentAdapterService, aiProviderService } from "../../services/auth";
+import { useSignalR } from "../../hooks/useSignalR";
+import { setOpenLoopProvider } from "../../utils/openLoopDocument";
+import { getCurrentChatSessionId, subscribeChatSessionId } from "../../services/chatSessionStore";
 import {
   templateToNodes,
   templateToEdges,
@@ -50,6 +53,8 @@ import {
   type LoopNode,
   type LoopNodeEdge,
   type LoopTemplate,
+  type LoopTemplateExport,
+  type ChatLoopUpdatePayload,
   EdgeType,
   NodeType,
   RecoveryPolicy,
@@ -201,11 +206,20 @@ export default function LoopEditor() {
   const nodesRef = useRef<Node[]>([]);
   const edgesRef = useRef<Edge[]>([]);
 
-  // Keep refs in sync so handleExport reads current graph without stale closures
-  useEffect(() => {
-    nodesRef.current = nodes;
-    edgesRef.current = edges;
-  }, [nodes, edges]);
+  // Track the latest graph in refs so callbacks (handleExport, the loop editor
+  // context relay) read the current graph without stale closures. Assigned during
+  // render — not in an effect — so a reader never observes a one-commit-stale
+  // snapshot (an effect would lag the commit and intermittently drop fresh state).
+  nodesRef.current = nodes;
+  edgesRef.current = edges;
+
+  // Loop editor context (ADR-0011): the chat bubble and the live-loop applier both
+  // need the current loop metadata without re-creating their stable callbacks, so
+  // mirror it into refs alongside the graph refs above (synced during render below,
+  // once the metadata state is declared).
+  const selectedTemplateRef = useRef<LoopTemplate | null>(null);
+  const isNewTemplateRef = useRef(false);
+  const newTemplateNameRef = useRef("");
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<Edge | null>(null);
   const [pendingConnection, setPendingConnection] = useState<Connection | null>(null);
@@ -333,6 +347,35 @@ export default function LoopEditor() {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     };
   }, []);
+
+  // Loop editor context (ADR-0011): subscribe to the chat hub directly so an AI
+  // edit lands on this canvas, and track the user's chat session so we only act on
+  // our own session's events. The id comes from the shared store ChatBubble
+  // publishes to, so a session started — or restarted — after this editor mounts
+  // still re-joins the correct group (seed at mount, then react to every change).
+  const {
+    connectionState: chatConnectionState,
+    on: onChat,
+    off: offChat,
+    invoke: invokeChat,
+  } = useSignalR("/hubs/chat");
+  const [chatSessionId, setChatSessionId] = useState<string | null>(() =>
+    getCurrentChatSessionId(),
+  );
+  const chatSessionIdRef = useRef<string | null>(null);
+  chatSessionIdRef.current = chatSessionId;
+
+  useEffect(() => {
+    // Return the unsubscribe so the module-level listener is removed on unmount.
+    return subscribeChatSessionId(setChatSessionId);
+  }, []);
+
+  // Mirror the current loop metadata into refs during render (see buildExportData /
+  // applyLoopDocument) so a reader always sees the latest state, never a
+  // one-commit-stale value from a deferred effect.
+  selectedTemplateRef.current = selectedTemplate;
+  isNewTemplateRef.current = isNewTemplate;
+  newTemplateNameRef.current = newTemplateName;
 
   const onEdgesChangeCustom: OnEdgesChange = useCallback(
     (changes) => {
@@ -567,20 +610,22 @@ export default function LoopEditor() {
   // --- Export ---
   // Issue #5: nodes/edges change on every React Flow interaction, so we read
   // them from refs inside the handler instead of capturing in useCallback deps.
-  const handleExport = useCallback(() => {
-    // Read current graph from refs to avoid stale closures
+  // The same builder backs the loop editor context relay (ADR-0011), which reads
+  // the metadata from refs too, so the document the chat sees is always the live
+  // graph as-of the moment it is pulled.
+  const buildExportData = useCallback((): LoopTemplateExport => {
     const loopNodes = nodesToLoopNodes(nodesRef.current);
     const loopEdges = edgesToLoopNodeEdges(edgesRef.current);
 
-    const exportTemplate: LoopTemplate = selectedTemplate
+    const exportTemplate: LoopTemplate = selectedTemplateRef.current
       ? {
-          ...selectedTemplate,
+          ...selectedTemplateRef.current,
           nodes: loopNodes,
           edges: loopEdges,
         }
       : {
           id: "",
-          name: newTemplateName || "Untitled",
+          name: newTemplateNameRef.current || "Untitled",
           description: "",
           version: 0,
           recoveryPolicy: RecoveryPolicy.AutoResume,
@@ -591,9 +636,105 @@ export default function LoopEditor() {
           isArchived: false,
         };
 
-    const exportData = serializeForExport(exportTemplate);
-    downloadExport(exportData, exportTemplate.name);
-  }, [selectedTemplate, newTemplateName]);
+    return serializeForExport(exportTemplate);
+  }, []);
+
+  const handleExport = useCallback(() => {
+    const exportData = buildExportData();
+    downloadExport(exportData, exportData.name);
+  }, [buildExportData]);
+
+  // --- Loop editor context (ADR-0011) ---
+  // While a loop is open, expose its live document to the chat bubble (which sends
+  // it with each message) and apply AI edits the chat hub pushes back. Only the
+  // human Save persists — applying an edit mutates transient canvas state only.
+
+  // Register the live-loop getter for the duration of the mount. It returns null
+  // when nothing is open so a message sent from an empty editor carries no loop.
+  useEffect(() => {
+    setOpenLoopProvider(() =>
+      selectedTemplateRef.current || isNewTemplateRef.current ? buildExportData() : null,
+    );
+    return () => setOpenLoopProvider(null);
+  }, [buildExportData]);
+
+  const applyLoopDocument = useCallback(
+    (rawDocument: string) => {
+      // Only apply when a loop is actually open; otherwise the canvas is showing
+      // the empty-state and there is nothing to replace.
+      if (!selectedTemplateRef.current && !isNewTemplateRef.current) return;
+
+      // An AI edit is a programmatic import into transient unsaved state: reuse the
+      // import validator, and on a malformed document leave the loop untouched.
+      // parseImportFile returns { ok: false } for bad input, but guard against an
+      // unexpected throw too so a rogue payload can never crash the render.
+      let result;
+      try {
+        result = parseImportFile(rawDocument);
+      } catch (error) {
+        setErrorText(`AI loop edit rejected: ${loadErrorMessage(error, "Invalid loop document.")}`);
+        return;
+      }
+      if (!result.ok) {
+        setErrorText(`AI loop edit rejected: ${result.error}`);
+        return;
+      }
+
+      const parsed = result.data;
+      const loopNodes = exportNodesToLoopNodes(parsed.nodes);
+      const loopEdges = exportEdgesToLoopNodeEdges(parsed.edges);
+      const base = selectedTemplateRef.current;
+      const applied: LoopTemplate = base
+        ? {
+            ...base,
+            name: parsed.name,
+            description: parsed.description,
+            recoveryPolicy: parsed.recoveryPolicy,
+            nodes: loopNodes,
+            edges: loopEdges,
+          }
+        : {
+            id: "",
+            name: parsed.name,
+            description: parsed.description,
+            version: 0,
+            recoveryPolicy: parsed.recoveryPolicy,
+            nodes: loopNodes,
+            edges: loopEdges,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            isArchived: false,
+          };
+
+      setNodes(templateToNodes(applied));
+      setEdges(templateToEdges(applied));
+      // Keep the editor's saveable metadata in step so a subsequent human Save
+      // persists exactly what the AI produced.
+      if (base) setSelectedTemplate(applied);
+      else setNewTemplateName(parsed.name);
+    },
+    [setNodes, setEdges, setSelectedTemplate, setNewTemplateName, setErrorText],
+  );
+
+  // Join the current session's hub group, and leave it when the id changes (e.g.
+  // the user ends one session and starts another) so we never linger on a stale
+  // group or miss the new one.
+  useEffect(() => {
+    if (chatConnectionState !== "connected" || !chatSessionId) return;
+    void invokeChat("SubscribeToChat", chatSessionId);
+    return () => {
+      void invokeChat("UnsubscribeFromChat", chatSessionId);
+    };
+  }, [chatConnectionState, chatSessionId, invokeChat]);
+
+  useEffect(() => {
+    const onLoopUpdate = (msg: { payload: ChatLoopUpdatePayload }) => {
+      if (msg.payload.chatSessionId !== chatSessionIdRef.current) return;
+      applyLoopDocument(msg.payload.document);
+    };
+    onChat("ChatLoopUpdate", onLoopUpdate);
+    return () => offChat("ChatLoopUpdate", onLoopUpdate);
+  }, [onChat, offChat, applyLoopDocument]);
 
   // --- Import ---
   // Issue #1: useRef instead of window for import queue

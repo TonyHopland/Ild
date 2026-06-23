@@ -26,6 +26,8 @@ import {
   type Size,
 } from "./chatPlacement";
 import MarkdownRenderer from "./MarkdownRenderer";
+import { getOpenLoopDocument } from "../utils/openLoopDocument";
+import { setCurrentChatSessionId } from "../services/chatSessionStore";
 import "./ChatBubble.css";
 
 // Treat tiny pointer movements as a click, not a drag, so the icon still opens
@@ -212,6 +214,12 @@ export default function ChatBubble() {
     }
   }, [connectionState, session?.id, invoke]);
 
+  // Publish the session id so other components (the LoopEditor) can join the same
+  // chat group — including a session created or restarted after they mount.
+  useEffect(() => {
+    setCurrentChatSessionId(session?.id ?? null);
+  }, [session?.id]);
+
   const upsertMessage = useCallback((message: ChatMessage) => {
     setMessages((prev) =>
       prev.some((m) => m.id === message.id)
@@ -311,7 +319,12 @@ export default function ChatBubble() {
     setInput("");
     setBusy(true);
     try {
-      await chatService.sendMessage(content, openWorkItemIdRef.current);
+      // The open Loop Editor's live, possibly-unsaved document travels with each
+      // message so the agent can read and edit the loop the user is looking at
+      // (ADR-0011). Serialized to the same JSON the editor's import/export use.
+      const openLoop = getOpenLoopDocument();
+      const openLoopDocument = openLoop ? JSON.stringify(openLoop) : null;
+      await chatService.sendMessage(content, openWorkItemIdRef.current, openLoopDocument);
     } catch (e) {
       setBusy(false);
       setError((e as { message?: string })?.message ?? "Could not send message.");
