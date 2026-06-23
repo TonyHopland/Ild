@@ -7,15 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- The taskboard no longer gets stuck showing a stale status (e.g. a newly created work item parking for human input still showing "Running") when a burst of work-item-hub events arrives in quick succession. Each event triggered a `getById`, and an earlier fetch the server answered with an older status could resolve _after_ a later one and clobber the fresher state, with nothing to correct it. Each fetch now carries a per-item request ordinal and its result is applied only while it is still the latest request for that item, so a late, stale response is dropped instead of reverting the card.
+## [0.3.0] - 2026-06-23
 
 ### Added
 
-- The run timeline/event log now records an `EdgeTraversed` entry naming the edge the engine took out of each node — a custom edge's name (e.g. `Respond`, `true`/`false`), or the role (`OnSuccess`/`OnFailure`) for default and fallback edges — so routings are visible as the edge taken rather than only the node's Succeeded/Failed status. Best-effort and attributed to the node the edge left; routing behavior is unchanged.
-- The run-details timeline now labels each edge by the actual edge the engine traversed (resolved from the node's persisted `IncomingEdgeId`, now exposed on the run-node API), so a custom routing shows its name (e.g. `Respond`) instead of the generic `custom`. Runs predating edge persistence fall back to the previous inferred-from-status label.
+- **Context-aware AI chat** — a per-user, draggable and resizable in-app chat bubble that talks to ILD's work-item tools. It can create, edit, and delete work items (editing or deleting only the items its own session created), and is aware of the work item, worktree, and live loop-editor context it is opened from. When a Loop Editor is open it can read the in-flight loop document (`get_current_loop`) and direct-apply a full-document edit to the open canvas (`update_current_loop`) without saving — persistence stays human-only. New chats pre-select the default AI provider. See [ADR-0011](docs/adr/0011-context-aware-chat.md).
+- **Condition node** — a new graph node type that evaluates a single predicate against run/work-item state (text match, PR exists, has tag) and routes to a fixed `true`/`false` edge without invoking AI, running a command, or touching the worktree. Includes engine executor, template validation, and loop-editor support.
+- **Per-run loop variables** — AI nodes can read and write named variables scoped to a run; the run view renders them as markdown. New `{{Conversation.*}}` placeholders expose run history to prompt templates.
+- **Preview services** — start, stop, and configure preview services individually, with a table view showing per-service state, an editable port, a link, and live logs.
+- **PR auto-merge and full PR view** — PRs tagged `AutoMerge` are merged automatically once approved and green; the heartbeat poller fires PR-state custom edges and surfaces a full PR view with CI verdict and reviews.
+- **Abandon run** — stop a running run, including while it is parked for human feedback, from the work item Runs/Action tab.
+- Fork an AI session into a new named session so a later node can reuse it.
+- Taskboard cards parked awaiting merge show PR status tags, and the run timeline/event log now records an `EdgeTraversed` entry naming the edge the engine took out of each node — a custom edge's name (e.g. `Respond`, `true`/`false`), or the role (`OnSuccess`/`OnFailure`) for default and fallback edges — so routings are visible as the edge taken rather than only the node's Succeeded/Failed status. Best-effort and attributed to the node the edge left; routing behavior is unchanged.
+- Node transitions are now marked in the live output stream.
+- The viewed loop template now persists in the URL so it can be linked and survives a reload.
+- **Container image publishing** — CI builds and pushes both deployable images (`ghcr.io/tonyhopland/ild` and `ghcr.io/tonyhopland/ild-workitem-server`) to GHCR from a build-gated job, and both report their stamped version on `/health`. See [ADR-0012](docs/adr/0012-ghcr-image-tagging-strategy.md).
 
+### Changed
+
+- **Work item dialog redesign** — the full-screen V2 dialog is now used for work-item creation (the old modal is removed); the live view and human-feedback pane moved into an **Action** tab, which opens automatically when an item is awaiting human feedback, and the Halt/steer control now lives there too.
+- The AI node dialog was redesigned.
+- Work item **Description** is now unlimited length.
+- Git commit identity can be overridden via environment variables without changing the host default.
+- **Loop-editor edge rendering** — multiple edges between the same pair of connectors are now allowed and fanned onto readable, individually clickable lanes with staggered labels; edge labels are the click target for selection, and edges highlight on hover.
+- The run-details timeline now labels each edge by the actual edge the engine traversed (resolved from the node's persisted `IncomingEdgeId`, now exposed on the run-node API), so a custom routing shows its name (e.g. `Respond`) instead of the generic `custom`. Runs predating edge persistence fall back to the previous inferred-from-status label.
+- The taskboard heading is replaced with a filter + toggle toolbar.
+
+### Fixed
+
+- The taskboard no longer gets stuck showing a stale status (e.g. a newly created work item parking for human input still showing "Running") when a burst of work-item-hub events arrives in quick succession. Each event triggered a `getById`, and an earlier fetch the server answered with an older status could resolve _after_ a later one and clobber the fresher state, with nothing to correct it. Each fetch now carries a per-item request ordinal and its result is applied only while it is still the latest request for that item, so a late, stale response is dropped instead of reverting the card.
+- The WorkItem Server's Ready→Running claim is now atomic, closing a race that could let two runs claim the same work item.
+- A waiting work-queue item is promoted to Ready when the dependency it was waiting on completes.
+- `on_merged` is now wired to the Cleanup node, and a PR failure no longer loops back endlessly.
+- A PR keeps its approval when a later `COMMENTED` review follows, and the CI verdict is serialized as its string name so the PR panel renders it.
+- `HumanFeedbackReason` is cleared when a human signal resumes a run, and halt state is cleared when a node is retried so the steer dialog no longer sticks.
+- The `ild.config` tool install on the Start node is best-effort when no config is present, instead of failing the node.
+- A work item edit now broadcasts so the board refreshes without a manual reload.
+
+### Security
+
+- Patched Dependabot advisories in dev-tree dependencies (`vite`, `ws`, `react-router`).
 
 ## [0.2.0] - 2026-06-15
 
