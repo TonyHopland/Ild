@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Reflection;
 using ILD.WorkItemServer;
 using ILD.WorkItemServer.Domain;
 using ILD.WorkItemServer.Dtos;
@@ -82,6 +83,25 @@ public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTest
         var resp = await c.GetAsync("/health");
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
     }
+
+    [Fact]
+    public async Task Health_endpoint_reports_the_stamped_version()
+    {
+        var c = _factory.CreateClient();
+        var body = await c.GetFromJsonAsync<HealthBody>("/health");
+
+        var expected = typeof(WorkItemServerProgram).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()!.InformationalVersion;
+
+        Assert.NotNull(body);
+        Assert.Equal("ok", body!.Status);
+        // The image's in-image version is the build-time informational version
+        // (release stamp == tag; docs/adr/0012), with no source-revision suffix.
+        Assert.Equal(expected, body.Version);
+        Assert.DoesNotContain("+", body.Version);
+    }
+
+    private sealed record HealthBody(string Status, string Version);
 
     [Fact]
     public async Task Unauthenticated_requests_return_401()

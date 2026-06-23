@@ -21,7 +21,12 @@ public class HealthController : ControllerBase
     public async Task<IActionResult> Check()
     {
         var health = new HealthResponse();
-        health.Version = Assembly.GetEntryAssembly()?.GetName().Version?.ToString() ?? "unknown";
+        // Report the build-time informational version (CI stamps it to the
+        // release tag via -p:Version; see docs/adr/0012). Read it from this
+        // assembly rather than the entry assembly so it resolves to ILD.Api
+        // under the test host as well as the published app.
+        health.Version = typeof(HealthController).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "unknown";
 
         try
         {

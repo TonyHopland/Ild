@@ -1,3 +1,4 @@
+using System.Reflection;
 using ILD.WorkItemServer.Auth;
 using ILD.WorkItemServer.Hosting;
 using ILD.WorkItemServer.Services;
@@ -89,7 +90,12 @@ public sealed class WorkItemServerProgram
             }
         }
 
-        app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+        // Surface the build-time informational version (CI stamps it to the
+        // release tag via -p:Version; see docs/adr/0012) so the published
+        // image's in-image version matches its tag.
+        var version = typeof(WorkItemServerProgram).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "unknown";
+        app.MapGet("/health", () => Results.Ok(new { status = "ok", version }));
         app.UseMiddleware<ApiKeyMiddleware>();
         app.MapControllers();
 

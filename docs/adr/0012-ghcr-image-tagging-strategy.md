@@ -12,6 +12,8 @@ Both deployable images (`ghcr.io/tonyhopland/ild` and `ghcr.io/tonyhopland/ild-w
 
 **Version stamping overrides only the informational `Version`.** Releases publish with `dotnet publish -p:Version=X.Y.Z` (from the tag); `main` builds stamp `<props-base>-main+<shortsha>` (base from `Directory.Build.props`). In both cases the numeric `AssemblyVersion`/`FileVersion` keep the props values, so assembly identity stays clean and only the human-facing version carries the build provenance. The override flows in as the `VERSION` Docker build arg, which is empty for local/compose builds so they keep the props version unchanged.
 
+**The informational version is the in-image version.** Both images report it on `/health` (ILD's `HealthController`, the WorkItem Server's `/health`), reading `AssemblyInformationalVersionAttribute` rather than the pinned numeric `AssemblyVersion`. So a release stamps `Version=X.Y.Z` and `/health` reports `X.Y.Z` == the tag. `IncludeSourceRevisionInInformationalVersion` is set `false` in `Directory.Build.props` so the SDK does not append a `+<git-sha>` to the informational version, which would otherwise make a release surface `X.Y.Z+<sha>` instead of the bare tag.
+
 ## Consequences
 
 - **One manual, one-time step per package.** The first push lands each GHCR package **private**; each must be flipped to **public** once in package settings (documented in [deployment](../deployment.md#published-images)). This cannot be automated from the push.

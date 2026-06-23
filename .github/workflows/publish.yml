@@ -88,5 +88,7 @@ jobs:
           build-args: |
             VERSION=${{ steps.vars.outputs.version }}
             ${{ matrix.extra_build_args }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Scope the cache per image so the two matrix builds don't clobber
+          # each other's gha cache entries.
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
