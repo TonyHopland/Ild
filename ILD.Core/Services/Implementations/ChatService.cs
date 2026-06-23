@@ -266,10 +266,36 @@ public sealed class ChatService : IChatService
                 "The user has a loop open in the Loop Editor. Call get_current_loop to read it as the "
                 + "ild-loop-template/v1 document, and update_current_loop with a complete document to edit "
                 + "it live (full replacement — the canvas updates immediately). Only the human can save.");
+            lines.Add(LoopAuthoringGuide);
         }
 
         return (string.Join("\n", lines), allowedDirectories);
     }
+
+    /// <summary>
+    /// A compact primer on the loop template model so the chat agent can author a
+    /// valid <c>ild-loop-template/v1</c> document — included in the Chat Context only
+    /// when a Loop Editor is open (ADR-0011). Mirrors the node/edge vocabulary in
+    /// CONTEXT.md and the config fields the editor reads/writes.
+    /// </summary>
+    private const string LoopAuthoringGuide =
+        """
+        Loop authoring guide — a loop is a directed graph executed from its Start node.
+        Document shape: { "$schema": "ild-loop-template/v1", "name", "description", "recoveryPolicy" (AutoResume|NeedsReview|Cancel), "nodes": [...], "edges": [...] }.
+        Each node: { "id", "type", "label" (unique), "config": {...} }. Each edge: { "id", "sourceNodeId", "targetNodeId", "edgeType" (OnSuccess|OnFailure|Custom), "name" (Custom only) }.
+        Node types and their key config fields:
+        - Start: entry point; creates the worktree/branch. config.createWorktree (bool), config.runInstall (bool).
+        - Cmd: runs a shell command in the worktree, succeeds on exit 0. config.command.
+        - AI: runs the agent. config.prompt, config.aiProviderId, config.toolAllowlist (string[]), config.matchRules ([{ "pattern", "edgeName" }] routing the AI output to Custom edges by name).
+        - Human: pauses for human input (becomes {{PreviousNode.Output}}). config.inputLabel, config.prompt, config.customEdges (string[] of Custom edge names this node may emit).
+        - Prompt: renders a templated string as its Output (compose a downstream AI prompt). config.prompt. Always routes OnSuccess.
+        - PR: opens/maintains a pull request. config.prDescriptionTemplate, config.prCommentTemplate, config.customEdges. Reserved PR edges: on_rejected, on_merge_conflict, on_ci_failed, on_approved, on_ci_passed, on_merged, on_abandoned — wire on_merged/on_abandoned to reach a terminal path.
+        - Condition: routes to two fixed Custom edges named "true" and "false". config.variant (TextMatches|PrExists|HasTag); TextMatches uses config.subject + config.pattern, HasTag uses config.tag; config.output is the pass-through.
+        - Cleanup: terminal sink (incoming edges only); marks the run finished.
+        Edges: give every non-terminal node an OnSuccess edge (and usually OnFailure). Custom edges are matched by name — AI matchRules.edgeName, Human/PR customEdges, Condition true/false.
+        Variables: templated fields expand placeholders — {{WorkItem.Title}}/{{WorkItem.Description}}, {{PreviousNode.Output}}, {{EventLog.LastN}}, and {{Var.<name>}}. A Loop Variable is a mutable per-run string an AI node writes (via the agent variable API/tools) for a later node to read; names match [A-Za-z][A-Za-z0-9_]*.
+        Sessions: an AI node continues a multi-turn agent session by setting config.useSession=true and config.sessionPlaceholder="<name>"; config.forkFromPlaceholder="<name>" branches from another node's session. AI nodes share a session only when they use the same placeholder.
+        """;
 
     public async Task<bool> EndAsync(string userId, CancellationToken ct = default)
     {

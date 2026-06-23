@@ -361,6 +361,41 @@ public sealed class ChatServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ExecuteTurnAsync_includes_node_variable_and_session_guidance_when_a_loop_is_open()
+    {
+        var provider = await SeedProviderAsync();
+        var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
+        var svc = NewService(adapter);
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+
+        const string document = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"L\",\"nodes\":[]}";
+        await svc.ExecuteTurnAsync(started.Id, "help me wire this up", openWorkItemId: null, document, CancellationToken.None);
+
+        // The Chat Context teaches the agent the loop model so it can author a valid
+        // document: node types, edges, variables, and sessions.
+        var prompt = adapter.LastContext!.Prompt;
+        Assert.Contains("Loop authoring guide", prompt);
+        Assert.Contains("Condition", prompt);
+        Assert.Contains("OnFailure", prompt);
+        Assert.Contains("{{Var.<name>}}", prompt);
+        Assert.Contains("sessionPlaceholder", prompt);
+    }
+
+    [Fact]
+    public async Task ExecuteTurnAsync_omits_loop_guidance_when_only_a_work_item_is_open()
+    {
+        var provider = await SeedProviderAsync();
+        var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
+        var svc = NewService(adapter);
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+
+        await svc.ExecuteTurnAsync(started.Id, "what is open?", "wi-42", openLoopDocument: null, CancellationToken.None);
+
+        // No loop editor open ⇒ the loop primer is not paid for.
+        Assert.DoesNotContain("Loop authoring guide", adapter.LastContext!.Prompt);
+    }
+
+    [Fact]
     public async Task ExecuteTurnAsync_overwrites_then_clears_the_loop_scratchpad_per_message()
     {
         var provider = await SeedProviderAsync();

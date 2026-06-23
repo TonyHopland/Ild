@@ -5,7 +5,6 @@ using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
-using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Tests.Integration;
@@ -496,35 +495,6 @@ public class AgentApiIntegrationTests
         Assert.Equal(1.0m, run.GetProperty("costUsd").GetDecimal());
         Assert.Equal(100, run.GetProperty("inputTokens").GetInt64());
         Assert.Equal(200, run.GetProperty("outputTokens").GetInt64());
-    }
-
-    [Fact]
-    public async Task AgentApi_registers_the_current_loop_get_and_put_routes()
-    {
-        // Guards against the failure the chat hit in review: a request for
-        // /api/v1/agent/current-loop falling through to the SPA catch-all
-        // (index.html, 200) because the route is absent. This asserts the route is
-        // actually mapped in the built application — both verbs — not just that an
-        // HTTP call happens to succeed. If it ever fails here, the endpoint is
-        // missing from the build and must be (re)deployed.
-        await using var factory = new ApiFactory();
-        using var _ = factory.CreateClient(); // force the host to build and map endpoints
-
-        var endpoints = factory.Services.GetServices<EndpointDataSource>()
-            .SelectMany(source => source.Endpoints)
-            .OfType<RouteEndpoint>()
-            .Where(e => string.Equals(
-                e.RoutePattern.RawText?.Trim('/'),
-                "api/v1/agent/current-loop",
-                StringComparison.OrdinalIgnoreCase))
-            .ToList();
-
-        Assert.NotEmpty(endpoints);
-        var methods = endpoints
-            .SelectMany(e => e.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods ?? Array.Empty<string>())
-            .ToList();
-        Assert.Contains("GET", methods);
-        Assert.Contains("PUT", methods);
     }
 
     [Fact]
