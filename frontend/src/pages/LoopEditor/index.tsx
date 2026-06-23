@@ -20,14 +20,10 @@ import LoopNodeComponent from "../../components/LoopNodeComponent";
 import LoopEdgeComponent from "../../components/LoopEdgeComponent";
 import { LoopEdgeInteractionContext } from "../../components/loopEdgeInteraction";
 import ErrorBanner from "../../components/ErrorBanner";
-import {
-  loopTemplateService,
-  agentAdapterService,
-  aiProviderService,
-  chatService,
-} from "../../services/auth";
+import { loopTemplateService, agentAdapterService, aiProviderService } from "../../services/auth";
 import { useSignalR } from "../../hooks/useSignalR";
 import { setOpenLoopProvider } from "../../utils/openLoopDocument";
+import { getCurrentChatSessionId, subscribeChatSessionId } from "../../services/chatSessionStore";
 import {
   templateToNodes,
   templateToEdges,
@@ -58,6 +54,7 @@ import {
   type LoopNodeEdge,
   type LoopTemplate,
   type LoopTemplateExport,
+  type ChatLoopUpdatePayload,
   EdgeType,
   NodeType,
   RecoveryPolicy,
@@ -351,16 +348,22 @@ export default function LoopEditor() {
 
   // Loop editor context (ADR-0011): subscribe to the chat hub directly so an AI
   // edit lands on this canvas, and track the user's chat session so we only act on
-  // our own session's events.
+  // our own session's events. The id comes from the shared store ChatBubble
+  // publishes to, so a session started — or restarted — after this editor mounts
+  // still re-joins the correct group (seed at mount, then react to every change).
   const {
     connectionState: chatConnectionState,
     on: onChat,
     off: offChat,
     invoke: invokeChat,
   } = useSignalR("/hubs/chat");
-  const [chatSessionId, setChatSessionId] = useState<string | null>(null);
+  const [chatSessionId, setChatSessionId] = useState<string | null>(() =>
+    getCurrentChatSessionId(),
+  );
   const chatSessionIdRef = useRef<string | null>(null);
   chatSessionIdRef.current = chatSessionId;
+
+  useEffect(() => subscribeChatSessionId(setChatSessionId), []);
 
   // Mirror the current loop metadata into refs (see buildExportData / applyLoopDocument).
   useEffect(() => {
@@ -700,28 +703,19 @@ export default function LoopEditor() {
     [setNodes, setEdges],
   );
 
-  // Resolve the user's chat session id so we can join its hub group.
+  // Join the current session's hub group, and leave it when the id changes (e.g.
+  // the user ends one session and starts another) so we never linger on a stale
+  // group or miss the new one.
   useEffect(() => {
-    let cancelled = false;
-    void chatService
-      .get()
-      .then((session) => {
-        if (!cancelled) setChatSessionId(session?.id ?? null);
-      })
-      .catch(() => {});
+    if (chatConnectionState !== "connected" || !chatSessionId) return;
+    void invokeChat("SubscribeToChat", chatSessionId);
     return () => {
-      cancelled = true;
+      void invokeChat("UnsubscribeFromChat", chatSessionId);
     };
-  }, []);
-
-  useEffect(() => {
-    if (chatConnectionState === "connected" && chatSessionId) {
-      void invokeChat("SubscribeToChat", chatSessionId);
-    }
   }, [chatConnectionState, chatSessionId, invokeChat]);
 
   useEffect(() => {
-    const onLoopUpdate = (msg: { payload: { chatSessionId: string; document: string } }) => {
+    const onLoopUpdate = (msg: { payload: ChatLoopUpdatePayload }) => {
       if (msg.payload.chatSessionId !== chatSessionIdRef.current) return;
       applyLoopDocument(msg.payload.document);
     };

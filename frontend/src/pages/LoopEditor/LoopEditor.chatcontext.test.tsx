@@ -4,17 +4,20 @@ import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { AuthContext } from "../../hooks/useAuth";
 import { NodeType, EdgeType, RecoveryPolicy } from "../../types";
 import { getOpenLoopDocument } from "../../utils/openLoopDocument";
+import { setCurrentChatSessionId } from "../../services/chatSessionStore";
 
 // Capture the hub handlers the editor registers so a test can fire a server push,
 // and stub the services the editor calls on mount (mirrors ChatBubble.test.tsx).
-const { handlers, loopTemplateService, aiProviderService, agentAdapterService, chatService } =
-  vi.hoisted(() => ({
+// The chat session id comes from the real chatSessionStore (driven below), not a
+// service call, so it is exercised end to end.
+const { handlers, loopTemplateService, aiProviderService, agentAdapterService } = vi.hoisted(
+  () => ({
     handlers: {} as Record<string, (msg: { payload: unknown }) => void>,
     loopTemplateService: { getAll: vi.fn() },
     aiProviderService: { getAll: vi.fn() },
     agentAdapterService: { getConfigSchema: vi.fn() },
-    chatService: { get: vi.fn() },
-  }));
+  }),
+);
 
 vi.mock("../../hooks/useSignalR", () => ({
   useSignalR: () => ({
@@ -33,7 +36,6 @@ vi.mock("../../services/auth", () => ({
   loopTemplateService,
   aiProviderService,
   agentAdapterService,
-  chatService,
 }));
 
 import LoopEditor from "./index";
@@ -106,17 +108,26 @@ function renderEditorWithOpenTemplate() {
   );
 }
 
+function pushLoopUpdate(chatSessionId: string, document: object) {
+  act(() => {
+    handlers.ChatLoopUpdate?.({
+      payload: { chatSessionId, document: JSON.stringify(document) },
+    });
+  });
+}
+
 afterEach(() => {
   cleanup();
   for (const k of Object.keys(handlers)) delete handlers[k];
   vi.clearAllMocks();
+  // The store is module-level global; reset so a session id can't leak between tests.
+  setCurrentChatSessionId(null);
 });
 
 describe("Loop Editor — loop editor context (ADR-0011)", () => {
   test("exposes the open loop as a live ild-loop-template/v1 document for the chat", async () => {
     loopTemplateService.getAll.mockResolvedValue([sampleTemplate]);
     aiProviderService.getAll.mockResolvedValue([]);
-    chatService.get.mockResolvedValue({ id: "s1" });
 
     renderEditorWithOpenTemplate();
     await waitFor(() => expect(screen.getByText("Initialize")).toBeTruthy());
@@ -131,18 +142,13 @@ describe("Loop Editor — loop editor context (ADR-0011)", () => {
   test("applies a pushed loop document live to the canvas for the matching session", async () => {
     loopTemplateService.getAll.mockResolvedValue([sampleTemplate]);
     aiProviderService.getAll.mockResolvedValue([]);
-    chatService.get.mockResolvedValue({ id: "s1" });
+    // A session exists before the editor mounts (seeded from the shared store).
+    setCurrentChatSessionId("s1");
 
     renderEditorWithOpenTemplate();
     await waitFor(() => expect(screen.getByText("Initialize")).toBeTruthy());
-    // The session id must resolve before the push so the handler accepts it.
-    await waitFor(() => expect(chatService.get).toHaveBeenCalled());
 
-    act(() => {
-      handlers.ChatLoopUpdate?.({
-        payload: { chatSessionId: "s1", document: JSON.stringify(aiDocument) },
-      });
-    });
+    pushLoopUpdate("s1", aiDocument);
 
     // New labels replace the old ones — the canvas updated in place.
     await waitFor(() => expect(screen.getByText("Boot Up")).toBeTruthy());
@@ -151,20 +157,38 @@ describe("Loop Editor — loop editor context (ADR-0011)", () => {
     expect(screen.queryByText("Tidy Up")).toBeNull();
   });
 
-  test("ignores a push addressed to a different chat session", async () => {
+  test("applies edits for a session created after the editor mounted", async () => {
     loopTemplateService.getAll.mockResolvedValue([sampleTemplate]);
     aiProviderService.getAll.mockResolvedValue([]);
-    chatService.get.mockResolvedValue({ id: "s1" });
+    // No session yet when the editor mounts — the user opens the chat and starts
+    // one only afterwards. The one-shot-resolve bug would leave this stuck on null.
+    setCurrentChatSessionId(null);
 
     renderEditorWithOpenTemplate();
     await waitFor(() => expect(screen.getByText("Initialize")).toBeTruthy());
-    await waitFor(() => expect(chatService.get).toHaveBeenCalled());
 
-    act(() => {
-      handlers.ChatLoopUpdate?.({
-        payload: { chatSessionId: "someone-else", document: JSON.stringify(aiDocument) },
-      });
-    });
+    // A push now would be ignored — there is no session to match yet.
+    pushLoopUpdate("s-late", aiDocument);
+    expect(screen.getByText("Initialize")).toBeTruthy();
+    expect(screen.queryByText("Boot Up")).toBeNull();
+
+    // ChatBubble starts a session and publishes it; the editor must pick it up.
+    act(() => setCurrentChatSessionId("s-late"));
+    pushLoopUpdate("s-late", aiDocument);
+
+    await waitFor(() => expect(screen.getByText("Boot Up")).toBeTruthy());
+    expect(screen.queryByText("Initialize")).toBeNull();
+  });
+
+  test("ignores a push addressed to a different chat session", async () => {
+    loopTemplateService.getAll.mockResolvedValue([sampleTemplate]);
+    aiProviderService.getAll.mockResolvedValue([]);
+    setCurrentChatSessionId("s1");
+
+    renderEditorWithOpenTemplate();
+    await waitFor(() => expect(screen.getByText("Initialize")).toBeTruthy());
+
+    pushLoopUpdate("someone-else", aiDocument);
 
     // The canvas is untouched — the event was for another user's session.
     expect(screen.getByText("Initialize")).toBeTruthy();
@@ -174,21 +198,13 @@ describe("Loop Editor — loop editor context (ADR-0011)", () => {
   test("rejects a malformed document with a banner and leaves the loop untouched", async () => {
     loopTemplateService.getAll.mockResolvedValue([sampleTemplate]);
     aiProviderService.getAll.mockResolvedValue([]);
-    chatService.get.mockResolvedValue({ id: "s1" });
+    setCurrentChatSessionId("s1");
 
     renderEditorWithOpenTemplate();
     await waitFor(() => expect(screen.getByText("Initialize")).toBeTruthy());
-    await waitFor(() => expect(chatService.get).toHaveBeenCalled());
 
-    act(() => {
-      // Wrong $schema — parseImportFile must reject it.
-      handlers.ChatLoopUpdate?.({
-        payload: {
-          chatSessionId: "s1",
-          document: JSON.stringify({ ...aiDocument, $schema: "not-a-loop/v9" }),
-        },
-      });
-    });
+    // Wrong $schema — parseImportFile must reject it.
+    pushLoopUpdate("s1", { ...aiDocument, $schema: "not-a-loop/v9" });
 
     await waitFor(() => expect(screen.getByText(/AI loop edit rejected/i)).toBeTruthy());
     // The original graph survives the rejected edit.

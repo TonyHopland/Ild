@@ -27,6 +27,7 @@ import {
 } from "./chatPlacement";
 import MarkdownRenderer from "./MarkdownRenderer";
 import { getOpenLoopDocument } from "../utils/openLoopDocument";
+import { setCurrentChatSessionId } from "../services/chatSessionStore";
 import "./ChatBubble.css";
 
 // Treat tiny pointer movements as a click, not a drag, so the icon still opens
@@ -212,6 +213,12 @@ export default function ChatBubble() {
       void invoke("SubscribeToChat", session.id);
     }
   }, [connectionState, session?.id, invoke]);
+
+  // Publish the session id so other components (the LoopEditor) can join the same
+  // chat group — including a session created or restarted after they mount.
+  useEffect(() => {
+    setCurrentChatSessionId(session?.id ?? null);
+  }, [session?.id]);
 
   const upsertMessage = useCallback((message: ChatMessage) => {
     setMessages((prev) =>
