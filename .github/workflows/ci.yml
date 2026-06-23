@@ -40,10 +40,11 @@ jobs:
       - name: Backend tests
         run: dotnet test ILD.Tests/ILD.Tests.csproj --no-build --configuration Release --nologo
 
-  # Publish to GHCR only after the build is green, and never on PRs.
+  # Publish to GHCR only on a release tag, after the build is green. Merges to
+  # main build and test but never publish.
   publish:
     needs: build-and-test
-    if: github.event_name != 'pull_request'
+    if: github.ref_type == 'tag'
     permissions:
       contents: read
       packages: write
