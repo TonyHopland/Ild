@@ -206,15 +206,17 @@ export default function LoopEditor() {
   const nodesRef = useRef<Node[]>([]);
   const edgesRef = useRef<Edge[]>([]);
 
-  // Keep refs in sync so handleExport reads current graph without stale closures
-  useEffect(() => {
-    nodesRef.current = nodes;
-    edgesRef.current = edges;
-  }, [nodes, edges]);
+  // Track the latest graph in refs so callbacks (handleExport, the loop editor
+  // context relay) read the current graph without stale closures. Assigned during
+  // render — not in an effect — so a reader never observes a one-commit-stale
+  // snapshot (an effect would lag the commit and intermittently drop fresh state).
+  nodesRef.current = nodes;
+  edgesRef.current = edges;
 
   // Loop editor context (ADR-0011): the chat bubble and the live-loop applier both
   // need the current loop metadata without re-creating their stable callbacks, so
-  // mirror it into refs alongside the graph refs above.
+  // mirror it into refs alongside the graph refs above (synced during render below,
+  // once the metadata state is declared).
   const selectedTemplateRef = useRef<LoopTemplate | null>(null);
   const isNewTemplateRef = useRef(false);
   const newTemplateNameRef = useRef("");
@@ -365,12 +367,12 @@ export default function LoopEditor() {
 
   useEffect(() => subscribeChatSessionId(setChatSessionId), []);
 
-  // Mirror the current loop metadata into refs (see buildExportData / applyLoopDocument).
-  useEffect(() => {
-    selectedTemplateRef.current = selectedTemplate;
-    isNewTemplateRef.current = isNewTemplate;
-    newTemplateNameRef.current = newTemplateName;
-  }, [selectedTemplate, isNewTemplate, newTemplateName]);
+  // Mirror the current loop metadata into refs during render (see buildExportData /
+  // applyLoopDocument) so a reader always sees the latest state, never a
+  // one-commit-stale value from a deferred effect.
+  selectedTemplateRef.current = selectedTemplate;
+  isNewTemplateRef.current = isNewTemplate;
+  newTemplateNameRef.current = newTemplateName;
 
   const onEdgesChangeCustom: OnEdgesChange = useCallback(
     (changes) => {
