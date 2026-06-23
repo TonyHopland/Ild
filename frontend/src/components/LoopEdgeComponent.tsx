@@ -1,4 +1,4 @@
-import { useCallback, useContext } from "react";
+import { useCallback, useContext, useState } from "react";
 import {
   BaseEdge,
   EdgeLabelRenderer,
@@ -37,6 +37,12 @@ export default function LoopEdgeComponent({
 }: EdgeProps) {
   const selectEdge = useContext(LoopEdgeInteractionContext);
   const { getEdge } = useReactFlow();
+  // Highlight the edge under the cursor — a thicker, more vibrant line makes it
+  // obvious which two nodes the hovered connection joins, even where several
+  // siblings share one route. React Flow's transparent interaction path (the fat
+  // hit area BaseEdge draws beneath the visible line) gives us a forgiving target,
+  // and its pointer events bubble up to the wrapping <g>.
+  const [hovered, setHovered] = useState(false);
   const onLabelClick = useCallback(
     (event: React.MouseEvent) => {
       // Stop the canvas from also handling the click (which would clear the
@@ -77,9 +83,13 @@ export default function LoopEdgeComponent({
   const labelX = pathLabelX;
   const labelY = pathLabelY + parallelLabelOffset(index, count);
 
+  // On hover, thicken the line and brighten its colour. `brightness` works for
+  // any edge colour (success/failure/custom) without hard-coding a second palette.
+  const hoverStyle = hovered ? { strokeWidth: 3, filter: "brightness(1.4)" } : undefined;
+
   return (
-    <>
-      <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={style} />
+    <g onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}>
+      <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={{ ...style, ...hoverStyle }} />
       {label && (
         <EdgeLabelRenderer>
           <div
@@ -106,6 +116,6 @@ export default function LoopEdgeComponent({
           </div>
         </EdgeLabelRenderer>
       )}
-    </>
+    </g>
   );
 }
