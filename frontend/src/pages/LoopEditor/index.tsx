@@ -365,7 +365,10 @@ export default function LoopEditor() {
   const chatSessionIdRef = useRef<string | null>(null);
   chatSessionIdRef.current = chatSessionId;
 
-  useEffect(() => subscribeChatSessionId(setChatSessionId), []);
+  useEffect(() => {
+    // Return the unsubscribe so the module-level listener is removed on unmount.
+    return subscribeChatSessionId(setChatSessionId);
+  }, []);
 
   // Mirror the current loop metadata into refs during render (see buildExportData /
   // applyLoopDocument) so a reader always sees the latest state, never a
@@ -663,7 +666,15 @@ export default function LoopEditor() {
 
       // An AI edit is a programmatic import into transient unsaved state: reuse the
       // import validator, and on a malformed document leave the loop untouched.
-      const result = parseImportFile(rawDocument);
+      // parseImportFile returns { ok: false } for bad input, but guard against an
+      // unexpected throw too so a rogue payload can never crash the render.
+      let result;
+      try {
+        result = parseImportFile(rawDocument);
+      } catch (error) {
+        setErrorText(`AI loop edit rejected: ${loadErrorMessage(error, "Invalid loop document.")}`);
+        return;
+      }
       if (!result.ok) {
         setErrorText(`AI loop edit rejected: ${result.error}`);
         return;
@@ -702,7 +713,7 @@ export default function LoopEditor() {
       if (base) setSelectedTemplate(applied);
       else setNewTemplateName(parsed.name);
     },
-    [setNodes, setEdges],
+    [setNodes, setEdges, setSelectedTemplate, setNewTemplateName, setErrorText],
   );
 
   // Join the current session's hub group, and leave it when the id changes (e.g.
