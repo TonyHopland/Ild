@@ -27,6 +27,12 @@ RUN pnpm run build
 
 FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS build
 WORKDIR /src
+
+# Optional informational version override stamped by CI (see
+# docs/adr/0012-ghcr-image-tagging-strategy.md). Empty by default so local and
+# compose builds keep the version from Directory.Build.props.
+ARG VERSION=
+
 COPY ILD.sln ./
 COPY ILD.Data/ILD.Data.csproj ILD.Data/
 COPY ILD.Core/ILD.Core.csproj ILD.Core/
@@ -39,11 +45,11 @@ COPY . .
 RUN mkdir -p /certs && \
   if [ -d /src/certs ]; then cp -a /src/certs/. /certs/; fi
 WORKDIR /src/ILD.Api
-RUN dotnet publish -c Release -o /app/publish --no-restore
+RUN dotnet publish -c Release -o /app/publish --no-restore ${VERSION:+-p:Version=$VERSION}
 
 # Build the MCP server so it can be shipped alongside ILD.Api
 WORKDIR /src/ILD.McpServer
-RUN dotnet publish -c Release -o /app/mcp-server --no-restore
+RUN dotnet publish -c Release -o /app/mcp-server --no-restore ${VERSION:+-p:Version=$VERSION}
 
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS final
 WORKDIR /app

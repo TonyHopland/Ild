@@ -1,0 +1,19 @@
+# ADR-0012: GHCR image tagging and version-stamping strategy
+
+Both deployable images (`ghcr.io/tonyhopland/ild` and `ghcr.io/tonyhopland/ild-workitem-server`) are built and pushed to GHCR from CI by a build-gated `publish` job. This records the tagging, architecture, and version-stamping rules, which embed a few deliberate trade-offs.
+
+**Scope is publish-only.** CI pushes images, but the deploy path is unchanged — `docker-compose.yml` stays on `--build`. Wiring compose/the Pi to _pull_ these images is a separate follow-up. Until then the published images exist but nothing consumes them, which is intentional: it lets the pipeline be validated (and packages flipped public) before anything depends on them.
+
+**`latest` tracks the newest release, never `main`.** A `push` to `main` publishes only the `main` tag (amd64); a `vX.Y.Z` git tag publishes `X.Y.Z`, `X.Y`, and `latest` (amd64 + arm64). We deliberately do **not** mint an immutable `main-<sha>` tag — `main` is a moving pointer for the bleeding edge and the release tags are the stable, immutable references, so a per-commit tag would just accumulate noise no one pulls by name.
+
+**The canonical release tag is `vX.Y.Z`; the stray bare `0.2.0` git tag is ignored.** The CI trigger filters tags to `v*`, and `compute-version.sh` rejects any tag that is not `vX.Y.Z`, so the legacy bare tag can never trigger a publish. The image tag strips the leading `v`.
+
+**arm64 is release-only, built via QEMU emulation.** Emulated arm64 builds are slow, but releases are infrequent, so the cost is acceptable; `main` builds stay amd64-only to keep the common path fast.
+
+**Version stamping overrides only the informational `Version`.** Releases publish with `dotnet publish -p:Version=X.Y.Z` (from the tag); `main` builds stamp `<props-base>-main+<shortsha>` (base from `Directory.Build.props`). In both cases the numeric `AssemblyVersion`/`FileVersion` keep the props values, so assembly identity stays clean and only the human-facing version carries the build provenance. The override flows in as the `VERSION` Docker build arg, which is empty for local/compose builds so they keep the props version unchanged.
+
+## Consequences
+
+- **One manual, one-time step per package.** The first push lands each GHCR package **private**; each must be flipped to **public** once in package settings (documented in [deployment](../deployment.md#published-images)). This cannot be automated from the push.
+- **The publish never runs on PRs or on a red build.** `publish` is a reusable workflow (`on: workflow_call`) invoked from `ci.yml` with `needs: build-and-test` and `if: github.event_name != 'pull_request'`, authenticating with `GITHUB_TOKEN` (`packages: write`).
+- **Version logic is unit-tested.** `compute-version.sh` is covered by `compute-version.test.sh`, run as a CI step so the stamping rules are verified before any publish can use them.

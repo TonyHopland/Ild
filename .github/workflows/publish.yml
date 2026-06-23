@@ -1,0 +1,92 @@
+name: Publish
+
+# Build and push the two deployable images to GHCR. Called from ci.yml as a
+# final, build-gated job so a failing build never publishes. Tagging/arch rules
+# are recorded in docs/adr/0012-ghcr-image-tagging-strategy.md:
+#   push to main  -> tag `main`, amd64 only
+#   tag vX.Y.Z    -> tags X.Y.Z / X.Y / latest, amd64 + arm64
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ild
+            dockerfile: Dockerfile
+            # Batteries-included, matching the compose defaults.
+            extra_build_args: |
+              WITH_OPENCODE=1
+              WITH_PI=1
+              WITH_CLAUDE_CODE=1
+              WITH_NODE=1
+              WITH_DOTNET_SDK=1
+              WITH_CHROME=1
+              WITH_CERTS=0
+          - image: ild-workitem-server
+            dockerfile: Dockerfile.WorkItemServer
+            extra_build_args: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute version and platforms
+        id: vars
+        run: |
+          version="$(.github/scripts/compute-version.sh \
+            "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME" "$(git rev-parse --short HEAD)")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            echo "platforms=linux/amd64,linux/arm64" >> "$GITHUB_OUTPUT"
+          else
+            echo "platforms=linux/amd64" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/tonyhopland/${{ matrix.image }}
+          # `latest` tracks the newest release only, never main.
+          tags: |
+            type=raw,value=main,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+          flavor: |
+            latest=auto
+
+      # arm64 is release-only and built via QEMU emulation (slow, infrequent).
+      - name: Set up QEMU
+        if: github.ref_type == 'tag'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ steps.vars.outputs.platforms }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.vars.outputs.version }}
+            ${{ matrix.extra_build_args }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
