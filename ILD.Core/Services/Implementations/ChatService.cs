@@ -28,6 +28,7 @@ public sealed class ChatService : IChatService
     private readonly IChatNotifier _notifier;
     private readonly ChatOptions _options;
     private readonly ILoopRunStore _runs;
+    private readonly IChatLoopScratchpad _loopScratchpad;
 
     public ChatService(
         AppDbContext db,
@@ -35,7 +36,8 @@ public sealed class ChatService : IChatService
         IAgentAdapterRegistry registry,
         IChatNotifier notifier,
         ChatOptions options,
-        ILoopRunStore runs)
+        ILoopRunStore runs,
+        IChatLoopScratchpad loopScratchpad)
     {
         _db = db;
         _providers = providers;
@@ -43,6 +45,7 @@ public sealed class ChatService : IChatService
         _notifier = notifier;
         _options = options;
         _runs = runs;
+        _loopScratchpad = loopScratchpad;
     }
 
     public async Task<ChatSessionView?> GetForUserAsync(string userId, CancellationToken ct = default)
@@ -93,12 +96,18 @@ public sealed class ChatService : IChatService
     }
 
     public Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, CancellationToken ct)
-        => ExecuteTurnAsync(chatSessionId, userMessage, openWorkItemId: null, ct);
+        => ExecuteTurnAsync(chatSessionId, userMessage, openWorkItemId: null, openLoopDocument: null, ct);
 
-    public async Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, CancellationToken ct)
+    public async Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, string? openLoopDocument, CancellationToken ct)
     {
         var session = await _db.ChatSessions.FirstOrDefaultAsync(c => c.Id == chatSessionId, ct);
         if (session is null) return;
+
+        // Stash the live loop document for this turn, overwriting any prior entry
+        // (a null/empty document clears it). The agent reads it back through the
+        // get_current_loop tool — only the "loop editor is open" flag below enters
+        // the model context unprompted.
+        _loopScratchpad.Set(chatSessionId, openLoopDocument);
 
         var nextSeq = await NextSequenceAsync(chatSessionId, ct);
 
@@ -135,7 +144,7 @@ public sealed class ChatService : IChatService
         // active-run worktree path granted as an extra allowed directory when the
         // session also holds a filesystem grant.
         var (contextPreamble, additionalAllowedDirectories) =
-            await BuildChatContextAsync(openWorkItemId, tools);
+            await BuildChatContextAsync(openWorkItemId, !string.IsNullOrWhiteSpace(openLoopDocument), tools);
         var promptForAgent = contextPreamble is null
             ? userMessage
             : $"{contextPreamble}\n\n{userMessage}";
@@ -202,53 +211,91 @@ public sealed class ChatService : IChatService
     }
 
     /// <summary>
-    /// Build the per-turn Chat Context (ADR-0011) for the open work item: a small
-    /// preamble pushed into the model context, and the extra allowed directories
-    /// granting access to the open item's active-run worktree. Returns
-    /// <c>(null, null)</c> when no work item is open. The worktree path is granted
-    /// only when BOTH a filesystem grant is held AND the open item has an active
-    /// (non-terminal) run with a worktree on disk; otherwise the agent gets the
-    /// id-only preamble and scratch access alone.
+    /// Build the per-turn Chat Context (ADR-0011): a small preamble pushed into the
+    /// model context, and the extra allowed directories granting access to the open
+    /// work item's active-run worktree. Returns <c>(null, null)</c> when nothing is
+    /// open. The worktree path is granted only when BOTH a filesystem grant is held
+    /// AND the open item has an active (non-terminal) run with a worktree on disk;
+    /// otherwise the agent gets the id-only preamble and scratch access alone. When
+    /// <paramref name="loopEditorOpen"/> is set, the preamble names the open Loop
+    /// Editor as a thin pointer — the agent reads/edits the loop via the
+    /// <c>get_current_loop</c>/<c>update_current_loop</c> tools.
     /// </summary>
     private async Task<(string? Preamble, IReadOnlyList<string>? AllowedDirectories)> BuildChatContextAsync(
-        string? openWorkItemId, IReadOnlyList<string> tools)
+        string? openWorkItemId, bool loopEditorOpen, IReadOnlyList<string> tools)
     {
-        if (string.IsNullOrWhiteSpace(openWorkItemId))
+        var hasWorkItem = !string.IsNullOrWhiteSpace(openWorkItemId);
+        if (!hasWorkItem && !loopEditorOpen)
             return (null, null);
 
-        var lines = new List<string>
-        {
-            "[Chat Context]",
-            $"The user currently has work item {openWorkItemId} open in the UI. Use the ILD tools "
-                + "(e.g. get_workitem, the preview controls) with this work item id to inspect or act on it.",
-        };
-
+        var lines = new List<string> { "[Chat Context]" };
         IReadOnlyList<string>? allowedDirectories = null;
 
-        // Filesystem access must be granted on the session before exposing any
-        // worktree path — without a read/write/execute tool the directory grant
-        // would be inert anyway.
-        var hasFilesystemGrant = tools.Any(t =>
-            string.Equals(t, AiToolCatalog.Read, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(t, AiToolCatalog.Write, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(t, AiToolCatalog.Execute, StringComparison.OrdinalIgnoreCase));
-
-        if (hasFilesystemGrant)
+        if (hasWorkItem)
         {
-            // Active run only (ADR-0011): finished-run worktrees are kept on disk
-            // per ADR-0008 but are not exposed to the chat.
-            var activeRun = await _runs.GetActiveByWorkItemAsync(openWorkItemId);
-            var worktreePath = activeRun?.WorktreePath;
-            if (!string.IsNullOrWhiteSpace(worktreePath) && Directory.Exists(worktreePath))
+            lines.Add(
+                $"The user currently has work item {openWorkItemId} open in the UI. Use the ILD tools "
+                + "(e.g. get_workitem, the preview controls) with this work item id to inspect or act on it.");
+
+            // Filesystem access must be granted on the session before exposing any
+            // worktree path — without a read/write/execute tool the directory grant
+            // would be inert anyway.
+            var hasFilesystemGrant = tools.Any(t =>
+                string.Equals(t, AiToolCatalog.Read, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(t, AiToolCatalog.Write, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(t, AiToolCatalog.Execute, StringComparison.OrdinalIgnoreCase));
+
+            if (hasFilesystemGrant)
             {
-                lines.Add($"Its active run's worktree is checked out at: {worktreePath}");
-                lines.Add("You may read and edit files there directly with your filesystem tools using that absolute path.");
-                allowedDirectories = new[] { worktreePath };
+                // Active run only (ADR-0011): finished-run worktrees are kept on disk
+                // per ADR-0008 but are not exposed to the chat.
+                var activeRun = await _runs.GetActiveByWorkItemAsync(openWorkItemId!);
+                var worktreePath = activeRun?.WorktreePath;
+                if (!string.IsNullOrWhiteSpace(worktreePath) && Directory.Exists(worktreePath))
+                {
+                    lines.Add($"Its active run's worktree is checked out at: {worktreePath}");
+                    lines.Add("You may read and edit files there directly with your filesystem tools using that absolute path.");
+                    allowedDirectories = new[] { worktreePath };
+                }
             }
+        }
+
+        if (loopEditorOpen)
+        {
+            lines.Add(
+                "The user has a loop open in the Loop Editor. Call get_current_loop to read it as the "
+                + "ild-loop-template/v1 document, and update_current_loop with a complete document to edit "
+                + "it live (full replacement — the canvas updates immediately). Only the human can save.");
+            lines.Add(LoopAuthoringGuide);
         }
 
         return (string.Join("\n", lines), allowedDirectories);
     }
+
+    /// <summary>
+    /// A compact primer on the loop template model so the chat agent can author a
+    /// valid <c>ild-loop-template/v1</c> document — included in the Chat Context only
+    /// when a Loop Editor is open (ADR-0011). Mirrors the node/edge vocabulary in
+    /// CONTEXT.md and the config fields the editor reads/writes.
+    /// </summary>
+    private const string LoopAuthoringGuide =
+        """
+        Loop authoring guide — a loop is a directed graph executed from its Start node.
+        Document shape: { "$schema": "ild-loop-template/v1", "name", "description", "recoveryPolicy" (AutoResume|NeedsReview|Cancel), "nodes": [...], "edges": [...] }.
+        Each node: { "id", "type", "label" (unique), "config": {...} }. Each edge: { "id", "sourceNodeId", "targetNodeId", "edgeType" (OnSuccess|OnFailure|Custom), "name" (Custom only) }.
+        Node types and their key config fields:
+        - Start: entry point; creates the worktree/branch. config.createWorktree (bool), config.runInstall (bool).
+        - Cmd: runs a shell command in the worktree, succeeds on exit 0. config.command.
+        - AI: runs the agent. config.prompt, config.aiProviderId, config.toolAllowlist (string[]), config.matchRules ([{ "pattern", "edgeName" }] routing the AI output to Custom edges by name).
+        - Human: pauses for human input (becomes {{PreviousNode.Output}}). config.inputLabel, config.prompt, config.customEdges (string[] of Custom edge names this node may emit).
+        - Prompt: renders a templated string as its Output (compose a downstream AI prompt). config.prompt. Always routes OnSuccess.
+        - PR: opens/maintains a pull request. config.prDescriptionTemplate, config.prCommentTemplate, config.customEdges. Reserved PR edges: on_rejected, on_merge_conflict, on_ci_failed, on_approved, on_ci_passed, on_merged, on_abandoned — wire on_merged/on_abandoned to reach a terminal path.
+        - Condition: routes to two fixed Custom edges named "true" and "false". config.variant (TextMatches|PrExists|HasTag); TextMatches uses config.subject + config.pattern, HasTag uses config.tag; config.output is the pass-through.
+        - Cleanup: terminal sink (incoming edges only); marks the run finished.
+        Edges: give every non-terminal node an OnSuccess edge. Use OnFailure edges sparingly — only when you genuinely want a distinct recovery path (e.g. an AI fix/retry loop). Most failures are transient (an AI node out of tokens or a throttled provider, a flaky command); a node that fails with NO OnFailure edge fails in place and parks the run for human feedback, so a human can fix and restart that node. That is almost always better than wiring OnFailure to Cleanup, which discards the run on a hiccup — do not route failures to Cleanup. Custom edges are matched by name — AI matchRules.edgeName, Human/PR customEdges, Condition true/false.
+        Variables: templated fields expand placeholders — {{WorkItem.Title}}/{{WorkItem.Description}}, {{PreviousNode.Output}}, {{EventLog.LastN}}, and {{Var.<name>}}. A Loop Variable is a mutable per-run string an AI node writes (via the agent variable API/tools) for a later node to read; names match [A-Za-z][A-Za-z0-9_]*.
+        Sessions: an AI node continues a multi-turn agent session by setting config.useSession=true and config.sessionPlaceholder="<name>"; config.forkFromPlaceholder="<name>" branches from another node's session. AI nodes share a session only when they use the same placeholder.
+        """;
 
     public async Task<bool> EndAsync(string userId, CancellationToken ct = default)
     {
@@ -276,7 +323,9 @@ public sealed class ChatService : IChatService
 
     private async Task DeleteSessionAsync(ChatSession session, CancellationToken ct)
     {
-        // Messages and adapter snapshots cascade-delete via their FKs.
+        // Messages and adapter snapshots cascade-delete via their FKs; the loop
+        // scratchpad is in-memory only, so drop its entry explicitly.
+        _loopScratchpad.Clear(session.Id);
         _db.ChatSessions.Remove(session);
         await _db.SaveChangesAsync(ct);
 

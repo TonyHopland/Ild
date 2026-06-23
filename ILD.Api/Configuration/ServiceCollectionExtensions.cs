@@ -74,6 +74,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IChatService, ChatService>();
         services.AddSingleton<IChatTurnRunner, ChatTurnRunner>();
         services.AddSingleton<IChatNotifier, SignalRChatNotifier>();
+        // The loop scratchpad relays the open Loop Editor's live document from the
+        // chat turn to the agent-scoped API (ADR-0011); a singleton so both scopes
+        // share the same in-memory store.
+        services.AddSingleton<IChatLoopScratchpad, ChatLoopScratchpad>();
         services.AddHostedService<ChatSessionRetentionSweeper>();
 
         services.AddSingleton<IRunProgressBuffer, RunProgressBuffer>();
