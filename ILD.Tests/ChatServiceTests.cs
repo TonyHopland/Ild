@@ -376,9 +376,12 @@ public sealed class ChatServiceTests : IDisposable
         var prompt = adapter.LastContext!.Prompt;
         Assert.Contains("Loop authoring guide", prompt);
         Assert.Contains("Condition", prompt);
-        Assert.Contains("OnFailure", prompt);
         Assert.Contains("{{Var.<name>}}", prompt);
         Assert.Contains("sessionPlaceholder", prompt);
+        // OnFailure edges are advised sparingly: transient failures should fail in
+        // place for a human restart rather than route to Cleanup.
+        Assert.Contains("OnFailure edges sparingly", prompt);
+        Assert.Contains("fails in place", prompt);
     }
 
     [Fact]
