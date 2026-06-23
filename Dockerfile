@@ -109,7 +109,13 @@ RUN if [ "$WITH_NODE" = "1" ]; then \
   if [ "$NODE_RUNTIME_VERSION" = "latest" ]; then \
     NODE_RUNTIME_VERSION=$(curl -fsSL https://nodejs.org/dist/index.json | sed -n 's/.*"version":"\(v[^"]*\)".*/\1/p' | head -n1 | sed 's/^v//'); \
   fi && \
-  curl -fsSL "https://nodejs.org/dist/v${NODE_RUNTIME_VERSION}/node-v${NODE_RUNTIME_VERSION}-linux-x64.tar.xz" -o node.tar.xz && \
+  case "$(dpkg --print-architecture)" in \
+    amd64) NODE_ARCH=x64 ;; \
+    arm64) NODE_ARCH=arm64 ;; \
+    armhf) NODE_ARCH=armv7l ;; \
+    *) echo "Unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
+  esac && \
+  curl -fsSL "https://nodejs.org/dist/v${NODE_RUNTIME_VERSION}/node-v${NODE_RUNTIME_VERSION}-linux-${NODE_ARCH}.tar.xz" -o node.tar.xz && \
   tar -xf node.tar.xz -C /usr/local --strip-components=1 && \
   rm node.tar.xz && \
   if command -v corepack >/dev/null 2>&1; then corepack enable; else npm install -g pnpm@latest; fi && \
