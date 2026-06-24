@@ -42,6 +42,11 @@ public class ManagedAgentsController : ControllerBase
             var status = await _service.UpdateAsync(key, request?.Version, ct);
             return Ok(status);
         }
+        catch (ArgumentException ex)
+        {
+            // Caller-supplied version was not a plain semver.
+            return BadRequest(new { error = ex.Message });
+        }
         catch (InvalidOperationException ex)
         {
             // Install failed (npm error, registry unreachable, ...). The previous

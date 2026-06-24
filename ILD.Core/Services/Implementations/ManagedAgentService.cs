@@ -5,7 +5,6 @@ using System.Text.RegularExpressions;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations;
@@ -26,23 +25,33 @@ public sealed partial class ManagedAgentService : IManagedAgentService
     private readonly ILogger<ManagedAgentService>? _logger;
     private readonly string _dataRoot;
 
-    // One in-flight update per agent: two clicks racing the same agent are
-    // serialized so they can't interleave installs and corrupt the swap.
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new();
+    // One in-flight update per agent, shared across every instance: the typed
+    // HttpClient registration makes this service transient, so two racing
+    // POST .../update requests run on different instances. A static lock store
+    // is the only thing that actually serializes them — otherwise instance A's
+    // PruneOldVersions could delete instance B's just-swapped version dir.
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> Locks = new();
 
+    [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
     public ManagedAgentService(
         HttpClient http,
         IProcessRunner runner,
-        IConfiguration config,
+        ILogger<ManagedAgentService>? logger = null)
+        : this(http, runner, ManagedAgentInstall.ResolveDataRoot(), logger)
+    {
+    }
+
+    /// <summary>Test seam: construct against an explicit data root instead of the resolved one.</summary>
+    public ManagedAgentService(
+        HttpClient http,
+        IProcessRunner runner,
+        string dataRoot,
         ILogger<ManagedAgentService>? logger = null)
     {
         _http = http;
         _runner = runner;
         _logger = logger;
-        _dataRoot = config["App:DataPath"]
-            ?? Environment.GetEnvironmentVariable("ILD_DATA_PATH")
-            ?? config["Storage:DataRoot"]
-            ?? "data";
+        _dataRoot = dataRoot;
     }
 
     public IReadOnlyList<ManagedAgent> Agents => ManagedAgentCatalog.All;
@@ -74,7 +83,14 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         var agent = ManagedAgentCatalog.Find(agentKey)
             ?? throw new KeyNotFoundException($"No managed agent with key '{agentKey}'.");
 
-        var gate = _locks.GetOrAdd(agent.Key, _ => new SemaphoreSlim(1, 1));
+        // Reject anything that is not a plain semver. `version` is interpolated
+        // into the npm spec (`pkg@<version>`); npm spec aliasing (e.g.
+        // `npm:other-pkg`, a dist-tag, or a URL) would otherwise let a caller
+        // install an arbitrary package under the managed agent's directory.
+        if (!string.IsNullOrWhiteSpace(version) && !IsValidVersion(version))
+            throw new ArgumentException($"'{version}' is not a valid version (expected e.g. 1.2.3).", nameof(version));
+
+        var gate = Locks.GetOrAdd(agent.Key, _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(ct);
         try
         {
@@ -227,6 +243,13 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         return match.Success ? match.Value : null;
     }
 
+    /// <summary>
+    /// True when <paramref name="version"/> is a plain semver (<c>1.2.3</c>, optionally
+    /// with a prerelease / build suffix) — i.e. an exact version, not an npm spec
+    /// alias, dist-tag, range, or URL.
+    /// </summary>
+    public static bool IsValidVersion(string version) => ExactSemverRegex().IsMatch(version);
+
     /// <summary>True when <paramref name="latest"/> is a strictly higher version than <paramref name="installed"/>.</summary>
     public static bool IsNewer(string latest, string installed)
     {
@@ -275,4 +298,7 @@ public sealed partial class ManagedAgentService : IManagedAgentService
 
     [GeneratedRegex(@"(\d+)\.(\d+)\.(\d+)")]
     private static partial Regex SemverRegex();
+
+    [GeneratedRegex(@"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")]
+    private static partial Regex ExactSemverRegex();
 }

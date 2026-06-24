@@ -3,7 +3,7 @@ using System.Text;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
-using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Tests;
 
@@ -32,37 +32,68 @@ public class ManagedAgentServiceTests : IDisposable
         public bool ProduceBinary = true;
         public List<IReadOnlyList<string>> Calls { get; } = new();
 
-        public Task<ProcessResult> RunAsync(
+        // Concurrency instrumentation: when InstallGate is set, an install
+        // parks on it so a test can observe how many installs run at once.
+        public TaskCompletionSource? InstallGate;
+        public TaskCompletionSource InstallEntered { get; } = new();
+        private int _concurrent;
+        private int _maxConcurrent;
+        public int MaxConcurrentInstalls => Volatile.Read(ref _maxConcurrent);
+
+        public async Task<ProcessResult> RunAsync(
             string fileName,
             IReadOnlyList<string> args,
             string? workingDirectory = null,
             CancellationToken ct = default,
             IReadOnlyDictionary<string, string?>? environmentVariables = null)
         {
-            Calls.Add([fileName, .. args]);
+            lock (Calls) Calls.Add([fileName, .. args]);
 
             if (args.Count > 0 && args[0] == "install")
             {
-                var prefix = ArgValue(args, "--prefix")!;
-                if (InstallSucceeds && ProduceBinary)
+                var current = Interlocked.Increment(ref _concurrent);
+                InterlockedMax(ref _maxConcurrent, current);
+                InstallEntered.TrySetResult();
+                try
                 {
-                    var binDir = Path.Combine(prefix, "node_modules", ".bin");
-                    Directory.CreateDirectory(binDir);
-                    File.WriteAllText(Path.Combine(binDir, BinaryName), "#!/bin/sh\n");
+                    if (InstallGate is not null)
+                        await InstallGate.Task;
+
+                    var prefix = ArgValue(args, "--prefix")!;
+                    if (InstallSucceeds && ProduceBinary)
+                    {
+                        var binDir = Path.Combine(prefix, "node_modules", ".bin");
+                        Directory.CreateDirectory(binDir);
+                        File.WriteAllText(Path.Combine(binDir, BinaryName), "#!/bin/sh\n");
+                    }
+                    return InstallSucceeds
+                        ? new ProcessResult(0, "added 1 package", "")
+                        : new ProcessResult(1, "", "npm ERR! 404 not found");
                 }
-                return Task.FromResult(InstallSucceeds
-                    ? new ProcessResult(0, "added 1 package", "")
-                    : new ProcessResult(1, "", "npm ERR! 404 not found"));
+                finally
+                {
+                    Interlocked.Decrement(ref _concurrent);
+                }
             }
 
             if (args.Count > 0 && args[0] == "--version")
             {
-                return Task.FromResult(InstalledVersion is null
+                return InstalledVersion is null
                     ? new ProcessResult(127, "", "command not found")
-                    : new ProcessResult(0, InstalledVersion + "\n", ""));
+                    : new ProcessResult(0, InstalledVersion + "\n", "");
             }
 
-            return Task.FromResult(new ProcessResult(0, "", ""));
+            return new ProcessResult(0, "", "");
+        }
+
+        private static void InterlockedMax(ref int target, int value)
+        {
+            int snapshot;
+            while ((snapshot = Volatile.Read(ref target)) < value
+                && Interlocked.CompareExchange(ref target, value, snapshot) != snapshot)
+            {
+                // retry on lost race
+            }
         }
 
         private static string? ArgValue(IReadOnlyList<string> args, string name)
@@ -91,12 +122,7 @@ public class ManagedAgentServiceTests : IDisposable
     }
 
     private ManagedAgentService CreateService(FakeRunner runner, RegistryHandler handler)
-    {
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["App:DataPath"] = _dataRoot })
-            .Build();
-        return new ManagedAgentService(new HttpClient(handler), runner, config);
-    }
+        => new(new HttpClient(handler), runner, _dataRoot);
 
     [Fact]
     public async Task GetStatus_reports_update_available_when_installed_is_behind()
@@ -227,6 +253,81 @@ public class ManagedAgentServiceTests : IDisposable
         var service = CreateService(new FakeRunner(), new RegistryHandler());
         await Assert.ThrowsAsync<KeyNotFoundException>(
             () => service.UpdateAsync("does-not-exist", version: null));
+    }
+
+    [Fact]
+    public async Task Concurrent_updates_of_the_same_agent_are_serialized_across_instances()
+    {
+        // Two separate instances stand in for the transient typed-client
+        // instances two racing requests would get. A genuinely-shared (static)
+        // lock must stop both installs running at once — otherwise one prune
+        // could delete the other's just-swapped version dir.
+        var gateA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runnerA = new FakeRunner { InstalledVersion = "0.80.2", InstallGate = gateA };
+        var runnerB = new FakeRunner { InstalledVersion = "0.80.2" };
+        var serviceA = CreateService(runnerA, new RegistryHandler { Version = "0.80.2" });
+        var serviceB = CreateService(runnerB, new RegistryHandler { Version = "0.80.2" });
+
+        var taskA = serviceA.UpdateAsync(_agent.Key, version: null);
+        var taskB = serviceB.UpdateAsync(_agent.Key, version: null);
+
+        // A is inside its install (holding the shared lock).
+        await runnerA.InstallEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        // B must not have started installing — it is parked on the lock.
+        Assert.False(runnerB.InstallEntered.Task.IsCompleted);
+
+        gateA.SetResult();
+        await Task.WhenAll(taskA, taskB).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(runnerB.InstallEntered.Task.IsCompleted);
+        // The end state is a single, valid install.
+        Assert.Single(Directory.GetDirectories(ManagedAgentInstall.VersionsRoot(_dataRoot, _agent)));
+        Assert.NotNull(ManagedAgentInstall.CurrentBinaryPath(_dataRoot, _agent));
+    }
+
+    [Fact]
+    public void Service_resolves_from_DI_as_a_typed_http_client()
+    {
+        // The service has a second public ctor (the test seam); make sure the
+        // typed-client factory still selects the DI ctor and constructs it.
+        var services = new ServiceCollection();
+        services.AddSingleton<IProcessRunner>(new FakeRunner());
+        services.AddHttpClient<IManagedAgentService, ManagedAgentService>();
+        using var provider = services.BuildServiceProvider();
+
+        var resolved = provider.GetRequiredService<IManagedAgentService>();
+
+        Assert.IsType<ManagedAgentService>(resolved);
+    }
+
+    [Theory]
+    [InlineData("npm:malicious-package")]
+    [InlineData("latest")]
+    [InlineData("^1.2.3")]
+    [InlineData("https://evil.example/x.tgz")]
+    [InlineData("../../escape")]
+    public async Task Update_rejects_a_non_semver_version(string version)
+    {
+        var service = CreateService(new FakeRunner(), new RegistryHandler());
+
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => service.UpdateAsync(_agent.Key, version));
+
+        // Rejected before any install ran.
+        Assert.False(Directory.Exists(ManagedAgentInstall.AgentRoot(_dataRoot, _agent)));
+    }
+
+    [Theory]
+    [InlineData("1.2.3", true)]
+    [InlineData("0.80.2", true)]
+    [InlineData("1.2.3-beta.1", true)]
+    [InlineData("latest", false)]
+    [InlineData("npm:other", false)]
+    [InlineData("^1.2.3", false)]
+    [InlineData("1.2", false)]
+    public void IsValidVersion_accepts_only_exact_semver(string version, bool expected)
+    {
+        Assert.Equal(expected, ManagedAgentService.IsValidVersion(version));
     }
 
     [Fact]

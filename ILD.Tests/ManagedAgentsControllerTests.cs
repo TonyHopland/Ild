@@ -55,6 +55,19 @@ public class ManagedAgentsControllerTests
     }
 
     [Fact]
+    public async Task Update_returns_400_for_an_invalid_version()
+    {
+        var service = new Mock<IManagedAgentService>();
+        service.Setup(s => s.UpdateAsync("pi", "npm:evil", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new ArgumentException("not a valid version"));
+        var controller = new ManagedAgentsController(service.Object);
+
+        var result = await controller.Update("pi", new UpdateManagedAgentRequest("npm:evil"), CancellationToken.None);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+    }
+
+    [Fact]
     public async Task Update_returns_502_when_install_fails()
     {
         var service = new Mock<IManagedAgentService>();
