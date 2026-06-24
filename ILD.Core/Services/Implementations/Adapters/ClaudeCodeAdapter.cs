@@ -39,7 +39,8 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         try
         {
             var rendered = await RenderPromptAsync(ctx.Prompt, ctx.RunContext);
-            var binaryPath = AiProviderConfig.Parse(ctx.Provider.Config).BinaryPathOr("claude");
+            var binaryPath = AiProviderConfig.Parse(ctx.Provider.Config)
+                .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.ClaudeCode));
 
             var worktreePath = ctx.RunContext.WorktreePath;
             if (string.IsNullOrEmpty(worktreePath) || !Directory.Exists(worktreePath))

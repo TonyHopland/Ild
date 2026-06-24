@@ -331,6 +331,48 @@ public class ManagedAgentServiceTests : IDisposable
     }
 
     [Fact]
+    public void Catalog_manages_pi_opencode_and_claude_code()
+    {
+        Assert.Equal(
+            ["pi", "opencode", "claude-code"],
+            ManagedAgentCatalog.All.Select(a => a.Key).ToArray());
+
+        var claude = ManagedAgentCatalog.Find("claude-code");
+        Assert.NotNull(claude);
+        Assert.Equal("@anthropic-ai/claude-code", claude!.NpmPackage);
+        Assert.Equal("claude", claude.BinaryName);
+        Assert.Equal("claude", claude.Command);
+    }
+
+    [Fact]
+    public async Task GetStatuses_covers_every_managed_agent()
+    {
+        var runner = new FakeRunner { InstalledVersion = "1.0.0" };
+        var service = CreateService(runner, new RegistryHandler { Version = "1.0.0" });
+
+        var statuses = await service.GetStatusesAsync();
+
+        Assert.Equal(
+            ManagedAgentCatalog.All.Select(a => a.Key).OrderBy(k => k).ToArray(),
+            statuses.Select(s => s.Key).OrderBy(k => k).ToArray());
+    }
+
+    [Fact]
+    public async Task Update_installs_claude_code_to_data()
+    {
+        var claude = ManagedAgentCatalog.ClaudeCode;
+        var runner = new FakeRunner { BinaryName = claude.BinaryName, InstalledVersion = "2.1.187" };
+        var service = CreateService(runner, new RegistryHandler { Version = "2.1.187" });
+
+        await service.UpdateAsync(claude.Key, version: null);
+
+        var active = ManagedAgentInstall.CurrentBinaryPath(_dataRoot, claude);
+        Assert.NotNull(active);
+        Assert.True(File.Exists(active));
+        Assert.Contains(runner.Calls, c => c.Any(a => a.Contains("@anthropic-ai/claude-code@latest")));
+    }
+
+    [Fact]
     public async Task Installed_data_version_is_preferred_over_baked_in_copy()
     {
         var runner = new FakeRunner { InstalledVersion = "0.80.2" };

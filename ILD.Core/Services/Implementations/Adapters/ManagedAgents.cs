@@ -21,9 +21,10 @@ public sealed record ManagedAgent(
     string Command);
 
 /// <summary>
-/// The set of coding agents ILD manages via npm. Pi and OpenCode are installed
-/// from npm packages so a single update mechanism (no <c>curl</c> dependency)
-/// covers both; the baked-in image copies remain the offline fallback.
+/// The set of coding agents ILD manages via npm. Pi, OpenCode and Claude Code
+/// are each installed from an npm package so a single update mechanism (no
+/// <c>curl</c> dependency) covers all three; the baked-in image copies remain
+/// the offline fallback.
 /// </summary>
 public static class ManagedAgentCatalog
 {
@@ -33,7 +34,10 @@ public static class ManagedAgentCatalog
     public static readonly ManagedAgent OpenCode =
         new("opencode", "OpenCode", "opencode-ai", "opencode", "opencode");
 
-    public static readonly IReadOnlyList<ManagedAgent> All = [Pi, OpenCode];
+    public static readonly ManagedAgent ClaudeCode =
+        new("claude-code", "Claude Code", "@anthropic-ai/claude-code", "claude", "claude");
+
+    public static readonly IReadOnlyList<ManagedAgent> All = [Pi, OpenCode, ClaudeCode];
 
     /// <summary>Look up a managed agent by its <see cref="ManagedAgent.Key"/> (case-insensitive); null when unknown.</summary>
     public static ManagedAgent? Find(string? key)
