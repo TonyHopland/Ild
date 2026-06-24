@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Image publishing is release-only** — CI now pushes the GHCR images (`ghcr.io/tonyhopland/ild` and `ghcr.io/tonyhopland/ild-workitem-server`) only on a `vX.Y.Z` release tag, not on every merge to `main`. The moving `main` image tag is dropped. See [ADR-0012](docs/adr/0012-ghcr-image-tagging-strategy.md).
+
 ## [0.3.0] - 2026-06-23
 
 ### Added

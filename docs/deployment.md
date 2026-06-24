@@ -50,7 +50,7 @@ CI also builds and pushes both images to GHCR (see [ADR-0012](./adr/0012-ghcr-im
 - `ghcr.io/tonyhopland/ild` — batteries-included app plus the bundled MCP server
 - `ghcr.io/tonyhopland/ild-workitem-server` — the WorkItem Server
 
-A push to `main` publishes the `main` tag (amd64); a `vX.Y.Z` git tag publishes `X.Y.Z`, `X.Y`, and `latest` for both images (amd64 + arm64). The compose stack still builds locally with `--build` — it does not pull these images.
+A `vX.Y.Z` git tag publishes `X.Y.Z`, `X.Y`, and `latest` for both images (amd64 + arm64); pushes to `main` build and test but publish nothing. The compose stack still builds locally with `--build` — it does not pull these images.
 
 **One-time setup:** the first push lands each package **private**. Flip each to **public** once in its GHCR package settings (Package → Settings → Change visibility).
 

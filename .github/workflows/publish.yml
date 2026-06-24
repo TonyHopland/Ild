@@ -1,9 +1,8 @@
 name: Publish
 
 # Build and push the two deployable images to GHCR. Called from ci.yml as a
-# final, build-gated job so a failing build never publishes. Tagging/arch rules
-# are recorded in docs/adr/0012-ghcr-image-tagging-strategy.md:
-#   push to main  -> tag `main`, amd64 only
+# final, build-gated job on release tags so a failing build never publishes.
+# Tagging/arch rules are recorded in docs/adr/0012-ghcr-image-tagging-strategy.md:
 #   tag vX.Y.Z    -> tags X.Y.Z / X.Y / latest, amd64 + arm64
 on:
   workflow_call:
@@ -36,34 +35,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Compute version and platforms
+      - name: Compute version
         id: vars
         run: |
           version="$(.github/scripts/compute-version.sh \
-            "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME" "$(git rev-parse --short HEAD)")"
+            "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME")"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
-            echo "platforms=linux/amd64,linux/arm64" >> "$GITHUB_OUTPUT"
-          else
-            echo "platforms=linux/amd64" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/tonyhopland/${{ matrix.image }}
-          # `latest` tracks the newest release only, never main.
+          # `latest` tracks the newest release.
           tags: |
-            type=raw,value=main,enable={{is_default_branch}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
           flavor: |
             latest=auto
 
-      # arm64 is release-only and built via QEMU emulation (slow, infrequent).
+      # arm64 is built via QEMU emulation (slow, but releases are infrequent).
       - name: Set up QEMU
-        if: github.ref_type == 'tag'
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Buildx
@@ -81,7 +73,7 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
-          platforms: ${{ steps.vars.outputs.platforms }}
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
