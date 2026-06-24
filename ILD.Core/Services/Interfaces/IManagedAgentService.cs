@@ -29,4 +29,15 @@ public interface IManagedAgentService
     /// <exception cref="KeyNotFoundException">No managed agent has the given key.</exception>
     /// <exception cref="InvalidOperationException">The install failed (e.g. npm error, registry unreachable).</exception>
     Task<ManagedAgentStatus> UpdateAsync(string agentKey, CancellationToken ct = default);
+
+    /// <summary>
+    /// Install <paramref name="agentKey"/> to <c>/data</c> only if it is not
+    /// already present (on <c>/data</c> or PATH). A present-but-behind install is
+    /// left untouched — updating an existing agent stays a user-triggered action.
+    /// Used to auto-provision the agents that configured AI providers need, so a
+    /// fresh or upgraded deployment doesn't fail the first AI run on a missing CLI.
+    /// </summary>
+    /// <exception cref="KeyNotFoundException">No managed agent has the given key.</exception>
+    /// <exception cref="InvalidOperationException">An install was needed but failed (e.g. npm error, registry unreachable).</exception>
+    Task<ManagedAgentStatus> EnsureInstalledAsync(string agentKey, CancellationToken ct = default);
 }

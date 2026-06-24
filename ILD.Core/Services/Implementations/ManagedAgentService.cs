@@ -100,8 +100,39 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         }
     }
 
+    public async Task<ManagedAgentStatus> EnsureInstalledAsync(string agentKey, CancellationToken ct = default)
+    {
+        var agent = ManagedAgentCatalog.Find(agentKey)
+            ?? throw new KeyNotFoundException($"No managed agent with key '{agentKey}'.");
+
+        // Fast path: already present on /data or PATH — nothing to do. We do NOT
+        // upgrade a present-but-behind install here; that stays a user-triggered
+        // action on the AI Provider page.
+        if (await GetInstalledVersionAsync(agent, ct) is not null)
+            return await GetStatusAsync(agent, ct);
+
+        var gate = Locks.GetOrAdd(agent.Key, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        try
+        {
+            // Re-check under the lock: a racing Update/Ensure may have installed
+            // it while we waited, so we don't redundantly reinstall.
+            if (await GetInstalledVersionAsync(agent, ct) is null)
+                await InstallAsync(agent, ct);
+            return await GetStatusAsync(agent, ct);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
     private async Task InstallAsync(ManagedAgent agent, CancellationToken ct)
     {
+        // The version currently in use (if any). It is kept through this install
+        // so a run already launched against it isn't pulled out from under it.
+        var previousVersionId = ManagedAgentInstall.CurrentVersionId(_dataRoot, agent);
+
         var versionId = Guid.NewGuid().ToString("N");
         var versionDir = ManagedAgentInstall.VersionDir(_dataRoot, agent, versionId);
         Directory.CreateDirectory(versionDir);
@@ -150,7 +181,7 @@ public sealed partial class ManagedAgentService : IManagedAgentService
             throw;
         }
 
-        PruneOldVersions(agent, keep: versionId);
+        PruneOldVersions(agent, versionId, previousVersionId);
     }
 
     /// <summary>
@@ -167,15 +198,23 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         File.Move(tmp, pointer, overwrite: true);
     }
 
-    /// <summary>Delete every install except the active one — latest only, no version history on disk.</summary>
-    private void PruneOldVersions(ManagedAgent agent, string keep)
+    /// <summary>
+    /// Delete superseded installs, keeping the given version ids (nulls ignored).
+    /// We keep the active version AND the one it just replaced: these agents are
+    /// Node apps that lazily <c>require()</c> files from their install dir, so a
+    /// run launched before the swap would crash if its version were deleted
+    /// mid-run. Keeping current + previous lets in-flight runs finish while still
+    /// bounding disk to two installs — no long version history.
+    /// </summary>
+    private void PruneOldVersions(ManagedAgent agent, params string?[] keep)
     {
         var versionsRoot = ManagedAgentInstall.VersionsRoot(_dataRoot, agent);
         if (!Directory.Exists(versionsRoot)) return;
 
+        var keepSet = keep.Where(k => k is not null).ToHashSet(StringComparer.Ordinal);
         foreach (var dir in Directory.EnumerateDirectories(versionsRoot))
         {
-            if (string.Equals(Path.GetFileName(dir), keep, StringComparison.Ordinal)) continue;
+            if (keepSet.Contains(Path.GetFileName(dir))) continue;
             TryDeleteDirectory(dir);
         }
     }

@@ -28,6 +28,9 @@ public class ManagedAgentServiceTests : IDisposable
     {
         public string BinaryName = "pi";
         public string? InstalledVersion;
+        // When set, a successful install flips InstalledVersion to this, so
+        // `--version` reports "not installed" until an install actually runs.
+        public string? VersionAfterInstall;
         public bool InstallSucceeds = true;
         public bool ProduceBinary = true;
         public List<IReadOnlyList<string>> Calls { get; } = new();
@@ -66,6 +69,8 @@ public class ManagedAgentServiceTests : IDisposable
                         Directory.CreateDirectory(binDir);
                         File.WriteAllText(Path.Combine(binDir, BinaryName), "#!/bin/sh\n");
                     }
+                    if (InstallSucceeds && VersionAfterInstall is not null)
+                        InstalledVersion = VersionAfterInstall;
                     return InstallSucceeds
                         ? new ProcessResult(0, "added 1 package", "")
                         : new ProcessResult(1, "", "npm ERR! 404 not found");
@@ -215,17 +220,42 @@ public class ManagedAgentServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Update_keeps_only_the_latest_install()
+    public async Task Update_keeps_current_and_previous_then_prunes_older()
+    {
+        var runner = new FakeRunner { InstalledVersion = "0.80.1" };
+        var handler = new RegistryHandler { Version = "0.80.2" };
+        var service = CreateService(runner, handler);
+        var versionsRoot = ManagedAgentInstall.VersionsRoot(_dataRoot, _agent);
+
+        await service.UpdateAsync(_agent.Key); // v1 (no previous)
+        Assert.Single(Directory.GetDirectories(versionsRoot));
+
+        await service.UpdateAsync(_agent.Key); // v2 keeps v1 as previous
+        Assert.Equal(2, Directory.GetDirectories(versionsRoot).Length);
+
+        await service.UpdateAsync(_agent.Key); // v3 keeps v2; v1 pruned
+        Assert.Equal(2, Directory.GetDirectories(versionsRoot).Length);
+    }
+
+    [Fact]
+    public async Task Update_preserves_the_previous_version_for_in_flight_runs()
     {
         var runner = new FakeRunner { InstalledVersion = "0.80.1" };
         var handler = new RegistryHandler { Version = "0.80.2" };
         var service = CreateService(runner, handler);
 
         await service.UpdateAsync(_agent.Key);
+        var previousBinary = ManagedAgentInstall.CurrentBinaryPath(_dataRoot, _agent);
+        Assert.NotNull(previousBinary);
+
         await service.UpdateAsync(_agent.Key);
 
-        var versionDirs = Directory.GetDirectories(ManagedAgentInstall.VersionsRoot(_dataRoot, _agent));
-        Assert.Single(versionDirs);
+        // The new version is active, but the version a run was launched against
+        // before the swap is still on disk, so that run can keep require()-ing.
+        var currentBinary = ManagedAgentInstall.CurrentBinaryPath(_dataRoot, _agent);
+        Assert.NotNull(currentBinary);
+        Assert.NotEqual(previousBinary, currentBinary);
+        Assert.True(File.Exists(previousBinary));
     }
 
     [Fact]
@@ -299,9 +329,50 @@ public class ManagedAgentServiceTests : IDisposable
         await Task.WhenAll(taskA, taskB).WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.True(runnerB.InstallEntered.Task.IsCompleted);
-        // The end state is a single, valid install.
-        Assert.Single(Directory.GetDirectories(ManagedAgentInstall.VersionsRoot(_dataRoot, _agent)));
+        // Serialized, not interleaved: B installed after A, so the end state is
+        // B's install active with A's kept as the previous (current + previous).
+        Assert.Equal(2, Directory.GetDirectories(ManagedAgentInstall.VersionsRoot(_dataRoot, _agent)).Length);
         Assert.NotNull(ManagedAgentInstall.CurrentBinaryPath(_dataRoot, _agent));
+    }
+
+    [Fact]
+    public async Task EnsureInstalled_installs_when_missing()
+    {
+        // Nothing installed yet → ensure must install it.
+        var runner = new FakeRunner { InstalledVersion = null, VersionAfterInstall = "0.80.2" };
+        var service = CreateService(runner, new RegistryHandler { Version = "0.80.2" });
+
+        var status = await service.EnsureInstalledAsync(_agent.Key);
+
+        var active = ManagedAgentInstall.CurrentBinaryPath(_dataRoot, _agent);
+        Assert.NotNull(active);
+        Assert.True(File.Exists(active));
+        Assert.Equal("0.80.2", status.InstalledVersion);
+        Assert.Contains(runner.Calls, c => c.Contains("install"));
+    }
+
+    [Fact]
+    public async Task EnsureInstalled_is_a_noop_when_already_installed_even_if_behind()
+    {
+        // Present but behind: ensure must NOT install/update — updating an
+        // existing agent stays a user-triggered action on the AI Provider page.
+        var runner = new FakeRunner { InstalledVersion = "0.80.1" };
+        var service = CreateService(runner, new RegistryHandler { Version = "0.80.2" });
+
+        var status = await service.EnsureInstalledAsync(_agent.Key);
+
+        Assert.Equal("0.80.1", status.InstalledVersion);
+        Assert.True(status.UpdateAvailable); // surfaced, but not acted on
+        Assert.DoesNotContain(runner.Calls, c => c.Contains("install"));
+        Assert.False(Directory.Exists(ManagedAgentInstall.VersionsRoot(_dataRoot, _agent)));
+    }
+
+    [Fact]
+    public async Task EnsureInstalled_rejects_unknown_agent_key()
+    {
+        var service = CreateService(new FakeRunner(), new RegistryHandler());
+        await Assert.ThrowsAsync<KeyNotFoundException>(
+            () => service.EnsureInstalledAsync("does-not-exist"));
     }
 
     [Fact]

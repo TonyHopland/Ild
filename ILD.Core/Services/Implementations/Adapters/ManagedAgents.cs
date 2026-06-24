@@ -78,19 +78,30 @@ public static class ManagedAgentInstall
         => Path.Combine(versionDir, "node_modules", ".bin", agent.BinaryName);
 
     /// <summary>
+    /// The active version id named by the pointer file, or null when no pointer
+    /// exists or it is empty/unreadable. This is what the pointer says is active,
+    /// independent of whether that version's binary is still on disk.
+    /// </summary>
+    public static string? CurrentVersionId(string dataRoot, ManagedAgent agent)
+    {
+        var pointer = PointerFile(dataRoot, agent);
+        if (!File.Exists(pointer)) return null;
+
+        try
+        {
+            var versionId = File.ReadAllText(pointer).Trim();
+            return string.IsNullOrWhiteSpace(versionId) ? null : versionId;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
     /// The launch path of the active <c>/data</c> install, or null when no
     /// install is present or the pointer names a version whose binary is gone.
     /// </summary>
     public static string? CurrentBinaryPath(string dataRoot, ManagedAgent agent)
     {
-        var pointer = PointerFile(dataRoot, agent);
-        if (!File.Exists(pointer)) return null;
-
-        string versionId;
-        try { versionId = File.ReadAllText(pointer).Trim(); }
-        catch { return null; }
-
-        if (string.IsNullOrWhiteSpace(versionId)) return null;
+        if (CurrentVersionId(dataRoot, agent) is not { } versionId) return null;
 
         var binary = BinaryIn(VersionDir(dataRoot, agent, versionId), agent);
         return File.Exists(binary) ? binary : null;

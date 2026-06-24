@@ -179,10 +179,14 @@ Set as build args (e.g. in `.env` consumed by `docker compose build`):
 | `WITH_CERTS`      | Import `.crt` or `.pem` files from `certs/` at build time |
 
 The coding agents (Pi, OpenCode, Claude Code) are **not** baked into the image.
-They install on demand onto the persistent `/data` volume from the **AI Provider**
-page and are updated there without rebuilding the image. `WITH_NODE` must be on,
-since those installs and version checks use Node/npm. On a fresh deployment, open
-the AI Provider page and use each agent's **Update** button before running AI
-nodes.
+They install on demand onto the persistent `/data` volume and are updated there
+without rebuilding the image. `WITH_NODE` must be on, since those installs and
+version checks use Node/npm. The agent a configured AI provider needs is
+**installed automatically** — at startup for any provider that already exists,
+and when a provider using a not-yet-installed agent is added — so a fresh or
+upgraded deployment doesn't fail its first AI run on a missing CLI. Installs run
+in the background; the **AI Provider** page shows each agent's current/latest
+version, lets you trigger an install or update manually, and reports failures
+(e.g. the npm registry being unreachable).
 
 Toolchain versions are also configurable: `NODE_VERSION`, `DOTNET_VERSION`, `NODE_RUNTIME_VERSION`, and `DOTNET_SDK_CHANNEL`.

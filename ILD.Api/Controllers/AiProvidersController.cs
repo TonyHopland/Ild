@@ -18,13 +18,15 @@ public class AiProvidersController : ControllerBase
     private readonly AppDbContext _db;
     private readonly IProviderStore _providerStore;
     private readonly InteractiveProviderSessionService _interactiveSessions;
+    private readonly IManagedAgentProvisioner _agentProvisioner;
 
     public AiProvidersController(
         IAIProviderService aiProviderService,
         IAgentAdapterRegistry adapterRegistry,
         AppDbContext db,
         IProviderStore providerStore,
-        InteractiveProviderSessionService interactiveSessions)
+        InteractiveProviderSessionService interactiveSessions,
+        IManagedAgentProvisioner agentProvisioner)
     {
         _aiProviderService = aiProviderService;
         _supportedProviderTypes = adapterRegistry.GetAllSupportedProviderTypes()
@@ -32,6 +34,7 @@ public class AiProvidersController : ControllerBase
         _db = db;
         _providerStore = providerStore;
         _interactiveSessions = interactiveSessions;
+        _agentProvisioner = agentProvisioner;
     }
 
     /// <summary>
@@ -117,6 +120,10 @@ public class AiProvidersController : ControllerBase
             CreatedAt = DateTime.UtcNow,
         };
         await _providerStore.CreateAiProviderAsync(p);
+        // Agents aren't baked into the image; if this provider uses a managed
+        // agent that isn't installed yet, install it in the background so the
+        // first run doesn't fail on a missing CLI.
+        _agentProvisioner.EnsureInstalledForProviderType(p.Type);
         return CreatedAtAction(nameof(GetById), new { id = p.Id }, ToResponse(p));
     }
 
@@ -169,6 +176,8 @@ public class AiProvidersController : ControllerBase
         p.Config = request.Config;
         p.UpdatedAt = DateTime.UtcNow;
         await _providerStore.UpdateAiProviderAsync(p);
+        // If the type was changed to a managed agent, make sure it is installed.
+        _agentProvisioner.EnsureInstalledForProviderType(p.Type);
         return Ok(ToResponse(p));
     }
 }
