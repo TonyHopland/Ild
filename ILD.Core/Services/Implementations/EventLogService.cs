@@ -12,28 +12,21 @@ public class EventLogService : IEventLogService
 {
     private readonly IEventLogStore _eventLogStore;
     private readonly ILoopRunStore _loopRunStore;
-    private readonly EventLogOptions _options;
     private readonly ILogger<EventLogService>? _logger;
 
-    // Per-run lock guards the sequence allocate -> file-write -> insert path so
-    // concurrent appends within a run cannot interleave payload-file writes
-    // ahead of their event row. Cross-run appends never block each other.
+    // Per-run lock guards the sequence allocate -> insert path so concurrent
+    // appends within a run cannot insert their event row out of sequence order.
+    // Cross-run appends never block each other.
     private static readonly ConcurrentDictionary<Guid, SemaphoreSlim> _runLocks = new();
 
-    public EventLogService(IEventLogStore eventLogStore, ILoopRunStore loopRunStore, EventLogOptions? options = null, ILogger<EventLogService>? logger = null)
+    public EventLogService(IEventLogStore eventLogStore, ILoopRunStore loopRunStore, ILogger<EventLogService>? logger = null)
     {
         _eventLogStore = eventLogStore;
         _loopRunStore = loopRunStore;
-        _options = options ?? new EventLogOptions();
         _logger = logger;
     }
 
-    public EventLogService(IEventLogStore eventLogStore, ILoopRunStore loopRunStore, string payloadDirectory)
-        : this(eventLogStore, loopRunStore, new EventLogOptions { PayloadDirectory = payloadDirectory })
-    {
-    }
-
-    public async Task<long> AppendAsync(Guid runId, string eventType, string message, Guid? nodeId = null, string? payloadPath = null, Guid? runNodeId = null)
+    public async Task<long> AppendAsync(Guid runId, string eventType, string message, Guid? nodeId = null, Guid? runNodeId = null)
     {
         if (!Enum.TryParse<EventType>(eventType, ignoreCase: true, out var parsed))
         {
@@ -53,18 +46,9 @@ public class EventLogService : IEventLogService
         {
             var nextSequence = await _loopRunStore.AllocateNextEventSequenceAsync(runId);
 
-            string? finalPayloadPath = payloadPath;
-            string? data = message;
-
-            if (message != null && System.Text.Encoding.UTF8.GetByteCount(message) > _options.LargePayloadThresholdBytes)
-            {
-                Directory.CreateDirectory(Path.Combine(_options.PayloadDirectory, runId.ToString()));
-                var path = Path.Combine(_options.PayloadDirectory, runId.ToString(), $"{nextSequence}.json");
-                await File.WriteAllTextAsync(path, message);
-                finalPayloadPath = path;
-                data = null;
-            }
-
+            // Payloads are stored inline in the DB. PostgreSQL keeps the Data
+            // column (text) out-of-line and LZ-compressed via TOAST once a value
+            // exceeds a few KB, so large prompts/diffs cost nothing on the main row.
             var entry = new EventLog
             {
                 Id = Guid.NewGuid(),
@@ -74,8 +58,7 @@ public class EventLogService : IEventLogService
                 NodeId = nodeId,
                 RunNodeId = runNodeId,
                 Timestamp = DateTime.UtcNow,
-                PayloadPath = finalPayloadPath,
-                Data = data
+                Data = message
             };
 
             await _eventLogStore.AppendAsync(entry);
@@ -100,15 +83,8 @@ public class EventLogService : IEventLogService
             e.LoopRunId,
             e.EventType.ToString(),
             e.Data ?? string.Empty,
-            e.PayloadPath,
             e.RunNodeId,
             e.Timestamp));
-    }
-
-    public async Task<EventLogEntry?> GetBySequenceAsync(Guid runId, long sequence)
-    {
-        var entry = await _eventLogStore.GetBySequenceAsync(runId, (int)sequence);
-        return entry == null ? null : new EventLogEntry(entry.LoopRunId, entry.EventType.ToString(), entry.Data ?? string.Empty, entry.PayloadPath, entry.RunNodeId, entry.Timestamp);
     }
 
     public async Task<int> EnforceRetentionPolicyAsync(DateTimeOffset before, ISet<Guid> eligibleRunIds)
@@ -120,23 +96,8 @@ public class EventLogService : IEventLogService
             .Where(e => e.LoopRunId.HasValue && eligibleRunIds.Contains(e.LoopRunId.Value))
             .ToList();
 
-        foreach (var entry in toRemove)
-        {
-            if (!string.IsNullOrEmpty(entry.PayloadPath) && File.Exists(entry.PayloadPath))
-            {
-                try { File.Delete(entry.PayloadPath); } catch { /* best-effort */ }
-            }
-        }
-
         await _eventLogStore.RemoveRangeAsync(toRemove);
         return toRemove.Count;
-    }
-
-    public async Task<string?> GetPayloadPathAsync(long eventLogId)
-    {
-        var match = await _eventLogStore.GetByRunIdAsync(Guid.Empty);
-        var found = match.FirstOrDefault(e => e.Sequence == (int)eventLogId);
-        return found?.PayloadPath;
     }
 
     public async Task<EventLogPage> GetByRunIdAfterCursorAsync(Guid runId, int cursor, int limit)

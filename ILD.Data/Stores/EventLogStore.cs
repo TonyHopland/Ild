@@ -32,9 +32,6 @@ public class EventLogStore : IEventLogStore
             .OrderBy(e => e.Sequence)
             .ToListAsync();
 
-    public async Task<EventLog?> GetBySequenceAsync(Guid runId, int sequence)
-        => await _db.EventLogs.FirstOrDefaultAsync(e => e.LoopRunId == runId && e.Sequence == sequence);
-
     public async Task<IReadOnlyList<EventLog>> GetOlderThanAsync(DateTimeOffset before)
         => await _db.EventLogs.Where(e => e.Timestamp < before.UtcDateTime).ToListAsync();
 

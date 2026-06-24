@@ -4,7 +4,6 @@ public record EventLogEntry(
     Guid? LoopRunId,
     string EventType,
     string Data,
-    string? PayloadPath = null,
     Guid? RunNodeId = null,
     DateTime Timestamp = default
 );

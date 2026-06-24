@@ -6,7 +6,6 @@ vi.mock("../../services/auth", () => ({
   loopRunService: {
     getById: vi.fn(),
     getEvents: vi.fn(),
-    getPayload: vi.fn(),
     getSessionPreview: vi.fn(),
     cancel: vi.fn(),
     pause: vi.fn(),
@@ -37,7 +36,6 @@ const mockEvents = [
     nodeId: null,
     payload: "First event message",
     timestamp: "2025-01-01T00:00:00Z",
-    hasPayload: false,
     runNodeId: "run-node-1",
   },
   {
@@ -47,7 +45,6 @@ const mockEvents = [
     nodeId: "node-1",
     payload: "Second event message",
     timestamp: "2025-01-01T00:01:00Z",
-    hasPayload: false,
     runNodeId: "run-node-1",
   },
 ];
@@ -61,7 +58,6 @@ const mockEventsWithAIInput = [
     payload:
       'AI Node started\n{"nodeType":"AI","prompt":"Analyze {{WorkItem.Title}}","context":{"workItemTitle":"Test WI"}}',
     timestamp: "2025-01-01T00:00:00Z",
-    hasPayload: false,
     runNodeId: "run-node-ai",
   },
   {
@@ -71,7 +67,6 @@ const mockEventsWithAIInput = [
     nodeId: "node-ai",
     payload: 'AI Node succeeded\n{"output":"analysis result","resolvedPrompt":"Analyze Test WI"}',
     timestamp: "2025-01-01T00:01:00Z",
-    hasPayload: false,
     runNodeId: "run-node-ai",
   },
 ];
@@ -272,9 +267,6 @@ afterEach(() => {
 beforeEach(() => {
   (loopRunService.getById as ReturnType<typeof vi.fn>).mockResolvedValue(mockRun);
   (loopRunService.getEvents as ReturnType<typeof vi.fn>).mockResolvedValue(mockPage);
-  (loopRunService.getPayload as ReturnType<typeof vi.fn>).mockResolvedValue({
-    payload: "large payload content",
-  });
   (loopRunService.getSessionPreview as ReturnType<typeof vi.fn>).mockResolvedValue({
     adapterName: "OpenCode",
     sessionId: "ses_current",

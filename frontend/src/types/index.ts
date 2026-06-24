@@ -351,7 +351,6 @@ export interface EventLogEntry {
   nodeId: string | null;
   payload: string;
   timestamp: string;
-  hasPayload: boolean;
   nodeLabel?: string;
   runNodeId: string | null;
 }
