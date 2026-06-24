@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import { AiProvider } from "../../types";
-import { aiProviderService, agentAdapterService } from "../../services/auth";
+import { AiProvider, ManagedAgentStatus, ApiError } from "../../types";
+import { aiProviderService, agentAdapterService, managedAgentService } from "../../services/auth";
 import ProviderTerminal from "../../components/ProviderTerminal";
 
 export default function AiProviders() {
@@ -17,9 +17,13 @@ export default function AiProviders() {
   const [model, setModel] = useState("");
   const [isDefault, setIsDefault] = useState(false);
   const [parallelism, setParallelism] = useState<number>(0);
+  const [agents, setAgents] = useState<ManagedAgentStatus[]>([]);
+  const [updatingAgent, setUpdatingAgent] = useState<string | null>(null);
+  const [agentErrors, setAgentErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     void loadData();
+    void loadAgents();
   }, []);
 
   const loadData = async () => {
@@ -34,6 +38,33 @@ export default function AiProviders() {
       console.error("Failed to load AI providers:", error);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const loadAgents = async () => {
+    try {
+      const result = await managedAgentService.getAll();
+      setAgents(result ?? []);
+    } catch (error) {
+      console.error("Failed to load coding agents:", error);
+    }
+  };
+
+  const handleUpdateAgent = async (agent: ManagedAgentStatus) => {
+    setUpdatingAgent(agent.key);
+    setAgentErrors((prev) => {
+      const next = { ...prev };
+      delete next[agent.key];
+      return next;
+    });
+    try {
+      const updated = await managedAgentService.update(agent.key);
+      setAgents((prev) => prev.map((a) => (a.key === updated.key ? updated : a)));
+    } catch (error) {
+      const message = (error as ApiError)?.message ?? "Update failed.";
+      setAgentErrors((prev) => ({ ...prev, [agent.key]: message }));
+    } finally {
+      setUpdatingAgent(null);
     }
   };
 
@@ -112,6 +143,55 @@ export default function AiProviders() {
           + New Provider
         </button>
       </div>
+
+      {agents.length > 0 && (
+        <div className="ap-agents">
+          <h2 className="ap-section-title">Coding agents</h2>
+          <p className="ap-section-note">
+            Pi and OpenCode are installed onto the persistent <code>/data</code> volume and updated
+            on demand — no container rebuild needed. After updating, you are responsible for
+            verifying the new version works.
+          </p>
+          <div className="ap-agent-list">
+            {agents.map((agent) => {
+              const updating = updatingAgent === agent.key;
+              return (
+                <div key={agent.key} className="ap-agent-card">
+                  <div className="ap-agent-info">
+                    <span className="ap-agent-name">{agent.displayName}</span>
+                    <span className="ap-agent-versions">
+                      <span className="ap-label">Installed</span>
+                      <span className="ap-value">{agent.installedVersion ?? "not installed"}</span>
+                      <span className="ap-label">Latest</span>
+                      <span className="ap-value">{agent.latestVersion ?? "unknown"}</span>
+                    </span>
+                    {agent.error && <span className="ap-agent-warn">{agent.error}</span>}
+                    {agentErrors[agent.key] && (
+                      <span className="ap-agent-error">{agentErrors[agent.key]}</span>
+                    )}
+                  </div>
+                  <button
+                    className="btn btn-primary btn-small"
+                    disabled={!agent.updateAvailable || updating}
+                    onClick={() => handleUpdateAgent(agent)}
+                    title={
+                      agent.updateAvailable
+                        ? `Install ${agent.displayName} ${agent.latestVersion} onto /data`
+                        : "Already up to date"
+                    }
+                  >
+                    {updating
+                      ? "Updating…"
+                      : agent.updateAvailable
+                        ? `Update ${agent.installedVersion ?? "?"} → ${agent.latestVersion}`
+                        : "Up to date"}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="ap-list">
         {providers.map((provider) => (
@@ -324,6 +404,76 @@ export default function AiProviders() {
           gap: 0.75rem;
         }
 
+        .ap-agents {
+          margin-bottom: 1.5rem;
+        }
+
+        .ap-section-title {
+          font-size: 0.9rem;
+          font-weight: 600;
+          color: #e0e0e0;
+          margin: 0 0 0.25rem;
+        }
+
+        .ap-section-note {
+          font-size: 0.75rem;
+          color: #707090;
+          margin: 0 0 0.75rem;
+          line-height: 1.4;
+        }
+
+        .ap-section-note code {
+          background-color: #1e1e30;
+          padding: 0 0.25rem;
+          border-radius: 0.25rem;
+        }
+
+        .ap-agent-list {
+          display: flex;
+          flex-direction: column;
+          gap: 0.5rem;
+        }
+
+        .ap-agent-card {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 1rem;
+          background-color: #1e1e30;
+          border-radius: 0.5rem;
+          border: 1px solid #2d2d44;
+          padding: 0.75rem 1rem;
+        }
+
+        .ap-agent-info {
+          display: flex;
+          flex-direction: column;
+          gap: 0.25rem;
+        }
+
+        .ap-agent-name {
+          font-size: 0.85rem;
+          font-weight: 600;
+          color: #e0e0e0;
+        }
+
+        .ap-agent-versions {
+          display: flex;
+          align-items: baseline;
+          gap: 0.5rem;
+          font-size: 0.8rem;
+        }
+
+        .ap-agent-warn {
+          font-size: 0.7rem;
+          color: #d9a441;
+        }
+
+        .ap-agent-error {
+          font-size: 0.7rem;
+          color: #ef4444;
+        }
+
         .ap-card {
           background-color: #1e1e30;
           border-radius: 0.5rem;
@@ -411,6 +561,11 @@ export default function AiProviders() {
         .btn-small {
           padding: 0.25rem 0.5rem;
           font-size: 0.75rem;
+        }
+
+        .btn:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
         }
 
         .modal-overlay {

@@ -423,6 +423,16 @@ export interface AiToolDefinition {
   defaultEnabled: boolean;
 }
 
+export interface ManagedAgentStatus {
+  key: string;
+  displayName: string;
+  npmPackage: string;
+  installedVersion: string | null;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  error: string | null;
+}
+
 /**
  * One AI output-matching rule: if {@link pattern} (a case-insensitive regex)
  * matches the AI output, the node routes to the custom edge named

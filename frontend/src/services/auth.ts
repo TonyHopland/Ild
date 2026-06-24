@@ -12,6 +12,7 @@ import {
   LoopTemplateVersion,
   EventLogPage,
   ConfigFieldDescriptor,
+  ManagedAgentStatus,
   LoopNode,
   LoopNodeEdge,
   PrComment,
@@ -529,6 +530,17 @@ export const agentAdapterService = {
   },
   getConfigSchema: async (providerType: string): Promise<ConfigFieldDescriptor[]> => {
     return api.get<ConfigFieldDescriptor[]>(`/AgentAdapters/${providerType}/config-schema`);
+  },
+};
+
+export const managedAgentService = {
+  getAll: async (): Promise<ManagedAgentStatus[]> => {
+    return api.get<ManagedAgentStatus[]>("/managedagents");
+  },
+  update: async (key: string, version?: string): Promise<ManagedAgentStatus> => {
+    return api.post<ManagedAgentStatus>(`/managedagents/${key}/update`, {
+      version: version ?? null,
+    });
   },
 };
 

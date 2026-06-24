@@ -484,7 +484,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
     private static PiAdapterSettings ResolveSettings(AiProvider provider, Guid loopRunId, IReadOnlyList<string>? selectedToolKeys, Guid? chatSessionId = null)
     {
         var config = AiProviderConfig.Parse(provider.Config);
-        var binaryPath = config.BinaryPathOr("pi");
+        var binaryPath = config.BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.Pi));
         var apiKey = config.ApiKey ?? provider.ApiKey;
         var providerName = config.Provider;
         var model = config.Model ?? provider.Model;

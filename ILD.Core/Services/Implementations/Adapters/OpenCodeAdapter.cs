@@ -30,7 +30,8 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         {
             var rendered = await RenderPromptAsync(ctx.Prompt, ctx.RunContext);
 
-            var binaryPath = AiProviderConfig.Parse(ctx.Provider.Config).BinaryPathOr("opencode");
+            var binaryPath = AiProviderConfig.Parse(ctx.Provider.Config)
+                .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.OpenCode));
 
             var worktreePath = ctx.RunContext.WorktreePath;
             if (string.IsNullOrEmpty(worktreePath) || !Directory.Exists(worktreePath))
