@@ -1017,6 +1017,12 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private static void EnsureInstalledToolsOnProcessPath()
     {
         var npmBin = GetNpmGlobalBinDirectory();
+
+        // Create the directory up front. It is only populated lazily (by an
+        // `npm install -g` in a Start node), but agents launched with this PATH
+        // — e.g. Claude Code — warn when a PATH entry does not exist on disk.
+        Directory.CreateDirectory(npmBin);
+
         var currentPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
 
         var alreadyPresent = currentPath

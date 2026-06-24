@@ -33,21 +33,21 @@ public class ManagedAgentsControllerTests
         var service = new Mock<IManagedAgentService>();
         var controller = new ManagedAgentsController(service.Object);
 
-        var result = await controller.Update("nope", new UpdateManagedAgentRequest(null), CancellationToken.None);
+        var result = await controller.Update("nope", CancellationToken.None);
 
         Assert.IsType<NotFoundObjectResult>(result);
-        service.Verify(s => s.UpdateAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
+        service.Verify(s => s.UpdateAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
     public async Task Update_returns_refreshed_status_on_success()
     {
         var service = new Mock<IManagedAgentService>();
-        service.Setup(s => s.UpdateAsync("pi", null, It.IsAny<CancellationToken>()))
+        service.Setup(s => s.UpdateAsync("pi", It.IsAny<CancellationToken>()))
             .ReturnsAsync(Status("pi", updateAvailable: false));
         var controller = new ManagedAgentsController(service.Object);
 
-        var result = await controller.Update("pi", new UpdateManagedAgentRequest(null), CancellationToken.None);
+        var result = await controller.Update("pi", CancellationToken.None);
 
         var ok = Assert.IsType<OkObjectResult>(result);
         var status = Assert.IsType<ManagedAgentStatus>(ok.Value);
@@ -55,27 +55,14 @@ public class ManagedAgentsControllerTests
     }
 
     [Fact]
-    public async Task Update_returns_400_for_an_invalid_version()
-    {
-        var service = new Mock<IManagedAgentService>();
-        service.Setup(s => s.UpdateAsync("pi", "npm:evil", It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new ArgumentException("not a valid version"));
-        var controller = new ManagedAgentsController(service.Object);
-
-        var result = await controller.Update("pi", new UpdateManagedAgentRequest("npm:evil"), CancellationToken.None);
-
-        Assert.IsType<BadRequestObjectResult>(result);
-    }
-
-    [Fact]
     public async Task Update_returns_502_when_install_fails()
     {
         var service = new Mock<IManagedAgentService>();
-        service.Setup(s => s.UpdateAsync("pi", null, It.IsAny<CancellationToken>()))
+        service.Setup(s => s.UpdateAsync("pi", It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("npm boom"));
         var controller = new ManagedAgentsController(service.Object);
 
-        var result = await controller.Update("pi", new UpdateManagedAgentRequest(null), CancellationToken.None);
+        var result = await controller.Update("pi", CancellationToken.None);
 
         var status = Assert.IsType<ObjectResult>(result);
         Assert.Equal(StatusCodes.Status502BadGateway, status.StatusCode);

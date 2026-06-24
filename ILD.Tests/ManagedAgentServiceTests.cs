@@ -203,7 +203,7 @@ public class ManagedAgentServiceTests : IDisposable
         var handler = new RegistryHandler { Version = "0.80.2" };
         var service = CreateService(runner, handler);
 
-        var status = await service.UpdateAsync(_agent.Key, version: null);
+        var status = await service.UpdateAsync(_agent.Key);
 
         var active = ManagedAgentInstall.CurrentBinaryPath(_dataRoot, _agent);
         Assert.NotNull(active);
@@ -215,26 +215,14 @@ public class ManagedAgentServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Update_with_explicit_version_pins_that_version()
-    {
-        var runner = new FakeRunner { InstalledVersion = "0.79.0" };
-        var handler = new RegistryHandler { Version = "0.80.2" };
-        var service = CreateService(runner, handler);
-
-        await service.UpdateAsync(_agent.Key, version: "0.79.0");
-
-        Assert.Contains(runner.Calls, c => c.Any(a => a.EndsWith("@0.79.0")));
-    }
-
-    [Fact]
     public async Task Update_keeps_only_the_latest_install()
     {
         var runner = new FakeRunner { InstalledVersion = "0.80.1" };
         var handler = new RegistryHandler { Version = "0.80.2" };
         var service = CreateService(runner, handler);
 
-        await service.UpdateAsync(_agent.Key, version: null);
-        await service.UpdateAsync(_agent.Key, version: null);
+        await service.UpdateAsync(_agent.Key);
+        await service.UpdateAsync(_agent.Key);
 
         var versionDirs = Directory.GetDirectories(ManagedAgentInstall.VersionsRoot(_dataRoot, _agent));
         Assert.Single(versionDirs);
@@ -248,14 +236,14 @@ public class ManagedAgentServiceTests : IDisposable
         var service = CreateService(runner, handler);
 
         // First update succeeds and becomes the live version.
-        await service.UpdateAsync(_agent.Key, version: null);
+        await service.UpdateAsync(_agent.Key);
         var liveBefore = ManagedAgentInstall.CurrentBinaryPath(_dataRoot, _agent);
         var pointerBefore = File.ReadAllText(ManagedAgentInstall.PointerFile(_dataRoot, _agent));
 
         // Second update fails mid-install.
         runner.InstallSucceeds = false;
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => service.UpdateAsync(_agent.Key, version: null));
+            () => service.UpdateAsync(_agent.Key));
 
         // The previously-active version is untouched, and the failed staging dir is gone.
         Assert.Equal(liveBefore, ManagedAgentInstall.CurrentBinaryPath(_dataRoot, _agent));
@@ -272,7 +260,7 @@ public class ManagedAgentServiceTests : IDisposable
         var service = CreateService(runner, handler);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => service.UpdateAsync(_agent.Key, version: null));
+            () => service.UpdateAsync(_agent.Key));
 
         Assert.False(Directory.Exists(ManagedAgentInstall.VersionsRoot(_dataRoot, _agent))
             && Directory.GetDirectories(ManagedAgentInstall.VersionsRoot(_dataRoot, _agent)).Length > 0);
@@ -283,7 +271,7 @@ public class ManagedAgentServiceTests : IDisposable
     {
         var service = CreateService(new FakeRunner(), new RegistryHandler());
         await Assert.ThrowsAsync<KeyNotFoundException>(
-            () => service.UpdateAsync("does-not-exist", version: null));
+            () => service.UpdateAsync("does-not-exist"));
     }
 
     [Fact]
@@ -299,8 +287,8 @@ public class ManagedAgentServiceTests : IDisposable
         var serviceA = CreateService(runnerA, new RegistryHandler { Version = "0.80.2" });
         var serviceB = CreateService(runnerB, new RegistryHandler { Version = "0.80.2" });
 
-        var taskA = serviceA.UpdateAsync(_agent.Key, version: null);
-        var taskB = serviceB.UpdateAsync(_agent.Key, version: null);
+        var taskA = serviceA.UpdateAsync(_agent.Key);
+        var taskB = serviceB.UpdateAsync(_agent.Key);
 
         // A is inside its install (holding the shared lock).
         await runnerA.InstallEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -329,36 +317,6 @@ public class ManagedAgentServiceTests : IDisposable
         var resolved = provider.GetRequiredService<IManagedAgentService>();
 
         Assert.IsType<ManagedAgentService>(resolved);
-    }
-
-    [Theory]
-    [InlineData("npm:malicious-package")]
-    [InlineData("latest")]
-    [InlineData("^1.2.3")]
-    [InlineData("https://evil.example/x.tgz")]
-    [InlineData("../../escape")]
-    public async Task Update_rejects_a_non_semver_version(string version)
-    {
-        var service = CreateService(new FakeRunner(), new RegistryHandler());
-
-        await Assert.ThrowsAsync<ArgumentException>(
-            () => service.UpdateAsync(_agent.Key, version));
-
-        // Rejected before any install ran.
-        Assert.False(Directory.Exists(ManagedAgentInstall.AgentRoot(_dataRoot, _agent)));
-    }
-
-    [Theory]
-    [InlineData("1.2.3", true)]
-    [InlineData("0.80.2", true)]
-    [InlineData("1.2.3-beta.1", true)]
-    [InlineData("latest", false)]
-    [InlineData("npm:other", false)]
-    [InlineData("^1.2.3", false)]
-    [InlineData("1.2", false)]
-    public void IsValidVersion_accepts_only_exact_semver(string version, bool expected)
-    {
-        Assert.Equal(expected, ManagedAgentService.IsValidVersion(version));
     }
 
     [Fact]
@@ -395,7 +353,7 @@ public class ManagedAgentServiceTests : IDisposable
         var runner = new FakeRunner { BinaryName = claude.BinaryName, InstalledVersion = "2.1.187" };
         var service = CreateService(runner, new RegistryHandler { Version = "2.1.187" });
 
-        await service.UpdateAsync(claude.Key, version: null);
+        await service.UpdateAsync(claude.Key);
 
         var active = ManagedAgentInstall.CurrentBinaryPath(_dataRoot, claude);
         Assert.NotNull(active);
@@ -413,7 +371,7 @@ public class ManagedAgentServiceTests : IDisposable
         // No /data install yet → resolves to the bare command on PATH.
         Assert.Equal(_agent.Command, ManagedAgentInstall.ResolveCommand(_agent, _dataRoot));
 
-        await service.UpdateAsync(_agent.Key, version: null);
+        await service.UpdateAsync(_agent.Key);
 
         // After install → resolves to the /data binary.
         var resolved = ManagedAgentInstall.ResolveCommand(_agent, _dataRoot);

@@ -28,24 +28,19 @@ public class ManagedAgentsController : ControllerBase
     }
 
     /// <summary>
-    /// Install the latest (or pinned) version of an agent onto <c>/data</c> and
-    /// make it active, then return the refreshed version state.
+    /// Install the latest version of an agent onto <c>/data</c> and make it
+    /// active, then return the refreshed version state.
     /// </summary>
     [HttpPost("{key}/update")]
-    public async Task<IActionResult> Update(string key, [FromBody] UpdateManagedAgentRequest? request, CancellationToken ct)
+    public async Task<IActionResult> Update(string key, CancellationToken ct)
     {
         if (ManagedAgentCatalog.Find(key) is null)
             return NotFound(new { error = $"Unknown agent '{key}'." });
 
         try
         {
-            var status = await _service.UpdateAsync(key, request?.Version, ct);
+            var status = await _service.UpdateAsync(key, ct);
             return Ok(status);
-        }
-        catch (ArgumentException ex)
-        {
-            // Caller-supplied version was not a plain semver.
-            return BadRequest(new { error = ex.Message });
         }
         catch (InvalidOperationException ex)
         {
@@ -55,6 +50,3 @@ public class ManagedAgentsController : ControllerBase
         }
     }
 }
-
-/// <summary>Optional explicit version to pin; null installs the latest published version.</summary>
-public sealed record UpdateManagedAgentRequest(string? Version);

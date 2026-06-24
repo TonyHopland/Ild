@@ -537,10 +537,8 @@ export const managedAgentService = {
   getAll: async (): Promise<ManagedAgentStatus[]> => {
     return api.get<ManagedAgentStatus[]>("/managedagents");
   },
-  update: async (key: string, version?: string): Promise<ManagedAgentStatus> => {
-    return api.post<ManagedAgentStatus>(`/managedagents/${key}/update`, {
-      version: version ?? null,
-    });
+  update: async (key: string): Promise<ManagedAgentStatus> => {
+    return api.post<ManagedAgentStatus>(`/managedagents/${key}/update`, {});
   },
 };
 

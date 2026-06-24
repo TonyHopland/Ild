@@ -82,23 +82,16 @@ public sealed partial class ManagedAgentService : IManagedAgentService
             error);
     }
 
-    public async Task<ManagedAgentStatus> UpdateAsync(string agentKey, string? version, CancellationToken ct = default)
+    public async Task<ManagedAgentStatus> UpdateAsync(string agentKey, CancellationToken ct = default)
     {
         var agent = ManagedAgentCatalog.Find(agentKey)
             ?? throw new KeyNotFoundException($"No managed agent with key '{agentKey}'.");
-
-        // Reject anything that is not a plain semver. `version` is interpolated
-        // into the npm spec (`pkg@<version>`); npm spec aliasing (e.g.
-        // `npm:other-pkg`, a dist-tag, or a URL) would otherwise let a caller
-        // install an arbitrary package under the managed agent's directory.
-        if (!string.IsNullOrWhiteSpace(version) && !IsValidVersion(version))
-            throw new ArgumentException($"'{version}' is not a valid version (expected e.g. 1.2.3).", nameof(version));
 
         var gate = Locks.GetOrAdd(agent.Key, _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(ct);
         try
         {
-            await InstallAsync(agent, version, ct);
+            await InstallAsync(agent, ct);
             return await GetStatusAsync(agent, ct);
         }
         finally
@@ -107,13 +100,13 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         }
     }
 
-    private async Task InstallAsync(ManagedAgent agent, string? version, CancellationToken ct)
+    private async Task InstallAsync(ManagedAgent agent, CancellationToken ct)
     {
         var versionId = Guid.NewGuid().ToString("N");
         var versionDir = ManagedAgentInstall.VersionDir(_dataRoot, agent, versionId);
         Directory.CreateDirectory(versionDir);
 
-        var spec = $"{agent.NpmPackage}@{(string.IsNullOrWhiteSpace(version) ? "latest" : version)}";
+        var spec = $"{agent.NpmPackage}@latest";
 
         try
         {
@@ -247,13 +240,6 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         return match.Success ? match.Value : null;
     }
 
-    /// <summary>
-    /// True when <paramref name="version"/> is a plain semver (<c>1.2.3</c>, optionally
-    /// with a prerelease / build suffix) — i.e. an exact version, not an npm spec
-    /// alias, dist-tag, range, or URL.
-    /// </summary>
-    public static bool IsValidVersion(string version) => ExactSemverRegex().IsMatch(version);
-
     /// <summary>True when <paramref name="latest"/> is a strictly higher version than <paramref name="installed"/>.</summary>
     public static bool IsNewer(string latest, string installed)
     {
@@ -302,7 +288,4 @@ public sealed partial class ManagedAgentService : IManagedAgentService
 
     [GeneratedRegex(@"(\d+)\.(\d+)\.(\d+)")]
     private static partial Regex SemverRegex();
-
-    [GeneratedRegex(@"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")]
-    private static partial Regex ExactSemverRegex();
 }
