@@ -6,7 +6,7 @@ namespace ILD.Api.Controllers;
 
 /// <summary>
 /// Version state and user-triggered updates for the managed coding agents
-/// (Pi, OpenCode). Backs the AI Provider page's "Update {old} → {new}" button.
+/// (Pi, OpenCode, Claude Code). Backs the AI Provider page's "Update {old} → {new}" button.
 /// </summary>
 [ApiController]
 [Route("api/v1/[controller]")]

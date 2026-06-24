@@ -10,8 +10,8 @@ using Microsoft.Extensions.Logging;
 namespace ILD.Core.Services.Implementations;
 
 /// <summary>
-/// Installs and version-checks the managed coding agents (Pi, OpenCode) via npm,
-/// landing installs on the persistent <c>/data</c> volume. See
+/// Installs and version-checks the managed coding agents (Pi, OpenCode,
+/// Claude Code) via npm, landing installs on the persistent <c>/data</c> volume. See
 /// <see cref="ManagedAgentInstall"/> for the on-disk layout and the atomic swap.
 /// </summary>
 public sealed partial class ManagedAgentService : IManagedAgentService

@@ -148,9 +148,9 @@ export default function AiProviders() {
         <div className="ap-agents">
           <h2 className="ap-section-title">Coding agents</h2>
           <p className="ap-section-note">
-            Pi and OpenCode are installed onto the persistent <code>/data</code> volume and updated
-            on demand — no container rebuild needed. After updating, you are responsible for
-            verifying the new version works.
+            Pi, OpenCode and Claude Code are installed onto the persistent <code>/data</code> volume
+            and updated on demand — no container rebuild needed. After updating, you are responsible
+            for verifying the new version works.
           </p>
           <div className="ap-agent-list">
             {agents.map((agent) => {

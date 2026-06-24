@@ -4,8 +4,8 @@ using ILD.Data.DTOs;
 namespace ILD.Core.Services.Interfaces;
 
 /// <summary>
-/// Reports version state for the managed coding agents (Pi, OpenCode) and
-/// performs user-triggered updates: install the new version onto the persistent
+/// Reports version state for the managed coding agents (Pi, OpenCode, Claude Code)
+/// and performs user-triggered updates: install the new version onto the persistent
 /// <c>/data</c> volume, then atomically swap it in. Installs survive container
 /// restarts and are preferred over the baked-in image copy.
 /// </summary>
