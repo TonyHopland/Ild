@@ -76,13 +76,19 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 
     protected override void Dispose(bool disposing)
     {
+        // Tear the host down first so its service provider, hosted services and
+        // any in-flight request scopes (all holding AppDbContexts bound to the
+        // shared, single-threaded SQLite connection) are gone before we dispose
+        // the connection. Disposing _connection while the host is still alive
+        // races SqliteConnection.Dispose against those consumers and throws
+        // intermittently under parallel test load.
+        base.Dispose(disposing);
         if (disposing)
         {
             _connection.Dispose();
             _serverHarness.Dispose();
             try { Directory.Delete(_dataRoot, recursive: true); } catch { }
         }
-        base.Dispose(disposing);
     }
 
     /// <summary>Logs in as the seeded admin user and returns an HttpClient with the bearer token attached.</summary>

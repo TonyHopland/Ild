@@ -150,7 +150,17 @@ public class LoopRunStore : ILoopRunStore
     }
 
     public async Task<IReadOnlyList<LoopRunVariable>> GetVariablesAsync(Guid runId)
+        // AsNoTracking so a long-lived engine context (reused across every node
+        // in a run, see LoopEngine) reads fresh column values from the row each
+        // time instead of EF identity resolution handing back an already-tracked
+        // instance with a stale in-memory Value — the set_loop_variable MCP tool
+        // writes variables from a separate scope/process. This mirrors ReloadAsync's
+        // guard for LoopRun. Assumes all variable writes happen out-of-scope (via
+        // SetVariableAsync's own tracked path); if a future in-engine node ever
+        // writes a variable and reads it back before SaveChanges, this read would
+        // miss that pending change.
         => await _db.LoopRunVariables
+            .AsNoTracking()
             .Where(v => v.LoopRunId == runId)
             .OrderBy(v => v.Name)
             .ToListAsync();
