@@ -69,6 +69,26 @@ public class LoopRunVariableStoreTests
     }
 
     [Fact]
+    public async Task GetVariablesAsync_returns_fresh_value_after_out_of_scope_update()
+    {
+        using var db = new TestDb();
+        var run = await SeedRunAsync(db);
+        await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "summary", "stale");
+
+        // A long-lived engine context: the first read tracks the variable row.
+        var engineStore = new LoopRunStore(db.Context);
+        var first = await engineStore.GetVariablesAsync(run.Id);
+        Assert.Equal("stale", Assert.Single(first).Value);
+
+        // A separate scope (mirrors the set_loop_variable MCP tool) overwrites it.
+        await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "summary", "fresh");
+
+        // The same engine context must observe the new value, not the tracked stale one.
+        var second = await engineStore.GetVariablesAsync(run.Id);
+        Assert.Equal("fresh", Assert.Single(second).Value);
+    }
+
+    [Fact]
     public async Task Variables_are_scoped_per_run()
     {
         using var db = new TestDb();
