@@ -293,6 +293,7 @@ public sealed class LoopEngine : ILoopEngine
     {
         using var scope = _sp.CreateScope();
         var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
+        var workItems = scope.ServiceProvider.GetRequiredService<IWorkItemManager>();
         var run = await loopRunStore.GetByIdAsync(runId);
         if (run is null) return;
         if (run.Status != LoopRunStatus.WaitingHuman)
@@ -324,6 +325,12 @@ public sealed class LoopEngine : ILoopEngine
         var old = run.Status;
         run.Status = LoopRunStatus.Running;
         await loopRunStore.UpdateRunAsync(run);
+        // Move the work item back out of HumanFeedback. The run is resuming to
+        // Running here, but unlike the other resume paths this handler had been
+        // omitting the transition — stranding the card in HumanFeedback while the
+        // run actively executed. Every resume that flips the run to Running pairs
+        // it with this transition (run start, ResumeFromHaltAsync, RetryFromNodeAsync).
+        await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.Running, currentLoopRunId: run.Id);
         await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.Running);
         _ = LaunchAfterAwaitAsync(runId);
     }
