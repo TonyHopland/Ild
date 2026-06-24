@@ -166,6 +166,37 @@ public class ManagedAgentServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetStatus_offers_install_when_nothing_is_installed()
+    {
+        // Fresh deployment: --version fails (nothing on /data or PATH), but the
+        // registry has a version, so the install must be actionable.
+        var runner = new FakeRunner { InstalledVersion = null };
+        var handler = new RegistryHandler { Version = "0.80.2" };
+        var service = CreateService(runner, handler);
+
+        var status = await service.GetStatusAsync(_agent);
+
+        Assert.Null(status.InstalledVersion);
+        Assert.Equal("0.80.2", status.LatestVersion);
+        Assert.True(status.UpdateAvailable);
+    }
+
+    [Fact]
+    public async Task GetStatus_not_actionable_when_not_installed_and_registry_unreachable()
+    {
+        var runner = new FakeRunner { InstalledVersion = null };
+        var handler = new RegistryHandler { Status = HttpStatusCode.ServiceUnavailable };
+        var service = CreateService(runner, handler);
+
+        var status = await service.GetStatusAsync(_agent);
+
+        Assert.Null(status.InstalledVersion);
+        Assert.Null(status.LatestVersion);
+        Assert.False(status.UpdateAvailable);
+        Assert.NotNull(status.Error);
+    }
+
+    [Fact]
     public async Task Update_installs_to_data_and_makes_it_the_active_binary()
     {
         var runner = new FakeRunner { InstalledVersion = "0.80.2" };

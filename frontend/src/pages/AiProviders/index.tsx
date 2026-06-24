@@ -155,6 +155,25 @@ export default function AiProviders() {
           <div className="ap-agent-list">
             {agents.map((agent) => {
               const updating = updatingAgent === agent.key;
+              const notInstalled = agent.installedVersion == null;
+              const label = updating
+                ? notInstalled
+                  ? "Installing…"
+                  : "Updating…"
+                : agent.updateAvailable
+                  ? notInstalled
+                    ? `Install ${agent.latestVersion}`
+                    : `Update ${agent.installedVersion} → ${agent.latestVersion}`
+                  : notInstalled
+                    ? "Unavailable"
+                    : "Up to date";
+              const title = agent.updateAvailable
+                ? notInstalled
+                  ? `Install ${agent.displayName} ${agent.latestVersion} onto /data`
+                  : `Update ${agent.displayName} to ${agent.latestVersion} on /data`
+                : notInstalled
+                  ? "Latest version unavailable — check registry connectivity"
+                  : "Already up to date";
               return (
                 <div key={agent.key} className="ap-agent-card">
                   <div className="ap-agent-info">
@@ -174,17 +193,9 @@ export default function AiProviders() {
                     className="btn btn-primary btn-small"
                     disabled={!agent.updateAvailable || updating}
                     onClick={() => handleUpdateAgent(agent)}
-                    title={
-                      agent.updateAvailable
-                        ? `Install ${agent.displayName} ${agent.latestVersion} onto /data`
-                        : "Already up to date"
-                    }
+                    title={title}
                   >
-                    {updating
-                      ? "Updating…"
-                      : agent.updateAvailable
-                        ? `Update ${agent.installedVersion ?? "?"} → ${agent.latestVersion}`
-                        : "Up to date"}
+                    {label}
                   </button>
                 </div>
               );

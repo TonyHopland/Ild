@@ -5,9 +5,10 @@ namespace ILD.Core.Services.Interfaces;
 
 /// <summary>
 /// Reports version state for the managed coding agents (Pi, OpenCode, Claude Code)
-/// and performs user-triggered updates: install the new version onto the persistent
-/// <c>/data</c> volume, then atomically swap it in. Installs survive container
-/// restarts and are preferred over the baked-in image copy.
+/// and performs user-triggered installs/updates: install the version onto the
+/// persistent <c>/data</c> volume, then atomically swap it in. Agents are not baked
+/// into the image; the <c>/data</c> install is what the adapters launch and it
+/// survives container restarts and redeploys.
 /// </summary>
 public interface IManagedAgentService
 {

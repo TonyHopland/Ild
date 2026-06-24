@@ -67,7 +67,11 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         var installed = await GetInstalledVersionAsync(agent, ct);
         var (latest, error) = await GetLatestVersionAsync(agent, ct);
 
-        var updateAvailable = installed is not null && latest is not null && IsNewer(latest, installed);
+        // Actionable whenever the latest version is known and either nothing is
+        // installed yet (fresh deployment — install it) or the installed copy is
+        // behind (update it). Agents are no longer baked into the image, so the
+        // not-installed case is the normal first-boot state and must be installable.
+        var updateAvailable = latest is not null && (installed is null || IsNewer(latest, installed));
         return new ManagedAgentStatus(
             agent.Key,
             agent.DisplayName,
