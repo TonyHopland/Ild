@@ -164,15 +164,19 @@ RUN if [ "$WITH_DOTNET_SDK" = "1" ]; then \
   rm -rf /var/lib/apt/lists/*; \
 fi
 
-RUN if [ "$WITH_CHROME" = "1" ]; then \
+# Google Chrome ships an amd64-only Linux package, so it is installed only on
+# amd64 — on other architectures (release builds publish amd64 + arm64) the step
+# is a no-op rather than failing on a nonexistent package. The .deb installs
+# /opt/google/chrome/chrome, exactly where Puppeteer's default `--channel
+# stable` resolution looks (used by chrome-devtools-mcp, see opencode.json), so
+# no extra config is needed. We don't purge wget/ca-certificates afterwards
+# because google-chrome-stable depends on both.
+RUN if [ "$WITH_CHROME" = "1" ] && [ "$(dpkg --print-architecture)" = "amd64" ]; then \
   apt-get update && \
-  apt-get install -y ca-certificates wget gnupg && \
-  wget -qO- https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg && \
-  echo "deb [signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list && \
-  apt-get update && \
-  apt-get install -y google-chrome-stable && \
-  apt-get remove -y ca-certificates wget gnupg && \
-  apt-get autoremove -y && \
+  apt-get install -y --no-install-recommends wget ca-certificates && \
+  wget -q -O /tmp/google-chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && \
+  apt-get install -y /tmp/google-chrome.deb && \
+  rm -f /tmp/google-chrome.deb && \
   rm -rf /var/lib/apt/lists/*; \
 fi
 
