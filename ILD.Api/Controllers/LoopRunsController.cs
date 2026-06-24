@@ -287,32 +287,11 @@ public class LoopRunsController : ControllerBase
                 nodeId = e.NodeId,
                 runNodeId = e.RunNodeId,
                 timestamp = e.Timestamp,
-                payload = e.Data ?? string.Empty,
-                hasPayload = !string.IsNullOrEmpty(e.PayloadPath)
+                payload = e.Data ?? string.Empty
             }),
             nextCursor = page.NextCursor,
             hasMore = page.HasMore
         });
-    }
-
-    [HttpGet("{id}/events/payload")]
-    public async Task<IActionResult> GetPayload(string id, [FromQuery] int sequence)
-    {
-        if (!Guid.TryParse(id, out var guid))
-            return BadRequest(new { error = "Invalid GUID" });
-
-        var entry = await _eventLogService.GetBySequenceAsync(guid, sequence);
-        if (entry == null)
-            return NotFound(new { error = "Event not found" });
-
-        if (string.IsNullOrEmpty(entry.PayloadPath))
-            return Ok(new { payload = entry.Data ?? string.Empty });
-
-        if (!System.IO.File.Exists(entry.PayloadPath))
-            return NotFound(new { error = "Payload file not found" });
-
-        var content = await System.IO.File.ReadAllTextAsync(entry.PayloadPath);
-        return Ok(new { payload = content });
     }
 
     [HttpGet("{id}/sessions/preview")]

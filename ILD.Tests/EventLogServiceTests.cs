@@ -6,7 +6,7 @@ namespace ILD.Tests;
 
 public class EventLogServiceTests
 {
-    private static (EventLogService svc, TestDb db, Guid runId, string workItemId) Setup(string? payloadDir = null)
+    private static (EventLogService svc, TestDb db, Guid runId, string workItemId) Setup()
     {
         var db = new TestDb();
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume };
@@ -23,8 +23,7 @@ public class EventLogServiceTests
         db.Context.LoopRuns.Add(run);
         db.Context.SaveChanges();
 
-        var opts = payloadDir != null ? new EventLogOptions { PayloadDirectory = payloadDir } : null;
-        var svc = new EventLogService(db.EventLogs, db.LoopRuns, opts);
+        var svc = new EventLogService(db.EventLogs, db.LoopRuns);
         return (svc, db, run.Id, workItemId);
     }
 
@@ -59,23 +58,22 @@ public class EventLogServiceTests
     }
 
     [Fact]
-    public async Task Large_messages_are_spilled_to_disk_under_payload_directory()
+    public async Task Large_messages_are_stored_inline_in_the_database()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "ild-test-" + Guid.NewGuid());
-        var (svc, db, runId, _) = Setup(dir);
+        var (svc, db, runId, _) = Setup();
         using var _ = db;
 
+        // Well over the old 10 KB offload threshold: it must still land in the
+        // Data column (PostgreSQL TOASTs it) rather than being written to disk.
         var bigMessage = new string('x', 20_000);
         await svc.AppendAsync(runId, "NodeStarted", bigMessage);
 
         var entry = (await svc.GetByRunIdAsync(runId)).Single();
-        Assert.False(string.IsNullOrEmpty(entry.PayloadPath));
-        Assert.StartsWith(dir, entry.PayloadPath!);
-        Assert.True(File.Exists(entry.PayloadPath));
-        Assert.Equal(bigMessage, (await File.ReadAllTextAsync(entry.PayloadPath)));
-        Assert.Empty(entry.Data);
+        Assert.Equal(bigMessage, entry.Data);
 
-        Directory.Delete(dir, recursive: true);
+        var row = db.Context.EventLogs.Single(e => e.LoopRunId == runId);
+        Assert.Equal(bigMessage, row.Data);
+        Assert.Null(row.PayloadPath);
     }
 
     [Fact]

@@ -303,29 +303,6 @@ public class LoopRunStore : ILoopRunStore
             .Where(e => e.LoopRunId == runId)
             .ToListAsync();
 
-        // Large event payloads spill to files outside the DB (EventLogService);
-        // deleting only the rows would orphan them on disk forever. Best-effort.
-        string? payloadDir = null;
-        foreach (var entry in eventLogs)
-        {
-            if (string.IsNullOrEmpty(entry.PayloadPath)) continue;
-            try
-            {
-                if (File.Exists(entry.PayloadPath)) File.Delete(entry.PayloadPath);
-                payloadDir ??= Path.GetDirectoryName(entry.PayloadPath);
-            }
-            catch { /* best effort */ }
-        }
-        if (payloadDir is not null)
-        {
-            try
-            {
-                if (Directory.Exists(payloadDir) && !Directory.EnumerateFileSystemEntries(payloadDir).Any())
-                    Directory.Delete(payloadDir);
-            }
-            catch { /* best effort */ }
-        }
-
         // Archive this run's analytics into the durable rollup before its rows
         // are cascade-deleted, so token/cost/timing history survives reclaim.
         await ArchiveRunAnalyticsAsync(run, eventLogs);

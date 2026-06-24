@@ -393,10 +393,6 @@ export const loopRunService = {
     return api.get<EventLogPage>(`/loopruns/${runId}/events?cursor=${cursor}&limit=${limit}`);
   },
 
-  getPayload: async (runId: string, sequence: number): Promise<{ payload: string }> => {
-    return api.get<{ payload: string }>(`/loopruns/${runId}/events/payload?sequence=${sequence}`);
-  },
-
   getSessionPreview: async (
     runId: string,
     adapterName: string,

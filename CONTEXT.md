@@ -175,7 +175,7 @@ See the [Architecture](#architecture) section below for how the API layer compos
 - Auth is enforced by `ILD.Api/Middleware/AuthMiddleware.cs` via bearer-token session cookies/headers. The middleware only **enforces** auth on `/api/*`, `/hubs/*`, and `/metrics`; everything else (SPA routes, static assets when `AuthOptions.AllowStaticFiles` is on — the default) is allowed through so the SPA shell can serve. Within the enforced scope, `AuthOptions.ExcludedPaths` adds explicit exemptions: `/api/v1/auth/login`, `/api/v1/health`, `/api/v1/logging`, `/metrics`. The webhook endpoints (`/api/v1/webhooks/forgejo` and `/api/v1/webhooks/github`) are **not** excluded; external callers must additionally pass HMAC verification via `IRemoteGitProviderAdapter.VerifyWebhookSignature` (the relevant adapter owns the check) on top of bearer auth.
 - `AuthService.LoginAsync` auto-seeds the `admin` user the first time it sees a login attempt with the username `admin` and a non-empty `ILD_PASSWORD` env var.
 - Webhook routes verify HMAC against `RemoteProvider.WebhookSecret` values; if no provider has a secret configured, all webhook calls are rejected with 401.
-- `EventLog` query routes live on `LoopRunsController` (`GET /api/v1/loopruns/{id}/events?cursor=&limit=` for the cursor-paginated list, `GET /api/v1/loopruns/{id}/events/payload?sequence=N` for the spilled large-payload fetch) — there is no separate `EventLogController`.
+- `EventLog` query routes live on `LoopRunsController` (`GET /api/v1/loopruns/{id}/events?cursor=&limit=` for the cursor-paginated list, with each entry's full payload inline in the `payload` field) — there is no separate `EventLogController`.
 - `HttpClient` instances for AI providers and the work-item server are registered as **typed clients** via `AddHttpClient<TInterface, TImpl>` (no named clients). Failures from AI calls surface as `AiProviderException` with cause-preserving inner exceptions.
 
 ### Storage layout
@@ -190,7 +190,7 @@ See the [Architecture](#architecture) section below for how the API layer compos
 
 `Storage:WorktreesSubdir` (default `"worktrees"`) is appended to `DataRoot` to compose the worktrees root, **unless** `ILD_WORKTREES_PATH` is set, which overrides the worktrees path outright. Each `Worktree` row's `Path` is rooted under the resolved worktrees path.
 
-Event log payloads larger than `EventLogOptions.LargePayloadThresholdBytes` (default 10 KB) spill to `EventLogOptions.PayloadDirectory` (default `data/payloads`) at `{run-id}/{sequence}.json`; the DB row stores the relative path.
+Event log payloads are stored inline in the `EventLog.Data` column regardless of size. On PostgreSQL large `text` values are TOASTed (stored out-of-line, LZ-compressed) automatically, so big prompts/diffs cost nothing on the main row. The legacy disk-offload (a `PayloadDirectory` on the ephemeral `/app` layer) was removed; `EventLogPayloadInliningMigrator` runs on startup to pull any previously offloaded payloads back into the DB and clear their now-dead `PayloadPath`.
 
 **Database (tests).** Integration tests use `ILD.Tests/Integration/ApiFactory.cs`, which generates a per-instance temp directory and an in-memory SQLite connection. Unit tests use `ILD.Tests/TestDb.cs`, whose XML doc comment describes the per-test isolation guarantees. SQLite is **only** used in tests; production deployments must point at Postgres.
 

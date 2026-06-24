@@ -119,6 +119,13 @@ try
             if (rejectMigrated > 0)
                 Log.Information("Migrated {Count} AI node(s) from rejectPattern to named custom edges", rejectMigrated);
 
+            // Pull any historically offloaded event payloads back inline into the
+            // DB. The payload files lived on the ephemeral /app layer, so this also
+            // clears dangling paths whose files a redeploy already wiped.
+            var payloadsInlined = await ILD.Data.Migrations.EventLogPayloadInliningMigrator.MigrateAsync(dbContext);
+            if (payloadsInlined > 0)
+                Log.Information("Inlined {Count} offloaded event-log payload(s) into the database", payloadsInlined);
+
             if (ILD.Data.Security.SecretProtector.IsEnabled)
                 Log.Information("Secret encryption-at-rest is enabled (ILD_SECRET_KEY set)");
             else

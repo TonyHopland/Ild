@@ -6,7 +6,7 @@ namespace ILD.Tests;
 public class LoopRunStoreDeleteTests
 {
     [Fact]
-    public async Task DeleteAsync_removes_spilled_payload_files_and_their_directory()
+    public async Task DeleteAsync_removes_the_run_and_its_event_log_rows()
     {
         using var db = new TestDb();
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t" };
@@ -23,13 +23,7 @@ public class LoopRunStoreDeleteTests
         db.Context.LoopTemplateVersions.Add(version);
         db.Context.LoopRuns.Add(run);
 
-        // Simulate EventLogService's large-payload spill layout: {dir}/{runId}/{seq}.json
-        var payloadRoot = Directory.CreateTempSubdirectory("ild-payload-test-").FullName;
-        var runDir = Path.Combine(payloadRoot, run.Id.ToString());
-        Directory.CreateDirectory(runDir);
-        var payloadPath = Path.Combine(runDir, "1.json");
-        await File.WriteAllTextAsync(payloadPath, "{\"big\":true}");
-
+        // Payloads now live inline in the Data column — no spilled files to clean up.
         db.Context.EventLogs.Add(new EventLog
         {
             Id = Guid.NewGuid(),
@@ -37,23 +31,14 @@ public class LoopRunStoreDeleteTests
             Sequence = 1,
             EventType = EventType.NodeCompleted,
             Timestamp = DateTime.UtcNow,
-            PayloadPath = payloadPath,
+            Data = new string('x', 20_000),
         });
         db.Context.SaveChanges();
 
-        try
-        {
-            Assert.True(await db.LoopRuns.DeleteAsync(run.Id));
+        Assert.True(await db.LoopRuns.DeleteAsync(run.Id));
 
-            // Rows and spilled files are both gone — deleting only the rows
-            // would orphan the payload files on disk forever.
-            Assert.False(File.Exists(payloadPath));
-            Assert.False(Directory.Exists(runDir));
-            Assert.Empty(db.Fresh().EventLogs.Where(e => e.LoopRunId == run.Id));
-        }
-        finally
-        {
-            if (Directory.Exists(payloadRoot)) Directory.Delete(payloadRoot, recursive: true);
-        }
+        var fresh = db.Fresh();
+        Assert.Empty(fresh.EventLogs.Where(e => e.LoopRunId == run.Id));
+        Assert.Null(fresh.LoopRuns.FirstOrDefault(r => r.Id == run.Id));
     }
 }
