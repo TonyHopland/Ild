@@ -82,12 +82,12 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                     }
                     catch (Exception retryEx) when (retryEx is InvalidOperationException or IOException)
                     {
-                        return NodeExecutionResult.Fail($"[opencode-error] cannot start '{binaryPath}' — make sure the opencode binary is installed and on PATH. Details: {retryEx.Message}");
+                        return NodeExecutionResult.Fail($"[opencode-error] cannot start '{binaryPath}' — install or update OpenCode from the AI Provider page, or make sure the opencode binary is on PATH. Details: {retryEx.Message}");
                     }
                 }
                 else
                 {
-                    return NodeExecutionResult.Fail($"[opencode-error] cannot start '{binaryPath}' — make sure the opencode binary is installed and on PATH. Details: {ex.Message}");
+                    return NodeExecutionResult.Fail($"[opencode-error] cannot start '{binaryPath}' — install or update OpenCode from the AI Provider page, or make sure the opencode binary is on PATH. Details: {ex.Message}");
                 }
             }
             using var p = proc ?? throw new InvalidOperationException("Process.Start returned null");

@@ -10,8 +10,9 @@ namespace ILD.Core.Services.Implementations.Adapters;
 /// <param name="BinaryName">Executable dropped into the package's <c>node_modules/.bin</c>.</param>
 /// <param name="Command">
 /// Fallback command used to launch the agent when no <c>/data</c> install is
-/// present — the bare name, resolved against <c>PATH</c> (i.e. the baked-in
-/// image copy).
+/// present — the bare name, resolved against <c>PATH</c>. Agents are no longer
+/// baked into the image, so this resolves only if one was installed separately;
+/// otherwise the launch fails until the user installs it from the AI Provider page.
 /// </param>
 public sealed record ManagedAgent(
     string Key,
@@ -23,8 +24,9 @@ public sealed record ManagedAgent(
 /// <summary>
 /// The set of coding agents ILD manages via npm. Pi, OpenCode and Claude Code
 /// are each installed from an npm package so a single update mechanism (no
-/// <c>curl</c> dependency) covers all three; the baked-in image copies remain
-/// the offline fallback.
+/// <c>curl</c> dependency) covers all three. They are not baked into the image:
+/// installs land on <c>/data</c> and are launched from there, so a fresh
+/// deployment installs them once from the AI Provider page.
 /// </summary>
 public static class ManagedAgentCatalog
 {
@@ -105,9 +107,11 @@ public static class ManagedAgentInstall
 
     /// <summary>
     /// The command an adapter should launch for <paramref name="agent"/>:
-    /// the active <c>/data</c> install when present, otherwise the baked-in
-    /// image copy on <c>PATH</c>. An explicit <c>binaryPath</c> in the provider
-    /// config still overrides this (it is consulted first by the caller).
+    /// the active <c>/data</c> install when present, otherwise the bare command
+    /// name on <c>PATH</c> (which resolves only if the agent was installed
+    /// separately, since it is no longer baked into the image). An explicit
+    /// <c>binaryPath</c> in the provider config still overrides this (it is
+    /// consulted first by the caller).
     /// </summary>
     public static string ResolveCommand(ManagedAgent agent)
         => ResolveCommand(agent, ResolveDataRoot());

@@ -80,7 +80,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
-                return NodeExecutionResult.Fail($"[pi-error] cannot start '{settings.BinaryPath}' — make sure the pi binary is installed and on PATH. Details: {ex.Message}");
+                return NodeExecutionResult.Fail($"[pi-error] cannot start '{settings.BinaryPath}' — install or update Pi from the AI Provider page, or make sure the pi binary is on PATH. Details: {ex.Message}");
             }
 
             using var process = proc ?? throw new InvalidOperationException("Process.Start returned null");

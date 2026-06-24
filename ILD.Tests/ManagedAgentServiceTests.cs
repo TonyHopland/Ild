@@ -379,7 +379,7 @@ public class ManagedAgentServiceTests : IDisposable
         var handler = new RegistryHandler { Version = "0.80.2" };
         var service = CreateService(runner, handler);
 
-        // No install yet → resolves to the baked-in command on PATH.
+        // No /data install yet → resolves to the bare command on PATH.
         Assert.Equal(_agent.Command, ManagedAgentInstall.ResolveCommand(_agent, _dataRoot));
 
         await service.UpdateAsync(_agent.Key, version: null);
