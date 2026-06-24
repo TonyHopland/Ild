@@ -54,9 +54,6 @@ RUN dotnet publish -c Release -o /app/mcp-server --no-restore ${VERSION:+-p:Vers
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS final
 WORKDIR /app
 
-ARG WITH_OPENCODE=0
-ARG WITH_PI=0
-ARG WITH_CLAUDE_CODE=0
 ARG WITH_NODE=0
 ARG NODE_RUNTIME_VERSION=24.15.0
 ARG WITH_DOTNET_SDK=0
@@ -72,10 +69,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
     mkdir -p /usr/local/share/ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-# Create the runtime user up front so subsequent install steps that need a
-# real (non-root) HOME — e.g. the Claude Code launcher, which uses absolute
-# symlinks into $HOME/.local/share — can install into /home/ild directly
-# via gosu. Reuses any existing user/group at the configured UID/GID.
+# Create the runtime user up front. ILD runs as this non-root user (the
+# entrypoint drops to it via gosu) and owns /app, /data and /worktrees;
+# the managed coding-agent installs land under /data owned by ild. Reuses
+# any existing user/group at the configured UID/GID.
 RUN existing_group="$(getent group "${APP_GID}" | cut -d: -f1 || true)" && \
     if [ -n "$existing_group" ] && [ "$existing_group" != "ild" ]; then \
       groupmod -n ild "$existing_group"; \
@@ -89,20 +86,11 @@ RUN existing_group="$(getent group "${APP_GID}" | cut -d: -f1 || true)" && \
       useradd --uid ${APP_UID} --gid ${APP_GID} --create-home --home-dir /home/ild --shell /usr/sbin/nologin ild; \
     fi
 
-# The opencode install script drops files under $HOME/.opencode. Because ILD
-# runs as a non-root runtime user, keep that install outside /root so the
-# binary and any adjacent assets remain executable after gosu switches users.
-RUN if [ "$WITH_OPENCODE" = "1" ]; then \
-      apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && \
-      curl -fsSL https://opencode.ai/install | bash && \
-  mkdir -p /opt && \
-  rm -rf /opt/opencode && \
-  cp -a /root/.opencode /opt/opencode && \
-  chmod -R a+rX /opt/opencode && \
-  ln -sf /opt/opencode/bin/opencode /usr/local/bin/opencode && \
-      rm -rf /var/lib/apt/lists/*; \
-    fi
-
+# Coding agents (Pi, OpenCode, Claude Code) are intentionally NOT baked into
+# the image. They are installed on demand onto the persistent /data volume
+# from the AI Provider page (npm-based), so they can be updated without
+# rebuilding the image and survive redeploys. Node/npm below (WITH_NODE) is
+# what those runtime installs and version checks use.
 RUN if [ "$WITH_NODE" = "1" ]; then \
   apt-get update && \
   apt-get install -y ca-certificates curl xz-utils && \
@@ -123,30 +111,6 @@ RUN if [ "$WITH_NODE" = "1" ]; then \
   apt-get autoremove -y && \
   rm -rf /var/lib/apt/lists/*; \
 fi
-
-RUN if [ "$WITH_PI" = "1" ]; then \
-  if ! command -v npm >/dev/null 2>&1; then \
-    echo "WITH_PI=1 requires Node/npm. Enable WITH_NODE=1 as well." >&2; \
-    exit 1; \
-  fi && \
-  npm install -g @earendil-works/pi-coding-agent; \
-fi
-
-# Claude Code ships a native binary via https://claude.ai/install.sh. The
-# launcher at $HOME/.local/bin/claude is an absolute symlink into
-# $HOME/.local/share/claude/versions/<ver>, so the install tree must stay
-# where it lands. We run the installer as the ild user (gosu sets
-# HOME=/home/ild) so files are owned by the runtime user from the start
-# and the launcher's symlinks stay valid; a /usr/local/bin/claude symlink
-# exposes the binary on PATH for any user inside the container.
-# Auth is handled at runtime via `claude /login` (Max subscription) or
-# CLAUDE_CODE_OAUTH_TOKEN.
-RUN if [ "$WITH_CLAUDE_CODE" = "1" ]; then \
-      apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && \
-      gosu ild sh -c 'curl -fsSL https://claude.ai/install.sh | bash' && \
-      ln -sf /home/ild/.local/bin/claude /usr/local/bin/claude && \
-      rm -rf /var/lib/apt/lists/*; \
-    fi
 
 RUN if [ "$WITH_DOTNET_SDK" = "1" ]; then \
   apt-get update && \

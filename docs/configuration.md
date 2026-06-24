@@ -4,27 +4,27 @@ Remote providers, the WorkItem Server connection, repositories, AI providers, an
 
 ## Environment variables
 
-| Variable                        | Purpose                                                                                  |
-| ------------------------------- | ---------------------------------------------------------------------------------------- |
-| `ILD_PASSWORD`                  | Required bootstrap password; sets the password for the bootstrap user on first login     |
-| `ILD_USERNAME`                  | Bootstrap username (defaults to `admin`); used to seed and authenticate the first user   |
-| `ILD_DB_CONNECTION_STRING`      | PostgreSQL connection string for ILD local state                                         |
-| `WORKITEM_DB_CONNECTION_STRING` | PostgreSQL connection string for the WorkItem Server                                     |
-| `ILD_DATA_PATH`                 | Base data directory for ILD runtime files                                                |
-| `ILD_WORKTREES_PATH`            | Base directory for per-item worktrees (overrides the `DataRoot`/`worktrees` default)     |
-| `ILD_LOG_LEVEL`                 | Initial Serilog level (`Verbose`, `Debug`, `Information`, `Warning`, `Error`, `Fatal`)   |
-| `ILD_SECRET_KEY`                | Optional encryption-at-rest key for provider API keys and webhook secrets (see below)    |
-| `ILD_WORKITEM_SERVER_URL`       | URL used to auto-seed the global WorkItem Server connection                              |
-| `ILD_WORKITEM_SERVER_API_KEY`   | API key used to auto-seed the global WorkItem Server connection                          |
-| `ILD_API_URL`                   | Base URL agents and the MCP server use to call back into the ILD API                     |
-| `ILD_ALLOWED_ORIGINS`           | Comma-separated CORS origins allowed to call the ILD API                                 |
-| `WORKITEM_API_KEYS`             | Accepted bearer keys for the WorkItem Server (comma-separated)                           |
-| `WORKITEM_DATA_PATH`            | Base data directory for WorkItem Server runtime files                                    |
-| `WORKITEM_LOG_LEVEL`            | Serilog level for the WorkItem Server (docker compose defaults it to `ILD_LOG_LEVEL`)    |
+| Variable                                     | Purpose                                                                                                           |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `ILD_PASSWORD`                               | Required bootstrap password; sets the password for the bootstrap user on first login                              |
+| `ILD_USERNAME`                               | Bootstrap username (defaults to `admin`); used to seed and authenticate the first user                            |
+| `ILD_DB_CONNECTION_STRING`                   | PostgreSQL connection string for ILD local state                                                                  |
+| `WORKITEM_DB_CONNECTION_STRING`              | PostgreSQL connection string for the WorkItem Server                                                              |
+| `ILD_DATA_PATH`                              | Base data directory for ILD runtime files                                                                         |
+| `ILD_WORKTREES_PATH`                         | Base directory for per-item worktrees (overrides the `DataRoot`/`worktrees` default)                              |
+| `ILD_LOG_LEVEL`                              | Initial Serilog level (`Verbose`, `Debug`, `Information`, `Warning`, `Error`, `Fatal`)                            |
+| `ILD_SECRET_KEY`                             | Optional encryption-at-rest key for provider API keys and webhook secrets (see below)                             |
+| `ILD_WORKITEM_SERVER_URL`                    | URL used to auto-seed the global WorkItem Server connection                                                       |
+| `ILD_WORKITEM_SERVER_API_KEY`                | API key used to auto-seed the global WorkItem Server connection                                                   |
+| `ILD_API_URL`                                | Base URL agents and the MCP server use to call back into the ILD API                                              |
+| `ILD_ALLOWED_ORIGINS`                        | Comma-separated CORS origins allowed to call the ILD API                                                          |
+| `WORKITEM_API_KEYS`                          | Accepted bearer keys for the WorkItem Server (comma-separated)                                                    |
+| `WORKITEM_DATA_PATH`                         | Base data directory for WorkItem Server runtime files                                                             |
+| `WORKITEM_LOG_LEVEL`                         | Serilog level for the WorkItem Server (docker compose defaults it to `ILD_LOG_LEVEL`)                             |
 | `GIT_CONFIG`                                 | Path to the host `.gitconfig` mounted into the ILD container (default `~/.gitconfig`) so commits inherit identity |
-| `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL`       | Override the git author identity for agent commits (defaults to the mounted host `.gitconfig`) |
-| `GIT_COMMITTER_NAME` / `GIT_COMMITTER_EMAIL` | Override the git committer identity for agent commits |
-| `ASPNETCORE_URLS`               | HTTP bind address for each .NET host (standard ASP.NET Core variable)                    |
+| `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL`       | Override the git author identity for agent commits (defaults to the mounted host `.gitconfig`)                    |
+| `GIT_COMMITTER_NAME` / `GIT_COMMITTER_EMAIL` | Override the git committer identity for agent commits                                                             |
+| `ASPNETCORE_URLS`                            | HTTP bind address for each .NET host (standard ASP.NET Core variable)                                             |
 
 The ILD API log level is also changeable at runtime through `PUT /api/v1/logging/level` without restarting; `ILD_LOG_LEVEL` only sets the starting level. The WorkItem Server has no runtime endpoint; its level is fixed at startup.
 
@@ -171,14 +171,22 @@ The repository's own `ild.config.json` defines an `app` profile that boots three
 
 Set as build args (e.g. in `.env` consumed by `docker compose build`):
 
-| Build arg          | Purpose                                                    |
-| ------------------ | ---------------------------------------------------------- |
-| `WITH_OPENCODE`    | Install the OpenCode CLI in the ILD image                  |
-| `WITH_PI`          | Install the Pi CLI in the ILD image (requires `WITH_NODE`) |
-| `WITH_CLAUDE_CODE` | Install the Claude Code CLI in the ILD image               |
-| `WITH_NODE`        | Install Node.js tooling in the ILD image                   |
-| `WITH_DOTNET_SDK`  | Install the .NET SDK in the ILD image                      |
-| `WITH_CHROME`      | Install Chrome in the ILD image                            |
-| `WITH_CERTS`       | Import `.crt` or `.pem` files from `certs/` at build time  |
+| Build arg         | Purpose                                                   |
+| ----------------- | --------------------------------------------------------- |
+| `WITH_NODE`       | Install Node.js tooling in the ILD image                  |
+| `WITH_DOTNET_SDK` | Install the .NET SDK in the ILD image                     |
+| `WITH_CHROME`     | Install Chrome in the ILD image                           |
+| `WITH_CERTS`      | Import `.crt` or `.pem` files from `certs/` at build time |
+
+The coding agents (Pi, OpenCode, Claude Code) are **not** baked into the image.
+They install on demand onto the persistent `/data` volume and are updated there
+without rebuilding the image. `WITH_NODE` must be on, since those installs and
+version checks use Node/npm. The agent a configured AI provider needs is
+**installed automatically** — at startup for any provider that already exists,
+and when a provider using a not-yet-installed agent is added — so a fresh or
+upgraded deployment doesn't fail its first AI run on a missing CLI. Installs run
+in the background; the **AI Provider** page shows each agent's current/latest
+version, lets you trigger an install or update manually, and reports failures
+(e.g. the npm registry being unreachable).
 
 Toolchain versions are also configurable: `NODE_VERSION`, `DOTNET_VERSION`, `NODE_RUNTIME_VERSION`, and `DOTNET_SDK_CHANNEL`.

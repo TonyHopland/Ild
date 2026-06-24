@@ -2,6 +2,7 @@ using System.Net.WebSockets;
 using System.Runtime.InteropServices;
 using System.Text;
 using ILD.Api.Services;
+using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.Entities;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -70,20 +71,92 @@ public class InteractiveProviderSessionServiceTests
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var runTask = service.RunAsync(server, provider, initialCols: 80, initialRows: 24, cancellationToken: cts.Token);
 
-        // Drain whatever the server sends and observe the close. With a real
-        // PTY, a bogus binary path makes the child exec fail and the master
-        // fd close immediately — what matters here is that the bridge tears
-        // down without hanging.
+        // A bogus binaryPath no longer reaches the PTY: the pre-flight check
+        // resolves it as missing and sends an actionable error before closing.
         var buffer = new byte[1024];
+        var received = new StringBuilder();
         WebSocketReceiveResult result;
         do
         {
             result = await client.ReceiveAsync(buffer, cts.Token);
+            if (result.Count > 0)
+                received.Append(Encoding.UTF8.GetString(buffer, 0, result.Count));
         }
         while (result.MessageType != WebSocketMessageType.Close);
 
         await runTask;
-        Assert.True(true);
+        Assert.Contains("was not found", received.ToString());
+    }
+
+    [Fact]
+    public void ResolveLaunchCommand_prefers_explicit_binaryPath()
+    {
+        var provider = new AiProvider { Type = "pi", Config = "{\"binaryPath\":\"/custom/pi\"}" };
+        Assert.Equal("/custom/pi", InteractiveProviderSessionService.ResolveLaunchCommand(provider, "/data"));
+    }
+
+    [Fact]
+    public void ResolveLaunchCommand_falls_back_to_agent_command_when_not_installed()
+    {
+        // claude-code ships as `claude`; with no /data install it resolves to the
+        // bare command (which only works if separately on PATH).
+        var dataRoot = Path.Combine(Path.GetTempPath(), "ild-iss-" + Guid.NewGuid().ToString("N"));
+        var provider = new AiProvider { Type = "claude-code", Config = null };
+
+        Assert.Equal("claude", InteractiveProviderSessionService.ResolveLaunchCommand(provider, dataRoot));
+    }
+
+    [Fact]
+    public void ResolveLaunchCommand_prefers_the_data_install_when_present()
+    {
+        var dataRoot = Path.Combine(Path.GetTempPath(), "ild-iss-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var agent = ManagedAgentCatalog.Pi;
+            var versionId = "v1";
+            var versionDir = ManagedAgentInstall.VersionDir(dataRoot, agent, versionId);
+            var binary = ManagedAgentInstall.BinaryIn(versionDir, agent);
+            Directory.CreateDirectory(Path.GetDirectoryName(binary)!);
+            File.WriteAllText(binary, "#!/bin/sh\n");
+            Directory.CreateDirectory(ManagedAgentInstall.AgentRoot(dataRoot, agent));
+            File.WriteAllText(ManagedAgentInstall.PointerFile(dataRoot, agent), versionId);
+
+            var provider = new AiProvider { Type = "pi", Config = null };
+            var resolved = InteractiveProviderSessionService.ResolveLaunchCommand(provider, dataRoot);
+
+            Assert.Equal(binary, resolved);
+        }
+        finally
+        {
+            try { Directory.Delete(dataRoot, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void ResolveLaunchCommand_uses_type_for_unknown_provider()
+    {
+        var provider = new AiProvider { Type = "cat", Config = null };
+        Assert.Equal("cat", InteractiveProviderSessionService.ResolveLaunchCommand(provider, "/data"));
+    }
+
+    [Fact]
+    public void BuildUnavailableMessage_points_managed_agent_to_install_button()
+    {
+        var provider = new AiProvider { Type = "pi" };
+        var message = InteractiveProviderSessionService.BuildUnavailableMessage(provider, "pi");
+
+        Assert.Contains("Pi isn't installed", message);
+        Assert.Contains("AI Provider page", message);
+    }
+
+    [Fact]
+    public void BuildUnavailableMessage_flags_misconfigured_binaryPath_for_other_types()
+    {
+        var provider = new AiProvider { Type = "cat" };
+        var message = InteractiveProviderSessionService.BuildUnavailableMessage(provider, "/no/such/bin");
+
+        Assert.Contains("/no/such/bin", message);
+        Assert.Contains("binaryPath", message);
     }
 
     private static async Task<string> ReadUntilAsync(WebSocket socket, string needle, TimeSpan timeout)

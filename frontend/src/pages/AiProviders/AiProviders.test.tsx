@@ -16,6 +16,27 @@ function mockFetch(json: unknown, status = 200) {
   });
 }
 
+function jsonResponse(json: unknown, status = 200) {
+  return Promise.resolve({
+    ok: status < 400,
+    status,
+    text: () => Promise.resolve(JSON.stringify(json)),
+  });
+}
+
+// The page loads three resources on mount, in this fetch order:
+// providers, supported types, managed agents.
+function queueInitialLoad(
+  fetchMock: ReturnType<typeof mockFetch>,
+  providers: unknown[],
+  agents: unknown[] = [],
+) {
+  fetchMock
+    .mockReturnValueOnce(jsonResponse(providers))
+    .mockReturnValueOnce(jsonResponse(["opencode", "pi"]))
+    .mockReturnValueOnce(jsonResponse(agents));
+}
+
 function renderPage(mockFetchFn: ReturnType<typeof mockFetch>) {
   vi.stubGlobal("fetch", mockFetchFn);
 
@@ -403,6 +424,236 @@ describe("AI Providers page", () => {
         expect.objectContaining({ method: "POST" }),
       );
     });
+  });
+
+  test("shows installed + latest version and an enabled Update button when behind", async () => {
+    const agents = [
+      {
+        key: "pi",
+        displayName: "Pi",
+        npmPackage: "@earendil-works/pi-coding-agent",
+        installedVersion: "0.80.1",
+        latestVersion: "0.80.2",
+        updateAvailable: true,
+        error: null,
+      },
+    ];
+
+    const fetchMock = mockFetch(null);
+    queueInitialLoad(fetchMock, [], agents);
+    renderPage(fetchMock);
+
+    await waitFor(() => {
+      expect(screen.getByText("Coding agents")).toBeTruthy();
+    });
+
+    expect(screen.getByText("0.80.1")).toBeTruthy();
+    expect(screen.getByText("0.80.2")).toBeTruthy();
+    const updateBtn = screen.getByText("Update 0.80.1 → 0.80.2") as HTMLButtonElement;
+    expect(updateBtn.disabled).toBe(false);
+  });
+
+  test("Update button is disabled when the agent is up to date", async () => {
+    const agents = [
+      {
+        key: "opencode",
+        displayName: "OpenCode",
+        npmPackage: "opencode-ai",
+        installedVersion: "1.17.9",
+        latestVersion: "1.17.9",
+        updateAvailable: false,
+        error: null,
+      },
+    ];
+
+    const fetchMock = mockFetch(null);
+    queueInitialLoad(fetchMock, [], agents);
+    renderPage(fetchMock);
+
+    await waitFor(() => {
+      expect(screen.getByText("Coding agents")).toBeTruthy();
+    });
+
+    const upToDate = screen.getByText("Up to date") as HTMLButtonElement;
+    expect(upToDate.disabled).toBe(true);
+  });
+
+  test("offers an enabled Install button when the agent is not installed", async () => {
+    const agents = [
+      {
+        key: "pi",
+        displayName: "Pi",
+        npmPackage: "@earendil-works/pi-coding-agent",
+        installedVersion: null,
+        latestVersion: "0.80.2",
+        updateAvailable: true,
+        error: null,
+      },
+    ];
+
+    const fetchMock = mockFetch(null);
+    queueInitialLoad(fetchMock, [], agents);
+    renderPage(fetchMock);
+
+    await waitFor(() => {
+      expect(screen.getByText("Coding agents")).toBeTruthy();
+    });
+
+    expect(screen.getByText("not installed")).toBeTruthy();
+    const installBtn = screen.getByText("Install 0.80.2") as HTMLButtonElement;
+    expect(installBtn.disabled).toBe(false);
+  });
+
+  test("clicking Install installs the agent and reflects the new version", async () => {
+    const agents = [
+      {
+        key: "pi",
+        displayName: "Pi",
+        npmPackage: "@earendil-works/pi-coding-agent",
+        installedVersion: null,
+        latestVersion: "0.80.2",
+        updateAvailable: true,
+        error: null,
+      },
+    ];
+
+    const fetchMock = mockFetch(null);
+    queueInitialLoad(fetchMock, [], agents);
+    renderPage(fetchMock);
+
+    await waitFor(() => {
+      expect(screen.getByText("Coding agents")).toBeTruthy();
+    });
+
+    fetchMock.mockReturnValueOnce(
+      jsonResponse({
+        key: "pi",
+        displayName: "Pi",
+        npmPackage: "@earendil-works/pi-coding-agent",
+        installedVersion: "0.80.2",
+        latestVersion: "0.80.2",
+        updateAvailable: false,
+        error: null,
+      }),
+    );
+
+    fireEvent.click(screen.getByText("Install 0.80.2"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/managedagents/pi/update"),
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Up to date")).toBeTruthy();
+    });
+  });
+
+  test("Install button is disabled when not installed and latest is unknown", async () => {
+    const agents = [
+      {
+        key: "pi",
+        displayName: "Pi",
+        npmPackage: "@earendil-works/pi-coding-agent",
+        installedVersion: null,
+        latestVersion: null,
+        updateAvailable: false,
+        error: "Could not reach the npm registry.",
+      },
+    ];
+
+    const fetchMock = mockFetch(null);
+    queueInitialLoad(fetchMock, [], agents);
+    renderPage(fetchMock);
+
+    await waitFor(() => {
+      expect(screen.getByText("Coding agents")).toBeTruthy();
+    });
+
+    const btn = screen.getByText("Unavailable") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+  });
+
+  test("clicking Update calls the update API and reflects the new version", async () => {
+    const agents = [
+      {
+        key: "pi",
+        displayName: "Pi",
+        npmPackage: "@earendil-works/pi-coding-agent",
+        installedVersion: "0.80.1",
+        latestVersion: "0.80.2",
+        updateAvailable: true,
+        error: null,
+      },
+    ];
+
+    const fetchMock = mockFetch(null);
+    queueInitialLoad(fetchMock, [], agents);
+    renderPage(fetchMock);
+
+    await waitFor(() => {
+      expect(screen.getByText("Coding agents")).toBeTruthy();
+    });
+
+    fetchMock.mockReturnValueOnce(
+      jsonResponse({
+        key: "pi",
+        displayName: "Pi",
+        npmPackage: "@earendil-works/pi-coding-agent",
+        installedVersion: "0.80.2",
+        latestVersion: "0.80.2",
+        updateAvailable: false,
+        error: null,
+      }),
+    );
+
+    fireEvent.click(screen.getByText("Update 0.80.1 → 0.80.2"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/managedagents/pi/update"),
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Up to date")).toBeTruthy();
+    });
+  });
+
+  test("shows an error when the update fails and leaves the button actionable", async () => {
+    const agents = [
+      {
+        key: "pi",
+        displayName: "Pi",
+        npmPackage: "@earendil-works/pi-coding-agent",
+        installedVersion: "0.80.1",
+        latestVersion: "0.80.2",
+        updateAvailable: true,
+        error: null,
+      },
+    ];
+
+    const fetchMock = mockFetch(null);
+    queueInitialLoad(fetchMock, [], agents);
+    renderPage(fetchMock);
+
+    await waitFor(() => {
+      expect(screen.getByText("Coding agents")).toBeTruthy();
+    });
+
+    fetchMock.mockReturnValueOnce(jsonResponse({ error: "npm install failed" }, 502));
+
+    fireEvent.click(screen.getByText("Update 0.80.1 → 0.80.2"));
+
+    await waitFor(() => {
+      expect(screen.getByText("npm install failed")).toBeTruthy();
+    });
+
+    // The previous version is intact; the button is still offering the same update.
+    expect(screen.getByText("Update 0.80.1 → 0.80.2")).toBeTruthy();
   });
 
   test("shows default badge for default provider", async () => {

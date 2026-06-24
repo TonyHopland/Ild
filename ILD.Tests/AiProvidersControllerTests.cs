@@ -37,13 +37,23 @@ public class AiProvidersControllerTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
+    private readonly RecordingProvisioner _provisioner = new();
+
     private AiProvidersController CreateController()
         => new(
             Mock.Of<IAIProviderService>(),
             _registry.Object,
             _db,
             new ProviderStore(_db),
-            new InteractiveProviderSessionService(NullLogger<InteractiveProviderSessionService>.Instance));
+            new InteractiveProviderSessionService(NullLogger<InteractiveProviderSessionService>.Instance),
+            _provisioner);
+
+    /// <summary>Captures the provider types the controller asks to provision.</summary>
+    private sealed class RecordingProvisioner : IManagedAgentProvisioner
+    {
+        public List<string?> Requested { get; } = new();
+        public void EnsureInstalledForProviderType(string? providerType) => Requested.Add(providerType);
+    }
 
     [Fact]
     public async Task GetAll_redacts_ApiKey_and_Config()

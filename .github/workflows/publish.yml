@@ -20,11 +20,10 @@ jobs:
         include:
           - image: ild
             dockerfile: Dockerfile
-            # Batteries-included, matching the compose defaults.
+            # Batteries-included, matching the compose defaults. Coding agents
+            # (Pi, OpenCode, Claude Code) are not baked in — they install onto
+            # /data on demand from the AI Provider page; WITH_NODE provides npm.
             extra_build_args: |
-              WITH_OPENCODE=1
-              WITH_PI=1
-              WITH_CLAUDE_CODE=1
               WITH_NODE=1
               WITH_DOTNET_SDK=1
               WITH_CHROME=1

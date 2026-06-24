@@ -39,7 +39,8 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         try
         {
             var rendered = await RenderPromptAsync(ctx.Prompt, ctx.RunContext);
-            var binaryPath = AiProviderConfig.Parse(ctx.Provider.Config).BinaryPathOr("claude");
+            var binaryPath = AiProviderConfig.Parse(ctx.Provider.Config)
+                .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.ClaudeCode));
 
             var worktreePath = ctx.RunContext.WorktreePath;
             if (string.IsNullOrEmpty(worktreePath) || !Directory.Exists(worktreePath))
@@ -74,7 +75,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
                 return NodeExecutionResult.Fail(
-                    $"[claude-code-error] cannot start '{binaryPath}' — make sure the claude CLI is installed and on PATH, and that you are logged in (e.g. via 'claude /login'). Details: {ex.Message}");
+                    $"[claude-code-error] cannot start '{binaryPath}' — install or update Claude Code from the AI Provider page (or make sure the claude CLI is on PATH), and make sure you are logged in (e.g. via 'claude /login'). Details: {ex.Message}");
             }
 
             using var process = proc ?? throw new InvalidOperationException("Process.Start returned null");

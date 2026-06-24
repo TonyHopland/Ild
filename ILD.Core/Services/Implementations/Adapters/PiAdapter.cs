@@ -80,7 +80,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
-                return NodeExecutionResult.Fail($"[pi-error] cannot start '{settings.BinaryPath}' — make sure the pi binary is installed and on PATH. Details: {ex.Message}");
+                return NodeExecutionResult.Fail($"[pi-error] cannot start '{settings.BinaryPath}' — install or update Pi from the AI Provider page, or make sure the pi binary is on PATH. Details: {ex.Message}");
             }
 
             using var process = proc ?? throw new InvalidOperationException("Process.Start returned null");
@@ -484,7 +484,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
     private static PiAdapterSettings ResolveSettings(AiProvider provider, Guid loopRunId, IReadOnlyList<string>? selectedToolKeys, Guid? chatSessionId = null)
     {
         var config = AiProviderConfig.Parse(provider.Config);
-        var binaryPath = config.BinaryPathOr("pi");
+        var binaryPath = config.BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.Pi));
         var apiKey = config.ApiKey ?? provider.ApiKey;
         var providerName = config.Provider;
         var model = config.Model ?? provider.Model;
