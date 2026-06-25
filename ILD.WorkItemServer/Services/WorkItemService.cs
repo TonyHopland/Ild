@@ -29,6 +29,16 @@ public interface IWorkItemService
 
     Task<PollResponse> PollAsync(IReadOnlyList<string> activeIds, CancellationToken ct = default);
     Task<int> ReclaimStaleAsync(TimeSpan timeout, CancellationToken ct = default);
+
+    /// <summary>
+    /// Promote every <see cref="WorkItemStatus.WorkQueue"/> item whose
+    /// dependencies are all satisfied to <see cref="WorkItemStatus.Ready"/>.
+    /// A reconciliation backstop for the event-driven
+    /// <c>PromoteReadyDependents</c> path: it recovers items that entered the
+    /// work queue with their dependencies already complete, or whose promotion
+    /// was lost to a crash, cancellation, or concurrent completion.
+    /// </summary>
+    Task<int> ReconcileWorkQueueAsync(CancellationToken ct = default);
 }
 
 public sealed class WorkItemService : IWorkItemService
@@ -113,6 +123,32 @@ public sealed class WorkItemService : IWorkItemService
         if (w == null) return false;
         _db.WorkItems.Remove(w);
         await _db.SaveChangesAsync(ct);
+
+        // Scrub the deleted id from every other item's dependency list. A
+        // dangling reference would otherwise wedge a dependent forever: a
+        // Running claim requires every dependency row to exist and be Done
+        // (ClaimRunningAsync), so a pointer to a now-missing item is permanently
+        // unsatisfiable and never gets cleaned up.
+        var dependents = (await _db.WorkItems.ToListAsync(ct))
+            .Where(x => WorkItemMapper.ReadDependencies(x).Contains(id))
+            .ToList();
+        if (dependents.Count > 0)
+        {
+            var now = _clock.GetUtcNow().UtcDateTime;
+            foreach (var d in dependents)
+            {
+                var deps = WorkItemMapper.ReadDependencies(d).Where(depId => depId != id).ToList();
+                WorkItemMapper.WriteDependencies(d, deps);
+                d.UpdatedAt = now;
+            }
+            await _db.SaveChangesAsync(ct);
+
+            // Dropping the dependency may have satisfied a WorkQueue dependent's
+            // last outstanding requirement; promote any that are now ready.
+            await PromoteWorkQueueItemsAsync(
+                dependents.Where(d => d.Status == WorkItemStatus.WorkQueue).ToList(), ct);
+        }
+
         return true;
     }
 
@@ -181,9 +217,31 @@ public sealed class WorkItemService : IWorkItemService
                 .ToListAsync(ct))
             .Where(w => WorkItemMapper.ReadDependencies(w).Contains(completedId))
             .ToList();
-        if (dependents.Count == 0) return;
+        await PromoteWorkQueueItemsAsync(dependents, ct);
+    }
 
-        var depIds = dependents
+    /// <inheritdoc />
+    public async Task<int> ReconcileWorkQueueAsync(CancellationToken ct = default)
+    {
+        var candidates = await _db.WorkItems
+            .Where(w => w.Status == WorkItemStatus.WorkQueue)
+            .ToListAsync(ct);
+        return await PromoteWorkQueueItemsAsync(candidates, ct);
+    }
+
+    /// <summary>
+    /// Promote each supplied <see cref="WorkItemStatus.WorkQueue"/> candidate
+    /// whose dependencies are all <see cref="WorkItemStatus.Done"/> (an item
+    /// with no dependencies is trivially satisfied) to
+    /// <see cref="WorkItemStatus.Ready"/>. Returns the number promoted.
+    /// Backlog dependents are never passed in by callers — they still require
+    /// human approval to enter the work queue.
+    /// </summary>
+    private async Task<int> PromoteWorkQueueItemsAsync(IReadOnlyList<WorkItem> candidates, CancellationToken ct)
+    {
+        if (candidates.Count == 0) return 0;
+
+        var depIds = candidates
             .SelectMany(WorkItemMapper.ReadDependencies)
             .Distinct()
             .ToList();
@@ -194,7 +252,7 @@ public sealed class WorkItemService : IWorkItemService
 
         var now = _clock.GetUtcNow().UtcDateTime;
         var promoted = 0;
-        foreach (var w in dependents)
+        foreach (var w in candidates)
         {
             var allDone = WorkItemMapper.ReadDependencies(w)
                 .All(id => statusById.TryGetValue(id, out var s) && s == WorkItemStatus.Done);
@@ -207,6 +265,7 @@ public sealed class WorkItemService : IWorkItemService
 
         if (promoted > 0)
             await _db.SaveChangesAsync(ct);
+        return promoted;
     }
 
     /// <summary>

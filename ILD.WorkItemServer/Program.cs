@@ -71,6 +71,7 @@ public sealed class WorkItemServerProgram
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddOpenApi();
         builder.Services.AddHostedService<StaleWorkItemReclaimer>();
+        builder.Services.AddHostedService<WorkQueueReconciler>();
 
         var app = builder.Build();
 

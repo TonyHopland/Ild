@@ -458,6 +458,138 @@ public class WorkItemServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Reconcile_promotes_WorkQueue_item_created_with_deps_already_done()
+    {
+        // #1: an item lands in WorkQueue with its dependency already complete.
+        // No future Done transition will fire, so only the reconciler can rescue it.
+        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" });
+        await _svc.TransitionAsync(dep.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Done });
+        var child = await _svc.CreateAsync(new CreateWorkItemRequest
+        {
+            Title = "child",
+            ForceStatus = WorkItemStatus.WorkQueue,
+            Dependencies = new[] { dep.Id },
+        });
+
+        Assert.Equal(WorkItemStatus.WorkQueue, (await _svc.GetAsync(child.Id))!.Status);
+
+        var n = await _svc.ReconcileWorkQueueAsync();
+
+        Assert.Equal(1, n);
+        Assert.Equal(WorkItemStatus.Ready, (await _svc.GetAsync(child.Id))!.Status);
+    }
+
+    [Fact]
+    public async Task Reconcile_promotes_dependency_free_WorkQueue_item()
+    {
+        // A WorkQueue item with no dependencies is trivially ready; it strands
+        // if it never reached WorkQueue through the client path that re-checks
+        // readiness. The reconciler must promote it.
+        var item = await _svc.CreateAsync(new CreateWorkItemRequest
+        {
+            Title = "x",
+            ForceStatus = WorkItemStatus.WorkQueue,
+        });
+
+        var n = await _svc.ReconcileWorkQueueAsync();
+
+        Assert.Equal(1, n);
+        Assert.Equal(WorkItemStatus.Ready, (await _svc.GetAsync(item.Id))!.Status);
+    }
+
+    [Fact]
+    public async Task Reconcile_leaves_WorkQueue_item_with_unfinished_deps_untouched()
+    {
+        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" });
+        var child = await _svc.CreateAsync(new CreateWorkItemRequest
+        {
+            Title = "child",
+            ForceStatus = WorkItemStatus.WorkQueue,
+            Dependencies = new[] { dep.Id },
+        });
+
+        var n = await _svc.ReconcileWorkQueueAsync();
+
+        Assert.Equal(0, n);
+        Assert.Equal(WorkItemStatus.WorkQueue, (await _svc.GetAsync(child.Id))!.Status);
+    }
+
+    [Fact]
+    public async Task Reconcile_recovers_dependent_stranded_by_a_lost_promotion()
+    {
+        // #3/#4: simulate a crash/cancellation between the dependency's Done
+        // commit and the promotion write by marking the dependency Done directly
+        // on the database, bypassing TransitionAsync's promotion side effect.
+        // The dependent is left stuck in WorkQueue with no retrigger.
+        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" });
+        var child = await _svc.CreateAsync(new CreateWorkItemRequest
+        {
+            Title = "child",
+            ForceStatus = WorkItemStatus.WorkQueue,
+            Dependencies = new[] { dep.Id },
+        });
+
+        var depRow = await _db.WorkItems.FirstAsync(w => w.Id == dep.Id);
+        depRow.Status = WorkItemStatus.Done;
+        await _db.SaveChangesAsync();
+
+        Assert.Equal(WorkItemStatus.WorkQueue, (await _svc.GetAsync(child.Id))!.Status);
+
+        var n = await _svc.ReconcileWorkQueueAsync();
+
+        Assert.Equal(1, n);
+        Assert.Equal(WorkItemStatus.Ready, (await _svc.GetAsync(child.Id))!.Status);
+    }
+
+    [Fact]
+    public async Task Delete_scrubs_dependency_reference_and_promotes_now_ready_dependent()
+    {
+        // #2: deleting a dependency must not leave a dangling reference that
+        // blocks the dependent forever. The id is scrubbed and the dependent,
+        // whose only blocker is gone, is promoted to Ready.
+        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" });
+        var child = await _svc.CreateAsync(new CreateWorkItemRequest
+        {
+            Title = "child",
+            ForceStatus = WorkItemStatus.WorkQueue,
+            Dependencies = new[] { dep.Id },
+        });
+
+        var deleted = await _svc.DeleteAsync(dep.Id);
+
+        Assert.True(deleted);
+        var fresh = await _svc.GetAsync(child.Id);
+        Assert.Empty(fresh!.Dependencies);
+        Assert.Equal(WorkItemStatus.Ready, fresh.Status);
+    }
+
+    [Fact]
+    public async Task Delete_scrubs_one_of_several_deps_without_promoting_still_blocked_dependent()
+    {
+        // Deleting one of two dependencies removes the dangling reference but
+        // leaves the dependent in WorkQueue while its other dependency is open.
+        var dep1 = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep1" });
+        var dep2 = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep2" });
+        var child = await _svc.CreateAsync(new CreateWorkItemRequest
+        {
+            Title = "child",
+            ForceStatus = WorkItemStatus.WorkQueue,
+            Dependencies = new[] { dep1.Id, dep2.Id },
+        });
+
+        await _svc.DeleteAsync(dep1.Id);
+
+        var fresh = await _svc.GetAsync(child.Id);
+        Assert.Equal(dep2.Id, Assert.Single(fresh!.Dependencies));
+        Assert.Equal(WorkItemStatus.WorkQueue, fresh.Status);
+
+        // Finishing the remaining dependency now promotes it — no dangling ref
+        // left behind to block the claim.
+        await _svc.TransitionAsync(dep2.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Done });
+        Assert.Equal(WorkItemStatus.Ready, (await _svc.GetAsync(child.Id))!.Status);
+    }
+
+    [Fact]
     public async Task ListAsync_filters_by_status_and_tags()
     {
         await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a", Tags = new[] { "feature" }, ForceStatus = WorkItemStatus.Ready });
