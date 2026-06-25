@@ -58,6 +58,14 @@ function renderPage(mockFetchFn: ReturnType<typeof mockFetch>) {
   );
 }
 
+// Coding agents now live behind a notification bell in the header; their
+// version details and install/update actions are only rendered once the
+// popover is opened.
+async function openAgentsPopover() {
+  const bell = await screen.findByRole("button", { name: /Coding agents/i });
+  fireEvent.click(bell);
+}
+
 describe("AI Providers page", () => {
   test("renders provider list with name, type, URL, and model", async () => {
     const providers = [
@@ -443,17 +451,14 @@ describe("AI Providers page", () => {
     queueInitialLoad(fetchMock, [], agents);
     renderPage(fetchMock);
 
-    await waitFor(() => {
-      expect(screen.getByText("Coding agents")).toBeTruthy();
-    });
+    await openAgentsPopover();
 
-    expect(screen.getByText("0.80.1")).toBeTruthy();
-    expect(screen.getByText("0.80.2")).toBeTruthy();
-    const updateBtn = screen.getByText("Update 0.80.1 → 0.80.2") as HTMLButtonElement;
+    expect(screen.getByText("0.80.1 → 0.80.2")).toBeTruthy();
+    const updateBtn = screen.getByText("Update → 0.80.2") as HTMLButtonElement;
     expect(updateBtn.disabled).toBe(false);
   });
 
-  test("Update button is disabled when the agent is up to date", async () => {
+  test("shows an 'Up to date' indicator (no action) when the agent is current", async () => {
     const agents = [
       {
         key: "opencode",
@@ -470,12 +475,12 @@ describe("AI Providers page", () => {
     queueInitialLoad(fetchMock, [], agents);
     renderPage(fetchMock);
 
-    await waitFor(() => {
-      expect(screen.getByText("Coding agents")).toBeTruthy();
-    });
+    await openAgentsPopover();
 
-    const upToDate = screen.getByText("Up to date") as HTMLButtonElement;
-    expect(upToDate.disabled).toBe(true);
+    // A current agent shows a plain status indicator, not an actionable button.
+    const upToDate = screen.getByText("Up to date");
+    expect(upToDate.tagName).toBe("SPAN");
+    expect(screen.queryByRole("button", { name: /Update|Install/ })).toBeNull();
   });
 
   test("offers an enabled Install button when the agent is not installed", async () => {
@@ -495,11 +500,9 @@ describe("AI Providers page", () => {
     queueInitialLoad(fetchMock, [], agents);
     renderPage(fetchMock);
 
-    await waitFor(() => {
-      expect(screen.getByText("Coding agents")).toBeTruthy();
-    });
+    await openAgentsPopover();
 
-    expect(screen.getByText("not installed")).toBeTruthy();
+    expect(screen.getByText("not installed → 0.80.2")).toBeTruthy();
     const installBtn = screen.getByText("Install 0.80.2") as HTMLButtonElement;
     expect(installBtn.disabled).toBe(false);
   });
@@ -521,9 +524,7 @@ describe("AI Providers page", () => {
     queueInitialLoad(fetchMock, [], agents);
     renderPage(fetchMock);
 
-    await waitFor(() => {
-      expect(screen.getByText("Coding agents")).toBeTruthy();
-    });
+    await openAgentsPopover();
 
     fetchMock.mockReturnValueOnce(
       jsonResponse({
@@ -568,9 +569,7 @@ describe("AI Providers page", () => {
     queueInitialLoad(fetchMock, [], agents);
     renderPage(fetchMock);
 
-    await waitFor(() => {
-      expect(screen.getByText("Coding agents")).toBeTruthy();
-    });
+    await openAgentsPopover();
 
     const btn = screen.getByText("Unavailable") as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
@@ -593,9 +592,7 @@ describe("AI Providers page", () => {
     queueInitialLoad(fetchMock, [], agents);
     renderPage(fetchMock);
 
-    await waitFor(() => {
-      expect(screen.getByText("Coding agents")).toBeTruthy();
-    });
+    await openAgentsPopover();
 
     fetchMock.mockReturnValueOnce(
       jsonResponse({
@@ -609,7 +606,7 @@ describe("AI Providers page", () => {
       }),
     );
 
-    fireEvent.click(screen.getByText("Update 0.80.1 → 0.80.2"));
+    fireEvent.click(screen.getByText("Update → 0.80.2"));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -640,20 +637,18 @@ describe("AI Providers page", () => {
     queueInitialLoad(fetchMock, [], agents);
     renderPage(fetchMock);
 
-    await waitFor(() => {
-      expect(screen.getByText("Coding agents")).toBeTruthy();
-    });
+    await openAgentsPopover();
 
     fetchMock.mockReturnValueOnce(jsonResponse({ error: "npm install failed" }, 502));
 
-    fireEvent.click(screen.getByText("Update 0.80.1 → 0.80.2"));
+    fireEvent.click(screen.getByText("Update → 0.80.2"));
 
     await waitFor(() => {
       expect(screen.getByText("npm install failed")).toBeTruthy();
     });
 
     // The previous version is intact; the button is still offering the same update.
-    expect(screen.getByText("Update 0.80.1 → 0.80.2")).toBeTruthy();
+    expect(screen.getByText("Update → 0.80.2")).toBeTruthy();
   });
 
   test("shows default badge for default provider", async () => {
