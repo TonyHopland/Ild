@@ -275,6 +275,50 @@ describe("ChatBubble", () => {
     await waitFor(() => expect(setCurrentChatSessionId).toHaveBeenCalledWith(null));
   });
 
+  test("shows an in-progress indicator from send through streaming until completion", async () => {
+    const session: ChatSession = {
+      id: "s1",
+      aiProviderId: "p1",
+      providerType: "claude-code",
+      tools: ["ild"],
+      createdAt: "2026-01-01T00:00:00Z",
+      messages: [],
+    };
+    chatService.get.mockResolvedValue(session);
+    chatService.sendMessage.mockResolvedValue(undefined);
+
+    renderBubble();
+    fireEvent.click(await screen.findByLabelText("Open chat"));
+
+    const input = await screen.findByLabelText("Chat message");
+    fireEvent.change(input, { target: { value: "do the thing" } });
+    fireEvent.click(screen.getByText("Send"));
+
+    // Before any text streams back, the status reads "Thinking".
+    const status = await screen.findByRole("status");
+    expect(status.textContent).toContain("Thinking");
+
+    // Once tokens stream in, the indicator must remain visible (the message is
+    // still in progress) and switch to "Responding".
+    act(() => {
+      handlers.ChatTurnProgress?.({ payload: { chatSessionId: "s1", delta: "half an ans" } });
+    });
+    expect(await screen.findByText("half an ans")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("Responding");
+
+    // The finalized reply ends the turn, so the indicator disappears.
+    act(() => {
+      handlers.ChatMessageAppended?.({
+        payload: {
+          chatSessionId: "s1",
+          message: msg({ id: "a1", role: "assistant", content: "half an answer", sequence: 1 }),
+        },
+      });
+    });
+    await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
+    expect(screen.getByText("half an answer")).toBeTruthy();
+  });
+
   test("streams a turn and flags an interrupted partial reply", async () => {
     const session: ChatSession = {
       id: "s1",

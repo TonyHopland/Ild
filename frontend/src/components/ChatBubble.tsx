@@ -451,7 +451,14 @@ export default function ChatBubble() {
                 <MarkdownRenderer content={streaming} className="chat-msg-content" />
               </div>
             )}
-            {busy && !streaming && <div className="chat-muted chat-typing">thinking…</div>}
+            {/* Visible for the whole turn — including while text streams — so it
+                is clear the agent is still working rather than done. */}
+            {busy && (
+              <div className="chat-muted chat-typing" role="status">
+                {streaming ? "Responding" : "Thinking"}
+                <span className="chat-typing-dots" aria-hidden="true" />
+              </div>
+            )}
           </div>
 
           <form
