@@ -7,9 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-25
+
+### Added
+
+- **AI Providers page** — a redesigned page that lists each managed coding agent (Pi, OpenCode, Claude Code) with its installed and latest version and a single action button: **Install** when nothing is installed, **Update {old} → {new}** when behind, **Up to date** when current, and **Unavailable** when not installed and the npm registry can't be reached.
+- **Managed coding agents** — Pi, OpenCode, and Claude Code are installed onto the persistent `/data` volume on demand (npm install into a versioned dir followed by an atomic `current` pointer-file swap) and resolved from there at launch; an explicit config `binaryPath` still wins, and the baked-in/PATH copy remains the offline fallback. New `GET /api/v1/managedagents` and `POST /api/v1/managedagents/{key}/update` endpoints back the page.
+- **Automatic agent provisioning** — a `ManagedAgentProvisioner` hosted service installs every agent an existing provider uses at startup, and on demand when a provider for a not-yet-installed agent is added or changed, so a fresh or freshly upgraded deployment no longer fails its first AI run on a missing CLI. Installs run detached and best-effort, never blocking host startup or the HTTP request.
+- Chat now shows an in-progress indicator for the whole turn — "Thinking" before any tokens, "Responding" while text streams — with an animated pulsing dot that respects `prefers-reduced-motion`, so an in-flight reply is no longer indistinguishable from a finished one.
+
 ### Changed
 
+- **Coding agents are no longer baked into the container image** — the `WITH_OPENCODE` / `WITH_PI` / `WITH_CLAUDE_CODE` build args and their Dockerfile install blocks are removed, and dropped from `docker-compose.yml`, `.env.example`, the publish workflow, and the configuration docs. A fresh deployment installs each agent once from the AI Provider page, and installs persist on `/data` across redeploys. `WITH_NODE` stays — Node/npm is what the runtime installs and version checks use.
+- An agent update keeps the previous install alongside the new one (pruning bounded to two installs, current + previous) so an in-flight run that lazily `require()`s files from its version dir isn't pulled out from under it mid-update.
+- **Event-log payloads are stored inline in Postgres** instead of being offloaded to a file when over 10 KB. Postgres already TOASTs and compresses large text values out-of-line, so the offload bought nothing while creating split state, a second read path, and a data-loss bug (every redeploy wiped the payload files but kept the rows, so the payload fetch 404'd forever). A startup `EventLogPayloadInliningMigrator` slurps any previously offloaded files back into the row and clears dangling paths, and the now-dead `/events/payload` endpoint, `hasPayload` flag, and payload-file retention/delete paths are removed.
 - **Image publishing is release-only** — CI now pushes the GHCR images (`ghcr.io/tonyhopland/ild` and `ghcr.io/tonyhopland/ild-workitem-server`) only on a `vX.Y.Z` release tag, not on every merge to `main`. The moving `main` image tag is dropped. See [ADR-0012](docs/adr/0012-ghcr-image-tagging-strategy.md).
+
+### Fixed
+
+- Stranded WorkQueue items are now reconciled by a new `WorkQueueReconciler` background service: an item that enters the queue with its dependencies already Done, or one left behind by a crash or a lost promotion under concurrent completion, is promoted to Ready instead of waiting forever for a Done transition that will never fire. Deleting a work item also scrubs its id from every other item's dependency list, so dependents are no longer blocked permanently by a dangling dependency.
+- A parked human-feedback node resumed via `SignalNodeResultAsync` — from the automated PR/CI poller, webhook PR sync, or an actual human response — now moves the work item out of the HumanFeedback column to Running, mirroring the other resume paths, so the board and the engine no longer diverge while the run executes.
+- A human-feedback node no longer renders a stale `{{Var.*}}` value: `GetVariablesAsync` now reads with `AsNoTracking()` so it returns fresh column values after `set_loop_variable` updates a variable from a separate scope, instead of an already-tracked stale instance via EF identity resolution.
+- The AI Provider "Open terminal" action now resolves the CLI from the agent's `/data` install (or PATH) the same way the loop adapters do, instead of a bare command name that isn't present on a fresh machine, and sends an actionable "install it from the AI Provider page" message when nothing resolves rather than an opaque PTY spawn error.
 
 ## [0.3.0] - 2026-06-23
 
