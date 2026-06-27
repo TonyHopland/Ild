@@ -6,6 +6,13 @@ namespace ILD.Core.Services.Interfaces;
 
 public sealed record GitAuthOptions(string RemoteUrl, string? ApiKey, string? ProviderType = null);
 
+/// <summary>
+/// Details inferred from a remote when adding a repository: the default branch
+/// from the remote's advertised <c>HEAD</c> symref and a name derived from the
+/// clone URL. Either field is null when it can't be determined.
+/// </summary>
+public sealed record RemoteRepositoryInfo(string? DefaultBranch, string? Name);
+
 public interface IRepositoryManager
 {
     /// <summary>
@@ -38,16 +45,28 @@ public interface IRepositoryManager
     /// to the default branch's fork point. Files deleted on the branch are
     /// included so a PR-style diff view can still surface them. Returns an
     /// empty list if <paramref name="worktreePath"/> is not a valid worktree.
+    /// The diff is anchored on <paramref name="defaultBranch"/> (the repository's
+    /// stored default branch) when supplied, falling back to <c>origin/HEAD</c>.
     /// </summary>
-    Task<IReadOnlyList<WorktreeFileEntry>> ListWorktreeFilesAsync(string worktreePath);
+    Task<IReadOnlyList<WorktreeFileEntry>> ListWorktreeFilesAsync(string worktreePath, string? defaultBranch = null);
 
     /// <summary>
     /// Read a single worktree file's full content together with its unified
     /// diff against the default branch's fork point. Content is null for binary
     /// or missing files; the diff is null when the file is unchanged. Returns
-    /// null if the path escapes the worktree.
+    /// null if the path escapes the worktree. The diff is anchored on
+    /// <paramref name="defaultBranch"/> (the repository's stored default branch)
+    /// when supplied, falling back to <c>origin/HEAD</c>.
     /// </summary>
-    Task<WorktreeFileContentResponse?> ReadWorktreeFileAsync(string worktreePath, string relativePath);
+    Task<WorktreeFileContentResponse?> ReadWorktreeFileAsync(string worktreePath, string relativePath, string? defaultBranch = null);
+
+    /// <summary>
+    /// Inspect a remote without cloning to infer the default branch (from the
+    /// remote's advertised <c>HEAD</c> symref) and a name (from the clone URL).
+    /// Honors the same <paramref name="auth"/> as clone. Returns null when the
+    /// remote can't be reached (private without creds, offline, local path).
+    /// </summary>
+    Task<RemoteRepositoryInfo?> InspectRemoteAsync(string cloneUrl, CancellationToken cancellationToken = default, GitAuthOptions? auth = null);
 
     /// <summary>
     /// Delete a local branch from the repository at <paramref name="repoPath"/>.

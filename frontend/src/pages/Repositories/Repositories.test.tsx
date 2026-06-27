@@ -206,6 +206,141 @@ describe("Repositories page", () => {
     );
   });
 
+  test("auto-fills name and default branch from the remote on clone-URL blur", async () => {
+    const repos: unknown[] = [];
+    const providers = [
+      {
+        id: "prov-1",
+        name: "Forgejo",
+        type: "gitea",
+        baseUrl: "https://git.example.com",
+        apiKey: "",
+        webhookSecret: "",
+        createdAt: "2025-01-01T00:00:00Z",
+      },
+    ];
+
+    const fetchMock = mockFetch(null);
+    fetchMock
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify(repos)),
+        }),
+      )
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify(providers)),
+        }),
+      );
+
+    renderPage(fetchMock);
+
+    await waitFor(() => {
+      expect(screen.getByText("Repositories")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("+ New Repository"));
+    await waitFor(() => {
+      expect(screen.getByText("New Repository")).toBeTruthy();
+    });
+
+    // The remote inspection responds with the advertised default branch + name.
+    fetchMock.mockReturnValueOnce(
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () =>
+          Promise.resolve(JSON.stringify({ name: "inspect-proj", defaultBranch: "develop" })),
+      }),
+    );
+
+    fireEvent.change(screen.getByLabelText("Clone URL"), {
+      target: { value: "https://git.example.com/inspect-proj.git" },
+    });
+    fireEvent.blur(screen.getByLabelText("Clone URL"));
+
+    await waitFor(() => {
+      expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("inspect-proj");
+    });
+    expect((screen.getByLabelText("Default Branch") as HTMLInputElement).value).toBe("develop");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/repositories/inspect-remote"),
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  test("clone-URL blur degrades gracefully when the remote can't be inspected", async () => {
+    const repos: unknown[] = [];
+    const providers = [
+      {
+        id: "prov-1",
+        name: "Forgejo",
+        type: "gitea",
+        baseUrl: "https://git.example.com",
+        apiKey: "",
+        webhookSecret: "",
+        createdAt: "2025-01-01T00:00:00Z",
+      },
+    ];
+
+    const fetchMock = mockFetch(null);
+    fetchMock
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify(repos)),
+        }),
+      )
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify(providers)),
+        }),
+      );
+
+    renderPage(fetchMock);
+
+    await waitFor(() => {
+      expect(screen.getByText("Repositories")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("+ New Repository"));
+    await waitFor(() => {
+      expect(screen.getByText("New Repository")).toBeTruthy();
+    });
+
+    // Unfetchable remote: server returns empty fields; the form keeps its default.
+    fetchMock.mockReturnValueOnce(
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify({ name: null, defaultBranch: null })),
+      }),
+    );
+
+    fireEvent.change(screen.getByLabelText("Clone URL"), {
+      target: { value: "https://git.example.com/private.git" },
+    });
+    fireEvent.blur(screen.getByLabelText("Clone URL"));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/repositories/inspect-remote"),
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Default Branch") as HTMLInputElement).value).toBe("main");
+  });
+
   test("delete shows confirmation and removes repository on confirm", async () => {
     const repos = [
       {

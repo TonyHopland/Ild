@@ -20,17 +20,29 @@ public class WorkItemsController : ControllerBase
     private readonly ILogger<WorkItemsController> _logger;
     private readonly IWorkItemNotifier _notifier;
     private readonly IRemoteProvider? _remoteProvider;
+    private readonly IProviderStore _providerStore;
 
-    public WorkItemsController(IWorkItemManager workItemManager, ILoopEngine engine, IWorktreePreviewService worktreePreviewService, IRepositoryManager repositoryManager, ILoopRunStore loopRunStore, ILogger<WorkItemsController> logger, IWorkItemNotifier? notifier = null, IRemoteProvider? remoteProvider = null)
+    public WorkItemsController(IWorkItemManager workItemManager, ILoopEngine engine, IWorktreePreviewService worktreePreviewService, IRepositoryManager repositoryManager, ILoopRunStore loopRunStore, IProviderStore providerStore, ILogger<WorkItemsController> logger, IWorkItemNotifier? notifier = null, IRemoteProvider? remoteProvider = null)
     {
         _workItemManager = workItemManager;
         _engine = engine;
         _worktreePreviewService = worktreePreviewService;
         _repositoryManager = repositoryManager;
         _loopRunStore = loopRunStore;
+        _providerStore = providerStore;
         _logger = logger;
         _notifier = notifier ?? new NoopWorkItemNotifier();
         _remoteProvider = remoteProvider;
+    }
+
+    // The diff view anchors on the repository's stored default branch; resolve
+    // it from the work item's repository so the worktree diff doesn't collapse
+    // when origin/HEAD isn't set in the worktree.
+    private async Task<string?> ResolveDefaultBranchAsync(WorkItemView workItem)
+    {
+        if (workItem.RepositoryId is null) return null;
+        var repo = await _providerStore.GetRepositoryByIdAsync(workItem.RepositoryId.Value);
+        return repo?.DefaultBranch;
     }
 
     private async Task<(WorkItemView? WorkItem, IActionResult? Error)> GetPreviewableWorkItemAsync(string id)
@@ -310,7 +322,8 @@ public class WorkItemsController : ControllerBase
         var (workItem, error) = await GetPreviewableWorkItemAsync(id);
         if (error != null) return error;
 
-        var files = await _repositoryManager.ListWorktreeFilesAsync(workItem!.WorktreePath!);
+        var defaultBranch = await ResolveDefaultBranchAsync(workItem!);
+        var files = await _repositoryManager.ListWorktreeFilesAsync(workItem!.WorktreePath!, defaultBranch);
         return Ok(new WorktreeFilesResponse
         {
             WorktreePath = workItem.WorktreePath!,
@@ -327,7 +340,8 @@ public class WorkItemsController : ControllerBase
         var (workItem, error) = await GetPreviewableWorkItemAsync(id);
         if (error != null) return error;
 
-        var content = await _repositoryManager.ReadWorktreeFileAsync(workItem!.WorktreePath!, path);
+        var defaultBranch = await ResolveDefaultBranchAsync(workItem!);
+        var content = await _repositoryManager.ReadWorktreeFileAsync(workItem!.WorktreePath!, path, defaultBranch);
         if (content == null)
             return NotFound(new { error = "File not found in worktree." });
         return Ok(content);

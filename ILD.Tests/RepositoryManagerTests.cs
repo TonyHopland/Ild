@@ -297,6 +297,96 @@ public class RepositoryManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task ListWorktreeFiles_diffs_committed_work_against_stored_default_branch_when_origin_head_unset()
+    {
+        var (work, mgr) = CloneWithOrigin();
+        // Production worktrees don't carry refs/remotes/origin/HEAD; reproduce
+        // that so the diff can only anchor via the stored default branch.
+        Git(work, "symbolic-ref", "-d", "refs/remotes/origin/HEAD");
+
+        var wt = await mgr.CreateWorktreeAsync(work, "feature-stored-branch");
+        File.WriteAllText(Path.Combine(wt, "added.txt"), "new file\n");
+        File.WriteAllText(Path.Combine(wt, "mod.txt"), "changed\n");
+        Git(wt, "add", "-A");
+        Git(wt, "commit", "-m", "branch work"); // committed, unpushed, clean tree
+
+        var files = await mgr.ListWorktreeFilesAsync(wt, "main");
+        var byPath = files.ToDictionary(f => f.Path, f => f.ChangeStatus);
+
+        Assert.Equal("added", byPath["added.txt"]);
+        Assert.Equal("modified", byPath["mod.txt"]);
+
+        // Without the stored branch, origin/HEAD is unresolvable and the diff
+        // silently collapses — the very regression this story fixes.
+        var collapsed = await mgr.ListWorktreeFilesAsync(wt);
+        Assert.Equal("none", collapsed.Single(f => f.Path == "mod.txt").ChangeStatus);
+    }
+
+    [Fact]
+    public async Task ReadWorktreeFile_diffs_against_stored_default_branch_when_origin_head_unset()
+    {
+        var (work, mgr) = CloneWithOrigin();
+        Git(work, "symbolic-ref", "-d", "refs/remotes/origin/HEAD");
+
+        var wt = await mgr.CreateWorktreeAsync(work, "feature-stored-read");
+        File.WriteAllText(Path.Combine(wt, "mod.txt"), "changed\n");
+        Git(wt, "add", "-A");
+        Git(wt, "commit", "-m", "edit");
+
+        var modified = await mgr.ReadWorktreeFileAsync(wt, "mod.txt", "main");
+        Assert.NotNull(modified);
+        Assert.Equal("modified", modified!.ChangeStatus);
+        Assert.Contains("+changed", modified.Diff);
+    }
+
+    [Fact]
+    public async Task ListWorktreeFiles_falls_back_to_origin_head_when_stored_branch_does_not_resolve()
+    {
+        var (work, mgr) = CloneWithOrigin();
+        // origin/HEAD stays set (as after a fresh clone).
+        var wt = await mgr.CreateWorktreeAsync(work, "feature-fallback");
+        File.WriteAllText(Path.Combine(wt, "mod.txt"), "changed\n");
+        Git(wt, "add", "-A");
+        Git(wt, "commit", "-m", "edit");
+
+        // A bogus stored branch can't resolve; the diff must fall back to
+        // origin/HEAD instead of collapsing to empty.
+        var files = await mgr.ListWorktreeFilesAsync(wt, "no-such-branch");
+        Assert.Equal("modified", files.Single(f => f.Path == "mod.txt").ChangeStatus);
+    }
+
+    [Fact]
+    public async Task InspectRemoteAsync_reads_default_branch_from_symref_and_name_from_url()
+    {
+        var dir = Path.Combine(_tmp, "ins-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var origin = Path.Combine(dir, "inspect-proj.git");
+        Directory.CreateDirectory(origin);
+        Git(origin, "init", "-b", "develop");
+        Git(origin, "config", "user.email", "t@t.io");
+        Git(origin, "config", "user.name", "Tester");
+        File.WriteAllText(Path.Combine(origin, "README.md"), "x\n");
+        Git(origin, "add", "-A");
+        Git(origin, "commit", "-m", "seed");
+
+        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var info = await mgr.InspectRemoteAsync(origin);
+
+        Assert.NotNull(info);
+        Assert.Equal("develop", info!.DefaultBranch);
+        Assert.Equal("inspect-proj", info.Name);
+    }
+
+    [Fact]
+    public async Task InspectRemoteAsync_returns_null_for_unfetchable_remote()
+    {
+        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var missing = Path.Combine(_tmp, "does-not-exist-" + Guid.NewGuid().ToString("N"));
+
+        Assert.Null(await mgr.InspectRemoteAsync(missing));
+    }
+
+    [Fact]
     public async Task ReadWorktreeFile_flags_binary_and_blocks_path_traversal()
     {
         var (work, mgr) = CloneWithOrigin();
