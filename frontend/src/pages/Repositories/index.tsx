@@ -17,6 +17,7 @@ export default function Repositories() {
     WorkItemStatus.Backlog,
   );
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [isInspecting, setIsInspecting] = useState(false);
 
   useEffect(() => {
     void loadData();
@@ -57,6 +58,26 @@ export default function Repositories() {
     setDefaultBranch("main");
     setWorktreesPath("");
     setDefaultIntakeStatus(WorkItemStatus.Backlog);
+  };
+
+  // When adding a repo, pull the name and default branch from the remote so the
+  // user doesn't type them by hand and the stored default branch the diff relies
+  // on is correct. Both stay editable; an unfetchable remote is a silent no-op.
+  const inspectRemote = async () => {
+    if (editingRepo || !cloneUrl.trim()) return;
+    setIsInspecting(true);
+    try {
+      const info = await repositoryService.inspectRemote(
+        cloneUrl.trim(),
+        remoteProviderId || undefined,
+      );
+      if (info.name && !name.trim()) setName(info.name);
+      if (info.defaultBranch) setDefaultBranch(info.defaultBranch);
+    } catch (error) {
+      console.error("Failed to inspect remote:", error);
+    } finally {
+      setIsInspecting(false);
+    }
   };
 
   const handleSave = async () => {
@@ -206,8 +227,10 @@ export default function Repositories() {
                   type="text"
                   value={cloneUrl}
                   onChange={(e) => setCloneUrl(e.target.value)}
+                  onBlur={() => void inspectRemote()}
                   required
                 />
+                {isInspecting && <span className="repo-hint">Fetching remote details…</span>}
               </div>
               <div className="form-group">
                 <label htmlFor="repoProvider">Remote Provider</label>
@@ -445,6 +468,11 @@ export default function Repositories() {
         .modal-body label {
           font-size: 0.75rem;
           color: #a0a0b0;
+        }
+
+        .repo-hint {
+          font-size: 0.7rem;
+          color: #707090;
         }
 
         .modal-body input,

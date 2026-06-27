@@ -36,6 +36,30 @@ public class RepositoriesController : ControllerBase
         return repo == null ? NotFound() : Ok(repo);
     }
 
+    [HttpPost("inspect-remote")]
+    public async Task<IActionResult> InspectRemote([FromBody] InspectRemoteRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.CloneUrl))
+            return BadRequest(new { error = "CloneUrl is required" });
+
+        GitAuthOptions? auth = null;
+        if (Guid.TryParse(request.RemoteProviderId, out var providerId))
+        {
+            var provider = await _db.RemoteProviders.AsNoTracking().FirstOrDefaultAsync(p => p.Id == providerId);
+            if (provider != null)
+                auth = new GitAuthOptions(request.CloneUrl, provider.ApiKey, provider.Type);
+        }
+
+        // Degrade gracefully: an unfetchable remote yields a null info, which we
+        // return as empty fields so the user just fills them in by hand.
+        var info = await _repositoryManager.InspectRemoteAsync(request.CloneUrl, auth: auth);
+        return Ok(new InspectRemoteResponse
+        {
+            Name = info?.Name,
+            DefaultBranch = info?.DefaultBranch,
+        });
+    }
+
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] RepositoryDto request)
     {

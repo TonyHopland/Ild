@@ -424,6 +424,16 @@ export const repositoryService = {
   delete: async (id: string): Promise<void> => {
     return api.delete<void>(`/repositories/${id}`);
   },
+
+  inspectRemote: async (
+    cloneUrl: string,
+    remoteProviderId?: string,
+  ): Promise<{ name: string | null; defaultBranch: string | null }> => {
+    return api.post<{ name: string | null; defaultBranch: string | null }>(
+      "/repositories/inspect-remote",
+      { cloneUrl, remoteProviderId },
+    );
+  },
 };
 
 export const remoteProviderService = {

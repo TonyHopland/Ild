@@ -157,12 +157,12 @@ public class RepositoryManager : IRepositoryManager
         return await File.ReadAllTextAsync(full);
     }
 
-    public async Task<IReadOnlyList<WorktreeFileEntry>> ListWorktreeFilesAsync(string worktreePath)
+    public async Task<IReadOnlyList<WorktreeFileEntry>> ListWorktreeFilesAsync(string worktreePath, string? defaultBranch = null)
     {
         if (!await ValidateWorktreeHealthAsync(worktreePath))
             return Array.Empty<WorktreeFileEntry>();
 
-        var baseRef = await ResolveDiffBaseAsync(worktreePath);
+        var baseRef = await ResolveDiffBaseAsync(worktreePath, defaultBranch);
 
         // Present files (tracked + untracked), .gitignore honoured. Start every
         // one at "none"; the diff below promotes the ones that actually changed.
@@ -204,12 +204,12 @@ public class RepositoryManager : IRepositoryManager
             .ToList();
     }
 
-    public async Task<WorktreeFileContentResponse?> ReadWorktreeFileAsync(string worktreePath, string relativePath)
+    public async Task<WorktreeFileContentResponse?> ReadWorktreeFileAsync(string worktreePath, string relativePath, string? defaultBranch = null)
     {
         var full = ResolveSafePath(worktreePath, relativePath);
         if (full == null) return null;
 
-        var baseRef = await ResolveDiffBaseAsync(worktreePath);
+        var baseRef = await ResolveDiffBaseAsync(worktreePath, defaultBranch);
 
         var status = "none";
         string? diff = null;
@@ -260,14 +260,82 @@ public class RepositoryManager : IRepositoryManager
     }
 
     /// <summary>
-    /// Resolve the fork point the run branched from. <c>origin/HEAD</c> tracks
-    /// the default branch; pinning the merge-base keeps later fast-forwards on
-    /// the default branch from dragging unrelated commits into the diff.
+    /// Resolve the fork point the run branched from. Prefers the repository's
+    /// stored <paramref name="defaultBranch"/> (as <c>origin/&lt;branch&gt;</c>,
+    /// then bare <c>&lt;branch&gt;</c>) and falls back to <c>origin/HEAD</c> when
+    /// that branch is unset or doesn't resolve in the worktree. Pinning the
+    /// merge-base keeps later fast-forwards on the default branch from dragging
+    /// unrelated commits into the diff.
     /// </summary>
-    private async Task<string> ResolveDiffBaseAsync(string worktreePath)
+    private async Task<string> ResolveDiffBaseAsync(string worktreePath, string? defaultBranch)
     {
-        var (code, stdout, _) = await RunAsync(worktreePath, "merge-base", "HEAD", "origin/HEAD");
-        return code == 0 && !string.IsNullOrWhiteSpace(stdout) ? stdout.Trim() : "origin/HEAD";
+        foreach (var candidate in EnumerateBaseRefCandidates(defaultBranch))
+        {
+            var (code, stdout, _) = await RunAsync(worktreePath, "merge-base", "HEAD", candidate);
+            if (code == 0 && !string.IsNullOrWhiteSpace(stdout))
+                return stdout.Trim();
+        }
+
+        // Nothing resolved (e.g. origin/HEAD unset in this worktree); keep the
+        // literal ref so the caller's diff fails loudly rather than silently.
+        return "origin/HEAD";
+    }
+
+    private static IEnumerable<string> EnumerateBaseRefCandidates(string? defaultBranch)
+    {
+        if (!string.IsNullOrWhiteSpace(defaultBranch))
+        {
+            var trimmed = defaultBranch.Trim();
+            yield return $"origin/{trimmed}";
+            yield return trimmed;
+        }
+
+        yield return "origin/HEAD";
+    }
+
+    public async Task<RemoteRepositoryInfo?> InspectRemoteAsync(string cloneUrl, CancellationToken cancellationToken = default, GitAuthOptions? auth = null)
+    {
+        if (string.IsNullOrWhiteSpace(cloneUrl))
+            return null;
+
+        var (code, stdout, _) = await RunAsync(Path.GetTempPath(), new[] { "ls-remote", "--symref", cloneUrl, "HEAD" }, cancellationToken, auth);
+        if (code != 0)
+            return null;
+
+        return new RemoteRepositoryInfo(ParseSymrefDefaultBranch(stdout), ParseRepoNameFromUrl(cloneUrl));
+    }
+
+    // `git ls-remote --symref <url> HEAD` advertises the default branch as a
+    // line like "ref: refs/heads/main\tHEAD"; pull the branch name out of it.
+    private static string? ParseSymrefDefaultBranch(string lsRemoteOutput)
+    {
+        foreach (var line in lsRemoteOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var trimmed = line.Trim();
+            if (!trimmed.StartsWith("ref:", StringComparison.Ordinal)) continue;
+
+            var rest = trimmed["ref:".Length..].Trim();
+            var refName = rest.Split('\t', ' ')[0];
+            const string prefix = "refs/heads/";
+            if (refName.StartsWith(prefix, StringComparison.Ordinal))
+                return refName[prefix.Length..];
+        }
+
+        return null;
+    }
+
+    private static string? ParseRepoNameFromUrl(string cloneUrl)
+    {
+        var trimmed = cloneUrl.Trim().TrimEnd('/');
+        if (trimmed.Length == 0) return null;
+
+        // Handle both URL ("https://host/group/repo.git") and scp-like
+        // ("git@host:group/repo.git") forms by splitting on both separators.
+        var lastSegment = trimmed.Split('/', ':')[^1];
+        if (lastSegment.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+            lastSegment = lastSegment[..^".git".Length];
+
+        return string.IsNullOrWhiteSpace(lastSegment) ? null : lastSegment;
     }
 
     private async Task<IReadOnlyList<string>> ListZeroSeparatedAsync(string worktreePath, params string[] args)
