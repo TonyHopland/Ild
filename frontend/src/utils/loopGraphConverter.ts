@@ -51,6 +51,8 @@ export function templateToEdges(template: LoopTemplate): Edge[] {
           ? "failure"
           : edge.name?.trim() || "custom";
 
+    // Custom edges (a PR node's on_* edges, a Condition's true/false branches,
+    // a Human/AI node's named edges) all leave the single "respond" outlet.
     const sourceHandle =
       edge.edgeType === EdgeType.OnSuccess
         ? "success"

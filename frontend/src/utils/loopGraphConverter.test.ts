@@ -71,6 +71,40 @@ describe("loopGraphConverter custom edges", () => {
     expect(edges.every((edge) => edge.targetHandle === "target-handle")).toBe(true);
   });
 
+  test("a Condition node's true/false edges reload onto the shared 'respond' outlet", () => {
+    const edges = templateToEdges(
+      template([
+        {
+          id: "e-true",
+          sourceNodeId: "cond",
+          targetNodeId: "human",
+          edgeType: EdgeType.Custom,
+          name: "true",
+          maxTraversals: null,
+        },
+        {
+          id: "e-false",
+          sourceNodeId: "cond",
+          targetNodeId: "pr",
+          edgeType: EdgeType.Custom,
+          name: "false",
+          maxTraversals: null,
+        },
+      ]),
+    );
+
+    // A Condition node routes its true/false branches through the same single
+    // custom outlet as a PR node's on_* edges, so both reload onto "respond"
+    // with their names preserved as labels.
+    expect(edges.map((edge) => [(edge.data as { name?: string }).name, edge.sourceHandle])).toEqual(
+      [
+        ["true", "respond"],
+        ["false", "respond"],
+      ],
+    );
+    expect(edges.map((edge) => edge.label)).toEqual(["true", "false"]);
+  });
+
   test("a custom edge with no name falls back to a generic 'custom' label", () => {
     const [edge] = templateToEdges(
       template([

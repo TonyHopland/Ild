@@ -48,21 +48,21 @@ const handleStyles = {
   success: { background: "#10b981", borderColor: "#059669" },
   fail: { background: "#ef4444", borderColor: "#dc2626" },
   respond: { background: "#f59e0b", borderColor: "#d97706" },
-  conditionTrue: { background: "#22c55e", borderColor: "#16a34a" },
-  conditionFalse: { background: "#f97316", borderColor: "#ea580c" },
 };
 
 export default function LoopNodeComponent({ data }: NodeProps) {
   const nodeData = data as { label: string; type: string };
   const style = nodeStyles[nodeData.type] || nodeStyles[NodeType.Cmd];
   // The top handle is the single "custom" outlet; any number of named custom
-  // edges may leave it. Only Human, AI and PR nodes declare custom edges.
+  // edges may leave it. Human, AI and PR nodes declare custom edges, and a
+  // Condition node routes its fixed "true"/"false" branches through it too.
   const hasCustomHandle =
     nodeData.type === NodeType.Human ||
     nodeData.type === NodeType.AI ||
-    nodeData.type === NodeType.PR;
-  // A Condition node routes only through two fixed outlets \u2014 "true"/"false" \u2014
-  // and never an OnSuccess edge, so it replaces the success handle with them.
+    nodeData.type === NodeType.PR ||
+    nodeData.type === NodeType.Condition;
+  // A Condition node has no default success outlet — it routes only through its
+  // two named custom edges (and the fail handle for an evaluation error).
   const isCondition = nodeData.type === NodeType.Condition;
 
   return (
@@ -111,26 +111,6 @@ export default function LoopNodeComponent({ data }: NodeProps) {
           className="handle-respond"
           style={handleStyles.respond}
         />
-      )}
-      {isCondition && (
-        <>
-          <Handle
-            type="source"
-            position={Position.Right}
-            id="true"
-            data-testid="source-handle-true"
-            className="handle-true"
-            style={handleStyles.conditionTrue}
-          />
-          <Handle
-            type="source"
-            position={Position.Top}
-            id="false"
-            data-testid="source-handle-false"
-            className="handle-false"
-            style={handleStyles.conditionFalse}
-          />
-        </>
       )}
       <div
         className="loop-node-type"
