@@ -14,7 +14,14 @@ using Microsoft.Extensions.Logging;
 /// </summary>
 public interface IRemoteWorkItemCoordinator
 {
-    Task<PollCycleResult> RunPollCycleAsync(WorkItemServerOptions opts, int maxConcurrent, CancellationToken ct = default);
+    /// <param name="claimReadyItems">
+    /// When <c>false</c> (the scheduler is paused) the Ready-items claim loop is
+    /// skipped, so nothing auto-promotes from Ready into Running. Every other
+    /// step — heartbeating the active set, resuming WaitingForIld runs, dropping
+    /// Done items, reporting active human feedback — runs as normal. Humans can
+    /// still promote Ready items manually through the work-item transition API.
+    /// </param>
+    Task<PollCycleResult> RunPollCycleAsync(WorkItemServerOptions opts, int maxConcurrent, bool claimReadyItems = true, CancellationToken ct = default);
 }
 
 public sealed class PollCycleResult
@@ -59,7 +66,7 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
         _logger = logger;
     }
 
-    public async Task<PollCycleResult> RunPollCycleAsync(WorkItemServerOptions opts, int maxConcurrent, CancellationToken ct = default)
+    public async Task<PollCycleResult> RunPollCycleAsync(WorkItemServerOptions opts, int maxConcurrent, bool claimReadyItems = true, CancellationToken ct = default)
     {
         var poll = await _client.PollAsync(opts, _tracker.Snapshot(), ct);
 
@@ -114,7 +121,10 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
         //    Running state on the server.
         var hasActiveHumanFeedback = poll.ActiveItems.Any(w => w.Status == RemoteWorkItemStatus.HumanFeedback);
 
-        foreach (var ready in poll.ReadyItems)
+        // While paused, leave Ready items untouched: the whole claim loop is the
+        // auto-promotion path, so skipping it is what "pause" means. A human can
+        // still promote a Ready item to Running manually via the transition API.
+        foreach (var ready in claimReadyItems ? poll.ReadyItems : Enumerable.Empty<RemoteWorkItem>())
         {
             if (_tracker.Count >= maxConcurrent) break;
             if (ct.IsCancellationRequested) break;

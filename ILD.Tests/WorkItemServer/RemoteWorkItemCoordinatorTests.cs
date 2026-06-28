@@ -255,6 +255,74 @@ public sealed class RemoteWorkItemCoordinatorTests
     }
 
     [Fact]
+    public async Task Does_not_claim_ready_items_when_paused()
+    {
+        var ready = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.Ready, "build");
+
+        var client = new Mock<IWorkItemServerClient>();
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+              .ReturnsAsync(new RemotePollResponse { ReadyItems = new[] { ready } });
+
+        var tracker = new InMemoryActiveWorkItemTracker();
+        var engine = new Mock<ILoopEngine>();
+        var resolver = new Mock<ILoopTemplateResolver>();
+        resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
+                .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Single, Guid.NewGuid(), Array.Empty<string>()));
+
+        var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object, engine.Object);
+        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, claimReadyItems: false);
+
+        Assert.Empty(result.Claimed);
+        Assert.Equal(0, tracker.Count);
+        // Nothing should have been transitioned (no claim, no escalation) and no
+        // run started — Ready items are left untouched for a human to promote.
+        client.Verify(c => c.TransitionAsync(Opts, It.IsAny<string>(), It.IsAny<RemoteTransitionRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+        engine.Verify(e => e.StartRunAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task When_paused_still_resumes_waiting_for_ild_and_drops_done()
+    {
+        // Everything except Ready→Running auto-promotion must keep working while
+        // paused: a parked WaitingForIld run still resumes, a finished item still
+        // leaves the heartbeat set, and a Ready item is left untouched.
+        var waiting = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.WaitingForIld);
+        var done = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.Done);
+        var ready = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.Ready, "build");
+
+        var tracker = new InMemoryActiveWorkItemTracker();
+        tracker.Add(waiting.Id);
+        tracker.Add(done.Id);
+
+        var client = new Mock<IWorkItemServerClient>();
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+              .ReturnsAsync(new RemotePollResponse
+              {
+                  ActiveItems = new[] { waiting, done },
+                  ReadyItems = new[] { ready },
+              });
+        client.Setup(c => c.TransitionAsync(Opts, waiting.Id,
+                It.Is<RemoteTransitionRequest>(r => r.TargetStatus == RemoteWorkItemStatus.Running),
+                It.IsAny<CancellationToken>()))
+              .ReturnsAsync(new RemoteTransitionResponse { Success = true, ActualStatus = RemoteWorkItemStatus.Running });
+
+        var engine = new Mock<ILoopEngine>();
+        var resolver = new Mock<ILoopTemplateResolver>();
+        resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
+                .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Single, Guid.NewGuid(), Array.Empty<string>()));
+
+        var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object, engine.Object);
+        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, claimReadyItems: false);
+
+        Assert.Single(result.Resumed);
+        Assert.DoesNotContain(done.Id, tracker.Snapshot());
+        Assert.Empty(result.Claimed);
+        Assert.DoesNotContain(ready.Id, tracker.Snapshot());
+        // The Ready item was never claimed, but the WaitingForIld resume still fired.
+        client.Verify(c => c.TransitionAsync(Opts, ready.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task Does_not_notify_when_claim_fails()
     {
         var ready = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.Ready, "build");
