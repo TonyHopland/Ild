@@ -1272,51 +1272,6 @@ export default function LoopEditor() {
       const sourceNode = nodes.find((node) => node.id === connection.source);
       if (!sourceNode) return;
 
-      // A Condition node reuses the standard success/fail outlets for its two
-      // branches: the success handle wires the fixed "true" edge, the fail
-      // handle the fixed "false" edge. Both persist as fixed Custom edges — no
-      // name picker, no renaming — so the user cannot add or rename outlets.
-      if (
-        (sourceNode.data?.type as NodeType) === NodeType.Condition &&
-        (connection.sourceHandle === "success" || connection.sourceHandle === "fail")
-      ) {
-        const fixedHandle = connection.sourceHandle;
-        const fixedName = fixedHandle === "success" ? "true" : "false";
-        const result = checkEdgeConstraints(
-          connection.source,
-          sourceNode.data?.type as NodeType,
-          EdgeType.Custom,
-          edges,
-        );
-        if (!result.allowed) {
-          setEdgeError(result.error ?? "Cannot create edge");
-          return;
-        }
-        if (
-          edges.some(
-            (edge) =>
-              edge.source === connection.source &&
-              edge.data?.edgeType === EdgeType.Custom &&
-              ((edge.data as { name?: string | null })?.name ?? "") === fixedName,
-          )
-        ) {
-          setEdgeError(`The '${fixedName}' edge is already connected from this node`);
-          return;
-        }
-        const newEdge = buildEdge({
-          source: connection.source,
-          target: connection.target,
-          edgeType: EdgeType.Custom,
-          name: fixedName,
-          maxTraversals: null,
-          sourceHandle: fixedHandle,
-          targetHandle: connection.targetHandle ?? "target-handle",
-        });
-        setEdges((currentEdges) => appendEdge(newEdge, currentEdges));
-        setEdgeError(null);
-        return;
-      }
-
       let nextEdgeType = EdgeType.OnSuccess;
       if (connection.sourceHandle === "fail") nextEdgeType = EdgeType.OnFailure;
       // The top handle is the single custom outlet; the edge name is chosen in

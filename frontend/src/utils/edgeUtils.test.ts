@@ -58,6 +58,10 @@ describe("getCustomEdgeNames", () => {
     expect(getCustomEdgeNames(node("c", NodeType.Cmd))).toEqual([]);
   });
 
+  test("Condition node offers exactly its fixed true/false pair", () => {
+    expect(getCustomEdgeNames(node("c", NodeType.Condition))).toEqual(["true", "false"]);
+  });
+
   test("PR node offers the seven reserved heartbeat edges plus any declared ones", () => {
     const pr = node("p", NodeType.PR, { customEdges: ["custom_extra"] });
     const names = getCustomEdgeNames(pr);

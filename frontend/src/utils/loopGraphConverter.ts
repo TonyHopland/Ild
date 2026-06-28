@@ -34,8 +34,6 @@ export function templateToNodes(template: LoopTemplate): Node[] {
 }
 
 export function templateToEdges(template: LoopTemplate): Edge[] {
-  const nodeTypeById = new Map(template.nodes.map((node) => [node.id, node.type]));
-
   return template.edges.map((edge) => {
     const strokeStyle =
       edge.edgeType === EdgeType.OnSuccess
@@ -53,25 +51,14 @@ export function templateToEdges(template: LoopTemplate): Edge[] {
           ? "failure"
           : edge.name?.trim() || "custom";
 
-    // A Condition node has no shared "respond" outlet: it reuses the standard
-    // success/fail handles for its two branches (success = the "true" edge,
-    // fail = the "false" edge). Anchoring them to "respond" (a handle the node
-    // never renders) detaches the edges on reload, so map them back onto the
-    // success/fail handles their names correspond to.
-    const isConditionOutlet =
-      edge.edgeType === EdgeType.Custom &&
-      nodeTypeById.get(edge.sourceNodeId) === NodeType.Condition;
-
+    // Custom edges (a PR node's on_* edges, a Condition's true/false branches,
+    // a Human/AI node's named edges) all leave the single "respond" outlet.
     const sourceHandle =
       edge.edgeType === EdgeType.OnSuccess
         ? "success"
         : edge.edgeType === EdgeType.OnFailure
           ? "fail"
-          : isConditionOutlet
-            ? edge.name === "false"
-              ? "fail"
-              : "success"
-            : "respond";
+          : "respond";
 
     return {
       id: edge.id,

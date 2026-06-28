@@ -49,6 +49,12 @@ export const PR_RESERVED_EDGE_NAMES = [
   "on_abandoned",
 ] as const;
 
+// A Condition node routes through exactly two fixed, named custom edges — the
+// branch taken when the predicate holds ("true") and when it does not ("false").
+// Like the PR node's reserved edges these are wired through the single custom
+// outlet and picked by name, not declared in config.
+export const CONDITION_EDGE_NAMES = ["true", "false"] as const;
+
 /**
  * The custom-edge names a node declares, used to populate the "Which edge?"
  * dropdown when connecting from the custom handle. AI nodes derive them from
@@ -80,6 +86,10 @@ export function getCustomEdgeNames(node: Node | undefined | null): string[] {
   if (data?.type === NodeType.Human) {
     const names = (config.customEdges as string[] | undefined) ?? [];
     return collect(names);
+  }
+  if (data?.type === NodeType.Condition) {
+    // Fixed pair, like the PR node's reserved edges — not config-driven.
+    return collect([...CONDITION_EDGE_NAMES]);
   }
   return [];
 }

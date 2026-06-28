@@ -2,25 +2,21 @@ import { describe, expect, test } from "vite-plus/test";
 import type { Edge } from "@xyflow/react";
 import { templateToEdges, edgesToLoopNodeEdges } from "./loopGraphConverter";
 import { LOOP_EDGE_TYPE } from "./edgeUtils";
-import { EdgeType, NodeType, type LoopTemplate } from "../types";
+import { EdgeType, type LoopTemplate } from "../types";
 
-function template(edges: LoopTemplate["edges"], nodes: LoopTemplate["nodes"] = []): LoopTemplate {
+function template(edges: LoopTemplate["edges"]): LoopTemplate {
   return {
     id: "t",
     name: "t",
     description: "",
     version: 1,
     recoveryPolicy: "AutoResume" as LoopTemplate["recoveryPolicy"],
-    nodes,
+    nodes: [],
     edges,
     createdAt: "",
     updatedAt: "",
     isArchived: false,
   };
-}
-
-function node(id: string, type: NodeType): LoopTemplate["nodes"][number] {
-  return { id, type, label: id, config: {}, maxTraversals: null };
 }
 
 describe("loopGraphConverter custom edges", () => {
@@ -75,58 +71,38 @@ describe("loopGraphConverter custom edges", () => {
     expect(edges.every((edge) => edge.targetHandle === "target-handle")).toBe(true);
   });
 
-  test("a Condition node's true/false edges reload onto the reused success/fail handles", () => {
+  test("a Condition node's true/false edges reload onto the shared 'respond' outlet", () => {
     const edges = templateToEdges(
-      template(
-        [
-          {
-            id: "e-true",
-            sourceNodeId: "cond",
-            targetNodeId: "human",
-            edgeType: EdgeType.Custom,
-            name: "true",
-            maxTraversals: null,
-          },
-          {
-            id: "e-false",
-            sourceNodeId: "cond",
-            targetNodeId: "pr",
-            edgeType: EdgeType.Custom,
-            name: "false",
-            maxTraversals: null,
-          },
-        ],
-        [node("cond", NodeType.Condition)],
-      ),
+      template([
+        {
+          id: "e-true",
+          sourceNodeId: "cond",
+          targetNodeId: "human",
+          edgeType: EdgeType.Custom,
+          name: "true",
+          maxTraversals: null,
+        },
+        {
+          id: "e-false",
+          sourceNodeId: "cond",
+          targetNodeId: "pr",
+          edgeType: EdgeType.Custom,
+          name: "false",
+          maxTraversals: null,
+        },
+      ]),
     );
 
-    // A Condition node reuses the standard success/fail outlets (no "respond"
-    // handle), so its "true" edge must anchor to "success" and "false" to
-    // "fail" or the edge detaches from the node on reload.
-    const handleByName = Object.fromEntries(
-      edges.map((edge) => [(edge.data as { name?: string }).name, edge.sourceHandle]),
+    // A Condition node routes its true/false branches through the same single
+    // custom outlet as a PR node's on_* edges, so both reload onto "respond"
+    // with their names preserved as labels.
+    expect(edges.map((edge) => [(edge.data as { name?: string }).name, edge.sourceHandle])).toEqual(
+      [
+        ["true", "respond"],
+        ["false", "respond"],
+      ],
     );
-    expect(handleByName).toEqual({ true: "success", false: "fail" });
-  });
-
-  test("a non-Condition node's custom edge still uses the shared 'respond' outlet", () => {
-    const [edge] = templateToEdges(
-      template(
-        [
-          {
-            id: "e1",
-            sourceNodeId: "ai",
-            targetNodeId: "b",
-            edgeType: EdgeType.Custom,
-            name: "Escalate",
-            maxTraversals: null,
-          },
-        ],
-        [node("ai", NodeType.AI)],
-      ),
-    );
-
-    expect(edge.sourceHandle).toBe("respond");
+    expect(edges.map((edge) => edge.label)).toEqual(["true", "false"]);
   });
 
   test("a custom edge with no name falls back to a generic 'custom' label", () => {

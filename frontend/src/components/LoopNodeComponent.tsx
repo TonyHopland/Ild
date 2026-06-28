@@ -54,14 +54,16 @@ export default function LoopNodeComponent({ data }: NodeProps) {
   const nodeData = data as { label: string; type: string };
   const style = nodeStyles[nodeData.type] || nodeStyles[NodeType.Cmd];
   // The top handle is the single "custom" outlet; any number of named custom
-  // edges may leave it. Only Human, AI and PR nodes declare custom edges.
+  // edges may leave it. Human, AI and PR nodes declare custom edges, and a
+  // Condition node routes its fixed "true"/"false" branches through it too.
   const hasCustomHandle =
     nodeData.type === NodeType.Human ||
     nodeData.type === NodeType.AI ||
-    nodeData.type === NodeType.PR;
-  // A Condition node reuses the standard success/fail outlets for its two
-  // branches (success = the "true" edge, fail = the "false" edge) rather than
-  // inventing dedicated handles; the wiring is named in onConnect.
+    nodeData.type === NodeType.PR ||
+    nodeData.type === NodeType.Condition;
+  // A Condition node has no default success outlet — it routes only through its
+  // two named custom edges (and the fail handle for an evaluation error).
+  const isCondition = nodeData.type === NodeType.Condition;
 
   return (
     <div
@@ -82,14 +84,16 @@ export default function LoopNodeComponent({ data }: NodeProps) {
         data-testid="target-handle"
         style={{ background: "#555", borderColor: "#777" }}
       />
-      <Handle
-        type="source"
-        position={Position.Right}
-        id="success"
-        data-testid="source-handle-success"
-        className="handle-success"
-        style={handleStyles.success}
-      />
+      {!isCondition && (
+        <Handle
+          type="source"
+          position={Position.Right}
+          id="success"
+          data-testid="source-handle-success"
+          className="handle-success"
+          style={handleStyles.success}
+        />
+      )}
       <Handle
         type="source"
         position={Position.Bottom}
