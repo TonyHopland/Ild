@@ -80,11 +80,15 @@ export function useSignalR(hubUrl = "/hubs/work-item") {
     };
 
     connection.onreconnecting(() => {
-      dispatchersRef.current.clear();
       updateState(signalR.HubConnectionState.Reconnecting);
     });
     connection.onreconnected(() => {
-      handlersRef.current.forEach((_, eventType) => ensureDispatcher(connection, eventType));
+      // .on() handlers survive automatic reconnects, so the dispatchers are still
+      // registered. A reconnect produces a new ConnectionId, though, so the
+      // work-items group membership is lost and must be re-joined.
+      if (hubUrl === "/hubs/work-item") {
+        connection.invoke("SubscribeToWorkItems").catch((err) => console.error(err));
+      }
       updateState(signalR.HubConnectionState.Connected);
     });
     connection.onclose(() => updateState(signalR.HubConnectionState.Disconnected));
