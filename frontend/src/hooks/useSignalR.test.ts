@@ -56,6 +56,8 @@ beforeEach(() => {
   stopMock.mockClear();
   invokeMock.mockClear();
   onMock.mockClear();
+  onreconnectingMock.mockClear();
+  onreconnectedMock.mockClear();
   localStorage.clear();
 });
 
@@ -113,6 +115,76 @@ describe("useSignalR", () => {
       await Promise.resolve();
     });
     expect(invokeMock).toHaveBeenCalledWith("SubscribeToWorkItems");
+    unmount();
+  });
+
+  test("re-joins the work-items group when the work-item hub reconnects", async () => {
+    localStorage.setItem("auth_token", "tok-1");
+    authService.setAuth({ id: "u1", username: "x", createdAt: "" }, "tok-1");
+
+    const { unmount } = renderHook(() => useSignalR("/hubs/work-item"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    invokeMock.mockClear();
+
+    const onreconnected = onreconnectedMock.mock.calls[0][0] as () => void;
+    await act(async () => {
+      onreconnected();
+      await Promise.resolve();
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith("SubscribeToWorkItems");
+    unmount();
+  });
+
+  test("does not re-subscribe to work items when a non-work-item hub reconnects", async () => {
+    localStorage.setItem("auth_token", "tok-1");
+    authService.setAuth({ id: "u1", username: "x", createdAt: "" }, "tok-1");
+
+    const { unmount } = renderHook(() => useSignalR("/hubs/loop-run"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    invokeMock.mockClear();
+
+    const onreconnected = onreconnectedMock.mock.calls[0][0] as () => void;
+    await act(async () => {
+      onreconnected();
+      await Promise.resolve();
+    });
+
+    expect(invokeMock).not.toHaveBeenCalledWith("SubscribeToWorkItems");
+    unmount();
+  });
+
+  test("does not register a duplicate connection-level handler across a reconnect cycle", async () => {
+    localStorage.setItem("auth_token", "tok-1");
+    authService.setAuth({ id: "u1", username: "x", createdAt: "" }, "tok-1");
+
+    const { result, unmount } = renderHook(() => useSignalR("/hubs/work-item"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const handler = vi.fn();
+    act(() => {
+      result.current.on("WorkItemUpdated", handler);
+    });
+
+    const onForEvent = () =>
+      onMock.mock.calls.filter(([eventType]) => eventType === "WorkItemUpdated").length;
+    expect(onForEvent()).toBe(1);
+
+    const onreconnecting = onreconnectingMock.mock.calls[0][0] as () => void;
+    const onreconnected = onreconnectedMock.mock.calls[0][0] as () => void;
+    await act(async () => {
+      onreconnecting();
+      onreconnected();
+      await Promise.resolve();
+    });
+
+    expect(onForEvent()).toBe(1);
     unmount();
   });
 });
