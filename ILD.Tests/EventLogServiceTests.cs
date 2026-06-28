@@ -42,6 +42,22 @@ public class EventLogServiceTests
         Assert.Equal(3, s3);
     }
 
+    [Theory]
+    [InlineData("PrMerged", EventType.PrMerged)]
+    [InlineData("PrMergeFailed", EventType.PrMergeFailed)]
+    [InlineData("BranchDeleteFailed", EventType.BranchDeleteFailed)]
+    public async Task PrMerge_event_strings_round_trip_and_are_not_coerced_to_Error(string eventType, EventType expected)
+    {
+        var (svc, db, runId, _) = Setup();
+        using var _d = db;
+
+        await svc.AppendAsync(runId, eventType, "merge flow event");
+
+        var row = db.Context.EventLogs.Single(e => e.LoopRunId == runId);
+        Assert.Equal(expected, row.EventType);
+        Assert.NotEqual(EventType.Error, row.EventType);
+    }
+
     [Fact]
     public async Task GetByRunId_returns_events_in_sequence_order()
     {

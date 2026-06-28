@@ -15,5 +15,8 @@ public enum EventType
     RecoveryTriggered = 10,
     Error = 11,
     CleanupStarted = 12,
-    CleanupCompleted = 13
+    CleanupCompleted = 13,
+    PrMerged = 14,
+    PrMergeFailed = 15,
+    BranchDeleteFailed = 16
 }
