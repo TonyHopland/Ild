@@ -1272,11 +1272,16 @@ export default function LoopEditor() {
       const sourceNode = nodes.find((node) => node.id === connection.source);
       if (!sourceNode) return;
 
-      // Condition nodes expose two fixed outlets ("true"/"false"). They wire
-      // straight to a Custom edge whose name is the handle id — no name picker,
-      // no renaming — so the user cannot add or rename outlets.
-      if (connection.sourceHandle === "true" || connection.sourceHandle === "false") {
-        const fixedName = connection.sourceHandle;
+      // A Condition node reuses the standard success/fail outlets for its two
+      // branches: the success handle wires the fixed "true" edge, the fail
+      // handle the fixed "false" edge. Both persist as fixed Custom edges — no
+      // name picker, no renaming — so the user cannot add or rename outlets.
+      if (
+        (sourceNode.data?.type as NodeType) === NodeType.Condition &&
+        (connection.sourceHandle === "success" || connection.sourceHandle === "fail")
+      ) {
+        const fixedHandle = connection.sourceHandle;
+        const fixedName = fixedHandle === "success" ? "true" : "false";
         const result = checkEdgeConstraints(
           connection.source,
           sourceNode.data?.type as NodeType,
@@ -1304,7 +1309,7 @@ export default function LoopEditor() {
           edgeType: EdgeType.Custom,
           name: fixedName,
           maxTraversals: null,
-          sourceHandle: fixedName,
+          sourceHandle: fixedHandle,
           targetHandle: connection.targetHandle ?? "target-handle",
         });
         setEdges((currentEdges) => appendEdge(newEdge, currentEdges));

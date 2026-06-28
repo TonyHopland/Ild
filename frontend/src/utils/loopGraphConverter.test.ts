@@ -75,7 +75,7 @@ describe("loopGraphConverter custom edges", () => {
     expect(edges.every((edge) => edge.targetHandle === "target-handle")).toBe(true);
   });
 
-  test("a Condition node's true/false edges reload onto their named outlet handles", () => {
+  test("a Condition node's true/false edges reload onto the reused success/fail handles", () => {
     const edges = templateToEdges(
       template(
         [
@@ -100,13 +100,13 @@ describe("loopGraphConverter custom edges", () => {
       ),
     );
 
-    // A Condition node renders only "true"/"false" source handles — never the
-    // shared "respond" outlet — so each custom edge must anchor to the handle
-    // matching its name or it detaches from the node on reload.
+    // A Condition node reuses the standard success/fail outlets (no "respond"
+    // handle), so its "true" edge must anchor to "success" and "false" to
+    // "fail" or the edge detaches from the node on reload.
     const handleByName = Object.fromEntries(
       edges.map((edge) => [(edge.data as { name?: string }).name, edge.sourceHandle]),
     );
-    expect(handleByName).toEqual({ true: "true", false: "false" });
+    expect(handleByName).toEqual({ true: "success", false: "fail" });
   });
 
   test("a non-Condition node's custom edge still uses the shared 'respond' outlet", () => {

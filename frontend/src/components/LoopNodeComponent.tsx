@@ -48,8 +48,6 @@ const handleStyles = {
   success: { background: "#10b981", borderColor: "#059669" },
   fail: { background: "#ef4444", borderColor: "#dc2626" },
   respond: { background: "#f59e0b", borderColor: "#d97706" },
-  conditionTrue: { background: "#22c55e", borderColor: "#16a34a" },
-  conditionFalse: { background: "#f97316", borderColor: "#ea580c" },
 };
 
 export default function LoopNodeComponent({ data }: NodeProps) {
@@ -61,9 +59,9 @@ export default function LoopNodeComponent({ data }: NodeProps) {
     nodeData.type === NodeType.Human ||
     nodeData.type === NodeType.AI ||
     nodeData.type === NodeType.PR;
-  // A Condition node routes only through two fixed outlets \u2014 "true"/"false" \u2014
-  // and never an OnSuccess edge, so it replaces the success handle with them.
-  const isCondition = nodeData.type === NodeType.Condition;
+  // A Condition node reuses the standard success/fail outlets for its two
+  // branches (success = the "true" edge, fail = the "false" edge) rather than
+  // inventing dedicated handles; the wiring is named in onConnect.
 
   return (
     <div
@@ -84,16 +82,14 @@ export default function LoopNodeComponent({ data }: NodeProps) {
         data-testid="target-handle"
         style={{ background: "#555", borderColor: "#777" }}
       />
-      {!isCondition && (
-        <Handle
-          type="source"
-          position={Position.Right}
-          id="success"
-          data-testid="source-handle-success"
-          className="handle-success"
-          style={handleStyles.success}
-        />
-      )}
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="success"
+        data-testid="source-handle-success"
+        className="handle-success"
+        style={handleStyles.success}
+      />
       <Handle
         type="source"
         position={Position.Bottom}
@@ -111,26 +107,6 @@ export default function LoopNodeComponent({ data }: NodeProps) {
           className="handle-respond"
           style={handleStyles.respond}
         />
-      )}
-      {isCondition && (
-        <>
-          <Handle
-            type="source"
-            position={Position.Right}
-            id="true"
-            data-testid="source-handle-true"
-            className="handle-true"
-            style={handleStyles.conditionTrue}
-          />
-          <Handle
-            type="source"
-            position={Position.Top}
-            id="false"
-            data-testid="source-handle-false"
-            className="handle-false"
-            style={handleStyles.conditionFalse}
-          />
-        </>
       )}
       <div
         className="loop-node-type"
