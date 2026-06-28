@@ -71,17 +71,14 @@ public sealed class WorkItemScheduler : BackgroundService, IWorkItemScheduler
             {
                 using var scope = _scopes.CreateScope();
                 var settings = scope.ServiceProvider.GetRequiredService<ISchedulerSettingsService>();
+                // Pause only suppresses auto-promotion of Ready items into Running;
+                // the rest of the pass (heartbeats, WaitingForIld resumes, Done
+                // cleanup, grace polling) keeps running so the system stays live.
                 var isPaused = await settings.GetIsPausedAsync(stoppingToken);
-                if (isPaused)
-                {
-                    await WaitForNextPassAsync(opts.PollInterval, stoppingToken);
-                    continue;
-                }
-
                 var maxConcurrent = await settings.GetMaxConcurrentAsync(stoppingToken);
                 var coord = scope.ServiceProvider.GetRequiredService<IRemoteWorkItemCoordinator>();
                 var serverOpts = new WorkItemServerOptions { BaseUrl = opts.BaseUrl, ApiKey = opts.ApiKey };
-                var result = await coord.RunPollCycleAsync(serverOpts, maxConcurrent, stoppingToken);
+                var result = await coord.RunPollCycleAsync(serverOpts, maxConcurrent, claimReadyItems: !isPaused, stoppingToken);
                 if (result.HasActiveHumanFeedback) delay = opts.GracePollInterval;
                 if (result.Claimed.Count > 0 || result.Resumed.Count > 0 || result.EscalatedToHumanFeedback.Count > 0)
                 {

@@ -23,7 +23,7 @@ public class WorkItemSchedulerPulseTests
         var gateRef = new GateRef();
 
         var coord = new Mock<IRemoteWorkItemCoordinator>();
-        coord.Setup(c => c.RunPollCycleAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+        coord.Setup(c => c.RunPollCycleAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(() =>
             {
                 gateRef.Current?.TrySetResult(true);
