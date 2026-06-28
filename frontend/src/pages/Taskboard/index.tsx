@@ -46,7 +46,7 @@ export default function Taskboard() {
   const [repositories, setRepositories] = useState<Repository[]>([]);
   const [loopTemplateNames, setLoopTemplateNames] = useState<string[]>([]);
   const [filter, setFilter] = useState<TaskboardFilter>(EMPTY_TASKBOARD_FILTER);
-  const { on, off } = useSignalR();
+  const { on, off, connectionState } = useSignalR();
   // Highest getById request ordinal issued per work item. A newly created item
   // receives a burst of hub events (create → claim → run-progressed → human),
   // each firing a getById; an early fetch the server answered with an older
@@ -54,13 +54,16 @@ export default function Taskboard() {
   // apply a fetch's result only when it is still the latest request for that
   // item, so a late, stale response is dropped instead of reverting the card.
   const syncSeqRef = useRef<Map<string, number>>(new Map());
+  // The work-item hub replays nothing on (re)subscribe — unlike SubscribeToRun,
+  // SubscribeToWorkItems has no backlog buffer — so any events delivered while
+  // the socket was down are lost for good. We re-fetch the board on each
+  // reconnect to re-sync; this ref skips the very first connect, whose load the
+  // mount effect below already performed.
+  const hasConnectedRef = useRef(false);
 
   useEffect(() => {
     void loadWorkItems();
-    void settingsService
-      .get(SchedulerSettingKeys.IsPaused)
-      .then((s) => setIsPaused(s.value === "true"))
-      .catch(() => {});
+    void loadSchedulerPaused();
     void repositoryService
       .getAll()
       .then(setRepositories)
@@ -163,6 +166,21 @@ export default function Taskboard() {
     };
   }, [on, off]);
 
+  // Re-fetch the board whenever the hub transitions back into "connected". The
+  // first connect is skipped because the mount effect already loaded the board;
+  // every later transition follows a dropout during which the work-item hub
+  // buffered nothing, so a fresh fetch is the only way to recover missed events.
+  // The scheduler paused state is re-synced for the same reason.
+  useEffect(() => {
+    if (connectionState !== "connected") return;
+    if (!hasConnectedRef.current) {
+      hasConnectedRef.current = true;
+      return;
+    }
+    void loadWorkItems();
+    void loadSchedulerPaused();
+  }, [connectionState]);
+
   // Keep the open detail item in sync with the id in the URL. Resolving from
   // the loaded board keeps the dialog's data fresh; a direct link to an item
   // not on the board is fetched on demand, and a stale/invalid id bounces back
@@ -202,6 +220,15 @@ export default function Taskboard() {
       console.error("Failed to load work items:", error);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const loadSchedulerPaused = async () => {
+    try {
+      const setting = await settingsService.get(SchedulerSettingKeys.IsPaused);
+      setIsPaused(setting.value === "true");
+    } catch {
+      // Leave the toggle on its last-known state if the fetch fails.
     }
   };
 

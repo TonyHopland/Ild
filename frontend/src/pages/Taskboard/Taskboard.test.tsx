@@ -519,6 +519,106 @@ describe("Taskboard SignalR", () => {
   });
 });
 
+describe("Taskboard reconnect", () => {
+  // The work-item hub buffers nothing on resubscribe, so the board can only
+  // recover events missed during an outage by re-fetching when the socket
+  // returns. These tests drive connectionState through a drop-and-recover cycle.
+  function taskboardTree() {
+    return (
+      <MemoryRouter initialEntries={["/taskboard"]}>
+        <Routes>
+          <Route path="/taskboard" element={<Taskboard />} />
+          <Route path="/taskboard/:workItemId" element={<Taskboard />} />
+        </Routes>
+        <LocationDisplay />
+      </MemoryRouter>
+    );
+  }
+
+  test("re-fetches the board and scheduler state when the hub reconnects", async () => {
+    let connectionState: "connected" | "reconnecting" | "disconnected" = "connected";
+    vi.spyOn(signalRHook, "useSignalR").mockImplementation(() => ({
+      on: vi.fn(),
+      off: vi.fn(),
+      invoke: vi.fn(),
+      connectionState,
+    }));
+
+    const getAllSpy = vi
+      .spyOn(authServices.workItemService, "getAll")
+      .mockResolvedValue([makeItem()]);
+    const settingsSpy = vi
+      .spyOn(authServices.settingsService, "get")
+      .mockResolvedValue({ key: "scheduler.isPaused", value: "false" });
+
+    const { rerender } = render(taskboardTree());
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Item")).toBeTruthy();
+    });
+    // The initial mount loads the board once; the first connect must not add a
+    // second load on top of it.
+    expect(getAllSpy).toHaveBeenCalledTimes(1);
+    expect(settingsSpy).toHaveBeenCalledTimes(1);
+
+    // The connection drops — no re-fetch while it is down.
+    connectionState = "reconnecting";
+    await act(async () => {
+      rerender(taskboardTree());
+    });
+    expect(getAllSpy).toHaveBeenCalledTimes(1);
+
+    // …and recovers: the board and scheduler state re-sync to catch up on
+    // anything that happened during the outage.
+    connectionState = "connected";
+    await act(async () => {
+      rerender(taskboardTree());
+    });
+
+    await waitFor(() => {
+      expect(getAllSpy).toHaveBeenCalledTimes(2);
+      expect(settingsSpy).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  test("does not re-fetch on the very first connect", async () => {
+    // A board that mounts while already connected must load exactly once: the
+    // mount effect's load, with no extra fetch from the connect transition.
+    let connectionState: "connected" | "reconnecting" | "disconnected" = "disconnected";
+    vi.spyOn(signalRHook, "useSignalR").mockImplementation(() => ({
+      on: vi.fn(),
+      off: vi.fn(),
+      invoke: vi.fn(),
+      connectionState,
+    }));
+
+    const getAllSpy = vi
+      .spyOn(authServices.workItemService, "getAll")
+      .mockResolvedValue([makeItem()]);
+    vi.spyOn(authServices.settingsService, "get").mockResolvedValue({
+      key: "scheduler.isPaused",
+      value: "false",
+    });
+
+    const { rerender } = render(taskboardTree());
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Item")).toBeTruthy();
+    });
+
+    // The socket finishes its initial handshake.
+    connectionState = "connected";
+    await act(async () => {
+      rerender(taskboardTree());
+    });
+
+    // Still a single load — the first arrival at "connected" is not a recovery.
+    await waitFor(() => {
+      expect(getAllSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
 describe("Taskboard keyboard navigation", () => {
   test("ArrowRight on a focused card transitions to the next column", async () => {
     vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
