@@ -48,10 +48,22 @@ public sealed class ChatService : IChatService
         _loopScratchpad = loopScratchpad;
     }
 
-    public async Task<ChatSessionView?> GetForUserAsync(string userId, CancellationToken ct = default)
+    public async Task<IReadOnlyList<ChatSessionSummaryView>> ListForUserAsync(string userId, CancellationToken ct = default)
     {
+        // Lightweight history rows only — no transcripts. Newest activity first so
+        // the most recently used chats top the list.
+        return await _db.ChatSessions.AsNoTracking()
+            .Where(c => c.UserId == userId)
+            .OrderByDescending(c => c.UpdatedAt ?? c.CreatedAt)
+            .Select(c => new ChatSessionSummaryView(c.Id, c.Name, c.CreatedAt, c.UpdatedAt))
+            .ToListAsync(ct);
+    }
+
+    public async Task<ChatSessionView?> GetByIdAsync(string userId, Guid sessionId, CancellationToken ct = default)
+    {
+        // Scope by userId as well as id so one user can never resume another's chat.
         var session = await _db.ChatSessions.AsNoTracking()
-            .FirstOrDefaultAsync(c => c.UserId == userId, ct);
+            .FirstOrDefaultAsync(c => c.Id == sessionId && c.UserId == userId, ct);
         if (session is null) return null;
 
         var messages = await _db.ChatMessages.AsNoTracking()
@@ -62,12 +74,11 @@ public sealed class ChatService : IChatService
         return ToView(session, messages);
     }
 
+    public Task<bool> ExistsForUserAsync(string userId, Guid sessionId, CancellationToken ct = default)
+        => _db.ChatSessions.AsNoTracking().AnyAsync(c => c.Id == sessionId && c.UserId == userId, ct);
+
     public async Task<ChatSessionView> StartAsync(string userId, Guid aiProviderId, IReadOnlyList<string> tools, CancellationToken ct = default)
     {
-        var existing = await _db.ChatSessions.AsNoTracking().AnyAsync(c => c.UserId == userId, ct);
-        if (existing)
-            throw new InvalidOperationException("A chat session already exists for this user. End it before starting a new one.");
-
         var provider = await _providers.GetAiProviderByIdAsync(aiProviderId)
             ?? throw new InvalidOperationException($"AiProvider {aiProviderId} not found");
 
@@ -110,6 +121,12 @@ public sealed class ChatService : IChatService
         _loopScratchpad.Set(chatSessionId, openLoopDocument);
 
         var nextSeq = await NextSequenceAsync(chatSessionId, ct);
+
+        // Name the chat from its first user message (ADR-0013) so the history list
+        // shows something meaningful without asking the user to type a title. The
+        // session is tracked, so the name persists with the turn's SaveChanges.
+        if (nextSeq == 0 && string.IsNullOrEmpty(session.Name))
+            session.Name = DeriveName(userMessage);
 
         // Persist the human's verbatim message; the Chat Context preamble is an
         // ambient per-turn hint for the model only, never part of the transcript.
@@ -297,28 +314,37 @@ public sealed class ChatService : IChatService
         Sessions: an AI node continues a multi-turn agent session by setting config.useSession=true and config.sessionPlaceholder="<name>"; config.forkFromPlaceholder="<name>" branches from another node's session. AI nodes share a session only when they use the same placeholder.
         """;
 
-    public async Task<bool> EndAsync(string userId, CancellationToken ct = default)
+    public async Task<bool> DeleteAsync(string userId, Guid sessionId, CancellationToken ct = default)
     {
-        var session = await _db.ChatSessions.FirstOrDefaultAsync(c => c.UserId == userId, ct);
+        // Scope by userId so a delete can only ever touch the caller's own chat.
+        var session = await _db.ChatSessions.FirstOrDefaultAsync(c => c.Id == sessionId && c.UserId == userId, ct);
         if (session is null) return false;
         await DeleteSessionAsync(session, ct);
         return true;
     }
 
-    public async Task<int> SweepIdleAsync(DateTimeOffset cutoff, CancellationToken ct = default)
+    public async Task<int> DeleteAllForUserAsync(string userId, CancellationToken ct = default)
     {
-        var cutoffUtc = cutoff.UtcDateTime;
-        var stale = await _db.ChatSessions
-            .Where(c => (c.UpdatedAt ?? c.CreatedAt) < cutoffUtc)
-            .ToListAsync(ct);
-
-        foreach (var session in stale)
+        var sessions = await _db.ChatSessions.Where(c => c.UserId == userId).ToListAsync(ct);
+        foreach (var session in sessions)
         {
             if (ct.IsCancellationRequested) break;
             await DeleteSessionAsync(session, ct);
         }
+        return sessions.Count;
+    }
 
-        return stale.Count;
+    /// <summary>
+    /// Derive a short, meaningful chat name from the first user message (ADR-0013):
+    /// collapse whitespace and truncate to a sensible length, appending an ellipsis
+    /// when trimmed. Falls back to a generic label for an empty/whitespace message.
+    /// </summary>
+    private static string DeriveName(string firstMessage)
+    {
+        const int maxLength = 60;
+        var collapsed = string.Join(' ', firstMessage.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        if (collapsed.Length == 0) return "New chat";
+        return collapsed.Length <= maxLength ? collapsed : collapsed[..maxLength].TrimEnd() + "…";
     }
 
     private async Task DeleteSessionAsync(ChatSession session, CancellationToken ct)
@@ -400,6 +426,7 @@ public sealed class ChatService : IChatService
     private static ChatSessionView ToView(ChatSession session, IReadOnlyList<ChatMessage> messages)
         => new(
             session.Id,
+            session.Name,
             session.AiProviderId,
             session.ProviderType,
             session.ToolAllowlistCsv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),

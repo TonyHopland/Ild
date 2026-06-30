@@ -9,6 +9,7 @@ import {
   RemoteProviderTypeOption,
   AiProvider,
   ChatSession,
+  ChatSessionSummary,
   LoopTemplateVersion,
   EventLogPage,
   ConfigFieldDescriptor,
@@ -485,10 +486,14 @@ export const aiProviderService = {
 };
 
 export const chatService = {
-  /** The current user's chat session, or null when none is active (204). */
-  get: async (): Promise<ChatSession | null> => {
-    const session = await api.get<ChatSession | undefined>("/chat");
-    return session ?? null;
+  /** The user's retained chats as lightweight history rows, newest first. */
+  listHistory: async (): Promise<ChatSessionSummary[]> => {
+    return api.get<ChatSessionSummary[]>("/chat/history");
+  },
+
+  /** Resume one chat: its full transcript and continued agent session. */
+  getById: async (id: string): Promise<ChatSession> => {
+    return api.get<ChatSession>(`/chat/${id}`);
   },
 
   start: async (aiProviderId: string, tools: string[]): Promise<ChatSession> => {
@@ -496,18 +501,25 @@ export const chatService = {
   },
 
   sendMessage: async (
+    sessionId: string,
     content: string,
     openWorkItemId?: string | null,
     openLoopDocument?: string | null,
   ): Promise<void> => {
-    await api.post<void>("/chat/messages", {
+    await api.post<void>(`/chat/${sessionId}/messages`, {
       content,
       openWorkItemId: openWorkItemId ?? null,
       openLoopDocument: openLoopDocument ?? null,
     });
   },
 
-  end: async (): Promise<void> => {
+  /** Hard-delete one retained chat. */
+  deleteOne: async (id: string): Promise<void> => {
+    await api.delete<void>(`/chat/${id}`);
+  },
+
+  /** Hard-delete every retained chat the user owns. */
+  deleteAll: async (): Promise<void> => {
     await api.delete<void>("/chat");
   },
 };

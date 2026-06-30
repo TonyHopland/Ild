@@ -7,6 +7,7 @@ import type {
   AiProvider,
   ChatMessage,
   ChatSession,
+  ChatSessionSummary,
   ChatMessageAppendedPayload,
   ChatTurnProgressPayload,
   ChatTurnCompletedPayload,
@@ -44,8 +45,10 @@ const TOOL_OPTIONS: { key: string; label: string; defaultOn: boolean }[] = [
 ];
 
 /**
- * Persistent per-user chat bubble (ADR-0010). Mounted globally so it survives
- * navigation; the session itself lives server-side and rehydrates on reload.
+ * Persistent chat bubble (ADR-0010) with retained chat history (ADR-0013).
+ * Mounted globally so it survives navigation; chats live server-side. The bubble
+ * lists the user's past chats and resumes any of them with its full transcript;
+ * chats are retained until explicitly deleted (per-chat or "delete all").
  */
 export default function ChatBubble() {
   const [open, setOpen] = useState(false);
@@ -54,6 +57,11 @@ export default function ChatBubble() {
   const [streaming, setStreaming] = useState("");
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
+
+  // Retained chat history (ADR-0013): the user's past chats, shown under Start
+  // chat. `confirmDeleteAll` gates the wipe-all action behind a confirmation.
+  const [history, setHistory] = useState<ChatSessionSummary[]>([]);
+  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
 
   // Start form
   const [providers, setProviders] = useState<AiProvider[]>([]);
@@ -187,17 +195,15 @@ export default function ChatBubble() {
     [panelOverride, fabPos, panelSize],
   );
 
-  // Load any existing session once, so the transcript rehydrates on reload.
+  const refreshHistory = useCallback(async () => {
+    const chats = await chatService.listHistory();
+    setHistory(chats);
+  }, []);
+
+  // Load the chat history once, so the list is ready when the bubble opens.
   useEffect(() => {
     let cancelled = false;
-    void chatService
-      .get()
-      .then((s) => {
-        if (cancelled) return;
-        setSession(s);
-        setMessages(s?.messages ?? []);
-        sessionIdRef.current = s?.id ?? null;
-      })
+    void refreshHistory()
       .catch(() => {})
       .finally(() => {
         if (!cancelled) setLoaded(true);
@@ -205,13 +211,17 @@ export default function ChatBubble() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refreshHistory]);
 
-  // Subscribe to the session's group whenever we are connected and have a session.
+  // Join the active chat's group whenever we are connected, and leave it on
+  // resume/back so streamed turns only ever reach the chat currently open.
   useEffect(() => {
-    if (connectionState === "connected" && session?.id) {
-      void invoke("SubscribeToChat", session.id);
-    }
+    if (connectionState !== "connected" || !session?.id) return;
+    const id = session.id;
+    void invoke("SubscribeToChat", id);
+    return () => {
+      void invoke("UnsubscribeFromChat", id);
+    };
   }, [connectionState, session?.id, invoke]);
 
   // Publish the session id so other components (the LoopEditor) can join the same
@@ -324,24 +334,64 @@ export default function ChatBubble() {
       // (ADR-0011). Serialized to the same JSON the editor's import/export use.
       const openLoop = getOpenLoopDocument();
       const openLoopDocument = openLoop ? JSON.stringify(openLoop) : null;
-      await chatService.sendMessage(content, openWorkItemIdRef.current, openLoopDocument);
+      await chatService.sendMessage(
+        session.id,
+        content,
+        openWorkItemIdRef.current,
+        openLoopDocument,
+      );
     } catch (e) {
       setBusy(false);
       setError((e as { message?: string })?.message ?? "Could not send message.");
     }
   };
 
-  const endChat = async () => {
-    try {
-      await chatService.end();
-    } catch {
-      /* even on error, drop local state — the session is gone or never existed */
-    }
+  // Drop the in-conversation view and return to the chat list. The chat is
+  // retained and resumable — Back never deletes (ADR-0013). Refresh history so the
+  // chat re-sorts to the top with its freshly-derived name.
+  const backToList = useCallback(() => {
     setSession(null);
     setMessages([]);
     setStreaming("");
     setBusy(false);
+    setError(null);
+    setConfirmDeleteAll(false);
     sessionIdRef.current = null;
+    void refreshHistory().catch(() => {});
+  }, [refreshHistory]);
+
+  // Resume a past chat: load its transcript and continue the same agent session.
+  const resumeChat = async (id: string) => {
+    setError(null);
+    try {
+      const resumed = await chatService.getById(id);
+      setSession(resumed);
+      setMessages(resumed.messages);
+      setStreaming("");
+      setBusy(false);
+      sessionIdRef.current = resumed.id;
+    } catch (e) {
+      setError((e as { message?: string })?.message ?? "Could not open chat.");
+    }
+  };
+
+  const deleteChat = async (id: string) => {
+    try {
+      await chatService.deleteOne(id);
+    } catch {
+      /* even on error, drop it locally — it is gone or never existed */
+    }
+    setHistory((prev) => prev.filter((c) => c.id !== id));
+  };
+
+  const deleteAllChats = async () => {
+    setConfirmDeleteAll(false);
+    try {
+      await chatService.deleteAll();
+    } catch {
+      /* even on error, clear the list — the chats are gone or never existed */
+    }
+    setHistory([]);
   };
 
   if (!chatEnabled) {
@@ -378,11 +428,11 @@ export default function ChatBubble() {
       }}
     >
       <div className="chat-panel-header" onPointerDown={startHeaderDrag}>
-        <span className="chat-panel-title">AI Chat</span>
+        <span className="chat-panel-title">{session?.name ?? "AI Chat"}</span>
         <div className="chat-panel-header-actions">
           {session && (
-            <button type="button" className="chat-link-btn" onClick={() => void endChat()}>
-              End chat
+            <button type="button" className="chat-link-btn" onClick={backToList}>
+              ← Back
             </button>
           )}
           <button
@@ -436,6 +486,69 @@ export default function ChatBubble() {
           <button type="button" className="chat-primary-btn" onClick={() => void startChat()}>
             Start chat
           </button>
+
+          {history.length > 0 && (
+            <div className="chat-history">
+              <div className="chat-history-head">
+                <span className="chat-field-label">Past chats</span>
+                {confirmDeleteAll ? (
+                  <span
+                    className="chat-history-confirm"
+                    role="alertdialog"
+                    aria-label="Delete all chats?"
+                  >
+                    Delete all chats?
+                    <button
+                      type="button"
+                      className="chat-link-btn chat-danger"
+                      onClick={() => void deleteAllChats()}
+                    >
+                      Delete all
+                    </button>
+                    <button
+                      type="button"
+                      className="chat-link-btn"
+                      onClick={() => setConfirmDeleteAll(false)}
+                    >
+                      Cancel
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className="chat-link-btn chat-danger"
+                    onClick={() => setConfirmDeleteAll(true)}
+                  >
+                    Delete all
+                  </button>
+                )}
+              </div>
+              <ul className="chat-history-list">
+                {history.map((c) => (
+                  <li key={c.id} className="chat-history-row">
+                    <button
+                      type="button"
+                      className="chat-history-open"
+                      onClick={() => void resumeChat(c.id)}
+                    >
+                      <span className="chat-history-name">{c.name ?? "New chat"}</span>
+                      <span className="chat-history-date">
+                        {new Date(c.updatedAt ?? c.createdAt).toLocaleString()}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="chat-link-btn chat-danger"
+                      aria-label={`Delete chat ${c.name ?? "New chat"}`}
+                      onClick={() => void deleteChat(c.id)}
+                    >
+                      ✕
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       ) : (
         <>

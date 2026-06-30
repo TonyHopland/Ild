@@ -156,14 +156,16 @@ public sealed class ChatServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task StartAsync_rejects_a_second_session_for_the_same_user()
+    public async Task StartAsync_allows_many_retained_chats_for_the_same_user()
     {
         var provider = await SeedProviderAsync();
         var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok())));
-        await svc.StartAsync("alice", provider.Id, new[] { "ild" });
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
-            () => svc.StartAsync("alice", provider.Id, new[] { "ild" }));
+        var first = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var second = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+
+        Assert.NotEqual(first.Id, second.Id);
+        Assert.Equal(2, _db.Context.ChatSessions.Count(c => c.UserId == "alice"));
     }
 
     [Fact]
@@ -424,7 +426,95 @@ public sealed class ChatServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task EndAsync_hard_deletes_session_messages_snapshots_and_scratch_dir()
+    public async Task ExecuteTurnAsync_names_the_chat_from_the_first_user_message()
+    {
+        var provider = await SeedProviderAsync();
+        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        Assert.Null(started.Name);
+
+        await svc.ExecuteTurnAsync(started.Id, "Help me wire up a deploy loop", CancellationToken.None);
+        Assert.Equal("Help me wire up a deploy loop", _db.Context.ChatSessions.Single().Name);
+
+        // The name is fixed by the first turn — a later message must not rename it.
+        await svc.ExecuteTurnAsync(started.Id, "now add a PR node", CancellationToken.None);
+        Assert.Equal("Help me wire up a deploy loop", _db.Context.ChatSessions.Single().Name);
+    }
+
+    [Fact]
+    public async Task ExecuteTurnAsync_truncates_a_long_first_message_into_the_name()
+    {
+        var provider = await SeedProviderAsync();
+        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+
+        var longMessage = new string('a', 200);
+        await svc.ExecuteTurnAsync(started.Id, longMessage, CancellationToken.None);
+
+        var name = _db.Context.ChatSessions.Single().Name!;
+        Assert.True(name.Length <= 61, "name should be truncated to a sensible length");
+        Assert.EndsWith("…", name);
+    }
+
+    [Fact]
+    public async Task ListForUserAsync_returns_only_the_users_chats_newest_activity_first()
+    {
+        var provider = await SeedProviderAsync();
+        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
+
+        var older = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        await svc.ExecuteTurnAsync(older.Id, "first chat", CancellationToken.None);
+        var newer = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        await svc.ExecuteTurnAsync(newer.Id, "second chat", CancellationToken.None);
+        // A different user's chat must never leak into alice's history.
+        var bobs = await svc.StartAsync("bob", provider.Id, new[] { "ild" });
+        await svc.ExecuteTurnAsync(bobs.Id, "bob chat", CancellationToken.None);
+
+        // Force the newer chat to have the most recent activity timestamp.
+        await _db.Context.Database.ExecuteSqlInterpolatedAsync(
+            $"UPDATE \"ChatSessions\" SET \"UpdatedAt\" = {DateTime.UtcNow.AddMinutes(-10)} WHERE \"Id\" = {older.Id}");
+        await _db.Context.Database.ExecuteSqlInterpolatedAsync(
+            $"UPDATE \"ChatSessions\" SET \"UpdatedAt\" = {DateTime.UtcNow} WHERE \"Id\" = {newer.Id}");
+
+        var history = await svc.ListForUserAsync("alice");
+
+        Assert.Equal(2, history.Count);
+        Assert.Equal(newer.Id, history[0].Id);
+        Assert.Equal(older.Id, history[1].Id);
+        Assert.Equal("second chat", history[0].Name);
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_is_scoped_to_the_owning_user()
+    {
+        var provider = await SeedProviderAsync();
+        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        await svc.ExecuteTurnAsync(started.Id, "hi there", CancellationToken.None);
+
+        var owner = await svc.GetByIdAsync("alice", started.Id);
+        Assert.NotNull(owner);
+        Assert.Equal(2, owner!.Messages.Count);
+
+        // Another user may not resume alice's chat.
+        Assert.Null(await svc.GetByIdAsync("bob", started.Id));
+    }
+
+    [Fact]
+    public async Task ExistsForUserAsync_is_true_only_for_the_owner()
+    {
+        var provider = await SeedProviderAsync();
+        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+
+        Assert.True(await svc.ExistsForUserAsync("alice", started.Id));
+        // A different user, and a missing id, are both unauthorized/absent.
+        Assert.False(await svc.ExistsForUserAsync("bob", started.Id));
+        Assert.False(await svc.ExistsForUserAsync("alice", Guid.NewGuid()));
+    }
+
+    [Fact]
+    public async Task DeleteAsync_hard_deletes_one_chat_scoped_to_the_owner()
     {
         var provider = await SeedProviderAsync();
         var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("x"))));
@@ -437,9 +527,13 @@ public sealed class ChatServiceTests : IDisposable
         var scratchPath = _db.Context.ChatSessions.Single().ScratchPath;
         Assert.True(Directory.Exists(scratchPath));
 
-        var ended = await svc.EndAsync("alice");
+        // A non-owner cannot delete it.
+        Assert.False(await svc.DeleteAsync("bob", started.Id));
+        Assert.Single(_db.Context.ChatSessions);
 
-        Assert.True(ended);
+        var deleted = await svc.DeleteAsync("alice", started.Id);
+
+        Assert.True(deleted);
         Assert.Empty(_db.Context.ChatSessions);
         Assert.Empty(_db.Context.ChatMessages);
         Assert.Empty(_db.Context.AdapterSessionSnapshots);
@@ -447,21 +541,21 @@ public sealed class ChatServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task SweepIdleAsync_reclaims_only_sessions_idle_before_the_cutoff()
+    public async Task DeleteAllForUserAsync_removes_every_chat_the_user_owns_and_no_others()
     {
         var provider = await SeedProviderAsync();
-        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok())));
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
+        var a1 = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var a2 = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var bobs = await svc.StartAsync("bob", provider.Id, new[] { "ild" });
+        var a1Scratch = _db.Context.ChatSessions.Single(c => c.Id == a1.Id).ScratchPath;
 
-        // Backdate activity well before the cutoff. Done via raw SQL because the
-        // context's IHasUpdatedAt hook would otherwise reset UpdatedAt to now on save.
-        var old = DateTime.UtcNow.AddDays(-30);
-        await _db.Context.Database.ExecuteSqlInterpolatedAsync(
-            $"UPDATE \"ChatSessions\" SET \"UpdatedAt\" = {old} WHERE \"Id\" = {started.Id}");
+        var removed = await svc.DeleteAllForUserAsync("alice");
 
-        var removed = await svc.SweepIdleAsync(DateTimeOffset.UtcNow.AddDays(-14));
-
-        Assert.Equal(1, removed);
-        Assert.Empty(_db.Context.ChatSessions);
+        Assert.Equal(2, removed);
+        Assert.False(Directory.Exists(a1Scratch), "scratch directories should be removed");
+        Assert.DoesNotContain(_db.Context.ChatSessions, c => c.Id == a1.Id || c.Id == a2.Id);
+        // Bob's chat is untouched.
+        Assert.Contains(_db.Context.ChatSessions, c => c.Id == bobs.Id);
     }
 }
