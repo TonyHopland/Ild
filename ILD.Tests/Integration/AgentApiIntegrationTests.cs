@@ -619,6 +619,120 @@ public class AgentApiIntegrationTests
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
     }
 
+    [Fact]
+    public async Task ListWorkItems_returns_lightweight_projection_without_full_body()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+
+        var longBody = "First line of the body.\n" + new string('x', 400);
+        var create = await client.PostAsJsonAsync("/api/v1/agent/workitems", new
+        {
+            title = "triage me",
+            description = longBody,
+            repositoryId = repoId.ToString(),
+            tags = new[] { "backend-loop" },
+        });
+        create.EnsureSuccessStatusCode();
+
+        var arr = JsonDocument.Parse(await (await client.GetAsync("/api/v1/agent/workitems")).Content.ReadAsStringAsync()).RootElement;
+        var row = arr.EnumerateArray().Single(e => e.GetProperty("title").GetString() == "triage me");
+
+        // No full body; a single-line, truncated preview stands in for it.
+        Assert.False(row.TryGetProperty("description", out _));
+        var preview = row.GetProperty("descriptionPreview").GetString()!;
+        Assert.DoesNotContain('\n', preview);
+        Assert.True(preview.Length <= 161); // 160 chars + the ellipsis
+        Assert.EndsWith("…", preview);
+
+        // Lightweight triage fields are present.
+        Assert.Equal("Medium", row.GetProperty("priority").GetString());
+        Assert.Equal("backend-loop", row.GetProperty("tags")[0].GetString());
+        Assert.Equal(0, row.GetProperty("blockedByCount").GetInt32());
+        Assert.Equal(0, row.GetProperty("blocksCount").GetInt32());
+        Assert.True(row.GetProperty("actionable").GetBoolean());
+    }
+
+    [Fact]
+    public async Task ListWorkItems_exposes_dependency_and_reverse_edges()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+
+        var depId = await CreateAsync(client, "dep", null, repoId);
+        var create = await client.PostAsJsonAsync("/api/v1/agent/workitems", new
+        {
+            title = "child",
+            description = "",
+            repositoryId = repoId.ToString(),
+            dependencies = new[] { depId.ToString() },
+        });
+        create.EnsureSuccessStatusCode();
+
+        var arr = JsonDocument.Parse(await (await client.GetAsync("/api/v1/agent/workitems")).Content.ReadAsStringAsync()).RootElement;
+        var child = arr.EnumerateArray().Single(e => e.GetProperty("title").GetString() == "child");
+        var dep = arr.EnumerateArray().Single(e => e.GetProperty("title").GetString() == "dep");
+
+        Assert.Equal(1, child.GetProperty("blockedByCount").GetInt32());
+        Assert.Equal(depId, child.GetProperty("blockedBy")[0].GetString());
+        Assert.Equal(1, dep.GetProperty("blocksCount").GetInt32());
+    }
+
+    [Fact]
+    public async Task GetWorkItem_returns_reverse_blocks_and_gates_the_conversation()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+
+        var depId = await CreateAsync(client, "dep", null, repoId);
+        var create = await client.PostAsJsonAsync("/api/v1/agent/workitems", new
+        {
+            title = "child",
+            description = "",
+            repositoryId = repoId.ToString(),
+            dependencies = new[] { depId.ToString() },
+        });
+        create.EnsureSuccessStatusCode();
+        var childId = JsonDocument.Parse(await create.Content.ReadAsStringAsync()).RootElement.GetProperty("id").GetString();
+
+        // The dependency's record surfaces the reverse "blocks" edge to its child.
+        var dep = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{depId}");
+        var blocks = dep.GetProperty("blocks");
+        Assert.Equal(1, blocks.GetArrayLength());
+        Assert.Equal(childId, blocks[0].GetProperty("id").GetString());
+
+        // The child's forward dependency is still resolved to {id,title,status}.
+        var childDetail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{childId}");
+        Assert.Equal(depId, childDetail.GetProperty("dependencies")[0].GetProperty("id").GetString());
+
+        // Conversation is excluded by default and present only when requested.
+        Assert.Equal(JsonValueKind.Null, dep.GetProperty("conversation").ValueKind);
+        var withConv = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{depId}?includeConversation=true");
+        Assert.Equal(JsonValueKind.Array, withConv.GetProperty("conversation").ValueKind);
+    }
+
+    [Fact]
+    public async Task GetBacklogSummary_returns_counts_and_blocked_vs_actionable()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+
+        await CreateAsync(client, "one", null, repoId);
+        await CreateAsync(client, "two", null, repoId);
+
+        var summary = await client.GetFromJsonAsync<JsonElement>("/api/v1/agent/workitems/summary");
+
+        Assert.Equal(2, summary.GetProperty("total").GetInt32());
+        Assert.Equal(2, summary.GetProperty("countsByStatus").GetProperty("Backlog").GetInt32());
+        // No dependencies, so both items are actionable now.
+        Assert.Equal(2, summary.GetProperty("actionable").GetInt32());
+        Assert.Equal(0, summary.GetProperty("blocked").GetInt32());
+    }
+
     private static async Task<(Guid RunId, string WorkItemId)> SeedRunWithUsageAsync(ApiFactory factory)
     {
         using var scope = factory.Services.CreateScope();

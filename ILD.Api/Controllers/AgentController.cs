@@ -86,11 +86,20 @@ public class AgentController : ControllerBase
         return (workItem, null);
     }
 
+    // Single-line description preview length for the lightweight list (~160
+    // chars per the triage design): enough to recognise an item, far short of
+    // its full body.
+    private const int DescriptionPreviewLength = 160;
+
     [HttpGet("workitems")]
     public async Task<IActionResult> ListWorkItems(
         [FromQuery] string? status = null,
         [FromQuery] string? repositoryId = null,
         [FromQuery] string? createdByLoopRunId = null,
+        [FromQuery] string? priority = null,
+        [FromQuery] string[]? tags = null,
+        [FromQuery] string? orderBy = null,
+        [FromQuery] bool actionableOnly = false,
         [FromQuery] int skip = 0,
         [FromQuery] int take = 100)
     {
@@ -101,28 +110,51 @@ public class AgentController : ControllerBase
         RemoteWorkItemStatus? statusFilter = null;
         if (!string.IsNullOrEmpty(status) && Enum.TryParse<RemoteWorkItemStatus>(status, true, out var s))
             statusFilter = s;
+        RemoteWorkItemPriority? priorityFilter = null;
+        if (!string.IsNullOrEmpty(priority) && Enum.TryParse<RemoteWorkItemPriority>(priority, true, out var p))
+            priorityFilter = p;
         Guid? repoFilter = null;
         if (!string.IsNullOrEmpty(repositoryId) && Guid.TryParse(repositoryId, out var repoGuid))
             repoFilter = repoGuid;
         Guid? runFilter = null;
         if (!string.IsNullOrEmpty(createdByLoopRunId) && Guid.TryParse(createdByLoopRunId, out var runGuid))
             runFilter = runGuid;
+        var orderByValue = WorkItemOrderBy.UpdatedAt;
+        if (!string.IsNullOrEmpty(orderBy) && Enum.TryParse<WorkItemOrderBy>(orderBy, true, out var ob))
+            orderByValue = ob;
+        var tagFilter = tags?.Where(t => !string.IsNullOrWhiteSpace(t)).ToList();
 
         try
         {
-            var items = await _workItems.ListAsync(statusFilter, runFilter, repoFilter, skip, take);
+            var items = await _workItems.ListSummariesAsync(new WorkItemListQuery
+            {
+                Status = statusFilter,
+                Priority = priorityFilter,
+                Tags = tagFilter is { Count: > 0 } ? tagFilter : null,
+                RepositoryId = repoFilter,
+                CreatedByLoopRunId = runFilter,
+                ActionableOnly = actionableOnly,
+                OrderBy = orderByValue,
+                Skip = skip,
+                Take = take,
+            });
             return Ok(items.Select(w => new
             {
                 id = w.Id,
                 title = w.Title,
-                description = w.Description,
                 status = w.Status.ToString(),
-                repositoryId = w.RepositoryId == Guid.Empty ? null : (Guid?)w.RepositoryId,
-                loopTemplateVersionId = (Guid?)null,
+                priority = w.Priority.ToString(),
+                tags = w.Tags,
+                blockedBy = w.BlockedBy,
+                blockedByCount = w.BlockedBy.Count,
+                blocksCount = w.BlocksCount,
+                actionable = w.IsActionable,
+                repositoryId = w.RepositoryId == Guid.Empty ? null : w.RepositoryId,
                 createdByLoopRunId = w.CreatedByLoopRunId,
                 createdByChatSessionId = w.CreatedByChatSessionId,
                 createdAt = w.CreatedAt,
                 updatedAt = w.UpdatedAt,
+                descriptionPreview = BuildDescriptionPreview(w.Description),
             }));
         }
         catch (InvalidOperationException ex)
@@ -135,18 +167,67 @@ public class AgentController : ControllerBase
         }
     }
 
+    [HttpGet("workitems/summary")]
+    public async Task<IActionResult> GetBacklogSummary([FromQuery] string? repositoryId = null)
+    {
+        Guid? repoFilter = null;
+        if (!string.IsNullOrEmpty(repositoryId) && Guid.TryParse(repositoryId, out var repoGuid))
+            repoFilter = repoGuid;
+
+        try
+        {
+            var summary = await _workItems.GetBacklogSummaryAsync(repoFilter);
+            return Ok(new
+            {
+                total = summary.Total,
+                countsByStatus = summary.CountsByStatus,
+                countsByPriority = summary.CountsByPriority,
+                blocked = summary.Blocked,
+                actionable = summary.Actionable,
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return StatusCode(503, new { error = ex.Message });
+        }
+        catch (HttpRequestException ex)
+        {
+            return StatusCode(503, new { error = "WorkItemServer unreachable", detail = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Collapse a work item body to a single-line preview of at most
+    /// <see cref="DescriptionPreviewLength"/> characters (whitespace runs
+    /// flattened to single spaces, truncated with an ellipsis). Returns null for
+    /// an empty body so the list stays bodiless when there is nothing to show.
+    /// </summary>
+    private static string? BuildDescriptionPreview(string? description)
+    {
+        if (string.IsNullOrWhiteSpace(description)) return null;
+        var singleLine = System.Text.RegularExpressions.Regex.Replace(description, @"\s+", " ").Trim();
+        return singleLine.Length <= DescriptionPreviewLength
+            ? singleLine
+            : singleLine[..DescriptionPreviewLength].TrimEnd() + "…";
+    }
+
     [HttpGet("workitems/{id}")]
-    public async Task<IActionResult> GetWorkItem(string id)
+    public async Task<IActionResult> GetWorkItem(string id, [FromQuery] bool includeConversation = false)
     {
         var wi = await _workItems.GetWorkItemAsync(id);
         if (wi == null) return NotFound();
         var deps = await _workItems.GetDependenciesAsync(id);
+        // Reverse edges: the items that depend on this one ("blocks"). Resolved
+        // here, one item at a time, so the lightweight list never pays for it.
+        var blocks = await _workItems.GetDependentsAsync(id);
         return Ok(new
         {
             id = wi.Id,
             title = wi.Title,
             description = wi.Description,
             status = wi.Status.ToString(),
+            priority = wi.Priority.ToString(),
+            tags = wi.Tags,
             repositoryId = wi.RepositoryId == Guid.Empty ? null : (Guid?)wi.RepositoryId,
                 loopTemplateVersionId = (Guid?)null,
             createdByLoopRunId = wi.CreatedByLoopRunId,
@@ -154,6 +235,12 @@ public class AgentController : ControllerBase
             createdAt = wi.CreatedAt,
             updatedAt = wi.UpdatedAt,
             dependencies = deps.Select(d => new { id = d.Id, title = d.Title, status = d.Status.ToString() }),
+            blocks = blocks.Select(b => new { id = b.Id, title = b.Title, status = b.Status.ToString() }),
+            // The conversation is the largest field and rarely needed for
+            // planning, so it is gated behind an explicit flag (ADR scope note).
+            conversation = includeConversation
+                ? wi.Conversation.Select(m => new { role = m.Role, content = m.Content, timestamp = m.Timestamp, name = m.Name })
+                : null,
         });
     }
 

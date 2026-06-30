@@ -208,6 +208,112 @@ public class WorkItemManager : IWorkItemManager
             .ToList();
     }
 
+    public async Task<IReadOnlyList<WorkItemSummary>> ListSummariesAsync(WorkItemListQuery query)
+    {
+        var opts = await _options.ResolveForRepositoryAsync(query.RepositoryId);
+        // Load the whole graph (not just the requested page/status) so reverse
+        // edges and dependency status resolve across every item — the same
+        // full-load pattern GetDependentsAsync uses. No LoopRun merge is needed:
+        // every projected field already lives on the server entity.
+        var all = await _server.ListAsync(opts, status: null, tags: null);
+        if (all.Count == 0) return Array.Empty<WorkItemSummary>();
+
+        var statusById = all.ToDictionary(w => w.Id, w => w.Status);
+        var blocksCount = BuildReverseEdgeCounts(all);
+
+        IEnumerable<RemoteWorkItem> filtered = all;
+        if (query.Status.HasValue) filtered = filtered.Where(w => w.Status == query.Status.Value);
+        if (query.Priority.HasValue) filtered = filtered.Where(w => w.Priority == query.Priority.Value);
+        if (query.RepositoryId.HasValue) filtered = filtered.Where(w => w.RepositoryId == query.RepositoryId.Value);
+        if (query.CreatedByLoopRunId.HasValue) filtered = filtered.Where(w => w.CreatedByLoopRunId == query.CreatedByLoopRunId.Value);
+        if (query.Tags is { Count: > 0 })
+        {
+            var wanted = query.Tags.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            filtered = filtered.Where(w => w.Tags.Any(wanted.Contains));
+        }
+        if (query.ActionableOnly)
+            filtered = filtered.Where(w => IsActionable(w, statusById));
+
+        var ordered = query.OrderBy switch
+        {
+            WorkItemOrderBy.Priority => filtered.OrderByDescending(w => w.Priority).ThenByDescending(w => w.UpdatedAt),
+            WorkItemOrderBy.CreatedAt => filtered.OrderByDescending(w => w.CreatedAt),
+            _ => filtered.OrderByDescending(w => w.UpdatedAt),
+        };
+
+        var skip = query.Skip < 0 ? 0 : query.Skip;
+        var take = query.Take <= 0 ? 100 : query.Take;
+        return ordered
+            .Skip(skip)
+            .Take(take)
+            .Select(w => new WorkItemSummary(
+                w.Id,
+                w.Title,
+                w.Description,
+                w.Status,
+                w.Priority,
+                w.Tags,
+                w.Dependencies,
+                blocksCount.GetValueOrDefault(w.Id),
+                IsActionable(w, statusById),
+                w.CreatedAt,
+                w.UpdatedAt,
+                w.RepositoryId,
+                w.CreatedByLoopRunId,
+                w.CreatedByChatSessionId))
+            .ToList();
+    }
+
+    public async Task<BacklogSummary> GetBacklogSummaryAsync(Guid? repositoryId)
+    {
+        var opts = await _options.ResolveForRepositoryAsync(repositoryId);
+        var all = await _server.ListAsync(opts, status: null, tags: null);
+        // Dependency status is resolved against the whole graph; the counts are
+        // scoped to the requested repository (when one is supplied).
+        var statusById = all.ToDictionary(w => w.Id, w => w.Status);
+        var scoped = repositoryId.HasValue
+            ? all.Where(w => w.RepositoryId == repositoryId.Value).ToList()
+            : all.ToList();
+
+        var byStatus = scoped
+            .GroupBy(w => w.Status)
+            .ToDictionary(g => g.Key.ToString(), g => g.Count());
+        var byPriority = scoped
+            .GroupBy(w => w.Priority)
+            .ToDictionary(g => g.Key.ToString(), g => g.Count());
+        var actionable = scoped.Count(w => IsActionable(w, statusById));
+
+        return new BacklogSummary(
+            scoped.Count,
+            byStatus,
+            byPriority,
+            scoped.Count - actionable,
+            actionable);
+    }
+
+    /// <summary>
+    /// Count, per work item id, how many other items declare it as a
+    /// dependency — the reverse "blocks" edges (what frees up if this item
+    /// completes).
+    /// </summary>
+    private static Dictionary<string, int> BuildReverseEdgeCounts(IReadOnlyList<RemoteWorkItem> all)
+    {
+        var counts = new Dictionary<string, int>();
+        foreach (var w in all)
+            foreach (var dep in w.Dependencies)
+                counts[dep] = counts.GetValueOrDefault(dep) + 1;
+        return counts;
+    }
+
+    /// <summary>
+    /// An item is actionable now when every dependency it lists is Done
+    /// (vacuously true when it has none) — the same readiness rule the server
+    /// applies in PromoteWorkQueueItemsAsync. A dependency id missing from the
+    /// graph counts as not-Done, so the item stays blocked.
+    /// </summary>
+    private static bool IsActionable(RemoteWorkItem w, IReadOnlyDictionary<string, RemoteWorkItemStatus> statusById)
+        => w.Dependencies.All(id => statusById.TryGetValue(id, out var s) && s == RemoteWorkItemStatus.Done);
+
     /// <summary>
     /// The run whose lifetime defines the work item's Started/Completed times:
     /// the most recently started run regardless of status. A successfully

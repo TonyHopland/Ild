@@ -19,6 +19,23 @@ public interface IWorkItemManager
         Guid? repositoryId,
         int skip,
         int take);
+
+    /// <summary>
+    /// Lightweight, relationship-aware listing for agent triage. Returns
+    /// bodiless <see cref="WorkItemSummary"/> rows carrying dependency ids,
+    /// reverse-edge counts, and an actionable flag, filtered/sorted/paged per
+    /// <paramref name="query"/>. The whole graph is loaded once to resolve
+    /// reverse edges and dependency status, so a single call lets the agent
+    /// reconstruct the dependency graph without per-item lookups.
+    /// </summary>
+    Task<IReadOnlyList<WorkItemSummary>> ListSummariesAsync(WorkItemListQuery query);
+
+    /// <summary>
+    /// Aggregate the backlog (optionally scoped to <paramref name="repositoryId"/>)
+    /// into status/priority counts and blocked-vs-actionable totals, with no
+    /// bodies. Lets an agent orient before drilling into individual items.
+    /// </summary>
+    Task<BacklogSummary> GetBacklogSummaryAsync(Guid? repositoryId);
     Task<bool> TransitionToWorkQueueAsync(string workItemId);
     Task<bool> TransitionToReadyAsync(string workItemId);
     Task<bool> TransitionToRunningAsync(string workItemId);
