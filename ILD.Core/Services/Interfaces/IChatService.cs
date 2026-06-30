@@ -24,6 +24,13 @@ public interface IChatService
     Task<ChatSessionView?> GetByIdAsync(string userId, Guid sessionId, CancellationToken ct = default);
 
     /// <summary>
+    /// Whether the chat exists and belongs to <paramref name="userId"/>. A
+    /// lightweight ownership check (no transcript load) for authorizing per-chat
+    /// actions such as sending a message or deleting.
+    /// </summary>
+    Task<bool> ExistsForUserAsync(string userId, Guid sessionId, CancellationToken ct = default);
+
+    /// <summary>
     /// Start a new chat session for the user. Provider + tools are fixed for its
     /// life. A user may hold many retained chats (ADR-0013), so this no longer
     /// rejects a second session. Throws <see cref="InvalidOperationException"/>

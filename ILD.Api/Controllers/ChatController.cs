@@ -64,13 +64,12 @@ public class ChatController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Content))
             return BadRequest(new { error = "Message content is required." });
 
-        // Resolve the target chat scoped by user, so a message can only ever drive a
-        // chat the caller owns.
-        var session = await _chat.GetByIdAsync(userId, id, ct);
-        if (session is null)
+        // Authorize against the target chat (scoped by user) before driving it, so a
+        // message can only ever reach a chat the caller owns.
+        if (!await _chat.ExistsForUserAsync(userId, id, ct))
             return NotFound(new { error = "Chat not found." });
 
-        await _runner.SubmitAsync(session.Id, request.Content, request.OpenWorkItemId, request.OpenLoopDocument);
+        await _runner.SubmitAsync(id, request.Content, request.OpenWorkItemId, request.OpenLoopDocument);
         return Accepted();
     }
 
@@ -79,9 +78,14 @@ public class ChatController : ControllerBase
     {
         if (!TryResolveUser(out var userId, out var error)) return error;
 
+        // Confirm ownership before touching the chat, so interrupting an in-flight
+        // turn can never act on another user's session.
+        if (!await _chat.ExistsForUserAsync(userId, id, ct))
+            return NotFound();
+
         await _runner.InterruptAsync(id);
-        var deleted = await _chat.DeleteAsync(userId, id, ct);
-        return deleted ? NoContent() : NotFound();
+        await _chat.DeleteAsync(userId, id, ct);
+        return NoContent();
     }
 
     [HttpDelete]

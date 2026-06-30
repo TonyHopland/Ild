@@ -501,6 +501,19 @@ public sealed class ChatServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ExistsForUserAsync_is_true_only_for_the_owner()
+    {
+        var provider = await SeedProviderAsync();
+        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+
+        Assert.True(await svc.ExistsForUserAsync("alice", started.Id));
+        // A different user, and a missing id, are both unauthorized/absent.
+        Assert.False(await svc.ExistsForUserAsync("bob", started.Id));
+        Assert.False(await svc.ExistsForUserAsync("alice", Guid.NewGuid()));
+    }
+
+    [Fact]
     public async Task DeleteAsync_hard_deletes_one_chat_scoped_to_the_owner()
     {
         var provider = await SeedProviderAsync();
