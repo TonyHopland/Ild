@@ -116,7 +116,7 @@ _Avoid_: draft, planned
 ### Chat
 
 **Chat Session**:
-A standalone, one-per-user interactive conversation with a configured AiProvider, opened from the in-app chat bubble. Deliberately **not** a LoopRun: it has no WorkItem, worktree, branch, or PR of its own, and runs the agent in a durable per-session scratch directory that stays its working directory for the session's whole life. Reuses the loop's agent-adapter execution layer. See [ADR-0010](docs/adr/0010-standalone-chat-session.md).
+A standalone interactive conversation with a configured AiProvider, opened from the in-app chat bubble. Deliberately **not** a LoopRun: it has no WorkItem, worktree, branch, or PR of its own, and runs the agent in a durable per-session scratch directory that stays its working directory for the session's whole life. Reuses the loop's agent-adapter execution layer. A user retains **many** chats as browsable history — each auto-named from its first message — resumes any with its full transcript, and a chat is deleted only by an explicit per-chat or "delete all" action, never automatically (no inactivity sweeper). See [ADR-0010](docs/adr/0010-standalone-chat-session.md) and [ADR-0013](docs/adr/0013-retained-chat-history.md).
 _Avoid_: chat thread, conversation, chat run
 
 **Chat Context**:

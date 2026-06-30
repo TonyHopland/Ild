@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import type { AiProvider, ChatMessage, ChatSession } from "../types";
+import type { AiProvider, ChatMessage, ChatSession, ChatSessionSummary } from "../types";
 import { FAB_POSITION_KEY, PANEL_POSITION_KEY, PANEL_SIZE_KEY } from "./chatPlacement";
 import { CHAT_ENABLED_KEY } from "../hooks/useChatEnabled";
 
@@ -11,10 +11,12 @@ const { handlers, chatService, aiProviderService, getOpenLoopDocument, setCurren
   vi.hoisted(() => ({
     handlers: {} as Record<string, (msg: { payload: unknown }) => void>,
     chatService: {
-      get: vi.fn(),
+      listHistory: vi.fn(),
+      getById: vi.fn(),
       start: vi.fn(),
       sendMessage: vi.fn(),
-      end: vi.fn(),
+      deleteOne: vi.fn(),
+      deleteAll: vi.fn(),
     },
     aiProviderService: {
       getAll: vi.fn(),
@@ -76,6 +78,42 @@ function msg(partial: Partial<ChatMessage>): ChatMessage {
   };
 }
 
+function chatSession(partial: Partial<ChatSession> = {}): ChatSession {
+  return {
+    id: partial.id ?? "s1",
+    name: partial.name ?? "Past chat",
+    aiProviderId: partial.aiProviderId ?? "p1",
+    providerType: partial.providerType ?? "claude-code",
+    tools: partial.tools ?? ["ild"],
+    createdAt: partial.createdAt ?? "2026-01-01T00:00:00Z",
+    messages: partial.messages ?? [],
+  };
+}
+
+function summary(partial: Partial<ChatSessionSummary> = {}): ChatSessionSummary {
+  return {
+    id: partial.id ?? "s1",
+    name: partial.name ?? "Past chat",
+    createdAt: partial.createdAt ?? "2026-01-01T00:00:00Z",
+    updatedAt: partial.updatedAt ?? "2026-01-02T00:00:00Z",
+  };
+}
+
+/**
+ * Open the bubble and resume the given chat from the history list, leaving the
+ * conversation view active. The history-list behaviour is the new entry point —
+ * the bubble no longer auto-loads a single session on mount.
+ */
+async function openResumed(session: ChatSession, initialPath = "/") {
+  chatService.listHistory.mockResolvedValue([summary({ id: session.id, name: session.name })]);
+  chatService.getById.mockResolvedValue(session);
+  const view = renderBubble(initialPath);
+  fireEvent.click(await screen.findByLabelText("Open chat"));
+  fireEvent.click(await screen.findByText(session.name ?? "New chat"));
+  await screen.findByLabelText("Chat message");
+  return view;
+}
+
 afterEach(() => {
   cleanup();
   for (const k of Object.keys(handlers)) delete handlers[k];
@@ -91,7 +129,7 @@ afterEach(() => {
 
 describe("ChatBubble", () => {
   test("opening with no session prompts for a provider with ILD tools pre-checked", async () => {
-    chatService.get.mockResolvedValue(null);
+    chatService.listHistory.mockResolvedValue([]);
     aiProviderService.getAll.mockResolvedValue([provider]);
 
     renderBubble();
@@ -105,7 +143,7 @@ describe("ChatBubble", () => {
   });
 
   test("pre-selects the default provider in the dropdown", async () => {
-    chatService.get.mockResolvedValue(null);
+    chatService.listHistory.mockResolvedValue([]);
     const other: AiProvider = { ...provider, id: "p0", name: "GPT", isDefault: false };
     // List the non-default first to prove selection follows isDefault, not order.
     aiProviderService.getAll.mockResolvedValue([other, provider]);
@@ -118,7 +156,7 @@ describe("ChatBubble", () => {
   });
 
   test("leaves the dropdown unselected when no provider is the default", async () => {
-    chatService.get.mockResolvedValue(null);
+    chatService.listHistory.mockResolvedValue([]);
     const a: AiProvider = { ...provider, id: "p0", name: "GPT", isDefault: false };
     const b: AiProvider = { ...provider, id: "p2", name: "Llama", isDefault: false };
     aiProviderService.getAll.mockResolvedValue([a, b]);
@@ -131,45 +169,24 @@ describe("ChatBubble", () => {
   });
 
   test("sends the open work item id from the route as Chat Context", async () => {
-    const session: ChatSession = {
-      id: "s1",
-      aiProviderId: "p1",
-      providerType: "claude-code",
-      tools: ["ild"],
-      createdAt: "2026-01-01T00:00:00Z",
-      messages: [],
-    };
-    chatService.get.mockResolvedValue(session);
     chatService.sendMessage.mockResolvedValue(undefined);
-
-    renderBubble("/taskboard/wi-77");
-    fireEvent.click(await screen.findByLabelText("Open chat"));
+    await openResumed(chatSession(), "/taskboard/wi-77");
 
     const input = await screen.findByLabelText("Chat message");
     fireEvent.change(input, { target: { value: "look at this" } });
     fireEvent.click(screen.getByText("Send"));
 
     await waitFor(() =>
-      expect(chatService.sendMessage).toHaveBeenCalledWith("look at this", "wi-77", null),
+      expect(chatService.sendMessage).toHaveBeenCalledWith("s1", "look at this", "wi-77", null),
     );
   });
 
   test("sends the open Loop Editor's live document with the message", async () => {
-    const session: ChatSession = {
-      id: "s1",
-      aiProviderId: "p1",
-      providerType: "claude-code",
-      tools: ["ild"],
-      createdAt: "2026-01-01T00:00:00Z",
-      messages: [],
-    };
-    chatService.get.mockResolvedValue(session);
     chatService.sendMessage.mockResolvedValue(undefined);
     const liveLoop = { $schema: "ild-loop-template/v1", name: "My Loop", nodes: [], edges: [] };
     getOpenLoopDocument.mockReturnValue(liveLoop);
 
-    renderBubble();
-    fireEvent.click(await screen.findByLabelText("Open chat"));
+    await openResumed(chatSession());
 
     const input = await screen.findByLabelText("Chat message");
     fireEvent.change(input, { target: { value: "edit the loop" } });
@@ -177,6 +194,7 @@ describe("ChatBubble", () => {
 
     await waitFor(() =>
       expect(chatService.sendMessage).toHaveBeenCalledWith(
+        "s1",
         "edit the loop",
         null,
         JSON.stringify(liveLoop),
@@ -185,41 +203,22 @@ describe("ChatBubble", () => {
   });
 
   test("sends a null Chat Context when no work item is open", async () => {
-    const session: ChatSession = {
-      id: "s1",
-      aiProviderId: "p1",
-      providerType: "claude-code",
-      tools: ["ild"],
-      createdAt: "2026-01-01T00:00:00Z",
-      messages: [],
-    };
-    chatService.get.mockResolvedValue(session);
     chatService.sendMessage.mockResolvedValue(undefined);
-
-    renderBubble("/taskboard");
-    fireEvent.click(await screen.findByLabelText("Open chat"));
+    await openResumed(chatSession(), "/taskboard");
 
     const input = await screen.findByLabelText("Chat message");
     fireEvent.change(input, { target: { value: "general question" } });
     fireEvent.click(screen.getByText("Send"));
 
     await waitFor(() =>
-      expect(chatService.sendMessage).toHaveBeenCalledWith("general question", null, null),
+      expect(chatService.sendMessage).toHaveBeenCalledWith("s1", "general question", null, null),
     );
   });
 
   test("starting a chat locks in the session and reveals the input box", async () => {
-    chatService.get.mockResolvedValue(null);
+    chatService.listHistory.mockResolvedValue([]);
     aiProviderService.getAll.mockResolvedValue([provider]);
-    const session: ChatSession = {
-      id: "s1",
-      aiProviderId: "p1",
-      providerType: "claude-code",
-      tools: ["ild"],
-      createdAt: "2026-01-01T00:00:00Z",
-      messages: [],
-    };
-    chatService.start.mockResolvedValue(session);
+    chatService.start.mockResolvedValue(chatSession({ name: null }));
 
     renderBubble();
     fireEvent.click(await screen.findByLabelText("Open chat"));
@@ -231,64 +230,105 @@ describe("ChatBubble", () => {
     expect(chatService.start).toHaveBeenCalledWith("p1", ["ild"]);
   });
 
-  test("rehydrates an existing transcript on mount", async () => {
-    const session: ChatSession = {
-      id: "s1",
-      aiProviderId: "p1",
-      providerType: "claude-code",
-      tools: ["ild"],
-      createdAt: "2026-01-01T00:00:00Z",
-      messages: [
-        msg({ id: "m1", role: "user", content: "hello", sequence: 0 }),
-        msg({ id: "m2", role: "assistant", content: "hi back", sequence: 1 }),
-      ],
-    };
-    chatService.get.mockResolvedValue(session);
-
-    renderBubble();
-    fireEvent.click(await screen.findByLabelText("Open chat"));
+  test("resuming a past chat rehydrates its transcript", async () => {
+    await openResumed(
+      chatSession({
+        messages: [
+          msg({ id: "m1", role: "user", content: "hello", sequence: 0 }),
+          msg({ id: "m2", role: "assistant", content: "hi back", sequence: 1 }),
+        ],
+      }),
+    );
 
     expect(await screen.findByText("hello")).toBeTruthy();
     expect(screen.getByText("hi back")).toBeTruthy();
+    expect(chatService.getById).toHaveBeenCalledWith("s1");
   });
 
-  test("publishes the chat session id so the loop editor can join the same group", async () => {
-    const session: ChatSession = {
-      id: "s1",
-      aiProviderId: "p1",
-      providerType: "claude-code",
-      tools: ["ild"],
-      createdAt: "2026-01-01T00:00:00Z",
-      messages: [],
-    };
-    chatService.get.mockResolvedValue(session);
-    chatService.end.mockResolvedValue(undefined);
+  test("lists past chats under Start chat with a name and date-stamp", async () => {
+    chatService.listHistory.mockResolvedValue([
+      summary({ id: "s1", name: "Deploy loop help", updatedAt: "2026-03-04T00:00:00Z" }),
+      summary({ id: "s2", name: "Bug triage", updatedAt: "2026-03-03T00:00:00Z" }),
+    ]);
+    aiProviderService.getAll.mockResolvedValue([provider]);
 
     renderBubble();
     fireEvent.click(await screen.findByLabelText("Open chat"));
 
-    // The loaded session is published for other components (the LoopEditor).
+    expect(await screen.findByText("Deploy loop help")).toBeTruthy();
+    expect(screen.getByText("Bug triage")).toBeTruthy();
+    // The date-stamp renders the last-activity timestamp.
+    expect(screen.getByText(new Date("2026-03-04T00:00:00Z").toLocaleString())).toBeTruthy();
+  });
+
+  test("per-chat delete removes that chat without touching the others", async () => {
+    chatService.listHistory.mockResolvedValue([
+      summary({ id: "s1", name: "Keep me" }),
+      summary({ id: "s2", name: "Remove me" }),
+    ]);
+    chatService.deleteOne.mockResolvedValue(undefined);
+    aiProviderService.getAll.mockResolvedValue([provider]);
+
+    renderBubble();
+    fireEvent.click(await screen.findByLabelText("Open chat"));
+    await screen.findByText("Remove me");
+
+    fireEvent.click(screen.getByLabelText("Delete chat Remove me"));
+
+    await waitFor(() => expect(chatService.deleteOne).toHaveBeenCalledWith("s2"));
+    await waitFor(() => expect(screen.queryByText("Remove me")).toBeNull());
+    expect(screen.getByText("Keep me")).toBeTruthy();
+  });
+
+  test("delete all wipes every chat only after the confirmation", async () => {
+    chatService.listHistory.mockResolvedValue([
+      summary({ id: "s1", name: "One" }),
+      summary({ id: "s2", name: "Two" }),
+    ]);
+    chatService.deleteAll.mockResolvedValue(undefined);
+    aiProviderService.getAll.mockResolvedValue([provider]);
+
+    renderBubble();
+    fireEvent.click(await screen.findByLabelText("Open chat"));
+    await screen.findByText("One");
+
+    // First click only arms the confirmation — nothing is deleted yet.
+    fireEvent.click(screen.getByText("Delete all"));
+    expect(await screen.findByRole("alertdialog", { name: "Delete all chats?" })).toBeTruthy();
+    expect(chatService.deleteAll).not.toHaveBeenCalled();
+
+    // Confirming wipes the list.
+    fireEvent.click(screen.getByRole("alertdialog").querySelector("button")!);
+    await waitFor(() => expect(chatService.deleteAll).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText("One")).toBeNull());
+  });
+
+  test("Back returns to the list and retains the chat (no delete)", async () => {
+    await openResumed(chatSession({ name: "Retained chat" }));
+
+    fireEvent.click(screen.getByText("← Back"));
+
+    // The list is shown again and the chat was not deleted.
+    expect(await screen.findByText("Start chat")).toBeTruthy();
+    expect(screen.queryByLabelText("Chat message")).toBeNull();
+    expect(chatService.deleteOne).not.toHaveBeenCalled();
+    expect(chatService.deleteAll).not.toHaveBeenCalled();
+  });
+
+  test("publishes the chat session id so the loop editor can join the same group", async () => {
+    await openResumed(chatSession());
+
+    // The resumed session is published for other components (the LoopEditor).
     await waitFor(() => expect(setCurrentChatSessionId).toHaveBeenCalledWith("s1"));
 
-    // Ending the session publishes null so the editor leaves the group.
-    fireEvent.click(await screen.findByText("End chat"));
+    // Going back publishes null so the editor leaves the group.
+    fireEvent.click(await screen.findByText("← Back"));
     await waitFor(() => expect(setCurrentChatSessionId).toHaveBeenCalledWith(null));
   });
 
   test("shows an in-progress indicator from send through streaming until completion", async () => {
-    const session: ChatSession = {
-      id: "s1",
-      aiProviderId: "p1",
-      providerType: "claude-code",
-      tools: ["ild"],
-      createdAt: "2026-01-01T00:00:00Z",
-      messages: [],
-    };
-    chatService.get.mockResolvedValue(session);
     chatService.sendMessage.mockResolvedValue(undefined);
-
-    renderBubble();
-    fireEvent.click(await screen.findByLabelText("Open chat"));
+    await openResumed(chatSession());
 
     const input = await screen.findByLabelText("Chat message");
     fireEvent.change(input, { target: { value: "do the thing" } });
@@ -320,18 +360,7 @@ describe("ChatBubble", () => {
   });
 
   test("streams a turn and flags an interrupted partial reply", async () => {
-    const session: ChatSession = {
-      id: "s1",
-      aiProviderId: "p1",
-      providerType: "claude-code",
-      tools: ["ild"],
-      createdAt: "2026-01-01T00:00:00Z",
-      messages: [],
-    };
-    chatService.get.mockResolvedValue(session);
-
-    renderBubble();
-    fireEvent.click(await screen.findByLabelText("Open chat"));
+    await openResumed(chatSession());
     await screen.findByLabelText("Chat message");
 
     // Live streaming delta appears, then a finalized interrupted reply replaces it.
@@ -363,7 +392,7 @@ describe("ChatBubble", () => {
 describe("ChatBubble placement", () => {
   test("renders nothing when chat is disabled in settings", () => {
     localStorage.setItem(CHAT_ENABLED_KEY, "false");
-    chatService.get.mockResolvedValue(null);
+    chatService.listHistory.mockResolvedValue([]);
 
     const { container } = renderBubble();
     expect(screen.queryByLabelText("Open chat")).toBeNull();
@@ -371,7 +400,7 @@ describe("ChatBubble placement", () => {
   });
 
   test("dragging the icon moves it, persists the spot, and suppresses the open click", async () => {
-    chatService.get.mockResolvedValue(null);
+    chatService.listHistory.mockResolvedValue([]);
     aiProviderService.getAll.mockResolvedValue([provider]);
 
     renderBubble();
@@ -394,7 +423,7 @@ describe("ChatBubble placement", () => {
   });
 
   test("resizing the panel updates and persists its size", async () => {
-    chatService.get.mockResolvedValue(null);
+    chatService.listHistory.mockResolvedValue([]);
     aiProviderService.getAll.mockResolvedValue([provider]);
 
     renderBubble();
@@ -418,7 +447,7 @@ describe("ChatBubble placement", () => {
 
   test("a window resize clamps a now-off-screen icon back into view", async () => {
     localStorage.setItem(FAB_POSITION_KEY, JSON.stringify({ x: 900, y: 700 }));
-    chatService.get.mockResolvedValue(null);
+    chatService.listHistory.mockResolvedValue([]);
 
     renderBubble();
     const fab = await screen.findByLabelText("Open chat");
@@ -437,7 +466,7 @@ describe("ChatBubble placement", () => {
   });
 
   test("dragging the window header moves and persists the panel position", async () => {
-    chatService.get.mockResolvedValue(null);
+    chatService.listHistory.mockResolvedValue([]);
     aiProviderService.getAll.mockResolvedValue([provider]);
 
     renderBubble();
@@ -464,24 +493,13 @@ describe("ChatBubble placement", () => {
   });
 
   test("a header button press does not drag the window", async () => {
-    const session: ChatSession = {
-      id: "s1",
-      aiProviderId: "p1",
-      providerType: "claude-code",
-      tools: ["ild"],
-      createdAt: "2026-01-01T00:00:00Z",
-      messages: [],
-    };
-    chatService.get.mockResolvedValue(session);
-
-    renderBubble();
-    fireEvent.click(await screen.findByLabelText("Open chat"));
+    await openResumed(chatSession());
 
     const panel = await screen.findByRole("dialog", { name: "AI chat" });
-    const endChat = await screen.findByText("End chat");
+    const back = await screen.findByText("← Back");
 
     // Pressing and moving on a header button must not reposition the panel…
-    fireEvent.pointerDown(endChat, { clientX: 200, clientY: 200 });
+    fireEvent.pointerDown(back, { clientX: 200, clientY: 200 });
     fireEvent.pointerMove(window, { clientX: 50, clientY: 50 });
     fireEvent.pointerUp(window, { clientX: 50, clientY: 50 });
 
@@ -489,8 +507,8 @@ describe("ChatBubble placement", () => {
     expect((panel as HTMLElement).style.top).toBe("236px");
     expect(localStorage.getItem(PANEL_POSITION_KEY)).toBeNull();
 
-    // …and the button still does its job.
-    fireEvent.click(endChat);
-    expect(chatService.end).toHaveBeenCalled();
+    // …and the button still does its job, returning to the list.
+    fireEvent.click(back);
+    expect(await screen.findByText("Start chat")).toBeTruthy();
   });
 });

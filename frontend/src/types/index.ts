@@ -541,14 +541,25 @@ export interface ChatMessage {
   createdAt: string;
 }
 
-/** The current user's chat session. Mirrors ILD.Data.DTOs.ChatSessionView. */
+/** A resumed chat session with its transcript. Mirrors ILD.Data.DTOs.ChatSessionView. */
 export interface ChatSession {
   id: string;
+  name: string | null;
   aiProviderId: string;
   providerType: string;
   tools: string[];
   createdAt: string;
   messages: ChatMessage[];
+}
+
+/**
+ * A lightweight history-list row. Mirrors ILD.Data.DTOs.ChatSessionSummaryView.
+ */
+export interface ChatSessionSummary {
+  id: string;
+  name: string | null;
+  createdAt: string;
+  updatedAt: string | null;
 }
 
 export interface ChatMessageAppendedPayload {

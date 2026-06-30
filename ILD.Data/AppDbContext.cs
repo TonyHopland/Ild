@@ -156,7 +156,10 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<ChatSession>(e =>
         {
-            e.HasIndex(c => c.UserId).IsUnique();
+            // Retained history (ADR-0013): a user keeps many chats, so the index on
+            // UserId is a non-unique lookup for the history list, not a one-per-user
+            // constraint.
+            e.HasIndex(c => c.UserId);
         });
 
         modelBuilder.Entity<ChatMessage>(e =>

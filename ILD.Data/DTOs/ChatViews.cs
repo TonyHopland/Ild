@@ -9,11 +9,22 @@ public sealed record ChatMessageView(
     int Sequence,
     DateTime CreatedAt);
 
-/// <summary>The current user's chat session plus its rehydrated transcript.</summary>
+/// <summary>A resumed chat session plus its rehydrated transcript.</summary>
 public sealed record ChatSessionView(
     Guid Id,
+    string? Name,
     Guid AiProviderId,
     string ProviderType,
     IReadOnlyList<string> Tools,
     DateTime CreatedAt,
     IReadOnlyList<ChatMessageView> Messages);
+
+/// <summary>
+/// A lightweight history-list row (ADR-0013): no transcript, just what the chat
+/// bubble needs to render a resumable past chat (name + date-stamp).
+/// </summary>
+public sealed record ChatSessionSummaryView(
+    Guid Id,
+    string? Name,
+    DateTime CreatedAt,
+    DateTime? UpdatedAt);

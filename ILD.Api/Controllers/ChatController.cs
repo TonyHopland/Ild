@@ -4,10 +4,11 @@ using Microsoft.AspNetCore.Mvc;
 namespace ILD.Api.Controllers;
 
 /// <summary>
-/// REST surface for the per-user chat bubble (ADR-0010). The streaming of a turn
-/// happens over the <c>/hubs/chat</c> SignalR hub; these endpoints start/end the
-/// session, rehydrate the transcript, and submit messages (which interrupt any
-/// in-flight turn rather than queueing).
+/// REST surface for the chat bubble (ADR-0010, retained history ADR-0013). The
+/// streaming of a turn happens over the <c>/hubs/chat</c> SignalR hub; these
+/// endpoints start chats, list/resume retained history, submit messages (which
+/// interrupt any in-flight turn rather than queueing), and delete chats (one or
+/// all). A chat is never deleted automatically — only by an explicit delete.
 /// </summary>
 [ApiController]
 [Route("api/v1/chat")]
@@ -22,12 +23,20 @@ public class ChatController : ControllerBase
         _runner = runner;
     }
 
-    [HttpGet]
-    public async Task<IActionResult> Get(CancellationToken ct)
+    [HttpGet("history")]
+    public async Task<IActionResult> History(CancellationToken ct)
     {
         if (!TryResolveUser(out var userId, out var error)) return error;
-        var session = await _chat.GetForUserAsync(userId, ct);
-        return session is null ? NoContent() : Ok(session);
+        var chats = await _chat.ListForUserAsync(userId, ct);
+        return Ok(chats);
+    }
+
+    [HttpGet("{id:guid}")]
+    public async Task<IActionResult> Get(Guid id, CancellationToken ct)
+    {
+        if (!TryResolveUser(out var userId, out var error)) return error;
+        var session = await _chat.GetByIdAsync(userId, id, ct);
+        return session is null ? NotFound() : Ok(session);
     }
 
     [HttpPost]
@@ -48,32 +57,45 @@ public class ChatController : ControllerBase
         }
     }
 
-    [HttpPost("messages")]
-    public async Task<IActionResult> SendMessage([FromBody] ChatMessageRequest request, CancellationToken ct)
+    [HttpPost("{id:guid}/messages")]
+    public async Task<IActionResult> SendMessage(Guid id, [FromBody] ChatMessageRequest request, CancellationToken ct)
     {
         if (!TryResolveUser(out var userId, out var error)) return error;
         if (string.IsNullOrWhiteSpace(request.Content))
             return BadRequest(new { error = "Message content is required." });
 
-        var session = await _chat.GetForUserAsync(userId, ct);
+        // Resolve the target chat scoped by user, so a message can only ever drive a
+        // chat the caller owns.
+        var session = await _chat.GetByIdAsync(userId, id, ct);
         if (session is null)
-            return NotFound(new { error = "No active chat session. Start one first." });
+            return NotFound(new { error = "Chat not found." });
 
         await _runner.SubmitAsync(session.Id, request.Content, request.OpenWorkItemId, request.OpenLoopDocument);
         return Accepted();
     }
 
-    [HttpDelete]
-    public async Task<IActionResult> End(CancellationToken ct)
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
         if (!TryResolveUser(out var userId, out var error)) return error;
 
-        var session = await _chat.GetForUserAsync(userId, ct);
-        if (session is not null)
-            await _runner.InterruptAsync(session.Id);
+        await _runner.InterruptAsync(id);
+        var deleted = await _chat.DeleteAsync(userId, id, ct);
+        return deleted ? NoContent() : NotFound();
+    }
 
-        var ended = await _chat.EndAsync(userId, ct);
-        return ended ? NoContent() : NotFound();
+    [HttpDelete]
+    public async Task<IActionResult> DeleteAll(CancellationToken ct)
+    {
+        if (!TryResolveUser(out var userId, out var error)) return error;
+
+        // Cancel any in-flight turns first so a delete can't race a streaming reply.
+        var chats = await _chat.ListForUserAsync(userId, ct);
+        foreach (var chat in chats)
+            await _runner.InterruptAsync(chat.Id);
+
+        await _chat.DeleteAllForUserAsync(userId, ct);
+        return NoContent();
     }
 
     private bool TryResolveUser(out string userId, out IActionResult error)

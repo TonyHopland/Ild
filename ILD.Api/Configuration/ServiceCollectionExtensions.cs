@@ -61,8 +61,8 @@ public static class ServiceCollectionExtensions
 
         // Standalone chat (ADR-0010): the turn runner is a singleton (owns
         // interrupt/concurrency), the service is scoped (DbContext + adapter), and
-        // the notifier streams to the chat hub. The retention sweeper backstops
-        // abandoned sessions.
+        // the notifier streams to the chat hub. Chats are retained as history until
+        // the user deletes them (ADR-0013) — no idle sweeper.
         services.AddSingleton(sp =>
         {
             var config = sp.GetRequiredService<IConfiguration>();
@@ -82,7 +82,6 @@ public static class ServiceCollectionExtensions
         // chat turn to the agent-scoped API (ADR-0011); a singleton so both scopes
         // share the same in-memory store.
         services.AddSingleton<IChatLoopScratchpad, ChatLoopScratchpad>();
-        services.AddHostedService<ChatSessionRetentionSweeper>();
 
         services.AddSingleton<IRunProgressBuffer, RunProgressBuffer>();
         services.AddSingleton<IRunNotifier, SignalRRunNotifier>();

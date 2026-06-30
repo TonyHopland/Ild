@@ -3,25 +3,32 @@ using System.ComponentModel.DataAnnotations;
 namespace ILD.Data.Entities;
 
 /// <summary>
-/// A standalone, one-per-user interactive chat with a configured
-/// <see cref="AiProvider"/>, opened from the in-app chat bubble. Deliberately
-/// NOT a <c>LoopRun</c> (see ADR-0010): it has no WorkItem, worktree, branch, or
-/// PR, but reuses the loop's agent-adapter execution layer and the same
-/// <see cref="AdapterSessionSnapshot"/> store (widened to key on either a
-/// LoopRun or a ChatSession). It is durable — the session row, its bound adapter
-/// session, its <see cref="ChatMessage"/> transcript, and its scratch directory
-/// survive process restarts and are reclaimed only when the user explicitly ends
-/// the chat (the <c>ChatSessionRetentionSweeper</c> backstops abandoned sessions).
+/// A standalone interactive chat with a configured <see cref="AiProvider"/>,
+/// opened from the in-app chat bubble. Deliberately NOT a <c>LoopRun</c> (see
+/// ADR-0010): it has no WorkItem, worktree, branch, or PR, but reuses the loop's
+/// agent-adapter execution layer and the same <see cref="AdapterSessionSnapshot"/>
+/// store (widened to key on either a LoopRun or a ChatSession). It is durable —
+/// the session row, its bound adapter session, its <see cref="ChatMessage"/>
+/// transcript, and its scratch directory survive process restarts. A user retains
+/// many chats as browsable history (ADR-0013); a chat is reclaimed only when the
+/// user explicitly deletes it (per-chat or "delete all"), never automatically.
 /// </summary>
 public class ChatSession : IHasUpdatedAt
 {
     [Key]
     public Guid Id { get; set; }
 
-    /// <summary>The owning user (the authenticated username). One chat per user.</summary>
+    /// <summary>The owning user (the authenticated username). A user may retain many chats.</summary>
     [Required]
     [MaxLength(128)]
     public string UserId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// A short, auto-generated display name for the history list, derived from the
+    /// first user message (ADR-0013). Null until the first turn names the chat.
+    /// </summary>
+    [MaxLength(120)]
+    public string? Name { get; set; }
 
     /// <summary>The chosen <see cref="AiProvider"/>; fixed for the session's life.</summary>
     [Required]
@@ -55,7 +62,7 @@ public class ChatSession : IHasUpdatedAt
 
     public DateTime CreatedAt { get; set; }
 
-    /// <summary>Last-activity timestamp; also the cutoff the idle sweeper checks.</summary>
+    /// <summary>Last-activity timestamp; shown as the history row's date-stamp.</summary>
     public DateTime? UpdatedAt { get; set; }
 
     public List<ChatMessage> Messages { get; set; } = new();
