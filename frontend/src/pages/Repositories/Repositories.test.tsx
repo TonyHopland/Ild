@@ -449,6 +449,68 @@ describe("Repositories page", () => {
     );
   });
 
+  test("delete does not open the repository form dialog", async () => {
+    const repos = [
+      {
+        id: "repo-1",
+        name: "my-repo",
+        cloneUrl: "https://git.example.com/my-repo.git",
+        remoteProviderId: "prov-1",
+        defaultBranch: "main",
+        worktreesPath: null,
+        defaultIntakeStatus: "Backlog",
+        createdAt: "2025-01-01T00:00:00Z",
+      },
+    ];
+
+    const providers = [
+      {
+        id: "prov-1",
+        name: "Forgejo",
+        type: "gitea",
+        baseUrl: "https://git.example.com",
+        apiKey: "",
+        webhookSecret: "",
+        createdAt: "2025-01-01T00:00:00Z",
+      },
+    ];
+
+    const fetchMock = mockFetch(null);
+    fetchMock
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify(repos)),
+        }),
+      )
+      .mockReturnValueOnce(
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify(providers)),
+        }),
+      );
+
+    renderPage(fetchMock);
+
+    await waitFor(() => {
+      expect(screen.getByText("my-repo")).toBeTruthy();
+    });
+
+    // Clicking delete should reveal the inline confirmation only — not the
+    // create/edit form modal, which would otherwise overlay and block the
+    // Confirm button.
+    fireEvent.click(screen.getByText("Delete"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Confirm")).toBeTruthy();
+    });
+
+    expect(screen.queryByText("New Repository")).toBeFalsy();
+    expect(screen.queryByText("Edit Repository")).toBeFalsy();
+  });
+
   test("edit button opens modal with repository data pre-filled", async () => {
     const repos = [
       {
