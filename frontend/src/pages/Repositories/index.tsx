@@ -187,13 +187,12 @@ export default function Repositories() {
         ))}
       </div>
 
-      {(showModal || confirmDelete !== null) && (
+      {showModal && (
         <div
           className="modal-overlay"
           onMouseDown={() => {
             setShowModal(false);
             setEditingRepo(null);
-            setConfirmDelete(null);
           }}
         >
           <div className="modal-content" onMouseDown={(e) => e.stopPropagation()}>
