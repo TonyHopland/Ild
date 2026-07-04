@@ -334,6 +334,31 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     connectionState: runConnectionState,
   } = useSignalR("/hubs/loop-run");
 
+  // The work-item hub carries PreviewStateChanged, broadcast whenever a preview
+  // is started or stopped out-of-band — most importantly by an AI agent driving
+  // the preview through the agent API. Human start/stop from this dialog already
+  // updates `preview` from the HTTP response; this keeps the open Preview tab in
+  // sync when the change originates anywhere else.
+  const {
+    on: wiOn,
+    off: wiOff,
+    connectionState: wiConnectionState,
+  } = useSignalR("/hubs/work-item");
+
+  useEffect(() => {
+    if (!workItem?.id || wiConnectionState !== "connected") return;
+
+    const onPreviewStateChanged = (message: TypedSignalRMessage<"PreviewStateChanged">) => {
+      if (message.payload.workItemId !== workItem.id) return;
+      void refreshPreview();
+    };
+
+    wiOn("PreviewStateChanged", onPreviewStateChanged);
+    return () => {
+      wiOff("PreviewStateChanged", onPreviewStateChanged);
+    };
+  }, [workItem?.id, wiConnectionState, wiOn, wiOff, refreshPreview]);
+
   // Backlog→live handoff state. `seeded` flips true once the replayed backlog
   // has been written; until then live chunks are queued. `seededSeq` is the
   // last sequence number already reflected in `progressText`, so a chunk is
