@@ -50,6 +50,7 @@ public class AgentController : ControllerBase
     private readonly IWorktreePreviewService _preview;
     private readonly IChatLoopScratchpad _loopScratchpad;
     private readonly IChatNotifier _chatNotifier;
+    private readonly IWorkItemNotifier _notifier;
 
     public AgentController(
         IWorkItemManager workItems,
@@ -58,7 +59,8 @@ public class AgentController : ControllerBase
         AppDbContext db,
         IWorktreePreviewService preview,
         IChatLoopScratchpad loopScratchpad,
-        IChatNotifier chatNotifier)
+        IChatNotifier chatNotifier,
+        IWorkItemNotifier? notifier = null)
     {
         _workItems = workItems;
         _templates = templates;
@@ -67,6 +69,7 @@ public class AgentController : ControllerBase
         _preview = preview;
         _loopScratchpad = loopScratchpad;
         _chatNotifier = chatNotifier;
+        _notifier = notifier ?? new NoopWorkItemNotifier();
     }
 
     /// <summary>
@@ -258,8 +261,9 @@ public class AgentController : ControllerBase
     //
     // These mirror the human WorkItemsController preview surface so the chat agent
     // can drive a work item's preview. Each takes an explicit work item id (read
-    // from the Chat Context). They fold under the `ild` grant; unlike the human
-    // controller they raise no SignalR notifications — agents act headless.
+    // from the Chat Context). They fold under the `ild` grant. Like the human
+    // controller, every mutating endpoint broadcasts PreviewStateChanged so an open
+    // Preview tab live-updates when an agent starts or stops the preview.
 
     [HttpGet("workitems/{id}/preview")]
     public async Task<IActionResult> GetPreview(string id)
@@ -290,6 +294,7 @@ public class AgentController : ControllerBase
                     request?.SkipInstall == true,
                     request?.PublicHost,
                     request?.PortOverrides));
+            await _notifier.PreviewStateChangedAsync(id);
             return Ok(response);
         }
         catch (InvalidOperationException ex)
@@ -305,7 +310,9 @@ public class AgentController : ControllerBase
         if (error != null) return error;
         try
         {
-            return Ok(await _preview.StopAsync(workItem!.WorktreePath!));
+            var response = await _preview.StopAsync(workItem!.WorktreePath!);
+            await _notifier.PreviewStateChangedAsync(id);
+            return Ok(response);
         }
         catch (InvalidOperationException ex)
         {
@@ -331,6 +338,7 @@ public class AgentController : ControllerBase
                     request?.SkipInstall == true,
                     request?.PublicHost,
                     request?.PortOverrides));
+            await _notifier.PreviewStateChangedAsync(id);
             return Ok(response);
         }
         catch (InvalidOperationException ex)
@@ -349,7 +357,9 @@ public class AgentController : ControllerBase
         if (error != null) return error;
         try
         {
-            return Ok(await _preview.StopServiceAsync(workItem!.WorktreePath!, service));
+            var response = await _preview.StopServiceAsync(workItem!.WorktreePath!, service);
+            await _notifier.PreviewStateChangedAsync(id);
+            return Ok(response);
         }
         catch (InvalidOperationException ex)
         {

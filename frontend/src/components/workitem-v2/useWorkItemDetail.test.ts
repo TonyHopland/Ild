@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { renderHook, act, cleanup } from "@testing-library/react";
 import { useWorkItemDetail } from "./useWorkItemDetail";
-import { WorkItem, WorkItemStatus, WorkItemPriority } from "../../types";
+import { WorkItem, WorkItemStatus, WorkItemPriority, WorktreePreview } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import {
   repositoryService,
@@ -154,5 +154,78 @@ describe("useWorkItemDetail live handoff", () => {
 
     act(() => emit("NodeProgress", progress("other-run", "NOPE\n", 1)));
     expect(result.current.progressText).toBe("");
+  });
+});
+
+const makePreview = (state: string): WorktreePreview => ({
+  configured: true,
+  state,
+  worktreePath: "/tmp/wt",
+  configPath: null,
+  profileName: null,
+  publicHost: null,
+  stateDirectory: null,
+  message: null,
+  services: [],
+});
+
+describe("useWorkItemDetail preview live update", () => {
+  test("refreshes preview when a PreviewStateChanged event targets this item", async () => {
+    stubServices();
+    const { emit } = mockSignalR({ text: "", lastSeq: 0 });
+    // Starts stopped; the agent-driven start flips it to running, and the board
+    // hub's PreviewStateChanged must re-fetch so the open Preview tab reflects it.
+    const getPreview = vi
+      .spyOn(workItemService, "getPreview")
+      .mockResolvedValueOnce(makePreview("stopped"))
+      .mockResolvedValue(makePreview("running"));
+
+    const wi = makeWorkItem({ worktreePath: "/tmp/wt" });
+    const onSave = vi.fn();
+    const { result } = renderHook(() => useWorkItemDetail(wi, onSave));
+
+    // Let the mount refreshPreview settle.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.preview?.state).toBe("stopped");
+    expect(getPreview).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      emit("PreviewStateChanged", { workItemId: "wi-1" });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getPreview).toHaveBeenCalledTimes(2);
+    expect(result.current.preview?.state).toBe("running");
+  });
+
+  test("ignores a PreviewStateChanged event for a different work item", async () => {
+    stubServices();
+    const { emit } = mockSignalR({ text: "", lastSeq: 0 });
+    const getPreview = vi
+      .spyOn(workItemService, "getPreview")
+      .mockResolvedValue(makePreview("stopped"));
+
+    const wi = makeWorkItem({ worktreePath: "/tmp/wt" });
+    const onSave = vi.fn();
+    renderHook(() => useWorkItemDetail(wi, onSave));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(getPreview).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      emit("PreviewStateChanged", { workItemId: "other-wi" });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // No extra fetch — the event was for another item.
+    expect(getPreview).toHaveBeenCalledTimes(1);
   });
 });
