@@ -146,7 +146,20 @@ public class WorkItemsController : ControllerBase
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(string id, [FromBody] WorkItemCreateRequest request)
     {
-        var ok = await _workItemManager.UpdateAsync(id, request.Title, request.Description, request.Tags);
+        // A supplied (parseable) override mode replaces the work item's override;
+        // the target id travels with it. An unset/unparseable mode leaves the
+        // existing override untouched.
+        RemoteAiProviderOverrideMode? overrideMode = null;
+        Guid? overrideProviderId = null;
+        if (!string.IsNullOrWhiteSpace(request.AiProviderOverride)
+            && Enum.TryParse<RemoteAiProviderOverrideMode>(request.AiProviderOverride, ignoreCase: true, out var parsedMode))
+        {
+            overrideMode = parsedMode;
+            if (Guid.TryParse(request.AiProviderOverrideId, out var parsedProviderId))
+                overrideProviderId = parsedProviderId;
+        }
+
+        var ok = await _workItemManager.UpdateAsync(id, request.Title, request.Description, request.Tags, overrideMode, overrideProviderId);
         if (!ok) return NotFound();
         var wi = await _workItemManager.GetWorkItemAsync(id);
         return Ok(wi);

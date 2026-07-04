@@ -1,5 +1,6 @@
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -34,9 +35,10 @@ public class AINodeExecutorTests
         IProviderStore providerStore,
         ILoopRunStore? loopRunStore = null,
         IWorkItemManager? workItemManager = null,
-        IAgentAdapterRegistry? registry = null)
+        IAgentAdapterRegistry? registry = null,
+        WorkItemView? workItem = null)
     {
-        var wi = new WorkItemView { Id = "WI-1", RepositoryId = null };
+        var wi = workItem ?? new WorkItemView { Id = "WI-1", RepositoryId = null };
         var wimMock = workItemManager ?? Mock.Of<IWorkItemManager>(m =>
             m.GetWorkItemAsync(It.IsAny<string>()) == Task.FromResult<WorkItemView?>(wi));
 
@@ -208,5 +210,141 @@ public class AINodeExecutorTests
         Assert.Contains(providerId.ToString(), fail.Reason);
         // The default-provider path must NOT be called
         providerStore.Verify(s => s.GetDefaultAiProviderAsync(), Times.Never);
+    }
+
+    // ── Work-item AI provider override ──────────────────────────────────────
+
+    private static AiProvider Provider(string name, bool isDefault = false) => new()
+    {
+        Id = Guid.NewGuid(),
+        Name = name,
+        Type = "stub",
+        IsDefault = isDefault,
+        Parallelism = 1,
+        CreatedAt = DateTime.UtcNow,
+    };
+
+    /// <summary>
+    /// A registry that records the provider the executor resolved an adapter for,
+    /// so a test can assert which provider actually won after any override.
+    /// </summary>
+    private static (IAgentAdapterRegistry registry, Func<AiProvider?> resolved) CapturingRegistry()
+    {
+        var adapter = new StubAdapter(NodeExecutionResult.Ok("done"));
+        AiProvider? captured = null;
+        var reg = new Mock<IAgentAdapterRegistry>();
+        reg.Setup(r => r.ResolveForProvider(It.IsAny<AiProvider>()))
+            .Returns((AiProvider p) => { captured = p; return () => adapter; });
+        return (reg.Object, () => captured);
+    }
+
+    private static (Mock<IProviderStore> store, AiProvider def, AiProvider pinned, AiProvider ovr) BuildOverrideProviderStore()
+    {
+        var def = Provider("default", isDefault: true);
+        var pinned = Provider("pinned");
+        var ovr = Provider("override");
+        var store = new Mock<IProviderStore>();
+        store.Setup(s => s.GetDefaultAiProviderAsync()).ReturnsAsync(def);
+        store.Setup(s => s.GetAiProviderByIdAsync(def.Id)).ReturnsAsync(def);
+        store.Setup(s => s.GetAiProviderByIdAsync(pinned.Id)).ReturnsAsync(pinned);
+        store.Setup(s => s.GetAiProviderByIdAsync(ovr.Id)).ReturnsAsync(ovr);
+        return (store, def, pinned, ovr);
+    }
+
+    private async Task<(AiProvider? resolved, NodeOutcome last)> RunWithOverrideAsync(
+        Mock<IProviderStore> store, string? nodeConfig, WorkItemView workItem)
+    {
+        var (registry, resolved) = CapturingRegistry();
+        var sp = BuildServices(store.Object, registry: registry, workItem: workItem);
+        var executor = new AINodeExecutor();
+        var ctx = BuildCtx(MakeNode(nodeConfig), MakeRun(), sp);
+
+        NodeOutcome? last = null;
+        await foreach (var o in executor.ExecuteAsync(ctx))
+            last = o;
+        return (resolved(), last!);
+    }
+
+    private static WorkItemView WorkItem(RemoteAiProviderOverrideMode mode, Guid? overrideId) => new()
+    {
+        Id = "WI-1",
+        AiProviderOverride = mode,
+        AiProviderOverrideId = overrideId,
+    };
+
+    [Fact]
+    public async Task OverrideAll_replaces_even_a_node_pinned_to_a_specific_provider()
+    {
+        var (store, _, pinned, ovr) = BuildOverrideProviderStore();
+        var (resolved, _) = await RunWithOverrideAsync(
+            store,
+            $@"{{""aiProviderId"":""{pinned.Id}""}}",
+            WorkItem(RemoteAiProviderOverrideMode.OverrideAll, ovr.Id));
+
+        Assert.Equal(ovr.Id, resolved!.Id);
+    }
+
+    [Fact]
+    public async Task OverrideDefault_leaves_a_node_pinned_to_a_specific_provider_alone()
+    {
+        var (store, _, pinned, ovr) = BuildOverrideProviderStore();
+        var (resolved, _) = await RunWithOverrideAsync(
+            store,
+            $@"{{""aiProviderId"":""{pinned.Id}""}}",
+            WorkItem(RemoteAiProviderOverrideMode.OverrideDefault, ovr.Id));
+
+        // The node deliberately pinned a provider, so OverrideDefault must not touch it.
+        Assert.Equal(pinned.Id, resolved!.Id);
+    }
+
+    [Fact]
+    public async Task OverrideDefault_replaces_a_node_that_fell_back_to_the_default()
+    {
+        var (store, _, _, ovr) = BuildOverrideProviderStore();
+        var (resolved, _) = await RunWithOverrideAsync(
+            store,
+            @"{}",
+            WorkItem(RemoteAiProviderOverrideMode.OverrideDefault, ovr.Id));
+
+        Assert.Equal(ovr.Id, resolved!.Id);
+    }
+
+    [Fact]
+    public async Task None_mode_never_overrides_even_with_a_target_set()
+    {
+        var (store, def, _, ovr) = BuildOverrideProviderStore();
+        var (resolved, _) = await RunWithOverrideAsync(
+            store,
+            @"{}",
+            WorkItem(RemoteAiProviderOverrideMode.None, ovr.Id));
+
+        Assert.Equal(def.Id, resolved!.Id);
+    }
+
+    [Fact]
+    public async Task Override_without_a_target_provider_is_a_no_op()
+    {
+        var (store, def, _, _) = BuildOverrideProviderStore();
+        var (resolved, _) = await RunWithOverrideAsync(
+            store,
+            @"{}",
+            WorkItem(RemoteAiProviderOverrideMode.OverrideAll, overrideId: null));
+
+        Assert.Equal(def.Id, resolved!.Id);
+    }
+
+    [Fact]
+    public async Task Override_target_provider_not_found_fails_the_node()
+    {
+        var (store, _, _, _) = BuildOverrideProviderStore();
+        var missingId = Guid.NewGuid();
+        var (_, last) = await RunWithOverrideAsync(
+            store,
+            @"{}",
+            WorkItem(RemoteAiProviderOverrideMode.OverrideAll, missingId));
+
+        var fail = Assert.IsType<NodeOutcome.Fail>(last);
+        Assert.Equal(EdgeType.OnFailure, fail.Edge);
+        Assert.Contains(missingId.ToString(), fail.Reason);
     }
 }

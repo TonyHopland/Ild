@@ -6,7 +6,7 @@ public interface IWorkItemManager
 {
     Task<string> CreateWorkItemAsync(string title, string description, Guid? repositoryId);
     Task<string> CreateWorkItemAsync(string title, string description, Guid? repositoryId, Guid? createdByLoopRunId, bool forceBacklog, IEnumerable<string>? tags = null, Guid? createdByChatSessionId = null);
-    Task<bool> UpdateAsync(string workItemId, string title, string description, IEnumerable<string>? tags = null);
+    Task<bool> UpdateAsync(string workItemId, string title, string description, IEnumerable<string>? tags = null, RemoteAiProviderOverrideMode? aiProviderOverride = null, Guid? aiProviderOverrideId = null);
     Task<WorkItemView?> GetWorkItemAsync(string workItemId);
 
     /// <summary>

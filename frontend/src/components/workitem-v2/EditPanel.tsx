@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { WorkItem, WorkItemStatus, WorkItemPriority } from "../../types";
+import { WorkItem, WorkItemStatus, WorkItemPriority, AiProviderOverrideMode } from "../../types";
 import { workItemService } from "../../services/auth";
 import { parseTags } from "../../utils/workItemJson";
 import TagAutocomplete from "../TagAutocomplete";
@@ -40,6 +40,8 @@ export default function EditPanel({
   const basePriority = workItem?.priority ?? WorkItemPriority.Medium;
   const baseTags = workItem ? parseTags(workItem).join(", ") : "";
   const baseRepositoryId = workItem?.repositoryId ?? "";
+  const baseAiProviderOverride = workItem?.aiProviderOverride ?? AiProviderOverrideMode.None;
+  const baseAiProviderOverrideId = workItem?.aiProviderOverrideId ?? "";
 
   const [title, setTitle] = useState(baseTitle);
   const [description, setDescription] = useState(baseDescription);
@@ -47,8 +49,13 @@ export default function EditPanel({
   const [priority, setPriority] = useState<WorkItemPriority>(basePriority);
   const [tags, setTags] = useState(baseTags);
   const [repositoryId, setRepositoryId] = useState(baseRepositoryId);
+  const [aiProviderOverride, setAiProviderOverride] =
+    useState<AiProviderOverrideMode>(baseAiProviderOverride);
+  const [aiProviderOverrideId, setAiProviderOverrideId] = useState(baseAiProviderOverrideId);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  const overridesProvider = aiProviderOverride !== AiProviderOverrideMode.None;
 
   const dirty =
     title !== baseTitle ||
@@ -56,7 +63,9 @@ export default function EditPanel({
     status !== baseStatus ||
     priority !== basePriority ||
     tags !== baseTags ||
-    repositoryId !== baseRepositoryId;
+    repositoryId !== baseRepositoryId ||
+    aiProviderOverride !== baseAiProviderOverride ||
+    aiProviderOverrideId !== baseAiProviderOverrideId;
 
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -80,6 +89,10 @@ export default function EditPanel({
       priority,
       tags: parsedTags,
       repositoryId,
+      aiProviderOverride,
+      // Only carry a target when actually overriding, so switching back to
+      // "no override" clears the stored provider.
+      aiProviderOverrideId: overridesProvider ? aiProviderOverrideId : "",
     };
 
     try {
@@ -191,6 +204,41 @@ export default function EditPanel({
           placeholder="e.g. build, deploy"
         />
       </div>
+      {workItem && (
+        <div className="form-row">
+          <div className="form-group">
+            <label htmlFor="wiv2-ai-override">AI provider override</label>
+            <select
+              id="wiv2-ai-override"
+              value={aiProviderOverride}
+              onChange={(e) => setAiProviderOverride(e.target.value as AiProviderOverrideMode)}
+            >
+              <option value={AiProviderOverrideMode.None}>Default (no override)</option>
+              <option value={AiProviderOverrideMode.OverrideDefault}>
+                Override default provider only
+              </option>
+              <option value={AiProviderOverrideMode.OverrideAll}>Override all providers</option>
+            </select>
+          </div>
+          {overridesProvider && (
+            <div className="form-group">
+              <label htmlFor="wiv2-ai-override-provider">Provider</label>
+              <select
+                id="wiv2-ai-override-provider"
+                value={aiProviderOverrideId}
+                onChange={(e) => setAiProviderOverrideId(e.target.value)}
+              >
+                <option value="">Select provider...</option>
+                {detail.aiProviders.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+      )}
       {submitError && (
         <div role="alert" className="form-error">
           {submitError}

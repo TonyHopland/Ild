@@ -112,6 +112,15 @@ public sealed class WorkItemService : IWorkItemService
         if (req.Title != null) w.Title = req.Title;
         if (req.Description != null) w.Description = req.Description;
         if (req.Tags != null) WorkItemMapper.WriteTags(w, req.Tags);
+        // Mode and target travel as a unit: setting the mode also sets the
+        // target (null clears it). None is a real, settable value — clearing an
+        // override back to "no override" must persist, so this cannot key off a
+        // truthy mode.
+        if (req.AiProviderOverride != null)
+        {
+            w.AiProviderOverride = req.AiProviderOverride.Value;
+            w.AiProviderOverrideId = req.AiProviderOverrideId;
+        }
         w.UpdatedAt = _clock.GetUtcNow().UtcDateTime;
         await _db.SaveChangesAsync(ct);
         return WorkItemMapper.ToDto(w);

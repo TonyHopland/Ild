@@ -24,6 +24,20 @@ public enum RemoteWorkItemPriority
     Critical = 3,
 }
 
+/// <summary>
+/// Mirrors the WorkItem server's AiProviderOverrideMode. Kept independent so
+/// ILD.Core does not reference the server assembly (see <see cref="RemoteWorkItemStatus"/>).
+/// <c>None</c> leaves each AI node's provider untouched; <c>OverrideDefault</c>
+/// swaps only nodes that fell back to the configured default provider;
+/// <c>OverrideAll</c> swaps every AI node regardless of what the loop pinned.
+/// </summary>
+public enum RemoteAiProviderOverrideMode
+{
+    None = 0,
+    OverrideDefault = 1,
+    OverrideAll = 2,
+}
+
 public sealed record RemoteConversationMessage(string Role, string Content, DateTime Timestamp, string? Name = null);
 
 public sealed class RemoteWorkItem
@@ -43,6 +57,8 @@ public sealed class RemoteWorkItem
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? CreatedByChatSessionId { get; set; }
     public Guid? RepositoryId { get; set; }
+    public RemoteAiProviderOverrideMode AiProviderOverride { get; set; }
+    public Guid? AiProviderOverrideId { get; set; }
 }
 
 public sealed class RemoteCreateWorkItemRequest
@@ -64,6 +80,13 @@ public sealed class RemoteUpdateWorkItemRequest
     public string? Title { get; set; }
     public string? Description { get; set; }
     public IReadOnlyList<string>? Tags { get; set; }
+
+    /// <summary>
+    /// When supplied, replaces the work item's AI provider override. Mode and
+    /// target travel as a unit — see the server's UpdateWorkItemRequest.
+    /// </summary>
+    public RemoteAiProviderOverrideMode? AiProviderOverride { get; set; }
+    public Guid? AiProviderOverrideId { get; set; }
 }
 
 public sealed class RemoteTransitionRequest

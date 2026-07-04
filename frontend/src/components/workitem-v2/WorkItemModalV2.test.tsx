@@ -11,6 +11,7 @@ import {
   LoopRunNodeStatus,
   LoopTemplate,
   RecoveryPolicy,
+  AiProvider,
 } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
@@ -141,6 +142,7 @@ function mockServices(runs: LoopRun[] = [makeRun()]) {
     },
   ]);
   vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([]);
+  vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.workItemService, "getRuns").mockResolvedValue(runs);
   vi.spyOn(authServices.workItemService, "getDependencies").mockResolvedValue([]);
   vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([]);
@@ -663,6 +665,59 @@ describe("WorkItemModalV2", () => {
     expect(deleteSpy).toHaveBeenCalledWith("wi-1");
     expect(onDelete).toHaveBeenCalledWith("wi-1");
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  test("editing sends the chosen AI provider override mode and target to update", async () => {
+    mockServices();
+    const provider: AiProvider = {
+      id: "ai-2",
+      name: "gpt-fast",
+      type: "openai",
+      baseUrl: "",
+      apiKey: "",
+      model: "gpt",
+      isDefault: false,
+      parallelism: 0,
+      createdAt: "2025-01-01T00:00:00Z",
+    };
+    vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([provider]);
+    const updateSpy = vi
+      .spyOn(authServices.workItemService, "update")
+      .mockImplementation(async (_id, data) => makeWorkItem(data as Partial<WorkItem>));
+
+    await renderDialog(makeWorkItem());
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+      await Promise.resolve();
+    });
+
+    // Default is "no override"; the provider picker only appears once a real
+    // override mode is chosen.
+    expect(screen.queryByLabelText("Provider")).toBeNull();
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("AI provider override"), {
+        target: { value: "OverrideAll" },
+      });
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "ai-2" } });
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Update" }));
+      await Promise.resolve();
+    });
+
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+    expect(updateSpy.mock.calls[0][1]).toMatchObject({
+      aiProviderOverride: "OverrideAll",
+      aiProviderOverrideId: "ai-2",
+    });
   });
 
   test("Delete stays out of the footer even when cleanup buttons are present", async () => {

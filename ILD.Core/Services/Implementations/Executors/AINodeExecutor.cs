@@ -3,6 +3,7 @@ using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Remote;
 using Microsoft.Extensions.DependencyInjection;
 using System.Text.Json;
 
@@ -29,8 +30,12 @@ public sealed class AINodeExecutor : INodeExecutor
             yield break;
         }
 
+        // Resolve the provider the loop node itself selects: an explicit GUID
+        // pins a specific provider, otherwise the node falls back to the
+        // configured default.
+        var nodePinsProvider = Guid.TryParse(cfg.AiProviderId, out var parsedId);
         AiProvider? provider;
-        if (Guid.TryParse(cfg.AiProviderId, out var parsedId))
+        if (nodePinsProvider)
         {
             provider = await providerStore.GetAiProviderByIdAsync(parsedId);
             if (provider is null)
@@ -47,6 +52,27 @@ public sealed class AINodeExecutor : INodeExecutor
                 yield return new NodeOutcome.Fail(EdgeType.OnFailure, "AI node has no aiProviderId and no default provider is configured");
                 yield break;
             }
+        }
+
+        // A work item can override the node's provider. OverrideAll swaps every
+        // AI node; OverrideDefault swaps only nodes that fell back to the default
+        // (a node deliberately pinned to a specific provider is left alone). The
+        // override is a no-op without a target provider.
+        var shouldOverride = wi.AiProviderOverrideId is not null && wi.AiProviderOverride switch
+        {
+            RemoteAiProviderOverrideMode.OverrideAll => true,
+            RemoteAiProviderOverrideMode.OverrideDefault => !nodePinsProvider,
+            _ => false,
+        };
+        if (shouldOverride)
+        {
+            var overrideProvider = await providerStore.GetAiProviderByIdAsync(wi.AiProviderOverrideId!.Value);
+            if (overrideProvider is null)
+            {
+                yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"Work item AI provider override {wi.AiProviderOverrideId} not found");
+                yield break;
+            }
+            provider = overrideProvider;
         }
 
         if (registry is null)

@@ -6,6 +6,7 @@ import {
   LoopTemplate,
   LoopRun,
   WorktreePreview,
+  AiProvider,
 } from "../../types";
 import type { TypedSignalRMessage } from "../../types/signalr";
 import {
@@ -13,6 +14,7 @@ import {
   repositoryService,
   loopTemplateService,
   loopRunService,
+  aiProviderService,
 } from "../../services/auth";
 import { useSignalR } from "../../hooks/useSignalR";
 
@@ -30,6 +32,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const [allWorkItems, setAllWorkItems] = useState<WorkItem[]>([]);
   const [repositories, setRepositories] = useState<Repository[]>([]);
   const [templates, setTemplates] = useState<LoopTemplate[]>([]);
+  const [aiProviders, setAiProviders] = useState<AiProvider[]>([]);
   const [feedbackInput, setFeedbackInput] = useState("");
   const [prCommentsLoading, setPrCommentsLoading] = useState(false);
   const [progressText, setProgressText] = useState("");
@@ -51,6 +54,10 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     loopTemplateService
       .getAll()
       .then(setTemplates)
+      .catch(() => {});
+    aiProviderService
+      .getAll()
+      .then(setAiProviders)
       .catch(() => {});
   }, []);
 
@@ -594,6 +601,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     allWorkItems,
     repositories,
     templates,
+    aiProviders,
     feedbackInput,
     setFeedbackInput,
     prCommentsLoading,
