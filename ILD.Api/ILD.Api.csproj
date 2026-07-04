@@ -9,6 +9,9 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.7" />
+    <!-- Pin the transitive Microsoft.OpenApi off the vulnerable 2.0.0 pulled by
+         Microsoft.AspNetCore.OpenApi 10.0.7 (GHSA-v5pm-xwqc-g5wc; fixed in 2.7.5). -->
+    <PackageReference Include="Microsoft.OpenApi" Version="2.7.5" />
     <PackageReference Include="Porta.Pty" Version="1.0.7" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.4">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>

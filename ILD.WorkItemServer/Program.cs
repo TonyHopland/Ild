@@ -47,8 +47,9 @@ public sealed class WorkItemServerProgram
 
         var connectionString = Environment.GetEnvironmentVariable("WORKITEM_DB_CONNECTION_STRING")
             ?? builder.Configuration["WORKITEM_DB_CONNECTION_STRING"];
+        var hasDatabase = !string.IsNullOrEmpty(connectionString);
 
-        if (connectionString != null && connectionString.Length > 0)
+        if (hasDatabase)
         {
             builder.Services.AddDbContext<WorkItemServerDbContext>(opt =>
                 opt.UseNpgsql(connectionString, npg => npg.MigrationsHistoryTable("__EFMigrationsHistory", "public")));
@@ -70,8 +71,20 @@ public sealed class WorkItemServerProgram
         builder.Services.AddControllers();
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddOpenApi();
-        builder.Services.AddHostedService<StaleWorkItemReclaimer>();
-        builder.Services.AddHostedService<WorkQueueReconciler>();
+
+        // The stale-reclaim and work-queue reconcile backstops open a scoped
+        // WorkItemService — and therefore a WorkItemServerDbContext — on every
+        // pass. Register them only when a database is configured: without a
+        // connection string no DbContext is registered (see above), so resolving
+        // WorkItemService threw "Unable to resolve WorkItemServerDbContext" on
+        // every pass (every 30s). A DB-less process has nothing for them to act
+        // on; integration tests substitute their own DbContext and exercise the
+        // reconcile/reclaim logic directly rather than through the hosted loop.
+        if (hasDatabase)
+        {
+            builder.Services.AddHostedService<StaleWorkItemReclaimer>();
+            builder.Services.AddHostedService<WorkQueueReconciler>();
+        }
 
         var app = builder.Build();
 
