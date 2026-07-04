@@ -19,6 +19,8 @@ public sealed class WorkItemDto
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? CreatedByChatSessionId { get; set; }
     public Guid? RepositoryId { get; set; }
+    public AiProviderOverrideMode AiProviderOverride { get; set; }
+    public Guid? AiProviderOverrideId { get; set; }
 }
 
 public sealed class CreateWorkItemRequest
@@ -40,6 +42,14 @@ public sealed class UpdateWorkItemRequest
     public string? Title { get; set; }
     public string? Description { get; set; }
     public IReadOnlyList<string>? Tags { get; set; }
+
+    /// <summary>
+    /// When supplied, replaces the work item's AI provider override. The mode
+    /// and target id travel as a unit — supplying the mode also authoritatively
+    /// sets <see cref="AiProviderOverrideId"/> (null clears the target).
+    /// </summary>
+    public AiProviderOverrideMode? AiProviderOverride { get; set; }
+    public Guid? AiProviderOverrideId { get; set; }
 }
 
 public sealed class TransitionRequest

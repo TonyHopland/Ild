@@ -51,5 +51,7 @@ internal static class WorkItemMapper
         CreatedByLoopRunId = w.CreatedByLoopRunId,
         CreatedByChatSessionId = w.CreatedByChatSessionId,
         RepositoryId = w.RepositoryId,
+        AiProviderOverride = w.AiProviderOverride,
+        AiProviderOverrideId = w.AiProviderOverrideId,
     };
 }

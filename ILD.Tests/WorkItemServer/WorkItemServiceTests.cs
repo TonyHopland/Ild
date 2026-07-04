@@ -87,6 +87,78 @@ public class WorkItemServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Create_defaults_AiProviderOverride_to_None()
+    {
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
+
+        Assert.Equal(AiProviderOverrideMode.None, dto.AiProviderOverride);
+        Assert.Null(dto.AiProviderOverrideId);
+    }
+
+    [Fact]
+    public async Task Update_round_trips_AiProviderOverride_mode_and_target()
+    {
+        var created = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
+        var target = Guid.NewGuid();
+
+        var updated = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest
+        {
+            AiProviderOverride = AiProviderOverrideMode.OverrideAll,
+            AiProviderOverrideId = target,
+        });
+
+        Assert.Equal(AiProviderOverrideMode.OverrideAll, updated!.AiProviderOverride);
+        Assert.Equal(target, updated.AiProviderOverrideId);
+
+        // Persisted, not just echoed back.
+        var fresh = await _svc.GetAsync(created.Id);
+        Assert.Equal(AiProviderOverrideMode.OverrideAll, fresh!.AiProviderOverride);
+        Assert.Equal(target, fresh.AiProviderOverrideId);
+    }
+
+    [Fact]
+    public async Task Update_clearing_override_back_to_None_drops_the_target()
+    {
+        var created = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
+        await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest
+        {
+            AiProviderOverride = AiProviderOverrideMode.OverrideDefault,
+            AiProviderOverrideId = Guid.NewGuid(),
+        });
+
+        var cleared = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest
+        {
+            AiProviderOverride = AiProviderOverrideMode.None,
+            AiProviderOverrideId = null,
+        });
+
+        Assert.Equal(AiProviderOverrideMode.None, cleared!.AiProviderOverride);
+        Assert.Null(cleared.AiProviderOverrideId);
+    }
+
+    [Fact]
+    public async Task Update_without_override_fields_leaves_existing_override_intact()
+    {
+        var created = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
+        var target = Guid.NewGuid();
+        await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest
+        {
+            AiProviderOverride = AiProviderOverrideMode.OverrideAll,
+            AiProviderOverrideId = target,
+        });
+
+        // A title-only edit (override fields null) must not disturb the override.
+        var afterTitleEdit = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest
+        {
+            Title = "renamed",
+        });
+
+        Assert.Equal("renamed", afterTitleEdit!.Title);
+        Assert.Equal(AiProviderOverrideMode.OverrideAll, afterTitleEdit.AiProviderOverride);
+        Assert.Equal(target, afterTitleEdit.AiProviderOverrideId);
+    }
+
+    [Fact]
     public async Task Create_honours_forceStatus_when_provided()
     {
         var dto = await _svc.CreateAsync(new CreateWorkItemRequest

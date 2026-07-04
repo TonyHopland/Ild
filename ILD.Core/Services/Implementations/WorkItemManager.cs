@@ -339,6 +339,8 @@ public class WorkItemManager : IWorkItemManager
             Tags = remote.Tags,
             Conversation = remote.Conversation,
             HumanFeedbackActions = remote.HumanFeedbackActions,
+            AiProviderOverride = remote.AiProviderOverride,
+            AiProviderOverrideId = remote.AiProviderOverrideId,
             RepositoryId = run?.RepositoryId ?? remote.RepositoryId,
             CreatedByLoopRunId = run?.CreatedByLoopRunId ?? remote.CreatedByLoopRunId,
             CreatedByChatSessionId = remote.CreatedByChatSessionId,
@@ -406,7 +408,13 @@ public class WorkItemManager : IWorkItemManager
         return current?.NodeLabel ?? current?.LoopNode?.Label;
     }
 
-    public async Task<bool> UpdateAsync(string workItemId, string title, string description, IEnumerable<string>? tags = null)
+    public async Task<bool> UpdateAsync(
+        string workItemId,
+        string title,
+        string description,
+        IEnumerable<string>? tags = null,
+        RemoteAiProviderOverrideMode? aiProviderOverride = null,
+        Guid? aiProviderOverrideId = null)
     {
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
         var updated = await _server.UpdateAsync(opts, workItemId, new RemoteUpdateWorkItemRequest
@@ -414,6 +422,8 @@ public class WorkItemManager : IWorkItemManager
             Title = title,
             Description = description,
             Tags = tags?.ToList(),
+            AiProviderOverride = aiProviderOverride,
+            AiProviderOverrideId = aiProviderOverrideId,
         });
         if (updated == null) return false;
 

@@ -30,6 +30,19 @@ export enum WorkItemPriority {
   Critical = "Critical",
 }
 
+/**
+ * How a work item overrides the AI provider its AI nodes run against.
+ * {@link None} leaves each node's own provider choice untouched;
+ * {@link OverrideDefault} swaps only nodes that fell back to the default
+ * provider; {@link OverrideAll} swaps every AI node regardless of what the
+ * loop pinned. Mirrors the backend's AiProviderOverrideMode.
+ */
+export enum AiProviderOverrideMode {
+  None = "None",
+  OverrideDefault = "OverrideDefault",
+  OverrideAll = "OverrideAll",
+}
+
 export interface ConversationMessage {
   role: string;
   content: string;
@@ -57,6 +70,13 @@ export interface WorkItem {
   loopTemplateId?: string;
   loopTemplateVersion?: string;
   repositoryId: string;
+  /**
+   * AI provider override for this item's AI nodes. Defaults to
+   * {@link AiProviderOverrideMode.None}. {@link aiProviderOverrideId} names the
+   * provider the override targets.
+   */
+  aiProviderOverride?: AiProviderOverrideMode;
+  aiProviderOverrideId?: string | null;
   prUrl: string | null;
   pullRequestBranch: string | null;
   humanFeedbackReason: string | null;

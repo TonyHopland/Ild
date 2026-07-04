@@ -3,7 +3,12 @@ import { renderHook, act, cleanup } from "@testing-library/react";
 import { useWorkItemDetail } from "./useWorkItemDetail";
 import { WorkItem, WorkItemStatus, WorkItemPriority } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
-import { repositoryService, loopTemplateService, workItemService } from "../../services/auth";
+import {
+  repositoryService,
+  loopTemplateService,
+  workItemService,
+  aiProviderService,
+} from "../../services/auth";
 
 afterEach(() => {
   cleanup();
@@ -66,6 +71,7 @@ function mockSignalR(subscribeResult: unknown) {
 function stubServices() {
   vi.spyOn(repositoryService, "getAll").mockResolvedValue([]);
   vi.spyOn(loopTemplateService, "getAll").mockResolvedValue([]);
+  vi.spyOn(aiProviderService, "getAll").mockResolvedValue([]);
   vi.spyOn(workItemService, "getRuns").mockResolvedValue([]);
   vi.spyOn(workItemService, "getDependencies").mockResolvedValue([]);
   vi.spyOn(workItemService, "getAll").mockResolvedValue([]);

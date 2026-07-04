@@ -71,4 +71,18 @@ public class WorkItem
     /// so it round-trips and can be attached to LoopRun records on the client.
     /// </summary>
     public Guid? RepositoryId { get; set; }
+
+    /// <summary>
+    /// How this work item overrides the AI provider its AI nodes run against.
+    /// Defaults to <see cref="AiProviderOverrideMode.None"/> (no override).
+    /// </summary>
+    public AiProviderOverrideMode AiProviderOverride { get; set; } = AiProviderOverrideMode.None;
+
+    /// <summary>
+    /// The AI provider (a client-side <c>AiProvider</c> id) an override targets.
+    /// Only meaningful when <see cref="AiProviderOverride"/> is not
+    /// <see cref="AiProviderOverrideMode.None"/>; stored opaquely like
+    /// <see cref="RepositoryId"/> so it round-trips to the ILD instance.
+    /// </summary>
+    public Guid? AiProviderOverrideId { get; set; }
 }

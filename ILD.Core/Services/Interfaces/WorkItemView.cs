@@ -21,6 +21,13 @@ public sealed class WorkItemView
     public IReadOnlyList<RemoteConversationMessage> Conversation { get; set; } = Array.Empty<RemoteConversationMessage>();
     public string? HumanFeedbackActions { get; set; }
 
+    /// <summary>
+    /// How this work item overrides the AI provider its AI nodes run against,
+    /// and which provider the override targets. Read by the AI node executor.
+    /// </summary>
+    public RemoteAiProviderOverrideMode AiProviderOverride { get; set; }
+    public Guid? AiProviderOverrideId { get; set; }
+
     // Engine-only fields (from LoopRun)
     public Guid? RepositoryId { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
