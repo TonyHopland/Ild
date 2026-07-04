@@ -37,6 +37,8 @@ public sealed class ListingTools
         string? orderBy = null,
         [Description("When true, return only items whose dependencies are all Done (actionable now).")]
         bool actionableOnly = false,
+        [Description("When true, also include each item's full description body (off by default to keep the list lightweight).")]
+        bool includeDescription = false,
         [Description("Pagination skip (default 0).")] int skip = 0,
         [Description("Pagination take (default 100, max 500).")] int take = 100)
     {
@@ -44,6 +46,7 @@ public sealed class ListingTools
                             ("createdByLoopRunId", createdByLoopRunId),
                             ("priority", priority), ("orderBy", orderBy),
                             ("actionableOnly", actionableOnly ? "true" : null),
+                            ("includeDescription", includeDescription ? "true" : null),
                             ("skip", skip.ToString()), ("take", take.ToString()));
         qs = AppendRepeated(qs, "tags", tags);
         return _ild.GetRawAsync($"api/v1/agent/workitems{qs}");

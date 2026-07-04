@@ -639,8 +639,8 @@ public class AgentApiIntegrationTests
         var arr = JsonDocument.Parse(await (await client.GetAsync("/api/v1/agent/workitems")).Content.ReadAsStringAsync()).RootElement;
         var row = arr.EnumerateArray().Single(e => e.GetProperty("title").GetString() == "triage me");
 
-        // No full body; a single-line, truncated preview stands in for it.
-        Assert.False(row.TryGetProperty("description", out _));
+        // No full body by default; a single-line, truncated preview stands in for it.
+        Assert.Equal(JsonValueKind.Null, row.GetProperty("description").ValueKind);
         var preview = row.GetProperty("descriptionPreview").GetString()!;
         Assert.DoesNotContain('\n', preview);
         Assert.True(preview.Length <= 161); // 160 chars + the ellipsis
@@ -652,6 +652,11 @@ public class AgentApiIntegrationTests
         Assert.Equal(0, row.GetProperty("blockedByCount").GetInt32());
         Assert.Equal(0, row.GetProperty("blocksCount").GetInt32());
         Assert.True(row.GetProperty("actionable").GetBoolean());
+
+        // Opt back in to the full body for backward compatibility.
+        var withBody = JsonDocument.Parse(await (await client.GetAsync("/api/v1/agent/workitems?includeDescription=true")).Content.ReadAsStringAsync()).RootElement;
+        var full = withBody.EnumerateArray().Single(e => e.GetProperty("title").GetString() == "triage me");
+        Assert.Equal(longBody, full.GetProperty("description").GetString());
     }
 
     [Fact]
@@ -678,6 +683,36 @@ public class AgentApiIntegrationTests
         Assert.Equal(1, child.GetProperty("blockedByCount").GetInt32());
         Assert.Equal(depId, child.GetProperty("blockedBy")[0].GetString());
         Assert.Equal(1, dep.GetProperty("blocksCount").GetInt32());
+    }
+
+    [Fact]
+    public async Task ListWorkItems_caps_the_blockedBy_id_array_but_keeps_an_exact_count()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+
+        // 51 dependencies — one over the 50-id cap — so the array is bounded while
+        // blockedByCount still reports the true total.
+        const int depCount = 51;
+        var depIds = new List<string>();
+        for (var i = 0; i < depCount; i++)
+            depIds.Add(await CreateAsync(client, $"dep-{i}", null, repoId));
+
+        var create = await client.PostAsJsonAsync("/api/v1/agent/workitems", new
+        {
+            title = "hub",
+            description = "",
+            repositoryId = repoId.ToString(),
+            dependencies = depIds,
+        });
+        create.EnsureSuccessStatusCode();
+
+        var arr = JsonDocument.Parse(await (await client.GetAsync("/api/v1/agent/workitems")).Content.ReadAsStringAsync()).RootElement;
+        var hub = arr.EnumerateArray().Single(e => e.GetProperty("title").GetString() == "hub");
+
+        Assert.Equal(depCount, hub.GetProperty("blockedByCount").GetInt32());
+        Assert.Equal(50, hub.GetProperty("blockedBy").GetArrayLength()); // capped
     }
 
     [Fact]

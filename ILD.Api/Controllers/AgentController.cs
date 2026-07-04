@@ -91,6 +91,11 @@ public class AgentController : ControllerBase
     // its full body.
     private const int DescriptionPreviewLength = 160;
 
+    // Upper bound on the number of dependency ids returned per row. blockedByCount
+    // stays exact; only the id array is capped so a pathological item with hundreds
+    // of dependencies can't bloat the (per-page) list payload.
+    private const int MaxBlockedByIds = 50;
+
     [HttpGet("workitems")]
     public async Task<IActionResult> ListWorkItems(
         [FromQuery] string? status = null,
@@ -100,6 +105,7 @@ public class AgentController : ControllerBase
         [FromQuery] string[]? tags = null,
         [FromQuery] string? orderBy = null,
         [FromQuery] bool actionableOnly = false,
+        [FromQuery] bool includeDescription = false,
         [FromQuery] int skip = 0,
         [FromQuery] int take = 100)
     {
@@ -145,7 +151,7 @@ public class AgentController : ControllerBase
                 status = w.Status.ToString(),
                 priority = w.Priority.ToString(),
                 tags = w.Tags,
-                blockedBy = w.BlockedBy,
+                blockedBy = w.BlockedBy.Take(MaxBlockedByIds),
                 blockedByCount = w.BlockedBy.Count,
                 blocksCount = w.BlocksCount,
                 actionable = w.IsActionable,
@@ -155,6 +161,10 @@ public class AgentController : ControllerBase
                 createdAt = w.CreatedAt,
                 updatedAt = w.UpdatedAt,
                 descriptionPreview = BuildDescriptionPreview(w.Description),
+                // Full body is omitted by default (the point of the lightweight
+                // list); opt back in with includeDescription for callers that
+                // still want it, preserving backward compatibility.
+                description = includeDescription ? w.Description : null,
             }));
         }
         catch (InvalidOperationException ex)

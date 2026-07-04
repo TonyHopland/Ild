@@ -9,7 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Smarter work-item tools for AI triage** — the agent listing now returns a compact, relationship-aware projection instead of every full body. `list_workitems` drops the full `description` for a single-line `descriptionPreview` and adds `priority`, `tags`, the dependency ids blocking each item (`blockedBy`/`blockedByCount`), the reverse-edge count of what it blocks (`blocksCount`), and an `actionable` flag (all dependencies Done). It also gains `priority`, `tags[]`, `orderBy` (updatedAt | createdAt | priority), and `actionableOnly` filters/sort. A new `get_backlog_summary` tool/endpoint aggregates counts by status and priority plus blocked-vs-actionable totals with no bodies, so an agent can orient over a large backlog before drilling in. `get_workitem` now also resolves reverse `blocks` edges and gates the (large) `conversation` behind an explicit `includeConversation` flag.
+- **Smarter work-item tools for AI triage** — the agent listing now returns a compact, relationship-aware projection instead of every full body. `list_workitems` drops the full `description` for a single-line `descriptionPreview` and adds `priority`, `tags`, the dependency ids blocking each item (`blockedBy`/`blockedByCount`), the reverse-edge count of what it blocks (`blocksCount`), and an `actionable` flag (all dependencies Done). It also gains `priority`, `tags[]`, `orderBy` (updatedAt | createdAt | priority), and `actionableOnly` filters/sort. For backward compatibility an `includeDescription` flag re-adds the full body per row (off by default); the `blockedBy` id array is capped (50 ids/row) while `blockedByCount` stays exact. A new `get_backlog_summary` tool/endpoint aggregates counts by status and priority plus blocked-vs-actionable totals with no bodies, so an agent can orient over a large backlog before drilling in. `get_workitem` now also resolves reverse `blocks` edges and gates the (large) `conversation` behind an explicit `includeConversation` flag.
+
+### Fixed
+
+- The WorkItem server's stale-reclaim and work-queue reconcile background services are now registered only when a database connection string is configured. Previously they were registered unconditionally but resolve a `WorkItemServerDbContext` that is registered only when `WORKITEM_DB_CONNECTION_STRING` is set, so a DB-less process crashed both services on every pass ("Unable to resolve service for type 'WorkItemServerDbContext'"). With a connection string set (the standard deployment) they run exactly as before.
+
+### Security
+
+- Pin `Microsoft.OpenApi` to 2.7.5 in the API and WorkItem server, off the vulnerable 2.0.0 pulled transitively by `Microsoft.AspNetCore.OpenApi` (GHSA-v5pm-xwqc-g5wc).
 
 ## [0.4.0] - 2026-06-25
 

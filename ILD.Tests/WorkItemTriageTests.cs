@@ -112,6 +112,21 @@ public sealed class WorkItemTriageTests : IDisposable
     }
 
     [Fact]
+    public async Task ListSummaries_actionableOnly_includes_items_with_zero_dependencies()
+    {
+        // A dependency-free item must never be filtered out by actionableOnly — its
+        // (empty) dependency set is vacuously all-Done. This guards against the
+        // classic INNER-JOIN mistake that would drop items with no dependency rows.
+        var noDeps = await SeedAsync("no deps");
+
+        var rows = await _mgr.ListSummariesAsync(new WorkItemListQuery { ActionableOnly = true });
+
+        var row = rows.Single(r => r.Id == noDeps);
+        Assert.True(row.IsActionable);
+        Assert.Empty(row.BlockedBy);
+    }
+
+    [Fact]
     public async Task ListSummaries_treats_missing_dependency_as_blocking()
     {
         // A dependency id with no matching item must keep the dependent blocked,
