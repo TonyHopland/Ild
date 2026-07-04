@@ -273,20 +273,34 @@ export default function ChatBubble() {
     scrollRef.current?.scrollTo?.({ top: scrollRef.current.scrollHeight });
   }, [messages, streaming]);
 
-  const openPanel = useCallback(async () => {
+  const openPanel = useCallback(() => {
     setOpen(true);
-    if (!session && providers.length === 0) {
+  }, []);
+
+  // Load the AI providers whenever the start form needs them — on first open and
+  // again after ending a chat — so the list is never left empty waiting for a
+  // close/reopen (e.g. when the first load failed at startup). Tied to the start
+  // form being shown rather than to the open-from-closed click, and skipped once
+  // providers are loaded or a chat is active.
+  useEffect(() => {
+    if (!open || session || providers.length > 0) return;
+    let cancelled = false;
+    void (async () => {
       try {
         const loaded = await aiProviderService.getAll();
+        if (cancelled) return;
         setProviders(loaded);
         // Pre-select the default provider so a new chat is ready to start.
         const fallback = loaded.find((p) => p.isDefault);
         if (fallback) setProviderId(fallback.id);
       } catch {
-        setError("Could not load AI providers.");
+        if (!cancelled) setError("Could not load AI providers.");
       }
-    }
-  }, [session, providers.length]);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, session, providers.length]);
 
   const onFabClick = useCallback(() => {
     // Swallow the click that ends a drag; a genuine click re-arms and opens.
@@ -294,7 +308,7 @@ export default function ChatBubble() {
       draggedRef.current = false;
       return;
     }
-    void openPanel();
+    openPanel();
   }, [openPanel]);
 
   const toggleTool = (key: string) => {

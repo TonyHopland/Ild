@@ -315,6 +315,25 @@ describe("ChatBubble", () => {
     expect(chatService.deleteAll).not.toHaveBeenCalled();
   });
 
+  test("reloads providers when ending a chat if the first load failed", async () => {
+    chatService.listHistory.mockResolvedValue([summary({ id: "s1", name: "Old chat" })]);
+    chatService.getById.mockResolvedValue(chatSession({ id: "s1", name: "Old chat" }));
+    // The first provider load fails (e.g. a transient auth hiccup right at
+    // startup); the retry when the start form re-appears succeeds.
+    aiProviderService.getAll.mockRejectedValueOnce(new Error("boom")).mockResolvedValue([provider]);
+
+    renderBubble();
+    fireEvent.click(await screen.findByLabelText("Open chat"));
+
+    // Resume the past chat (this does not need providers), then end it.
+    fireEvent.click(await screen.findByText("Old chat"));
+    await screen.findByLabelText("Chat message");
+    fireEvent.click(screen.getByText("← Back"));
+
+    // The provider list fills without having to close and reopen the panel.
+    expect(await screen.findByText("Claude (claude-code)")).toBeTruthy();
+  });
+
   test("publishes the chat session id so the loop editor can join the same group", async () => {
     await openResumed(chatSession());
 
