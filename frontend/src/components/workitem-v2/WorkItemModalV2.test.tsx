@@ -420,9 +420,10 @@ describe("WorkItemModalV2", () => {
     ).toBeTruthy();
     expect(within(actionPanel as HTMLElement).getByRole("button", { name: "Reject" })).toBeTruthy();
 
-    // The action content opts into the flex layout (wiv2-action-feedback) that
-    // lets the feedback card fill the panel and scroll its own body, so the
-    // buttons stay on screen instead of being pushed off by a tall prompt.
+    // Guards only that the flex layout is wired on (the wiv2-action-feedback
+    // modifier). jsdom has no layout engine, so this cannot prove the buttons
+    // stay on screen — the pixel behaviour depends on the CSS cascade and must
+    // be checked in a real browser, not here.
     expect((actionPanel as HTMLElement).querySelector(".wiv2-action-feedback")).not.toBeNull();
   });
 
