@@ -214,6 +214,34 @@
   max-height: none;
 }
 
+/* While waiting on a human the Action tab is dedicated to the feedback card, so
+   let it fill the panel and drive its own layout with flexbox: the card is a
+   bounded column whose scrollable region (PR view + prompt) flexes to whatever
+   space is left, while the textarea and action buttons keep their size. The
+   card grows and shrinks with the window, so the buttons never leave the
+   screen — no fixed heights involved. */
+.wiv2-action-feedback {
+  height: 100%;
+  min-height: 0;
+}
+
+.wiv2-action-feedback .wiv2-feedback {
+  /* Fill the panel and stay bounded by it. The base .wiv2-feedback rule pins
+     flex-shrink: 0, which would let the card grow past the panel and defeat the
+     inner scroll region, so flex here must reset both grow and shrink. */
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.wiv2-action-feedback .feedback-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 /* The halt control sits beneath the live view; pin its button to the right so
    it reads as an action on the stream above rather than a header for it. */
 .wiv2-action .wiv2-halt-bar {

@@ -274,7 +274,7 @@ export default function WorkItemModalV2({
         className="wiv2-tabpanel"
         hidden={activeTab !== "action"}
       >
-        <div className="wiv2-action">
+        <div className={`wiv2-action${actionRequired ? " wiv2-action-feedback" : ""}`}>
           {detail.shouldStream && <LiveStream text={detail.progressText} />}
           <HaltSteerControls
             run={detail.currentRun}

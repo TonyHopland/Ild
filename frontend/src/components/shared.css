@@ -361,11 +361,6 @@
   color: #cbd5e1;
 }
 
-.feedback-prompt {
-  max-height: 20rem;
-  overflow: auto;
-}
-
 .feedback-textarea:focus {
   outline: none;
   border-color: #6366f1;
