@@ -361,13 +361,6 @@
   color: #cbd5e1;
 }
 
-/* Grow with the content but cap to a fraction of the window (not a fixed
-   height) so the prompt never pushes the action buttons below it off screen. */
-.feedback-prompt {
-  max-height: 40vh;
-  overflow: auto;
-}
-
 .feedback-textarea:focus {
   outline: none;
   border-color: #6366f1;

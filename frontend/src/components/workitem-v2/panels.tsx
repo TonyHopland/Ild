@@ -49,10 +49,14 @@ export function FeedbackBanner({
           </a>
         )}
       </div>
-      {prSnapshot && <PrView snapshot={prSnapshot} />}
-      {prompt && (
-        <div className="markdown-container feedback-prompt">
-          <MarkdownRenderer content={prompt} />
+      {(prSnapshot || prompt) && (
+        <div className="feedback-scroll">
+          {prSnapshot && <PrView snapshot={prSnapshot} />}
+          {prompt && (
+            <div className="markdown-container">
+              <MarkdownRenderer content={prompt} />
+            </div>
+          )}
         </div>
       )}
       <textarea

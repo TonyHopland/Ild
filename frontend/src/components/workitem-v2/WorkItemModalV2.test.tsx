@@ -419,6 +419,11 @@ describe("WorkItemModalV2", () => {
       within(actionPanel as HTMLElement).getByRole("button", { name: "Approve" }),
     ).toBeTruthy();
     expect(within(actionPanel as HTMLElement).getByRole("button", { name: "Reject" })).toBeTruthy();
+
+    // The action content opts into the flex layout (wiv2-action-feedback) that
+    // lets the feedback card fill the panel and scroll its own body, so the
+    // buttons stay on screen instead of being pushed off by a tall prompt.
+    expect((actionPanel as HTMLElement).querySelector(".wiv2-action-feedback")).not.toBeNull();
   });
 
   test("opens on the Action tab when the item is waiting on human feedback", async () => {
@@ -493,6 +498,9 @@ describe("WorkItemModalV2", () => {
 
     const actionPanel = document.getElementById("wiv2-panel-action");
     expect(within(actionPanel as HTMLElement).getByText("Live Output")).toBeTruthy();
+    // A running item is not the human-feedback layout, so the flex-fill modifier
+    // is off and the streaming view keeps the tab's normal scrolling.
+    expect((actionPanel as HTMLElement).querySelector(".wiv2-action-feedback")).toBeNull();
     // The live stream is no longer duplicated in the Overview panel.
     const overviewPanel = document.getElementById("wiv2-panel-overview");
     expect(within(overviewPanel as HTMLElement).queryByText("Live Output")).toBeNull();
