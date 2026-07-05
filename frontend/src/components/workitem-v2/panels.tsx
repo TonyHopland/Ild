@@ -5,12 +5,7 @@ import { makeLoopTagMatcher, parseConversation, parseTags } from "../../utils/wo
 import { prStatusBadges } from "../../utils/prStatusBadges";
 import MarkdownRenderer from "../MarkdownRenderer";
 import FeedbackActions from "../FeedbackActions";
-import { useViewportBoundedHeight } from "../../hooks/useViewportBoundedHeight";
 import type { WorkItemDetail } from "./useWorkItemDetail";
-
-// Space kept clear below the feedback prompt for the textarea and action
-// buttons, so capping the prompt to the viewport never hides them.
-const FEEDBACK_PROMPT_RESERVED_BELOW_PX = 224;
 
 /** Prominent feedback banner shown in the Action tab while the item waits on a human. */
 export function FeedbackBanner({
@@ -22,13 +17,6 @@ export function FeedbackBanner({
   detail: WorkItemDetail;
   prompt: string | null;
 }) {
-  // Grow the prompt with its content but never past the window, so the textarea
-  // and action buttons below it stay on screen.
-  const { ref: promptRef, maxHeight: promptMaxHeight } = useViewportBoundedHeight(
-    FEEDBACK_PROMPT_RESERVED_BELOW_PX,
-    prompt,
-  );
-
   if (workItem.status !== WorkItemStatus.HumanFeedback || !workItem.humanFeedbackReason) {
     return null;
   }
@@ -63,11 +51,7 @@ export function FeedbackBanner({
       </div>
       {prSnapshot && <PrView snapshot={prSnapshot} />}
       {prompt && (
-        <div
-          ref={promptRef}
-          className="markdown-container feedback-prompt"
-          style={{ maxHeight: promptMaxHeight }}
-        >
+        <div className="markdown-container feedback-prompt">
           <MarkdownRenderer content={prompt} />
         </div>
       )}
