@@ -361,8 +361,9 @@
   color: #cbd5e1;
 }
 
+/* max-height is set inline from the viewport (useViewportBoundedHeight) so the
+   prompt grows with its content but never pushes the action buttons off screen. */
 .feedback-prompt {
-  max-height: 20rem;
   overflow: auto;
 }
 
