@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { createClipboardKeyHandler } from "../utils/terminalClipboard";
+import { describeTerminalClose } from "../utils/terminalStatus";
 
 interface Props {
   /** Stable identity for this connection. Changing it tears down the socket and reconnects. */
@@ -36,6 +37,11 @@ export default function TerminalView({
   const termRef = useRef<Terminal | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  // Whether this socket ever reached the "open" state. Lets us tell a genuine
+  // failure to connect (never opened) apart from a connection that dropped
+  // after working for a while. Kept in a ref so the close handler reads the
+  // live value rather than the stale mount-time closure.
+  const openedRef = useRef(false);
   const [status, setStatus] = useState<"connecting" | "open" | "closed" | "error">("connecting");
   const [errorText, setErrorText] = useState<string>("");
 
@@ -63,12 +69,17 @@ export default function TerminalView({
     termRef.current = term;
     fitRef.current = fit;
 
+    openedRef.current = false;
     const ws = new WebSocket(buildWsUrl(term.cols, term.rows));
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
 
     ws.onopen = () => {
+      openedRef.current = true;
       setStatus("open");
+      // Clear any lingering message from a previous connection attempt so a
+      // successful (re)connect never leaves a stale error on screen.
+      setErrorText("");
       ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
     };
     ws.onmessage = (ev) => {
@@ -80,13 +91,13 @@ export default function TerminalView({
     };
     ws.onerror = () => {
       setStatus("error");
-      setErrorText(errorHint ?? "Connection error.");
+      setErrorText((prev) => prev || errorHint || "Connection error.");
     };
     ws.onclose = (ev) => {
       setStatus("closed");
-      if (ev.code !== 1000 && !errorText) {
-        setErrorText(ev.reason || `Connection closed (${ev.code}).`);
-      }
+      const message = describeTerminalClose(ev.code, openedRef.current, errorHint);
+      // Keep any message onerror already set; otherwise use the close message.
+      if (message) setErrorText((prev) => prev || message);
     };
 
     const dataDisposable = term.onData((data) => {

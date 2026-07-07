@@ -173,7 +173,10 @@ try
         app.UseStaticFiles();
     }
 
-    app.UseWebSockets();
+    // Send WebSocket keepalive (Ping) frames well inside the idle timeout of
+    // typical reverse proxies, so long-lived interactive terminals don't get
+    // torn down as idle and surface to the browser as an abnormal 1006 close.
+    app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
     app.UseMiddleware<AuthMiddleware>();
     app.UseRouting();
 
