@@ -255,6 +255,46 @@ describe("AI Providers page", () => {
     );
   });
 
+  test("selecting the copilot CLI-auth type hides connection fields and shows the login note", async () => {
+    const fetchMock = mockFetch(null);
+    // Initial load order: providers, supported types (incl. copilot), agents.
+    fetchMock
+      .mockReturnValueOnce(jsonResponse([]))
+      .mockReturnValueOnce(jsonResponse(["opencode", "pi", "claude-code", "copilot"]))
+      .mockReturnValueOnce(jsonResponse([]));
+
+    renderPage(fetchMock);
+
+    await waitFor(() => {
+      expect(screen.getByText("AI Providers")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("+ New Provider"));
+    await waitFor(() => {
+      expect(screen.getByText("New Provider")).toBeTruthy();
+    });
+
+    // Base URL / Model / API Key are shown until a CLI-auth type is picked.
+    expect(screen.getByLabelText("Base URL")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Type"), {
+      target: { value: "copilot" },
+    });
+
+    // CLI-auth: connection fields disappear, the login note takes their place.
+    expect(screen.queryByLabelText("Base URL")).toBeFalsy();
+    expect(screen.queryByLabelText("Model")).toBeFalsy();
+    expect(screen.queryByLabelText("API Key")).toBeFalsy();
+    expect(screen.getByText("/login")).toBeTruthy();
+    // The note is Copilot-specific rather than the Claude Code wording.
+    const note = screen.getByText(
+      (_, element) =>
+        element?.className === "ap-cli-note" &&
+        (element.textContent ?? "").includes("GitHub Copilot"),
+    );
+    expect(note).toBeTruthy();
+  });
+
   test("edit form pre-fills fields and calls update API on save", async () => {
     const providers = [
       {

@@ -391,10 +391,10 @@ public class ManagedAgentServiceTests : IDisposable
     }
 
     [Fact]
-    public void Catalog_manages_pi_opencode_and_claude_code()
+    public void Catalog_manages_pi_opencode_claude_code_and_copilot()
     {
         Assert.Equal(
-            ["pi", "opencode", "claude-code"],
+            ["pi", "opencode", "claude-code", "copilot"],
             ManagedAgentCatalog.All.Select(a => a.Key).ToArray());
 
         var claude = ManagedAgentCatalog.Find("claude-code");
@@ -402,6 +402,12 @@ public class ManagedAgentServiceTests : IDisposable
         Assert.Equal("@anthropic-ai/claude-code", claude!.NpmPackage);
         Assert.Equal("claude", claude.BinaryName);
         Assert.Equal("claude", claude.Command);
+
+        var copilot = ManagedAgentCatalog.Find("copilot");
+        Assert.NotNull(copilot);
+        Assert.Equal("@github/copilot", copilot!.NpmPackage);
+        Assert.Equal("copilot", copilot.BinaryName);
+        Assert.Equal("copilot", copilot.Command);
     }
 
     [Fact]

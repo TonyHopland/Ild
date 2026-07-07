@@ -178,7 +178,7 @@ Set as build args (e.g. in `.env` consumed by `docker compose build`):
 | `WITH_CHROME`     | Install Chrome in the ILD image                           |
 | `WITH_CERTS`      | Import `.crt` or `.pem` files from `certs/` at build time |
 
-The coding agents (Pi, OpenCode, Claude Code) are **not** baked into the image.
+The coding agents (Pi, OpenCode, Claude Code, GitHub Copilot) are **not** baked into the image.
 They install on demand onto the persistent `/data` volume and are updated there
 without rebuilding the image. `WITH_NODE` must be on, since those installs and
 version checks use Node/npm. The agent a configured AI provider needs is

@@ -54,8 +54,8 @@ The product should let a developer:
 ### AI Execution Model
 
 - AI nodes resolve an `IAgentAdapter` from the configured `AiProvider.Type`.
-- The currently supported provider types are `opencode`, `pi`, and `claude-code`.
-- All three providers are CLI-backed: the adapter spawns the provider's CLI inside the worktree and reads structured output.
+- The currently supported provider types are `opencode`, `pi`, `claude-code`, and `copilot`.
+- All providers are CLI-backed: the adapter spawns the provider's CLI inside the worktree and reads structured output.
 - The adapter, not the node executor, owns the provider-specific execution lifecycle.
 - Prompt templates remain single-field per AI node and support ILD placeholder expansion.
 - Session-aware adapters may persist and restore session snapshots across node visits.
