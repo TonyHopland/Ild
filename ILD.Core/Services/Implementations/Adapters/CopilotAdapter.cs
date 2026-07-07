@@ -91,8 +91,17 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
             string stderr;
             try
             {
-                stdout = await stdoutTask;
-                stderr = await stderrTask;
+                // Strip NUL bytes as the raw CLI stream is captured. Unlike the
+                // claude-code/opencode/pi adapters — which parse a JSON event
+                // stream and surface only clean assistant text — this adapter
+                // forwards copilot's raw terminal stdout/stderr verbatim, and a
+                // raw stream can carry a NUL (U+0000). A NUL cannot be stored in
+                // a PostgreSQL text/varchar column, so leaving it in the node's
+                // output/error makes the engine's persistence SaveChanges throw a
+                // DbUpdateException, crashing the run before its result is
+                // recorded. Removing it keeps every visible character intact.
+                stdout = StripNullChars(await stdoutTask);
+                stderr = StripNullChars(await stderrTask);
             }
             catch (OperationCanceledException)
             {
@@ -166,6 +175,15 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
         psi.ArgumentList.Add(renderedPrompt);
         return psi;
     }
+
+    /// <summary>
+    /// Remove the NUL (U+0000) character from captured CLI output. It is the one
+    /// character a PostgreSQL <c>text</c>/<c>varchar</c> column cannot store, so
+    /// it must never reach the node output/error the engine persists. Returns the
+    /// input unchanged when it holds no NUL (the common case).
+    /// </summary>
+    public static string StripNullChars(string value)
+        => value.IndexOf('\0') < 0 ? value : value.Replace("\0", string.Empty);
 
     private static async Task<string> ReadStreamAsync(
         StreamReader reader,

@@ -129,6 +129,48 @@ public class CopilotAdapterTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_strips_nul_bytes_from_output_so_it_is_db_safe()
+    {
+        // Regression: copilot forwards raw terminal stdout, which can carry a NUL
+        // (U+0000). A NUL cannot be stored in a PostgreSQL text column, so if it
+        // reaches the persisted node output the engine's SaveChanges throws a
+        // DbUpdateException and the run crashes before recording its result. The
+        // adapter must scrub NUL while keeping every visible character.
+        var worktreeDir = CreateWorktree();
+        var scriptPath = Path.Combine(worktreeDir, "fake-copilot.sh");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "printf 'clean line\\n'\n" +
+            "printf 'with\\0nul\\n'\n");
+        Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var adapter = new CopilotAdapter();
+            var ctx = BuildContext(binaryPath: scriptPath, worktreePath: worktreeDir);
+
+            var result = await adapter.ExecuteAsync(ctx);
+
+            Assert.True(result.Success);
+            Assert.NotNull(result.Output);
+            Assert.DoesNotContain('\0', result.Output!);
+            Assert.Equal("clean line\nwithnul", result.Output);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public void StripNullChars_removes_nul_and_leaves_clean_text_untouched()
+    {
+        Assert.Equal("abc", CopilotAdapter.StripNullChars("a\0b\0c"));
+        var clean = "no nul here";
+        Assert.Same(clean, CopilotAdapter.StripNullChars(clean));
+    }
+
+    [Fact]
     public async Task ExecuteAsync_fails_when_binary_exits_nonzero()
     {
         var worktreeDir = CreateWorktree();
