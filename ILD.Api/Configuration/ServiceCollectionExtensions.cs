@@ -102,6 +102,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IAgentAdapter, OpenCodeAdapter>();
         services.AddSingleton<IAgentAdapter, PiAdapter>();
         services.AddSingleton<IAgentAdapter, ClaudeCodeAdapter>();
+        services.AddSingleton<IAgentAdapter, CopilotAdapter>();
 
         services.AddHttpClient();
 

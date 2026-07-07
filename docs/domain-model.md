@@ -28,7 +28,7 @@ Loop templates are directed graphs built from these node types:
 
 ## AI execution model
 
-AI nodes resolve an `IAgentAdapter` from the configured `AiProvider.Type`. The currently registered provider types are **`opencode`**, **`pi`**, and **`claude-code`** — all three are CLI-backed: the adapter spawns the provider's CLI inside the worktree and reads its structured output. The adapter, not the node executor, owns the provider-specific execution lifecycle, including multi-turn loops and session handling.
+AI nodes resolve an `IAgentAdapter` from the configured `AiProvider.Type`. The currently registered provider types are **`opencode`**, **`pi`**, **`claude-code`**, and **`copilot`** — all are CLI-backed: the adapter spawns the provider's CLI inside the worktree and reads its structured output. The adapter, not the node executor, owns the provider-specific execution lifecycle, including multi-turn loops and session handling.
 
 Each AI node has a single `prompt` field. When first-turn and follow-up prompts need to differ, model that explicitly with an upstream `Prompt` node.
 
