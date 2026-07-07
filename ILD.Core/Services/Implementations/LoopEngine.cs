@@ -435,7 +435,7 @@ public sealed class LoopEngine : ILoopEngine
                 // and the run page shows RUNNING even though nothing will ever
                 // resume it. Park it for human review instead. (StuckRunWatchdog
                 // is the backstop for the exit paths this catch can't see.)
-                await TrySafe(() => MarkRunCrashedAsync(runId, ex.Message));
+                await TrySafe(() => MarkRunCrashedAsync(runId, DescribeException(ex)));
             }
             finally
             {
@@ -925,4 +925,28 @@ public sealed class LoopEngine : ILoopEngine
     }
 
     private static async Task TrySafe(Func<Task> f) { try { await f(); } catch { } }
+
+    /// <summary>
+    /// Flatten an exception and its inner-exception chain into a single
+    /// diagnostic line for the crashed run's <c>HumanFeedbackReason</c> and the
+    /// work-item conversation. EF Core's <c>DbUpdateException</c> carries only the
+    /// generic "An error occurred while saving the entity changes. See the inner
+    /// exception for details." message; the real cause — the database driver's
+    /// constraint/column violation — lives one level down. Surfacing the whole
+    /// chain turns an opaque crash reason into an actionable one without ILD.Core
+    /// having to reference any specific database provider's exception type. Blank
+    /// and consecutive-duplicate messages are dropped so the line stays readable.
+    /// </summary>
+    public static string DescribeException(Exception ex)
+    {
+        var messages = new List<string>();
+        for (Exception? e = ex; e is not null; e = e.InnerException)
+        {
+            var text = e.Message?.Trim();
+            if (!string.IsNullOrEmpty(text)
+                && (messages.Count == 0 || !string.Equals(messages[^1], text, StringComparison.Ordinal)))
+                messages.Add(text);
+        }
+        return messages.Count == 0 ? ex.GetType().Name : string.Join(" → ", messages);
+    }
 }
