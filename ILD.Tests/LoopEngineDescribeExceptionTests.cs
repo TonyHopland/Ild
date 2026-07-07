@@ -39,4 +39,28 @@ public class LoopEngineDescribeExceptionTests
 
         Assert.Equal(nameof(Exception), described);
     }
+
+    [Fact]
+    public void Truncate_caps_over_length_reasons_to_the_column_limit_with_an_ellipsis()
+    {
+        // A flattened inner-exception chain is unbounded, but HumanFeedbackReason
+        // is varchar(512). The crash handler must clamp before persisting or its
+        // own SaveChanges throws and the run is left stuck Running.
+        var over = new string('x', LoopEngine.MaxHumanFeedbackReasonLength + 100);
+
+        var clamped = LoopEngine.Truncate(over, LoopEngine.MaxHumanFeedbackReasonLength);
+
+        Assert.Equal(LoopEngine.MaxHumanFeedbackReasonLength, clamped.Length);
+        Assert.EndsWith("…", clamped);
+    }
+
+    [Fact]
+    public void Truncate_leaves_a_reason_within_the_limit_untouched()
+    {
+        var within = new string('x', LoopEngine.MaxHumanFeedbackReasonLength);
+
+        var result = LoopEngine.Truncate(within, LoopEngine.MaxHumanFeedbackReasonLength);
+
+        Assert.Same(within, result);
+    }
 }
