@@ -7,13 +7,32 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ILD.Core.Services.Implementations.Adapters;
 
 /// <summary>
-/// Runs GitHub's <c>copilot</c> CLI in headless (<c>--prompt</c>) mode.
+/// Runs GitHub's <c>copilot</c> CLI in headless (<c>-p</c>/<c>--prompt</c>) mode.
 /// Authentication is handled by the CLI itself: the user signs in once via the
 /// interactive <c>/login</c> command (a GitHub Copilot subscription), which
 /// stores credentials under <c>~/.copilot</c>. Like <see cref="ClaudeCodeAdapter"/>
 /// this adapter intentionally ignores <see cref="AiProvider.BaseUrl"/>,
 /// <see cref="AiProvider.ApiKey"/> and <see cref="AiProvider.Model"/> — those
 /// fields are not meaningful for subscription-based CLI auth.
+///
+/// The invocation follows GitHub's documented headless form
+/// (<c>copilot --allow-all-tools -p "…"</c>): <c>--allow-all-tools</c> is
+/// required for programmatic runs so the CLI never blocks on an interactive
+/// approval prompt, and each <c>--add-dir</c> trusts a directory for file access.
+/// Default output is plain text on stdout, which becomes the node's output.
+/// See https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference.
+///
+/// Two deliberate limitations versus <see cref="ClaudeCodeAdapter"/>:
+/// <list type="bullet">
+///   <item><b>Single-turn.</b> Each run is an independent one-shot; the CLI's
+///   <c>-p</c> mode does not surface a resumable session id on stdout, so ILD
+///   cannot persist/restore a session the way it does for claude-code/opencode/pi.
+///   Multi-turn loops re-send context via the prompt rather than resuming.</item>
+///   <item><b>Always all-tools.</b> <c>--allow-all-tools</c> is mandatory for
+///   headless use, so a Copilot provider runs unrestricted; the per-node tool
+///   allowlist (read/write/execute/ild) is not applied (Copilot is excluded from
+///   <see cref="ILD.Data.AiToolCatalog"/>'s default-agent set).</item>
+/// </list>
 /// </summary>
 public sealed class CopilotAdapter : CliAgentAdapterBase
 {
@@ -45,7 +64,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
             Process? proc;
             try
             {
-                proc = Process.Start(BuildRunProcessStartInfo(binaryPath, worktreePath, rendered, ctx.SessionId, ctx.AdditionalAllowedDirectories));
+                proc = Process.Start(BuildRunProcessStartInfo(binaryPath, worktreePath, rendered, ctx.AdditionalAllowedDirectories));
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
@@ -89,8 +108,10 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
                     : "[copilot] no assistant text response from model";
             }
 
+            // Single-turn: no session id is bound (see class remarks), so the
+            // result carries none and the run does not chain to a later --resume.
             return process.ExitCode == 0
-                ? NodeExecutionResult.Ok(response, rendered, ctx.SessionId, ctx.IncomingSessionId, AdapterUsageParser.Parse(stdout))
+                ? NodeExecutionResult.Ok(response, rendered)
                 : NodeExecutionResult.Fail($"exit={process.ExitCode} stderr={stderr}", response);
         }
         catch (Exception ex)
@@ -103,7 +124,6 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
         string binaryPath,
         string worktreePath,
         string renderedPrompt,
-        string? sessionId,
         IReadOnlyList<string>? additionalAllowedDirectories = null)
     {
         var psi = new ProcessStartInfo(binaryPath)
@@ -116,13 +136,11 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
             WorkingDirectory = worktreePath,
         };
 
-        // Disable ANSI colour so the captured stdout is the model's plain text.
-        psi.EnvironmentVariables["NO_COLOR"] = "1";
-
-        // Auto-approve tool use so the headless run isn't blocked on interactive
-        // confirmation prompts, and trust the worktree so file/command tools can
-        // operate inside it.
+        // Auto-approve tool use (mandatory for headless `-p` runs so the CLI
+        // never blocks on an interactive confirmation prompt) and drop ANSI
+        // colour so the captured stdout is the model's plain text.
         psi.ArgumentList.Add("--allow-all-tools");
+        psi.ArgumentList.Add("--no-color");
         psi.ArgumentList.Add("--add-dir");
         psi.ArgumentList.Add(worktreePath);
 
@@ -142,17 +160,9 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
             }
         }
 
-        // Continue a prior turn's session when one is bound, so multi-turn loops
-        // keep the agent's context.
-        if (!string.IsNullOrWhiteSpace(sessionId))
-        {
-            psi.ArgumentList.Add("--resume");
-            psi.ArgumentList.Add(sessionId);
-        }
-
-        // `--prompt` runs a single turn non-interactively and exits. Keep it last
-        // so the prompt text is unambiguously the option's value.
-        psi.ArgumentList.Add("--prompt");
+        // `-p` runs a single turn non-interactively and exits. Keep it last so
+        // the prompt text is unambiguously the option's value.
+        psi.ArgumentList.Add("-p");
         psi.ArgumentList.Add(renderedPrompt);
         return psi;
     }

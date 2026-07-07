@@ -149,26 +149,22 @@ public class CopilotAdapterTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_passes_resume_flag_when_session_id_is_set()
+    public async Task ExecuteAsync_does_not_bind_a_session_id()
     {
+        // Copilot's headless `-p` mode does not surface a resumable session id,
+        // so each run is single-turn and the result must carry no session id —
+        // otherwise AINodeExecutor/ChatService would try to chain a --resume that
+        // the adapter never emits (see class remarks).
         var worktreeDir = CreateWorktree();
-        var scriptPath = Path.Combine(worktreeDir, "args.sh");
-        File.WriteAllText(scriptPath, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n");
-        Process.Start("chmod", "+x " + scriptPath).WaitForExit();
-
         try
         {
             var adapter = new CopilotAdapter();
-            var ctx = BuildContext(
-                binaryPath: scriptPath,
-                worktreePath: worktreeDir,
-                sessionId: "resume-me-123");
+            var ctx = BuildContext(binaryPath: "/bin/true", worktreePath: worktreeDir);
 
             var result = await adapter.ExecuteAsync(ctx);
 
             Assert.True(result.Success);
-            Assert.Contains("--resume", result.Output);
-            Assert.Contains("resume-me-123", result.Output);
+            Assert.Null(result.SessionId);
         }
         finally
         {
@@ -182,32 +178,18 @@ public class CopilotAdapterTests
         var psi = CopilotAdapter.BuildRunProcessStartInfo(
             binaryPath: "copilot",
             worktreePath: "/tmp/wt",
-            renderedPrompt: "fix it",
-            sessionId: "abc");
+            renderedPrompt: "fix it");
 
         Assert.Equal("/tmp/wt", psi.WorkingDirectory);
         Assert.Equal(new[]
         {
             "--allow-all-tools",
+            "--no-color",
             "--add-dir",
             "/tmp/wt",
-            "--resume",
-            "abc",
-            "--prompt",
+            "-p",
             "fix it",
         }, psi.ArgumentList);
-    }
-
-    [Fact]
-    public void BuildRunProcessStartInfo_omits_resume_when_session_id_is_null()
-    {
-        var psi = CopilotAdapter.BuildRunProcessStartInfo(
-            binaryPath: "copilot",
-            worktreePath: "/tmp/wt",
-            renderedPrompt: "fix it",
-            sessionId: null);
-
-        Assert.DoesNotContain("--resume", psi.ArgumentList);
     }
 
     [Fact]
@@ -220,7 +202,6 @@ public class CopilotAdapterTests
             binaryPath: "copilot",
             worktreePath: "/tmp/wt",
             renderedPrompt: "fix it",
-            sessionId: null,
             additionalAllowedDirectories: new[] { "/tmp/wt", "/data/worktrees/wi-99" });
 
         var args = psi.ArgumentList.ToList();
@@ -243,7 +224,6 @@ public class CopilotAdapterTests
         string worktreePath,
         string prompt = "test prompt",
         string? config = null,
-        string? sessionId = null,
         Func<string, Task>? progressCallback = null)
     {
         var mergedConfig = config;
@@ -272,7 +252,6 @@ public class CopilotAdapterTests
                 null),
             ExecutionCount: 1,
             Cancel: CancellationToken.None,
-            ProgressCallback: progressCallback,
-            SessionId: sessionId);
+            ProgressCallback: progressCallback);
     }
 }
