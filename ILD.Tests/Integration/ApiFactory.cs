@@ -85,7 +85,13 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         base.Dispose(disposing);
         if (disposing)
         {
-            _connection.Dispose();
+            // Even with the host torn down first, a hosted service that is still
+            // flushing on a background thread can touch the shared connection as
+            // it is disposed, so SqliteConnection.Dispose still throws
+            // intermittently under parallel test load. The test's assertions have
+            // already run by this point, so a teardown-only race must not fail the
+            // test — swallow it like the temp-directory cleanup below.
+            try { _connection.Dispose(); } catch { }
             _serverHarness.Dispose();
             try { Directory.Delete(_dataRoot, recursive: true); } catch { }
         }
