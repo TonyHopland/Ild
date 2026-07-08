@@ -358,10 +358,35 @@ public class AppDbContext : DbContext
         }
     }
 
+    /// <summary>
+    /// Enforce the "a Running run has not completed" invariant at the save
+    /// boundary: <see cref="LoopRun.CompletedAt"/> is only ever stamped at a
+    /// terminal transition (Complete/Fail/Cancel/Crash), so a run that is
+    /// <see cref="LoopRunStatus.Running"/> while carrying a completion timestamp
+    /// is in the impossible "completed yet running" state — e.g. a retry/resume
+    /// that flipped a finished run back to Running without clearing the stamp.
+    /// Clearing it here, rather than only in each transition, makes the
+    /// contradiction unpersistable whatever code path produced it (see issue
+    /// #39). Mirrors <see cref="ScrubNullChars"/>: a single guard at the write
+    /// boundary is the backstop no individual caller can bypass.
+    /// </summary>
+    private void EnforceLoopRunInvariants()
+    {
+        foreach (var entry in ChangeTracker.Entries<LoopRun>())
+        {
+            if (entry.State != EntityState.Added && entry.State != EntityState.Modified)
+                continue;
+            var run = entry.Entity;
+            if (run.Status == LoopRunStatus.Running && run.CompletedAt is not null)
+                run.CompletedAt = null;
+        }
+    }
+
     public override int SaveChanges()
     {
         TouchUpdatedAt();
         ScrubNullChars();
+        EnforceLoopRunInvariants();
         return base.SaveChanges();
     }
 
@@ -369,6 +394,7 @@ public class AppDbContext : DbContext
     {
         TouchUpdatedAt();
         ScrubNullChars();
+        EnforceLoopRunInvariants();
         return base.SaveChanges(acceptAllChangesOnSuccess);
     }
 
@@ -376,6 +402,7 @@ public class AppDbContext : DbContext
     {
         TouchUpdatedAt();
         ScrubNullChars();
+        EnforceLoopRunInvariants();
         return base.SaveChangesAsync(cancellationToken);
     }
 
@@ -383,6 +410,7 @@ public class AppDbContext : DbContext
     {
         TouchUpdatedAt();
         ScrubNullChars();
+        EnforceLoopRunInvariants();
         return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
     }
 }

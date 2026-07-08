@@ -1,5 +1,6 @@
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
+using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
@@ -113,6 +114,21 @@ public sealed class StuckRunWatchdog : BackgroundService
             var lastTouched = run.UpdatedAt ?? run.StartedAt ?? run.CreatedAt;
             if (lastTouched > cutoff) continue;
 
+            // Self-heal the invalid "completed yet Running" state (issue #39): a
+            // run whose CompletedAt is set was already finalized at a terminal
+            // transition, but was left — or flipped back — to Running with no live
+            // driver (e.g. two AI nodes stuck Running). Re-driving would redo
+            // finished work; instead restore a terminal state, clear the orphaned
+            // Running nodes, and park the work item for review so it stops hanging
+            // in the Running column. The save-boundary guard prevents new runs from
+            // reaching this state; this recovers ones already stuck in it.
+            if (run.CompletedAt is not null)
+            {
+                await HealCompletedButRunningAsync(runStore, workItems, run);
+                recovered++;
+                continue;
+            }
+
             // Only recover a run whose work item the server still considers
             // Running. A run parked by the capacity gate (WaitingIld) leaves
             // the run row Running with no driver on purpose — its work item is
@@ -145,5 +161,27 @@ public sealed class StuckRunWatchdog : BackgroundService
 
         if (recovered > 0)
             _log.LogInformation("Stuck-run watchdog recovered {Count} orphaned run(s)", recovered);
+    }
+
+    /// <summary>
+    /// Restore a run stuck in the impossible "completed yet Running" state to a
+    /// terminal state: interrupt any orphaned Running nodes (collapsing the
+    /// invalid concurrent-running set to none), mark the run Failed while keeping
+    /// the completion timestamp it was finalized with, and park the work item for
+    /// human review so it leaves the Running column. See issue #39.
+    /// </summary>
+    private async Task HealCompletedButRunningAsync(ILoopRunStore runStore, IWorkItemManager workItems, LoopRun run)
+    {
+        _log.LogWarning(
+            "Reconciling run {RunId} (work item {WorkItemId}): Running with CompletedAt {CompletedAt:o} and no driver",
+            run.Id, run.WorkItemId, run.CompletedAt);
+
+        await runStore.InterruptRunningNodesAsync(run.Id);
+        run.Status = LoopRunStatus.Failed;
+        run.HumanFeedbackReason = HumanFeedbackReasons.RunCrashed;
+        await runStore.UpdateRunAsync(run);
+        await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+            reason: HumanFeedbackReasons.RunCrashed, humanFeedbackReason: HumanFeedbackReasons.RunCrashed,
+            currentLoopRunId: run.Id);
     }
 }

@@ -133,35 +133,23 @@ public sealed class LoopEngine : ILoopEngine
         _ = LaunchAsync(run.Id);
     }
 
-    public async Task ResumeRecoveredRunAsync(Guid runId)
+    public Task ResumeRecoveredRunAsync(Guid runId)
     {
-        // If a loop already owns this run, recovery must be a no-op: marking
-        // its in-flight nodes Interrupted (below) would corrupt a live
-        // execution, and relaunching is already blocked by the single-owner
-        // gate. This is what makes the periodic scheduler's WaitingForIld
-        // resume calls — and the stuck-run watchdog — safe to invoke against a
-        // run that may genuinely be mid-node.
+        // If a loop already owns this run, recovery must be a no-op: re-driving
+        // would corrupt a live execution, and relaunching is already blocked by
+        // the single-owner gate. This is what makes the periodic scheduler's
+        // WaitingForIld resume calls — and the stuck-run watchdog — safe to
+        // invoke against a run that may genuinely be mid-node.
         if (_runCts.ContainsKey(runId))
         {
             _logger.LogDebug("ResumeRecoveredRunAsync skipped for run {RunId}: already owned", runId);
-            return;
+            return Task.CompletedTask;
         }
-        using (var scope = _sp.CreateScope())
-        {
-            var store = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
-            var staleNodes = (await store.GetRunNodesAsync(runId))
-                .Where(rn => rn.Status == LoopRunNodeStatus.Running)
-                .ToList();
-            foreach (var rn in staleNodes)
-            {
-                rn.Status = LoopRunNodeStatus.Interrupted;
-                rn.CompletedAt = DateTime.UtcNow;
-                await store.UpdateRunNodeAsync(rn);
-                await _notifier.NodeStateChangedAsync(runId, rn.LoopNodeId,
-                    LoopRunNodeStatus.Running, LoopRunNodeStatus.Interrupted);
-            }
-        }
+        // Stale Running nodes left by the previous (dead) driver are interrupted
+        // by RunUntilParkAsync at the start of the drive this relaunch schedules,
+        // so recovery no longer needs to clear them here (issue #39).
         _ = LaunchAfterAwaitAsync(runId);
+        return Task.CompletedTask;
     }
 
     public async Task ResumeRunAsync(Guid runId)
@@ -467,6 +455,16 @@ public sealed class LoopEngine : ILoopEngine
         var loopRunStore = sp.GetRequiredService<ILoopRunStore>();
         var templateStore = sp.GetRequiredService<ILoopTemplateStore>();
         var edgeTraversalCount = await RebuildEdgeTraversalCountsAsync(loopRunStore, runId);
+
+        // Any LoopRunNode still marked Running as a new drive begins is stale: its
+        // executor died with the previous driver, and the single-owner gate in
+        // LaunchAsync guarantees this loop is now the sole driver. Clear them
+        // before executing so a re-drive (retry, halt-resume, signal, crash
+        // recovery) can never leave two nodes Running at once — the invalid
+        // concurrent-running state (issue #39). On a clean start there are none.
+        foreach (var stale in await loopRunStore.InterruptRunningNodesAsync(runId))
+            await _notifier.NodeStateChangedAsync(runId, stale.LoopNodeId,
+                LoopRunNodeStatus.Running, LoopRunNodeStatus.Interrupted);
 
         while (!ct.IsCancellationRequested)
         {

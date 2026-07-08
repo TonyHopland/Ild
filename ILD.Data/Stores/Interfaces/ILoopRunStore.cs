@@ -96,6 +96,17 @@ public interface ILoopRunStore
     Task CreateRunNodeAsync(LoopRunNode runNode);
     Task UpdateRunNodeAsync(LoopRunNode runNode);
     Task DeleteRunNodeAsync(Guid runNodeId);
+
+    /// <summary>
+    /// Transition every <see cref="LoopRunNodeStatus.Running"/> node of a run to
+    /// <see cref="LoopRunNodeStatus.Interrupted"/>, stamping <c>CompletedAt</c>,
+    /// and return the nodes that were changed. Enforces the "at most one Running
+    /// node per run" invariant at the two points a run's driver changes hands:
+    /// when a new driver (re)enters the loop and when the reconciler finalizes an
+    /// orphaned run. A run stopped cleanly has no Running node, so this is a no-op
+    /// on the happy path (see issue #39).
+    /// </summary>
+    Task<IReadOnlyList<LoopRunNode>> InterruptRunningNodesAsync(Guid runId);
     Task<LoopNode?> GetStartNodeAsync(Guid versionId);
     Task<IReadOnlyList<LoopNode>> GetNodesForVersionAsync(Guid versionId);
     Task<IReadOnlyList<LoopNodeEdge>> GetEdgesForNodeIdsAsync(IReadOnlyList<Guid> nodeIds);
