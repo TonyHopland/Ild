@@ -41,6 +41,15 @@ public sealed class LoopEngine : ILoopEngine
     /// own <c>SaveChanges</c> throws and the run is left stuck as Running.</summary>
     public const int MaxHumanFeedbackReasonLength = 512;
 
+    /// <summary>ANSI SGR sequence (bold cyan) that wraps the <c>[Ild: &lt;label&gt;]</c>
+    /// node transition marker so the xterm live view renders node hand-offs in a
+    /// distinct colour from ordinary output, making node changes easy to spot.</summary>
+    private const string NodeMarkerColor = "\u001b[1;36m";
+
+    /// <summary>ANSI SGR reset, closing <see cref="NodeMarkerColor"/> so only the
+    /// marker itself is coloured and the following output stays default-styled.</summary>
+    private const string AnsiReset = "\u001b[0m";
+
     public LoopEngine(
         IServiceProvider sp,
         INodeExecutorRegistry registry,
@@ -519,15 +528,16 @@ public sealed class LoopEngine : ILoopEngine
         // backs the mid-run replay and assigns the sequence number) before
         // broadcasting each chunk, so the live and backlog views stay in sync.
         // The first chunk a node emits is preceded by an `[Ild: <label>]`
-        // transition marker (styled like the adapters' `[tool: ...]` markers)
-        // so the live view makes the hand-off between nodes obvious.
+        // transition marker, wrapped in an ANSI colour (see NodeMarkerColor) so
+        // the live view renders node hand-offs in a distinct colour and the
+        // change between nodes is easy to spot.
         var headerEmitted = 0;
         var ctx = new NodeExecutionContext(run, node, sp, ct,
             async line =>
             {
                 if (Interlocked.Exchange(ref headerEmitted, 1) == 0)
                 {
-                    var header = $"\n[Ild: {NodeDisplayName(node)}]\n";
+                    var header = $"\n{NodeMarkerColor}[Ild: {NodeDisplayName(node)}]{AnsiReset}\n";
                     var headerSeq = _progressBuffer.Append(run.Id, header);
                     await _notifier.NodeProgressAsync(run.Id, node.Id, header, headerSeq);
                 }

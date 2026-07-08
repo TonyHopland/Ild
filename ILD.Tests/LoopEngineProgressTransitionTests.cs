@@ -7,11 +7,17 @@ namespace ILD.Tests;
 /// <summary>
 /// Covers the live-output transition markers: when a node starts emitting to
 /// the live stream the engine prefixes its first chunk with an
-/// <c>[Ild: &lt;label&gt;]</c> header, styled like the adapters' <c>[tool: ...]</c>
-/// markers, so the hand-off between nodes is visible in the live view.
+/// <c>[Ild: &lt;label&gt;]</c> header wrapped in an ANSI colour, so the hand-off
+/// between nodes is visible — and colour-distinct — in the live view.
 /// </summary>
 public class LoopEngineProgressTransitionTests
 {
+    // ANSI bold-cyan open / reset, mirroring LoopEngine's marker colouring.
+    private const string Color = "\u001b[1;36m";
+    private const string Reset = "\u001b[0m";
+
+    private static string Marker(string label) => $"\n{Color}[Ild: {label}]{Reset}\n";
+
     [Fact]
     public async Task First_live_chunk_of_a_node_is_prefixed_with_an_Ild_transition_marker()
     {
@@ -35,7 +41,7 @@ public class LoopEngineProgressTransitionTests
 
         var lines = notifier.ProgressLines;
         Assert.Equal(
-            new[] { "\n[Ild: Bootstrap]\n", "cloning repo\n", "ready\n", "\n[Ild: Wrap up]\n", "tidying\n" },
+            new[] { Marker("Bootstrap"), "cloning repo\n", "ready\n", Marker("Wrap up"), "tidying\n" },
             lines);
     }
 
@@ -62,8 +68,8 @@ public class LoopEngineProgressTransitionTests
 
         // Exactly one marker for the node that streamed, and none for the
         // Cleanup node that produced no live output.
-        Assert.Single(notifier.ProgressLines, l => l == "\n[Ild: Bootstrap]\n");
-        Assert.DoesNotContain("\n[Ild: Wrap up]\n", notifier.ProgressLines);
+        Assert.Single(notifier.ProgressLines, l => l == Marker("Bootstrap"));
+        Assert.DoesNotContain(Marker("Wrap up"), notifier.ProgressLines);
     }
 
     [Fact]
@@ -89,7 +95,40 @@ public class LoopEngineProgressTransitionTests
         h.SeedRun("s");
         await h.RunAsync();
 
-        Assert.Contains("\n[Ild: Start]\n", notifier.ProgressLines);
+        Assert.Contains(Marker("Start"), notifier.ProgressLines);
+    }
+
+    [Fact]
+    public async Task Transition_marker_is_wrapped_in_an_ansi_colour_while_ordinary_output_is_not()
+    {
+        var notifier = new RecordingRunNotifier();
+        using var h = new LoopEngineHarness(notifier);
+        h.AddNode("s", NodeType.Start, label: "Bootstrap");
+        h.AddNode("c", NodeType.Cleanup, label: "Wrap up");
+        h.AddEdge("s", "c", EdgeType.OnSuccess);
+
+        h.Registry.Register(new ProgressEmittingExecutor(NodeType.Start,
+            new[] { "cloning repo\n" },
+            new NodeOutcome.NodeStarting("start"),
+            new NodeOutcome.Success(EdgeType.OnSuccess, "ok")));
+        h.Registry.Register(new ProgressEmittingExecutor(NodeType.Cleanup,
+            System.Array.Empty<string>(),
+            new NodeOutcome.NodeStarting("cleanup"),
+            new NodeOutcome.Terminal("done")));
+
+        h.SeedRun("s");
+        await h.RunAsync();
+
+        // The marker carries the colour open + reset around the label...
+        var marker = Assert.Single(notifier.ProgressLines, l => l.Contains("[Ild: Bootstrap]"));
+        Assert.StartsWith($"\n{Color}", marker);
+        Assert.EndsWith($"{Reset}\n", marker);
+        // ...while ordinary streamed output stays uncoloured: only the marker
+        // lines carry the colour code, never the node's own output.
+        Assert.Contains("cloning repo\n", notifier.ProgressLines);
+        Assert.All(
+            notifier.ProgressLines.Where(l => l.Contains(Color)),
+            l => Assert.Contains("[Ild: ", l));
     }
 }
 
