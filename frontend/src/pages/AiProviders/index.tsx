@@ -93,9 +93,13 @@ export default function AiProviders() {
   };
 
   // Provider types whose auth is handled by the CLI itself (e.g. claude-code
-  // logs in via the `/login` slash command inside its TUI and stores creds in
-  // ~/.claude), so the BaseUrl / API key / model fields are not applicable.
-  const isCliAuthProvider = (t: string) => t === "claude-code";
+  // and copilot log in via the `/login` slash command inside their TUI and store
+  // creds under ~/.claude / ~/.copilot), so the BaseUrl / API key / model fields
+  // are not applicable.
+  const isCliAuthProvider = (t: string) => t === "claude-code" || t === "copilot";
+
+  // Human-facing CLI name for a CLI-auth provider type, used in the login note.
+  const cliAuthLabel = (t: string) => (t === "copilot" ? "GitHub Copilot" : "Claude Code");
 
   const handleSetDefault = async (provider: AiProvider) => {
     await aiProviderService.setDefault(provider.id);
@@ -222,8 +226,8 @@ export default function AiProviders() {
                       </span>
                     </div>
                     <p className="ap-popover-note">
-                      Pi, OpenCode and Claude Code live on the persistent <code>/data</code> volume
-                      and update on demand.
+                      Pi, OpenCode, Claude Code and GitHub Copilot live on the persistent{" "}
+                      <code>/data</code> volume and update on demand.
                     </p>
                     <div className="ap-agent-list">{agents.map(renderAgentRow)}</div>
                   </div>
@@ -350,12 +354,13 @@ export default function AiProviders() {
               </div>
               {isCliAuthProvider(type) ? (
                 <div className="ap-cli-note">
-                  This provider type authenticates via the locally-installed Claude Code CLI. The
-                  first time you set it up, save the provider and then use{" "}
-                  <strong>Open terminal</strong> to launch the Claude Code TUI. Inside it, run the{" "}
-                  <code>/login</code> slash command to sign in (use a Max subscription). Until you
-                  complete that one-time login, this provider will not work. Base URL, API key and
-                  model are configured by the CLI itself and are not needed here.
+                  This provider type authenticates via the locally-installed {cliAuthLabel(type)}{" "}
+                  CLI. The first time you set it up, save the provider and then use{" "}
+                  <strong>Open terminal</strong> to launch the {cliAuthLabel(type)} TUI. Inside it,
+                  run the <code>/login</code> slash command to sign in (with an active{" "}
+                  {cliAuthLabel(type)} subscription). Until you complete that one-time login, this
+                  provider will not work. Base URL, API key and model are configured by the CLI
+                  itself and are not needed here.
                 </div>
               ) : (
                 <>

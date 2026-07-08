@@ -33,6 +33,14 @@ public sealed class LoopEngine : ILoopEngine
     /// in-memory per run on a per-edge basis.</summary>
     public const int DefaultMaxEdgeTraversals = 50;
 
+    /// <summary>Upper bound for a crash/fail reason persisted to
+    /// <c>LoopRun.HumanFeedbackReason</c>, whose column is <c>varchar(512)</c>
+    /// (see <see cref="LoopRun.HumanFeedbackReason"/>'s <c>[MaxLength(512)]</c>).
+    /// A reason longer than this — e.g. a flattened inner-exception chain — must
+    /// be truncated before it reaches the store, otherwise the crash handler's
+    /// own <c>SaveChanges</c> throws and the run is left stuck as Running.</summary>
+    public const int MaxHumanFeedbackReasonLength = 512;
+
     /// <summary>ANSI SGR sequence (bold cyan) that wraps the <c>[Ild: &lt;label&gt;]</c>
     /// node transition marker so the xterm live view renders node hand-offs in a
     /// distinct colour from ordinary output, making node changes easy to spot.</summary>
@@ -444,7 +452,7 @@ public sealed class LoopEngine : ILoopEngine
                 // and the run page shows RUNNING even though nothing will ever
                 // resume it. Park it for human review instead. (StuckRunWatchdog
                 // is the backstop for the exit paths this catch can't see.)
-                await TrySafe(() => MarkRunCrashedAsync(runId, ex.Message));
+                await TrySafe(() => MarkRunCrashedAsync(runId, DescribeException(ex)));
             }
             finally
             {
@@ -922,6 +930,12 @@ public sealed class LoopEngine : ILoopEngine
         var run = await store.GetByIdAsync(runId);
         if (run is null || run.Status != LoopRunStatus.Running) return;
 
+        // Clamp before persisting: a flattened inner-exception chain is unbounded,
+        // but HumanFeedbackReason is varchar(512). An over-length reason would make
+        // this handler's own UpdateRunAsync SaveChanges throw — swallowed by the
+        // caller's TrySafe — leaving the run stuck Running and never parked.
+        reason = Truncate(reason, MaxHumanFeedbackReasonLength);
+
         var workItems = sp.GetRequiredService<IWorkItemManager>();
         var old = run.Status;
         run.Status = LoopRunStatus.Failed;
@@ -935,4 +949,36 @@ public sealed class LoopEngine : ILoopEngine
     }
 
     private static async Task TrySafe(Func<Task> f) { try { await f(); } catch { } }
+
+    /// <summary>
+    /// Cap <paramref name="value"/> at <paramref name="max"/> characters, marking
+    /// a cut with a trailing ellipsis so the truncation is visible. Returns the
+    /// input unchanged when it already fits.
+    /// </summary>
+    public static string Truncate(string value, int max)
+        => value.Length <= max ? value : value[..(max - 1)] + "…";
+
+    /// <summary>
+    /// Flatten an exception and its inner-exception chain into a single
+    /// diagnostic line for the crashed run's <c>HumanFeedbackReason</c> and the
+    /// work-item conversation. EF Core's <c>DbUpdateException</c> carries only the
+    /// generic "An error occurred while saving the entity changes. See the inner
+    /// exception for details." message; the real cause — the database driver's
+    /// constraint/column violation — lives one level down. Surfacing the whole
+    /// chain turns an opaque crash reason into an actionable one without ILD.Core
+    /// having to reference any specific database provider's exception type. Blank
+    /// and consecutive-duplicate messages are dropped so the line stays readable.
+    /// </summary>
+    public static string DescribeException(Exception ex)
+    {
+        var messages = new List<string>();
+        for (Exception? e = ex; e is not null; e = e.InnerException)
+        {
+            var text = e.Message?.Trim();
+            if (!string.IsNullOrEmpty(text)
+                && (messages.Count == 0 || !string.Equals(messages[^1], text, StringComparison.Ordinal)))
+                messages.Add(text);
+        }
+        return messages.Count == 0 ? ex.GetType().Name : string.Join(" → ", messages);
+    }
 }

@@ -16,7 +16,7 @@ RUNTIME_DIRS="${RUNTIME_DIRS:-/data /worktrees /home/ild/.agent-config}"
 # project state) is the canonical example: without it, even a valid
 # .claude/.credentials.json reads as logged-out.
 AGENT_CONFIG_STORE="${AGENT_CONFIG_STORE:-/home/ild/.agent-config}"
-AGENT_CONFIG_DIRS="${AGENT_CONFIG_DIRS:-.claude .opencode .pi}"
+AGENT_CONFIG_DIRS="${AGENT_CONFIG_DIRS:-.claude .opencode .pi .copilot}"
 AGENT_CONFIG_FILES="${AGENT_CONFIG_FILES:-.claude.json}"
 
 ensure_owned_by_runtime_user() {

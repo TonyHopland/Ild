@@ -4,7 +4,7 @@
 
 ILD is a containerized development orchestration system built around shared work items, loop templates, per-run git worktrees, and adapter-driven AI execution. A local ILD instance owns loop execution, repository operations, previews, and the realtime UI; a standalone WorkItem Server owns the work-item source of truth so multiple ILD instances can coordinate safely.
 
-Work flows through a taskboard and resolves via versioned, visual loop templates made of `Start`, `Cmd`, `AI`, `Human`, `Prompt`, `PR`, and `Cleanup` nodes. AI nodes are adapter-based and run external agent CLIs — currently `opencode`, `pi`, and `claude-code` — inside the worktree.
+Work flows through a taskboard and resolves via versioned, visual loop templates made of `Start`, `Cmd`, `AI`, `Human`, `Prompt`, `PR`, and `Cleanup` nodes. AI nodes are adapter-based and run external agent CLIs — currently `opencode`, `pi`, `claude-code`, and `copilot` — inside the worktree.
 
 ## What ILD does
 
@@ -12,7 +12,7 @@ Work flows through a taskboard and resolves via versioned, visual loop templates
 - A taskboard UI covering `Backlog`, `WorkQueue`, `Ready`, `Running`, `HumanFeedback`, `WaitingForIld`, and `Done`.
 - Visual, versioned loop-template editing and execution with retries, `OnFailure` routing, pause/resume, crash recovery, and startup reconciliation.
 - Manual starts from the UI and automatic claiming via background polling.
-- Adapter-driven AI execution across the `opencode`, `pi`, and `claude-code` provider types.
+- Adapter-driven AI execution across the `opencode`, `pi`, `claude-code`, and `copilot` provider types.
 - QA preview orchestration for active worktrees, and realtime updates over SignalR for run events, work-item changes, and node progress.
 
 ## Quickstart

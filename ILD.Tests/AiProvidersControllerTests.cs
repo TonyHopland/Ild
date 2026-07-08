@@ -27,7 +27,7 @@ public class AiProvidersControllerTests : IDisposable
         var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(_conn).Options;
         _db = new AppDbContext(options);
         _db.Database.EnsureCreated();
-        _registry.Setup(r => r.GetAllSupportedProviderTypes()).Returns(["opencode", "pi", "claude-code"]);
+        _registry.Setup(r => r.GetAllSupportedProviderTypes()).Returns(["opencode", "pi", "claude-code", "copilot"]);
     }
 
     public void Dispose()
@@ -169,6 +169,24 @@ public class AiProvidersControllerTests : IDisposable
         var created = Assert.IsType<CreatedAtActionResult>(result);
         var json = System.Text.Json.JsonSerializer.Serialize(created.Value);
         Assert.Contains("claude-code", json);
+    }
+
+    [Fact]
+    public async Task Create_accepts_copilot_with_empty_url_and_model()
+    {
+        var controller = CreateController();
+
+        var result = await controller.Create(new AiProviderDto
+        {
+            Name = "copilot-sub",
+            Type = "copilot",
+            BaseUrl = string.Empty,
+            Model = string.Empty,
+        });
+
+        var created = Assert.IsType<CreatedAtActionResult>(result);
+        var json = System.Text.Json.JsonSerializer.Serialize(created.Value);
+        Assert.Contains("copilot", json);
     }
 
     [Fact]

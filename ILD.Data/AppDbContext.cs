@@ -335,27 +335,54 @@ public class AppDbContext : DbContext
         }
     }
 
+    /// <summary>
+    /// Strip the NUL (U+0000) character from every string property being written.
+    /// NUL is the one character a PostgreSQL <c>text</c>/<c>varchar</c> column
+    /// cannot store, so a value carrying it — e.g. a coding-agent CLI's raw
+    /// terminal output forwarded verbatim — makes <c>SaveChanges</c> throw a
+    /// <c>DbUpdateException</c> and crashes the run before its result is recorded.
+    /// Scrubbing at the save boundary is the backstop that keeps any single bad
+    /// value from taking down a save, regardless of which code path produced it.
+    /// </summary>
+    private void ScrubNullChars()
+    {
+        foreach (var entry in ChangeTracker.Entries())
+        {
+            if (entry.State != EntityState.Added && entry.State != EntityState.Modified)
+                continue;
+            foreach (var property in entry.Properties)
+            {
+                if (property.CurrentValue is string value && value.IndexOf('\0') >= 0)
+                    property.CurrentValue = value.Replace("\0", string.Empty);
+            }
+        }
+    }
+
     public override int SaveChanges()
     {
         TouchUpdatedAt();
+        ScrubNullChars();
         return base.SaveChanges();
     }
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
         TouchUpdatedAt();
+        ScrubNullChars();
         return base.SaveChanges(acceptAllChangesOnSuccess);
     }
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
         TouchUpdatedAt();
+        ScrubNullChars();
         return base.SaveChangesAsync(cancellationToken);
     }
 
     public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
     {
         TouchUpdatedAt();
+        ScrubNullChars();
         return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
     }
 }

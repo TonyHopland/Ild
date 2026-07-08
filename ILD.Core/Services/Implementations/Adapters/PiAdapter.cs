@@ -594,7 +594,14 @@ public sealed class PiAdapter : CliAgentAdapterBase
         {
             ["baseUrl"] = provider.BaseUrl,
             ["api"] = api,
-            ["apiKey"] = string.IsNullOrWhiteSpace(apiKey) ? "ild" : apiKeyEnvironmentVariableName,
+            // Pi treats a plain uppercase apiKey (e.g. "ILD_PI_PROVIDER_API_KEY")
+            // as a *literal* key; a "$"-prefix tells it to interpolate the named
+            // environment variable instead. We set that env var to the real key
+            // in BuildRunProcessStartInfo, so reference it with "$" — otherwise
+            // Pi sends the literal variable name as the credential and the
+            // backend (e.g. vLLM) rejects it with 401. The "ild" literal mirrors
+            // Pi's own "apiKey": "ollama" placeholder for keyless backends.
+            ["apiKey"] = string.IsNullOrWhiteSpace(apiKey) ? "ild" : "$" + apiKeyEnvironmentVariableName,
             ["models"] = new JsonArray
             {
                 new JsonObject

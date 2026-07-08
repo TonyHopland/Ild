@@ -40,11 +40,12 @@ public class AiProvidersController : ControllerBase
     /// <summary>
     /// Provider types whose authentication is handled by the CLI itself
     /// (e.g. <c>claude-code</c> uses the Max-subscription session stored in
-    /// <c>~/.claude</c>). For these we do not require BaseUrl, ApiKey or
-    /// Model on the AiProvider record.
+    /// <c>~/.claude</c>, and <c>copilot</c> uses the GitHub Copilot session
+    /// stored in <c>~/.copilot</c>). For these we do not require BaseUrl, ApiKey
+    /// or Model on the AiProvider record.
     /// </summary>
     private static readonly HashSet<string> CliAuthProviderTypes =
-        new(StringComparer.OrdinalIgnoreCase) { "claude-code" };
+        new(StringComparer.OrdinalIgnoreCase) { "claude-code", "copilot" };
 
     private static string? ValidateConnectionFields(AiProviderDto request)
     {
