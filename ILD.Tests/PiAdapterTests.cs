@@ -522,6 +522,68 @@ public class PiAdapterTests
         }
     }
 
+    [Fact]
+    public async Task ExecuteAsync_writes_models_json_that_interpolates_api_key_env_var()
+    {
+        var runId = Guid.NewGuid();
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-pi-modelskey-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "pi.sh");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "cat >/dev/null\n" +
+            "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-session-modelskey\",\"cwd\":\"$PWD\"}'\n" +
+            "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ok\"}]}}'\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var result = await new PiAdapter().ExecuteAsync(new AgentExecutionContext(
+                Provider: new AiProvider
+                {
+                    Name = "vllm-provider",
+                    Type = "pi",
+                    // Absolute BaseUrl takes the custom-provider path that writes models.json.
+                    BaseUrl = "http://localhost:8000/v1",
+                    ApiKey = "sk-secret",
+                    Model = "openai/my-model",
+                    Config = JsonSerializer.Serialize(new { binaryPath = scriptPath }),
+                },
+                Prompt: "test prompt",
+                RunContext: new LoopRunContext(
+                    runId,
+                    Guid.NewGuid().ToString(),
+                    "Test Task",
+                    "Test description",
+                    worktreeDir,
+                    "main",
+                    new List<string>(),
+                    null),
+                ExecutionCount: 1,
+                Cancel: CancellationToken.None));
+
+            Assert.True(result.Success);
+
+            var modelsJsonPath = Path.Combine(
+                Path.GetTempPath(), "ild-pi-agent", runId.ToString("N"), "models.json");
+            Assert.True(File.Exists(modelsJsonPath));
+            var modelsJson = await File.ReadAllTextAsync(modelsJsonPath);
+
+            // Pi interpolates env vars only when the value is "$"-prefixed; a bare
+            // uppercase name is treated as a literal key and would 401 against vLLM.
+            Assert.Contains("\"apiKey\": \"$ILD_PI_PROVIDER_API_KEY\"", modelsJson);
+            // The real secret must never be baked into the config file itself.
+            Assert.DoesNotContain("sk-secret", modelsJson);
+        }
+        finally
+        {
+            var agentDir = Path.Combine(Path.GetTempPath(), "ild-pi-agent", runId.ToString("N"));
+            if (Directory.Exists(agentDir))
+                Directory.Delete(agentDir, true);
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
     private static AgentExecutionContext BuildContext(
         string binaryPath,
         int executionCount,
