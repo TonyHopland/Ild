@@ -169,6 +169,43 @@ public class StuckRunWatchdogTests
         db.Dispose();
     }
 
+    [Fact]
+    public async Task A_failing_reconcile_does_not_abort_the_sweep_for_other_runs()
+    {
+        // A throw while healing one completed-yet-Running run must not strand the
+        // other orphaned runs in the same sweep (Copilot review on PR #69).
+        var db = new TestDb();
+        var (version, _) = SeedTemplate(db);
+
+        // Stuck run whose heal throws (its work-item transition blows up).
+        var stuck = SeedRun(db, version.Id, LoopRunStatus.Running,
+            updatedAt: DateTime.UtcNow.AddMinutes(-10));
+        await db.Fresh().LoopRuns.Where(r => r.Id == stuck.Id)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.CompletedAt, DateTime.UtcNow.AddMinutes(-9)));
+
+        // A healthy orphan that must still be recovered.
+        var orphan = SeedRun(db, version.Id, LoopRunStatus.Running,
+            updatedAt: DateTime.UtcNow.AddMinutes(-10));
+
+        var engine = EngineWithActiveRuns(/* none */);
+        var recovery = RecoveryReturning(true);
+        var workItems = new Mock<IWorkItemManager>();
+        workItems.Setup(x => x.GetWorkItemAsync(It.IsAny<string>()))
+            .ReturnsAsync((string id) => new WorkItemView { Id = id, Status = RemoteWorkItemStatus.Running });
+        workItems.Setup(x => x.TransitionAsync(stuck.WorkItemId, It.IsAny<RemoteWorkItemStatus>(),
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ThrowsAsync(new InvalidOperationException("transition failed"));
+
+        var watchdog = BuildWatchdog(new LoopRunStore(db.Fresh()), engine.Object, recovery.Object, workItems.Object);
+
+        // The sweep completes despite the heal throwing, and the healthy orphan is
+        // still recovered.
+        await InvokeSweepOnceAsync(watchdog);
+        recovery.Verify(r => r.RecoverRunAsync(orphan.Id), Times.Once);
+
+        db.Dispose();
+    }
+
     private static (LoopTemplateVersion version, LoopTemplate template) SeedTemplate(TestDb db)
     {
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume };

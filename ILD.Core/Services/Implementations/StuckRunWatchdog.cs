@@ -124,8 +124,18 @@ public sealed class StuckRunWatchdog : BackgroundService
             // reaching this state; this recovers ones already stuck in it.
             if (run.CompletedAt is not null)
             {
-                await HealCompletedButRunningAsync(runStore, workItems, run);
-                recovered++;
+                // Guard per run, like the RecoverRunAsync path below: a throw from
+                // the interrupt/update/transition here must not abort the sweep and
+                // strand the other orphaned runs until the next interval.
+                try
+                {
+                    await HealCompletedButRunningAsync(runStore, workItems, run);
+                    recovered++;
+                }
+                catch (Exception ex)
+                {
+                    _log.LogError(ex, "Failed to reconcile completed-yet-Running run {RunId}", run.Id);
+                }
                 continue;
             }
 
