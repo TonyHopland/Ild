@@ -3,7 +3,9 @@ using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -122,6 +124,88 @@ public class StuckRunWatchdogTests
         recovery.Verify(r => r.RecoverRunAsync(It.IsAny<Guid>()), Times.Never);
     }
 
+    [Fact]
+    public async Task Reconciles_run_stuck_Running_with_completedAt_and_multiple_running_nodes()
+    {
+        // The issue #39 invalid state: a run finalized (CompletedAt stamped) but
+        // left Running, with two AI nodes stuck Running and no live driver. The
+        // watchdog must finalize it — not re-drive it — and unstick the work item.
+        var db = new TestDb();
+        var (version, _) = SeedTemplate(db);
+        var run = SeedRun(db, version.Id, LoopRunStatus.Running,
+            updatedAt: DateTime.UtcNow.AddMinutes(-10));
+        SeedRunNode(db, version.Id, run.Id, LoopRunNodeStatus.Running);
+        SeedRunNode(db, version.Id, run.Id, LoopRunNodeStatus.Running);
+
+        // Write CompletedAt directly: the save-boundary guard strips it from a
+        // Running run, so an ExecuteUpdate reproduces the already-stuck row.
+        var completedAt = DateTime.UtcNow.AddMinutes(-9);
+        await db.Fresh().LoopRuns.Where(r => r.Id == run.Id)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.CompletedAt, completedAt));
+
+        var engine = EngineWithActiveRuns(/* none */);
+        var recovery = RecoveryReturning(true);
+        var workItems = WorkItemsReturning(RemoteWorkItemStatus.Running);
+
+        // A dedicated store over a fresh context so the watchdog's read reflects
+        // the row's DB state, not the seeding context's tracked (CompletedAt-less)
+        // instance.
+        var watchdog = BuildWatchdog(new LoopRunStore(db.Fresh()), engine.Object, recovery.Object, workItems.Object);
+        await InvokeSweepOnceAsync(watchdog);
+
+        // Finalized, not re-driven.
+        recovery.Verify(r => r.RecoverRunAsync(It.IsAny<Guid>()), Times.Never);
+        workItems.Verify(w => w.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Once);
+
+        var healed = db.Fresh().LoopRuns.AsNoTracking().First(r => r.Id == run.Id);
+        Assert.Equal(LoopRunStatus.Failed, healed.Status);
+        Assert.NotNull(healed.CompletedAt); // the finish time is preserved
+
+        var nodes = db.Fresh().LoopRunNodes.AsNoTracking().Where(n => n.LoopRunId == run.Id).ToList();
+        Assert.Equal(2, nodes.Count);
+        Assert.All(nodes, n => Assert.Equal(LoopRunNodeStatus.Interrupted, n.Status));
+
+        db.Dispose();
+    }
+
+    [Fact]
+    public async Task A_failing_reconcile_does_not_abort_the_sweep_for_other_runs()
+    {
+        // A throw while healing one completed-yet-Running run must not strand the
+        // other orphaned runs in the same sweep (Copilot review on PR #69).
+        var db = new TestDb();
+        var (version, _) = SeedTemplate(db);
+
+        // Stuck run whose heal throws (its work-item transition blows up).
+        var stuck = SeedRun(db, version.Id, LoopRunStatus.Running,
+            updatedAt: DateTime.UtcNow.AddMinutes(-10));
+        await db.Fresh().LoopRuns.Where(r => r.Id == stuck.Id)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.CompletedAt, DateTime.UtcNow.AddMinutes(-9)));
+
+        // A healthy orphan that must still be recovered.
+        var orphan = SeedRun(db, version.Id, LoopRunStatus.Running,
+            updatedAt: DateTime.UtcNow.AddMinutes(-10));
+
+        var engine = EngineWithActiveRuns(/* none */);
+        var recovery = RecoveryReturning(true);
+        var workItems = new Mock<IWorkItemManager>();
+        workItems.Setup(x => x.GetWorkItemAsync(It.IsAny<string>()))
+            .ReturnsAsync((string id) => new WorkItemView { Id = id, Status = RemoteWorkItemStatus.Running });
+        workItems.Setup(x => x.TransitionAsync(stuck.WorkItemId, It.IsAny<RemoteWorkItemStatus>(),
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ThrowsAsync(new InvalidOperationException("transition failed"));
+
+        var watchdog = BuildWatchdog(new LoopRunStore(db.Fresh()), engine.Object, recovery.Object, workItems.Object);
+
+        // The sweep completes despite the heal throwing, and the healthy orphan is
+        // still recovered.
+        await InvokeSweepOnceAsync(watchdog);
+        recovery.Verify(r => r.RecoverRunAsync(orphan.Id), Times.Once);
+
+        db.Dispose();
+    }
+
     private static (LoopTemplateVersion version, LoopTemplate template) SeedTemplate(TestDb db)
     {
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume };
@@ -176,10 +260,35 @@ public class StuckRunWatchdogTests
         return m;
     }
 
+    private static LoopRunNode SeedRunNode(TestDb db, Guid versionId, Guid runId, LoopRunNodeStatus status)
+    {
+        var node = new LoopNode
+        {
+            Id = Guid.NewGuid(),
+            LoopTemplateVersionId = versionId,
+            NodeType = NodeType.AI,
+        };
+        db.Context.LoopNodes.Add(node);
+        var runNode = new LoopRunNode
+        {
+            Id = Guid.NewGuid(),
+            LoopRunId = runId,
+            LoopNodeId = node.Id,
+            Status = status,
+            StartedAt = DateTime.UtcNow.AddMinutes(-8),
+        };
+        db.Context.LoopRunNodes.Add(runNode);
+        db.Context.SaveChanges();
+        return runNode;
+    }
+
     private static StuckRunWatchdog BuildWatchdog(TestDb db, ILoopEngine engine, IRecoveryManager recovery, IWorkItemManager workItems)
+        => BuildWatchdog(db.LoopRuns, engine, recovery, workItems);
+
+    private static StuckRunWatchdog BuildWatchdog(ILoopRunStore runStore, ILoopEngine engine, IRecoveryManager recovery, IWorkItemManager workItems)
     {
         var services = new ServiceCollection();
-        services.AddSingleton<ILoopRunStore>(db.LoopRuns);
+        services.AddSingleton(runStore);
         services.AddSingleton(recovery);
         services.AddSingleton(workItems);
         var provider = services.BuildServiceProvider();

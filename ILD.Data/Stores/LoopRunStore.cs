@@ -270,6 +270,22 @@ public class LoopRunStore : ILoopRunStore
         await _db.SaveChangesAsync();
     }
 
+    public async Task<IReadOnlyList<LoopRunNode>> InterruptRunningNodesAsync(Guid runId)
+    {
+        var running = await _db.LoopRunNodes
+            .Where(rn => rn.LoopRunId == runId && rn.Status == LoopRunNodeStatus.Running)
+            .ToListAsync();
+        if (running.Count == 0) return running;
+        var now = DateTime.UtcNow;
+        foreach (var rn in running)
+        {
+            rn.Status = LoopRunNodeStatus.Interrupted;
+            rn.CompletedAt = now;
+        }
+        await _db.SaveChangesAsync();
+        return running;
+    }
+
     public async Task<LoopNode?> GetStartNodeAsync(Guid versionId)
         => await _db.LoopNodes.FirstOrDefaultAsync(n => n.LoopTemplateVersionId == versionId && n.NodeType == NodeType.Start);
 
