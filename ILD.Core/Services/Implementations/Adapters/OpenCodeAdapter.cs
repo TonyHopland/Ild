@@ -23,6 +23,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
 
     public override string Name => "OpenCode";
     public override string[] SupportedProviderTypes => ["opencode"];
+    public override ConfigFieldDescriptor[] ConfigSchema => [CustomMcpServersField];
 
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
@@ -661,21 +662,28 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             ["permission"] = BuildPermissions(enabled, grantExternalDirectory),
         };
 
-        // Inject the ILD MCP server entry so agents can list/create work items
-        // through the agent-scoped API. The opencode child process inherits its
-        // *own* config via OPENCODE_CONFIG_CONTENT, which means the user's
+        // Inject MCP server entries so agents can reach tools they otherwise
+        // couldn't: the ILD work-item API, plus any provider-scoped custom MCP
+        // servers. The opencode child process inherits its *own* config via
+        // OPENCODE_CONFIG_CONTENT, which means the user's
         // ~/.config/opencode/opencode.json (and any mcp entries it contains) is
-        // ignored — we have to add the entry here ourselves.
+        // ignored — we have to add every entry here ourselves.
+        var mcp = new Dictionary<string, object?>();
+
         var ildMcp = enabled.Contains(AiToolCatalog.Ild)
             ? BuildIldMcpEntry(runContext, chatSessionId)
             : null;
         if (ildMcp != null)
-        {
-            config["mcp"] = new Dictionary<string, object?>
-            {
-                ["ild"] = ildMcp,
-            };
-        }
+            mcp["ild"] = ildMcp;
+
+        // Provider-scoped custom MCP servers apply to every repo this provider
+        // runs in. The parser reserves the "ild" name, so these can never clobber
+        // the entry above.
+        foreach (var server in CustomMcpServers.Parse(AiProviderConfig.Parse(provider.Config).CustomMcpServersJson))
+            mcp[server.Name] = BuildCustomMcpEntry(server);
+
+        if (mcp.Count > 0)
+            config["mcp"] = mcp;
 
         var configJson = JsonSerializer.Serialize(config);
         var modelRef = $"{providerId}/{modelId}";
@@ -716,6 +724,30 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             ["command"] = new[] { "dotnet", dllPath },
             ["environment"] = IldMcpServer.BuildEnvironment(runContext, chatSessionId),
         };
+    }
+
+    /// <summary>
+    /// Format a normalized <see cref="CustomMcpServer"/> as an opencode
+    /// <c>mcp.&lt;name&gt;</c> entry:
+    /// <c>{ "type": "local", "command": [argv…], "environment": {…} }</c>.
+    /// opencode's <c>command</c> is the full argv array, so the server's command
+    /// tokens and args are concatenated. <c>environment</c> is omitted when empty.
+    /// </summary>
+    public static Dictionary<string, object?> BuildCustomMcpEntry(CustomMcpServer server)
+    {
+        var command = new List<string>(server.Command);
+        command.AddRange(server.Args);
+
+        var entry = new Dictionary<string, object?>
+        {
+            ["type"] = "local",
+            ["command"] = command.ToArray(),
+        };
+
+        if (server.Env.Count > 0)
+            entry["environment"] = server.Env.ToDictionary(kv => kv.Key, kv => (object?)kv.Value);
+
+        return entry;
     }
 
     /// <summary>

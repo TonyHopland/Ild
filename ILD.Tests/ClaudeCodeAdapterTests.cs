@@ -14,7 +14,8 @@ public class ClaudeCodeAdapterTests
 
         Assert.Equal("ClaudeCode", adapter.Name);
         Assert.Contains("claude-code", adapter.SupportedProviderTypes);
-        Assert.Empty(adapter.ConfigSchema);
+        var field = Assert.Single(adapter.ConfigSchema);
+        Assert.Equal("customMcpServersJson", field.Name);
     }
 
     [Fact]

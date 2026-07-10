@@ -37,6 +37,26 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     public abstract string[] SupportedProviderTypes { get; }
     public virtual ConfigFieldDescriptor[] ConfigSchema => Array.Empty<ConfigFieldDescriptor>();
 
+    /// <summary>
+    /// The generic "Custom MCP servers (JSON)" field shared by every MCP-capable
+    /// adapter (opencode, claude-code). Each such adapter surfaces it from its own
+    /// <see cref="ConfigSchema"/> so the value is persisted into
+    /// <c>AiProvider.Config</c> and injected alongside the built-in <c>ild</c>
+    /// server. Pi is intentionally excluded — it has no MCP support by design.
+    /// </summary>
+    protected static readonly ConfigFieldDescriptor CustomMcpServersField = new(
+        Name: "customMcpServersJson",
+        Type: ConfigFieldType.Textarea,
+        Label: "Custom MCP servers (JSON)",
+        Required: false,
+        DefaultValue: null,
+        Description: "Optional. A JSON object mapping a server name to its definition: "
+            + "{ \"name\": { \"command\": \"npx\" or [\"npx\", \"-y\", …], \"args\": [ … ], \"env\": { … } } }. "
+            + "command may be a string or an array of argv tokens; args and env are optional. "
+            + "These MCP servers are attached to the agent for every repository this provider runs in. "
+            + "Example: {\"chrome-devtools\": {\"command\": [\"npx\", \"-y\", \"chrome-devtools-mcp@latest\", \"--headless\", \"--isolated\", \"--no-sandbox\"]}}. "
+            + "Invalid JSON is ignored and never fails a run. The reserved name \"ild\" is ignored.");
+
     public abstract Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context);
 
     /// <summary>Render an AI-node prompt template against the run's placeholder context.</summary>

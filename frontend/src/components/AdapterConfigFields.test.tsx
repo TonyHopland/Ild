@@ -188,4 +188,35 @@ describe("AdapterConfigFields", () => {
 
     expect(handleChange).toHaveBeenCalledWith("enableTools", true);
   });
+
+  test("renders field descriptions as help text", () => {
+    render(<AdapterConfigFields schema={sampleSchema} values={{}} onChange={vi.fn()} />);
+
+    // Help text lets a schema like the "Custom MCP servers (JSON)" field explain
+    // its expected shape to the user.
+    expect(screen.getByText("Model identifier")).toBeTruthy();
+    expect(screen.getByText("A system prompt")).toBeTruthy();
+  });
+
+  test("round-trips a Textarea value through onChange", () => {
+    const handleChange = vi.fn();
+
+    render(
+      <AdapterConfigFields
+        schema={sampleSchema}
+        values={{ systemPrompt: "" }}
+        onChange={handleChange}
+      />,
+    );
+
+    const textarea = screen.getByLabelText("System Prompt");
+    fireEvent.change(textarea, {
+      target: { value: '{"chrome-devtools":{"command":["npx"]}}' },
+    });
+
+    expect(handleChange).toHaveBeenCalledWith(
+      "systemPrompt",
+      '{"chrome-devtools":{"command":["npx"]}}',
+    );
+  });
 });

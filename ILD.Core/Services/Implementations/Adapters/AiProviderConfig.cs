@@ -20,6 +20,14 @@ public sealed record AiProviderConfig
     public string? ApiKey { get; init; }
     public string? Api { get; init; }
 
+    /// <summary>
+    /// Raw JSON for the per-provider "Custom MCP servers (JSON)" field. Left as
+    /// an opaque string here — <see cref="CustomMcpServers.Parse"/> turns it into
+    /// normalized servers so a malformed value fails open rather than breaking
+    /// the whole provider config parse.
+    /// </summary>
+    public string? CustomMcpServersJson { get; init; }
+
     /// <summary>Parse a provider config blob. Returns an empty config when the JSON is null, blank, or malformed.</summary>
     public static AiProviderConfig Parse(string? json)
     {
@@ -44,6 +52,7 @@ public sealed record AiProviderConfig
         Model = Blank(Model),
         ApiKey = Blank(ApiKey),
         Api = Blank(Api),
+        CustomMcpServersJson = Blank(CustomMcpServersJson),
     };
 
     private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;

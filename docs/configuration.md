@@ -190,3 +190,59 @@ version, lets you trigger an install or update manually, and reports failures
 (e.g. the npm registry being unreachable).
 
 Toolchain versions are also configurable: `NODE_VERSION`, `DOTNET_VERSION`, `NODE_RUNTIME_VERSION`, and `DOTNET_SDK_CHANNEL`.
+
+## AI provider configuration
+
+Each AI provider stores a free-form JSON config blob (`AiProvider.Config`) that
+tunes the adapter it runs. Fields are schema-driven — every adapter advertises
+its own set — and apply to **every repository** that provider runs in, because
+the config lives on the provider, not in a target repo.
+
+### Custom MCP servers (JSON)
+
+The **OpenCode** and **Claude Code** adapters expose a `customMcpServersJson`
+field that attaches arbitrary [MCP](https://modelcontextprotocol.io) servers to
+the agent, on top of the built-in `ild` server. This lets you create provider
+variants that differ only by the tools they carry — e.g. a plain **OpenCode**
+provider and an **OpenCode w/chrome** provider whose agents can drive a headless
+browser for debugging and screenshots.
+
+The value is a JSON object mapping a server name to its definition:
+
+```json
+{
+  "chrome-devtools": {
+    "command": [
+      "npx",
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--headless",
+      "--isolated",
+      "--no-sandbox"
+    ]
+  }
+}
+```
+
+- `command` may be a single string or an array of argv tokens.
+- `args` (optional array) is appended after `command`.
+- `env` (optional object) becomes the server process's environment.
+
+Each adapter translates this into its own native shape (OpenCode's
+`{ "type": "local", "command": [...], "environment": {...} }` and Claude Code's
+`{ "command": ..., "args": [...], "env": {...} }`) and merges it alongside the
+`ild` entry. The name `ild` is reserved and any custom server using it is
+ignored, so it can never clobber the built-in server. For Claude Code the custom
+servers are injected even when the `ild` tool is disabled for the node.
+
+Invalid or partially-malformed JSON is ignored and **never fails an AI node
+run** — the parser fails open, keeping whatever well-formed servers it can and
+skipping the rest.
+
+The **Pi** adapter has no MCP support by design and does not expose this field.
+**GitHub Copilot** is not currently wired for MCP in ILD, so it does not expose
+it either.
+
+> The `chrome-devtools` example above requires Chrome in the ILD image
+> (`WITH_CHROME`, amd64 only) and Node/npm (`WITH_NODE`). `--no-sandbox` is
+> required because agents run as a non-root user.

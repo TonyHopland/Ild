@@ -20,7 +20,8 @@ public class OpenCodeAdapterTests
 
         Assert.Equal("OpenCode", adapter.Name);
         Assert.Contains("opencode", adapter.SupportedProviderTypes);
-        Assert.Empty(adapter.ConfigSchema);
+        var field = Assert.Single(adapter.ConfigSchema);
+        Assert.Equal("customMcpServersJson", field.Name);
     }
 
     [Fact]
@@ -504,6 +505,51 @@ public class OpenCodeAdapterTests
             Assert.Contains("\"mcp\"", result.Output);
             // No extra allowed dirs ⇒ external directory access stays denied.
             Assert.Contains("\"external_directory\":\"deny\"", result.Output);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_injects_provider_custom_mcp_servers_even_without_ild()
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-mcp-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
+        File.WriteAllText(scriptPath, "#!/bin/sh\nprintenv OPENCODE_CONFIG_CONTENT\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var adapter = new OpenCodeAdapter();
+            var result = await adapter.ExecuteAsync(new AgentExecutionContext(
+                Provider: new AiProvider
+                {
+                    Name = "test-provider",
+                    Type = "opencode",
+                    BaseUrl = "https://api.example.test/v1",
+                    Model = "gpt-5",
+                    Config = JsonSerializer.Serialize(new
+                    {
+                        binaryPath = scriptPath,
+                        customMcpServersJson = """
+                        { "chrome-devtools": { "command": ["npx", "-y", "chrome-devtools-mcp@latest", "--headless"] } }
+                        """,
+                    }),
+                },
+                Prompt: "prompt",
+                RunContext: new LoopRunContext(Guid.NewGuid(), Guid.NewGuid().ToString(), "Task", "Desc", worktreeDir, "main", new List<string>(), null),
+                ExecutionCount: 1,
+                Cancel: CancellationToken.None,
+                // Only "read" — no "ild". The custom server must still be injected.
+                ToolAllowlist: ["read"]));
+
+            Assert.True(result.Success);
+            Assert.Contains("\"chrome-devtools\"", result.Output);
+            Assert.Contains("chrome-devtools-mcp@latest", result.Output);
+            Assert.Contains("\"type\":\"local\"", result.Output);
         }
         finally
         {

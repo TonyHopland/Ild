@@ -32,6 +32,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
 
     public override string Name => "ClaudeCode";
     public override string[] SupportedProviderTypes => ["claude-code"];
+    public override ConfigFieldDescriptor[] ConfigSchema => [CustomMcpServersField];
 
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
@@ -240,26 +241,63 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     }
 
     /// <summary>
-    /// Serialize the ILD MCP config to a temp JSON file the caller can pass to
-    /// <c>claude --mcp-config</c>. Returns <c>null</c> when the <c>ild</c>
-    /// tool isn't in the allowlist, when no server DLL can be located, or when
-    /// the temp file can't be written.
+    /// Format a normalized <see cref="CustomMcpServer"/> as a Claude Code
+    /// <c>mcpServers.&lt;name&gt;</c> entry:
+    /// <c>{ "command": "npx", "args": [argv…], "env": {…} }</c>. Claude expects
+    /// a command string plus a separate args array, so the server's first command
+    /// token becomes <c>command</c> and the rest are prepended to its args.
+    /// <c>args</c>/<c>env</c> are omitted when empty.
+    /// </summary>
+    public static Dictionary<string, object?> BuildCustomMcpEntry(CustomMcpServer server)
+    {
+        var args = new List<string>(server.Command.Skip(1));
+        args.AddRange(server.Args);
+
+        var entry = new Dictionary<string, object?>
+        {
+            ["command"] = server.Command[0],
+        };
+
+        if (args.Count > 0)
+            entry["args"] = args.ToArray();
+
+        if (server.Env.Count > 0)
+            entry["env"] = server.Env.ToDictionary(kv => kv.Key, kv => (object?)kv.Value);
+
+        return entry;
+    }
+
+    /// <summary>
+    /// Serialize the MCP config to a temp JSON file the caller can pass to
+    /// <c>claude --mcp-config</c>. Merges the built-in <c>ild</c> server (only
+    /// when that tool is in the allowlist) with any provider-scoped custom MCP
+    /// servers, which apply for every repo this provider runs in and are written
+    /// even when <c>ild</c> is disabled. Returns <c>null</c> when there is nothing
+    /// to write (no ild entry and no custom servers) or the temp file can't be
+    /// written.
     /// </summary>
     public static string? TryWriteIldMcpConfig(AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? toolAllowlist, Guid? chatSessionId = null)
     {
-        var enabledKeys = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, toolAllowlist);
-        if (!enabledKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase))
-            return null;
+        var servers = new Dictionary<string, object?>();
 
-        var entry = BuildIldMcpEntry(runContext, chatSessionId);
-        if (entry == null) return null;
+        var enabledKeys = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, toolAllowlist);
+        if (enabledKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase))
+        {
+            var entry = BuildIldMcpEntry(runContext, chatSessionId);
+            if (entry != null)
+                servers["ild"] = entry;
+        }
+
+        // Provider-scoped custom MCP servers. The parser reserves the "ild" name,
+        // so these can never clobber the entry above.
+        foreach (var server in CustomMcpServers.Parse(AiProviderConfig.Parse(provider.Config).CustomMcpServersJson))
+            servers[server.Name] = BuildCustomMcpEntry(server);
+
+        if (servers.Count == 0) return null;
 
         var config = new Dictionary<string, object?>
         {
-            ["mcpServers"] = new Dictionary<string, object?>
-            {
-                ["ild"] = entry,
-            },
+            ["mcpServers"] = servers,
         };
 
         var json = JsonSerializer.Serialize(config);
