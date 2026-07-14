@@ -1,7 +1,14 @@
 import { useState, useEffect } from "react";
-import { AiProvider, ManagedAgentStatus, ApiError } from "../../types";
+import { AiProvider, ManagedAgentStatus, ApiError, ConfigFieldDescriptor } from "../../types";
 import { aiProviderService, agentAdapterService, managedAgentService } from "../../services/auth";
+import AdapterConfigFields from "../../components/AdapterConfigFields";
 import ProviderTerminal from "../../components/ProviderTerminal";
+
+/** Adapter config value shapes rendered by {@link AdapterConfigFields}. */
+type ConfigValue = string | number | boolean;
+
+/** The one schema field the server round-trips as a dedicated, non-secret value. */
+const CUSTOM_MCP_SERVERS_FIELD = "customMcpServersJson";
 
 export default function AiProviders() {
   const [providers, setProviders] = useState<AiProvider[]>([]);
@@ -17,6 +24,8 @@ export default function AiProviders() {
   const [model, setModel] = useState("");
   const [isDefault, setIsDefault] = useState(false);
   const [parallelism, setParallelism] = useState<number>(0);
+  const [configSchema, setConfigSchema] = useState<ConfigFieldDescriptor[]>([]);
+  const [configValues, setConfigValues] = useState<Record<string, ConfigValue>>({});
   const [agents, setAgents] = useState<ManagedAgentStatus[]>([]);
   const [updatingAgent, setUpdatingAgent] = useState<string | null>(null);
   const [agentErrors, setAgentErrors] = useState<Record<string, string>>({});
@@ -26,6 +35,35 @@ export default function AiProviders() {
     void loadData();
     void loadAgents();
   }, []);
+
+  // Load the adapter config schema for the selected provider type so its fields
+  // render on the modal. The endpoint returns an empty schema for MCP-incapable
+  // types (pi/copilot), which naturally hides the section for them. We keep only
+  // the fields the save path actually persists (currently just the Custom MCP
+  // servers value) so what renders is always what gets saved — if the backend
+  // adds more schema fields later, they won't silently no-op here.
+  useEffect(() => {
+    if (!type) {
+      setConfigSchema([]);
+      return;
+    }
+    let cancelled = false;
+    agentAdapterService
+      .getConfigSchema(type)
+      .then((schema) => {
+        if (cancelled) return;
+        const supported = Array.isArray(schema)
+          ? schema.filter((field) => field.name === CUSTOM_MCP_SERVERS_FIELD)
+          : [];
+        setConfigSchema(supported);
+      })
+      .catch(() => {
+        if (!cancelled) setConfigSchema([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [type]);
 
   const loadData = async () => {
     try {
@@ -77,6 +115,11 @@ export default function AiProviders() {
     setModel(provider.model);
     setIsDefault(provider.isDefault);
     setParallelism(provider.parallelism ?? 0);
+    setConfigValues(
+      provider.customMcpServersJson != null
+        ? { [CUSTOM_MCP_SERVERS_FIELD]: provider.customMcpServersJson }
+        : {},
+    );
     setShowModal(true);
   };
 
@@ -90,6 +133,7 @@ export default function AiProviders() {
     setModel("");
     setIsDefault(false);
     setParallelism(0);
+    setConfigValues({});
   };
 
   // Provider types whose auth is handled by the CLI itself (e.g. claude-code
@@ -116,6 +160,15 @@ export default function AiProviders() {
       isDefault,
       parallelism,
     };
+
+    // Send the Custom MCP servers value whenever the selected type exposes it
+    // (opencode, claude-code — including CLI-auth claude-code). An empty string
+    // clears it. The server folds it into AiProvider.Config, preserving any other
+    // stored keys. Types without the field (pi, copilot) send nothing, so their
+    // config is left untouched.
+    if (configSchema.some((field) => field.name === CUSTOM_MCP_SERVERS_FIELD)) {
+      data.customMcpServersJson = String(configValues[CUSTOM_MCP_SERVERS_FIELD] ?? "");
+    }
 
     if (editingProvider) {
       if (!cliAuth && apiKey) {
@@ -394,6 +447,15 @@ export default function AiProviders() {
                     />
                   </div>
                 </>
+              )}
+              {configSchema.length > 0 && (
+                <AdapterConfigFields
+                  schema={configSchema}
+                  values={configValues}
+                  onChange={(fieldName, value) =>
+                    setConfigValues((current) => ({ ...current, [fieldName]: value }))
+                  }
+                />
               )}
               <div className="form-group">
                 <label htmlFor="apParallelism">Parallelism (0 = unlimited)</label>
@@ -778,13 +840,41 @@ export default function AiProviders() {
         }
 
         .modal-body input,
-        .modal-body select {
+        .modal-body select,
+        .modal-body textarea {
           padding: 0.5rem;
           background-color: #2a2a40;
           border: 1px solid #3a3a5c;
           border-radius: 0.375rem;
           color: #e0e0e0;
           font-size: 0.875rem;
+        }
+
+        .modal-body textarea {
+          font-family: inherit;
+          resize: vertical;
+        }
+
+        /* Schema-driven adapter config fields (AdapterConfigFields) reuse the
+           LoopEditor class names, which aren't in scope here — mirror the
+           .form-group layout so they sit flush with the fixed fields. */
+        .modal-body .config-field {
+          display: flex;
+          flex-direction: column;
+          gap: 0.25rem;
+        }
+
+        .modal-body .config-help-text {
+          font-size: 0.7rem;
+          color: #707090;
+          line-height: 1.4;
+        }
+
+        .modal-body .config-field .checkbox-label {
+          flex-direction: row;
+          align-items: center;
+          gap: 0.5rem;
+          cursor: pointer;
         }
 
         .form-checkbox label {

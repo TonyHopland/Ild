@@ -606,4 +606,77 @@ describe("Adapter config schema", () => {
     expect(aiNode!.config.adapterConfig).toBeTruthy();
     expect((aiNode!.config.adapterConfig as Record<string, unknown>).temperature).toBe(0.1);
   });
+
+  test("the provider-scoped Custom MCP servers field is excluded from the node editor", async () => {
+    // The adapter advertises the MCP field in its schema (it is rendered on the
+    // AI Providers page), but a node's AdapterConfig is never read at run time, so
+    // the Loop Editor must filter it out while still rendering genuinely
+    // node-scoped fields.
+    const schemaWithMcp = [
+      ...sampleSchema,
+      {
+        name: "customMcpServersJson",
+        type: ConfigFieldType.Textarea,
+        label: "Custom MCP servers (JSON)",
+        required: false,
+        defaultValue: null,
+        description: "Optional MCP servers.",
+        options: null,
+      },
+    ];
+
+    const trackingFetch = vi.fn(async (url: string, init?: RequestInit) => {
+      const method = (init?.method as string) ?? "GET";
+
+      if (method === "GET" && url.includes("looptemplates")) {
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify([sampleTemplate])),
+        };
+      }
+
+      if (method === "GET" && url.includes("aiproviders")) {
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify(sampleProviders)),
+        };
+      }
+
+      if (method === "GET" && url.includes("AgentAdapters")) {
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve(JSON.stringify(schemaWithMcp)),
+        };
+      }
+
+      return { ok: false, status: 500, text: () => Promise.resolve("") };
+    });
+
+    renderPage(trackingFetch);
+
+    await waitFor(() => {
+      expect(screen.getByText("Dev Loop")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("Dev Loop"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Initialize")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("Code"));
+
+    const select = screen.getByLabelText("AI Provider");
+    fireEvent.change(select, { target: { value: "prov-1" } });
+
+    // A genuinely node-scoped field renders…
+    await waitFor(() => {
+      expect(screen.getByText("Temperature")).toBeTruthy();
+    });
+    // …but the provider-scoped MCP field is filtered out here.
+    expect(screen.queryByText("Custom MCP servers (JSON)")).toBeFalsy();
+  });
 });

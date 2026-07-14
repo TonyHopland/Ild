@@ -2,11 +2,77 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { AuthContext } from "../../hooks/useAuth";
+import { ConfigFieldType } from "../../types";
 import AiProviders from "./index";
 
 afterEach(() => {
   cleanup();
 });
+
+// The MCP-capable adapters (opencode, claude-code) advertise a single
+// "Custom MCP servers (JSON)" textarea via /AgentAdapters/{type}/config-schema.
+const customMcpSchema = [
+  {
+    name: "customMcpServersJson",
+    type: ConfigFieldType.Textarea,
+    label: "Custom MCP servers (JSON)",
+    required: false,
+    defaultValue: null,
+    description: "Optional. A JSON object mapping a server name to its definition.",
+    options: null,
+  },
+];
+
+// A URL-routed fetch mock: unlike the ordered queue above, it resolves each
+// request by inspecting the URL/method, so the extra per-type config-schema
+// fetch this feature adds can't desync the response order. `requests` records
+// every call for assertions on the save payload.
+function routingFetch(options: {
+  providers?: unknown[];
+  types?: string[];
+  schema?: unknown[];
+  agents?: unknown[];
+  onWrite?: (url: string, init: RequestInit) => unknown;
+  requests: Array<{ url: string; method: string; body: unknown }>;
+}) {
+  const { providers = [], types = [], schema = [], agents = [], onWrite, requests } = options;
+  return vi.fn(async (url: string, init?: RequestInit) => {
+    const method = (init?.method as string) ?? "GET";
+    const body = init?.body ? JSON.parse(init.body as string) : undefined;
+    requests.push({ url, method, body });
+    const ok = (json: unknown, status = 200) => ({
+      ok: status < 400,
+      status,
+      text: () => Promise.resolve(JSON.stringify(json)),
+    });
+
+    if (method === "GET" && url.includes("config-schema")) return ok(schema);
+    if (method === "GET" && url.includes("AgentAdapters")) return ok(types);
+    if (method === "GET" && url.includes("managedagents")) return ok(agents);
+    if (method === "GET" && url.includes("aiproviders")) return ok(providers);
+    if (method === "POST" || method === "PUT") return ok(onWrite?.(url, init!) ?? {});
+    return ok(null);
+  });
+}
+
+function renderRouted(fetchMock: ReturnType<typeof routingFetch>) {
+  vi.stubGlobal("fetch", fetchMock);
+  const authValue = {
+    user: { id: "1", username: "test", createdAt: "" },
+    token: "test-token",
+    isAuthenticated: true,
+    isLoading: false,
+    login: vi.fn(),
+    logout: vi.fn(),
+  };
+  render(
+    <MemoryRouter>
+      <AuthContext.Provider value={authValue}>
+        <AiProviders />
+      </AuthContext.Provider>
+    </MemoryRouter>,
+  );
+}
 
 function mockFetch(json: unknown, status = 200) {
   return vi.fn().mockResolvedValue({
@@ -738,5 +804,159 @@ describe("AI Providers page", () => {
     });
 
     expect(screen.getByText("Default")).toBeTruthy();
+  });
+
+  test("edit modal renders the Custom MCP servers field for an opencode provider and seeds its value", async () => {
+    const providers = [
+      {
+        id: "ai-1",
+        name: "OpenCode",
+        type: "opencode",
+        baseUrl: "http://opencode.local",
+        apiKey: "key",
+        model: "claude-3",
+        isDefault: false,
+        customMcpServersJson: '{"chrome-devtools":{"command":["npx"]}}',
+        createdAt: "2025-02-01T00:00:00Z",
+      },
+    ];
+
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    renderRouted(
+      routingFetch({ providers, types: ["opencode", "pi"], schema: customMcpSchema, requests }),
+    );
+
+    await waitFor(() => expect(screen.getByText("AI Providers")).toBeTruthy());
+
+    fireEvent.click(screen.getByText("Edit"));
+
+    // The schema-driven field appears and is pre-filled from the provider's
+    // non-secret customMcpServersJson value.
+    const textarea = (await screen.findByLabelText(
+      "Custom MCP servers (JSON)",
+    )) as HTMLTextAreaElement;
+    expect(textarea.tagName).toBe("TEXTAREA");
+    expect(textarea.value).toBe('{"chrome-devtools":{"command":["npx"]}}');
+  });
+
+  test("edit modal shows no Custom MCP servers field for a pi provider", async () => {
+    const providers = [
+      {
+        id: "ai-1",
+        name: "Pi",
+        type: "pi",
+        baseUrl: "http://pi.local",
+        apiKey: "key",
+        model: "gpt-4",
+        isDefault: true,
+        createdAt: "2025-01-01T00:00:00Z",
+      },
+    ];
+
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    // The pi adapter advertises an empty schema, so no config fields render.
+    renderRouted(routingFetch({ providers, types: ["opencode", "pi"], schema: [], requests }));
+
+    await waitFor(() => expect(screen.getByText("AI Providers")).toBeTruthy());
+
+    fireEvent.click(screen.getByText("Edit"));
+    await waitFor(() => expect(screen.getByText("Edit Provider")).toBeTruthy());
+
+    // Let any config-schema fetch settle, then confirm the field is absent.
+    await waitFor(() => {
+      const schemaFetched = requests.some((r) => r.url.includes("config-schema"));
+      expect(schemaFetched).toBe(true);
+    });
+    expect(screen.queryByLabelText("Custom MCP servers (JSON)")).toBeFalsy();
+  });
+
+  test("renders only the Custom MCP servers field, filtering out schema fields the save path can't persist", async () => {
+    // The save path only round-trips customMcpServersJson, so any other schema
+    // field the backend might advertise must not render (it would silently no-op).
+    const schemaWithExtra = [
+      {
+        name: "temperature",
+        type: ConfigFieldType.Number,
+        label: "Temperature",
+        required: false,
+        defaultValue: 0.7,
+        description: "Not persisted by this form.",
+        options: null,
+      },
+      ...customMcpSchema,
+    ];
+
+    const providers = [
+      {
+        id: "ai-1",
+        name: "OpenCode",
+        type: "opencode",
+        baseUrl: "http://opencode.local",
+        apiKey: "key",
+        model: "claude-3",
+        isDefault: false,
+        customMcpServersJson: '{"a":{"command":["npx"]}}',
+        createdAt: "2025-02-01T00:00:00Z",
+      },
+    ];
+
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    renderRouted(
+      routingFetch({ providers, types: ["opencode", "pi"], schema: schemaWithExtra, requests }),
+    );
+
+    await waitFor(() => expect(screen.getByText("AI Providers")).toBeTruthy());
+
+    fireEvent.click(screen.getByText("Edit"));
+
+    // The supported field renders…
+    await screen.findByLabelText("Custom MCP servers (JSON)");
+    // …but the unsupported extra field is filtered out.
+    expect(screen.queryByLabelText("Temperature")).toBeFalsy();
+  });
+
+  test("round-trips the Custom MCP servers value into the save payload", async () => {
+    const providers = [
+      {
+        id: "ai-1",
+        name: "OpenCode",
+        type: "opencode",
+        baseUrl: "http://opencode.local",
+        apiKey: "key",
+        model: "claude-3",
+        isDefault: false,
+        customMcpServersJson: '{"old":{"command":["npx"]}}',
+        createdAt: "2025-02-01T00:00:00Z",
+      },
+    ];
+
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    renderRouted(
+      routingFetch({
+        providers,
+        types: ["opencode", "pi"],
+        schema: customMcpSchema,
+        onWrite: () => providers[0],
+        requests,
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText("AI Providers")).toBeTruthy());
+
+    fireEvent.click(screen.getByText("Edit"));
+
+    const textarea = await screen.findByLabelText("Custom MCP servers (JSON)");
+    const newValue = '{"chrome-devtools":{"command":["npx","-y","chrome-devtools-mcp@latest"]}}';
+    fireEvent.change(textarea, { target: { value: newValue } });
+
+    fireEvent.click(screen.getByText("Update"));
+
+    await waitFor(() => expect(screen.queryByText("Edit Provider")).toBeFalsy());
+
+    const putReq = requests.find((r) => r.method === "PUT" && r.url.includes("/aiproviders/ai-1"));
+    expect(putReq).toBeTruthy();
+    // The edited value rides on the dedicated, non-secret field; the server folds
+    // it into AiProvider.Config, preserving any other stored keys.
+    expect((putReq!.body as { customMcpServersJson?: string }).customMcpServersJson).toBe(newValue);
   });
 });

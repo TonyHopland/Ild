@@ -34,5 +34,14 @@ public class AiProviderDto
     public int Parallelism { get; set; }
 
     public string? Config { get; set; }
+
+    /// <summary>
+    /// The UI-managed "Custom MCP servers (JSON)" value. Non-secret, so it is the
+    /// only part of <see cref="Config"/> surfaced to and accepted from the AI
+    /// Providers form. The controller folds it into <see cref="Config"/> on
+    /// create/update, preserving any other keys already stored there.
+    /// </summary>
+    public string? CustomMcpServersJson { get; set; }
+
     public DateTime CreatedAt { get; set; }
 }

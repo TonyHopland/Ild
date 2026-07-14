@@ -316,7 +316,15 @@ export default function LoopEditor() {
         return;
       }
 
-      const schema = await agentAdapterService.getConfigSchema(selectedProvider.type);
+      // The "Custom MCP servers (JSON)" field is a *provider*-scoped setting: the
+      // adapters inject it from AiProvider.Config, and it is set on the AI
+      // Providers page. A node's AdapterConfig is never read at run time, so
+      // surfacing this field here would let users set it in a place that does
+      // nothing. Exclude it from the node editor while keeping the schema-driven
+      // rendering generic for any genuinely node-scoped fields added later.
+      const schema = (await agentAdapterService.getConfigSchema(selectedProvider.type)).filter(
+        (field) => field.name !== "customMcpServersJson",
+      );
       const nextValues: Record<string, AdapterConfigValue> = {};
       for (const field of schema) {
         const nodeValue = initialAdapterConfig[field.name];
