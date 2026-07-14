@@ -12,58 +12,24 @@ namespace ILD.Core.Services.Implementations.Executors;
 /// routing to a named custom edge, plus a default edge taken when no case
 /// matches. It never invokes AI, runs a command, or touches the worktree. The
 /// pass-through <c>Output</c> is emitted identically on every branch; an
-/// evaluation error routes to OnFailure. Legacy true/false conditions are read
-/// as a single <c>true</c> case with a <c>false</c> default (see
-/// <see cref="NormalizeCases"/>).
+/// evaluation error routes to OnFailure. Pre-switch true/false conditions are
+/// upgraded to this shape by the one-time <c>ConditionSwitchMigrator</c>; the
+/// executor only ever reads the switch config.
 /// </summary>
 public sealed class ConditionNodeExecutor : INodeExecutor
 {
     public const string DefaultTemplate = "{{Node.Input}}";
-
-    // The edge names a legacy (pre-switch) true/false Condition routed through.
-    // Kept so old loops route identically without a config rewrite.
-    public const string LegacyMatchEdge = "true";
-    public const string LegacyDefaultEdge = "false";
 
     // Same regex options as AI MatchRules: case-insensitive single-line match.
     private const RegexOptions MatchOptions = RegexOptions.IgnoreCase;
 
     public NodeType NodeType => NodeType.Condition;
 
-    /// <summary>
-    /// Resolves a Condition config to its effective switch: the ordered cases
-    /// and the default edge. A config with explicit <see cref="NodeConfig.Condition.Cases"/>
-    /// is used as-is (its default edge falling back to <see cref="LegacyDefaultEdge"/>
-    /// only when unset); an old true/false config is read as a single case
-    /// routing to <see cref="LegacyMatchEdge"/> with <see cref="LegacyDefaultEdge"/>
-    /// as the default — identical routing to the pre-switch executor.
-    /// </summary>
-    internal static (IReadOnlyList<NodeConfig.ConditionCase> Cases, string DefaultEdge) NormalizeCases(
-        NodeConfig.Condition cfg)
-    {
-        if (cfg.Cases is { Count: > 0 })
-        {
-            var defaultEdge = string.IsNullOrWhiteSpace(cfg.DefaultEdge)
-                ? LegacyDefaultEdge
-                : cfg.DefaultEdge.Trim();
-            return (cfg.Cases, defaultEdge);
-        }
-
-        var legacy = new NodeConfig.ConditionCase
-        {
-            Variant = cfg.Variant,
-            Subject = cfg.Subject,
-            Pattern = cfg.Pattern,
-            Tag = cfg.Tag,
-            EdgeName = LegacyMatchEdge,
-        };
-        return (new[] { legacy }, LegacyDefaultEdge);
-    }
-
     public async IAsyncEnumerable<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
     {
         var cfg = NodeConfig.Parse<NodeConfig.Condition>(ctx.Node.Config);
-        var (cases, defaultEdge) = NormalizeCases(cfg);
+        var cases = cfg.Cases ?? new List<NodeConfig.ConditionCase>();
+        var defaultEdge = (cfg.DefaultEdge ?? string.Empty).Trim();
         var workItems = ctx.Services.GetRequiredService<IWorkItemManager>();
         var rendering = ctx.Services.GetService<IPromptRenderingService>();
 

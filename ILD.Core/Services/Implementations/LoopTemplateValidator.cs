@@ -166,8 +166,8 @@ public static class LoopTemplateValidator
             else if (string.Equals(node.NodeType, "Condition", StringComparison.OrdinalIgnoreCase))
             {
                 var cfg = NodeConfig.Parse<NodeConfig.Condition>(System.Text.Json.JsonSerializer.Serialize(node.Config));
-                var (cases, defaultEdge) = ConditionNodeExecutor.NormalizeCases(cfg);
-                var isSwitch = cfg.Cases is { Count: > 0 };
+                var cases = cfg.Cases ?? new List<NodeConfig.ConditionCase>();
+                var defaultEdge = (cfg.DefaultEdge ?? string.Empty).Trim();
 
                 conditionTemplates = new List<string> { cfg.Output ?? ConditionNodeExecutor.DefaultTemplate };
 
@@ -183,16 +183,19 @@ public static class LoopTemplateValidator
                         wiredCustomNames.Add(e.Name!.Trim());
                 }
 
-                // A switch must name its default edge; a legacy true/false config
-                // defaults to "false".
-                if (isSwitch && string.IsNullOrWhiteSpace(cfg.DefaultEdge))
+                // A switch must name its default edge and have at least one case.
+                if (defaultEdge.Length == 0)
                     errors.Add($"Condition node {node.Id} must set a default edge.");
+                if (cases.Count == 0)
+                    errors.Add($"Condition node {node.Id} must have at least one case.");
 
                 // Referenced edge names = every case's edge plus the default.
                 // Every referenced name must be wired and every wired custom edge
                 // must be referenced (mirrors the AI node's match-rule/edge sync).
                 // Names are ordinal to match the engine's edge resolution.
-                var referenced = new HashSet<string>(StringComparer.Ordinal) { defaultEdge };
+                var referenced = new HashSet<string>(StringComparer.Ordinal);
+                if (defaultEdge.Length > 0)
+                    referenced.Add(defaultEdge);
                 for (var i = 0; i < cases.Count; i++)
                 {
                     var c = cases[i];

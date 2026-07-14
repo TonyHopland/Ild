@@ -49,12 +49,6 @@ export const PR_RESERVED_EDGE_NAMES = [
   "on_abandoned",
 ] as const;
 
-// The edge names a legacy (pre-switch) true/false Condition routed through, used
-// as the fallback custom-edge set when a Condition config carries no `cases`
-// (an old loop not yet migrated to the switch model). Mirrors ILD.Core
-// ConditionNodeExecutor.Legacy*Edge.
-export const CONDITION_EDGE_NAMES = ["true", "false"] as const;
-
 /**
  * The custom-edge names a node declares, used to populate the "Which edge?"
  * dropdown when connecting from the custom handle. AI nodes derive them from
@@ -89,10 +83,9 @@ export function getCustomEdgeNames(node: Node | undefined | null): string[] {
   }
   if (data?.type === NodeType.Condition) {
     // A switch: derive the outlets from its cases' edge names plus the default
-    // edge. A legacy config with no cases falls back to the fixed true/false
-    // pair so old loops still wire.
+    // edge. (Pre-switch true/false configs are upgraded by the backend's
+    // one-time migration, so no legacy shape reaches the editor.)
     const cases = (config.cases as ConditionCase[] | undefined) ?? [];
-    if (cases.length === 0) return collect([...CONDITION_EDGE_NAMES]);
     return collect([...cases.map((c) => c?.edgeName), config.defaultEdge as string | undefined]);
   }
   return [];

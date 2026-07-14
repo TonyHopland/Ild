@@ -28,8 +28,22 @@ public class ConditionNodeExecutorTests
         PrUrl = prUrl,
     };
 
-    private static LoopNode MakeNode(Dictionary<string, object?> config)
+    /// <summary>Builds one switch case config dict, omitting unused predicate keys.</summary>
+    private static Dictionary<string, object?> Case(
+        string variant, string edgeName, string? pattern = null, string? tag = null, string? subject = null)
     {
+        var c = new Dictionary<string, object?> { ["variant"] = variant, ["edgeName"] = edgeName };
+        if (pattern != null) c["pattern"] = pattern;
+        if (tag != null) c["tag"] = tag;
+        if (subject != null) c["subject"] = subject;
+        return c;
+    }
+
+    /// <summary>Builds a Condition switch node from its cases and default edge.</summary>
+    private static LoopNode SwitchNode(object[] cases, string defaultEdge, string? output = null)
+    {
+        var config = new Dictionary<string, object?> { ["cases"] = cases, ["defaultEdge"] = defaultEdge };
+        if (output != null) config["output"] = output;
         var json = System.Text.Json.JsonSerializer.Serialize(config);
         return new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.Condition, Config = json };
     }
@@ -71,90 +85,80 @@ public class ConditionNodeExecutorTests
     }
 
     [Fact]
-    public async Task TextMatches_routes_true_when_pattern_matches()
+    public async Task TextMatches_case_routes_to_its_edge_when_the_pattern_matches()
     {
-        var node = MakeNode(new() { ["variant"] = "TextMatches", ["pattern"] = "approve" });
+        var node = SwitchNode(new object[] { Case("TextMatches", "matched", pattern: "approve") }, "unmatched");
         var run = MakeRun(previousOutput: "Please APPROVE this");
         var outcomes = await RunAsync(node, run, BuildServices(Wi()));
 
-        var success = AssertSuccess(outcomes, "true");
-        // Default Output is pass-through of the node input.
+        var success = AssertSuccess(outcomes, "matched");
+        // Default Output is a pass-through of the node input.
         Assert.Equal("Please APPROVE this", success.Output);
     }
 
     [Fact]
-    public async Task TextMatches_routes_false_when_pattern_does_not_match()
+    public async Task No_case_matches_routes_to_the_default_edge()
     {
-        var node = MakeNode(new() { ["variant"] = "TextMatches", ["pattern"] = "approve" });
+        var node = SwitchNode(new object[] { Case("TextMatches", "matched", pattern: "approve") }, "unmatched");
         var run = MakeRun(previousOutput: "Rejected outright");
         var outcomes = await RunAsync(node, run, BuildServices(Wi()));
 
-        AssertSuccess(outcomes, "false");
+        AssertSuccess(outcomes, "unmatched");
     }
 
     [Fact]
-    public async Task PrExists_routes_true_when_run_has_pr_url()
+    public async Task PrExists_case_routes_by_whether_the_run_has_a_pr_url()
     {
-        var node = MakeNode(new() { ["variant"] = "PrExists" });
-        var run = MakeRun(prUrl: "https://example.test/pr/1");
-        var outcomes = await RunAsync(node, run, BuildServices(Wi()));
+        var node = SwitchNode(new object[] { Case("PrExists", "has-pr") }, "no-pr");
 
-        AssertSuccess(outcomes, "true");
+        AssertSuccess(await RunAsync(node, MakeRun(prUrl: "https://example.test/pr/1"), BuildServices(Wi())), "has-pr");
+        AssertSuccess(await RunAsync(node, MakeRun(prUrl: null), BuildServices(Wi())), "no-pr");
     }
 
     [Fact]
-    public async Task PrExists_routes_false_when_run_has_no_pr_url()
+    public async Task HasTag_case_matches_the_work_item_tag_case_insensitively()
     {
-        var node = MakeNode(new() { ["variant"] = "PrExists" });
-        var run = MakeRun(prUrl: null);
-        var outcomes = await RunAsync(node, run, BuildServices(Wi()));
+        var node = SwitchNode(new object[] { Case("HasTag", "tagged", tag: "Needs-Review") }, "untagged");
 
-        AssertSuccess(outcomes, "false");
+        AssertSuccess(await RunAsync(node, MakeRun(), BuildServices(Wi("backend", "needs-review"))), "tagged");
+        AssertSuccess(await RunAsync(node, MakeRun(), BuildServices(Wi("backend"))), "untagged");
     }
 
     [Fact]
-    public async Task HasTag_routes_true_case_insensitively()
+    public async Task Switch_evaluates_cases_in_order_and_the_first_match_wins()
     {
-        var node = MakeNode(new() { ["variant"] = "HasTag", ["tag"] = "Needs-Review" });
-        var run = MakeRun();
-        var outcomes = await RunAsync(node, run, BuildServices(Wi("backend", "needs-review")));
+        // Both cases would match "banana"; the earlier one must win.
+        var node = SwitchNode(
+            new object[]
+            {
+                Case("TextMatches", "first", pattern: "a"),
+                Case("TextMatches", "second", pattern: "a"),
+            },
+            "otherwise");
+        var outcomes = await RunAsync(node, MakeRun(previousOutput: "banana"), BuildServices(Wi()));
 
-        AssertSuccess(outcomes, "true");
+        AssertSuccess(outcomes, "first");
     }
 
     [Fact]
-    public async Task HasTag_routes_false_when_tag_absent()
+    public async Task Output_template_is_emitted_identically_on_matched_and_default_branches()
     {
-        var node = MakeNode(new() { ["variant"] = "HasTag", ["tag"] = "needs-review" });
-        var run = MakeRun();
-        var outcomes = await RunAsync(node, run, BuildServices(Wi("backend")));
+        var node = SwitchNode(
+            new object[] { Case("TextMatches", "yes", pattern: "approve") },
+            "no",
+            output: "decided: {{Node.Input}}");
 
-        AssertSuccess(outcomes, "false");
-    }
+        var matched = await RunAsync(node, MakeRun(previousOutput: "approve"), BuildServices(Wi()));
+        var defaulted = await RunAsync(node, MakeRun(previousOutput: "no"), BuildServices(Wi()));
 
-    [Fact]
-    public async Task Output_template_is_emitted_identically_on_both_branches()
-    {
-        var node = MakeNode(new()
-        {
-            ["variant"] = "TextMatches",
-            ["pattern"] = "approve",
-            ["output"] = "decided: {{Node.Input}}",
-        });
-
-        var trueOutcomes = await RunAsync(node, MakeRun(previousOutput: "approve"), BuildServices(Wi()));
-        var falseOutcomes = await RunAsync(node, MakeRun(previousOutput: "no"), BuildServices(Wi()));
-
-        var t = AssertSuccess(trueOutcomes, "true");
-        var f = AssertSuccess(falseOutcomes, "false");
-        Assert.Equal("decided: approve", t.Output);
-        Assert.Equal("decided: no", f.Output);
+        Assert.Equal("decided: approve", AssertSuccess(matched, "yes").Output);
+        Assert.Equal("decided: no", AssertSuccess(defaulted, "no").Output);
     }
 
     [Fact]
     public async Task Missing_work_item_fails_on_failure()
     {
-        var node = MakeNode(new() { ["variant"] = "PrExists" });
+        var node = SwitchNode(new object[] { Case("PrExists", "has-pr") }, "no-pr");
         var outcomes = await RunAsync(node, MakeRun(), BuildServices(workItem: null));
 
         var fail = Assert.IsType<NodeOutcome.Fail>(outcomes[^1]);
@@ -163,11 +167,12 @@ public class ConditionNodeExecutorTests
     }
 
     [Fact]
-    public async Task Invalid_regex_at_runtime_fails_on_failure()
+    public async Task Invalid_regex_in_a_case_fails_on_failure()
     {
         // Edge case: a pattern that slipped past save-time validation still
-        // routes to OnFailure rather than throwing out of the engine.
-        var node = MakeNode(new() { ["variant"] = "TextMatches", ["pattern"] = "**approve**" });
+        // routes to OnFailure rather than throwing out of the engine or
+        // silently falling through to the default edge.
+        var node = SwitchNode(new object[] { Case("TextMatches", "matched", pattern: "**approve**") }, "unmatched");
         var run = MakeRun(previousOutput: "approve");
         var outcomes = await RunAsync(node, run, BuildServices(Wi()));
 
@@ -177,104 +182,13 @@ public class ConditionNodeExecutorTests
     }
 
     [Fact]
-    public async Task Unknown_variant_fails_on_failure()
+    public async Task Unknown_variant_in_a_case_fails_on_failure()
     {
-        var node = MakeNode(new() { ["variant"] = "Bogus" });
+        var node = SwitchNode(new object[] { Case("Bogus", "x") }, "otherwise");
         var outcomes = await RunAsync(node, MakeRun(), BuildServices(Wi()));
 
         var fail = Assert.IsType<NodeOutcome.Fail>(outcomes[^1]);
         Assert.Equal(EdgeType.OnFailure, fail.Edge);
         Assert.Contains("Unknown condition variant", fail.Reason);
-    }
-
-    // ---- Switch (multiple cases + default edge) ---------------------------
-
-    private static Dictionary<string, object?> Case(
-        string variant, string edgeName, string? pattern = null, string? tag = null, string? subject = null)
-    {
-        var c = new Dictionary<string, object?> { ["variant"] = variant, ["edgeName"] = edgeName };
-        if (pattern != null) c["pattern"] = pattern;
-        if (tag != null) c["tag"] = tag;
-        if (subject != null) c["subject"] = subject;
-        return c;
-    }
-
-    [Fact]
-    public async Task Switch_routes_to_the_matching_case_edge()
-    {
-        var node = MakeNode(new()
-        {
-            ["cases"] = new object[]
-            {
-                Case("HasTag", "urgent", tag: "urgent"),
-                Case("TextMatches", "approved", pattern: "approve"),
-            },
-            ["defaultEdge"] = "otherwise",
-        });
-        var outcomes = await RunAsync(node, MakeRun(previousOutput: "please approve"), BuildServices(Wi("backend")));
-
-        AssertSuccess(outcomes, "approved");
-    }
-
-    [Fact]
-    public async Task Switch_evaluates_cases_in_order_and_the_first_match_wins()
-    {
-        // Both cases would match "banana"; the earlier one must win.
-        var node = MakeNode(new()
-        {
-            ["cases"] = new object[]
-            {
-                Case("TextMatches", "first", pattern: "a"),
-                Case("TextMatches", "second", pattern: "a"),
-            },
-            ["defaultEdge"] = "otherwise",
-        });
-        var outcomes = await RunAsync(node, MakeRun(previousOutput: "banana"), BuildServices(Wi()));
-
-        AssertSuccess(outcomes, "first");
-    }
-
-    [Fact]
-    public async Task Switch_routes_to_the_default_edge_when_no_case_matches()
-    {
-        var node = MakeNode(new()
-        {
-            ["cases"] = new object[] { Case("TextMatches", "matched", pattern: "zzz") },
-            ["defaultEdge"] = "otherwise",
-        });
-        var outcomes = await RunAsync(node, MakeRun(previousOutput: "hello world"), BuildServices(Wi()));
-
-        AssertSuccess(outcomes, "otherwise");
-    }
-
-    [Fact]
-    public async Task Switch_case_with_invalid_regex_fails_on_failure()
-    {
-        // Edge case: a bad pattern on any case routes to OnFailure rather than
-        // falling through to the default edge.
-        var node = MakeNode(new()
-        {
-            ["cases"] = new object[] { Case("TextMatches", "matched", pattern: "**bad**") },
-            ["defaultEdge"] = "otherwise",
-        });
-        var outcomes = await RunAsync(node, MakeRun(previousOutput: "x"), BuildServices(Wi()));
-
-        var fail = Assert.IsType<NodeOutcome.Fail>(outcomes[^1]);
-        Assert.Equal(EdgeType.OnFailure, fail.Edge);
-        Assert.Contains("Invalid regex", fail.Reason);
-    }
-
-    [Fact]
-    public async Task Switch_falls_back_to_false_default_when_default_edge_is_unset()
-    {
-        // A switch config that omits defaultEdge still routes no-match through
-        // the legacy "false" edge, so a half-authored switch never dead-ends.
-        var node = MakeNode(new()
-        {
-            ["cases"] = new object[] { Case("TextMatches", "matched", pattern: "zzz") },
-        });
-        var outcomes = await RunAsync(node, MakeRun(previousOutput: "hello"), BuildServices(Wi()));
-
-        AssertSuccess(outcomes, "false");
     }
 }

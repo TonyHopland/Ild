@@ -120,10 +120,9 @@ internal static class NodeConfig
     /// A Condition node is a switch: an ordered list of <see cref="Cases"/> each
     /// routing to a named custom edge, plus a <see cref="DefaultEdge"/> taken
     /// when no case matches. It never invokes AI, runs a command, or touches the
-    /// worktree. Legacy true/false conditions (no <see cref="Cases"/>, a
-    /// top-level <see cref="Variant"/>) are read as a single case routing to
-    /// <c>true</c> with a <c>false</c> default — see
-    /// <c>ConditionNodeExecutor.NormalizeCases</c>.
+    /// worktree. Pre-switch true/false conditions are upgraded to this shape by
+    /// the one-time <c>ConditionSwitchMigrator</c> at startup; nothing reads the
+    /// old top-level predicate keys at runtime.
     /// </summary>
     public sealed record Condition
     {
@@ -132,18 +131,6 @@ internal static class NodeConfig
 
         /// <summary>The custom edge taken when no case matches.</summary>
         public string? DefaultEdge { get; init; }
-
-        /// <summary>Legacy single-predicate variant, read when <see cref="Cases"/> is empty.</summary>
-        public string? Variant { get; init; }
-
-        /// <summary>Legacy TextMatches subject, read when <see cref="Cases"/> is empty.</summary>
-        public string? Subject { get; init; }
-
-        /// <summary>Legacy TextMatches pattern, read when <see cref="Cases"/> is empty.</summary>
-        public string? Pattern { get; init; }
-
-        /// <summary>Legacy HasTag tag, read when <see cref="Cases"/> is empty.</summary>
-        public string? Tag { get; init; }
 
         /// <summary>
         /// Templated output emitted identically on every branch (default

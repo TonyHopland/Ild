@@ -188,9 +188,10 @@ function readMatchRules(config: Record<string, unknown>): AiMatchRule[] {
 }
 
 /**
- * Reads a Condition switch's ordered cases from its config. A legacy true/false
- * config (top-level `variant`, no `cases`) is read as a single case routing to
- * "true" so old loops open in the switch editor without a data migration.
+ * Reads a Condition switch's ordered cases from its config. A node with no
+ * `cases` yet (a freshly dropped node whose defaults have not been written)
+ * opens on a single starter case. (Pre-switch true/false configs are upgraded
+ * by the backend's one-time migration, so no legacy shape reaches the editor.)
  */
 function readConditionCases(config: Record<string, unknown>): ConditionCase[] {
   const raw = config.cases;
@@ -203,21 +204,10 @@ function readConditionCases(config: Record<string, unknown>): ConditionCase[] {
       edgeName: String((c as ConditionCase)?.edgeName ?? ""),
     }));
   }
-  if (typeof config.variant === "string" && config.variant.trim() !== "") {
-    return [
-      {
-        variant: config.variant,
-        subject: typeof config.subject === "string" ? config.subject : "",
-        pattern: typeof config.pattern === "string" ? config.pattern : "",
-        tag: typeof config.tag === "string" ? config.tag : "",
-        edgeName: CONDITION_DEFAULT_CASE.edgeName,
-      },
-    ];
-  }
   return [{ ...CONDITION_DEFAULT_CASE }];
 }
 
-/** Reads a Condition switch's default edge, defaulting to the legacy "false". */
+/** Reads a Condition switch's default edge, falling back to the starter default. */
 function readConditionDefaultEdge(config: Record<string, unknown>): string {
   return typeof config.defaultEdge === "string" && config.defaultEdge.trim() !== ""
     ? config.defaultEdge

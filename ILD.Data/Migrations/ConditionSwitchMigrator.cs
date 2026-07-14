@@ -12,13 +12,16 @@ namespace ILD.Data.Migrations;
 ///
 /// A pre-switch Condition stored its single predicate as top-level
 /// <c>variant</c>/<c>subject</c>/<c>pattern</c>/<c>tag</c> keys and routed
-/// through fixed <c>true</c>/<c>false</c> custom edges. The executor still reads
-/// that shape at runtime (see <c>ConditionNodeExecutor.NormalizeCases</c>), so
-/// old loops keep working untouched; this migration rewrites the persisted
-/// config so the editor and validator see the new shape directly. The existing
-/// <c>true</c>/<c>false</c> edges are preserved as-is — the synthesized case
-/// routes to <c>true</c> and the default edge is <c>false</c>, matching the old
-/// routing exactly, so no edge rows change.
+/// through fixed <c>true</c>/<c>false</c> custom edges. Nothing reads that shape
+/// at runtime any more — this migration is the sole bridge, rewriting the
+/// persisted config so the executor, validator, and editor all see the switch
+/// shape. The existing <c>true</c>/<c>false</c> edges are preserved as-is — the
+/// synthesized case routes to <c>true</c> and the default edge is <c>false</c>,
+/// matching the old routing exactly, so no edge rows change.
+///
+/// Because it runs on every startup and is idempotent, it can be deleted once
+/// every deployment has started at least once on this version (no legacy
+/// Condition config remains in any database).
 ///
 /// For every Condition node (across all persisted template versions) that still
 /// carries a top-level <c>variant</c> and no <c>cases</c>, this:

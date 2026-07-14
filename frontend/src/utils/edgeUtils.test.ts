@@ -58,8 +58,8 @@ describe("getCustomEdgeNames", () => {
     expect(getCustomEdgeNames(node("c", NodeType.Cmd))).toEqual([]);
   });
 
-  test("legacy Condition node with no cases falls back to the true/false pair", () => {
-    expect(getCustomEdgeNames(node("c", NodeType.Condition))).toEqual(["true", "false"]);
+  test("Condition node with no cases or default offers no outlets", () => {
+    expect(getCustomEdgeNames(node("c", NodeType.Condition))).toEqual([]);
   });
 
   test("Condition switch derives outlets from its cases' edges plus the default, deduped", () => {
