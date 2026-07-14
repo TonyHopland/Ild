@@ -153,6 +153,133 @@ public class ClaudeCodeAdapterMcpInjectionTests : IDisposable
     }
 
     [Fact]
+    public void BuildCustomMcpEntry_splits_command_head_from_args()
+    {
+        var server = new CustomMcpServer(
+            Name: "chrome-devtools",
+            Command: new[] { "npx", "-y", "chrome-devtools-mcp@latest", "--headless" },
+            Args: new[] { "--isolated" },
+            Env: new Dictionary<string, string> { ["FOO"] = "bar" });
+
+        var entry = ClaudeCodeAdapter.BuildCustomMcpEntry(server);
+
+        // Claude wants a command string plus a separate args array; the remaining
+        // command tokens are prepended to the explicit args.
+        Assert.Equal("npx", entry["command"]);
+        Assert.Equal(new[] { "-y", "chrome-devtools-mcp@latest", "--headless", "--isolated" }, (string[])entry["args"]!);
+        var env = (Dictionary<string, object?>)entry["env"]!;
+        Assert.Equal("bar", env["FOO"]);
+    }
+
+    [Fact]
+    public void BuildCustomMcpEntry_omits_empty_args_and_env()
+    {
+        var server = new CustomMcpServer(
+            Name: "solo",
+            Command: new[] { "run" },
+            Args: Array.Empty<string>(),
+            Env: new Dictionary<string, string>());
+
+        var entry = ClaudeCodeAdapter.BuildCustomMcpEntry(server);
+
+        Assert.Equal("run", entry["command"]);
+        Assert.False(entry.ContainsKey("args"));
+        Assert.False(entry.ContainsKey("env"));
+    }
+
+    [Fact]
+    public void TryWriteIldMcpConfig_merges_custom_servers_alongside_ild()
+    {
+        var provider = new AiProvider
+        {
+            Name = "claude-test",
+            Type = "claude-code",
+            BaseUrl = string.Empty,
+            ApiKey = null,
+            Model = string.Empty,
+            Config = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                customMcpServersJson = """
+                { "chrome-devtools": { "command": ["npx", "-y", "chrome-devtools-mcp@latest"] } }
+                """,
+            }),
+        };
+        var ctx = new LoopRunContext(Guid.NewGuid(), "wi", "t", "d", "/tmp", "main", new List<string>(), null);
+
+        var path = ClaudeCodeAdapter.TryWriteIldMcpConfig(provider, ctx, toolAllowlist: new[] { "ild" });
+        Assert.NotNull(path);
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path!));
+            var servers = doc.RootElement.GetProperty("mcpServers");
+            Assert.True(servers.TryGetProperty("ild", out _));
+            Assert.True(servers.TryGetProperty("chrome-devtools", out var chrome));
+            Assert.Equal("npx", chrome.GetProperty("command").GetString());
+            Assert.Equal("-y", chrome.GetProperty("args")[0].GetString());
+        }
+        finally
+        {
+            try { File.Delete(path!); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
+    public void TryWriteIldMcpConfig_writes_custom_servers_even_when_ild_disabled()
+    {
+        var provider = new AiProvider
+        {
+            Name = "claude-test",
+            Type = "claude-code",
+            BaseUrl = string.Empty,
+            ApiKey = null,
+            Model = string.Empty,
+            Config = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                customMcpServersJson = """
+                { "chrome-devtools": { "command": ["npx", "chrome-devtools-mcp@latest"] } }
+                """,
+            }),
+        };
+        var ctx = new LoopRunContext(Guid.NewGuid(), "wi", "t", "d", "/tmp", "main", new List<string>(), null);
+
+        // "ild" NOT in the allowlist — the ild entry is skipped, but the custom
+        // server must still be written so a provider variant can carry it.
+        var path = ClaudeCodeAdapter.TryWriteIldMcpConfig(provider, ctx, toolAllowlist: new[] { "read" });
+        Assert.NotNull(path);
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path!));
+            var servers = doc.RootElement.GetProperty("mcpServers");
+            Assert.False(servers.TryGetProperty("ild", out _));
+            Assert.True(servers.TryGetProperty("chrome-devtools", out _));
+        }
+        finally
+        {
+            try { File.Delete(path!); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
+    public void TryWriteIldMcpConfig_ignores_malformed_custom_json_and_returns_null_when_nothing_left()
+    {
+        var provider = new AiProvider
+        {
+            Name = "claude-test",
+            Type = "claude-code",
+            BaseUrl = string.Empty,
+            ApiKey = null,
+            Model = string.Empty,
+            Config = System.Text.Json.JsonSerializer.Serialize(new { customMcpServersJson = "{ not valid json" }),
+        };
+        var ctx = new LoopRunContext(Guid.NewGuid(), "wi", "t", "d", "/tmp", "main", new List<string>(), null);
+
+        // Malformed custom JSON with ild disabled ⇒ nothing to write ⇒ null, and
+        // crucially no throw.
+        var path = ClaudeCodeAdapter.TryWriteIldMcpConfig(provider, ctx, toolAllowlist: new[] { "read" });
+        Assert.Null(path);
+    }
+
+    [Fact]
     public void BuildRunProcessStartInfo_emits_mcp_config_flag_when_path_supplied()
     {
         var psi = ClaudeCodeAdapter.BuildRunProcessStartInfo(

@@ -68,6 +68,7 @@ export default function AdapterConfigFields({
               )}
             </>
           )}
+          {field.description && <small className="config-help-text">{field.description}</small>}
         </div>
       ))}
     </>

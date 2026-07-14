@@ -83,6 +83,41 @@ public class OpenCodeAdapterMcpInjectionTests : IDisposable
     }
 
     [Fact]
+    public void BuildCustomMcpEntry_concatenates_command_and_args_into_argv()
+    {
+        var server = new CustomMcpServer(
+            Name: "chrome-devtools",
+            Command: new[] { "npx", "-y", "chrome-devtools-mcp@latest" },
+            Args: new[] { "--headless", "--isolated" },
+            Env: new Dictionary<string, string> { ["FOO"] = "bar" });
+
+        var entry = OpenCodeAdapter.BuildCustomMcpEntry(server);
+
+        Assert.Equal("local", entry["type"]);
+        // opencode's `command` is the full argv, so command tokens + args are one array.
+        Assert.Equal(
+            new[] { "npx", "-y", "chrome-devtools-mcp@latest", "--headless", "--isolated" },
+            (string[])entry["command"]!);
+        var env = (Dictionary<string, object?>)entry["environment"]!;
+        Assert.Equal("bar", env["FOO"]);
+    }
+
+    [Fact]
+    public void BuildCustomMcpEntry_omits_environment_when_empty()
+    {
+        var server = new CustomMcpServer(
+            Name: "solo",
+            Command: new[] { "run" },
+            Args: Array.Empty<string>(),
+            Env: new Dictionary<string, string>());
+
+        var entry = OpenCodeAdapter.BuildCustomMcpEntry(server);
+
+        Assert.Equal(new[] { "run" }, (string[])entry["command"]!);
+        Assert.False(entry.ContainsKey("environment"));
+    }
+
+    [Fact]
     public void BuildIldMcpEntry_returns_null_when_no_dll_can_be_found()
     {
         Environment.SetEnvironmentVariable("ILD_MCP_SERVER_DLL", "/nonexistent/path/ild-mcp-server.dll");
