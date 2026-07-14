@@ -870,6 +870,51 @@ describe("AI Providers page", () => {
     expect(screen.queryByLabelText("Custom MCP servers (JSON)")).toBeFalsy();
   });
 
+  test("renders only the Custom MCP servers field, filtering out schema fields the save path can't persist", async () => {
+    // The save path only round-trips customMcpServersJson, so any other schema
+    // field the backend might advertise must not render (it would silently no-op).
+    const schemaWithExtra = [
+      {
+        name: "temperature",
+        type: ConfigFieldType.Number,
+        label: "Temperature",
+        required: false,
+        defaultValue: 0.7,
+        description: "Not persisted by this form.",
+        options: null,
+      },
+      ...customMcpSchema,
+    ];
+
+    const providers = [
+      {
+        id: "ai-1",
+        name: "OpenCode",
+        type: "opencode",
+        baseUrl: "http://opencode.local",
+        apiKey: "key",
+        model: "claude-3",
+        isDefault: false,
+        customMcpServersJson: '{"a":{"command":["npx"]}}',
+        createdAt: "2025-02-01T00:00:00Z",
+      },
+    ];
+
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    renderRouted(
+      routingFetch({ providers, types: ["opencode", "pi"], schema: schemaWithExtra, requests }),
+    );
+
+    await waitFor(() => expect(screen.getByText("AI Providers")).toBeTruthy());
+
+    fireEvent.click(screen.getByText("Edit"));
+
+    // The supported field renders…
+    await screen.findByLabelText("Custom MCP servers (JSON)");
+    // …but the unsupported extra field is filtered out.
+    expect(screen.queryByLabelText("Temperature")).toBeFalsy();
+  });
+
   test("round-trips the Custom MCP servers value into the save payload", async () => {
     const providers = [
       {

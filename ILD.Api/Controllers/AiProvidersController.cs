@@ -67,10 +67,14 @@ public class AiProvidersController : ControllerBase
 
     /// <summary>
     /// Fold the UI-managed Custom MCP servers value into a provider's config blob,
-    /// preserving every other key (including secrets the UI never sees, such as an
-    /// embedded <c>apiKey</c>). A null <paramref name="customMcpServersJson"/> means
-    /// the caller isn't managing the field, so the blob is returned unchanged; a
-    /// blank value clears the key. The stored key is camelCase to match the shape
+    /// preserving every other key of a well-formed JSON object (including secrets
+    /// the UI never sees, such as an embedded <c>apiKey</c>). A null
+    /// <paramref name="customMcpServersJson"/> means the caller isn't managing the
+    /// field, so the blob is returned unchanged; a blank value clears the key. If
+    /// the existing blob is malformed or not a JSON object it can't be merged into,
+    /// so it fails open to a fresh object holding just this key (mirroring
+    /// <see cref="AiProviderConfig.Parse"/>) — the only case where other keys are
+    /// not carried over. The stored key is camelCase to match the shape
     /// <see cref="AiProviderConfig"/> reads.
     /// </summary>
     private static string? ApplyCustomMcpServers(string? configJson, string? customMcpServersJson)

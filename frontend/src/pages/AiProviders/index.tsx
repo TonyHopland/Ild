@@ -37,9 +37,11 @@ export default function AiProviders() {
   }, []);
 
   // Load the adapter config schema for the selected provider type so its fields
-  // (e.g. "Custom MCP servers (JSON)") render on the modal. The endpoint returns
-  // an empty schema for MCP-incapable types (pi/copilot), which naturally hides
-  // the section for them.
+  // render on the modal. The endpoint returns an empty schema for MCP-incapable
+  // types (pi/copilot), which naturally hides the section for them. We keep only
+  // the fields the save path actually persists (currently just the Custom MCP
+  // servers value) so what renders is always what gets saved — if the backend
+  // adds more schema fields later, they won't silently no-op here.
   useEffect(() => {
     if (!type) {
       setConfigSchema([]);
@@ -49,7 +51,11 @@ export default function AiProviders() {
     agentAdapterService
       .getConfigSchema(type)
       .then((schema) => {
-        if (!cancelled) setConfigSchema(Array.isArray(schema) ? schema : []);
+        if (cancelled) return;
+        const supported = Array.isArray(schema)
+          ? schema.filter((field) => field.name === CUSTOM_MCP_SERVERS_FIELD)
+          : [];
+        setConfigSchema(supported);
       })
       .catch(() => {
         if (!cancelled) setConfigSchema([]);
