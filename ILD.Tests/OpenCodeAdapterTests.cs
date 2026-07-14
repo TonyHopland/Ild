@@ -13,6 +13,23 @@ namespace ILD.Tests;
 
 public class OpenCodeAdapterTests
 {
+    /// <summary>
+    /// Mark a generated stub script as executable. Uses
+    /// <see cref="System.Diagnostics.ProcessStartInfo.ArgumentList"/> so a path
+    /// with spaces is passed as a single argument (no shell-style quoting), and
+    /// guards against <see cref="System.Diagnostics.Process.Start(System.Diagnostics.ProcessStartInfo)"/>
+    /// returning null.
+    /// </summary>
+    private static void MakeExecutable(string scriptPath)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("chmod") { UseShellExecute = false };
+        psi.ArgumentList.Add("+x");
+        psi.ArgumentList.Add(scriptPath);
+        using var proc = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start chmod");
+        proc.WaitForExit();
+    }
+
     [Fact]
     public void ConfigSchema_returns_expected_fields()
     {
@@ -166,7 +183,7 @@ public class OpenCodeAdapterTests
         Directory.CreateDirectory(worktreeDir);
         var scriptPath = Path.Combine(worktreeDir, "pwd.sh");
         File.WriteAllText(scriptPath, "#!/bin/sh\nprintf '%s\\n' \"$@\"\npwd\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         try
         {
@@ -195,7 +212,7 @@ public class OpenCodeAdapterTests
     {
         var scriptPath = Path.Combine(Path.GetTempPath(), $"ild-timeout-test-{Guid.NewGuid():N}.sh");
         File.WriteAllText(scriptPath, "#!/bin/sh\nsleep 60\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         try
         {
@@ -225,7 +242,7 @@ public class OpenCodeAdapterTests
         Directory.CreateDirectory(worktreeDir);
         var scriptPath = Path.Combine(worktreeDir, "emit.sh");
         File.WriteAllText(scriptPath, "#!/bin/sh\necho '{\"text\":\"thinking...\"}'\necho '{\"text\":\"analyzing code...\"}'\necho '{\"text\":\"done\"}'\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         try
         {
@@ -273,7 +290,7 @@ public class OpenCodeAdapterTests
             "echo '{\"type\":\"tool_use\",\"tool\":\"read\"}'\n" +
             "echo '{\"type\":\"text\",\"text\":\"\"}'\n" +
             "echo '{\"type\":\"step_finish\"}'\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         try
         {
@@ -316,7 +333,7 @@ public class OpenCodeAdapterTests
     {
         var scriptPath = Path.Combine(Path.GetTempPath(), $"ild-stream-test-{Guid.NewGuid():N}.sh");
         File.WriteAllText(scriptPath, "#!/bin/sh\necho 'line one'\necho 'line two'\necho 'line three'\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         try
         {
@@ -353,7 +370,7 @@ public class OpenCodeAdapterTests
         Directory.CreateDirectory(worktreeDir);
         var scriptPath = Path.Combine(worktreeDir, "env.sh");
         File.WriteAllText(scriptPath, "#!/bin/sh\nprintenv OPENCODE_CONFIG_CONTENT\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         try
         {
@@ -384,7 +401,7 @@ public class OpenCodeAdapterTests
         Directory.CreateDirectory(worktreeDir);
         var scriptPath = Path.Combine(worktreeDir, "args.sh");
         File.WriteAllText(scriptPath, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         try
         {
@@ -416,7 +433,7 @@ public class OpenCodeAdapterTests
         Directory.CreateDirectory(worktreeDir);
         var scriptPath = Path.Combine(worktreeDir, "args.sh");
         File.WriteAllText(scriptPath, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         try
         {
@@ -477,7 +494,7 @@ public class OpenCodeAdapterTests
         Directory.CreateDirectory(worktreeDir);
         var scriptPath = Path.Combine(worktreeDir, "emit.sh");
         File.WriteAllText(scriptPath, "#!/bin/sh\nprintenv OPENCODE_CONFIG_CONTENT\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         try
         {
@@ -519,7 +536,7 @@ public class OpenCodeAdapterTests
         Directory.CreateDirectory(worktreeDir);
         var scriptPath = Path.Combine(worktreeDir, "emit.sh");
         File.WriteAllText(scriptPath, "#!/bin/sh\nprintenv OPENCODE_CONFIG_CONTENT\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         try
         {
@@ -567,7 +584,7 @@ public class OpenCodeAdapterTests
         Directory.CreateDirectory(worktreeDir);
         var scriptPath = Path.Combine(worktreeDir, "emit.sh");
         File.WriteAllText(scriptPath, "#!/bin/sh\nprintenv OPENCODE_CONFIG_CONTENT\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         try
         {
@@ -608,7 +625,7 @@ public class OpenCodeAdapterTests
             "#!/bin/sh\n" +
             "printf '%s\\n' \"$@\" > \"$ILD_TEST_ARGS\"\n" +
             "echo '{\"text\":\"ok\",\"sessionId\":\"dash-session\"}'\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         var previousArgs = Environment.GetEnvironmentVariable("ILD_TEST_ARGS");
         Environment.SetEnvironmentVariable("ILD_TEST_ARGS", argsPath);
@@ -642,7 +659,7 @@ public class OpenCodeAdapterTests
         Directory.CreateDirectory(worktreeDir);
         var scriptPath = Path.Combine(worktreeDir, "emit.sh");
         File.WriteAllText(scriptPath, "#!/bin/sh\necho '{\"text\":\"hello\",\"sessionId\":\"session-from-output\"}'\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         try
         {
@@ -676,7 +693,7 @@ public class OpenCodeAdapterTests
             "#!/bin/sh\n" +
             "echo '{\"type\":\"step_start\",\"sessionId\":\"oc-live\"}'\n" +
             "echo '{\"type\":\"text\",\"text\":\"hello\",\"sessionId\":\"oc-live\"}'\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         try
         {
@@ -711,7 +728,7 @@ public class OpenCodeAdapterTests
         Directory.CreateDirectory(worktreeDir);
         var scriptPath = Path.Combine(worktreeDir, "emit.sh");
         File.WriteAllText(scriptPath, "#!/bin/sh\necho '{\"text\":\"hello\",\"session\":{\"id\":\"nested-session\"}}'\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         try
         {
@@ -758,7 +775,7 @@ public class OpenCodeAdapterTests
             "    printf 'import %s\\n' \"$1\" >> \"$ILD_TEST_LOG\"\n" +
             "    ;;\n" +
             "esac\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         var previousLog = Environment.GetEnvironmentVariable("ILD_TEST_LOG");
         Environment.SetEnvironmentVariable("ILD_TEST_LOG", logPath);
@@ -840,7 +857,7 @@ public class OpenCodeAdapterTests
             "    printf 'import %s\\n' \"$1\" >> \"$ILD_TEST_LOG\"\n" +
             "    ;;\n" +
             "esac\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         var previousLog = Environment.GetEnvironmentVariable("ILD_TEST_LOG");
         var previousExport = Environment.GetEnvironmentVariable("ILD_TEST_EXPORT");
@@ -905,7 +922,7 @@ public class OpenCodeAdapterTests
             "    printf 'import %s\\n' \"$1\" >> \"$ILD_TEST_LOG\"\n" +
             "    ;;\n" +
             "esac\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         var previousLog = Environment.GetEnvironmentVariable("ILD_TEST_LOG");
         Environment.SetEnvironmentVariable("ILD_TEST_LOG", logPath);
@@ -969,7 +986,7 @@ public class OpenCodeAdapterTests
             "    printf '%s' '{\"id\":\"resume-session\",\"messages\":[2]}'\n" +
             "    ;;\n" +
             "esac\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         var previousLog = Environment.GetEnvironmentVariable("ILD_TEST_LOG");
         var previousImported = Environment.GetEnvironmentVariable("ILD_TEST_IMPORTED");
@@ -1048,7 +1065,7 @@ public class OpenCodeAdapterTests
             "    printf '%s' '{\"id\":\"fresh-session\",\"messages\":[1]}'\n" +
             "    ;;\n" +
             "esac\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         Environment.SetEnvironmentVariable("ILD_TEST_LOG", logPath);
         Environment.SetEnvironmentVariable("ILD_TEST_READY", readyPath);
@@ -1116,7 +1133,7 @@ public class OpenCodeAdapterTests
             "    printf '%s' '{\"id\":\"resume-session\",\"messages\":[{\"role\":\"assistant\",\"parts\":[{\"type\":\"reasoning\",\"text\":\"hidden\"},{\"type\":\"text\",\"text\":\"Recovered from session export.\"}]}]}'\n" +
             "    ;;\n" +
             "esac\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         var previousLog = Environment.GetEnvironmentVariable("ILD_TEST_LOG");
         Environment.SetEnvironmentVariable("ILD_TEST_LOG", logPath);
@@ -1157,7 +1174,7 @@ public class OpenCodeAdapterTests
         // Minimal opencode stub: succeed with no output for every subcommand
         // (run/export/import), so the only snapshot writes come from the fork.
         File.WriteAllText(scriptPath, "#!/bin/sh\nexit 0\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         const string sourceJson = "{\"id\":\"source-sess\",\"messages\":[1]}";
         try
@@ -1210,7 +1227,7 @@ public class OpenCodeAdapterTests
             "echo '{\"type\":\"step_start\",\"timestamp\":1,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"step-start\",\"id\":\"prt_1\",\"messageID\":\"msg_1\",\"sessionID\":\"ses_x\"}}'\n" +
             "echo '{\"type\":\"text\",\"timestamp\":2,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"text\",\"text\":\"final answer\",\"messageID\":\"msg_1\",\"sessionID\":\"ses_x\"}}'\n" +
             "echo '{\"type\":\"step_finish\",\"timestamp\":3,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"step-finish\",\"id\":\"prt_2\",\"messageID\":\"msg_1\",\"sessionID\":\"ses_x\"}}'\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         try
         {
@@ -1250,7 +1267,7 @@ public class OpenCodeAdapterTests
             "#!/bin/sh\n" +
             "echo '{\"type\":\"step_start\",\"timestamp\":1,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"step-start\",\"id\":\"prt_1\",\"messageID\":\"msg_1\",\"sessionID\":\"ses_x\"}}'\n" +
             "echo '{\"type\":\"step_finish\",\"timestamp\":2,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"step-finish\",\"id\":\"prt_2\",\"messageID\":\"msg_1\",\"sessionID\":\"ses_x\"}}'\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         try
         {
@@ -1290,7 +1307,7 @@ public class OpenCodeAdapterTests
         File.WriteAllText(scriptPath,
             "#!/bin/sh\n" +
             "echo '{\"type\":\"error\",\"timestamp\":1,\"sessionID\":\"ses_x\",\"error\":{\"name\":\"ProviderAuthError\",\"data\":{\"message\":\"invalid api key\"}}}'\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         try
         {
