@@ -1,5 +1,5 @@
 import type { Edge, Node } from "@xyflow/react";
-import { AiMatchRule, EdgeType, NodeType } from "../types";
+import { AiMatchRule, ConditionCase, EdgeType, NodeType } from "../types";
 
 // Every loop edge renders through the custom LoopEdgeComponent (registered under
 // this type) so siblings that share one source/target route can fan apart.
@@ -22,7 +22,7 @@ export interface EdgeConstraintResult {
 
 // Every node (except the Cleanup sink) routes success and failure. Only Human,
 // AI, PR and Condition nodes may additionally declare named custom edges
-// (Condition declares its fixed "true"/"false" pair).
+// (a Condition switch declares one per case plus its default edge).
 const customEdgeNodeTypes = new Set<NodeType>([
   NodeType.Human,
   NodeType.AI,
@@ -48,12 +48,6 @@ export const PR_RESERVED_EDGE_NAMES = [
   "on_merged",
   "on_abandoned",
 ] as const;
-
-// A Condition node routes through exactly two fixed, named custom edges — the
-// branch taken when the predicate holds ("true") and when it does not ("false").
-// Like the PR node's reserved edges these are wired through the single custom
-// outlet and picked by name, not declared in config.
-export const CONDITION_EDGE_NAMES = ["true", "false"] as const;
 
 /**
  * The custom-edge names a node declares, used to populate the "Which edge?"
@@ -88,8 +82,11 @@ export function getCustomEdgeNames(node: Node | undefined | null): string[] {
     return collect(names);
   }
   if (data?.type === NodeType.Condition) {
-    // Fixed pair, like the PR node's reserved edges — not config-driven.
-    return collect([...CONDITION_EDGE_NAMES]);
+    // A switch: derive the outlets from its cases' edge names plus the default
+    // edge. (Pre-switch true/false configs are upgraded by the backend's
+    // one-time migration, so no legacy shape reaches the editor.)
+    const cases = (config.cases as ConditionCase[] | undefined) ?? [];
+    return collect([...cases.map((c) => c?.edgeName), config.defaultEdge as string | undefined]);
   }
   return [];
 }

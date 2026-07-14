@@ -92,11 +92,13 @@ internal static class NodeConfig
     }
 
     /// <summary>
-    /// A Condition node evaluates a single predicate against run/work-item
-    /// state and routes to a fixed <c>true</c> or <c>false</c> custom edge,
-    /// without invoking AI, running a command, or touching the worktree.
+    /// One case of a Condition switch: a predicate that, when it holds, routes
+    /// the node to the custom edge named <see cref="EdgeName"/>. Cases are
+    /// evaluated in order and the first match wins; if none match the node takes
+    /// the switch's default edge. The predicate is picked by <see cref="Variant"/>
+    /// exactly as the legacy single-predicate Condition did.
     /// </summary>
-    public sealed record Condition
+    public sealed record ConditionCase
     {
         /// <summary>Which predicate to evaluate: TextMatches | PrExists | HasTag.</summary>
         public string? Variant { get; init; }
@@ -110,8 +112,28 @@ internal static class NodeConfig
         /// <summary>HasTag: the work-item tag tested by case-insensitive whole-string equality.</summary>
         public string? Tag { get; init; }
 
+        /// <summary>The custom edge this case routes to when its predicate holds.</summary>
+        public string? EdgeName { get; init; }
+    }
+
+    /// <summary>
+    /// A Condition node is a switch: an ordered list of <see cref="Cases"/> each
+    /// routing to a named custom edge, plus a <see cref="DefaultEdge"/> taken
+    /// when no case matches. It never invokes AI, runs a command, or touches the
+    /// worktree. Pre-switch true/false conditions are upgraded to this shape by
+    /// the one-time <c>ConditionSwitchMigrator</c> at startup; nothing reads the
+    /// old top-level predicate keys at runtime.
+    /// </summary>
+    public sealed record Condition
+    {
+        /// <summary>Ordered switch cases; the first whose predicate holds wins.</summary>
+        public List<ConditionCase>? Cases { get; init; }
+
+        /// <summary>The custom edge taken when no case matches.</summary>
+        public string? DefaultEdge { get; init; }
+
         /// <summary>
-        /// Templated output emitted identically on both branches (default
+        /// Templated output emitted identically on every branch (default
         /// <c>{{Node.Input}}</c>, a pass-through of the incoming node input).
         /// </summary>
         public string? Output { get; init; }

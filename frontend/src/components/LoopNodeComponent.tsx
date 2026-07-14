@@ -55,14 +55,15 @@ export default function LoopNodeComponent({ data }: NodeProps) {
   const style = nodeStyles[nodeData.type] || nodeStyles[NodeType.Cmd];
   // The top handle is the single "custom" outlet; any number of named custom
   // edges may leave it. Human, AI and PR nodes declare custom edges, and a
-  // Condition node routes its fixed "true"/"false" branches through it too.
+  // Condition switch routes its per-case and default branches through it too.
   const hasCustomHandle =
     nodeData.type === NodeType.Human ||
     nodeData.type === NodeType.AI ||
     nodeData.type === NodeType.PR ||
     nodeData.type === NodeType.Condition;
   // A Condition node has no default success outlet — it routes only through its
-  // two named custom edges (and the fail handle for an evaluation error).
+  // named custom edges (its cases and default edge, plus the fail handle for an
+  // evaluation error).
   const isCondition = nodeData.type === NodeType.Condition;
 
   return (

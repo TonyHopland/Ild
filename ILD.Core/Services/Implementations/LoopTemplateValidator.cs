@@ -10,7 +10,7 @@ public static class LoopTemplateValidator
 {
     // Every node (except the Cleanup sink) routes success and failure. Only
     // Human, AI, PR and Condition nodes may additionally declare named custom
-    // edges (Condition declares its fixed 'true'/'false' pair).
+    // edges (a Condition switch declares one per case plus its default edge).
     private static readonly HashSet<string> CustomEdgeNodeTypes =
         new(new[] { "Human", "AI", "PR", "Condition" }, StringComparer.OrdinalIgnoreCase);
 
@@ -137,8 +137,7 @@ public static class LoopTemplateValidator
             var promptNodePrompt = string.Equals(node.NodeType, "Prompt", StringComparison.OrdinalIgnoreCase)
                 ? node.Config.GetValueOrDefault("prompt")?.ToString()
                 : null;
-            string? conditionSubject = null;
-            string? conditionOutput = null;
+            List<string>? conditionTemplates = null;
             if (string.Equals(node.NodeType, "AI", StringComparison.OrdinalIgnoreCase))
             {
                 var cfg = NodeConfig.Parse<NodeConfig.Ai>(System.Text.Json.JsonSerializer.Serialize(node.Config));
@@ -167,57 +166,80 @@ public static class LoopTemplateValidator
             else if (string.Equals(node.NodeType, "Condition", StringComparison.OrdinalIgnoreCase))
             {
                 var cfg = NodeConfig.Parse<NodeConfig.Condition>(System.Text.Json.JsonSerializer.Serialize(node.Config));
-                conditionOutput = cfg.Output ?? ConditionNodeExecutor.DefaultTemplate;
+                var cases = cfg.Cases ?? new List<NodeConfig.ConditionCase>();
+                var defaultEdge = (cfg.DefaultEdge ?? string.Empty).Trim();
 
-                // A Condition routes only through its two fixed custom outlets:
-                // exactly one 'true' edge and one 'false' edge, no OnSuccess, and
-                // no other custom name. Names are ordinal to mirror the engine's
-                // edge resolution (the executor emits literal "true"/"false").
-                var customNames = new HashSet<string>(StringComparer.Ordinal);
+                conditionTemplates = new List<string> { cfg.Output ?? ConditionNodeExecutor.DefaultTemplate };
+
+                // A Condition routes only through named custom edges — never an
+                // OnSuccess default. Collect the custom names actually wired out.
+                var wiredCustomNames = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var e in edges.Where(e => e.SourceNodeId == node.Id))
                 {
                     if (!Enum.TryParse<EdgeType>(e.EdgeType, ignoreCase: true, out var role)) continue;
                     if (role == EdgeType.OnSuccess)
-                        errors.Add($"Condition node {node.Id} must not have an OnSuccess edge; it routes via its 'true' and 'false' edges.");
+                        errors.Add($"Condition node {node.Id} must not have an OnSuccess edge; it routes via its cases and default edge.");
                     else if (role == EdgeType.Custom && !string.IsNullOrWhiteSpace(e.Name))
-                    {
-                        if (string.Equals(e.Name, "true", StringComparison.Ordinal) || string.Equals(e.Name, "false", StringComparison.Ordinal))
-                            customNames.Add(e.Name);
-                        else
-                            errors.Add($"Condition node {node.Id} has an unexpected custom edge '{e.Name}'; only 'true' and 'false' are allowed.");
-                    }
+                        wiredCustomNames.Add(e.Name!.Trim());
                 }
-                if (!customNames.Contains("true"))
-                    errors.Add($"Condition node {node.Id} must have a custom edge named 'true'.");
-                if (!customNames.Contains("false"))
-                    errors.Add($"Condition node {node.Id} must have a custom edge named 'false'.");
 
-                var variant = (cfg.Variant ?? string.Empty).Trim();
-                if (string.Equals(variant, "TextMatches", StringComparison.OrdinalIgnoreCase))
+                // A switch must name its default edge and have at least one case.
+                if (defaultEdge.Length == 0)
+                    errors.Add($"Condition node {node.Id} must set a default edge.");
+                if (cases.Count == 0)
+                    errors.Add($"Condition node {node.Id} must have at least one case.");
+
+                // Referenced edge names = every case's edge plus the default.
+                // Every referenced name must be wired and every wired custom edge
+                // must be referenced (mirrors the AI node's match-rule/edge sync).
+                // Names are ordinal to match the engine's edge resolution.
+                var referenced = new HashSet<string>(StringComparer.Ordinal);
+                if (defaultEdge.Length > 0)
+                    referenced.Add(defaultEdge);
+                for (var i = 0; i < cases.Count; i++)
                 {
-                    conditionSubject = cfg.Subject ?? ConditionNodeExecutor.DefaultTemplate;
-                    if (string.IsNullOrWhiteSpace(cfg.Pattern))
-                        errors.Add($"Condition node {node.Id} (TextMatches) must set a non-empty pattern.");
+                    var c = cases[i];
+                    var edgeName = (c.EdgeName ?? string.Empty).Trim();
+                    if (edgeName.Length == 0)
+                        errors.Add($"Condition node {node.Id} case {i + 1} must set an edge name.");
                     else
+                        referenced.Add(edgeName);
+
+                    var variant = (c.Variant ?? string.Empty).Trim();
+                    if (string.Equals(variant, "TextMatches", StringComparison.OrdinalIgnoreCase))
                     {
-                        try { _ = new Regex(cfg.Pattern); }
-                        catch (ArgumentException ex) { errors.Add($"Condition node {node.Id} has an invalid regex pattern: {ex.Message}"); }
+                        conditionTemplates.Add(c.Subject ?? ConditionNodeExecutor.DefaultTemplate);
+                        if (string.IsNullOrWhiteSpace(c.Pattern))
+                            errors.Add($"Condition node {node.Id} case {i + 1} (TextMatches) must set a non-empty pattern.");
+                        else
+                        {
+                            try { _ = new Regex(c.Pattern); }
+                            catch (ArgumentException ex) { errors.Add($"Condition node {node.Id} case {i + 1} has an invalid regex pattern: {ex.Message}"); }
+                        }
+                    }
+                    else if (string.Equals(variant, "HasTag", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (string.IsNullOrWhiteSpace(c.Tag))
+                            errors.Add($"Condition node {node.Id} case {i + 1} (HasTag) must set a non-empty tag.");
+                    }
+                    else if (!string.Equals(variant, "PrExists", StringComparison.OrdinalIgnoreCase))
+                    {
+                        errors.Add($"Condition node {node.Id} case {i + 1} has an unknown variant '{c.Variant}'.");
                     }
                 }
-                else if (string.Equals(variant, "HasTag", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (string.IsNullOrWhiteSpace(cfg.Tag))
-                        errors.Add($"Condition node {node.Id} (HasTag) must set a non-empty tag.");
-                }
-                else if (!string.Equals(variant, "PrExists", StringComparison.OrdinalIgnoreCase))
-                {
-                    errors.Add($"Condition node {node.Id} has an unknown variant '{cfg.Variant}'.");
-                }
+
+                foreach (var orphan in wiredCustomNames.Except(referenced))
+                    errors.Add($"Condition node {node.Id} has a custom edge '{orphan}' that no case or default routes to.");
+                foreach (var missing in referenced.Except(wiredCustomNames))
+                    errors.Add($"Condition node {node.Id} routes to '{missing}' but no custom edge with that name exists.");
             }
 
-            if (string.IsNullOrEmpty(aiPrompt) && string.IsNullOrEmpty(prTemplate) && string.IsNullOrEmpty(prCommentTemplate) && string.IsNullOrEmpty(humanPrompt) && string.IsNullOrEmpty(promptNodePrompt) && string.IsNullOrEmpty(conditionSubject) && string.IsNullOrEmpty(conditionOutput)) continue;
-
-            var templates = new[] { aiPrompt, prTemplate, prCommentTemplate, humanPrompt, promptNodePrompt, conditionSubject, conditionOutput }.Where(t => !string.IsNullOrEmpty(t)).ToList();
+            var templates = new[] { aiPrompt, prTemplate, prCommentTemplate, humanPrompt, promptNodePrompt }
+                .Where(t => !string.IsNullOrEmpty(t))
+                .Concat(conditionTemplates ?? Enumerable.Empty<string>())
+                .Where(t => !string.IsNullOrEmpty(t))
+                .ToList();
+            if (templates.Count == 0) continue;
             foreach (var template in templates)
             {
                 foreach (Match m in PromptPlaceholderRegistry.Pattern.Matches(template!))

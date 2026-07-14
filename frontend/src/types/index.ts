@@ -470,6 +470,21 @@ export interface AiMatchRule {
   edgeName: string;
 }
 
+/**
+ * One case of a Condition switch: when its predicate ({@link variant} plus the
+ * relevant field) holds, the node routes to the custom edge named
+ * {@link edgeName}. Cases are evaluated in order and the first match wins; if
+ * none match the node takes the switch's default edge. Stored on a Condition
+ * node's config as `cases`.
+ */
+export interface ConditionCase {
+  variant: string;
+  subject: string;
+  pattern: string;
+  tag: string;
+  edgeName: string;
+}
+
 export interface ApiError {
   status: number;
   message: string;

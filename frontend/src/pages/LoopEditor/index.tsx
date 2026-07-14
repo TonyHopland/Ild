@@ -49,6 +49,7 @@ import {
   type AiMatchRule,
   type AiToolDefinition,
   type AiProvider,
+  type ConditionCase,
   type ConfigFieldDescriptor,
   type LoopNode,
   type LoopNodeEdge,
@@ -99,8 +100,16 @@ const paletteItems = [
 
 /** Pass-through default for a Condition node's Subject and Output templates. */
 const CONDITION_DEFAULT_TEMPLATE = "{{Node.Input}}";
-/** A new Condition node starts on the TextMatches variant. */
-const CONDITION_DEFAULT_VARIANT = "TextMatches";
+/** A new Condition switch starts with one TextMatches case routing to "true". */
+const CONDITION_DEFAULT_CASE: ConditionCase = {
+  variant: "TextMatches",
+  subject: "",
+  pattern: "",
+  tag: "",
+  edgeName: "true",
+};
+/** A new Condition switch's default edge, taken when no case matches. */
+const CONDITION_DEFAULT_EDGE = "false";
 
 function collectSessionPlaceholderUsages(nodes: Node[]): SessionPlaceholderUsage[] {
   const counts = new Map<string, number>();
@@ -178,6 +187,33 @@ function readMatchRules(config: Record<string, unknown>): AiMatchRule[] {
     .filter((rule) => rule.pattern !== "" || rule.edgeName !== "");
 }
 
+/**
+ * Reads a Condition switch's ordered cases from its config. A node with no
+ * `cases` yet (a freshly dropped node whose defaults have not been written)
+ * opens on a single starter case. (Pre-switch true/false configs are upgraded
+ * by the backend's one-time migration, so no legacy shape reaches the editor.)
+ */
+function readConditionCases(config: Record<string, unknown>): ConditionCase[] {
+  const raw = config.cases;
+  if (Array.isArray(raw)) {
+    return raw.map((c) => ({
+      variant: String((c as ConditionCase)?.variant ?? CONDITION_DEFAULT_CASE.variant),
+      subject: String((c as ConditionCase)?.subject ?? ""),
+      pattern: String((c as ConditionCase)?.pattern ?? ""),
+      tag: String((c as ConditionCase)?.tag ?? ""),
+      edgeName: String((c as ConditionCase)?.edgeName ?? ""),
+    }));
+  }
+  return [{ ...CONDITION_DEFAULT_CASE }];
+}
+
+/** Reads a Condition switch's default edge, falling back to the starter default. */
+function readConditionDefaultEdge(config: Record<string, unknown>): string {
+  return typeof config.defaultEdge === "string" && config.defaultEdge.trim() !== ""
+    ? config.defaultEdge
+    : CONDITION_DEFAULT_EDGE;
+}
+
 /** Reads a Human/PR node's declared custom edge names from its config. */
 function readCustomEdges(config: Record<string, unknown>): string[] {
   const names = config.customEdges;
@@ -246,10 +282,8 @@ export default function LoopEditor() {
   const [promptNodePrompt, setPromptNodePrompt] = useState("");
   const [prDescriptionTemplate, setPrDescriptionTemplate] = useState("");
   const [prCommentTemplate, setPrCommentTemplate] = useState("");
-  const [conditionVariant, setConditionVariant] = useState(CONDITION_DEFAULT_VARIANT);
-  const [conditionSubject, setConditionSubject] = useState("");
-  const [conditionPattern, setConditionPattern] = useState("");
-  const [conditionTag, setConditionTag] = useState("");
+  const [conditionCases, setConditionCases] = useState<ConditionCase[]>([]);
+  const [conditionDefaultEdge, setConditionDefaultEdge] = useState(CONDITION_DEFAULT_EDGE);
   const [conditionOutput, setConditionOutput] = useState(CONDITION_DEFAULT_TEMPLATE);
   const [labelError, setLabelError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -975,11 +1009,16 @@ export default function LoopEditor() {
         y: event.clientY - bounds.top,
       });
 
-      // A Condition node ships with a usable default: the TextMatches variant
-      // and a pass-through Output, so its two fixed outlets work out of the box.
+      // A Condition node ships with a usable default switch: one TextMatches
+      // case routing to "true" and a "false" default edge, plus a pass-through
+      // Output, so its outlets work out of the box.
       const initialConfig =
         nodeType === NodeType.Condition
-          ? { variant: CONDITION_DEFAULT_VARIANT, output: CONDITION_DEFAULT_TEMPLATE }
+          ? {
+              cases: [{ ...CONDITION_DEFAULT_CASE }],
+              defaultEdge: CONDITION_DEFAULT_EDGE,
+              output: CONDITION_DEFAULT_TEMPLATE,
+            }
           : undefined;
 
       const newNode: Node = {
@@ -1052,10 +1091,8 @@ export default function LoopEditor() {
       setPromptNodePrompt((config.prompt as string) || "");
       setPrDescriptionTemplate((config.prDescriptionTemplate as string) || "");
       setPrCommentTemplate((config.prCommentTemplate as string) || "");
-      setConditionVariant((config.variant as string) || CONDITION_DEFAULT_VARIANT);
-      setConditionSubject((config.subject as string) || "");
-      setConditionPattern((config.pattern as string) || "");
-      setConditionTag((config.tag as string) || "");
+      setConditionCases(readConditionCases(config));
+      setConditionDefaultEdge(readConditionDefaultEdge(config));
       setConditionOutput((config.output as string) ?? CONDITION_DEFAULT_TEMPLATE);
       setAdapterConfigValues(initialAdapterValues);
 
@@ -1084,10 +1121,8 @@ export default function LoopEditor() {
         promptNodePrompt: (config.prompt as string) || "",
         prDescriptionTemplate: (config.prDescriptionTemplate as string) || "",
         prCommentTemplate: (config.prCommentTemplate as string) || "",
-        conditionVariant: (config.variant as string) || CONDITION_DEFAULT_VARIANT,
-        conditionSubject: (config.subject as string) || "",
-        conditionPattern: (config.pattern as string) || "",
-        conditionTag: (config.tag as string) || "",
+        conditionCases: readConditionCases(config),
+        conditionDefaultEdge: readConditionDefaultEdge(config),
         conditionOutput: (config.output as string) ?? CONDITION_DEFAULT_TEMPLATE,
         adapterConfigValues: initialAdapterValues,
       });
@@ -1146,17 +1181,29 @@ export default function LoopEditor() {
       if (prCommentTemplate) config.prCommentTemplate = prCommentTemplate;
       config.customEdges = cleanCustomEdgeNames(customEdgeNames);
     } else if (selectedNodeType === NodeType.Condition) {
-      const variant = conditionVariant.trim() || CONDITION_DEFAULT_VARIANT;
-      config.variant = variant;
+      // Persist the switch: each case keeps only the params its variant uses,
+      // plus the default edge and pass-through output. Clear the legacy
+      // top-level predicate keys so a migrated node never keeps stale
+      // variant/subject/pattern/tag behind.
+      config.cases = conditionCases.map((c) => {
+        const variant = c.variant.trim() || CONDITION_DEFAULT_CASE.variant;
+        const persisted: Record<string, unknown> = { variant, edgeName: c.edgeName.trim() };
+        // Include only the params the chosen variant uses (PrExists uses none),
+        // matching the shape the backend migrator writes and the executor reads.
+        if (variant === "TextMatches") {
+          persisted.subject = c.subject.trim() || CONDITION_DEFAULT_TEMPLATE;
+          persisted.pattern = c.pattern;
+        } else if (variant === "HasTag") {
+          persisted.tag = c.tag.trim();
+        }
+        return persisted;
+      });
+      config.defaultEdge = conditionDefaultEdge.trim() || CONDITION_DEFAULT_EDGE;
       config.output = conditionOutput.trim() || CONDITION_DEFAULT_TEMPLATE;
-      // Persist only the params the chosen variant uses; clear the others so a
-      // variant switch never leaves stale Subject/Pattern/Tag behind.
-      config.subject =
-        variant === "TextMatches"
-          ? conditionSubject.trim() || CONDITION_DEFAULT_TEMPLATE
-          : undefined;
-      config.pattern = variant === "TextMatches" ? conditionPattern : undefined;
-      config.tag = variant === "HasTag" ? conditionTag.trim() : undefined;
+      config.variant = undefined;
+      config.subject = undefined;
+      config.pattern = undefined;
+      config.tag = undefined;
     }
 
     setNodes((currentNodes) =>
@@ -1198,10 +1245,8 @@ export default function LoopEditor() {
     prDescriptionTemplate,
     prCommentTemplate,
     promptNodePrompt,
-    conditionVariant,
-    conditionSubject,
-    conditionPattern,
-    conditionTag,
+    conditionCases,
+    conditionDefaultEdge,
     conditionOutput,
     setNodes,
     startCreateWorktree,
@@ -1227,10 +1272,8 @@ export default function LoopEditor() {
       setPromptNodePrompt(originalNodeConfig.promptNodePrompt);
       setPrDescriptionTemplate(originalNodeConfig.prDescriptionTemplate);
       setPrCommentTemplate(originalNodeConfig.prCommentTemplate);
-      setConditionVariant(originalNodeConfig.conditionVariant);
-      setConditionSubject(originalNodeConfig.conditionSubject);
-      setConditionPattern(originalNodeConfig.conditionPattern);
-      setConditionTag(originalNodeConfig.conditionTag);
+      setConditionCases(originalNodeConfig.conditionCases);
+      setConditionDefaultEdge(originalNodeConfig.conditionDefaultEdge);
       setConditionOutput(originalNodeConfig.conditionOutput);
       setAdapterConfigValues(originalNodeConfig.adapterConfigValues);
     }
@@ -1633,10 +1676,8 @@ export default function LoopEditor() {
                       promptNodePrompt={promptNodePrompt}
                       prDescriptionTemplate={prDescriptionTemplate}
                       prCommentTemplate={prCommentTemplate}
-                      conditionVariant={conditionVariant}
-                      conditionSubject={conditionSubject}
-                      conditionPattern={conditionPattern}
-                      conditionTag={conditionTag}
+                      conditionCases={conditionCases}
+                      conditionDefaultEdge={conditionDefaultEdge}
                       conditionOutput={conditionOutput}
                       aiProviders={aiProviders}
                       availableAiTools={availableAiTools}
@@ -1665,10 +1706,8 @@ export default function LoopEditor() {
                       onPromptNodePromptChange={setPromptNodePrompt}
                       onPrDescriptionTemplateChange={setPrDescriptionTemplate}
                       onPrCommentTemplateChange={setPrCommentTemplate}
-                      onConditionVariantChange={setConditionVariant}
-                      onConditionSubjectChange={setConditionSubject}
-                      onConditionPatternChange={setConditionPattern}
-                      onConditionTagChange={setConditionTag}
+                      onConditionCasesChange={setConditionCases}
+                      onConditionDefaultEdgeChange={setConditionDefaultEdge}
                       onConditionOutputChange={setConditionOutput}
                       onAdapterConfigChange={(name, value) =>
                         setAdapterConfigValues((current) => ({ ...current, [name]: value }))

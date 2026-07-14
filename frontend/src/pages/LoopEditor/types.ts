@@ -1,4 +1,4 @@
-import type { AiMatchRule } from "../../types";
+import type { AiMatchRule, ConditionCase } from "../../types";
 
 export type AdapterConfigValue = string | number | boolean;
 
@@ -32,10 +32,8 @@ export interface NodeSettingsSnapshot {
   promptNodePrompt: string;
   prDescriptionTemplate: string;
   prCommentTemplate: string;
-  conditionVariant: string;
-  conditionSubject: string;
-  conditionPattern: string;
-  conditionTag: string;
+  conditionCases: ConditionCase[];
+  conditionDefaultEdge: string;
   conditionOutput: string;
   adapterConfigValues: Record<string, AdapterConfigValue>;
 }

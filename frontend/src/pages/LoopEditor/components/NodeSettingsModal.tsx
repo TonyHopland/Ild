@@ -7,6 +7,7 @@ import {
   type AiMatchRule,
   type AiProvider,
   type AiToolDefinition,
+  type ConditionCase,
   type ConfigFieldDescriptor,
 } from "../../../types";
 import { AiSessionControls } from "./AiSessionControls";
@@ -33,10 +34,8 @@ interface NodeSettingsModalProps {
   promptNodePrompt: string;
   prDescriptionTemplate: string;
   prCommentTemplate: string;
-  conditionVariant: string;
-  conditionSubject: string;
-  conditionPattern: string;
-  conditionTag: string;
+  conditionCases: ConditionCase[];
+  conditionDefaultEdge: string;
   conditionOutput: string;
   aiProviders: AiProvider[];
   availableAiTools: AiToolDefinition[];
@@ -65,10 +64,8 @@ interface NodeSettingsModalProps {
   onPromptNodePromptChange: (value: string) => void;
   onPrDescriptionTemplateChange: (value: string) => void;
   onPrCommentTemplateChange: (value: string) => void;
-  onConditionVariantChange: (value: string) => void;
-  onConditionSubjectChange: (value: string) => void;
-  onConditionPatternChange: (value: string) => void;
-  onConditionTagChange: (value: string) => void;
+  onConditionCasesChange: (value: ConditionCase[]) => void;
+  onConditionDefaultEdgeChange: (value: string) => void;
   onConditionOutputChange: (value: string) => void;
   onAdapterConfigChange: (name: string, value: AdapterConfigValue) => void;
 }
@@ -144,6 +141,104 @@ function CustomEdgesEditor({
   );
 }
 
+/** A single empty Condition case, used when adding a new switch case. */
+const EMPTY_CONDITION_CASE: ConditionCase = {
+  variant: "TextMatches",
+  subject: "",
+  pattern: "",
+  tag: "",
+  edgeName: "",
+};
+
+/**
+ * Ordered switch cases for a Condition node. Each case picks a predicate
+ * (variant) and the custom edge to route to when it holds; the first matching
+ * case wins. Mirrors the AI node's Match Rules editor.
+ */
+function ConditionCasesEditor({
+  cases,
+  onChange,
+}: {
+  cases: ConditionCase[];
+  onChange: (value: ConditionCase[]) => void;
+}) {
+  const update = (index: number, patch: Partial<ConditionCase>) =>
+    onChange(cases.map((existing, i) => (i === index ? { ...existing, ...patch } : existing)));
+
+  return (
+    <div className="config-field">
+      <label>Cases</label>
+      <small className="config-help-text">
+        Each case is evaluated in order; the first whose predicate holds routes to its named custom
+        edge. If none match, the default edge is taken.
+      </small>
+      {cases.map((c, index) => (
+        <div key={index} className="condition-case-row">
+          <div className="match-rule-row">
+            <select
+              aria-label={`Case variant ${index + 1}`}
+              value={c.variant}
+              onChange={(event) => update(index, { variant: event.target.value })}
+            >
+              <option value="TextMatches">Text matches</option>
+              <option value="PrExists">PR exists</option>
+              <option value="HasTag">Has tag</option>
+            </select>
+            <input
+              type="text"
+              aria-label={`Case edge name ${index + 1}`}
+              value={c.edgeName}
+              onChange={(event) => update(index, { edgeName: event.target.value })}
+              placeholder="Edge name"
+            />
+            <button
+              type="button"
+              className="match-rule-remove"
+              aria-label={`Remove case ${index + 1}`}
+              onClick={() => onChange(cases.filter((_, i) => i !== index))}
+            >
+              ×
+            </button>
+          </div>
+          {c.variant === "TextMatches" && (
+            <>
+              <PromptEditor
+                id={`condition-case-subject-${index}`}
+                rows={2}
+                value={c.subject}
+                onChange={(value) => update(index, { subject: value })}
+              />
+              <input
+                type="text"
+                aria-label={`Case pattern ${index + 1}`}
+                value={c.pattern}
+                onChange={(event) => update(index, { pattern: event.target.value })}
+                placeholder="Regex (case-insensitive)"
+              />
+            </>
+          )}
+          {c.variant === "HasTag" && (
+            <input
+              type="text"
+              aria-label={`Case tag ${index + 1}`}
+              value={c.tag}
+              onChange={(event) => update(index, { tag: event.target.value })}
+              placeholder="Work-item tag"
+            />
+          )}
+        </div>
+      ))}
+      <button
+        type="button"
+        className="match-rule-add"
+        onClick={() => onChange([...cases, { ...EMPTY_CONDITION_CASE }])}
+      >
+        + Add case
+      </button>
+    </div>
+  );
+}
+
 export function NodeSettingsModal({
   selectedNode,
   labelError,
@@ -164,10 +259,8 @@ export function NodeSettingsModal({
   promptNodePrompt,
   prDescriptionTemplate,
   prCommentTemplate,
-  conditionVariant,
-  conditionSubject,
-  conditionPattern,
-  conditionTag,
+  conditionCases,
+  conditionDefaultEdge,
   conditionOutput,
   aiProviders,
   availableAiTools,
@@ -196,10 +289,8 @@ export function NodeSettingsModal({
   onPromptNodePromptChange,
   onPrDescriptionTemplateChange,
   onPrCommentTemplateChange,
-  onConditionVariantChange,
-  onConditionSubjectChange,
-  onConditionPatternChange,
-  onConditionTagChange,
+  onConditionCasesChange,
+  onConditionDefaultEdgeChange,
   onConditionOutputChange,
   onAdapterConfigChange,
 }: NodeSettingsModalProps) {
@@ -484,59 +575,27 @@ export function NodeSettingsModal({
 
           {selectedNodeType === NodeType.Condition && (
             <>
+              <small className="config-help-text">
+                A switch: each case routes to a named custom edge when its predicate holds, and the
+                default edge is taken when none match. No AI, command, or worktree access. Wire each
+                edge from the node's top handle.
+              </small>
+
+              <ConditionCasesEditor cases={conditionCases} onChange={onConditionCasesChange} />
+
               <div className="config-field">
-                <label htmlFor="condition-variant">Variant</label>
-                <select
-                  id="condition-variant"
-                  value={conditionVariant}
-                  onChange={(event) => onConditionVariantChange(event.target.value)}
-                >
-                  <option value="TextMatches">Text matches</option>
-                  <option value="PrExists">PR exists</option>
-                  <option value="HasTag">Has tag</option>
-                </select>
+                <label htmlFor="condition-default-edge">Default edge</label>
+                <input
+                  id="condition-default-edge"
+                  type="text"
+                  value={conditionDefaultEdge}
+                  onChange={(event) => onConditionDefaultEdgeChange(event.target.value)}
+                  placeholder="Edge name"
+                />
                 <small className="config-help-text">
-                  Evaluates a single predicate and routes to the fixed <code>true</code> or{" "}
-                  <code>false</code> outlet. No AI, command, or worktree access.
+                  Taken when no case matches. Connect it from the node's top handle.
                 </small>
               </div>
-
-              {conditionVariant === "TextMatches" && (
-                <>
-                  <div className="config-field">
-                    <label htmlFor="condition-subject">Subject</label>
-                    <PromptEditor
-                      id="condition-subject"
-                      rows={3}
-                      value={conditionSubject}
-                      onChange={onConditionSubjectChange}
-                    />
-                  </div>
-                  <div className="config-field">
-                    <label htmlFor="condition-pattern">Pattern</label>
-                    <input
-                      id="condition-pattern"
-                      type="text"
-                      value={conditionPattern}
-                      onChange={(event) => onConditionPatternChange(event.target.value)}
-                      placeholder="Regex (case-insensitive)"
-                    />
-                  </div>
-                </>
-              )}
-
-              {conditionVariant === "HasTag" && (
-                <div className="config-field">
-                  <label htmlFor="condition-tag">Tag</label>
-                  <input
-                    id="condition-tag"
-                    type="text"
-                    value={conditionTag}
-                    onChange={(event) => onConditionTagChange(event.target.value)}
-                    placeholder="Work-item tag"
-                  />
-                </div>
-              )}
 
               <div className="config-field">
                 <label htmlFor="condition-output">Output</label>
@@ -547,7 +606,7 @@ export function NodeSettingsModal({
                   onChange={onConditionOutputChange}
                 />
                 <small className="config-help-text">
-                  Emitted on both branches. Defaults to a pass-through of the node input.
+                  Emitted on every branch. Defaults to a pass-through of the node input.
                 </small>
               </div>
             </>

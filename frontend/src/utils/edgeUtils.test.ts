@@ -58,8 +58,21 @@ describe("getCustomEdgeNames", () => {
     expect(getCustomEdgeNames(node("c", NodeType.Cmd))).toEqual([]);
   });
 
-  test("Condition node offers exactly its fixed true/false pair", () => {
-    expect(getCustomEdgeNames(node("c", NodeType.Condition))).toEqual(["true", "false"]);
+  test("Condition node with no cases or default offers no outlets", () => {
+    expect(getCustomEdgeNames(node("c", NodeType.Condition))).toEqual([]);
+  });
+
+  test("Condition switch derives outlets from its cases' edges plus the default, deduped", () => {
+    const cond = node("c", NodeType.Condition, {
+      cases: [
+        { variant: "TextMatches", pattern: "approve", edgeName: "approved" },
+        { variant: "HasTag", tag: "urgent", edgeName: "urgent" },
+        { variant: "PrExists", edgeName: "approved" },
+        { variant: "PrExists", edgeName: "" },
+      ],
+      defaultEdge: "otherwise",
+    });
+    expect(getCustomEdgeNames(cond)).toEqual(["approved", "urgent", "otherwise"]);
   });
 
   test("PR node offers the seven reserved heartbeat edges plus any declared ones", () => {
