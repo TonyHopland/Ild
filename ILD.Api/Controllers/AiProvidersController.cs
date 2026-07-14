@@ -1,4 +1,7 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using ILD.Api.Services;
+using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
@@ -62,6 +65,38 @@ public class AiProvidersController : ControllerBase
         return null;
     }
 
+    /// <summary>
+    /// Fold the UI-managed Custom MCP servers value into a provider's config blob,
+    /// preserving every other key (including secrets the UI never sees, such as an
+    /// embedded <c>apiKey</c>). A null <paramref name="customMcpServersJson"/> means
+    /// the caller isn't managing the field, so the blob is returned unchanged; a
+    /// blank value clears the key. The stored key is camelCase to match the shape
+    /// <see cref="AiProviderConfig"/> reads.
+    /// </summary>
+    private static string? ApplyCustomMcpServers(string? configJson, string? customMcpServersJson)
+    {
+        if (customMcpServersJson is null) return configJson;
+
+        JsonObject obj;
+        try
+        {
+            obj = (string.IsNullOrWhiteSpace(configJson)
+                ? null
+                : JsonNode.Parse(configJson) as JsonObject) ?? new JsonObject();
+        }
+        catch (JsonException)
+        {
+            obj = new JsonObject();
+        }
+
+        if (string.IsNullOrWhiteSpace(customMcpServersJson))
+            obj.Remove("customMcpServersJson");
+        else
+            obj["customMcpServersJson"] = customMcpServersJson;
+
+        return obj.Count == 0 ? null : obj.ToJsonString();
+    }
+
     private static object ToResponse(AiProvider p) => new
     {
         id = p.Id,
@@ -74,6 +109,11 @@ public class AiProvidersController : ControllerBase
         apiKey = string.IsNullOrEmpty(p.ApiKey) ? null : "***",
         hasApiKey = !string.IsNullOrEmpty(p.ApiKey),
         hasConfig = !string.IsNullOrEmpty(p.Config),
+        // The config blob is never returned whole — it can embed a secret (e.g.
+        // a Pi provider's apiKey, read by PiAdapter). Surface only the non-secret,
+        // user-editable Custom MCP servers value so the AI Providers form can seed
+        // and round-trip it without leaking the rest of the blob.
+        customMcpServersJson = AiProviderConfig.Parse(p.Config).CustomMcpServersJson,
         supportedTools = AiToolCatalog.GetSupportedToolsForProviderType(p.Type),
         createdAt = p.CreatedAt,
         updatedAt = p.UpdatedAt,
@@ -117,7 +157,7 @@ public class AiProvidersController : ControllerBase
             ApiKey = string.IsNullOrEmpty(request.ApiKey) ? null : request.ApiKey,
             IsDefault = request.IsDefault,
             Parallelism = request.Parallelism,
-            Config = request.Config,
+            Config = ApplyCustomMcpServers(request.Config, request.CustomMcpServersJson),
             CreatedAt = DateTime.UtcNow,
         };
         await _providerStore.CreateAiProviderAsync(p);
@@ -174,7 +214,11 @@ public class AiProvidersController : ControllerBase
         if (!string.IsNullOrEmpty(request.ApiKey)) p.ApiKey = request.ApiKey;
         p.IsDefault = request.IsDefault;
         p.Parallelism = request.Parallelism;
-        p.Config = request.Config;
+        // Advanced callers may replace the whole blob via Config; otherwise keep the
+        // stored blob as the base so keys the UI never sees (e.g. a Pi provider's
+        // embedded apiKey) survive an edit. The Custom MCP servers value is then
+        // folded in on top.
+        p.Config = ApplyCustomMcpServers(request.Config ?? p.Config, request.CustomMcpServersJson);
         p.UpdatedAt = DateTime.UtcNow;
         await _providerStore.UpdateAiProviderAsync(p);
         // If the type was changed to a managed agent, make sure it is installed.

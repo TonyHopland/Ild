@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ILD.Data.Entities;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Tests.Integration;
 
@@ -169,5 +171,103 @@ public class AiProvidersIntegrationTests
         var defaults = items.Where(i => i.GetProperty("isDefault").GetBoolean()).ToList();
         Assert.Single(defaults);
         Assert.Equal("second", defaults[0].GetProperty("name").GetString());
+    }
+
+    [Fact]
+    public async Task CustomMcpServers_round_trips_through_create_response_and_update()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+
+        // The raw servers JSON the UI sends via the dedicated, non-secret field.
+        var servers = "{\"chrome-devtools\":{\"command\":[\"npx\"]}}";
+
+        var createResponse = await client.PostAsJsonAsync("/api/v1/aiproviders", new
+        {
+            name = "OpenCode w/chrome",
+            type = "opencode",
+            baseUrl = "https://oc.example.com",
+            model = "gpt-4",
+            isDefault = false,
+            customMcpServersJson = servers,
+        });
+        Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
+
+        // The create response echoes the value (never the whole config blob).
+        var created = await createResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var id = created.GetProperty("id").GetString()!;
+        Assert.Equal(servers, created.GetProperty("customMcpServersJson").GetString());
+        Assert.True(created.GetProperty("hasConfig").GetBoolean());
+        Assert.False(created.TryGetProperty("config", out _));
+
+        // GET also returns it, so reopening the edit modal round-trips the value.
+        var getResponse = await client.GetAsync($"/api/v1/aiproviders/{id}");
+        var fetched = await getResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(servers, fetched.GetProperty("customMcpServersJson").GetString());
+
+        // Updating with a new value persists and is echoed back.
+        var newServers = "{\"other\":{\"command\":[\"npx\"]}}";
+        var updateResponse = await client.PutAsJsonAsync($"/api/v1/aiproviders/{id}", new
+        {
+            name = "OpenCode w/chrome",
+            type = "opencode",
+            baseUrl = "https://oc.example.com",
+            model = "gpt-4",
+            isDefault = false,
+            customMcpServersJson = newServers,
+        });
+        Assert.Equal(HttpStatusCode.OK, updateResponse.StatusCode);
+        var updated = await updateResponse.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(newServers, updated.GetProperty("customMcpServersJson").GetString());
+    }
+
+    [Fact]
+    public async Task Editing_a_provider_preserves_other_config_keys_the_ui_never_sees()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+
+        // Seed a provider whose config carries a secret (an embedded apiKey the Pi
+        // adapter reads) alongside the MCP value — the shape the UI must not clobber.
+        var config = "{\"apiKey\":\"sk-secret\",\"customMcpServersJson\":\"{\\\"a\\\":{\\\"command\\\":[\\\"npx\\\"]}}\"}";
+        var createResponse = await client.PostAsJsonAsync("/api/v1/aiproviders", new
+        {
+            name = "Seeded",
+            type = "opencode",
+            baseUrl = "https://oc.example.com",
+            model = "gpt-4",
+            isDefault = false,
+            config,
+        });
+        Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
+        var id = (await createResponse.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("id").GetString()!;
+
+        // A normal UI edit sends only the MCP value (no raw config).
+        var newServers = "{\"b\":{\"command\":[\"npx\"]}}";
+        var updateResponse = await client.PutAsJsonAsync($"/api/v1/aiproviders/{id}", new
+        {
+            name = "Seeded renamed",
+            type = "opencode",
+            baseUrl = "https://oc.example.com",
+            model = "gpt-4",
+            isDefault = false,
+            customMcpServersJson = newServers,
+        });
+        Assert.Equal(HttpStatusCode.OK, updateResponse.StatusCode);
+        var updated = await updateResponse.Content.ReadFromJsonAsync<JsonElement>();
+        // The MCP value changed…
+        Assert.Equal(newServers, updated.GetProperty("customMcpServersJson").GetString());
+
+        // …and the embedded secret survived: it is still readable via the raw
+        // config (never returned to the UI, but persisted in the store), while the
+        // MCP value reflects the edit. Parse rather than substring-match so the
+        // assertion is agnostic to JSON string escaping.
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var stored = db.AiProviders.Single(p => p.Id == Guid.Parse(id)).Config!;
+        using var storedDoc = JsonDocument.Parse(stored);
+        Assert.Equal("sk-secret", storedDoc.RootElement.GetProperty("apiKey").GetString());
+        Assert.Equal(newServers, storedDoc.RootElement.GetProperty("customMcpServersJson").GetString());
     }
 }

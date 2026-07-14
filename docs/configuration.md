@@ -207,6 +207,12 @@ variants that differ only by the tools they carry — e.g. a plain **OpenCode**
 provider and an **OpenCode w/chrome** provider whose agents can drive a headless
 browser for debugging and screenshots.
 
+Set it on the **AI Providers** page: create or edit an OpenCode or Claude Code
+provider and fill in the **Custom MCP servers (JSON)** field. The value is stored
+on the provider (`AiProvider.Config`) and applies to every run that uses it. It
+is _not_ a per-loop-node setting — the Loop Editor's node settings do not carry
+provider config.
+
 The value is a JSON object mapping a server name to its definition:
 
 ```json

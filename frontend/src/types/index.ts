@@ -431,6 +431,13 @@ export interface AiProvider {
   model: string;
   isDefault: boolean;
   parallelism: number;
+  /**
+   * The non-secret "Custom MCP servers (JSON)" value extracted from the
+   * provider's config blob. Carried (rather than the whole blob, which can hold
+   * secrets) so the AI Providers form can seed the field and round-trip it on
+   * save; the server folds it back into `AiProvider.Config`.
+   */
+  customMcpServersJson?: string | null;
   supportedTools?: AiToolDefinition[];
   createdAt: string;
 }
