@@ -22,7 +22,7 @@ export interface EdgeConstraintResult {
 
 // Every node (except the Cleanup sink) routes success and failure. Only Human,
 // AI, PR and Condition nodes may additionally declare named custom edges
-// (Condition declares its fixed "true"/"false" pair).
+// (a Condition switch declares one per case plus its default edge).
 const customEdgeNodeTypes = new Set<NodeType>([
   NodeType.Human,
   NodeType.AI,

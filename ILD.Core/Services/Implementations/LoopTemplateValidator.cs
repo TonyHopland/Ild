@@ -10,7 +10,7 @@ public static class LoopTemplateValidator
 {
     // Every node (except the Cleanup sink) routes success and failure. Only
     // Human, AI, PR and Condition nodes may additionally declare named custom
-    // edges (Condition declares its fixed 'true'/'false' pair).
+    // edges (a Condition switch declares one per case plus its default edge).
     private static readonly HashSet<string> CustomEdgeNodeTypes =
         new(new[] { "Human", "AI", "PR", "Condition" }, StringComparer.OrdinalIgnoreCase);
 

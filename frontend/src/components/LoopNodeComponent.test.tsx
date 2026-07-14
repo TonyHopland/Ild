@@ -25,13 +25,13 @@ describe("LoopNodeComponent condition handles", () => {
   test("routes its branches through the shared custom outlet, with no success outlet", () => {
     renderNode(NodeType.Condition);
 
-    // A Condition node's "true"/"false" branches leave the single custom
-    // ("respond") outlet, like a PR node's on_* edges. The fail handle stays
-    // for an evaluation error, but there is no default success outlet.
+    // A Condition switch's per-case and default branches leave the single
+    // custom ("respond") outlet, like a PR node's on_* edges. The fail handle
+    // stays for an evaluation error, but there is no default success outlet.
     expect(screen.getByTestId("source-handle-respond")).toBeTruthy();
     expect(screen.getByTestId("source-handle-fail")).toBeTruthy();
     expect(screen.queryByTestId("source-handle-success")).toBeNull();
-    // No bespoke true/false handles.
+    // No bespoke per-branch handles.
     expect(screen.queryByTestId("source-handle-true")).toBeNull();
     expect(screen.queryByTestId("source-handle-false")).toBeNull();
   });
