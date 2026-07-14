@@ -119,6 +119,13 @@ try
             if (rejectMigrated > 0)
                 Log.Information("Migrated {Count} AI node(s) from rejectPattern to named custom edges", rejectMigrated);
 
+            // Convert legacy true/false Condition nodes to the switch model
+            // (cases + default edge). The executor already reads the old shape,
+            // so this only updates persisted rows. Idempotent once migrated.
+            var conditionsMigrated = await ILD.Data.Migrations.ConditionSwitchMigrator.MigrateAsync(dbContext);
+            if (conditionsMigrated > 0)
+                Log.Information("Migrated {Count} Condition node(s) from true/false to the switch model", conditionsMigrated);
+
             // Pull any historically offloaded event payloads back inline into the
             // DB. The payload files lived on the ephemeral /app layer, so this also
             // clears dangling paths whose files a redeploy already wiped.

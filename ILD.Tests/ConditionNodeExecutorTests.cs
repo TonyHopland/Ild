@@ -186,4 +186,95 @@ public class ConditionNodeExecutorTests
         Assert.Equal(EdgeType.OnFailure, fail.Edge);
         Assert.Contains("Unknown condition variant", fail.Reason);
     }
+
+    // ---- Switch (multiple cases + default edge) ---------------------------
+
+    private static Dictionary<string, object?> Case(
+        string variant, string edgeName, string? pattern = null, string? tag = null, string? subject = null)
+    {
+        var c = new Dictionary<string, object?> { ["variant"] = variant, ["edgeName"] = edgeName };
+        if (pattern != null) c["pattern"] = pattern;
+        if (tag != null) c["tag"] = tag;
+        if (subject != null) c["subject"] = subject;
+        return c;
+    }
+
+    [Fact]
+    public async Task Switch_routes_to_the_matching_case_edge()
+    {
+        var node = MakeNode(new()
+        {
+            ["cases"] = new object[]
+            {
+                Case("HasTag", "urgent", tag: "urgent"),
+                Case("TextMatches", "approved", pattern: "approve"),
+            },
+            ["defaultEdge"] = "otherwise",
+        });
+        var outcomes = await RunAsync(node, MakeRun(previousOutput: "please approve"), BuildServices(Wi("backend")));
+
+        AssertSuccess(outcomes, "approved");
+    }
+
+    [Fact]
+    public async Task Switch_evaluates_cases_in_order_and_the_first_match_wins()
+    {
+        // Both cases would match "banana"; the earlier one must win.
+        var node = MakeNode(new()
+        {
+            ["cases"] = new object[]
+            {
+                Case("TextMatches", "first", pattern: "a"),
+                Case("TextMatches", "second", pattern: "a"),
+            },
+            ["defaultEdge"] = "otherwise",
+        });
+        var outcomes = await RunAsync(node, MakeRun(previousOutput: "banana"), BuildServices(Wi()));
+
+        AssertSuccess(outcomes, "first");
+    }
+
+    [Fact]
+    public async Task Switch_routes_to_the_default_edge_when_no_case_matches()
+    {
+        var node = MakeNode(new()
+        {
+            ["cases"] = new object[] { Case("TextMatches", "matched", pattern: "zzz") },
+            ["defaultEdge"] = "otherwise",
+        });
+        var outcomes = await RunAsync(node, MakeRun(previousOutput: "hello world"), BuildServices(Wi()));
+
+        AssertSuccess(outcomes, "otherwise");
+    }
+
+    [Fact]
+    public async Task Switch_case_with_invalid_regex_fails_on_failure()
+    {
+        // Edge case: a bad pattern on any case routes to OnFailure rather than
+        // falling through to the default edge.
+        var node = MakeNode(new()
+        {
+            ["cases"] = new object[] { Case("TextMatches", "matched", pattern: "**bad**") },
+            ["defaultEdge"] = "otherwise",
+        });
+        var outcomes = await RunAsync(node, MakeRun(previousOutput: "x"), BuildServices(Wi()));
+
+        var fail = Assert.IsType<NodeOutcome.Fail>(outcomes[^1]);
+        Assert.Equal(EdgeType.OnFailure, fail.Edge);
+        Assert.Contains("Invalid regex", fail.Reason);
+    }
+
+    [Fact]
+    public async Task Switch_falls_back_to_false_default_when_default_edge_is_unset()
+    {
+        // A switch config that omits defaultEdge still routes no-match through
+        // the legacy "false" edge, so a half-authored switch never dead-ends.
+        var node = MakeNode(new()
+        {
+            ["cases"] = new object[] { Case("TextMatches", "matched", pattern: "zzz") },
+        });
+        var outcomes = await RunAsync(node, MakeRun(previousOutput: "hello"), BuildServices(Wi()));
+
+        AssertSuccess(outcomes, "false");
+    }
 }

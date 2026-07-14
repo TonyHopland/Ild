@@ -33,10 +33,8 @@ function renderModal(overrides: Partial<Parameters<typeof NodeSettingsModal>[0]>
     promptNodePrompt: "",
     prDescriptionTemplate: "",
     prCommentTemplate: "",
-    conditionVariant: "TextMatches",
-    conditionSubject: "",
-    conditionPattern: "",
-    conditionTag: "",
+    conditionCases: [],
+    conditionDefaultEdge: "false",
     conditionOutput: "{{Node.Input}}",
     aiProviders: [],
     availableAiTools: [],
@@ -65,10 +63,8 @@ function renderModal(overrides: Partial<Parameters<typeof NodeSettingsModal>[0]>
     onPromptNodePromptChange: vi.fn(),
     onPrDescriptionTemplateChange: vi.fn(),
     onPrCommentTemplateChange: vi.fn(),
-    onConditionVariantChange: vi.fn(),
-    onConditionSubjectChange: vi.fn(),
-    onConditionPatternChange: vi.fn(),
-    onConditionTagChange: vi.fn(),
+    onConditionCasesChange: vi.fn(),
+    onConditionDefaultEdgeChange: vi.fn(),
     onConditionOutputChange: vi.fn(),
     onAdapterConfigChange: vi.fn(),
     ...overrides,
@@ -180,52 +176,64 @@ describe("NodeSettingsModal condition node", () => {
     cleanup();
   });
 
-  test("TextMatches variant shows Subject and Pattern but not Tag", () => {
+  test("a TextMatches case shows its pattern field and the default edge", () => {
     renderModal({
       selectedNode: makeNode(NodeType.Condition),
-      conditionVariant: "TextMatches",
+      conditionCases: [
+        { variant: "TextMatches", subject: "", pattern: "approve", tag: "", edgeName: "approved" },
+      ],
+      conditionDefaultEdge: "otherwise",
     });
 
-    expect(screen.getByLabelText("Variant")).toBeTruthy();
-    expect(screen.getByLabelText("Subject")).toBeTruthy();
-    expect(screen.getByLabelText("Pattern")).toBeTruthy();
-    expect(screen.queryByLabelText("Tag")).toBeNull();
-    // Output is shown for every variant.
+    expect(screen.getByLabelText("Case variant 1")).toBeTruthy();
+    expect((screen.getByLabelText("Case edge name 1") as HTMLInputElement).value).toBe("approved");
+    expect((screen.getByLabelText("Case pattern 1") as HTMLInputElement).value).toBe("approve");
+    expect(screen.queryByLabelText("Case tag 1")).toBeNull();
+    expect((screen.getByLabelText("Default edge") as HTMLInputElement).value).toBe("otherwise");
+    // Output is still shown for the switch.
     expect(screen.getByLabelText("Output")).toBeTruthy();
   });
 
-  test("HasTag variant shows Tag but not Subject or Pattern", () => {
+  test("a HasTag case shows its tag field but not the TextMatches fields", () => {
     renderModal({
       selectedNode: makeNode(NodeType.Condition),
-      conditionVariant: "HasTag",
+      conditionCases: [
+        { variant: "HasTag", subject: "", pattern: "", tag: "urgent", edgeName: "urgent" },
+      ],
     });
 
-    expect(screen.getByLabelText("Tag")).toBeTruthy();
-    expect(screen.queryByLabelText("Subject")).toBeNull();
-    expect(screen.queryByLabelText("Pattern")).toBeNull();
-    expect(screen.getByLabelText("Output")).toBeTruthy();
+    expect((screen.getByLabelText("Case tag 1") as HTMLInputElement).value).toBe("urgent");
+    expect(screen.queryByLabelText("Case pattern 1")).toBeNull();
   });
 
-  test("PrExists variant shows neither sub-form but keeps Output", () => {
-    renderModal({
-      selectedNode: makeNode(NodeType.Condition),
-      conditionVariant: "PrExists",
-    });
-
-    expect(screen.queryByLabelText("Subject")).toBeNull();
-    expect(screen.queryByLabelText("Pattern")).toBeNull();
-    expect(screen.queryByLabelText("Tag")).toBeNull();
-    expect(screen.getByLabelText("Output")).toBeTruthy();
-  });
-
-  test("changing the variant dropdown notifies the parent", () => {
+  test("adding a case notifies the parent with an appended empty case", () => {
     const props = renderModal({
       selectedNode: makeNode(NodeType.Condition),
-      conditionVariant: "TextMatches",
+      conditionCases: [
+        { variant: "PrExists", subject: "", pattern: "", tag: "", edgeName: "has-pr" },
+      ],
     });
 
-    fireEvent.change(screen.getByLabelText("Variant"), { target: { value: "HasTag" } });
+    fireEvent.click(screen.getByText("+ Add case"));
 
-    expect(props.onConditionVariantChange).toHaveBeenCalledWith("HasTag");
+    expect(props.onConditionCasesChange).toHaveBeenCalledWith([
+      { variant: "PrExists", subject: "", pattern: "", tag: "", edgeName: "has-pr" },
+      { variant: "TextMatches", subject: "", pattern: "", tag: "", edgeName: "" },
+    ]);
+  });
+
+  test("changing a case variant notifies the parent", () => {
+    const props = renderModal({
+      selectedNode: makeNode(NodeType.Condition),
+      conditionCases: [
+        { variant: "TextMatches", subject: "", pattern: "", tag: "", edgeName: "m" },
+      ],
+    });
+
+    fireEvent.change(screen.getByLabelText("Case variant 1"), { target: { value: "HasTag" } });
+
+    expect(props.onConditionCasesChange).toHaveBeenCalledWith([
+      { variant: "HasTag", subject: "", pattern: "", tag: "", edgeName: "m" },
+    ]);
   });
 });

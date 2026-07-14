@@ -1,5 +1,5 @@
 import type { Edge, Node } from "@xyflow/react";
-import { AiMatchRule, EdgeType, NodeType } from "../types";
+import { AiMatchRule, ConditionCase, EdgeType, NodeType } from "../types";
 
 // Every loop edge renders through the custom LoopEdgeComponent (registered under
 // this type) so siblings that share one source/target route can fan apart.
@@ -49,10 +49,10 @@ export const PR_RESERVED_EDGE_NAMES = [
   "on_abandoned",
 ] as const;
 
-// A Condition node routes through exactly two fixed, named custom edges — the
-// branch taken when the predicate holds ("true") and when it does not ("false").
-// Like the PR node's reserved edges these are wired through the single custom
-// outlet and picked by name, not declared in config.
+// The edge names a legacy (pre-switch) true/false Condition routed through, used
+// as the fallback custom-edge set when a Condition config carries no `cases`
+// (an old loop not yet migrated to the switch model). Mirrors ILD.Core
+// ConditionNodeExecutor.Legacy*Edge.
 export const CONDITION_EDGE_NAMES = ["true", "false"] as const;
 
 /**
@@ -88,8 +88,12 @@ export function getCustomEdgeNames(node: Node | undefined | null): string[] {
     return collect(names);
   }
   if (data?.type === NodeType.Condition) {
-    // Fixed pair, like the PR node's reserved edges — not config-driven.
-    return collect([...CONDITION_EDGE_NAMES]);
+    // A switch: derive the outlets from its cases' edge names plus the default
+    // edge. A legacy config with no cases falls back to the fixed true/false
+    // pair so old loops still wire.
+    const cases = (config.cases as ConditionCase[] | undefined) ?? [];
+    if (cases.length === 0) return collect([...CONDITION_EDGE_NAMES]);
+    return collect([...cases.map((c) => c?.edgeName), config.defaultEdge as string | undefined]);
   }
   return [];
 }

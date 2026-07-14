@@ -979,6 +979,22 @@
   margin-top: 0.375rem;
 }
 
+/* One Condition switch case: a variant/edge header row plus its variant-specific
+   fields, grouped and separated from the next case. */
+.condition-case-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  border: 1px solid #3a3a5a;
+  border-radius: 0.25rem;
+}
+
+.condition-case-row .match-rule-row {
+  margin-top: 0;
+}
+
 .match-rule-row input {
   flex: 1;
   min-width: 0;

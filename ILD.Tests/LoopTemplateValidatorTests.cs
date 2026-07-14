@@ -359,7 +359,7 @@ public class LoopTemplateValidatorTests
             new() { Node("s", "Start"), ConditionNode("q", "PrExists"), Node("c", "Cleanup") },
             new() { Edge("s", "q"), Edge("q", "c", "Custom", "true") });
         var errs = LoopTemplateValidator.Validate(g);
-        Assert.Contains(errs, e => e.Contains("must have a custom edge named 'false'"));
+        Assert.Contains(errs, e => e.Contains("routes to 'false' but no custom edge with that name exists"));
     }
 
     [Fact]
@@ -368,7 +368,7 @@ public class LoopTemplateValidatorTests
         var errs = LoopTemplateValidator.Validate(
             ConditionGraph(ConditionNode("q", "PrExists"),
                 Edge("q", "c", "Custom", "maybe")));
-        Assert.Contains(errs, e => e.Contains("unexpected custom edge 'maybe'"));
+        Assert.Contains(errs, e => e.Contains("custom edge 'maybe' that no case or default routes to"));
     }
 
     [Fact]
@@ -394,5 +394,97 @@ public class LoopTemplateValidatorTests
         var errs = LoopTemplateValidator.Validate(
             ConditionGraph(ConditionNode("q", "PrExists", output: "{{Bogus.Thing}}")));
         Assert.Contains(errs, e => e.Contains("Bogus"));
+    }
+
+    // ---- Condition switch (multiple cases + default edge) ------------------
+
+    private static Dictionary<string, object> SwitchCase(
+        string variant, string edgeName, string? pattern = null, string? tag = null, string? subject = null)
+    {
+        var c = new Dictionary<string, object> { ["variant"] = variant, ["edgeName"] = edgeName };
+        if (pattern != null) c["pattern"] = pattern;
+        if (tag != null) c["tag"] = tag;
+        if (subject != null) c["subject"] = subject;
+        return c;
+    }
+
+    private static LoopNodeDto SwitchConditionNode(string id, object[] cases, string defaultEdge)
+    {
+        var dto = new LoopNodeDto { Id = id, NodeType = "Condition", Label = id };
+        dto.Config["cases"] = cases;
+        dto.Config["defaultEdge"] = defaultEdge;
+        return dto;
+    }
+
+    // A switch Condition wired to one custom edge per referenced name.
+    private static LoopTemplateGraph SwitchGraph(LoopNodeDto cond, params string[] edgeNames)
+    {
+        var edges = new List<LoopNodeEdgeDto> { Edge("s", cond.Id) };
+        foreach (var name in edgeNames)
+            edges.Add(Edge(cond.Id, "c", "Custom", name));
+        return new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Node("s", "Start"), cond, Node("c", "Cleanup") },
+            edges);
+    }
+
+    [Fact]
+    public void Condition_switch_with_cases_and_default_is_valid()
+    {
+        var cond = SwitchConditionNode("q",
+            new object[]
+            {
+                SwitchCase("TextMatches", "approved", pattern: "approve"),
+                SwitchCase("HasTag", "urgent", tag: "urgent"),
+            },
+            "otherwise");
+        var errs = LoopTemplateValidator.Validate(SwitchGraph(cond, "approved", "urgent", "otherwise"));
+        Assert.Empty(errs);
+    }
+
+    [Fact]
+    public void Condition_switch_without_default_edge_is_rejected()
+    {
+        var cond = SwitchConditionNode("q",
+            new object[] { SwitchCase("PrExists", "has-pr") }, "");
+        var errs = LoopTemplateValidator.Validate(SwitchGraph(cond, "has-pr"));
+        Assert.Contains(errs, e => e.Contains("must set a default edge"));
+    }
+
+    [Fact]
+    public void Condition_switch_case_without_edge_name_is_rejected()
+    {
+        var cond = SwitchConditionNode("q",
+            new object[] { SwitchCase("PrExists", "") }, "otherwise");
+        var errs = LoopTemplateValidator.Validate(SwitchGraph(cond, "otherwise"));
+        Assert.Contains(errs, e => e.Contains("case 1 must set an edge name"));
+    }
+
+    [Fact]
+    public void Condition_switch_case_with_invalid_regex_is_rejected()
+    {
+        var cond = SwitchConditionNode("q",
+            new object[] { SwitchCase("TextMatches", "approved", pattern: "**bad**") }, "otherwise");
+        var errs = LoopTemplateValidator.Validate(SwitchGraph(cond, "approved", "otherwise"));
+        Assert.Contains(errs, e => e.Contains("case 1 has an invalid regex pattern"));
+    }
+
+    [Fact]
+    public void Condition_switch_with_unwired_referenced_edge_is_rejected()
+    {
+        // The "otherwise" default edge is referenced but never wired out.
+        var cond = SwitchConditionNode("q",
+            new object[] { SwitchCase("PrExists", "has-pr") }, "otherwise");
+        var errs = LoopTemplateValidator.Validate(SwitchGraph(cond, "has-pr"));
+        Assert.Contains(errs, e => e.Contains("routes to 'otherwise' but no custom edge with that name exists"));
+    }
+
+    [Fact]
+    public void Condition_switch_with_orphan_wired_edge_is_rejected()
+    {
+        // A wired custom edge no case or default routes to.
+        var cond = SwitchConditionNode("q",
+            new object[] { SwitchCase("PrExists", "has-pr") }, "otherwise");
+        var errs = LoopTemplateValidator.Validate(SwitchGraph(cond, "has-pr", "otherwise", "orphan"));
+        Assert.Contains(errs, e => e.Contains("custom edge 'orphan' that no case or default routes to"));
     }
 }
