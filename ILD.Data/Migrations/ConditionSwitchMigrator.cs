@@ -41,12 +41,15 @@ public static class ConditionSwitchMigrator
     /// <summary>Runs the migration; returns the number of Condition nodes rewritten.</summary>
     public static async Task<int> MigrateAsync(AppDbContext db, CancellationToken ct = default)
     {
-        // Only legacy Condition nodes carried a top-level "variant" without a
-        // "cases" key. The Contains filters keep the query cheap and make
-        // re-runs a no-op once the config has been rewritten.
+        // Only legacy Condition nodes carried a top-level "variant" key; the
+        // migration removes it, so this gate also makes re-runs a no-op once a
+        // row is rewritten. (A "cases"-substring exclusion would be a false
+        // negative — a legacy pattern/subject/output containing "cases" would
+        // never migrate and then dead-end at runtime — so TryRewriteConfig
+        // re-checks for an existing cases array instead.)
         var conditionNodes = await db.LoopNodes
             .Where(n => n.NodeType == NodeType.Condition && n.Config != null
-                && n.Config.Contains("variant") && !n.Config.Contains("cases"))
+                && n.Config.Contains("variant"))
             .ToListAsync(ct);
         if (conditionNodes.Count == 0) return 0;
 

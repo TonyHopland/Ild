@@ -71,6 +71,26 @@ public class ConditionSwitchMigratorTests
     }
 
     [Fact]
+    public async Task Legacy_condition_whose_text_contains_cases_still_migrates()
+    {
+        // Regression: the query must not exclude legacy rows just because their
+        // free text (pattern/subject/output) contains the substring "cases" —
+        // migration is the sole bridge, so a skipped row would dead-end at runtime.
+        using var db = new TestDb();
+        var condId = SeedCondition(db, "{\"variant\":\"TextMatches\",\"pattern\":\"edge cases\"}");
+
+        var migrated = await ConditionSwitchMigrator.MigrateAsync(db.Context);
+
+        Assert.Equal(1, migrated);
+        var fresh = db.Fresh();
+        var node = await fresh.LoopNodes.SingleAsync(n => n.Id == condId);
+        using var doc = JsonDocument.Parse(node.Config!);
+        var c = Assert.Single(doc.RootElement.GetProperty("cases").EnumerateArray());
+        Assert.Equal("edge cases", c.GetProperty("pattern").GetString());
+        Assert.Equal("true", c.GetProperty("edgeName").GetString());
+    }
+
+    [Fact]
     public async Task An_already_switch_condition_is_left_untouched()
     {
         using var db = new TestDb();
