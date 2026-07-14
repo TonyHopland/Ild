@@ -1179,13 +1179,16 @@ export default function LoopEditor() {
       // variant/subject/pattern/tag behind.
       config.cases = conditionCases.map((c) => {
         const variant = c.variant.trim() || CONDITION_DEFAULT_CASE.variant;
-        return {
-          variant,
-          edgeName: c.edgeName.trim(),
-          subject: variant === "TextMatches" ? c.subject.trim() || CONDITION_DEFAULT_TEMPLATE : "",
-          pattern: variant === "TextMatches" ? c.pattern : "",
-          tag: variant === "HasTag" ? c.tag.trim() : "",
-        };
+        const persisted: Record<string, unknown> = { variant, edgeName: c.edgeName.trim() };
+        // Include only the params the chosen variant uses (PrExists uses none),
+        // matching the shape the backend migrator writes and the executor reads.
+        if (variant === "TextMatches") {
+          persisted.subject = c.subject.trim() || CONDITION_DEFAULT_TEMPLATE;
+          persisted.pattern = c.pattern;
+        } else if (variant === "HasTag") {
+          persisted.tag = c.tag.trim();
+        }
+        return persisted;
       });
       config.defaultEdge = conditionDefaultEdge.trim() || CONDITION_DEFAULT_EDGE;
       config.output = conditionOutput.trim() || CONDITION_DEFAULT_TEMPLATE;

@@ -48,6 +48,7 @@ public sealed class ConditionNodeExecutor : INodeExecutor
 
         // First case whose predicate holds wins; no match takes the default edge.
         string? edgeName = null;
+        var matchedAny = false;
         foreach (var c in cases)
         {
             var (matched, error) = await EvaluateAsync(c, ctx, wi, rendering);
@@ -59,11 +60,29 @@ public sealed class ConditionNodeExecutor : INodeExecutor
             if (matched)
             {
                 edgeName = c.EdgeName?.Trim();
+                matchedAny = true;
                 break;
             }
         }
 
-        edgeName = string.IsNullOrWhiteSpace(edgeName) ? defaultEdge : edgeName;
+        if (!matchedAny)
+            edgeName = defaultEdge;
+
+        if (string.IsNullOrWhiteSpace(edgeName))
+        {
+            // A blank edge name (an empty switch, no default edge, or a matched
+            // case that named no edge) would emit Success(Custom, "") — which the
+            // engine treats as a run terminus and silently completes. Fail onto
+            // OnFailure instead so the misconfiguration surfaces. Save-time
+            // validation already forbids this shape.
+            yield return new NodeOutcome.Fail(
+                EdgeType.OnFailure,
+                matchedAny
+                    ? "Condition matched a case with no edge name"
+                    : "Condition matched no case and has no default edge");
+            yield break;
+        }
+
         yield return new NodeOutcome.Success(EdgeType.Custom, output, edgeName);
     }
 

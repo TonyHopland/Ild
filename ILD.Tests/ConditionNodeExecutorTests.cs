@@ -191,4 +191,30 @@ public class ConditionNodeExecutorTests
         Assert.Equal(EdgeType.OnFailure, fail.Edge);
         Assert.Contains("Unknown condition variant", fail.Reason);
     }
+
+    [Fact]
+    public async Task No_match_with_blank_default_edge_fails_rather_than_completing_silently()
+    {
+        // A blank default edge must NOT emit Success(Custom, "") — the engine
+        // would treat the empty name as a terminus and silently complete the run.
+        var node = SwitchNode(new object[] { Case("TextMatches", "matched", pattern: "zzz") }, "");
+        var outcomes = await RunAsync(node, MakeRun(previousOutput: "hello"), BuildServices(Wi()));
+
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Success);
+        var fail = Assert.IsType<NodeOutcome.Fail>(outcomes[^1]);
+        Assert.Equal(EdgeType.OnFailure, fail.Edge);
+        Assert.Contains("no default edge", fail.Reason);
+    }
+
+    [Fact]
+    public async Task Matched_case_with_blank_edge_name_fails_rather_than_completing_silently()
+    {
+        var node = SwitchNode(new object[] { Case("TextMatches", "", pattern: "a") }, "otherwise");
+        var outcomes = await RunAsync(node, MakeRun(previousOutput: "banana"), BuildServices(Wi()));
+
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Success);
+        var fail = Assert.IsType<NodeOutcome.Fail>(outcomes[^1]);
+        Assert.Equal(EdgeType.OnFailure, fail.Edge);
+        Assert.Contains("no edge name", fail.Reason);
+    }
 }
