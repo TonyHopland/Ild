@@ -69,6 +69,8 @@ export default function TerminalView({
     termRef.current = term;
     fitRef.current = fit;
 
+    setStatus("connecting");
+    setErrorText("");
     openedRef.current = false;
     const ws = new WebSocket(buildWsUrl(term.cols, term.rows));
     ws.binaryType = "arraybuffer";
