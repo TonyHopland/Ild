@@ -149,4 +149,32 @@ public class AiToolCatalogTests
 
         Assert.Single(result);
     }
+
+    [Fact]
+    public void ToolDescriptors_All_includes_variable_tools()
+    {
+        var all = ToolDescriptors.All;
+        var names = all.Select(t => t.Name).ToArray();
+
+        Assert.Contains("ild_get_loop_variables", names);
+        Assert.Contains("ild_set_loop_variable", names);
+    }
+
+    [Fact]
+    public void ToolDescriptors_variable_tools_have_correct_endpoints()
+    {
+        var all = ToolDescriptors.All;
+
+        var getVars = all.First(t => t.Name == "ild_get_loop_variables");
+        Assert.Equal("api/v1/agent/variables", getVars.EndpointPath);
+        Assert.Equal(HttpMethod.Get, getVars.HttpMethod);
+        Assert.Empty(getVars.Parameters);
+
+        var setVar = all.First(t => t.Name == "ild_set_loop_variable");
+        Assert.Equal("api/v1/agent/variables/{name}", setVar.EndpointPath);
+        Assert.Equal(HttpMethod.Put, setVar.HttpMethod);
+        Assert.Equal(2, setVar.Parameters.Length);
+        Assert.Contains(setVar.Parameters, p => p.Name == "name" && !p.IsBodyParam);
+        Assert.Contains(setVar.Parameters, p => p.Name == "value" && p.IsBodyParam);
+    }
 }

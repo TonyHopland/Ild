@@ -254,6 +254,45 @@ public static class ToolDescriptors
         },
     };
 
+    // -- Loop variables (ADR-0011) --
+    //
+    // Mirror the MCP VariableTools and the agent-API variable endpoints.
+    // Scoped to the loop run via the X-ILD-Run-Id header the generated client sends.
+
+    public static readonly ToolDescriptor GetLoopVariables = new()
+    {
+        Name = "ild_get_loop_variables",
+        Label = "Get Loop Variables",
+        Description =
+            "List all loop variables set on the current loop run. Returns an array of {name, value, updatedAt}. Use this to read hand-off values written by an earlier node.",
+        EndpointPath = "api/v1/agent/variables",
+        HttpMethod = HttpMethod.Get,
+        Parameters = Array.Empty<ToolParameterDescriptor>(),
+    };
+
+    public static readonly ToolDescriptor SetLoopVariable = new()
+    {
+        Name = "ild_set_loop_variable",
+        Label = "Set Loop Variable",
+        Description =
+            "Create or overwrite a loop variable on the current loop run. The name must start with a letter and contain only letters, digits, and underscores. Use this to hand off text to a later AI or to the PR node.",
+        EndpointPath = "api/v1/agent/variables/{name}",
+        HttpMethod = HttpMethod.Put,
+        Parameters = new ToolParameterDescriptor[]
+        {
+            new()
+            {
+                Name = "name", Description =
+                    "Variable name: starts with a letter, then letters/digits/underscores (e.g. handoff, pr_summary).",
+                TsType = "string",
+            },
+            new()
+            {
+                Name = "value", Description = "Value to store (up to 8192 chars).", TsType = "string", IsBodyParam = true,
+            },
+        },
+    };
+
     // -- Aggregate (must be last to ensure all above are initialized first) --
 
     public static readonly ToolDescriptor[] All =
@@ -274,5 +313,7 @@ public static class ToolDescriptors
         GetPreviewLogs,
         GetCurrentLoop,
         UpdateCurrentLoop,
+        GetLoopVariables,
+        SetLoopVariable,
     ];
 }
