@@ -204,41 +204,39 @@ export default function EditPanel({
           placeholder="e.g. build, deploy"
         />
       </div>
-      {workItem && (
-        <div className="form-row">
+      <div className="form-row">
+        <div className="form-group">
+          <label htmlFor="wiv2-ai-override">AI provider override</label>
+          <select
+            id="wiv2-ai-override"
+            value={aiProviderOverride}
+            onChange={(e) => setAiProviderOverride(e.target.value as AiProviderOverrideMode)}
+          >
+            <option value={AiProviderOverrideMode.None}>Default (no override)</option>
+            <option value={AiProviderOverrideMode.OverrideDefault}>
+              Override default provider only
+            </option>
+            <option value={AiProviderOverrideMode.OverrideAll}>Override all providers</option>
+          </select>
+        </div>
+        {overridesProvider && (
           <div className="form-group">
-            <label htmlFor="wiv2-ai-override">AI provider override</label>
+            <label htmlFor="wiv2-ai-override-provider">Provider</label>
             <select
-              id="wiv2-ai-override"
-              value={aiProviderOverride}
-              onChange={(e) => setAiProviderOverride(e.target.value as AiProviderOverrideMode)}
+              id="wiv2-ai-override-provider"
+              value={aiProviderOverrideId}
+              onChange={(e) => setAiProviderOverrideId(e.target.value)}
             >
-              <option value={AiProviderOverrideMode.None}>Default (no override)</option>
-              <option value={AiProviderOverrideMode.OverrideDefault}>
-                Override default provider only
-              </option>
-              <option value={AiProviderOverrideMode.OverrideAll}>Override all providers</option>
+              <option value="">Select provider...</option>
+              {detail.aiProviders.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
             </select>
           </div>
-          {overridesProvider && (
-            <div className="form-group">
-              <label htmlFor="wiv2-ai-override-provider">Provider</label>
-              <select
-                id="wiv2-ai-override-provider"
-                value={aiProviderOverrideId}
-                onChange={(e) => setAiProviderOverrideId(e.target.value)}
-              >
-                <option value="">Select provider...</option>
-                {detail.aiProviders.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-        </div>
-      )}
+        )}
+      </div>
       {submitError && (
         <div role="alert" className="form-error">
           {submitError}
