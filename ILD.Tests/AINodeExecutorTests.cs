@@ -36,7 +36,8 @@ public class AINodeExecutorTests
         ILoopRunStore? loopRunStore = null,
         IWorkItemManager? workItemManager = null,
         IAgentAdapterRegistry? registry = null,
-        WorkItemView? workItem = null)
+        WorkItemView? workItem = null,
+        IAiProviderConcurrencyTracker? concurrency = null)
     {
         var wi = workItem ?? new WorkItemView { Id = "WI-1", RepositoryId = null };
         var wimMock = workItemManager ?? Mock.Of<IWorkItemManager>(m =>
@@ -55,6 +56,8 @@ public class AINodeExecutorTests
         // routing tests pass a fake registry so a real output is produced.
         if (registry is not null)
             services.AddSingleton(registry);
+        if (concurrency is not null)
+            services.AddSingleton(concurrency);
         return services.BuildServiceProvider();
     }
 
@@ -480,5 +483,66 @@ public class AINodeExecutorTests
         var fail = Assert.IsType<NodeOutcome.Fail>(last);
         Assert.Equal(EdgeType.OnFailure, fail.Edge);
         Assert.Contains(missingId.ToString(), fail.Reason);
+    }
+
+    // ── Concurrency is claimed against the post-override provider ───────────
+    //
+    // These pin the layer that is already correct: whatever the node pins, the
+    // slot is taken from the provider the override actually routes to. They are
+    // the backstop that keeps RemoteWorkItemCoordinator's wrong-provider resume
+    // peek from becoming a real parallelism breach — so a fix there must not
+    // change what happens here.
+
+    private async Task<(AiProvider? resolved, NodeOutcome last)> RunWithConcurrencyAsync(
+        Mock<IProviderStore> store, string? nodeConfig, WorkItemView workItem,
+        IAiProviderConcurrencyTracker concurrency)
+    {
+        var (registry, resolved) = CapturingRegistry();
+        var sp = BuildServices(store.Object, registry: registry, workItem: workItem, concurrency: concurrency);
+        var executor = new AINodeExecutor();
+        var ctx = BuildCtx(MakeNode(nodeConfig), MakeRun(), sp);
+
+        NodeOutcome? last = null;
+        await foreach (var o in executor.ExecuteAsync(ctx))
+            last = o;
+        return (resolved(), last!);
+    }
+
+    [Fact]
+    public async Task Waits_when_the_override_target_is_at_capacity_though_the_pinned_provider_is_free()
+    {
+        var (store, _, pinned, ovr) = BuildOverrideProviderStore();
+        var tracker = new AiProviderConcurrencyTracker();
+        Assert.True(tracker.TryEnter(ovr.Id, ovr.Parallelism)); // fill the override's only slot
+
+        var (_, last) = await RunWithConcurrencyAsync(
+            store,
+            $@"{{""aiProviderId"":""{pinned.Id}""}}",
+            WorkItem(RemoteAiProviderOverrideMode.OverrideAll, ovr.Id),
+            tracker);
+
+        var waiting = Assert.IsType<NodeOutcome.WaitingIld>(last);
+        Assert.Contains(ovr.Name, waiting.Reason);
+        // The pinned provider was never entered — it is not the gate.
+        Assert.Equal(0, tracker.ActiveCount(pinned.Id));
+    }
+
+    [Fact]
+    public async Task Runs_when_the_override_target_is_free_though_the_pinned_provider_is_at_capacity()
+    {
+        var (store, _, pinned, ovr) = BuildOverrideProviderStore();
+        var tracker = new AiProviderConcurrencyTracker();
+        Assert.True(tracker.TryEnter(pinned.Id, pinned.Parallelism)); // saturate the pinned provider
+
+        var (resolved, last) = await RunWithConcurrencyAsync(
+            store,
+            $@"{{""aiProviderId"":""{pinned.Id}""}}",
+            WorkItem(RemoteAiProviderOverrideMode.OverrideAll, ovr.Id),
+            tracker);
+
+        Assert.IsNotType<NodeOutcome.WaitingIld>(last);
+        Assert.Equal(ovr.Id, resolved!.Id);
+        // The override's slot was claimed and released around the adapter call.
+        Assert.Equal(0, tracker.ActiveCount(ovr.Id));
     }
 }
