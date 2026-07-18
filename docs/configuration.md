@@ -171,12 +171,12 @@ The repository's own `ild.config.json` defines an `app` profile that boots three
 
 Set as build args (e.g. in `.env` consumed by `docker compose build`):
 
-| Build arg         | Purpose                                                   |
-| ----------------- | --------------------------------------------------------- |
-| `WITH_NODE`       | Install Node.js tooling in the ILD image                  |
-| `WITH_DOTNET_SDK` | Install the .NET SDK in the ILD image                     |
-| `WITH_CHROME`     | Install Chrome in the ILD image                           |
-| `WITH_CERTS`      | Import `.crt` or `.pem` files from `certs/` at build time |
+| Build arg         | Purpose                                                                       |
+| ----------------- | ----------------------------------------------------------------------------- |
+| `WITH_NODE`       | Install Node.js tooling in the ILD image                                      |
+| `WITH_DOTNET_SDK` | Base the ILD image on the .NET SDK image instead of the ASP.NET runtime image |
+| `WITH_CHROME`     | Install Chrome in the ILD image                                               |
+| `WITH_CERTS`      | Import `.crt` or `.pem` files from `certs/` at build time                     |
 
 The coding agents (Pi, OpenCode, Claude Code, GitHub Copilot) are **not** baked into the image.
 They install on demand onto the persistent `/data` volume and are updated there
@@ -189,7 +189,10 @@ in the background; the **AI Provider** page shows each agent's current/latest
 version, lets you trigger an install or update manually, and reports failures
 (e.g. the npm registry being unreachable).
 
-Toolchain versions are also configurable: `NODE_VERSION`, `DOTNET_VERSION`, `NODE_RUNTIME_VERSION`, and `DOTNET_SDK_CHANNEL`.
+Toolchain versions are also configurable: `NODE_VERSION`, `DOTNET_VERSION`, and
+`NODE_RUNTIME_VERSION`. With `WITH_DOTNET_SDK=1` the image is based on
+`mcr.microsoft.com/dotnet/sdk:$DOTNET_VERSION`, so the SDK available to agents
+tracks `DOTNET_VERSION` rather than a separate channel.
 
 ## AI provider configuration
 

@@ -40,10 +40,56 @@ jobs:
       - name: Backend tests
         run: dotnet test ILD.Tests/ILD.Tests.csproj --no-build --configuration Release --nologo
 
+  # The Dockerfiles are otherwise only exercised at release time by publish.yml,
+  # so a broken one fails the tag rather than the PR that broke it. Build here
+  # (never push) to close that gap. amd64 only — arm64 is emulated and slow, so
+  # it lives in image-arm64.yml, which triggers on PRs that touch the Dockerfiles.
+  image-build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ild
+            dockerfile: Dockerfile
+            build_args: |
+              WITH_NODE=1
+              WITH_DOTNET_SDK=1
+              WITH_CHROME=1
+          # Covers the WITH_DOTNET_SDK=0 base (final-base-0). The batteries-
+          # included build above always selects final-base-1, so without this
+          # the runtime-only base is never built by anything.
+          - name: ild-runtime-base
+            dockerfile: Dockerfile
+            build_args: |
+              WITH_NODE=1
+              WITH_DOTNET_SDK=0
+              WITH_CHROME=0
+          - name: ild-workitem-server
+            dockerfile: Dockerfile.WorkItemServer
+            build_args: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.name }} (amd64, no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: false
+          build-args: ${{ matrix.build_args }}
+          # Scoped per matrix entry so the three builds don't clobber each
+          # other's cache, and kept distinct from publish.yml's scopes.
+          cache-from: type=gha,scope=ci-${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=ci-${{ matrix.name }}
+
   # Publish to GHCR only on a release tag, after the build is green. Merges to
   # main build and test but never publish.
   publish:
-    needs: build-and-test
+    needs: [build-and-test, image-build]
     if: github.ref_type == 'tag'
     permissions:
       contents: read
