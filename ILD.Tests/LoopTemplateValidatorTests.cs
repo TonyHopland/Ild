@@ -267,6 +267,21 @@ public class LoopTemplateValidatorTests
         Assert.Contains(errs, e => e.Contains("can match an empty string"));
     }
 
+    [Fact]
+    public void Ai_match_rule_with_a_catastrophically_backtracking_pattern_is_invalid()
+    {
+        // "(.|.)+#" blows up on the validator's own short probe string: before
+        // the probe run was given a timeout, this hung the save request itself.
+        // It must come back as an ordinary validation error instead.
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var errs = LoopTemplateValidator.Validate(GraphWithAiPattern("(.|.)+#"));
+        sw.Stop();
+
+        Assert.Contains(errs, e => e.Contains("too slow to evaluate"));
+        // The timeout has to actually bound it — not merely be declared.
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(10), $"validation took {sw.Elapsed}");
+    }
+
     [Theory]
     [InlineData("reject")]
     [InlineData(@"^\s*reject")]

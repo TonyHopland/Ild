@@ -201,9 +201,9 @@ public sealed class AINodeExecutor : INodeExecutor
             {
                 // Last match wins: agents narrate ("no reason to reject, so:
                 // approve"), so the pattern appearing latest in the output is
-                // the verdict. Each rule contributes its own last occurrence
-                // (RightToLeft), and the rule matching furthest into the text
-                // routes. No match falls through to the default OnSuccess edge.
+                // the verdict. Each rule contributes its own last occurrence,
+                // and the rule matching furthest into the text routes. No match
+                // falls through to the default OnSuccess edge.
                 var winner = SelectLastMatchingRule(cfg.MatchRules, result.Output);
                 if (winner is not null)
                 {

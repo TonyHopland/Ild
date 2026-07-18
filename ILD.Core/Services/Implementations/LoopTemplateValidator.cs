@@ -28,6 +28,15 @@ public static class LoopTemplateValidator
     private static readonly string[] MatchRuleProbes = { string.Empty, "approve reject nits 12." };
 
     /// <summary>
+    /// Ceiling on a single probe run. The probes are short enough that no
+    /// realistic pattern approaches this, but a validator is reachable from any
+    /// save request, so it must not be possible to wedge it with a
+    /// catastrophically-backtracking pattern. Matches the executor's own
+    /// per-rule timeout.
+    /// </summary>
+    private static readonly TimeSpan MatchRuleProbeTimeout = TimeSpan.FromSeconds(1);
+
+    /// <summary>
     /// Checks an AI match rule's pattern at save time — the only point where the
     /// author can still fix it. Two ways a pattern is unusable:
     ///
@@ -53,7 +62,7 @@ public static class LoopTemplateValidator
         Regex compiled;
         try
         {
-            compiled = new Regex(rule.Pattern, RegexOptions.IgnoreCase);
+            compiled = new Regex(rule.Pattern, RegexOptions.IgnoreCase, MatchRuleProbeTimeout);
         }
         catch (ArgumentException ex)
         {
@@ -61,7 +70,21 @@ public static class LoopTemplateValidator
             return;
         }
 
-        if (MatchRuleProbes.Any(probe => compiled.Matches(probe).Any(m => m.Length == 0)))
+        bool matchesNothing;
+        try
+        {
+            matchesNothing = MatchRuleProbes.Any(probe => compiled.Matches(probe).Any(m => m.Length == 0));
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            // Too slow on a 23-character probe means hopeless against a real AI
+            // output, where the executor would time out and skip it silently.
+            // Reject it here, where the author still gets told why.
+            errors.Add($"AI node {nodeId} has a match rule whose pattern '{rule.Pattern}' is too slow to evaluate (it backtracks excessively). Simplify it — nested quantifiers such as (a+)+ are the usual cause.");
+            return;
+        }
+
+        if (matchesNothing)
             errors.Add($"AI node {nodeId} has a match rule whose pattern '{rule.Pattern}' can match an empty string, so it would match every AI output and always win. Make it match the verdict text itself.");
     }
 
