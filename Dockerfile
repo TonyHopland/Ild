@@ -1,5 +1,8 @@
 ARG NODE_VERSION=24-alpine
 ARG DOTNET_VERSION=10.0
+# Selects the final stage's base image (see the final-base-* stages below).
+# Declared here, before the first FROM, so it can be used in a FROM line.
+ARG WITH_DOTNET_SDK=0
 
 FROM node:${NODE_VERSION} AS frontend-build
 WORKDIR /app
@@ -51,13 +54,20 @@ RUN dotnet publish -c Release -o /app/publish --no-restore ${VERSION:+-p:Version
 WORKDIR /src/ILD.McpServer
 RUN dotnet publish -c Release -o /app/mcp-server --no-restore ${VERSION:+-p:Version=$VERSION}
 
-FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS final
+# The final stage's base is picked by WITH_DOTNET_SDK: work-item execution that
+# builds .NET repos needs the SDK, so in that case we start from the official
+# SDK image rather than layering a second, separately-downloaded SDK on top of
+# the ASP.NET runtime image (which would ship two copies of the shared
+# frameworks). Both bases are Debian-derived, so the apt steps below are
+# identical either way.
+FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS final-base-0
+FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS final-base-1
+
+FROM final-base-${WITH_DOTNET_SDK} AS final
 WORKDIR /app
 
 ARG WITH_NODE=0
 ARG NODE_RUNTIME_VERSION=24.15.0
-ARG WITH_DOTNET_SDK=0
-ARG DOTNET_SDK_CHANNEL=10.0
 ARG WITH_CHROME=0
 ARG WITH_CERTS=0
 ARG APP_UID=10001
@@ -93,7 +103,7 @@ RUN existing_group="$(getent group "${APP_GID}" | cut -d: -f1 || true)" && \
 # what those runtime installs and version checks use.
 RUN if [ "$WITH_NODE" = "1" ]; then \
   apt-get update && \
-  apt-get install -y ca-certificates curl xz-utils && \
+  apt-get install -y --no-install-recommends curl xz-utils && \
   if [ "$NODE_RUNTIME_VERSION" = "latest" ]; then \
     NODE_RUNTIME_VERSION=$(curl -fsSL https://nodejs.org/dist/index.json | sed -n 's/.*"version":"\(v[^"]*\)".*/\1/p' | head -n1 | sed 's/^v//'); \
   fi && \
@@ -107,23 +117,7 @@ RUN if [ "$WITH_NODE" = "1" ]; then \
   tar -xf node.tar.xz -C /usr/local --strip-components=1 && \
   rm node.tar.xz && \
   if command -v corepack >/dev/null 2>&1; then corepack enable; else npm install -g pnpm@latest; fi && \
-  apt-get remove -y ca-certificates curl && \
-  apt-get autoremove -y && \
-  rm -rf /var/lib/apt/lists/*; \
-fi
-
-RUN if [ "$WITH_DOTNET_SDK" = "1" ]; then \
-  apt-get update && \
-  apt-get install -y ca-certificates curl && \
-  curl -fsSL https://dot.net/v1/dotnet-install.sh -o dotnet-install.sh && \
-  chmod +x dotnet-install.sh && \
-  if [ "$DOTNET_SDK_CHANNEL" = "latest" ]; then \
-    ./dotnet-install.sh --channel STS --install-dir /usr/share/dotnet; \
-  else \
-    ./dotnet-install.sh --channel "$DOTNET_SDK_CHANNEL" --install-dir /usr/share/dotnet; \
-  fi && \
-  rm dotnet-install.sh && \
-  apt-get remove -y ca-certificates curl && \
+  apt-get purge -y curl xz-utils && \
   apt-get autoremove -y && \
   rm -rf /var/lib/apt/lists/*; \
 fi
@@ -135,17 +129,19 @@ fi
 # stable` resolution looks (used by chrome-devtools-mcp, see opencode.json), so
 # no extra config is needed. We don't purge wget/ca-certificates afterwards
 # because google-chrome-stable depends on both.
+#
+# --no-install-recommends matters here: Chrome's recommends pull in the full
+# mesa DRI driver set and the Noto font families, which headless Chrome never
+# uses and which cost more than Chrome itself. fonts-liberation is added back
+# explicitly so pages still render with sane default fonts.
 RUN if [ "$WITH_CHROME" = "1" ] && [ "$(dpkg --print-architecture)" = "amd64" ]; then \
   apt-get update && \
   apt-get install -y --no-install-recommends wget ca-certificates && \
   wget -q -O /tmp/google-chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && \
-  apt-get install -y /tmp/google-chrome.deb && \
+  apt-get install -y --no-install-recommends /tmp/google-chrome.deb fonts-liberation && \
   rm -f /tmp/google-chrome.deb && \
   rm -rf /var/lib/apt/lists/*; \
 fi
-
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /certs /tmp/extra-certs
 RUN if [ "$WITH_CERTS" = "1" ]; then \
@@ -159,14 +155,16 @@ RUN if [ "$WITH_CERTS" = "1" ]; then \
     fi && \
     rm -rf /tmp/extra-certs
 
-COPY --from=build /app/publish ./
-COPY --from=build /app/mcp-server/ ./
-COPY --from=frontend-build /app/frontend/dist ./wwwroot
+# --chown on the COPY itself: a follow-up `chown -R /app` would rewrite every
+# file into an extra layer, shipping the published output twice.
+COPY --from=build --chown=ild:ild /app/publish ./
+COPY --from=build --chown=ild:ild /app/mcp-server/ ./
+COPY --from=frontend-build --chown=ild:ild /app/frontend/dist ./wwwroot
 ENV HOME=/home/ild
 ENV ILD_DATA_PATH=/data
 ENV ILD_WORKTREES_PATH=/worktrees
 RUN mkdir -p /data /worktrees && \
-  chown -R ild:ild /app /data /worktrees
+  chown ild:ild /app /data /worktrees
 
 COPY entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
