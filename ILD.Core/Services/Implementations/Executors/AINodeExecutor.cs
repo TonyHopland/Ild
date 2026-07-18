@@ -55,16 +55,11 @@ public sealed class AINodeExecutor : INodeExecutor
             }
         }
 
-        // A work item can override the node's provider. OverrideAll swaps every
-        // AI node; OverrideDefault swaps only nodes that fell back to the default
-        // (a node deliberately pinned to a specific provider is left alone). The
-        // override is a no-op without a target provider.
-        var shouldOverride = wi.AiProviderOverrideId is not null && wi.AiProviderOverride switch
-        {
-            RemoteAiProviderOverrideMode.OverrideAll => true,
-            RemoteAiProviderOverrideMode.OverrideDefault => !nodePinsProvider,
-            _ => false,
-        };
+        // A work item can override the node's provider. The rule is shared with
+        // RemoteWorkItemCoordinator's resume gate, which must peek capacity on
+        // the same provider this executor claims a slot against.
+        var shouldOverride = AiProviderOverrideRule.Applies(
+            wi.AiProviderOverride, wi.AiProviderOverrideId, nodePinsProvider);
         if (shouldOverride)
         {
             var overrideProvider = await providerStore.GetAiProviderByIdAsync(wi.AiProviderOverrideId!.Value);

@@ -80,7 +80,7 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
         //    change and a once-blocked item may now be unblocked.
         foreach (var w in poll.ActiveItems.Where(w => w.Status == RemoteWorkItemStatus.WaitingForIld))
         {
-            if (!await HasProviderCapacityForResumeAsync(w.Id, ct)) continue;
+            if (!await HasProviderCapacityForResumeAsync(w, ct)) continue;
 
             var resp = await _client.TransitionAsync(opts, w.Id,
                 new RemoteTransitionRequest { TargetStatus = RemoteWorkItemStatus.Running }, ct);
@@ -217,34 +217,49 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
     }
 
     /// <summary>
-    /// True if the run associated with <paramref name="workItemId"/> is not
-    /// parked on an AI node, or its AI provider currently has spare capacity.
+    /// True if the run associated with <paramref name="item"/> is not parked on
+    /// an AI node, or the provider it will actually execute against currently
+    /// has spare capacity. That provider is the node's pinned one, or the
+    /// configured default when the node pins nothing \u2014 in either case swapped
+    /// for the work item's override when
+    /// <see cref="AiProviderOverrideRule"/> says the override applies, exactly
+    /// as <c>AINodeExecutor</c> resolves it before claiming its slot. Peeking a
+    /// different provider than the executor claims would strand the run (gate
+    /// on a full provider the run never uses) or flap it (resume, then
+    /// immediately re-park at the executor's gate).
     /// Re-evaluated each poll so changes to provider parallelism settings
     /// take effect without restart.
     /// </summary>
-    private async Task<bool> HasProviderCapacityForResumeAsync(string workItemId, CancellationToken ct)
+    private async Task<bool> HasProviderCapacityForResumeAsync(RemoteWorkItem item, CancellationToken ct)
     {
         if (_loopRunStore == null || _providerStore == null || _aiTracker == null) return true;
         try
         {
-            var run = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
+            var run = await _loopRunStore.GetCurrentByWorkItemAsync(item.Id);
             if (run?.CurrentNodeId is not { } currentNodeId) return true;
 
             var nodes = await _loopRunStore.GetNodesForVersionAsync(run.LoopTemplateVersionId);
             var node = nodes.FirstOrDefault(n => n.Id == currentNodeId);
             if (node == null || node.NodeType != ILD.Data.Enums.NodeType.AI) return true;
 
-            var providerId = TryReadAiProviderId(node.Config);
-            if (providerId == null) return true; // no provider configured \u2192 default; let the engine decide
+            var pinnedId = TryReadAiProviderId(node.Config);
+            var targetId = AiProviderOverrideRule.Applies(
+                    item.AiProviderOverride, item.AiProviderOverrideId, nodePinsProvider: pinnedId != null)
+                ? item.AiProviderOverrideId
+                : pinnedId;
 
-            var provider = await _providerStore.GetAiProviderByIdAsync(providerId.Value);
-            if (provider == null) return true;
+            // No pin and no override \u2192 the executor falls back to the default
+            // provider, so gate on that rather than waving the resume through.
+            var provider = targetId is { } id
+                ? await _providerStore.GetAiProviderByIdAsync(id)
+                : await _providerStore.GetDefaultAiProviderAsync();
+            if (provider == null) return true; // let the executor report the missing provider
 
             return _aiTracker.HasCapacity(provider.Id, provider.Parallelism);
         }
         catch (Exception ex)
         {
-            _logger?.LogWarning(ex, "Provider capacity check failed for work item {WorkItemId}", workItemId);
+            _logger?.LogWarning(ex, "Provider capacity check failed for work item {WorkItemId}", item.Id);
             return true; // be permissive on errors so we don't strand work items
         }
     }
