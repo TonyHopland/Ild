@@ -1,0 +1,89 @@
+name: Image (extra targets)
+
+# The image builds that are NOT worth running on every PR.
+#
+# ci.yml builds the shipped amd64 image on all PRs. These three can only break
+# when Docker-related inputs change, and each one costs a full frontend + dotnet
+# publish, so they are gated on the paths below instead:
+#
+#   ild-runtime-base    the WITH_DOTNET_SDK=0 base (final-base-0). Nothing else
+#                       ever selects it -- the batteries-included build in
+#                       ci.yml always resolves to final-base-1.
+#   ild-workitem-server the second Dockerfile.
+#   ild-arm64           arm64 under QEMU emulation, which is slow. publish.yml
+#                       builds arm64 for real at release; this surfaces a break
+#                       on the PR instead of on the release tag.
+#
+# The paths list covers more than the Dockerfiles because the images embed the
+# project and dependency graph: Dockerfile COPYs each .csproj by name, and the
+# frontend stage runs pnpm install against the workspace lockfile. A new project
+# or a dependency bump can therefore break these builds on its own.
+#
+# Runnable on demand from the Actions tab via workflow_dispatch.
+
+on:
+  pull_request:
+    paths:
+      - "Dockerfile"
+      - "Dockerfile.WorkItemServer"
+      - "entrypoint.sh"
+      - ".dockerignore"
+      - "**/*.csproj"
+      - "ILD.sln"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "frontend/package.json"
+      - ".github/workflows/image-extra.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ild-runtime-base
+            dockerfile: Dockerfile
+            platform: linux/amd64
+            build_args: |
+              WITH_NODE=1
+              WITH_DOTNET_SDK=0
+              WITH_CHROME=0
+          - name: ild-workitem-server
+            dockerfile: Dockerfile.WorkItemServer
+            platform: linux/amd64
+            build_args: ""
+          - name: ild-arm64
+            dockerfile: Dockerfile
+            platform: linux/arm64
+            build_args: |
+              WITH_NODE=1
+              WITH_DOTNET_SDK=1
+              WITH_CHROME=1
+    steps:
+      - uses: actions/checkout@v4
+
+      # Only the arm64 entry needs emulation; the action is a no-op for the
+      # amd64 entries and cheap enough not to bother gating.
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.name }} (${{ matrix.platform }}, no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platform }}
+          push: false
+          build-args: ${{ matrix.build_args }}
+          # Read ci.yml's scope as well: ild-runtime-base shares this
+          # Dockerfile's frontend-build and build stages with the main image and
+          # differs only in the final stage's base, so those stages come from
+          # cache rather than being rebuilt.
+          cache-from: |
+            type=gha,scope=extra-${{ matrix.name }}
+            type=gha,scope=ci-ild
+          cache-to: type=gha,mode=max,scope=extra-${{ matrix.name }}
