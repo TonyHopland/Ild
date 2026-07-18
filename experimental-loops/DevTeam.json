@@ -1,0 +1,708 @@
+{
+  "$schema": "ild-loop-template/v1",
+  "name": "DevTeam",
+  "description": "A complete dev-team loop: the Orchestrator evaluates the work item and may optionally launch an Explorer to produce a targeted repo summary if it can't route without more context. Otherwise it routes to spec-clarification (human-in-the-loop), QA, or development. The developer can hand off to QA or straight to review; the reviewer can reject or approve. An HIL-tag gate optionally inserts human approval before the PR is opened. PR feedback loops back to the developer.",
+  "recoveryPolicy": "AutoResume",
+  "nodes": [
+    {
+      "id": "124d78d2-4444-4475-961e-15339fd4fc24",
+      "type": "Human",
+      "label": "HIL Approval",
+      "config": {
+        "__pos": {
+          "x": 620,
+          "y": 120
+        },
+        "customEdges": ["approve", "reject"],
+        "inputLabel": "Approval decision / feedback",
+        "prompt": "This work item is tagged HIL, so it needs your sign-off before a pull request is opened.\n\nDeveloper handoff:\n{{Var.DevHandoff}}\n\nReview verdict:\n{{Var.ReviewFeedback}}\n\nInspect the worktree if needed. Choose 'approve' to open the PR, or 'reject' with your feedback in the input — it will be handed to the developer verbatim."
+      }
+    },
+    {
+      "id": "0436cb48-ef38-429c-bfb4-6593ffd013bb",
+      "type": "Prompt",
+      "label": "Re-route Brief",
+      "config": {
+        "__pos": {
+          "x": -1460,
+          "y": 60
+        },
+        "prompt": "The spec analyst has finished clarifying the work item with the human. Resolution summary:\n\n{{Var.SpecResolution}}\n\nRe-read the work item (it may have been updated), fold this resolution into your understanding, then re-route: update `Route` with set_loop_variable (QA or DEV — only SPEC again if something is still genuinely blocking) and refresh `OrchestratorNotes` so the resolved decisions reach the downstream agents."
+      }
+    },
+    {
+      "id": "17d79eb5-6166-450e-8071-8476509c1450",
+      "type": "Prompt",
+      "label": "QA Repro Brief",
+      "config": {
+        "__pos": {
+          "x": -700,
+          "y": 640
+        },
+        "prompt": "You are the QA engineer. Development has not started yet — the work item likely describes a bug or behavior that must be captured in tests first.\n\nOrchestrator briefing:\n{{Var.OrchestratorNotes}}\n\n(A repo summary may be available as \"RepoSummary\" — reference it using 'get_loop_variable' for context if helpful.)\n\nReproduce the bug and/or author failing tests that capture the expected behavior, and commit them. Using set_loop_variable, set `QAReport` to a summary of the reproduction and the tests you added. End your final message with exactly: REPRO_READY"
+      }
+    },
+    {
+      "id": "18a9f1bc-e511-4096-bf0a-9627dd58c3ec",
+      "type": "Prompt",
+      "label": "Dev From Review",
+      "config": {
+        "__pos": {
+          "x": -130,
+          "y": 160
+        },
+        "prompt": "The reviewer rejected your change. Feedback:\n\n{{Var.ReviewFeedback}}\n\nAddress every point, commit, update `DevHandoff` with set_loop_variable, and end your final message with exactly TO_QA or TO_REVIEW."
+      }
+    },
+    {
+      "id": "1c18bd9a-95a3-44ae-a89b-8992dd0cce19",
+      "type": "Prompt",
+      "label": "Review fallback",
+      "config": {
+        "prompt": "The reviewer did not respond with APPROVE or REJECTED so the loop is stopped for human review.\nReviewer output:\n{{Node.Input}}\n\nReviewer feedback:\n{{Var.ReviewFeedback}}\n",
+        "__pos": {
+          "x": 418.80203045685283,
+          "y": -25.877687526354894
+        }
+      }
+    },
+    {
+      "id": "36aa628a-1632-4fc3-b10b-e94a02318e05",
+      "type": "AI",
+      "label": "Explorer",
+      "config": {
+        "__pos": {
+          "x": -1124.5,
+          "y": 645.98
+        },
+        "matchRules": [
+          {
+            "edgeName": "scanned",
+            "pattern": "REPO_SCANNED"
+          }
+        ],
+        "prompt": "You are the explorer. Produce a concise, targeted summary of the parts of this repository that are relevant to the work item below. Set the loop variable `RepoSummary` using set_loop_variable, then end your final message with exactly: REPO_SCANNED.\n\n# Work item context\n\nTitle: {{WorkItem.Title}}\n\nDescription:\n{{WorkItem.Description}}\n\n# What to scan\n\nFocus your exploration on:\n1. **Relevant areas** — only directories/files that touch the scope described in the work item.\n2. **Tech stack** — briefly note languages, frameworks, and key dependencies.\n3. **Relevant structure** — only the directories and entry points involved in this task.\n4. **Build/test commands** — how to build, test, lint.\n5. **Key modules** — the source files most likely to be modified, and what they do.\n\nKeep the summary under ~600 words. Be specific about file paths so downstream agents can navigate quickly.",
+        "useSession": false
+      }
+    },
+    {
+      "id": "370d3e90-95d0-4475-a8ad-4fc2078f5093",
+      "type": "Prompt",
+      "label": "Dev Brief",
+      "config": {
+        "__pos": {
+          "x": -700,
+          "y": 300
+        },
+        "prompt": "You are the developer. Implement this work item in the worktree.\n\nOrchestrator briefing:\n{{Var.OrchestratorNotes}}\n\n(A repo summary may be available as \"RepoSummary\" — reference it using 'get_loop_variable' for context if helpful.)\n\nWrite the code, keep changes focused, make the test suite pass, and commit your work with clear messages. When done, use set_loop_variable to set `DevHandoff` to a concise summary of what you changed and why (files touched, approach, anything reviewers should look at). Then end your final message with exactly one of:\n- TO_QA — the change is risky, touches tricky behavior, or deserves independent verification.\n- TO_REVIEW — the change is well covered by tests you ran yourself and can go straight to code review."
+      }
+    },
+    {
+      "id": "382cdc87-4510-4cdb-823f-c8882e8b9e62",
+      "type": "Prompt",
+      "label": "Spec Brief",
+      "config": {
+        "__pos": {
+          "x": -700,
+          "y": 0
+        },
+        "prompt": "You are the spec analyst. The orchestrator has already determined this work item is ambiguous or inconsistent and needs your help clarifying it with the human before development begins.\n\n# Work item (full context — no need to fetch it again)\n\n**Title:** {{WorkItem.Title}}\n\n**Description:**\n{{WorkItem.Description}}\n\n\nOrchestrator briefing:\n{{Var.OrchestratorNotes}}\n\n## Your process — resolve questions one by one with the human\n\nThe orchestrator sent you here precisely because this spec needs human input. **Asking the human is your default path** — use your best judgment for anything you can genuinely resolve with reasonable assumptions on your own, but err on the side of asking.\n\n1. **Read the work item** and identify every ambiguity, contradiction, or missing decision that could make implementation risky.\n2. **Pick the most critical unresolved question** and present it with:\n   - 2–3 suggested solutions/approaches\n   - Your **recommended** solution (the one you'd pick if left to your own devices)\n3. **Set `SpecQuestions`** (via set_loop_variable) to a focused message containing only that **one** question and its options, then end your final message with exactly: **ASK_HUMAN**\n4. **After the human replies**, you'll receive their answer as input. Evaluate whether this truly resolves the question:\n   - If the answer is clear and the question is settled, move on to step 2 for the next unresolved issue.\n   - If the answer is vague, raises a sub-concern, or the human wants to discuss trade-offs, **stay on the same topic** — ask a focused follow-up (with new options and a recommendation if helpful), set `SpecQuestions`, and end with: **ASK_HUMAN**\n   - A single question may take several rounds to fully resolve. Don't rush to the next topic until you're confident the current one is truly settled.\n5. **Keep iterating** — one question at a time, as many rounds per question as needed — until all ambiguous or inconsistent issues are resolved.\n6. **When everything is settled**, set `SpecResolution` to a concise summary of every decision, assumption, and clarification from the whole conversation, then end your final message with exactly: **SPEC_RESOLVED**\n\nYou drive this conversation loop. Go question by question with the human until the spec is fully resolved. Only hand off with SPEC_RESOLVED when there's nothing left to clarify."
+      }
+    },
+    {
+      "id": "3ba97056-cfc8-4416-8e09-bc9361214b50",
+      "type": "Prompt",
+      "label": "Repo Summary",
+      "config": {
+        "prompt": "#Repo summary: \n{{Var.RepoSummary}}",
+        "__pos": {
+          "x": -1345.7429816579456,
+          "y": 487.7867623828329
+        }
+      }
+    },
+    {
+      "id": "47273c4a-9832-4b38-b17d-b56ddeeb0ff4",
+      "type": "AI",
+      "label": "QA Engineer",
+      "config": {
+        "__pos": {
+          "x": -440,
+          "y": 700
+        },
+        "matchRules": [
+          {
+            "edgeName": "qa_passed",
+            "pattern": "QA_PASSED"
+          },
+          {
+            "edgeName": "qa_failed",
+            "pattern": "QA_FAILED"
+          },
+          {
+            "edgeName": "repro_ready",
+            "pattern": "REPRO_READY"
+          }
+        ],
+        "prompt": "{{Node.Input}}",
+        "sessionPlaceholder": "qa",
+        "useSession": true
+      }
+    },
+    {
+      "id": "551db065-088b-4618-9f90-25a417dc806c",
+      "type": "Prompt",
+      "label": "Dev From HIL",
+      "config": {
+        "__pos": {
+          "x": 142.79864636209814,
+          "y": 133.86463620981385
+        },
+        "prompt": "A human rejected the change at the pre-PR approval gate. Their feedback:\n\n{{Node.Input}}\n\nAddress it, commit, update `DevHandoff` with set_loop_variable, and end your final message with exactly TO_QA or TO_REVIEW."
+      }
+    },
+    {
+      "id": "5affd392-c12f-469c-a5cf-28f4cc53d902",
+      "type": "Prompt",
+      "label": "QA Verify Brief",
+      "config": {
+        "__pos": {
+          "x": -601.2657728706624,
+          "y": 501.2223974763407
+        },
+        "prompt": "The developer handed off an implementation for verification.\n\nDeveloper handoff:\n{{Var.DevHandoff}}\n\n(A repo summary may be available as \"RepoSummary\" — reference it using 'get_loop_variable' for context if helpful.)\n\nRun the test suite and exercise the change against the work item's acceptance criteria. Using set_loop_variable, set `QAReport` to your findings — if something fails, describe the failures precisely. End your final message with exactly QA_PASSED if everything passes, or QA_FAILED otherwise."
+      }
+    },
+    {
+      "id": "64eef244-a952-48bd-a728-665af5d89b16",
+      "type": "AI",
+      "label": "Reviewer",
+      "config": {
+        "__pos": {
+          "x": 145.93848580441642,
+          "y": 294.1048895899054
+        },
+        "adapterConfig": {},
+        "aiProviderId": "",
+        "matchRules": [
+          {
+            "edgeName": "rejected",
+            "pattern": "REJECTED"
+          },
+          {
+            "edgeName": "approved",
+            "pattern": "APPROVED"
+          }
+        ],
+        "prompt": "Review the current diff of this worktree against the work item: correctness, edge cases, test coverage, and fit with the surrounding codebase. Do not modify the code yourself.\n\nDeveloper handoff:\n{{Var.DevHandoff}}\n\nQA report (if any):\n{{Var.QAReport}}\n\n(A repo summary may be available as `{{Var.RepoSummary}}` — reference it for context if helpful.)\n\nUsing set_loop_variable, set `ReviewFeedback` to your verdict — if rejecting, list every issue the developer must fix, precisely and actionably; if approving, note anything worth mentioning in the PR. End your final message with exactly one token on its own line: REJECTED or APPROVED.",
+        "toolAllowlist": ["read", "execute", "ild"],
+        "useSession": false
+      }
+    },
+    {
+      "id": "74ffae71-090b-4508-b60c-e88f8b92874c",
+      "type": "Prompt",
+      "label": "Orchestrator Brief",
+      "config": {
+        "__pos": {
+          "x": -1467.082910321489,
+          "y": 307.082910321489
+        },
+        "prompt": "You are the orchestrator of an autonomous dev team.\n\n# Work item\n\nTitle: {{WorkItem.Title}}\n\nDescription:\n{{WorkItem.Description}}\n\n# Your task\n\nDecide the single next step and route to it. **You do NOT explore the repository yourself — that is the Explorer's job.** Do not read, grep, list, or open source files. If routing correctly requires knowing how the repo is laid out or where the relevant code lives, that is exactly the signal to route EXPLORE and let the Explorer produce a targeted summary for you.\n\nChoose exactly one:\n- EXPLORE — the DEFAULT whenever no `RepoSummary` exists yet and you cannot confidently place the work item from its title/description alone. Routing here produces a concise, targeted summary of the parts of the repo relevant to this work item, which comes back to you so you can then route for real.\n- SPEC — ONLY if the work item itself contains genuine ambiguities, contradictions, or missing product decisions that make implementation risky. Use sparingly. (SPEC is about unclear requirements, not an unfamiliar codebase — for the latter, use EXPLORE.)\n- QA — the work item is a bug report (or otherwise needs reproduction / a failing test) and QA should reproduce it and author tests BEFORE development starts.\n- DEV — the work item is unambiguous AND you already have enough context — from the description or an existing `RepoSummary` — to brief the developer without any further exploration.\n\nUsing the set_loop_variable tool, set the loop variable `Route` to exactly one of: SPEC, QA, DEV, EXPLORE. Also set `OrchestratorNotes` with a short briefing for the next agent (scope, assumptions, and files likely involved — naming only what you can derive from the work item or an existing `RepoSummary`, never from your own exploration)."
+      }
+    },
+    {
+      "id": "92a8b2f2-4f73-4368-b755-cfaf426a9cf2",
+      "type": "Condition",
+      "label": "Route",
+      "config": {
+        "__pos": {
+          "x": -916.3227731029059,
+          "y": 303.608274310403
+        },
+        "cases": [
+          {
+            "edgeName": "spec",
+            "pattern": "SPEC",
+            "subject": "{{Var.Route}}",
+            "variant": "TextMatches"
+          },
+          {
+            "edgeName": "qa",
+            "pattern": "QA",
+            "subject": "{{Var.Route}}",
+            "variant": "TextMatches"
+          },
+          {
+            "edgeName": "explore",
+            "pattern": "EXPLORE",
+            "subject": "{{Var.Route}}",
+            "variant": "TextMatches"
+          }
+        ],
+        "defaultEdge": "dev",
+        "output": "{{Var.Route}}"
+      }
+    },
+    {
+      "id": "a25e0719-bf21-4773-b568-df2ecffe4729",
+      "type": "Human",
+      "label": "Spec Clarification",
+      "config": {
+        "__pos": {
+          "x": -89.21529968454259,
+          "y": -15.32728706624606
+        },
+        "customEdges": ["answered"],
+        "inputLabel": "Answers / clarifications",
+        "prompt": "{{Var.SpecQuestions}}"
+      }
+    },
+    {
+      "id": "b02a2fb6-b7fb-4241-81bd-89f5ecac19c1",
+      "type": "AI",
+      "label": "Developer",
+      "config": {
+        "__pos": {
+          "x": -380,
+          "y": 300
+        },
+        "matchRules": [
+          {
+            "edgeName": "to_qa",
+            "pattern": "TO_QA"
+          },
+          {
+            "edgeName": "to_review",
+            "pattern": "TO_REVIEW"
+          }
+        ],
+        "prompt": "{{Node.Input}}",
+        "sessionPlaceholder": "dev",
+        "useSession": true
+      }
+    },
+    {
+      "id": "b7e10550-b108-460d-b256-ef101e5ee73d",
+      "type": "Prompt",
+      "label": "Dev From PR",
+      "config": {
+        "__pos": {
+          "x": 500,
+          "y": 560
+        },
+        "prompt": "The pull request needs work — it was rejected, CI failed, or there is a merge conflict. Details:\n\n{{Node.Input}}\n\nInspect the PR (review comments, CI logs, conflict state), fix the problems, and commit. Update `DevHandoff` with set_loop_variable and end your final message with exactly TO_QA or TO_REVIEW."
+      }
+    },
+    {
+      "id": "cb5f52a7-ec22-4042-9dc7-3414b0ccd925",
+      "type": "Prompt",
+      "label": "Dev From QA",
+      "config": {
+        "__pos": {
+          "x": -240,
+          "y": 560
+        },
+        "prompt": "You are the developer on this work item. QA has posted a report — either a bug reproduction with failing tests for you to make pass, or failures they found in the current implementation for you to fix.\n\nQA report:\n{{Var.QAReport}}\n\nOrchestrator briefing:\n{{Var.OrchestratorNotes}}\n\n(A repo summary may be available as \"RepoSummary\" — reference it using 'get_loop_variable' for context if helpful.)\n\nImplement or fix accordingly, keep changes focused, and commit. Then update `DevHandoff` with set_loop_variable and end your final message with exactly TO_QA or TO_REVIEW."
+      }
+    },
+    {
+      "id": "dc4331f9-dc29-4af8-b1cf-b783363ff658",
+      "type": "Cleanup",
+      "label": "Cleanup",
+      "config": {
+        "__pos": {
+          "x": 1150,
+          "y": 300
+        }
+      }
+    },
+    {
+      "id": "dc441da1-e704-4025-a041-94a52c0e1a64",
+      "type": "Condition",
+      "label": "HIL Gate",
+      "config": {
+        "__pos": {
+          "x": 380,
+          "y": 300
+        },
+        "cases": [
+          {
+            "edgeName": "hil",
+            "tag": "HIL",
+            "variant": "HasTag"
+          }
+        ],
+        "defaultEdge": "auto"
+      }
+    },
+    {
+      "id": "dd733830-2216-4a36-9085-83c8c6084bee",
+      "type": "AI",
+      "label": "Orchestrator",
+      "config": {
+        "__pos": {
+          "x": -1200,
+          "y": 300
+        },
+        "prompt": "{{Node.Input}}",
+        "sessionPlaceholder": "orchestrator",
+        "useSession": true,
+        "toolAllowlist": ["ild"]
+      }
+    },
+    {
+      "id": "e04a235a-d394-49b6-b476-c3b07a967278",
+      "type": "Start",
+      "label": "Start",
+      "config": {
+        "__pos": {
+          "x": -1700,
+          "y": 300
+        },
+        "createWorktree": true,
+        "runInstall": true
+      }
+    },
+    {
+      "id": "e6ca9ab4-7c56-4e4a-91d2-d5a0ef78ea6c",
+      "type": "AI",
+      "label": "Spec Analyst",
+      "config": {
+        "__pos": {
+          "x": -429.38880126182966,
+          "y": 5.895110410094638
+        },
+        "matchRules": [
+          {
+            "edgeName": "ask_human",
+            "pattern": "ASK_HUMAN"
+          },
+          {
+            "edgeName": "spec_resolved",
+            "pattern": "SPEC_RESOLVED"
+          }
+        ],
+        "prompt": "{{Node.Input}}",
+        "sessionPlaceholder": "spec",
+        "useSession": true
+      }
+    },
+    {
+      "id": "f7493c48-cca2-4335-b93e-c4cb9930397f",
+      "type": "PR",
+      "label": "Pull Request",
+      "config": {
+        "__pos": {
+          "x": 880,
+          "y": 300
+        },
+        "customEdges": [
+          "on_rejected",
+          "on_merge_conflict",
+          "on_ci_failed",
+          "on_merged",
+          "on_abandoned"
+        ],
+        "prCommentTemplate": "DevTeam loop update:\n\n{{Var.DevHandoff}}",
+        "prDescriptionTemplate": "## Summary\n\n{{Var.DevHandoff}}\n\n## QA\n\n{{Var.QAReport}}\n\n## Review\n\n{{Var.ReviewFeedback}}\n\n---\n_Automated by the DevTeam loop."
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "cd39a221-570a-49e6-876a-2de75043c354",
+      "sourceNodeId": "124d78d2-4444-4475-961e-15339fd4fc24",
+      "targetNodeId": "f7493c48-cca2-4335-b93e-c4cb9930397f",
+      "edgeType": "Custom",
+      "name": "approve"
+    },
+    {
+      "id": "e1f09d6b-07bc-43ed-973c-e0ed8bb01fa2",
+      "sourceNodeId": "124d78d2-4444-4475-961e-15339fd4fc24",
+      "targetNodeId": "551db065-088b-4618-9f90-25a417dc806c",
+      "edgeType": "Custom",
+      "name": "reject"
+    },
+    {
+      "id": "1c9ad1bd-9c65-483b-862e-225764c53744",
+      "sourceNodeId": "0436cb48-ef38-429c-bfb4-6593ffd013bb",
+      "targetNodeId": "dd733830-2216-4a36-9085-83c8c6084bee",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "28f10734-3e7d-4787-8389-a9fb334bdfae",
+      "sourceNodeId": "17d79eb5-6166-450e-8071-8476509c1450",
+      "targetNodeId": "47273c4a-9832-4b38-b17d-b56ddeeb0ff4",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "0f485984-0c4d-4b21-a257-9d57f6ec9ccd",
+      "sourceNodeId": "18a9f1bc-e511-4096-bf0a-9627dd58c3ec",
+      "targetNodeId": "b02a2fb6-b7fb-4241-81bd-89f5ecac19c1",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "453e27dc-66f3-47d1-9c71-92d24ea2484e",
+      "sourceNodeId": "1c18bd9a-95a3-44ae-a89b-8992dd0cce19",
+      "targetNodeId": "124d78d2-4444-4475-961e-15339fd4fc24",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "257d0fd7-368a-4013-a6ad-dd18bb154bd1",
+      "sourceNodeId": "36aa628a-1632-4fc3-b10b-e94a02318e05",
+      "targetNodeId": "3ba97056-cfc8-4416-8e09-bc9361214b50",
+      "edgeType": "Custom",
+      "name": "scanned"
+    },
+    {
+      "id": "28fa51ba-4fc1-4096-8bfa-17ada2f7bd7b",
+      "sourceNodeId": "36aa628a-1632-4fc3-b10b-e94a02318e05",
+      "targetNodeId": "3ba97056-cfc8-4416-8e09-bc9361214b50",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "19aa06dc-548c-412f-99d6-0193ab56da47",
+      "sourceNodeId": "370d3e90-95d0-4475-a8ad-4fc2078f5093",
+      "targetNodeId": "b02a2fb6-b7fb-4241-81bd-89f5ecac19c1",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "dc609ec6-2b85-4e36-9088-03600211b14f",
+      "sourceNodeId": "382cdc87-4510-4cdb-823f-c8882e8b9e62",
+      "targetNodeId": "e6ca9ab4-7c56-4e4a-91d2-d5a0ef78ea6c",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "c3839da7-26db-4ab3-9be9-d457b2a50c5a",
+      "sourceNodeId": "3ba97056-cfc8-4416-8e09-bc9361214b50",
+      "targetNodeId": "dd733830-2216-4a36-9085-83c8c6084bee",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "92ba2c62-495b-415b-8033-0d87905654d3",
+      "sourceNodeId": "47273c4a-9832-4b38-b17d-b56ddeeb0ff4",
+      "targetNodeId": "64eef244-a952-48bd-a728-665af5d89b16",
+      "edgeType": "Custom",
+      "name": "qa_passed"
+    },
+    {
+      "id": "b1e4a029-ff66-4a56-8435-e56e149cdfba",
+      "sourceNodeId": "47273c4a-9832-4b38-b17d-b56ddeeb0ff4",
+      "targetNodeId": "64eef244-a952-48bd-a728-665af5d89b16",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "bee4fd0b-bf1d-4bb2-b6c7-c248d3091bb5",
+      "sourceNodeId": "47273c4a-9832-4b38-b17d-b56ddeeb0ff4",
+      "targetNodeId": "cb5f52a7-ec22-4042-9dc7-3414b0ccd925",
+      "edgeType": "Custom",
+      "name": "qa_failed"
+    },
+    {
+      "id": "d63825da-0780-4612-8985-e6930f489eb7",
+      "sourceNodeId": "47273c4a-9832-4b38-b17d-b56ddeeb0ff4",
+      "targetNodeId": "cb5f52a7-ec22-4042-9dc7-3414b0ccd925",
+      "edgeType": "Custom",
+      "name": "repro_ready"
+    },
+    {
+      "id": "322db475-e56d-46ab-be6f-df5fd4552f2e",
+      "sourceNodeId": "551db065-088b-4618-9f90-25a417dc806c",
+      "targetNodeId": "b02a2fb6-b7fb-4241-81bd-89f5ecac19c1",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "59a0de58-e7c0-46e0-a6e7-f1cb6ff96e9d",
+      "sourceNodeId": "5affd392-c12f-469c-a5cf-28f4cc53d902",
+      "targetNodeId": "47273c4a-9832-4b38-b17d-b56ddeeb0ff4",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "38a11c18-fbb7-4e9b-9953-105c577a172f",
+      "sourceNodeId": "64eef244-a952-48bd-a728-665af5d89b16",
+      "targetNodeId": "18a9f1bc-e511-4096-bf0a-9627dd58c3ec",
+      "edgeType": "Custom",
+      "name": "rejected"
+    },
+    {
+      "id": "51513105-da1c-4ec6-b4b7-3a91ab8539a4",
+      "sourceNodeId": "64eef244-a952-48bd-a728-665af5d89b16",
+      "targetNodeId": "1c18bd9a-95a3-44ae-a89b-8992dd0cce19",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "f471cc7d-922a-42e6-bde3-8371a3a9c5ed",
+      "sourceNodeId": "64eef244-a952-48bd-a728-665af5d89b16",
+      "targetNodeId": "dc441da1-e704-4025-a041-94a52c0e1a64",
+      "edgeType": "Custom",
+      "name": "approved"
+    },
+    {
+      "id": "e09a401c-2d9f-442c-9c03-6d5c2175c507",
+      "sourceNodeId": "74ffae71-090b-4508-b60c-e88f8b92874c",
+      "targetNodeId": "dd733830-2216-4a36-9085-83c8c6084bee",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "332f8096-d529-44bb-9db1-01816e758abe",
+      "sourceNodeId": "92a8b2f2-4f73-4368-b755-cfaf426a9cf2",
+      "targetNodeId": "36aa628a-1632-4fc3-b10b-e94a02318e05",
+      "edgeType": "Custom",
+      "name": "explore"
+    },
+    {
+      "id": "96058217-6007-4edd-b246-772bafaa7a2d",
+      "sourceNodeId": "92a8b2f2-4f73-4368-b755-cfaf426a9cf2",
+      "targetNodeId": "17d79eb5-6166-450e-8071-8476509c1450",
+      "edgeType": "Custom",
+      "name": "qa"
+    },
+    {
+      "id": "b9315569-8ec9-4b36-9720-d8f0832ca59c",
+      "sourceNodeId": "92a8b2f2-4f73-4368-b755-cfaf426a9cf2",
+      "targetNodeId": "370d3e90-95d0-4475-a8ad-4fc2078f5093",
+      "edgeType": "Custom",
+      "name": "dev"
+    },
+    {
+      "id": "beabf50a-119c-4c09-a9b0-b2cdd2216df3",
+      "sourceNodeId": "92a8b2f2-4f73-4368-b755-cfaf426a9cf2",
+      "targetNodeId": "382cdc87-4510-4cdb-823f-c8882e8b9e62",
+      "edgeType": "Custom",
+      "name": "spec"
+    },
+    {
+      "id": "c716a2ef-efd7-4d0d-8b99-c6c38cd7eeb7",
+      "sourceNodeId": "a25e0719-bf21-4773-b568-df2ecffe4729",
+      "targetNodeId": "e6ca9ab4-7c56-4e4a-91d2-d5a0ef78ea6c",
+      "edgeType": "Custom",
+      "name": "answered"
+    },
+    {
+      "id": "9a968f12-efce-422a-bc05-b5da4ac2147f",
+      "sourceNodeId": "b02a2fb6-b7fb-4241-81bd-89f5ecac19c1",
+      "targetNodeId": "5affd392-c12f-469c-a5cf-28f4cc53d902",
+      "edgeType": "Custom",
+      "name": "to_qa"
+    },
+    {
+      "id": "ca4c94b9-996f-457d-bbfc-3ce6fd8c67b5",
+      "sourceNodeId": "b02a2fb6-b7fb-4241-81bd-89f5ecac19c1",
+      "targetNodeId": "64eef244-a952-48bd-a728-665af5d89b16",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "f95562e9-090c-4798-b9a0-640761307d91",
+      "sourceNodeId": "b02a2fb6-b7fb-4241-81bd-89f5ecac19c1",
+      "targetNodeId": "64eef244-a952-48bd-a728-665af5d89b16",
+      "edgeType": "Custom",
+      "name": "to_review"
+    },
+    {
+      "id": "fbc05019-cb05-4be5-a921-f9f36c7bbaa9",
+      "sourceNodeId": "b7e10550-b108-460d-b256-ef101e5ee73d",
+      "targetNodeId": "b02a2fb6-b7fb-4241-81bd-89f5ecac19c1",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "fc5e89e9-8508-45f8-9677-b1f6d7eca6e9",
+      "sourceNodeId": "cb5f52a7-ec22-4042-9dc7-3414b0ccd925",
+      "targetNodeId": "b02a2fb6-b7fb-4241-81bd-89f5ecac19c1",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "6389b947-9961-4989-b419-836ad44a4e46",
+      "sourceNodeId": "dc441da1-e704-4025-a041-94a52c0e1a64",
+      "targetNodeId": "f7493c48-cca2-4335-b93e-c4cb9930397f",
+      "edgeType": "Custom",
+      "name": "auto"
+    },
+    {
+      "id": "d7667846-e5bf-45b1-baa4-22b5e5a4ac7c",
+      "sourceNodeId": "dc441da1-e704-4025-a041-94a52c0e1a64",
+      "targetNodeId": "124d78d2-4444-4475-961e-15339fd4fc24",
+      "edgeType": "Custom",
+      "name": "hil"
+    },
+    {
+      "id": "6eea5e5d-fae7-4014-a780-e4c603ad1a13",
+      "sourceNodeId": "dd733830-2216-4a36-9085-83c8c6084bee",
+      "targetNodeId": "92a8b2f2-4f73-4368-b755-cfaf426a9cf2",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "430c0c44-5054-459d-893b-a3eb07fa71ea",
+      "sourceNodeId": "e04a235a-d394-49b6-b476-c3b07a967278",
+      "targetNodeId": "74ffae71-090b-4508-b60c-e88f8b92874c",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "cf45d60e-0276-47ff-bcd5-ec93b10d23f7",
+      "sourceNodeId": "e6ca9ab4-7c56-4e4a-91d2-d5a0ef78ea6c",
+      "targetNodeId": "a25e0719-bf21-4773-b568-df2ecffe4729",
+      "edgeType": "Custom",
+      "name": "ask_human"
+    },
+    {
+      "id": "db66122d-bc43-475a-bf7b-bd0e3ffa634f",
+      "sourceNodeId": "e6ca9ab4-7c56-4e4a-91d2-d5a0ef78ea6c",
+      "targetNodeId": "0436cb48-ef38-429c-bfb4-6593ffd013bb",
+      "edgeType": "Custom",
+      "name": "spec_resolved"
+    },
+    {
+      "id": "386ae8ba-7e89-4180-a66c-b75091571220",
+      "sourceNodeId": "f7493c48-cca2-4335-b93e-c4cb9930397f",
+      "targetNodeId": "b7e10550-b108-460d-b256-ef101e5ee73d",
+      "edgeType": "Custom",
+      "name": "on_rejected"
+    },
+    {
+      "id": "43061a75-5765-4b49-b3d2-c2a62ce8d7e0",
+      "sourceNodeId": "f7493c48-cca2-4335-b93e-c4cb9930397f",
+      "targetNodeId": "b7e10550-b108-460d-b256-ef101e5ee73d",
+      "edgeType": "Custom",
+      "name": "on_merge_conflict"
+    },
+    {
+      "id": "57a6caca-9e14-4ded-a94d-2c5e3f0ff7a9",
+      "sourceNodeId": "f7493c48-cca2-4335-b93e-c4cb9930397f",
+      "targetNodeId": "dc4331f9-dc29-4af8-b1cf-b783363ff658",
+      "edgeType": "Custom",
+      "name": "on_abandoned"
+    },
+    {
+      "id": "af974da2-4591-4f29-884a-1584355430da",
+      "sourceNodeId": "f7493c48-cca2-4335-b93e-c4cb9930397f",
+      "targetNodeId": "b7e10550-b108-460d-b256-ef101e5ee73d",
+      "edgeType": "Custom",
+      "name": "on_ci_failed"
+    },
+    {
+      "id": "b5359c01-28d1-49ac-8e84-d72801118f22",
+      "sourceNodeId": "f7493c48-cca2-4335-b93e-c4cb9930397f",
+      "targetNodeId": "dc4331f9-dc29-4af8-b1cf-b783363ff658",
+      "edgeType": "Custom",
+      "name": "on_merged"
+    }
+  ]
+}
