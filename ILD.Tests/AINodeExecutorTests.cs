@@ -105,18 +105,152 @@ public class AINodeExecutorTests
     }
 
     // Two rules both match "REJECT and review" (the first case-insensitively);
-    // first-match-wins must route to the earlier rule's edge.
+    // last-match-wins must route to whichever pattern sits later in the output.
     private const string TwoRuleConfig =
         @"{""matchRules"":[{""pattern"":""reject"",""edgeName"":""Reject""},{""pattern"":""review"",""edgeName"":""Review""}]}";
 
     [Fact]
-    public async Task Matching_output_routes_to_first_matching_rules_custom_edge_case_insensitively()
+    public async Task Matching_output_routes_to_last_matching_rules_custom_edge_case_insensitively()
     {
         var outcome = await LastOutcomeAsync(TwoRuleConfig, NodeExecutionResult.Ok("REJECT and review"));
 
         var success = Assert.IsType<NodeOutcome.Success>(outcome);
         Assert.Equal(EdgeType.Custom, success.Edge);
-        // Earlier rule wins even though the later "review" rule also matches.
+        // "review" sits later in the output, so it wins despite being the later rule.
+        Assert.Equal("Review", success.EdgeName);
+    }
+
+    [Fact]
+    public async Task Rule_order_does_not_decide_the_winner_only_position_in_the_output()
+    {
+        // Same two rules, reversed configuration order — the output is unchanged,
+        // so the winner must be unchanged too.
+        const string reversed =
+            @"{""matchRules"":[{""pattern"":""review"",""edgeName"":""Review""},{""pattern"":""reject"",""edgeName"":""Reject""}]}";
+
+        var outcome = await LastOutcomeAsync(reversed, NodeExecutionResult.Ok("REJECT and review"));
+
+        var success = Assert.IsType<NodeOutcome.Success>(outcome);
+        Assert.Equal("Review", success.EdgeName);
+    }
+
+    // The regression this rule change exists for: a reviewer that narrates its
+    // reasoning mentions "reject" on the way to approving, and used to be routed
+    // down the reject edge.
+    [Fact]
+    public async Task Narrated_verdict_routes_on_the_closing_word_not_an_earlier_mention()
+    {
+        const string config =
+            @"{""matchRules"":[{""pattern"":""reject"",""edgeName"":""Reject""},{""pattern"":""approve"",""edgeName"":""Approve""}]}";
+
+        var outcome = await LastOutcomeAsync(
+            config,
+            NodeExecutionResult.Ok("I found no reason to reject, so: approve"));
+
+        var success = Assert.IsType<NodeOutcome.Success>(outcome);
+        Assert.Equal(EdgeType.Custom, success.Edge);
+        Assert.Equal("Approve", success.EdgeName);
+    }
+
+    [Fact]
+    public async Task A_rule_matching_repeatedly_is_judged_by_its_last_occurrence()
+    {
+        // "reject" appears first, but its LAST occurrence is after "approve" —
+        // only that last occurrence may be compared, so Reject wins.
+        var outcome = await LastOutcomeAsync(
+            @"{""matchRules"":[{""pattern"":""reject"",""edgeName"":""Reject""},{""pattern"":""approve"",""edgeName"":""Approve""}]}",
+            NodeExecutionResult.Ok("reject? cannot approve this — reject"));
+
+        var success = Assert.IsType<NodeOutcome.Success>(outcome);
+        Assert.Equal("Reject", success.EdgeName);
+    }
+
+    [Fact]
+    public async Task Two_rules_matching_at_the_same_index_prefer_the_longer_match()
+    {
+        // Both patterns start at the same index; the longer (later-ending) match
+        // is the more specific verdict and must win regardless of rule order.
+        const string shortFirst =
+            @"{""matchRules"":[{""pattern"":""approve"",""edgeName"":""Approve""},{""pattern"":""approve with nits"",""edgeName"":""ApproveWithNits""}]}";
+        const string longFirst =
+            @"{""matchRules"":[{""pattern"":""approve with nits"",""edgeName"":""ApproveWithNits""},{""pattern"":""approve"",""edgeName"":""Approve""}]}";
+        var output = NodeExecutionResult.Ok("verdict: approve with nits");
+
+        var a = Assert.IsType<NodeOutcome.Success>(await LastOutcomeAsync(shortFirst, output));
+        var b = Assert.IsType<NodeOutcome.Success>(await LastOutcomeAsync(longFirst, output));
+
+        Assert.Equal("ApproveWithNits", a.EdgeName);
+        Assert.Equal("ApproveWithNits", b.EdgeName);
+    }
+
+    [Fact]
+    public async Task Backreference_patterns_match_the_same_way_they_read()
+    {
+        // A backreference is applied left-to-right. (Scanning the pattern itself
+        // backwards — RegexOptions.RightToLeft — would fail to match here, and
+        // the rule would silently lose.)
+        const string config =
+            @"{""matchRules"":[{""pattern"":""(approve)\\s+\\1"",""edgeName"":""Approve""}]}";
+
+        var outcome = await LastOutcomeAsync(config, NodeExecutionResult.Ok("approve approve"));
+
+        var success = Assert.IsType<NodeOutcome.Success>(outcome);
+        Assert.Equal("Approve", success.EdgeName);
+    }
+
+    [Fact]
+    public async Task Alternation_picks_the_branch_a_left_to_right_read_would()
+    {
+        // "approve|approve with nits" matches the FIRST viable branch, so the
+        // match is the 7-char "approve" — that Length is what feeds the
+        // tie-break, and the longer literal rule at the same index must win.
+        const string config =
+            @"{""matchRules"":[{""pattern"":""approve|approve with nits"",""edgeName"":""Short""},{""pattern"":""approve with nits"",""edgeName"":""Long""}]}";
+
+        var outcome = await LastOutcomeAsync(config, NodeExecutionResult.Ok("verdict: approve with nits"));
+
+        var success = Assert.IsType<NodeOutcome.Success>(outcome);
+        Assert.Equal("Long", success.EdgeName);
+    }
+
+    [Fact]
+    public async Task An_unparseable_pattern_is_skipped_and_the_other_rules_still_route()
+    {
+        // Legacy configs predate save-time pattern validation. A malformed rule
+        // must not take down routing that used to work: it just never matches.
+        const string config =
+            @"{""matchRules"":[{""pattern"":""approve"",""edgeName"":""Approve""},{""pattern"":""[unclosed"",""edgeName"":""Broken""}]}";
+
+        var outcome = await LastOutcomeAsync(config, NodeExecutionResult.Ok("verdict: approve"));
+
+        var success = Assert.IsType<NodeOutcome.Success>(outcome);
+        Assert.Equal(EdgeType.Custom, success.Edge);
+        Assert.Equal("Approve", success.EdgeName);
+    }
+
+    [Fact]
+    public async Task An_output_matching_only_an_unparseable_pattern_falls_through_to_OnSuccess()
+    {
+        var outcome = await LastOutcomeAsync(
+            @"{""matchRules"":[{""pattern"":""[unclosed"",""edgeName"":""Broken""}]}",
+            NodeExecutionResult.Ok("verdict: approve"));
+
+        var success = Assert.IsType<NodeOutcome.Success>(outcome);
+        Assert.Equal(EdgeType.OnSuccess, success.Edge);
+        Assert.Null(success.EdgeName);
+    }
+
+    [Fact]
+    public async Task Blank_and_edgeless_rules_are_skipped()
+    {
+        // A rule missing either half is unroutable and must not swallow the
+        // match, even though its (empty) pattern would match anywhere.
+        const string config =
+            @"{""matchRules"":[{""pattern"":"""",""edgeName"":""Blank""},{""pattern"":""approve"",""edgeName"":""""},{""pattern"":""reject"",""edgeName"":""Reject""}]}";
+
+        var outcome = await LastOutcomeAsync(config, NodeExecutionResult.Ok("reject then approve"));
+
+        var success = Assert.IsType<NodeOutcome.Success>(outcome);
         Assert.Equal("Reject", success.EdgeName);
     }
 

@@ -230,6 +230,73 @@ public class LoopTemplateValidatorTests
         Assert.Empty(errs);
     }
 
+    /// <summary>Wires an AI node whose single rule routes to a real custom edge,
+    /// so the only thing left for the validator to complain about is the pattern.</summary>
+    private static LoopTemplateGraph GraphWithAiPattern(string pattern)
+        => new(Guid.NewGuid(),
+            new() { AiNodeWithRules("a", (pattern, "Reject")), Node("s", "Start"), Node("c", "Cleanup") },
+            new()
+            {
+                Edge("s", "a"),
+                Edge("a", "c"),
+                Edge("a", "c", "Custom", "Reject"),
+            });
+
+    [Fact]
+    public void Ai_match_rule_with_an_uncompilable_pattern_is_invalid()
+    {
+        // The executor skips a pattern it cannot compile, so the rule would
+        // silently never fire. Say so at save time, while it can still be fixed.
+        var errs = LoopTemplateValidator.Validate(GraphWithAiPattern("[unclosed"));
+        Assert.Contains(errs, e => e.Contains("is not a valid regex"));
+    }
+
+    [Theory]
+    [InlineData("x*")]          // zero or more
+    [InlineData("a?")]          // optional
+    [InlineData("(?:)")]        // empty group
+    [InlineData(@"\b")]         // zero-width assertion
+    [InlineData(@"\s*")]        // zero or more whitespace
+    [InlineData("(?=approve)")] // lookahead consumes nothing
+    [InlineData("approve|")]    // empty alternative
+    public void Ai_match_rule_that_can_match_nothing_is_invalid(string pattern)
+    {
+        // Under last-match-wins a zero-width pattern matches at the end of every
+        // output, so it would outrank every genuine verdict.
+        var errs = LoopTemplateValidator.Validate(GraphWithAiPattern(pattern));
+        Assert.Contains(errs, e => e.Contains("can match an empty string"));
+    }
+
+    [Fact]
+    public void Ai_match_rule_with_a_catastrophically_backtracking_pattern_is_invalid()
+    {
+        // "(.|.)+#" blows up on the validator's own short probe string: before
+        // the probe run was given a timeout, this hung the save request itself.
+        // It must come back as an ordinary validation error instead.
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var errs = LoopTemplateValidator.Validate(GraphWithAiPattern("(.|.)+#"));
+        sw.Stop();
+
+        Assert.Contains(errs, e => e.Contains("too slow to evaluate"));
+        // The timeout has to actually bound it — not merely be declared.
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(10), $"validation took {sw.Elapsed}");
+    }
+
+    [Theory]
+    [InlineData("reject")]
+    [InlineData(@"^\s*reject")]
+    [InlineData("reject(?! this)")]
+    [InlineData("(reject|deny)")]
+    [InlineData("nits*")]        // optional tail, but 'nit' is still required
+    [InlineData(@"\d+")]
+    [InlineData("approve with nits")]
+    public void Ai_match_rule_with_an_ordinary_pattern_is_valid(string pattern)
+    {
+        // Anchors, lookarounds, alternation and optional tails are all
+        // legitimate verdict patterns and must not be flagged.
+        Assert.Empty(LoopTemplateValidator.Validate(GraphWithAiPattern(pattern)));
+    }
+
     [Fact]
     public void Ai_custom_edge_name_casing_must_match_rule_exactly()
     {
