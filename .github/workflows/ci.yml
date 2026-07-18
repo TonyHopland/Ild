@@ -42,7 +42,8 @@ jobs:
 
   # The Dockerfiles are otherwise only exercised at release time by publish.yml,
   # so a broken one fails the tag rather than the PR that broke it. Build here
-  # (never push) to close that gap. amd64 only — see image-build-arm64 below.
+  # (never push) to close that gap. amd64 only — arm64 is emulated and slow, so
+  # it lives in image-arm64.yml, which triggers on PRs that touch the Dockerfiles.
   image-build:
     runs-on: ubuntu-latest
     strategy:
@@ -84,36 +85,6 @@ jobs:
           # other's cache, and kept distinct from publish.yml's scopes.
           cache-from: type=gha,scope=ci-${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=ci-${{ matrix.name }}
-
-  # arm64 builds under QEMU emulation and is slow, so it runs on pushes to main
-  # rather than on every PR — still ahead of the release that would publish it.
-  # Deliberately excluded from `publish`'s needs and skipped on tags, because
-  # publish.yml builds arm64 itself; gating on it would emulate the same build
-  # twice per release. Only the main image: the arm64-specific logic (Node arch
-  # selection, the amd64-only Chrome skip) lives there.
-  image-build-arm64:
-    if: github.event_name == 'push' && github.ref_type == 'branch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: docker/setup-qemu-action@v3
-
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Build ild (arm64, no push)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile
-          platforms: linux/arm64
-          push: false
-          build-args: |
-            WITH_NODE=1
-            WITH_DOTNET_SDK=1
-            WITH_CHROME=1
-          cache-from: type=gha,scope=ci-ild-arm64
-          cache-to: type=gha,mode=max,scope=ci-ild-arm64
 
   # Publish to GHCR only on a release tag, after the build is green. Merges to
   # main build and test but never publish.

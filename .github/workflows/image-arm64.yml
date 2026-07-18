@@ -1,0 +1,44 @@
+name: Image (arm64)
+
+# arm64 builds under QEMU emulation and is slow, so it is deliberately not part
+# of the normal CI run. The arch-specific logic in the Dockerfile is small (Node
+# arch selection, the amd64-only Chrome skip), and it can only break when one of
+# the files below changes — so this builds on pull requests that touch them
+# rather than on every push. publish.yml builds arm64 for real at release time;
+# this exists so a break surfaces on the PR instead of on the release tag.
+#
+# Runnable on demand from the Actions tab via workflow_dispatch.
+
+on:
+  pull_request:
+    paths:
+      - "Dockerfile"
+      - "Dockerfile.WorkItemServer"
+      - "entrypoint.sh"
+      - ".dockerignore"
+      - ".github/workflows/image-arm64.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build ild (arm64, no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/arm64
+          push: false
+          build-args: |
+            WITH_NODE=1
+            WITH_DOTNET_SDK=1
+            WITH_CHROME=1
+          cache-from: type=gha,scope=ci-ild-arm64
+          cache-to: type=gha,mode=max,scope=ci-ild-arm64
