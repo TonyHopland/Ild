@@ -77,6 +77,28 @@ public class RepositoryManagerTests : IDisposable
 
         var diff = await mgr.GetDiffAsync(path);
         Assert.NotNull(diff);
+
+        // CommitAsync runs `git add -A`, so anything the worktree setup dropped
+        // on disk rides along into the run commit — and from there into the PR.
+        // Only the agent's own edit belongs here.
+        var committed = GitOutput(path, "show", "--pretty=", "--name-only", "HEAD")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.Trim())
+            .ToList();
+        Assert.Equal(new[] { "new.txt" }, committed);
+    }
+
+    [Fact]
+    public async Task CreateWorktree_does_not_write_tool_config_into_the_worktree()
+    {
+        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        // The seed repo has no opencode.json, so anything present afterwards was
+        // synthesized by worktree creation rather than checked out from the repo.
+        Assert.False(File.Exists(Path.Combine(_repo, "opencode.json")));
+
+        var path = await mgr.CreateWorktreeAsync(_repo, "feature-no-stub");
+
+        Assert.False(File.Exists(Path.Combine(path, "opencode.json")));
     }
 
     [Fact]
