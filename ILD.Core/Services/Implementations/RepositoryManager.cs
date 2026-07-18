@@ -65,11 +65,15 @@ public class RepositoryManager : IRepositoryManager
                     $"Failed to create worktree at {worktreePath}. git add -b stderr: {FormatGitError(stderr)} git add existing-branch stderr: {FormatGitError(stderr2)}");
         }
 
-        // Pin project root so opencode --dir works and doesn't walk up to parent workspace.
-        var opencodeConfig = Path.Combine(worktreePath, "opencode.json");
-        if (!File.Exists(opencodeConfig))
-            File.WriteAllText(opencodeConfig, "{\"$schema\":\"https://opencode.ai/config.json\"}");
-
+        // Deliberately nothing else here: the worktree must contain only what git
+        // checked out. CommitAsync runs `git add -A`, so any file synthesized at
+        // setup time rides into the run commit and from there into the PR.
+        //
+        // This used to drop a stub opencode.json to pin the project root. It was
+        // both leaky and unnecessary: the adapter passes `--dir <worktreePath>`
+        // explicitly and feeds config in-memory via OPENCODE_CONFIG_CONTENT
+        // (OpenCodeAdapter.BuildRunProcessStartInfo), so the file was never read
+        // for config, and the worktree's own .git already marks the root.
         return worktreePath;
     }
 
