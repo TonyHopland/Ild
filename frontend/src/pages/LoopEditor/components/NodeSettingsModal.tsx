@@ -423,7 +423,8 @@ export function NodeSettingsModal({
                   <label>Match Rules</label>
                   <small className="config-help-text">
                     Each rule's pattern is matched case-insensitively against the AI output. The
-                    first match routes to its named custom edge; no match takes the success edge.
+                    rule matching latest in the output routes to its named custom edge; no match
+                    takes the success edge.
                   </small>
                   {aiMatchRules.map((rule, index) => (
                     <div key={index} className="match-rule-row">

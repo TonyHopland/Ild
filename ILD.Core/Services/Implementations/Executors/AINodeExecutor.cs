@@ -6,6 +6,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using Microsoft.Extensions.DependencyInjection;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace ILD.Core.Services.Implementations.Executors;
 
@@ -198,16 +199,16 @@ public sealed class AINodeExecutor : INodeExecutor
             }
             if (!string.IsNullOrEmpty(result.Output) && cfg.MatchRules is { Count: > 0 })
             {
-                // First rule whose pattern matches routes to its named custom
-                // edge; no match falls through to the default OnSuccess edge.
-                foreach (var rule in cfg.MatchRules)
+                // Last match wins: agents narrate ("no reason to reject, so:
+                // approve"), so the pattern appearing latest in the output is
+                // the verdict. Each rule contributes its own last occurrence
+                // (RightToLeft), and the rule matching furthest into the text
+                // routes. No match falls through to the default OnSuccess edge.
+                var winner = SelectLastMatchingRule(cfg.MatchRules, result.Output);
+                if (winner is not null)
                 {
-                    if (!string.IsNullOrWhiteSpace(rule.Pattern) && !string.IsNullOrWhiteSpace(rule.EdgeName)
-                        && System.Text.RegularExpressions.Regex.IsMatch(result.Output, rule.Pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase))
-                    {
-                        yield return new NodeOutcome.Success(EdgeType.Custom, result.Output, rule.EdgeName, usage);
-                        yield break;
-                    }
+                    yield return new NodeOutcome.Success(EdgeType.Custom, result.Output, winner.EdgeName, usage);
+                    yield break;
                 }
             }
             yield return new NodeOutcome.Success(EdgeType.OnSuccess, result.Output, Usage: usage);
@@ -216,6 +217,36 @@ public sealed class AINodeExecutor : INodeExecutor
         {
             yield return new NodeOutcome.Fail(EdgeType.OnFailure, result.Error ?? "AI adapter failed", result.Output);
         }
+    }
+
+    /// <summary>
+    /// Picks the match rule whose last occurrence sits furthest into
+    /// <paramref name="output"/>, or null when no rule matches. Ties (two rules
+    /// matching at the same index) break on the later-ending match first, then
+    /// on configured order, so selection is deterministic.
+    /// </summary>
+    private static NodeConfig.AiMatchRule? SelectLastMatchingRule(
+        IReadOnlyList<NodeConfig.AiMatchRule> rules, string output)
+    {
+        NodeConfig.AiMatchRule? winner = null;
+        var bestIndex = -1;
+        var bestEnd = -1;
+        foreach (var rule in rules)
+        {
+            if (string.IsNullOrWhiteSpace(rule.Pattern) || string.IsNullOrWhiteSpace(rule.EdgeName))
+                continue;
+            // RightToLeft finds this rule's LAST occurrence rather than its first.
+            var m = Regex.Match(output, rule.Pattern, RegexOptions.IgnoreCase | RegexOptions.RightToLeft);
+            if (!m.Success) continue;
+            var end = m.Index + m.Length;
+            if (m.Index > bestIndex || (m.Index == bestIndex && end > bestEnd))
+            {
+                winner = rule;
+                bestIndex = m.Index;
+                bestEnd = end;
+            }
+        }
+        return winner;
     }
 
     /// <summary>

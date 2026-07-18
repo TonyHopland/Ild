@@ -37,7 +37,8 @@ internal static class NodeConfig
     /// <summary>
     /// One AI output-matching rule: if <see cref="Pattern"/> (a case-insensitive
     /// regex) matches the AI output, route to the custom edge named
-    /// <see cref="EdgeName"/>. Rules are evaluated in order; the first match wins.
+    /// <see cref="EdgeName"/>. When several rules match, the one matching latest
+    /// in the output wins (configured order only breaks ties).
     /// </summary>
     public sealed record AiMatchRule
     {
@@ -53,8 +54,9 @@ internal static class NodeConfig
         public string[]? ToolAllowlist { get; init; }
 
         /// <summary>
-        /// Ordered output-match rules routing to named custom edges. The first
-        /// rule whose pattern matches the output routes to its named edge; no
+        /// Output-match rules routing to named custom edges. The rule whose last
+        /// occurrence appears furthest into the output routes to its named edge
+        /// — an agent's closing verdict beats anything it mentioned earlier; no
         /// match takes the default OnSuccess edge.
         /// </summary>
         public List<AiMatchRule>? MatchRules { get; init; }
