@@ -220,10 +220,23 @@ public sealed class AINodeExecutor : INodeExecutor
     }
 
     /// <summary>
+    /// How long a single rule's pattern may spend scanning the output before it
+    /// is abandoned. Last-match-wins evaluates every rule on every run, so one
+    /// catastrophically-backtracking pattern would otherwise stall the node.
+    /// </summary>
+    private static readonly TimeSpan MatchTimeout = TimeSpan.FromSeconds(1);
+
+    /// <summary>
     /// Picks the match rule whose last occurrence sits furthest into
     /// <paramref name="output"/>, or null when no rule matches. Ties (two rules
     /// matching at the same index) break on the later-ending match first, then
     /// on configured order, so selection is deterministic.
+    ///
+    /// A rule whose pattern is malformed or too slow is skipped rather than
+    /// failing the node: it simply never matches, which is exactly what it did
+    /// before last-match-wins forced every rule to be evaluated.
+    /// <see cref="LoopTemplateValidator"/> rejects such patterns at save time,
+    /// so this only shields loops saved before that check existed.
     /// </summary>
     private static NodeConfig.AiMatchRule? SelectLastMatchingRule(
         IReadOnlyList<NodeConfig.AiMatchRule> rules, string output)
@@ -235,9 +248,22 @@ public sealed class AINodeExecutor : INodeExecutor
         {
             if (string.IsNullOrWhiteSpace(rule.Pattern) || string.IsNullOrWhiteSpace(rule.EdgeName))
                 continue;
-            // RightToLeft finds this rule's LAST occurrence rather than its first.
-            var m = Regex.Match(output, rule.Pattern, RegexOptions.IgnoreCase | RegexOptions.RightToLeft);
-            if (!m.Success) continue;
+
+            Match? m;
+            try
+            {
+                // Take this rule's LAST occurrence. Enumerating left-to-right and
+                // keeping the final hit — rather than RegexOptions.RightToLeft —
+                // keeps ordinary match semantics: RightToLeft also reverses how
+                // the pattern itself is applied, which breaks backreferences and
+                // changes which alternation branch wins (and so the Length that
+                // feeds the tie-break below).
+                m = Regex.Matches(output, rule.Pattern, RegexOptions.IgnoreCase, MatchTimeout).LastOrDefault();
+            }
+            catch (ArgumentException) { continue; }      // malformed pattern
+            catch (RegexMatchTimeoutException) { continue; }
+
+            if (m is null || !m.Success) continue;
             var end = m.Index + m.Length;
             if (m.Index > bestIndex || (m.Index == bestIndex && end > bestEnd))
             {

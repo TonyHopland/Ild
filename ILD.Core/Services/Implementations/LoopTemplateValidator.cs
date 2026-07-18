@@ -19,6 +19,52 @@ public static class LoopTemplateValidator
 
     private static bool AllowsCustomEdges(string nodeType) => CustomEdgeNodeTypes.Contains(nodeType);
 
+    /// <summary>
+    /// Text a match-rule pattern is trial-run against to see whether it can
+    /// match nothing at all. Covers letters, digits, spaces and punctuation so a
+    /// zero-width pattern has somewhere to land; the empty string catches the
+    /// patterns that match even that.
+    /// </summary>
+    private static readonly string[] MatchRuleProbes = { string.Empty, "approve reject nits 12." };
+
+    /// <summary>
+    /// Checks an AI match rule's pattern at save time — the only point where the
+    /// author can still fix it. Two ways a pattern is unusable:
+    ///
+    /// <list type="bullet">
+    ///   <item>it does not compile, so the executor can never evaluate it and
+    ///         the rule silently never fires;</item>
+    ///   <item>it can match zero characters (<c>x*</c>, <c>\b</c>, <c>(?:)</c>,
+    ///         <c>(?=...)</c>). Under last-match-wins such a pattern matches at
+    ///         the very end of any output, so it outranks every genuine verdict
+    ///         and the node always takes that one edge.</item>
+    /// </list>
+    ///
+    /// Both misroute silently at run time, which is why they are worth blocking
+    /// here rather than leaving to be discovered mid-run. Patterns that merely
+    /// contain an optional part (<c>nits*</c>) still require real characters and
+    /// are left alone.
+    /// </summary>
+    private static void ValidateMatchRulePattern(
+        string nodeId, NodeConfig.AiMatchRule rule, List<string> errors)
+    {
+        if (string.IsNullOrWhiteSpace(rule.Pattern)) return;
+
+        Regex compiled;
+        try
+        {
+            compiled = new Regex(rule.Pattern, RegexOptions.IgnoreCase);
+        }
+        catch (ArgumentException ex)
+        {
+            errors.Add($"AI node {nodeId} has a match rule whose pattern '{rule.Pattern}' is not a valid regex: {ex.Message}");
+            return;
+        }
+
+        if (MatchRuleProbes.Any(probe => compiled.Matches(probe).Any(m => m.Length == 0)))
+            errors.Add($"AI node {nodeId} has a match rule whose pattern '{rule.Pattern}' can match an empty string, so it would match every AI output and always win. Make it match the verdict text itself.");
+    }
+
     private static bool AllowsAnyEdges(string nodeType) => !NoEdgeNodeTypes.Contains(nodeType);
 
     public static IReadOnlyList<string> Validate(LoopTemplateGraph graph)
@@ -162,6 +208,9 @@ public static class LoopTemplateValidator
                     errors.Add($"AI node {node.Id} has a custom edge '{orphan}' that no match rule routes to.");
                 foreach (var missing in ruleEdgeNames.Except(customEdgeNames))
                     errors.Add($"AI node {node.Id} has a match rule routing to '{missing}' but no custom edge with that name exists.");
+
+                foreach (var rule in cfg.MatchRules ?? new())
+                    ValidateMatchRulePattern(node.Id, rule, errors);
             }
             else if (string.Equals(node.NodeType, "Condition", StringComparison.OrdinalIgnoreCase))
             {

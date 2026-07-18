@@ -39,6 +39,10 @@ internal static class NodeConfig
     /// regex) matches the AI output, route to the custom edge named
     /// <see cref="EdgeName"/>. When several rules match, the one matching latest
     /// in the output wins (configured order only breaks ties).
+    ///
+    /// <see cref="LoopTemplateValidator"/> rejects a pattern that is not a valid
+    /// regex or that can match zero characters — the latter would match at the
+    /// end of every output and so always win.
     /// </summary>
     public sealed record AiMatchRule
     {
