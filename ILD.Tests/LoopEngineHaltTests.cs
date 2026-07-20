@@ -10,18 +10,6 @@ namespace ILD.Tests;
 /// </summary>
 public class LoopEngineHaltTests
 {
-    // Drains the fire-and-forget background loop a resume kicks off so the
-    // harness can be disposed without racing an in-flight run.
-    private static async Task WaitForIdleAsync(LoopEngineHarness h)
-    {
-        for (var i = 0; i < 200; i++)
-        {
-            await Task.Delay(10);
-            var active = await h.Engine.GetActiveRunIdsAsync();
-            if (i > 3 && !active.Any()) return;
-        }
-    }
-
     [Fact]
     public async Task Halt_running_ai_node_parks_run_waiting_human_and_keeps_current_node()
     {
@@ -78,7 +66,7 @@ public class LoopEngineHaltTests
         await h.Engine.HaltRunAsync(h.RunId);
 
         await h.Engine.ResumeFromHaltAsync(h.RunId, "tighten the tests");
-        await WaitForIdleAsync(h);
+        await h.WaitUntilIdleAsync();
 
         var run = h.ReloadRun();
         Assert.Equal("tighten the tests", run.SteeringNote);
@@ -100,7 +88,7 @@ public class LoopEngineHaltTests
         // dialog visible the next time the run parked for human feedback.
         var retryNode = SeedRunNode(h, "ai");
         await h.Engine.RetryFromNodeAsync(h.RunId, retryNode.Id);
-        await WaitForIdleAsync(h);
+        await h.WaitUntilIdleAsync();
 
         var run = h.ReloadRun();
         Assert.False(run.IsHalted);

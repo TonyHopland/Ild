@@ -191,7 +191,7 @@ public class LoopEngineRoutingTests
             NodeSignal.Custom("Respond", "user-text"));
 
         // SignalNodeResultAsync launches the run via Task.Run; drain it.
-        await WaitUntilAsync(() => h.ReloadRun().Status != LoopRunStatus.Running, TimeSpan.FromSeconds(5));
+        await h.WaitUntilIdleAsync();
 
         var run = h.ReloadRun();
         Assert.Equal(LoopRunStatus.Completed, run.Status);
@@ -249,7 +249,7 @@ public class LoopEngineRoutingTests
         var waitingNode = h.ReloadRunNodes().Single(rn => rn.Status == LoopRunNodeStatus.WaitingHuman);
         await h.Engine.SignalNodeResultAsync(h.RunId, waitingNode.Id,
             new NodeSignal(ExternalActionResultType.Reject, Error: "Rejected"));
-        await WaitUntilAsync(() => h.ReloadRun().Status != LoopRunStatus.Running, TimeSpan.FromSeconds(5));
+        await h.WaitUntilIdleAsync();
 
         var nodes = h.ReloadRunNodes().OrderBy(n => n.StartedAt).ToList();
         Assert.Equal(3, nodes.Count);
@@ -392,7 +392,7 @@ public class LoopEngineRoutingTests
             new NodeOutcome.Terminal("b-ok"));
 
         await h.Engine.RetryFromNodeAsync(h.RunId, bNode.Id);
-        await WaitUntilAsync(() => h.ReloadRun().Status == LoopRunStatus.Completed, TimeSpan.FromSeconds(5));
+        await h.WaitUntilIdleAsync();
 
         var run = h.ReloadRun();
         Assert.Equal(LoopRunStatus.Completed, run.Status);
@@ -500,22 +500,4 @@ public class LoopEngineRoutingTests
         Assert.Equal(new[] { "OnSuccess", "OnFailure" }, edgeNames);
     }
 
-    private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            try
-            {
-                if (predicate()) return;
-            }
-            catch (Microsoft.Data.Sqlite.SqliteException)
-            {
-                // The engine re-launched via SignalNodeResultAsync/RetryFromNodeAsync may be
-                // mid-flight on the shared in-memory SQLite connection. Back off and retry.
-            }
-            await Task.Delay(25);
-        }
-        throw new TimeoutException("Predicate did not become true within timeout");
-    }
 }

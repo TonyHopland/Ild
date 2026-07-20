@@ -68,7 +68,7 @@ public class EngineFeedbackResumeTransitionTests
 
         // Let the resumed run drive to completion so no transition is in flight
         // while we assert.
-        await WaitUntilAsync(() => h.ReloadRun().Status == LoopRunStatus.Completed, TimeSpan.FromSeconds(5));
+        await h.WaitUntilIdleAsync();
 
         // The single Running transition is the one the resume must perform; the
         // core loop itself never transitions a work item to Running.
@@ -107,7 +107,7 @@ public class EngineFeedbackResumeTransitionTests
         await h.Engine.SignalNodeResultAsync(h.RunId, waitingNode.Id,
             NodeSignal.Custom("Respond", "user-text"));
 
-        await WaitUntilAsync(() => h.ReloadRun().Status == LoopRunStatus.Completed, TimeSpan.FromSeconds(5));
+        await h.WaitUntilIdleAsync();
 
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
             h.WorkItemId, RemoteWorkItemStatus.Running,
@@ -137,23 +137,5 @@ public class EngineFeedbackResumeTransitionTests
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
             It.IsAny<string>(), RemoteWorkItemStatus.Running,
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Never);
-    }
-
-    private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            try
-            {
-                if (predicate()) return;
-            }
-            catch (Microsoft.Data.Sqlite.SqliteException)
-            {
-                // Shared in-memory SQLite connection may be mid-flight.
-            }
-            await Task.Delay(25);
-        }
-        throw new TimeoutException("Predicate did not become true within timeout");
     }
 }
