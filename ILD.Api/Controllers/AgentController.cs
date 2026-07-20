@@ -4,6 +4,7 @@ using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -47,6 +48,7 @@ public class AgentController : ControllerBase
     private readonly ILoopTemplateManager _templates;
     private readonly ILoopRunStore _runs;
     private readonly AppDbContext _db;
+    private readonly IProviderStore _providerStore;
     private readonly IWorktreePreviewService _preview;
     private readonly IChatLoopScratchpad _loopScratchpad;
     private readonly IChatNotifier _chatNotifier;
@@ -57,6 +59,7 @@ public class AgentController : ControllerBase
         ILoopTemplateManager templates,
         ILoopRunStore runs,
         AppDbContext db,
+        IProviderStore providerStore,
         IWorktreePreviewService preview,
         IChatLoopScratchpad loopScratchpad,
         IChatNotifier chatNotifier,
@@ -66,6 +69,7 @@ public class AgentController : ControllerBase
         _templates = templates;
         _runs = runs;
         _db = db;
+        _providerStore = providerStore;
         _preview = preview;
         _loopScratchpad = loopScratchpad;
         _chatNotifier = chatNotifier;
@@ -89,15 +93,6 @@ public class AgentController : ControllerBase
         return (workItem, null);
     }
 
-    // The repository's custom .env is injected into every preview process; resolve
-    // it from the work item's repository so the agent's start paths inject the same
-    // baseline as the human controller and the run's Start node.
-    private async Task<string?> ResolvePreviewEnvAsync(WorkItemView workItem)
-    {
-        if (workItem.RepositoryId is null) return null;
-        var repo = await _db.Repositories.AsNoTracking().FirstOrDefaultAsync(r => r.Id == workItem.RepositoryId.Value);
-        return repo?.PreviewEnv;
-    }
 
     // Single-line description preview length for the lightweight list (~160
     // chars per the triage design): enough to recognise an item, far short of
@@ -304,7 +299,7 @@ public class AgentController : ControllerBase
                     request?.SkipInstall == true,
                     request?.PublicHost,
                     request?.PortOverrides,
-                    await ResolvePreviewEnvAsync(workItem)));
+                    await _providerStore.GetRepositoryPreviewEnvAsync(workItem!.RepositoryId)));
             await _notifier.PreviewStateChangedAsync(id);
             return Ok(response);
         }
@@ -349,7 +344,7 @@ public class AgentController : ControllerBase
                     request?.SkipInstall == true,
                     request?.PublicHost,
                     request?.PortOverrides,
-                    await ResolvePreviewEnvAsync(workItem)));
+                    await _providerStore.GetRepositoryPreviewEnvAsync(workItem!.RepositoryId)));
             await _notifier.PreviewStateChangedAsync(id);
             return Ok(response);
         }

@@ -30,6 +30,7 @@ public class AgentControllerPreviewTests
             new Mock<ILoopTemplateManager>().Object,
             db.LoopRuns,
             db.Context,
+            db.Providers,
             preview.Object,
             new Mock<IChatLoopScratchpad>().Object,
             new Mock<IChatNotifier>().Object,

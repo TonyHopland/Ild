@@ -125,11 +125,59 @@ public class RepositoryManager : IRepositoryManager
         return code == 0;
     }
 
+    /// <summary>
+    /// Untracked secret files ILD must never let ride into a run's commit — and from
+    /// there into the PR — even when the repository forgot to <c>.gitignore</c> them.
+    /// The repository custom <c>.env</c> (see <c>Repository.PreviewEnv</c>) is injected
+    /// into preview processes as environment variables and never written here, but a
+    /// preview/install step (or the repo) can materialise it as a dotenv file;
+    /// <c>.ild.env</c> is the reserved path ILD guarantees is always excluded.
+    /// </summary>
+    private static readonly string[] SecretExcludePatterns = { ".env", ".ild.env" };
+
     public async Task<bool> CommitAsync(string worktreePath, string message)
     {
+        await EnsureSecretExcludesAsync(worktreePath);
         await RunAsync(worktreePath, "add", "-A");
         var (code, _, _) = await RunAsync(worktreePath, "commit", "-m", message);
         return code == 0;
+    }
+
+    /// <summary>
+    /// Writes <see cref="SecretExcludePatterns"/> into the worktree's local git
+    /// exclude (<c>info/exclude</c>) so the subsequent <c>git add -A</c> can't stage
+    /// them. The exclude is git-local — never committed or pushed — and ignore rules
+    /// only apply to <em>untracked</em> paths, so a repository that deliberately
+    /// tracks its own <c>.env</c> is unaffected while a stray secret file the repo
+    /// forgot to ignore is kept out of the PR. Best-effort: failures never block the
+    /// commit.
+    /// </summary>
+    private async Task EnsureSecretExcludesAsync(string worktreePath)
+    {
+        try
+        {
+            var (code, stdout, _) = await RunAsync(worktreePath, "rev-parse", "--git-path", "info/exclude");
+            if (code != 0 || string.IsNullOrWhiteSpace(stdout)) return;
+
+            var excludePath = stdout.Trim();
+            if (!Path.IsPathRooted(excludePath))
+                excludePath = Path.GetFullPath(Path.Combine(worktreePath, excludePath));
+
+            var existing = File.Exists(excludePath)
+                ? await File.ReadAllLinesAsync(excludePath)
+                : Array.Empty<string>();
+            var have = new HashSet<string>(existing.Select(l => l.Trim()), StringComparer.Ordinal);
+            var missing = SecretExcludePatterns.Where(p => !have.Contains(p)).ToList();
+            if (missing.Count == 0) return;
+
+            Directory.CreateDirectory(Path.GetDirectoryName(excludePath)!);
+            var prefix = existing.Length > 0 && existing[^1].Length > 0 ? Environment.NewLine : string.Empty;
+            await File.AppendAllTextAsync(excludePath, prefix + string.Join(Environment.NewLine, missing) + Environment.NewLine);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogDebug(ex, "Failed to write secret excludes for {Worktree}", worktreePath);
+        }
     }
 
     public async Task<(bool Success, string? Error)> PushAsync(string worktreePath, string branchName, CancellationToken cancellationToken = default, GitAuthOptions? auth = null)

@@ -3,6 +3,7 @@ using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Enums;
 using ILD.Data.Entities;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -56,15 +57,6 @@ public class WorkItemsController : ControllerBase
         return (workItem, null);
     }
 
-    // The repository's custom .env is injected into every preview process; resolve
-    // it from the work item's repository so start paths inject the same baseline
-    // the run's Start node does.
-    private async Task<string?> ResolvePreviewEnvAsync(WorkItemView workItem)
-    {
-        if (workItem.RepositoryId is null) return null;
-        var repo = await _providerStore.GetRepositoryByIdAsync(workItem.RepositoryId.Value);
-        return repo?.PreviewEnv;
-    }
 
     private void RunInBackground(Guid runId)
     {
@@ -204,7 +196,7 @@ public class WorkItemsController : ControllerBase
                     request?.SkipInstall == true,
                     request?.PublicHost,
                     request?.PortOverrides,
-                    await ResolvePreviewEnvAsync(workItem)));
+                    await _providerStore.GetRepositoryPreviewEnvAsync(workItem!.RepositoryId)));
             await _notifier.PreviewStateChangedAsync(id);
             return Ok(response);
         }
@@ -249,7 +241,7 @@ public class WorkItemsController : ControllerBase
                     request?.SkipInstall == true,
                     request?.PublicHost,
                     request?.PortOverrides,
-                    await ResolvePreviewEnvAsync(workItem)));
+                    await _providerStore.GetRepositoryPreviewEnvAsync(workItem!.RepositoryId)));
             await _notifier.PreviewStateChangedAsync(id);
             return Ok(response);
         }

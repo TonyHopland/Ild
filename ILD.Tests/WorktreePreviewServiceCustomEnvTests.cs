@@ -111,4 +111,33 @@ public class WorktreePreviewServiceCustomEnvTests : IDisposable
         // The variable was never set, so the marker is empty.
         Assert.Equal(string.Empty, ReadMarker());
     }
+
+    [Fact]
+    public async Task Custom_env_is_injected_as_process_env_not_written_to_the_worktree()
+    {
+        // The secrets reach preview processes purely as environment variables; they
+        // must never be materialised as a .env file in the worktree, where a run's
+        // `git add -A` could push them into the PR. Use a no-op install step so the
+        // only thing that could appear is a file the injection itself wrote.
+        var config = """
+        {
+          "preview": {
+            "defaultProfile": "app",
+            "profiles": { "app": { "install": [ { "cwd": ".", "command": "true" } ], "services": [] } }
+          }
+        }
+        """;
+        File.WriteAllText(Path.Combine(_worktree, "ild.config.json"), config);
+        var service = BuildService();
+
+        await service.InstallAsync(_worktree, customEnv: "API_TOKEN=s3cr3t\nDB_PASSWORD=hunter2");
+
+        Assert.False(File.Exists(Path.Combine(_worktree, ".env")), ".env must not be written to the worktree");
+        Assert.False(File.Exists(Path.Combine(_worktree, ".ild.env")), ".ild.env must not be written to the worktree");
+        // No stray dotenv file of any name carries the secret into the worktree.
+        var leaked = Directory.EnumerateFiles(_worktree, "*", SearchOption.AllDirectories)
+            .Where(f => File.ReadAllText(f).Contains("s3cr3t"))
+            .ToList();
+        Assert.Empty(leaked);
+    }
 }

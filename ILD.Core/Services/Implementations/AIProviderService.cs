@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
 using Microsoft.Extensions.Logging;
@@ -276,9 +277,7 @@ public class AIProviderService : IAIProviderService
         var run = await _loopRuns.GetByWorktreePathAsync(worktreePath);
         if (run is null || string.IsNullOrEmpty(run.WorkItemId)) return null;
         var workItem = await _workItemManager.GetWorkItemAsync(run.WorkItemId);
-        if (workItem?.RepositoryId is null) return null;
-        var repo = await _providerStore.GetRepositoryByIdAsync(workItem.RepositoryId.Value);
-        return repo?.PreviewEnv;
+        return await _providerStore.GetRepositoryPreviewEnvAsync(workItem?.RepositoryId);
     }
 
     private async Task<ToolExecutionResult> GetPreviewStatusAsync(string worktreePath)
