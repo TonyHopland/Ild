@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Reflection;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
@@ -131,9 +133,57 @@ internal sealed class LoopEngineHarness : IDisposable
     public async Task RunAsync()
     {
         var method = typeof(LoopEngine).GetMethod("RunUntilParkAsync",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
         var task = (Task)method.Invoke(_engine, new object[] { RunId, CancellationToken.None })!;
         await task;
+    }
+
+    // The signal/retry resume paths do not drive the run inline: they commit the
+    // resume and launch RunUntilParkAsync on a fire-and-forget Task.Run
+    // (LaunchAfterAwaitAsync). That background drive keeps using this harness's
+    // single shared SqliteConnection after the re-park is observable — it still
+    // reads out-edges and transitions the work item (LoopEngine.RunUntilParkAsync,
+    // after the status write). The engine tracks each run's live drive in the
+    // private _runTasks map; awaiting the stored Task is the only way to know the
+    // shared connection is quiescent, so we reach it the same way RunAsync reaches
+    // RunUntilParkAsync — by reflection (the engine exposes no InternalsVisibleTo).
+    private static readonly FieldInfo RunTasksField =
+        typeof(LoopEngine).GetField("_runTasks", BindingFlags.NonPublic | BindingFlags.Instance)!;
+
+    private Task? OutstandingDriveTask()
+        => ((ConcurrentDictionary<Guid, Task>)RunTasksField.GetValue(_engine)!)
+            .TryGetValue(RunId, out var t) ? t : null;
+
+    /// <summary>
+    /// Waits until this harness's run has no in-flight drive — i.e. any
+    /// fire-and-forget resume launched by <see cref="ILoopEngine.SignalNodeResultAsync"/>
+    /// or <see cref="ILoopEngine.RetryFromNodeAsync"/> has run to completion and the
+    /// run has left <see cref="ILoopEngine.GetActiveRunIdsAsync"/>. After this returns
+    /// the shared SQLite connection is quiescent, so signal-resume tests should await
+    /// it before asserting or disposing rather than keying off the observable parked
+    /// state alone (which becomes visible mid-drive, while post-park DB work is still
+    /// running on the shared connection).
+    /// </summary>
+    public async Task WaitUntilIdleAsync(TimeSpan? timeout = null)
+    {
+        var limit = timeout ?? TimeSpan.FromSeconds(10);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.Elapsed < limit)
+        {
+            // Await the actual drive Task (it completes cleanly — the engine catches
+            // inside the loop), then re-check in case a relaunch chained another one.
+            if (OutstandingDriveTask() is { IsCompleted: false } drive)
+            {
+                try { await drive.WaitAsync(limit - sw.Elapsed); } catch { /* drained or timed out */ }
+                continue;
+            }
+            // No stored drive Task. If the run still owns a drive slot, a launch is
+            // in flight but its Task handle isn't stored yet — spin briefly. Otherwise
+            // the run is fully idle and the connection is safe to tear down.
+            if (!(await Engine.GetActiveRunIdsAsync()).Contains(RunId))
+                return;
+            await Task.Delay(2);
+        }
     }
 
     public LoopRun ReloadRun()
@@ -154,6 +204,14 @@ internal sealed class LoopEngineHarness : IDisposable
 
     public void Dispose()
     {
+        // Serialize teardown against any in-flight fire-and-forget drive before
+        // disposing the shared SqliteConnection. Without this, disposing right
+        // after a signal-resume re-park races SqliteConnection.Close() against the
+        // drive's still-running post-park DB use — the intermittent CI teardown
+        // fault (NullReferenceException out of Close()). Best-effort: a drain error
+        // must never mask the real test outcome.
+        try { WaitUntilIdleAsync().GetAwaiter().GetResult(); }
+        catch { /* teardown drain is best-effort */ }
         _sp.Dispose();
         Db.Dispose();
     }

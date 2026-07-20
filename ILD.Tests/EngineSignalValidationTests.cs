@@ -97,7 +97,7 @@ public class EngineSignalValidationTests
         await h.Engine.SignalNodeResultAsync(h.RunId, waitingNode.Id,
             NodeSignal.Custom("Respond", "user-text"));
 
-        await WaitUntilAsync(() => h.ReloadRun().Status != LoopRunStatus.Running, TimeSpan.FromSeconds(5));
+        await h.WaitUntilIdleAsync();
 
         var run = h.ReloadRun();
         Assert.Equal(LoopRunStatus.Completed, run.Status);
@@ -134,7 +134,7 @@ public class EngineSignalValidationTests
         await h.Engine.SignalNodeResultAsync(h.RunId, waitingNode.Id,
             NodeSignal.Custom("Respond", "user-text"));
 
-        await WaitUntilAsync(() => h.ReloadRun().Status != LoopRunStatus.Running, TimeSpan.FromSeconds(5));
+        await h.WaitUntilIdleAsync();
 
         // Once the human responds and the run resumes, the reason must be cleared
         // so the badge disappears in the running view.
@@ -178,30 +178,14 @@ public class EngineSignalValidationTests
 
         // It parks again at h2 with a freshly-written reason — the first one was
         // cleared on resume, never carried over.
-        await WaitUntilAsync(
-            () => h.ReloadRun() is { Status: LoopRunStatus.WaitingHuman } r && r.HumanFeedbackReason == "Second question",
-            TimeSpan.FromSeconds(5));
+        // Wait for the run to go fully IDLE — the resume drives RunUntilParkAsync on
+        // a background task that keeps using the shared connection after the re-park
+        // is observable. Keying off the observable parked state alone would read (and,
+        // on dispose, tear down) the connection mid-drive.
+        await h.WaitUntilIdleAsync();
 
         var run = h.ReloadRun();
         Assert.Equal(LoopRunStatus.WaitingHuman, run.Status);
         Assert.Equal("Second question", run.HumanFeedbackReason);
-    }
-
-    private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            try
-            {
-                if (predicate()) return;
-            }
-            catch (Microsoft.Data.Sqlite.SqliteException)
-            {
-                // Shared in-memory SQLite connection may be mid-flight.
-            }
-            await Task.Delay(25);
-        }
-        throw new TimeoutException("Predicate did not become true within timeout");
     }
 }

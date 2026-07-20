@@ -16,40 +16,39 @@ namespace ILD.Tests;
 /// Root cause: <see cref="ILoopEngine.SignalNodeResultAsync"/> persists the run's parked state
 /// and then resumes the run on a <b>fire-and-forget</b> background task
 /// (<c>LoopEngine.LaunchAfterAwaitAsync</c> → <c>Task.Run(RunUntilParkAsync)</c>). That drive
-/// keeps using the harness's <b>single shared</b> in-memory <c>SqliteConnection</c> AFTER the
-/// next park is observable: in <c>RunUntilParkAsync</c> the run status/reason are committed
-/// (<c>UpdateRunAsync</c>) and only THEN does the drive read the DB again
-/// (<c>GetEdgesForNodeIdsAsync</c>) and transition the work item. Tests key off the observable
-/// state via a state-poll (<c>WaitUntilAsync</c>) and immediately dispose the harness — tearing
-/// that connection down while the drive is still executing against it. Concurrent
-/// operation-vs-Close on one <c>SqliteConnection</c> (which is not thread-safe) faults the
-/// teardown.
+/// keeps issuing commands on the harness's <b>single shared</b> in-memory <c>SqliteConnection</c>
+/// AFTER the next park is observable: in <c>RunUntilParkAsync</c> the run status/reason are
+/// committed (<c>UpdateRunAsync</c>) and only THEN does the drive read the DB again
+/// (<c>GetEdgesForNodeIdsAsync</c>) and transition the work item. The signal-resume tests keyed
+/// off that observable state with a state-poll (<c>WaitUntilAsync(ReloadRun)</c>) — issuing their
+/// OWN commands on the same shared connection, from the test thread, concurrently with the drive.
+/// A <c>SqliteConnection</c> is not thread-safe: two threads mutating its internal command list at
+/// once intermittently corrupt it, and a later <c>Close()</c> then dereferences the corrupted
+/// state and throws (the CI signature; a sibling Sqlite/InvalidOperation/ObjectDisposed exception
+/// under heavier amplification — all the same defect).
 ///
-/// This test makes the otherwise-rare interleaving reliable: a gate notifier holds a few real
-/// operations in flight on the shared connection at the exact moment the flaky test would
-/// dispose, so <c>Dispose()</c> reliably faults (pre-fix ~100% across the loop, locally). The
-/// fix is to serialize teardown against the drive — <c>LoopEngineHarness.Dispose</c> should
-/// drain the run's outstanding drive (wait for it to leave
-/// <see cref="ILoopEngine.GetActiveRunIdsAsync"/> / await the drive task) before disposing
-/// <c>Db</c>, so the connection is quiescent at teardown. (Signal-resume tests should likewise
-/// wait for the run to go idle, not just for its parked state to be observable.) The exact
-/// exception type varies by interleaving (NullReferenceException in CI, often a sibling
-/// Sqlite/InvalidOperation/ObjectDisposed exception here) — all are the same defect surfacing as
-/// a throw out of the harness teardown.
+/// Fix: the signal-resume tests must let the run go fully idle before touching the shared
+/// connection — <see cref="LoopEngineHarness.WaitUntilIdleAsync"/> awaits the outstanding drive
+/// task WITHOUT issuing any command, so only the drive uses the connection while it is live. Its
+/// teardown (<c>LoopEngineHarness.Dispose</c>) drains the same way, so the connection is quiescent
+/// and single-threaded at <c>Close()</c>. This test widens the drive's post-park window (a stand-in
+/// for its real <c>GetEdgesForNodeIdsAsync</c> + work-item transition), then relies on that drain:
+/// if the drain returned early (e.g. a naive <c>GetActiveRunIdsAsync</c> poll that trips over the
+/// fire-and-forget launch gap) the subsequent read and dispose would race the still-live drive and
+/// this loop would fault, exactly as the original did.
 /// </summary>
 public class EngineResumeTeardownRaceTests
 {
     [Fact]
-    public async Task Disposing_the_harness_right_after_a_signal_resume_parks_must_not_race_the_background_drive()
+    public async Task Signal_resume_drive_is_drained_before_the_shared_connection_is_read_or_disposed()
     {
-        // A modest loop: each iteration independently races teardown against the in-flight
-        // drive so a pre-fix failure is near-certain across the loop (reliably ~100% locally).
-        // The fix is to serialize teardown against the drive — drain the run's outstanding drive
-        // (wait for it to leave GetActiveRunIdsAsync) before disposing the shared connection.
-        for (var iteration = 0; iteration < 80; iteration++)
+        // A modest loop: each iteration re-parks via the fire-and-forget resume drive while the
+        // gate holds that drive on the shared connection, then drains it before reading/disposing.
+        // Pre-fix (poll the connection while the drive is live) this faulted across the loop.
+        for (var iteration = 0; iteration < 60; iteration++)
         {
             var gate = new ReparkGate();
-            var h = new LoopEngineHarness(gate);
+            using var h = new LoopEngineHarness(gate);
             gate.Db = h.Db;
 
             h.AddNode("h1", NodeType.Human);
@@ -72,36 +71,44 @@ public class EngineResumeTeardownRaceTests
 
             var firstWaiting = h.ReloadRunNodes().Single(rn => rn.Status == LoopRunNodeStatus.WaitingHuman);
 
-            // Fire-and-forget resume: returns immediately; the drive runs on the thread pool
-            // and, on re-parking, ends up back on the shared connection.
+            // Fire-and-forget resume: returns immediately; the drive runs on the thread pool and,
+            // on re-parking, ends up back on the shared connection (the gate widens that window).
             await h.Engine.SignalNodeResultAsync(h.RunId, firstWaiting.Id,
                 NodeSignal.Custom("Respond", "user-text"));
 
-            // Wait until the signal-driven drive is provably back on the shared connection
-            // right after the observable re-park — the exact window the flaky test disposes in.
+            // Let the drive get provably busy on the shared connection right after the observable
+            // re-park — the exact window the flaky test used to poll (and dispose) into.
             await gate.DriveBusyOnConnection.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
-            // The flaky test does exactly this: dispose immediately once the parked state is
-            // observable. With the drive still on the shared connection this faults; a teardown
-            // that drains the drive first (waits for the run to leave GetActiveRunIdsAsync /
-            // awaits the drive task) lets the in-flight work finish and disposes cleanly.
-            h.Dispose();
+            // The fix: drain the drive before touching the connection. WaitUntilIdleAsync awaits
+            // the drive task and issues no command, so the test thread never races the drive.
+            await h.WaitUntilIdleAsync();
+
+            // Provably drained: the drive has released the connection and left the active set, so
+            // the read below and the dispose at end-of-scope are single-threaded on the connection.
+            Assert.DoesNotContain(h.RunId, await h.Engine.GetActiveRunIdsAsync());
+
+            var run = h.ReloadRun();
+            Assert.Equal(LoopRunStatus.WaitingHuman, run.Status);
+            Assert.Equal("Second question", run.HumanFeedbackReason);
         }
     }
 
     /// <summary>
-    /// Lets the initial park through, then on the signal-driven re-park launches a few real
-    /// operations that stay in flight on the harness's shared <see cref="TestDb"/> connection —
-    /// standing in, in a reliable/widened way, for the drive's own post-park DB use
-    /// (<c>GetEdgesForNodeIdsAsync</c> + the work-item transition, which run after the observable
-    /// status write). It signals once those are running so the test can dispose into the race.
+    /// Lets the initial inline park through, then on the signal-driven re-park keeps the drive
+    /// genuinely busy on the harness's shared <see cref="TestDb"/> connection for a bounded window
+    /// — a stand-in for the drive's own post-park DB use (<c>GetEdgesForNodeIdsAsync</c> + the
+    /// work-item transition, which run on this connection AFTER the observable status write). It
+    /// runs INLINE on the drive task (<c>RunUntilParkAsync</c> awaits this notifier), so the busy
+    /// work is part of the drive: draining the drive waits it out. It signals once the busy loop is
+    /// underway so the test can proceed into the (now drained) window.
     /// </summary>
     private sealed class ReparkGate : IRunNotifier
     {
-        // Bounded window each in-flight op stays live on the shared connection. Long enough to
-        // cover the test's dispose (a few ms), short enough that draining the drive (post-fix)
-        // waits it out cheaply. Self-terminating, so a drain that awaits the drive never hangs.
-        private static readonly TimeSpan InFlightWindow = TimeSpan.FromMilliseconds(60);
+        // Bounded window the drive stays busy on the shared connection. Long enough to give the
+        // teardown/idle-wait something real to serialize against, short enough that draining the
+        // drive waits it out cheaply. Self-terminating, so a drain that awaits the drive never hangs.
+        private static readonly TimeSpan BusyWindow = TimeSpan.FromMilliseconds(60);
 
         public TestDb? Db;
         public readonly TaskCompletionSource DriveBusyOnConnection =
@@ -115,59 +122,38 @@ public class EngineResumeTeardownRaceTests
 
             // 1st WaitingHuman = the initial park driven inline by RunAsync — let it pass or
             // RunAsync would deadlock. 2nd = the signal-driven re-park we want to catch. This
-            // notifier call runs INSIDE the drive task (RunUntilParkAsync awaits it), so the
-            // in-flight work below is part of the drive: draining the drive before teardown
-            // waits for it, which is exactly what makes the fixed teardown safe.
+            // notifier call runs INSIDE the drive task (RunUntilParkAsync awaits it), so the busy
+            // work below is part of the drive: draining the drive before the test reads or disposes
+            // waits for it, which is exactly what makes the fix safe.
             if (System.Threading.Interlocked.Increment(ref _waitingHumanTransitions) < 2)
                 return;
 
             var db = Db;
             if (db is null) return;
 
-            var conn = (Microsoft.Data.Sqlite.SqliteConnection)db.Context.Database.GetDbConnection();
-
-            // Hold several real operations in flight on the shared connection for a bounded
-            // window, then signal — standing in, reliably and in a widened way, for the drive's
-            // own post-park DB use (GetEdgesForNodeIdsAsync + the work-item transition, which run
-            // on this same connection after the observable status write). Awaited below so the
-            // in-flight work is part of THIS drive task: a teardown that drains the drive waits it
-            // out and disposes cleanly, while the unfixed teardown races it and faults in
-            // SqliteConnection.Close() — the CI signature.
-            const int inFlight = 3;
-            var started = new System.Threading.CountdownEvent(inFlight);
-            var ops = new Task[inFlight];
-            for (var i = 0; i < inFlight; i++)
+            // Keep the drive issuing real queries on the shared connection for the window, the same
+            // way its own post-park DB use does. Single-threaded (this is the drive): the defect the
+            // fix addresses is a SECOND thread (the old ReloadRun poll, or Close) touching the
+            // connection concurrently — which the drain now prevents by waiting this out first.
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            while (sw.Elapsed < BusyWindow)
             {
-                ops[i] = Task.Run(() =>
+                try
                 {
-                    try
-                    {
-                        using var cmd = conn.CreateCommand();
-                        // Unbounded recursive CTE: the reader stays open, pulling rows off the
-                        // shared connection for the window (or until it's torn down under us).
-                        cmd.CommandText =
-                            "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT x FROM c";
-                        using var reader = cmd.ExecuteReader();
-                        started.Signal();
-                        var sw = System.Diagnostics.Stopwatch.StartNew();
-                        while (sw.Elapsed < InFlightWindow && reader.Read())
-                        {
-                            // keep the operation in flight across the teardown window
-                        }
-                    }
-                    catch
-                    {
-                        // Connection torn down under the in-flight read — the real drive swallows
-                        // this too (RunUntilParkAsync's catch). The fault we assert on surfaces on
-                        // the disposing thread, out of TestDb.Dispose().
-                        try { started.Signal(); } catch { /* already signalled */ }
-                    }
-                });
+                    // A fresh context on the same shared connection — mirrors the run-state reads
+                    // the drive and the flaky test both make against it.
+                    _ = db.Fresh().LoopRuns.AsNoTracking().Count();
+                }
+                catch
+                {
+                    // Connection torn down under us — the real drive swallows this too
+                    // (RunUntilParkAsync's catch). A correctly-drained teardown never does this.
+                    break;
+                }
+                DriveBusyOnConnection.TrySetResult();
+                await Task.Yield();
             }
-
-            started.Wait(TimeSpan.FromSeconds(5));
             DriveBusyOnConnection.TrySetResult();
-            await Task.WhenAll(ops);
         }
 
         public Task NodeStateChangedAsync(Guid runId, Guid nodeId, LoopRunNodeStatus oldStatus, LoopRunNodeStatus newStatus) => Task.CompletedTask;
