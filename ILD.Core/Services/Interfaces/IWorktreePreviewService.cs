@@ -2,11 +2,18 @@ using ILD.Data.DTOs;
 
 namespace ILD.Core.Services.Interfaces;
 
+/// <param name="CustomEnv">
+/// Raw text of the repository's custom <c>.env</c> file (see
+/// <c>Repository.PreviewEnv</c>), or null. Parsed at injection time and merged into
+/// every preview process's environment as a repo-wide baseline: base defaults lose
+/// to it, and the per-service <c>ild.config.json</c> env still overrides it.
+/// </param>
 public sealed record WorktreePreviewStartOptions(
     string? ProfileName = null,
     bool SkipInstall = false,
     string? PublicHost = null,
-    IReadOnlyDictionary<string, int>? PortOverrides = null);
+    IReadOnlyDictionary<string, int>? PortOverrides = null,
+    string? CustomEnv = null);
 
 /// <summary>
 /// Result of <see cref="IWorktreePreviewService.InstallAsync"/>.
@@ -100,8 +107,12 @@ public interface IWorktreePreviewService
     /// false — most projects ship no such file, so a missing config is not a failure.
     /// Throws only when a requested profile is missing or an install step exits
     /// non-zero. Used by the Start node to provision a worktree on run start.
+    /// <paramref name="customEnv"/> is the repository's custom <c>.env</c> text
+    /// (see <c>Repository.PreviewEnv</c>); when set it is parsed and injected into
+    /// each install step's environment, the same baseline the service-start path
+    /// applies, so install scripts see the same secrets the services will.
     /// </summary>
-    Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default);
+    Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, string? customEnv = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Loads and validates the worktree's <c>ild.config.json</c> preview config
@@ -144,7 +155,7 @@ public sealed class NoopPreviewService : IWorktreePreviewService
         => throw new NotImplementedException();
     public Task<string?> GetServiceLogAsync(string worktreePath, string serviceName, int maxBytes = 64 * 1024, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
-    public Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
+    public Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, string? customEnv = null, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
     public Task<WorktreePreviewValidationResult> ValidateConfigAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();

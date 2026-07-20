@@ -19,13 +19,31 @@ public class RepositoriesController : ControllerBase
         _db = db;
     }
 
+    // The custom .env holds secrets, so it is never echoed back in plaintext —
+    // only whether one is set (mirrors the provider API-key masking). The client
+    // re-sends the full text to change it and sends null/empty to keep it.
+    private static object ToResponse(Repository r) => new
+    {
+        id = r.Id,
+        name = r.Name,
+        remoteProviderId = r.RemoteProviderId,
+        cloneUrl = r.CloneUrl,
+        defaultBranch = r.DefaultBranch,
+        worktreesPath = r.WorktreesPath,
+        defaultIntakeStatus = r.DefaultIntakeStatus,
+        hasPreviewEnv = !string.IsNullOrEmpty(r.PreviewEnv),
+        createdAt = r.CreatedAt,
+        updatedAt = r.UpdatedAt,
+    };
+
     [HttpGet]
     public async Task<IActionResult> GetAll([FromQuery] int skip = 0, [FromQuery] int take = 100)
     {
         if (skip < 0) skip = 0;
         if (take <= 0) take = 100;
         if (take > 500) take = 500;
-        return Ok(await _db.Repositories.AsNoTracking().OrderBy(r => r.Name).Skip(skip).Take(take).ToListAsync());
+        var items = await _db.Repositories.AsNoTracking().OrderBy(r => r.Name).Skip(skip).Take(take).ToListAsync();
+        return Ok(items.Select(ToResponse));
     }
 
     [HttpGet("{id}")]
@@ -33,7 +51,7 @@ public class RepositoriesController : ControllerBase
     {
         if (!Guid.TryParse(id, out var guid)) return BadRequest();
         var repo = await _db.Repositories.FindAsync(guid);
-        return repo == null ? NotFound() : Ok(repo);
+        return repo == null ? NotFound() : Ok(ToResponse(repo));
     }
 
     [HttpPost("inspect-remote")]
@@ -74,11 +92,12 @@ public class RepositoriesController : ControllerBase
             WorktreesPath = request.WorktreesPath,
             RemoteProviderId = providerId,
             DefaultIntakeStatus = request.DefaultIntakeStatus,
+            PreviewEnv = string.IsNullOrEmpty(request.PreviewEnv) ? null : request.PreviewEnv,
             CreatedAt = DateTime.UtcNow,
         };
         _db.Repositories.Add(repo);
         await _db.SaveChangesAsync();
-        return CreatedAtAction(nameof(GetById), new { id = repo.Id }, repo);
+        return CreatedAtAction(nameof(GetById), new { id = repo.Id }, ToResponse(repo));
     }
 
     [HttpPut("{id}")]
@@ -92,9 +111,12 @@ public class RepositoriesController : ControllerBase
         repo.DefaultBranch = request.DefaultBranch;
         repo.WorktreesPath = request.WorktreesPath;
         repo.DefaultIntakeStatus = request.DefaultIntakeStatus;
+        // Masked field: only overwrite when the client sends a new value, so a save
+        // that leaves the textarea blank keeps the stored .env (mirrors ApiKey).
+        if (!string.IsNullOrEmpty(request.PreviewEnv)) repo.PreviewEnv = request.PreviewEnv;
         repo.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
-        return Ok(repo);
+        return Ok(ToResponse(repo));
     }
 
     [HttpDelete("{id}")]

@@ -324,7 +324,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         return await reader.ReadToEndAsync(cancellationToken);
     }
 
-    public async Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
+    public async Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, string? customEnv = null, CancellationToken cancellationToken = default)
     {
         var normalized = NormalizeWorktreePath(worktreePath);
         var loaded = await LoadConfigAsync(normalized, cancellationToken);
@@ -355,7 +355,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             stateDirectory,
             _configuration["ILD_PREVIEW_PUBLIC_HOST"] ?? "127.0.0.1",
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase),
-            new List<ManagedPreviewProcess>());
+            new List<ManagedPreviewProcess>(),
+            DotEnvParser.Parse(customEnv));
 
         await RunInstallStepsAsync(profile.Install, runtime, cancellationToken);
         return new WorktreeInstallResult(true);
@@ -612,7 +613,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             stateDirectory,
             publicHost,
             ports,
-            new List<ManagedPreviewProcess>());
+            new List<ManagedPreviewProcess>(),
+            DotEnvParser.Parse(options.CustomEnv));
 
         if (!options.SkipInstall)
         {
@@ -946,6 +948,16 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     {
         var workingDirectory = ResolveWorkingDirectory(step.Cwd, runtime, currentPortAlias);
         var environment = BuildDefaultEnvironment(runtime);
+
+        // Precedence: base defaults < repo custom .env < per-service ild.config env.
+        // The repo .env is a repo-wide baseline; committed per-service config wins.
+        // Custom values are injected verbatim — they are user-authored secrets, not
+        // ${PORT:...} templates, so they must not go through ResolveTemplate.
+        foreach (var entry in runtime.CustomEnv)
+        {
+            environment[entry.Key] = entry.Value;
+        }
+
         if (step.Env != null)
         {
             foreach (var entry in step.Env)
@@ -1142,7 +1154,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             string stateDirectory,
             string publicHost,
             Dictionary<string, int> ports,
-            List<ManagedPreviewProcess> processes)
+            List<ManagedPreviewProcess> processes,
+            IReadOnlyDictionary<string, string> customEnv)
         {
             WorktreePath = worktreePath;
             ConfigPath = configPath;
@@ -1151,6 +1164,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             PublicHost = publicHost;
             Ports = ports;
             Processes = processes;
+            CustomEnv = customEnv;
         }
 
         public string WorktreePath { get; }
@@ -1160,6 +1174,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         public string PublicHost { get; }
         public Dictionary<string, int> Ports { get; }
         public List<ManagedPreviewProcess> Processes { get; }
+
+        /// <summary>Parsed repository custom <c>.env</c> (see <c>Repository.PreviewEnv</c>),
+        /// injected into every step's environment. Empty when none is configured.</summary>
+        public IReadOnlyDictionary<string, string> CustomEnv { get; }
     }
 
     private sealed class ManagedPreviewProcess

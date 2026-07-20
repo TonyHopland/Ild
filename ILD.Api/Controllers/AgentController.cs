@@ -89,6 +89,16 @@ public class AgentController : ControllerBase
         return (workItem, null);
     }
 
+    // The repository's custom .env is injected into every preview process; resolve
+    // it from the work item's repository so the agent's start paths inject the same
+    // baseline as the human controller and the run's Start node.
+    private async Task<string?> ResolvePreviewEnvAsync(WorkItemView workItem)
+    {
+        if (workItem.RepositoryId is null) return null;
+        var repo = await _db.Repositories.AsNoTracking().FirstOrDefaultAsync(r => r.Id == workItem.RepositoryId.Value);
+        return repo?.PreviewEnv;
+    }
+
     // Single-line description preview length for the lightweight list (~160
     // chars per the triage design): enough to recognise an item, far short of
     // its full body.
@@ -293,7 +303,8 @@ public class AgentController : ControllerBase
                     request?.ProfileName,
                     request?.SkipInstall == true,
                     request?.PublicHost,
-                    request?.PortOverrides));
+                    request?.PortOverrides,
+                    await ResolvePreviewEnvAsync(workItem)));
             await _notifier.PreviewStateChangedAsync(id);
             return Ok(response);
         }
@@ -337,7 +348,8 @@ public class AgentController : ControllerBase
                     request?.ProfileName,
                     request?.SkipInstall == true,
                     request?.PublicHost,
-                    request?.PortOverrides));
+                    request?.PortOverrides,
+                    await ResolvePreviewEnvAsync(workItem)));
             await _notifier.PreviewStateChangedAsync(id);
             return Ok(response);
         }
