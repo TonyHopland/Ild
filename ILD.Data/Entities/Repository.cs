@@ -32,11 +32,12 @@ public class Repository : IHasUpdatedAt
     /// preview process (install steps and services) as a baseline the committed
     /// <c>ild.config.json</c> per-service env can still override. Holds uncommitted
     /// secrets and machine-specific config, so it is encrypted at rest via
-    /// <see cref="ILD.Data.Security.SecretProtector"/> — see the column widening and
-    /// value converter in <c>AppDbContext.ConfigureSecretProtection</c>. Stored
-    /// verbatim (comments/formatting preserved) and parsed at injection time.
+    /// <see cref="ILD.Data.Security.SecretProtector"/>. The column width and the
+    /// value converter are owned by <c>AppDbContext.ConfigureSecretProtection</c>,
+    /// which sizes it for the encrypted envelope (no <c>[MaxLength]</c> here, so the
+    /// two can't drift); the plaintext input cap lives on <c>RepositoryDto</c>.
+    /// Stored verbatim (comments/formatting preserved) and parsed at injection time.
     /// </summary>
-    [MaxLength(16384)]
     public string? PreviewEnv { get; set; }
 
     public WorkItemStatus DefaultIntakeStatus { get; set; }

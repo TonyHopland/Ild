@@ -26,6 +26,12 @@ public class LoopRunStore : ILoopRunStore
     public async Task<LoopRun?> GetByPrUrlAsync(string prUrl)
         => await _db.LoopRuns.FirstOrDefaultAsync(r => r.PrUrl == prUrl);
 
+    public async Task<LoopRun?> GetByWorktreePathAsync(string worktreePath)
+        => await _db.LoopRuns
+            .Where(r => r.WorktreePath == worktreePath)
+            .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
+            .FirstOrDefaultAsync();
+
     public async Task<LoopRun?> GetByWorkItemAsync(string workItemId)
         => await _db.LoopRuns.FirstOrDefaultAsync(r => r.WorkItemId == workItemId);
 
