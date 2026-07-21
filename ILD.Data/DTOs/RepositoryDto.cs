@@ -21,6 +21,16 @@ public class RepositoryDto
     [StringLength(1024)]
     public string? WorktreesPath { get; set; }
 
+    /// <summary>
+    /// Raw text of the repository's custom <c>.env</c> file. Write-only from the
+    /// client's perspective: it is accepted on create/update but never echoed back
+    /// in plaintext (mirrors the provider API-key masking) — see
+    /// <c>RepositoriesController</c>. Null/empty on update means "leave the stored
+    /// value unchanged".
+    /// </summary>
+    [StringLength(16384)]
+    public string? PreviewEnv { get; set; }
+
     [Required]
     public string RemoteProviderId { get; set; } = string.Empty;
 

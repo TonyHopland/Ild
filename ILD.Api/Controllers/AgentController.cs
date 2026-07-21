@@ -4,6 +4,7 @@ using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -47,6 +48,7 @@ public class AgentController : ControllerBase
     private readonly ILoopTemplateManager _templates;
     private readonly ILoopRunStore _runs;
     private readonly AppDbContext _db;
+    private readonly IProviderStore _providerStore;
     private readonly IWorktreePreviewService _preview;
     private readonly IChatLoopScratchpad _loopScratchpad;
     private readonly IChatNotifier _chatNotifier;
@@ -57,6 +59,7 @@ public class AgentController : ControllerBase
         ILoopTemplateManager templates,
         ILoopRunStore runs,
         AppDbContext db,
+        IProviderStore providerStore,
         IWorktreePreviewService preview,
         IChatLoopScratchpad loopScratchpad,
         IChatNotifier chatNotifier,
@@ -66,6 +69,7 @@ public class AgentController : ControllerBase
         _templates = templates;
         _runs = runs;
         _db = db;
+        _providerStore = providerStore;
         _preview = preview;
         _loopScratchpad = loopScratchpad;
         _chatNotifier = chatNotifier;
@@ -88,6 +92,7 @@ public class AgentController : ControllerBase
             return (null, BadRequest(new { error = "Work item does not currently have an active worktree." }));
         return (workItem, null);
     }
+
 
     // Single-line description preview length for the lightweight list (~160
     // chars per the triage design): enough to recognise an item, far short of
@@ -293,7 +298,8 @@ public class AgentController : ControllerBase
                     request?.ProfileName,
                     request?.SkipInstall == true,
                     request?.PublicHost,
-                    request?.PortOverrides));
+                    request?.PortOverrides,
+                    await _providerStore.GetRepositoryPreviewEnvAsync(workItem!.RepositoryId)));
             await _notifier.PreviewStateChangedAsync(id);
             return Ok(response);
         }
@@ -337,7 +343,8 @@ public class AgentController : ControllerBase
                     request?.ProfileName,
                     request?.SkipInstall == true,
                     request?.PublicHost,
-                    request?.PortOverrides));
+                    request?.PortOverrides,
+                    await _providerStore.GetRepositoryPreviewEnvAsync(workItem!.RepositoryId)));
             await _notifier.PreviewStateChangedAsync(id);
             return Ok(response);
         }

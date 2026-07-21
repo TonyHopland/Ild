@@ -3,6 +3,7 @@ using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Enums;
 using ILD.Data.Entities;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -55,6 +56,7 @@ public class WorkItemsController : ControllerBase
 
         return (workItem, null);
     }
+
 
     private void RunInBackground(Guid runId)
     {
@@ -193,7 +195,8 @@ public class WorkItemsController : ControllerBase
                     request?.ProfileName,
                     request?.SkipInstall == true,
                     request?.PublicHost,
-                    request?.PortOverrides));
+                    request?.PortOverrides,
+                    await _providerStore.GetRepositoryPreviewEnvAsync(workItem!.RepositoryId)));
             await _notifier.PreviewStateChangedAsync(id);
             return Ok(response);
         }
@@ -237,7 +240,8 @@ public class WorkItemsController : ControllerBase
                     request?.ProfileName,
                     request?.SkipInstall == true,
                     request?.PublicHost,
-                    request?.PortOverrides));
+                    request?.PortOverrides,
+                    await _providerStore.GetRepositoryPreviewEnvAsync(workItem!.RepositoryId)));
             await _notifier.PreviewStateChangedAsync(id);
             return Ok(response);
         }

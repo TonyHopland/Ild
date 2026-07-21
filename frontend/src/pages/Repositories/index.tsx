@@ -13,6 +13,8 @@ export default function Repositories() {
   const [remoteProviderId, setRemoteProviderId] = useState("");
   const [defaultBranch, setDefaultBranch] = useState("main");
   const [worktreesPath, setWorktreesPath] = useState("");
+  const [previewEnv, setPreviewEnv] = useState("");
+  const [hasPreviewEnv, setHasPreviewEnv] = useState(false);
   const [defaultIntakeStatus, setDefaultIntakeStatus] = useState<WorkItemStatus>(
     WorkItemStatus.Backlog,
   );
@@ -46,6 +48,10 @@ export default function Repositories() {
     setRemoteProviderId(repo.remoteProviderId);
     setDefaultBranch(repo.defaultBranch || "main");
     setWorktreesPath(repo.worktreesPath || "");
+    // The .env is never sent back in plaintext; start blank and only overwrite the
+    // stored value when the user types a new one (mirrors the API-key field).
+    setPreviewEnv("");
+    setHasPreviewEnv(repo.hasPreviewEnv ?? false);
     setDefaultIntakeStatus(repo.defaultIntakeStatus);
   };
 
@@ -57,6 +63,8 @@ export default function Repositories() {
     setRemoteProviderId(providers[0]?.id || "");
     setDefaultBranch("main");
     setWorktreesPath("");
+    setPreviewEnv("");
+    setHasPreviewEnv(false);
     setDefaultIntakeStatus(WorkItemStatus.Backlog);
   };
 
@@ -89,6 +97,9 @@ export default function Repositories() {
       worktreesPath: worktreesPath || null,
       defaultIntakeStatus,
     };
+    // Only send the .env when the user entered one — a blank field keeps the
+    // stored secret unchanged on update (and sends nothing on create).
+    if (previewEnv) data.previewEnv = previewEnv;
 
     try {
       if (editingRepo) {
@@ -266,6 +277,28 @@ export default function Repositories() {
                 />
               </div>
               <div className="form-group">
+                <label htmlFor="repoPreviewEnv">Custom .env</label>
+                <textarea
+                  id="repoPreviewEnv"
+                  className="repo-env-textarea"
+                  rows={5}
+                  value={previewEnv}
+                  onChange={(e) => setPreviewEnv(e.target.value)}
+                  placeholder={
+                    hasPreviewEnv
+                      ? "•••••• (a custom .env is set — type to replace it)"
+                      : "KEY=value\n# injected into preview processes; uncommitted secrets go here"
+                  }
+                  spellCheck={false}
+                />
+                <span className="repo-hint">
+                  Stored encrypted in ILD and injected as environment variables into preview install
+                  steps and services on start — never written to a file in the worktree, so it can't
+                  be committed. The per-service ild.config.json env still overrides these. Leave
+                  blank to keep the current value.
+                </span>
+              </div>
+              <div className="form-group">
                 <label htmlFor="repoGating">Default Intake Status</label>
                 <select
                   id="repoGating"
@@ -361,6 +394,13 @@ export default function Repositories() {
 
         .repo-value {
           color: #c0c0d0;
+        }
+
+        .repo-env-textarea {
+          width: 100%;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          font-size: 0.8rem;
+          resize: vertical;
         }
 
         .repo-status-badge {

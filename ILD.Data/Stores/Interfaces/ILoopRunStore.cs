@@ -7,6 +7,16 @@ public interface ILoopRunStore
 {
     Task<LoopRun?> GetByIdAsync(Guid id);
     Task<LoopRun?> GetByPrUrlAsync(string prUrl);
+
+    /// <summary>
+    /// The most recent run whose isolated worktree is at <paramref name="worktreePath"/>.
+    /// Each run gets its own worktree (ADR-0008), so this resolves a worktree path
+    /// back to the run — and through it the work item and repository — for callers
+    /// that only hold the path (e.g. the agent tool surface). Null when no run owns
+    /// that path.
+    /// </summary>
+    Task<LoopRun?> GetByWorktreePathAsync(string worktreePath);
+
     Task<LoopRun?> GetByWorkItemAsync(string workItemId);
     Task<IReadOnlyList<LoopRun>> GetAllByWorkItemAsync(string workItemId);
     Task<IReadOnlyList<LoopRun>> GetByWorkItemPagedAsync(string workItemId, int skip, int take);

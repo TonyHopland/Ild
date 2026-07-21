@@ -2,11 +2,29 @@ using ILD.Data.DTOs;
 
 namespace ILD.Core.Services.Interfaces;
 
+/// <param name="CustomEnv">
+/// Raw text of the repository's custom <c>.env</c> (see <c>Repository.PreviewEnv</c>),
+/// or null. Parsed at injection time and merged into every preview process's
+/// environment as a repo-wide baseline: base defaults lose to it, and the per-service
+/// <c>ild.config.json</c> env still overrides it.
+/// <para>
+/// Security model: this text is stored encrypted at rest (via <c>SecretProtector</c>)
+/// and is injected only as <em>process environment variables</em> on the preview
+/// service/install <see cref="System.Diagnostics.ProcessStartInfo"/> — it is never
+/// written to a file in the worktree, so it cannot be staged by a run's
+/// <c>git add -A</c> and pushed into a PR. It also never enters the coding-agent's
+/// own process environment, and the agent-facing API does not return it, so an agent
+/// can't read it back. This env-var-only injection is deliberately preferred over
+/// materialising a <c>.env</c> file, which would be both committable and directly
+/// readable.
+/// </para>
+/// </param>
 public sealed record WorktreePreviewStartOptions(
     string? ProfileName = null,
     bool SkipInstall = false,
     string? PublicHost = null,
-    IReadOnlyDictionary<string, int>? PortOverrides = null);
+    IReadOnlyDictionary<string, int>? PortOverrides = null,
+    string? CustomEnv = null);
 
 /// <summary>
 /// Result of <see cref="IWorktreePreviewService.InstallAsync"/>.
@@ -100,8 +118,12 @@ public interface IWorktreePreviewService
     /// false — most projects ship no such file, so a missing config is not a failure.
     /// Throws only when a requested profile is missing or an install step exits
     /// non-zero. Used by the Start node to provision a worktree on run start.
+    /// <paramref name="customEnv"/> is the repository's custom <c>.env</c> text
+    /// (see <c>Repository.PreviewEnv</c>); when set it is parsed and injected into
+    /// each install step's environment, the same baseline the service-start path
+    /// applies, so install scripts see the same secrets the services will.
     /// </summary>
-    Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default);
+    Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, string? customEnv = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Loads and validates the worktree's <c>ild.config.json</c> preview config
@@ -144,7 +166,7 @@ public sealed class NoopPreviewService : IWorktreePreviewService
         => throw new NotImplementedException();
     public Task<string?> GetServiceLogAsync(string worktreePath, string serviceName, int maxBytes = 64 * 1024, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
-    public Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
+    public Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, string? customEnv = null, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
     public Task<WorktreePreviewValidationResult> ValidateConfigAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();

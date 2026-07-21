@@ -28,7 +28,8 @@ public class StartNodeExecutorTests : IDisposable
 
     private (Mock<IRepositoryManager> RepoManager, IServiceProvider Services, LoopRun Run, LoopNode Node) BuildContext(
         Mock<IRepositoryManager> repoManager,
-        Mock<IWorktreePreviewService>? preview = null)
+        Mock<IWorktreePreviewService>? preview = null,
+        string? previewEnv = null)
     {
         var repoId = Guid.NewGuid();
         var workItem = new WorkItemView { Id = "WI-1", Title = "T", Description = "D", RepositoryId = repoId };
@@ -40,6 +41,7 @@ public class StartNodeExecutorTests : IDisposable
             DefaultBranch = "main",
             WorktreesPath = _baseRepo,
             RemoteProviderId = Guid.NewGuid(),
+            PreviewEnv = previewEnv,
         };
 
         var workItems = new Mock<IWorkItemManager>();
@@ -131,7 +133,7 @@ public class StartNodeExecutorTests : IDisposable
     public async Task When_run_install_requested_install_runs_in_worktree_and_node_succeeds()
     {
         var preview = new Mock<IWorktreePreviewService>();
-        preview.Setup(p => p.InstallAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+        preview.Setup(p => p.InstallAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new WorktreeInstallResult(true));
 
         var (_, sp, run, node) = BuildContext(HappyRepoManager(), preview);
@@ -145,7 +147,28 @@ public class StartNodeExecutorTests : IDisposable
         Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
         Assert.Contains(outcomes, o => o is NodeOutcome.Success);
         // Install must run against the freshly prepared worktree, not the base repo.
-        preview.Verify(p => p.InstallAsync("/tmp/worktree", null, It.IsAny<CancellationToken>()), Times.Once);
+        preview.Verify(p => p.InstallAsync("/tmp/worktree", null, null, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task When_run_install_requested_repo_custom_env_is_threaded_to_install()
+    {
+        // The repository's custom .env must reach the install step so install
+        // scripts see the same secrets the services will.
+        var preview = new Mock<IWorktreePreviewService>();
+        preview.Setup(p => p.InstallAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new WorktreeInstallResult(true));
+
+        const string envText = "API_TOKEN=secret\n# comment\nDB_URL=postgres://x";
+        var (_, sp, run, node) = BuildContext(HappyRepoManager(), preview, previewEnv: envText);
+        node.Config = "{\"runInstall\":true}";
+
+        var executor = new StartNodeExecutor();
+        await foreach (var _ in executor.ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+        {
+        }
+
+        preview.Verify(p => p.InstallAsync("/tmp/worktree", null, envText, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -155,7 +178,7 @@ public class StartNodeExecutorTests : IDisposable
         // run — the install is skipped best-effort and the reason is surfaced as a
         // warning on the node output.
         var preview = new Mock<IWorktreePreviewService>();
-        preview.Setup(p => p.InstallAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+        preview.Setup(p => p.InstallAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new WorktreeInstallResult(false, "No ild.config.json found in worktree root."));
 
         var (_, sp, run, node) = BuildContext(HappyRepoManager(), preview);
@@ -176,7 +199,7 @@ public class StartNodeExecutorTests : IDisposable
     public async Task When_run_install_requested_and_install_fails_node_fails()
     {
         var preview = new Mock<IWorktreePreviewService>();
-        preview.Setup(p => p.InstallAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+        preview.Setup(p => p.InstallAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("install step exited non-zero"));
 
         var (_, sp, run, node) = BuildContext(HappyRepoManager(), preview);
@@ -197,7 +220,7 @@ public class StartNodeExecutorTests : IDisposable
     public async Task When_run_install_not_requested_install_is_skipped()
     {
         var preview = new Mock<IWorktreePreviewService>();
-        preview.Setup(p => p.InstallAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+        preview.Setup(p => p.InstallAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new WorktreeInstallResult(true));
 
         // Default Start config — runInstall absent — must not touch the preview service.
@@ -209,6 +232,6 @@ public class StartNodeExecutorTests : IDisposable
             outcomes.Add(o);
 
         Assert.Contains(outcomes, o => o is NodeOutcome.Success);
-        preview.Verify(p => p.InstallAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
+        preview.Verify(p => p.InstallAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 }

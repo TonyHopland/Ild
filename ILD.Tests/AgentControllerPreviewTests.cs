@@ -30,6 +30,7 @@ public class AgentControllerPreviewTests
             new Mock<ILoopTemplateManager>().Object,
             db.LoopRuns,
             db.Context,
+            db.Providers,
             preview.Object,
             new Mock<IChatLoopScratchpad>().Object,
             new Mock<IChatNotifier>().Object,
@@ -126,6 +127,42 @@ public class AgentControllerPreviewTests
         Assert.IsType<OkObjectResult>(result);
         // Reading status must not tell every board client the preview changed.
         notifier.Verify(n => n.PreviewStateChangedAsync(It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task StartPreview_threads_the_repository_custom_env_into_start_options()
+    {
+        using var db = new TestDb();
+        var id = Guid.NewGuid().ToString();
+
+        // Seed a repository carrying a custom .env, and point the work item at it.
+        var repoId = Guid.NewGuid();
+        var provider = new ILD.Data.Entities.RemoteProvider { Id = Guid.NewGuid(), Name = "p", Type = "Forgejo", Url = "https://e" };
+        db.Context.RemoteProviders.Add(provider);
+        db.Context.Repositories.Add(new ILD.Data.Entities.Repository
+        {
+            Id = repoId,
+            Name = "r",
+            CloneUrl = "https://e/r.git",
+            RemoteProviderId = provider.Id,
+            PreviewEnv = "API_TOKEN=from-repo",
+        });
+        await db.Context.SaveChangesAsync();
+
+        WorktreePreviewStartOptions? captured = null;
+        var preview = new Mock<IWorktreePreviewService>();
+        preview.Setup(p => p.StartAsync(WorktreePath, It.IsAny<WorktreePreviewStartOptions?>(), It.IsAny<CancellationToken>()))
+            .Callback<string, WorktreePreviewStartOptions?, CancellationToken>((_, o, _) => captured = o)
+            .ReturnsAsync(new WorktreePreviewResponse { State = "running", WorktreePath = WorktreePath });
+        var notifier = new Mock<IWorkItemNotifier>();
+        var workItem = new WorkItemView { Id = id, WorktreePath = WorktreePath, RepositoryId = repoId };
+        var controller = BuildController(workItem, preview, notifier, db);
+
+        var result = await controller.StartPreview(id, new WorktreePreviewStartRequest());
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.NotNull(captured);
+        Assert.Equal("API_TOKEN=from-repo", captured!.CustomEnv);
     }
 
     [Fact]

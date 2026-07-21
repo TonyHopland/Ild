@@ -89,6 +89,54 @@ public class RepositoryManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task Commit_never_pushes_an_untracked_env_file_even_without_gitignore()
+    {
+        // The repo custom .env is injected as process env, but a preview/install step
+        // (or the repo) could materialise it on disk. Even with no .gitignore entry,
+        // an untracked .env must never ride into the run commit — and thence the PR.
+        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var path = await mgr.CreateWorktreeAsync(_repo, "feature-secret");
+
+        File.WriteAllText(Path.Combine(path, ".env"), "API_TOKEN=super-secret\n");
+        File.WriteAllText(Path.Combine(path, ".ild.env"), "DB_PASSWORD=hunter2\n");
+        File.WriteAllText(Path.Combine(path, "app.txt"), "code\n");
+
+        Assert.True((await mgr.CommitAsync(path, "add app")));
+
+        var committed = GitOutput(path, "show", "--pretty=", "--name-only", "HEAD")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.Trim())
+            .ToList();
+        // The agent's real edit is committed; the secret files are held back.
+        Assert.Contains("app.txt", committed);
+        Assert.DoesNotContain(".env", committed);
+        Assert.DoesNotContain(".ild.env", committed);
+    }
+
+    [Fact]
+    public async Task Commit_still_tracks_changes_to_a_deliberately_committed_env_file()
+    {
+        // The exclude only affects untracked paths, so a repo that intentionally
+        // tracks its own .env keeps working — its edits still commit normally.
+        Git(_repo, "config", "user.email", "t@t.io");
+        File.WriteAllText(Path.Combine(_repo, ".env"), "PUBLIC=1\n");
+        Git(_repo, "add", "-f", ".env");
+        Git(_repo, "commit", "-m", "track env");
+
+        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var path = await mgr.CreateWorktreeAsync(_repo, "feature-tracked-env");
+
+        File.WriteAllText(Path.Combine(path, ".env"), "PUBLIC=2\n");
+        Assert.True((await mgr.CommitAsync(path, "edit tracked env")));
+
+        var committed = GitOutput(path, "show", "--pretty=", "--name-only", "HEAD")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.Trim())
+            .ToList();
+        Assert.Contains(".env", committed);
+    }
+
+    [Fact]
     public async Task CreateWorktree_does_not_write_tool_config_into_the_worktree()
     {
         var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));

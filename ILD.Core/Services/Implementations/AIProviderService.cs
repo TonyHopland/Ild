@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
 using Microsoft.Extensions.Logging;
@@ -20,15 +21,17 @@ public class AIProviderService : IAIProviderService
     private readonly IWorktreePreviewService _worktreePreviewService;
     private readonly HttpClient _http;
     private readonly IPromptTemplateResolver _resolver;
+    private readonly ILoopRunStore? _loopRuns;
     private readonly ILogger<AIProviderService>? _logger;
 
-    public AIProviderService(IProviderStore providerStore, IWorkItemManager workItemManager, IWorktreePreviewService worktreePreviewService, HttpClient http, IPromptTemplateResolver? resolver = null, ILogger<AIProviderService>? logger = null)
+    public AIProviderService(IProviderStore providerStore, IWorkItemManager workItemManager, IWorktreePreviewService worktreePreviewService, HttpClient http, IPromptTemplateResolver? resolver = null, ILoopRunStore? loopRuns = null, ILogger<AIProviderService>? logger = null)
     {
         _providerStore = providerStore;
         _workItemManager = workItemManager;
         _worktreePreviewService = worktreePreviewService;
         _http = http;
         _resolver = resolver ?? new PromptTemplateResolver();
+        _loopRuns = loopRuns;
         _logger = logger;
     }
 
@@ -252,13 +255,29 @@ public class AIProviderService : IAIProviderService
 
             var status = await _worktreePreviewService.StartAsync(
                 worktreePath,
-                new WorktreePreviewStartOptions(profileName, skipInstall, publicHost, portOverrides));
+                new WorktreePreviewStartOptions(profileName, skipInstall, publicHost, portOverrides,
+                    await ResolvePreviewEnvAsync(worktreePath)));
             return new ToolExecutionResult(true, JsonSerializer.Serialize(status), null);
         }
         catch (Exception ex)
         {
             return ToolFailure("ild.preview_start", ex);
         }
+    }
+
+    // The agent tool surface only carries the worktree path, so resolve the repo
+    // (and its custom .env) back through the run that owns the worktree —
+    // worktree → run → work item → repository. This keeps an agent-started preview
+    // injecting the same secrets the human WorkItems/Agent controllers and the run's
+    // Start node do. Best-effort: without a run store wired, or an unmatched path,
+    // no custom env is injected.
+    private async Task<string?> ResolvePreviewEnvAsync(string worktreePath)
+    {
+        if (_loopRuns is null) return null;
+        var run = await _loopRuns.GetByWorktreePathAsync(worktreePath);
+        if (run is null || string.IsNullOrEmpty(run.WorkItemId)) return null;
+        var workItem = await _workItemManager.GetWorkItemAsync(run.WorkItemId);
+        return await _providerStore.GetRepositoryPreviewEnvAsync(workItem?.RepositoryId);
     }
 
     private async Task<ToolExecutionResult> GetPreviewStatusAsync(string worktreePath)

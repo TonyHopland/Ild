@@ -64,6 +64,14 @@ public class AppDbContext : DbContext
         {
             e.Property(a => a.ApiKey).HasConversion(converter).HasMaxLength(2048);
         });
+
+        modelBuilder.Entity<Repository>(e =>
+        {
+            // Custom .env holds uncommitted secrets; encrypt at rest like the
+            // provider credentials. Widen well past the 16 KB plaintext cap so the
+            // base64 encrypted envelope fits.
+            e.Property(r => r.PreviewEnv).HasConversion(converter).HasMaxLength(24576);
+        });
     }
 
     private void ConfigureEnumConversions(ModelBuilder modelBuilder)

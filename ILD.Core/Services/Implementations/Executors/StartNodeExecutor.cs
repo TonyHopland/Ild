@@ -80,7 +80,7 @@ public sealed class StartNodeExecutor : INodeExecutor
                 yield break;
             }
 
-            var (installError, warning) = await RunInstallAsync(preview, worktreePath, ctx.CancellationToken);
+            var (installError, warning) = await RunInstallAsync(preview, worktreePath, repo.PreviewEnv, ctx.CancellationToken);
             if (installError is not null)
             {
                 yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"ild.config install failed: {installError}");
@@ -96,11 +96,11 @@ public sealed class StartNodeExecutor : INodeExecutor
     }
 
     private static async Task<(string? Error, string? Warning)> RunInstallAsync(
-        IWorktreePreviewService preview, string worktreePath, CancellationToken ct)
+        IWorktreePreviewService preview, string worktreePath, string? customEnv, CancellationToken ct)
     {
         try
         {
-            var result = await preview.InstallAsync(worktreePath, cancellationToken: ct);
+            var result = await preview.InstallAsync(worktreePath, customEnv: customEnv, cancellationToken: ct);
             // A missing ild.config.json is expected for most projects — surface a
             // warning rather than failing the run on it.
             return result.Installed

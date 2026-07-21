@@ -389,6 +389,11 @@ export interface Repository {
   defaultBranch: string | null;
   worktreesPath: string | null;
   defaultIntakeStatus: WorkItemStatus;
+  // Custom .env injected into preview processes. Write-only: the server never
+  // echoes the plaintext back (mirrors the provider API key), only whether one is
+  // set via `hasPreviewEnv`. `previewEnv` is populated only when submitting.
+  previewEnv?: string | null;
+  hasPreviewEnv?: boolean;
   createdAt: string;
 }
 

@@ -635,6 +635,39 @@
   gap: 0.35rem;
 }
 
+.preview-env {
+  margin-top: 0.75rem;
+  border-top: 1px solid #2a2a3a;
+  padding-top: 0.5rem;
+}
+
+.preview-env-summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: #c0c0d0;
+  user-select: none;
+}
+
+.preview-env-state {
+  color: #707090;
+  font-size: 0.75rem;
+}
+
+.preview-env-warning {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #7a5c1e;
+  background: #241d0e;
+  color: #e6c66b;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.preview-env-editor {
+  margin-top: 0.5rem;
+}
+
 .preview-url {
   color: #818cf8;
   font-size: 0.75rem;

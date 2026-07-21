@@ -46,11 +46,16 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [mergeMessage, setMergeMessage] = useState<string | null>(null);
 
+  const reloadRepositories = useCallback(async () => {
+    try {
+      setRepositories(await repositoryService.getAll());
+    } catch {
+      /* best effort — leave the last-known list in place */
+    }
+  }, []);
+
   useEffect(() => {
-    repositoryService
-      .getAll()
-      .then(setRepositories)
-      .catch(() => {});
+    void reloadRepositories();
     loopTemplateService
       .getAll()
       .then(setTemplates)
@@ -59,7 +64,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
       .getAll()
       .then(setAiProviders)
       .catch(() => {});
-  }, []);
+  }, [reloadRepositories]);
 
   const refreshRuns = useCallback(() => {
     if (!workItem) return;
@@ -625,6 +630,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     dependencies,
     allWorkItems,
     repositories,
+    reloadRepositories,
     templates,
     aiProviders,
     feedbackInput,

@@ -1,6 +1,13 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { RemotePrSnapshot, WorkItem, WorkItemStatus, WorktreePreviewService } from "../../types";
+import {
+  Repository,
+  RemotePrSnapshot,
+  WorkItem,
+  WorkItemStatus,
+  WorktreePreviewService,
+} from "../../types";
+import { repositoryService } from "../../services/auth";
 import { makeLoopTagMatcher, parseConversation, parseTags } from "../../utils/workItemJson";
 import { prStatusBadges } from "../../utils/prStatusBadges";
 import MarkdownRenderer from "../MarkdownRenderer";
@@ -500,6 +507,102 @@ function PreviewServiceTable({
   );
 }
 
+/**
+ * Repository-wide preview environment editor embedded in the Preview tab. Despite
+ * the ".env" label it is NOT a file: the text is stored encrypted in ILD and
+ * injected as environment variables when a preview starts — never written into the
+ * worktree (so it can't be committed) and never returned in plaintext (only whether
+ * one is set). It is a property of the *repository*, not this work item, so the
+ * warning makes the repo-wide, persisted scope explicit. The field starts blank and
+ * a save replaces the stored value; a blank save is a no-op.
+ */
+function RepoEnvEditor({
+  repository,
+  onSaved,
+}: {
+  repository: Repository | undefined;
+  onSaved: () => void;
+}) {
+  const [value, setValue] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!repository) return null;
+
+  const save = async () => {
+    if (!value.trim() || saving) return;
+    setSaving(true);
+    setMessage(null);
+    setError(null);
+    try {
+      // The PUT replaces the whole repository row, so carry its current fields
+      // through unchanged and only set the new custom .env.
+      await repositoryService.update(repository.id, {
+        name: repository.name,
+        cloneUrl: repository.cloneUrl,
+        remoteProviderId: repository.remoteProviderId,
+        defaultBranch: repository.defaultBranch,
+        worktreesPath: repository.worktreesPath,
+        defaultIntakeStatus: repository.defaultIntakeStatus,
+        previewEnv: value,
+      });
+      setValue("");
+      setMessage("Saved. Applied on the next preview start.");
+      onSaved();
+    } catch {
+      setError("Failed to save the custom .env.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <details className="preview-env">
+      <summary className="preview-env-summary">
+        Custom .env{" "}
+        <span className="preview-env-state">{repository.hasPreviewEnv ? "(set)" : "(none)"}</span>
+      </summary>
+      <div className="preview-message preview-env-warning" role="note">
+        ⚠ Repository-wide: stored encrypted in ILD on the <strong>{repository.name}</strong>{" "}
+        repository and applies to <strong>every</strong> work item that uses it, not just this one.
+        It is injected as environment variables when a preview starts — never written to a file in
+        the worktree, so it can't be committed to the repo — and takes effect on the next preview
+        start.
+      </div>
+      <textarea
+        className="preview-config-editor preview-env-editor"
+        rows={5}
+        value={value}
+        spellCheck={false}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder={
+          repository.hasPreviewEnv
+            ? "•••••• (set — type to replace it)"
+            : "KEY=value\n# injected into preview processes as environment variables"
+        }
+      />
+      <div className="preview-config-toolbar">
+        <span className="preview-message">
+          {message ??
+            "Injected as env vars on preview start; per-service ild.config env still wins."}
+        </span>
+        <div className="preview-config-buttons">
+          <button
+            type="button"
+            className="btn btn-sm btn-primary"
+            onClick={() => void save()}
+            disabled={!value.trim() || saving}
+          >
+            {saving ? "Saving…" : "Save .env"}
+          </button>
+        </div>
+      </div>
+      {error && <div className="preview-message preview-error">{error}</div>}
+    </details>
+  );
+}
+
 /** Preview tab: worktree preview state, services and start/stop controls. */
 export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail: WorkItemDetail }) {
   const { preview, previewLoading, previewError } = detail;
@@ -600,6 +703,10 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
           </button>
         ) : null}
       </div>
+      <RepoEnvEditor
+        repository={detail.repositories.find((r) => r.id === workItem.repositoryId)}
+        onSaved={() => void detail.reloadRepositories()}
+      />
     </div>
   );
 }

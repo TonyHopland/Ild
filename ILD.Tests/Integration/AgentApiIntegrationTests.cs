@@ -898,6 +898,52 @@ public class AgentApiIntegrationTests
             ?? throw new InvalidOperationException("Created work item response did not include an id.");
     }
 
+    [Fact]
+    public async Task ListRepositories_never_exposes_the_repository_custom_env_to_agents()
+    {
+        // The custom .env holds repo secrets. It is injected into preview processes
+        // as environment variables, never returned to a coding agent — so the agent
+        // API must not surface it (not even a "hasPreviewEnv" hint) or leak its value.
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+
+        const string secret = "API_TOKEN=super-secret-value";
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var provider = new RemoteProvider
+            {
+                Id = Guid.NewGuid(),
+                Name = "p",
+                Type = "forgejo",
+                Url = "https://example.invalid",
+                CreatedAt = DateTime.UtcNow,
+            };
+            db.RemoteProviders.Add(provider);
+            db.Repositories.Add(new Repository
+            {
+                Id = Guid.NewGuid(),
+                Name = "secret-repo",
+                CloneUrl = "https://example.invalid/repo.git",
+                RemoteProviderId = provider.Id,
+                PreviewEnv = secret,
+                CreatedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var resp = await client.GetAsync("/api/v1/agent/repositories");
+        resp.EnsureSuccessStatusCode();
+        var body = await resp.Content.ReadAsStringAsync();
+
+        Assert.DoesNotContain("super-secret-value", body);
+        Assert.DoesNotContain("previewEnv", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("hasPreviewEnv", body, StringComparison.OrdinalIgnoreCase);
+        // The row is still returned, just without the secret field.
+        var repos = JsonDocument.Parse(body).RootElement;
+        Assert.Contains(repos.EnumerateArray(), r => r.GetProperty("name").GetString() == "secret-repo");
+    }
+
     private static async Task<Guid> SeedRepositoryAsync(ApiFactory factory, WorkItemStatus intake)
     {
         using var scope = factory.Services.CreateScope();

@@ -1032,6 +1032,57 @@ describe("WorkItemModalV2 creation", () => {
     expect(utils.getByText(/exit 1/)).toBeTruthy();
   });
 
+  test("preview tab exposes a repo-wide custom .env editor with a persistence warning", async () => {
+    mockServices();
+    vi.spyOn(authServices.workItemService, "getPreview").mockResolvedValue({
+      configured: true,
+      state: "stopped",
+      worktreePath: "/wt",
+      configPath: null,
+      profileName: null,
+      publicHost: null,
+      stateDirectory: null,
+      message: null,
+      services: [],
+    });
+    const updateSpy = vi.spyOn(authServices.repositoryService, "update").mockResolvedValue({
+      id: "repo-1",
+      name: "my-repo",
+      remoteProviderId: "rp-1",
+      cloneUrl: "",
+      defaultBranch: null,
+      worktreesPath: null,
+      defaultIntakeStatus: WorkItemStatus.Backlog,
+      hasPreviewEnv: true,
+      createdAt: "2025-01-01T00:00:00Z",
+    });
+
+    await renderDialog(makeWorkItem({ worktreePath: "/wt" }));
+    await openPreviewTab();
+
+    // The warning makes the repo-wide, persisted-in-ILD scope explicit.
+    const warning = await screen.findByRole("note");
+    expect(warning.textContent).toMatch(/Repository-wide/);
+    expect(warning.textContent).toMatch(/every.*work item that uses it, not just this one/);
+
+    // Editing and saving persists via the repository update endpoint (repo-wide),
+    // not a per-work-item call.
+    const textarea = screen.getByPlaceholderText(/injected into preview processes/i);
+    await act(async () => {
+      fireEvent.change(textarea, { target: { value: "API_TOKEN=x" } });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Save \.env/i }));
+      await Promise.resolve();
+    });
+
+    expect(updateSpy).toHaveBeenCalledWith(
+      "repo-1",
+      expect.objectContaining({ previewEnv: "API_TOKEN=x" }),
+    );
+  });
+
   test("editing a service port sends it as an override when starting the preview", async () => {
     mockServices();
     vi.spyOn(authServices.workItemService, "getPreview").mockResolvedValue({
