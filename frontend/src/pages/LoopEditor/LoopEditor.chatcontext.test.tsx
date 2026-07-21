@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, waitFor, cleanup, act } from "@testing-library/react";
+import { render, screen, waitFor, cleanup, act, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { AuthContext } from "../../hooks/useAuth";
 import { NodeType, EdgeType, RecoveryPolicy } from "../../types";
@@ -210,5 +210,29 @@ describe("Loop Editor — loop editor context (ADR-0011)", () => {
     // The original graph survives the rejected edit.
     expect(screen.getByText("Initialize")).toBeTruthy();
     expect(screen.queryByText("Boot Up")).toBeNull();
+  });
+
+  test("save-review diff includes an AI edit (baseline is the persisted loop, not the AI doc)", async () => {
+    loopTemplateService.getAll.mockResolvedValue([sampleTemplate]);
+    aiProviderService.getAll.mockResolvedValue([]);
+    setCurrentChatSessionId("s1");
+
+    renderEditorWithOpenTemplate();
+    await waitFor(() => expect(screen.getByText("Initialize")).toBeTruthy());
+
+    // The agent rewrites the loop live on the canvas (overwriting selectedTemplate).
+    pushLoopUpdate("s1", aiDocument);
+    await waitFor(() => expect(screen.getByText("Boot Up")).toBeTruthy());
+
+    // Opening the save-review gate must diff the AI-edited canvas against the
+    // last-PERSISTED loop, so the AI's change shows up — not "No changes to save".
+    fireEvent.click(screen.getByText("Save"));
+
+    const diffView = await screen.findByTestId("save-diff-view");
+    expect(screen.queryByTestId("save-diff-empty")).toBeNull();
+    // The AI's new name is an added line; the persisted name is a removed line.
+    expect(diffView.querySelector(".save-diff-add")?.textContent).toBeTruthy();
+    expect(diffView.textContent).toContain("AI Reworked Loop");
+    expect(diffView.textContent).toContain("Dev Loop");
   });
 });

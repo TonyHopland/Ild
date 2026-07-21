@@ -55,11 +55,6 @@ export function computeLineDiff(before: string, after: string): DiffLine[] {
   return out;
 }
 
-/** True when the two texts are line-for-line identical (trailing newline aside). */
-export function hasChanges(before: string, after: string): boolean {
-  return computeLineDiff(before, after).some((line) => line.type !== "context");
-}
-
 function splitLines(text: string): string[] {
   if (text === "") return [];
   return text.replace(/\n$/, "").split("\n");

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vite-plus/test";
-import { computeLineDiff, hasChanges } from "./jsonDiff";
+import { computeLineDiff } from "./jsonDiff";
 
 describe("computeLineDiff", () => {
   test("marks identical text as all context", () => {
@@ -35,11 +35,7 @@ describe("computeLineDiff", () => {
   });
 
   test("ignores a trailing newline", () => {
-    expect(hasChanges("a\nb\n", "a\nb")).toBeFalsy();
-  });
-
-  test("hasChanges is false for identical, true otherwise", () => {
-    expect(hasChanges("x", "x")).toBeFalsy();
-    expect(hasChanges("x", "y")).toBeTruthy();
+    const diff = computeLineDiff("a\nb\n", "a\nb");
+    expect(diff.every((l) => l.type === "context")).toBeTruthy();
   });
 });

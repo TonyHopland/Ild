@@ -257,6 +257,12 @@ export default function LoopEditor() {
   const selectedTemplateRef = useRef<LoopTemplate | null>(null);
   const isNewTemplateRef = useRef(false);
   const newTemplateNameRef = useRef("");
+  // The last document actually persisted to the DB, as a serialized
+  // ild-loop-template/v1 string — the true baseline for the save-review diff
+  // (ADR-0011). Captured when a template/version loads and refreshed after a
+  // successful save; deliberately NOT updated by applyLoopDocument, so AI edits
+  // (which overwrite selectedTemplate) still show up as a pending delta at Save.
+  const lastSavedExportRef = useRef<string>("");
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<Edge | null>(null);
   const [pendingConnection, setPendingConnection] = useState<Connection | null>(null);
@@ -472,6 +478,7 @@ export default function LoopEditor() {
   const selectTemplate = useCallback(
     (template: LoopTemplate) => {
       setSelectedTemplate(template);
+      lastSavedExportRef.current = JSON.stringify(serializeForExport(template), null, 2);
       setNodes(templateToNodes(template));
       setEdges(templateToEdges(template));
       setValidationErrors([]);
@@ -510,6 +517,7 @@ export default function LoopEditor() {
 
   const handleNewTemplate = () => {
     setSelectedTemplate(null);
+    lastSavedExportRef.current = "";
     setNodes([]);
     setEdges([]);
     setValidationErrors([]);
@@ -534,10 +542,11 @@ export default function LoopEditor() {
     }
     setValidationErrors([]);
 
+    // Baseline is the last document actually persisted (lastSavedExportRef), NOT
+    // selectedTemplate — an AI edit overwrites selectedTemplate with its own doc,
+    // so diffing against it would hide the AI's change. "after" is the live canvas.
     const after = JSON.stringify(buildExportData(), null, 2);
-    const before = selectedTemplate
-      ? JSON.stringify(serializeForExport(selectedTemplate), null, 2)
-      : "";
+    const before = lastSavedExportRef.current;
     setSaveDiff({ before, after });
   };
 
@@ -581,6 +590,11 @@ export default function LoopEditor() {
           edges: loopEdges,
         });
       }
+
+      // The document we just persisted becomes the new diff baseline — it is
+      // exactly the "after" the modal reviewed. Refresh here (never in
+      // applyLoopDocument) so a later re-save diffs against what is now in the DB.
+      lastSavedExportRef.current = saveDiff?.after ?? lastSavedExportRef.current;
 
       setSaveSuccess(true);
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
@@ -652,6 +666,7 @@ export default function LoopEditor() {
           `${loopTemplateId}/versions/${versionNumber}`,
         );
         setSelectedTemplate(version);
+        lastSavedExportRef.current = JSON.stringify(serializeForExport(version), null, 2);
         setNodes(templateToNodes(version));
         setEdges(templateToEdges(version));
         setReadOnlyVersion(versionNumber);
@@ -669,6 +684,7 @@ export default function LoopEditor() {
   const exitReadOnlyMode = () => {
     setReadOnlyVersion(null);
     setSelectedTemplate(null);
+    lastSavedExportRef.current = "";
     setNodes([]);
     setEdges([]);
     if (routeTemplateId) void navigate("/loop-editor");
