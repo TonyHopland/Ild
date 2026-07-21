@@ -13,7 +13,12 @@ import { setCurrentChatSessionId } from "../../services/chatSessionStore";
 const { handlers, loopTemplateService, aiProviderService, agentAdapterService } = vi.hoisted(
   () => ({
     handlers: {} as Record<string, (msg: { payload: unknown }) => void>,
-    loopTemplateService: { getAll: vi.fn() },
+    loopTemplateService: {
+      getAll: vi.fn(),
+      validate: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+    },
     aiProviderService: { getAll: vi.fn() },
     agentAdapterService: { getConfigSchema: vi.fn() },
   }),
@@ -234,5 +239,36 @@ describe("Loop Editor — loop editor context (ADR-0011)", () => {
     expect(diffView.querySelector(".save-diff-add")?.textContent).toBeTruthy();
     expect(diffView.textContent).toContain("AI Reworked Loop");
     expect(diffView.textContent).toContain("Dev Loop");
+  });
+
+  test("save persists the reviewed snapshot, not a canvas an AI push mutated mid-review", async () => {
+    loopTemplateService.getAll.mockResolvedValue([sampleTemplate]);
+    aiProviderService.getAll.mockResolvedValue([]);
+    loopTemplateService.validate.mockResolvedValue({ valid: true, errors: [] });
+    loopTemplateService.update.mockResolvedValue({ id: sampleTemplate.id });
+    setCurrentChatSessionId("s1");
+
+    renderEditorWithOpenTemplate();
+    await waitFor(() => expect(screen.getByText("Initialize")).toBeTruthy());
+
+    // Open the review gate — this snapshots the current (unedited) loop.
+    fireEvent.click(screen.getByText("Save"));
+    await screen.findByText("Save changes");
+
+    // An AI push lands WHILE the modal is open, rewriting the live canvas.
+    pushLoopUpdate("s1", aiDocument);
+    await waitFor(() => expect(screen.getByText("Boot Up")).toBeTruthy());
+
+    // Confirm — the persisted payload must be the reviewed snapshot (original
+    // labels), NOT the AI's post-review mutation.
+    fireEvent.click(screen.getByText("Save changes"));
+    await waitFor(() => expect(loopTemplateService.update).toHaveBeenCalled());
+
+    const payload = loopTemplateService.update.mock.calls[0][1] as {
+      nodes: Array<{ label: string }>;
+    };
+    const labels = payload.nodes.map((n) => n.label).sort();
+    expect(labels).toEqual(["Initialize", "Tidy Up"]);
+    expect(labels).not.toContain("Boot Up");
   });
 });

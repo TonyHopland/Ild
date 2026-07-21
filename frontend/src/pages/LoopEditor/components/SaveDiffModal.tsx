@@ -59,7 +59,7 @@ export default function SaveDiffModal({
         </div>
         <div className="modal-body">
           {changed ? (
-            <pre className="save-diff-view" data-testid="save-diff-view">
+            <div className="save-diff-view" data-testid="save-diff-view">
               {diff.map((line, idx) => (
                 <div key={idx} className={`save-diff-line save-diff-${line.type}`}>
                   <span className="save-diff-gutter">
@@ -68,7 +68,7 @@ export default function SaveDiffModal({
                   <span className="save-diff-text">{line.text}</span>
                 </div>
               ))}
-            </pre>
+            </div>
           ) : (
             <p data-testid="save-diff-empty">
               No changes to save — the loop matches the last saved version.

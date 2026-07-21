@@ -309,9 +309,16 @@ export default function LoopEditor() {
   const [aiProviders, setAiProviders] = useState<AiProvider[]>([]);
   const [errorText, setErrorText] = useState("");
   const [isSaving, setIsSaving] = useState(false);
-  // Save-time review gate (ADR-0011): holds the last-saved vs currently-edited
-  // loop JSON while the diff modal is open; null when the modal is closed.
-  const [saveDiff, setSaveDiff] = useState<{ before: string; after: string } | null>(null);
+  // Save-time review gate (ADR-0011): while the diff modal is open, holds the
+  // last-saved vs currently-edited loop JSON AND the frozen export snapshot that
+  // was reviewed. persistSave writes that snapshot (not the live canvas), so an AI
+  // push arriving mid-review can't change what the human actually saves. Null when
+  // the modal is closed.
+  const [saveDiff, setSaveDiff] = useState<{
+    before: string;
+    after: string;
+    snapshot: LoopTemplateExport;
+  } | null>(null);
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [showArchived, setShowArchived] = useState(false);
   const [originalNodeConfig, setOriginalNodeConfig] = useState<NodeSettingsSnapshot | null>(null);
@@ -544,10 +551,13 @@ export default function LoopEditor() {
 
     // Baseline is the last document actually persisted (lastSavedExportRef), NOT
     // selectedTemplate — an AI edit overwrites selectedTemplate with its own doc,
-    // so diffing against it would hide the AI's change. "after" is the live canvas.
-    const after = JSON.stringify(buildExportData(), null, 2);
+    // so diffing against it would hide the AI's change. Snapshot the live canvas
+    // once so the reviewed diff, the persisted payload, and the new baseline are
+    // all the same document even if the canvas mutates while the modal is open.
+    const snapshot = buildExportData();
+    const after = JSON.stringify(snapshot, null, 2);
     const before = lastSavedExportRef.current;
-    setSaveDiff({ before, after });
+    setSaveDiff({ before, after, snapshot });
   };
 
   const cancelSave = () => {
@@ -557,13 +567,18 @@ export default function LoopEditor() {
 
   const persistSave = async () => {
     if (isSaving) return;
+    // Persist exactly the snapshot the modal reviewed, never the live canvas — so
+    // an AI applyLoopDocument push landing while the modal is open can't slip
+    // unreviewed changes into the save or drift the baseline.
+    const pending = saveDiff;
+    if (!pending) return;
 
     setIsSaving(true);
     setValidationErrors([]);
 
     try {
-      const loopNodes = nodesToLoopNodes(nodes);
-      const loopEdges = edgesToLoopNodeEdges(edges);
+      const loopNodes = exportNodesToLoopNodes(pending.snapshot.nodes);
+      const loopEdges = exportEdgesToLoopNodeEdges(pending.snapshot.edges);
       const validationResult = await loopTemplateService.validate({
         nodes: loopNodes,
         edges: loopEdges,
@@ -575,26 +590,27 @@ export default function LoopEditor() {
 
       if (isNewTemplate) {
         await loopTemplateService.create({
-          name: newTemplateName,
-          description: "",
-          recoveryPolicy: RecoveryPolicy.AutoResume,
+          name: pending.snapshot.name,
+          description: pending.snapshot.description,
+          recoveryPolicy: pending.snapshot.recoveryPolicy,
           nodes: loopNodes,
           edges: loopEdges,
         });
       } else if (selectedTemplate) {
         await loopTemplateService.update(selectedTemplate.id, {
-          name: selectedTemplate.name,
-          description: selectedTemplate.description,
-          recoveryPolicy: selectedTemplate.recoveryPolicy,
+          name: pending.snapshot.name,
+          description: pending.snapshot.description,
+          recoveryPolicy: pending.snapshot.recoveryPolicy,
           nodes: loopNodes,
           edges: loopEdges,
         });
       }
 
       // The document we just persisted becomes the new diff baseline — it is
-      // exactly the "after" the modal reviewed. Refresh here (never in
-      // applyLoopDocument) so a later re-save diffs against what is now in the DB.
-      lastSavedExportRef.current = saveDiff?.after ?? lastSavedExportRef.current;
+      // exactly the snapshot the modal reviewed (pending.after === serialized
+      // pending.snapshot). Refresh here (never in applyLoopDocument) so a later
+      // re-save diffs against what is now in the DB.
+      lastSavedExportRef.current = pending.after;
 
       setSaveSuccess(true);
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
