@@ -241,11 +241,79 @@ public static class ToolDescriptors
         Parameters = Array.Empty<ToolParameterDescriptor>(),
     };
 
+    public static readonly ToolDescriptor GetLoopNode = new()
+    {
+        Name = "ild_get_loop_node",
+        Label = "Get Loop Node",
+        Description = "Read a single node from the loop open in the Loop Editor by its id. Returns { id, type, label, config } as JSON with the config's prompt/text fields decoded (plain text, not escaped) — read this first, then craft a unique old_string for ild_edit_loop_node_field. Returns {\"loopEditorOpen\": false} when no loop editor is open, or a 404 when no node has that id.",
+        EndpointPath = "api/v1/agent/current-loop/nodes/{nodeId}",
+        HttpMethod = HttpMethod.Get,
+        Parameters = new ToolParameterDescriptor[]
+        {
+            new() { Name = "nodeId", Description = "The id of the node to read (from ild_get_current_loop).", TsType = "string" },
+        },
+    };
+
+    public static readonly ToolDescriptor EditLoopNodeField = new()
+    {
+        Name = "ild_edit_loop_node_field",
+        Label = "Edit Loop Node Field",
+        Description = "Targeted find-and-replace on ONE node config field's decoded text (the primary way to tweak a prompt). old_string is plain text — you never handle JSON escaping, the server re-encodes. old_string must match EXACTLY ONCE: zero or multiple matches change nothing and report the count. Returns { applied, matchCount, validationErrors }; a resulting invalid graph is rejected and the canvas is left untouched. Transient client state only.",
+        EndpointPath = "api/v1/agent/current-loop/nodes/{nodeId}/edit-field",
+        HttpMethod = HttpMethod.Post,
+        Parameters = new ToolParameterDescriptor[]
+        {
+            new() { Name = "nodeId", Description = "The id of the node to edit.", TsType = "string" },
+            new() { Name = "field", Description = "The config field to edit, e.g. 'prompt', 'command', 'prDescriptionTemplate', 'output'.", TsType = "string", IsBodyParam = true },
+            new() { Name = "oldString", Description = "The decoded text to find. Must occur exactly once in the field.", TsType = "string", IsBodyParam = true },
+            new() { Name = "newString", Description = "The decoded replacement text.", TsType = "string", IsBodyParam = true },
+        },
+    };
+
+    public static readonly ToolDescriptor SetLoopNodeField = new()
+    {
+        Name = "ild_set_loop_node_field",
+        Label = "Set Loop Node Field",
+        Description = "Overwrite ONE node config field wholesale with a new value (the intentional replace-all path; use instead of ild_edit_loop_node_field to replace the whole field). The field is created if absent. Returns { applied, matchCount, validationErrors }; a resulting invalid graph is rejected and the canvas is left untouched. Transient client state only.",
+        EndpointPath = "api/v1/agent/current-loop/nodes/{nodeId}/set-field",
+        HttpMethod = HttpMethod.Post,
+        Parameters = new ToolParameterDescriptor[]
+        {
+            new() { Name = "nodeId", Description = "The id of the node to edit.", TsType = "string" },
+            new() { Name = "field", Description = "The config field to overwrite, e.g. 'prompt', 'command'.", TsType = "string", IsBodyParam = true },
+            new() { Name = "value", Description = "The new value stored as the field's text.", TsType = "string", IsBodyParam = true },
+        },
+    };
+
+    public static readonly ToolDescriptor GetLoopFile = new()
+    {
+        Name = "ild_get_loop_file",
+        Label = "Get Loop File",
+        Description = "Read the whole loop open in the Loop Editor as raw ild-loop-template/v1 JSON text — the exact bytes to target with ild_edit_loop_file. Returns {\"loopEditorOpen\": false} when no loop editor is open. For a single node prefer ild_get_loop_node (decoded, cheaper).",
+        EndpointPath = "api/v1/agent/current-loop/file",
+        HttpMethod = HttpMethod.Get,
+        Parameters = Array.Empty<ToolParameterDescriptor>(),
+    };
+
+    public static readonly ToolDescriptor EditLoopFile = new()
+    {
+        Name = "ild_edit_loop_file",
+        Label = "Edit Loop File",
+        Description = "Targeted find-and-replace on the RAW JSON of the whole loop document — the escape hatch for structural nudges (edges, ids, adding a node) a field edit can't reach. You are editing raw JSON, so old_string must include correct JSON escaping (call ild_get_loop_file first). old_string must match EXACTLY ONCE. Returns { applied, matchCount, validationErrors }; an edit that produces invalid JSON or an invalid graph is rejected and the canvas is left untouched. Prefer ild_edit_loop_node_field for prompt text.",
+        EndpointPath = "api/v1/agent/current-loop/file/edit",
+        HttpMethod = HttpMethod.Post,
+        Parameters = new ToolParameterDescriptor[]
+        {
+            new() { Name = "oldString", Description = "The raw-JSON text to find. Must occur exactly once in the document.", TsType = "string", IsBodyParam = true },
+            new() { Name = "newString", Description = "The raw-JSON replacement text.", TsType = "string", IsBodyParam = true },
+        },
+    };
+
     public static readonly ToolDescriptor UpdateCurrentLoop = new()
     {
         Name = "ild_update_current_loop",
         Label = "Update Current Loop",
-        Description = "Replace the loop open in the Loop Editor with a complete ild-loop-template/v1 document (full replacement, NOT a patch). The open editor validates and direct-applies it to the live canvas; on a validation error the loop is left untouched. Edits transient client state only — it never saves and returns no structured ack; re-read with ild_get_current_loop on a later turn to confirm.",
+        Description = "Replace the loop open in the Loop Editor with a complete ild-loop-template/v1 document (full replacement, NOT a patch). ESCAPE HATCH: prefer the targeted edits (ild_edit_loop_node_field / ild_edit_loop_file), which cannot corrupt unrelated nodes. The server validates the document and returns a synchronous ack { applied, matchCount, validationErrors }; on a validation error the edit is rejected and the loop is left untouched. On success the live canvas updates immediately. Transient client state only — it never saves.",
         EndpointPath = "api/v1/agent/current-loop",
         HttpMethod = HttpMethod.Put,
         Parameters = new ToolParameterDescriptor[]
@@ -312,6 +380,11 @@ public static class ToolDescriptors
         UpdatePreviewServiceConfig,
         GetPreviewLogs,
         GetCurrentLoop,
+        GetLoopNode,
+        EditLoopNodeField,
+        SetLoopNodeField,
+        GetLoopFile,
+        EditLoopFile,
         UpdateCurrentLoop,
         GetLoopVariables,
         SetLoopVariable,

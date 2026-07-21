@@ -629,11 +629,145 @@ public class AgentController : ControllerBase
         if (request.Document.Length > MaxLoopDocumentChars)
             return BadRequest(new { error = $"document is too large ({request.Document.Length} chars); the limit is {MaxLoopDocumentChars}." });
 
-        // Fire-and-forget (ADR-0011): the open Loop Editor validates and applies the
-        // document client-side; a rejected document leaves the canvas untouched and
-        // the agent learns of it only by re-reading the loop on a later turn.
-        await _chatNotifier.LoopUpdateRequestedAsync(chatSessionId, request.Document);
-        return Accepted(new { accepted = true });
+        // Retrofit (ADR-0011): the server now validates the full replacement itself
+        // (reject-on-invalid) and returns the same synchronous ack as the scoped
+        // edits. A valid document is stashed and pushed to the canvas; a rejected one
+        // leaves both untouched and the agent is told now, not next turn.
+        var result = LoopDocumentEditor.ReplaceDocument(request.Document);
+        return await ApplyEditAsync(chatSessionId, result);
+    }
+
+    [HttpGet("current-loop/file")]
+    public async Task<IActionResult> GetLoopFile()
+    {
+        var (chatSessionId, error) = await ResolveChatSessionAsync();
+        if (error != null) return error;
+
+        var document = _loopScratchpad.Get(chatSessionId);
+        if (string.IsNullOrWhiteSpace(document))
+            return Ok(new { loopEditorOpen = false });
+
+        return Content(document, "application/json");
+    }
+
+    [HttpPost("current-loop/file/edit")]
+    public async Task<IActionResult> EditLoopFile([FromBody] AgentLoopFileEditRequest? request)
+    {
+        var (chatSessionId, error) = await ResolveChatSessionAsync();
+        if (error != null) return error;
+        if (request == null || string.IsNullOrEmpty(request.OldString))
+            return BadRequest(new { error = "old_string is required." });
+
+        var notOpen = RequireOpenLoop(chatSessionId, out var document);
+        if (notOpen != null) return notOpen;
+
+        var result = LoopDocumentEditor.EditFile(document, request.OldString, request.NewString ?? string.Empty);
+        return await ApplyEditAsync(chatSessionId, result);
+    }
+
+    [HttpGet("current-loop/nodes/{nodeId}")]
+    public async Task<IActionResult> GetLoopNode(string nodeId)
+    {
+        var (chatSessionId, error) = await ResolveChatSessionAsync();
+        if (error != null) return error;
+
+        var document = _loopScratchpad.Get(chatSessionId);
+        if (string.IsNullOrWhiteSpace(document))
+            return Ok(new { loopEditorOpen = false });
+
+        var (found, nodeJson, nodeError) = LoopDocumentEditor.GetNode(document, nodeId);
+        if (!found)
+            return NotFound(new { error = nodeError });
+        return Content(nodeJson!, "application/json");
+    }
+
+    [HttpPost("current-loop/nodes/{nodeId}/edit-field")]
+    public async Task<IActionResult> EditLoopNodeField(string nodeId, [FromBody] AgentLoopNodeFieldEditRequest? request)
+    {
+        var (chatSessionId, error) = await ResolveChatSessionAsync();
+        if (error != null) return error;
+        if (request == null || string.IsNullOrWhiteSpace(request.Field))
+            return BadRequest(new { error = "field is required." });
+
+        var notOpen = RequireOpenLoop(chatSessionId, out var document);
+        if (notOpen != null) return notOpen;
+
+        var result = LoopDocumentEditor.EditNodeField(
+            document, nodeId, request.Field, request.OldString ?? string.Empty, request.NewString ?? string.Empty);
+        return await ApplyEditAsync(chatSessionId, result);
+    }
+
+    [HttpPost("current-loop/nodes/{nodeId}/set-field")]
+    public async Task<IActionResult> SetLoopNodeField(string nodeId, [FromBody] AgentLoopNodeFieldSetRequest? request)
+    {
+        var (chatSessionId, error) = await ResolveChatSessionAsync();
+        if (error != null) return error;
+        if (request == null || string.IsNullOrWhiteSpace(request.Field))
+            return BadRequest(new { error = "field is required." });
+
+        var notOpen = RequireOpenLoop(chatSessionId, out var document);
+        if (notOpen != null) return notOpen;
+
+        var result = LoopDocumentEditor.SetNodeField(document, nodeId, request.Field, request.Value ?? string.Empty);
+        return await ApplyEditAsync(chatSessionId, result);
+    }
+
+    /// <summary>
+    /// The scoped edits act on the document the browser stashed this turn. When no
+    /// loop is open there is nothing to edit — reported as a clean <c>applied:false</c>
+    /// ack (not an HTTP error) so the agent gets the same structured shape it gets for
+    /// a bad match or a validation failure. Returns null (and the document) when a
+    /// loop is open.
+    /// </summary>
+    private IActionResult? RequireOpenLoop(Guid chatSessionId, out string document)
+    {
+        document = _loopScratchpad.Get(chatSessionId) ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(document))
+            return null;
+
+        return Ok(new
+        {
+            applied = false,
+            matchCount = 0,
+            validationErrors = Array.Empty<string>(),
+            error = "No loop is open in the Loop Editor, so there is nothing to edit.",
+        });
+    }
+
+    /// <summary>
+    /// Turn a <see cref="LoopEditResult"/> into the synchronous ack every loop edit
+    /// surface returns, and — only when the edit applied — stash the new document in
+    /// the scratchpad and push it to the open canvas via the same
+    /// <c>LoopUpdateRequested</c> path a full replacement uses. A rejected edit (bad
+    /// match or failed validation) leaves both the scratchpad and the canvas exactly
+    /// as they were, but the agent is told now rather than next turn (ADR-0011).
+    /// </summary>
+    private async Task<IActionResult> ApplyEditAsync(Guid chatSessionId, LoopEditResult result)
+    {
+        if (result is { Applied: true, Document: not null })
+        {
+            if (result.Document.Length > MaxLoopDocumentChars)
+                return Ok(new
+                {
+                    applied = false,
+                    matchCount = result.MatchCount,
+                    validationErrors = Array.Empty<string>(),
+                    error = $"The edited document is too large ({result.Document.Length} chars); the limit is {MaxLoopDocumentChars}.",
+                    summary = (string?)null,
+                });
+
+            _loopScratchpad.Set(chatSessionId, result.Document);
+            await _chatNotifier.LoopUpdateRequestedAsync(chatSessionId, result.Document);
+        }
+
+        return Ok(new
+        {
+            applied = result.Applied,
+            matchCount = result.MatchCount,
+            validationErrors = result.ValidationErrors,
+            error = result.Error,
+            summary = result.Summary,
+        });
     }
 
     /// <summary>

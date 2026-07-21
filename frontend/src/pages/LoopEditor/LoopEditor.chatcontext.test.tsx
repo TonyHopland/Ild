@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, waitFor, cleanup, act } from "@testing-library/react";
+import { render, screen, waitFor, cleanup, act, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { AuthContext } from "../../hooks/useAuth";
 import { NodeType, EdgeType, RecoveryPolicy } from "../../types";
@@ -13,7 +13,12 @@ import { setCurrentChatSessionId } from "../../services/chatSessionStore";
 const { handlers, loopTemplateService, aiProviderService, agentAdapterService } = vi.hoisted(
   () => ({
     handlers: {} as Record<string, (msg: { payload: unknown }) => void>,
-    loopTemplateService: { getAll: vi.fn() },
+    loopTemplateService: {
+      getAll: vi.fn(),
+      validate: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+    },
     aiProviderService: { getAll: vi.fn() },
     agentAdapterService: { getConfigSchema: vi.fn() },
   }),
@@ -210,5 +215,85 @@ describe("Loop Editor — loop editor context (ADR-0011)", () => {
     // The original graph survives the rejected edit.
     expect(screen.getByText("Initialize")).toBeTruthy();
     expect(screen.queryByText("Boot Up")).toBeNull();
+  });
+
+  test("save-review diff includes an AI edit (baseline is the persisted loop, not the AI doc)", async () => {
+    loopTemplateService.getAll.mockResolvedValue([sampleTemplate]);
+    aiProviderService.getAll.mockResolvedValue([]);
+    setCurrentChatSessionId("s1");
+
+    renderEditorWithOpenTemplate();
+    await waitFor(() => expect(screen.getByText("Initialize")).toBeTruthy());
+
+    // The agent rewrites the loop live on the canvas (overwriting selectedTemplate).
+    pushLoopUpdate("s1", aiDocument);
+    await waitFor(() => expect(screen.getByText("Boot Up")).toBeTruthy());
+
+    // Opening the save-review gate must diff the AI-edited canvas against the
+    // last-PERSISTED loop, so the AI's change shows up — not "No changes to save".
+    fireEvent.click(screen.getByText("Save"));
+
+    const diffView = await screen.findByTestId("save-diff-view");
+    expect(screen.queryByTestId("save-diff-empty")).toBeNull();
+    // The AI's new name is an added line; the persisted name is a removed line.
+    expect(diffView.querySelector(".save-diff-add")?.textContent).toBeTruthy();
+    expect(diffView.textContent).toContain("AI Reworked Loop");
+    expect(diffView.textContent).toContain("Dev Loop");
+  });
+
+  test("save persists the reviewed snapshot, not a canvas an AI push mutated mid-review", async () => {
+    loopTemplateService.getAll.mockResolvedValue([sampleTemplate]);
+    aiProviderService.getAll.mockResolvedValue([]);
+    loopTemplateService.validate.mockResolvedValue({ valid: true, errors: [] });
+    loopTemplateService.update.mockResolvedValue({ id: sampleTemplate.id });
+    setCurrentChatSessionId("s1");
+
+    renderEditorWithOpenTemplate();
+    await waitFor(() => expect(screen.getByText("Initialize")).toBeTruthy());
+
+    // Open the review gate — this snapshots the current (unedited) loop.
+    fireEvent.click(screen.getByText("Save"));
+    await screen.findByText("Save changes");
+
+    // An AI push lands WHILE the modal is open, rewriting the live canvas.
+    pushLoopUpdate("s1", aiDocument);
+    await waitFor(() => expect(screen.getByText("Boot Up")).toBeTruthy());
+
+    // Confirm — the persisted payload must be the reviewed snapshot (original
+    // labels), NOT the AI's post-review mutation.
+    fireEvent.click(screen.getByText("Save changes"));
+    await waitFor(() => expect(loopTemplateService.update).toHaveBeenCalled());
+
+    const payload = loopTemplateService.update.mock.calls[0][1] as {
+      nodes: Array<{ label: string }>;
+    };
+    const labels = payload.nodes.map((n) => n.label).sort();
+    expect(labels).toEqual(["Initialize", "Tidy Up"]);
+    expect(labels).not.toContain("Boot Up");
+  });
+
+  test("save preserves edge maxTraversals (persists the lossless graph, not the export)", async () => {
+    // The export format omits edge maxTraversals; persisting from it would null
+    // the traversal cap. The persist path must use the lossless frozen graph.
+    const templateWithCap = {
+      ...sampleTemplate,
+      edges: [{ ...sampleTemplate.edges[0], maxTraversals: 5 }],
+    };
+    loopTemplateService.getAll.mockResolvedValue([templateWithCap]);
+    aiProviderService.getAll.mockResolvedValue([]);
+    loopTemplateService.validate.mockResolvedValue({ valid: true, errors: [] });
+    loopTemplateService.update.mockResolvedValue({ id: templateWithCap.id });
+
+    renderEditorWithOpenTemplate();
+    await waitFor(() => expect(screen.getByText("Initialize")).toBeTruthy());
+
+    fireEvent.click(screen.getByText("Save"));
+    fireEvent.click(await screen.findByText("Save changes"));
+    await waitFor(() => expect(loopTemplateService.update).toHaveBeenCalled());
+
+    const payload = loopTemplateService.update.mock.calls[0][1] as {
+      edges: Array<{ maxTraversals: number | null }>;
+    };
+    expect(payload.edges[0].maxTraversals).toBe(5);
   });
 });

@@ -588,9 +588,10 @@ describe("Adapter config schema", () => {
       expect(document.querySelector(".node-settings-modal")).toBeFalsy();
     });
 
-    // Click the header save button
+    // Click the header save button — this opens the review-diff modal; confirm it.
     const saveBtn = document.querySelector(".save-btn");
     fireEvent.click(saveBtn!);
+    fireEvent.click(await screen.findByText("Save changes"));
 
     // Wait for save to complete
     await waitFor(() => {

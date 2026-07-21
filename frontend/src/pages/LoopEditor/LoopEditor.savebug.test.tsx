@@ -117,8 +117,9 @@ describe("Loop Editor save existing template (regression)", () => {
 
     await waitFor(() => expect(screen.getByText("Initialize")).toBeTruthy());
 
-    // Click save
+    // Click save — this opens the review-diff modal; confirm to persist.
     fireEvent.click(screen.getByText("Save"));
+    fireEvent.click(await screen.findByText("Save changes"));
 
     await waitFor(
       () => {
@@ -137,6 +138,7 @@ describe("Loop Editor save existing template (regression)", () => {
 
     // Save a second time to make sure it doesn't hang
     fireEvent.click(screen.getByText("Save"));
+    fireEvent.click(await screen.findByText("Save changes"));
     await waitFor(
       () => {
         const putCalls = fetchCalls.filter((c) => c.method === "PUT");
@@ -224,6 +226,7 @@ describe("Loop Editor save existing template (regression)", () => {
     await waitFor(() => expect(screen.getByText("Initialize")).toBeTruthy());
 
     fireEvent.click(screen.getByText("Save"));
+    fireEvent.click(await screen.findByText("Save changes"));
 
     await waitFor(() => {}, { timeout: 5000 });
   }, 15000);
@@ -364,6 +367,7 @@ describe("Loop Editor save existing template (regression)", () => {
     await waitFor(() => expect(screen.getByText("Build")).toBeTruthy());
 
     fireEvent.click(screen.getByText("Save"));
+    fireEvent.click(await screen.findByText("Save changes"));
 
     await waitFor(
       () => {

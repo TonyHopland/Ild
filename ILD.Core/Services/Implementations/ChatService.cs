@@ -281,8 +281,14 @@ public sealed class ChatService : IChatService
         {
             lines.Add(
                 "The user has a loop open in the Loop Editor. Call get_current_loop to read it as the "
-                + "ild-loop-template/v1 document, and update_current_loop with a complete document to edit "
-                + "it live (full replacement — the canvas updates immediately). Only the human can save.");
+                + "ild-loop-template/v1 document. To EDIT it, prefer the targeted tools — they change only "
+                + "what you name (never corrupting an unrelated node) and each returns a synchronous ack "
+                + "{ applied, matchCount, validationErrors }: use get_loop_node + edit_loop_node_field for a "
+                + "prompt/config tweak (plain-text find-and-replace, the server handles JSON escaping; "
+                + "old_string must match exactly once), set_loop_node_field to overwrite a whole field, and "
+                + "edit_loop_file for structural nudges (edges, ids). update_current_loop (full replacement) "
+                + "is a last resort. Every edit applies to the live canvas immediately but is transient — only "
+                + "the human can save.");
             lines.Add(LoopAuthoringGuide);
         }
 

@@ -64,6 +64,7 @@ import { EdgePanels } from "./components/EdgePanels";
 import { LoopEditorHeader } from "./components/LoopEditorHeader";
 import { LoopEditorSidebar } from "./components/LoopEditorSidebar";
 import { NodeSettingsModal } from "./components/NodeSettingsModal";
+import SaveDiffModal from "./components/SaveDiffModal";
 import type {
   AdapterConfigValue,
   ImportFeedbackItem,
@@ -256,6 +257,12 @@ export default function LoopEditor() {
   const selectedTemplateRef = useRef<LoopTemplate | null>(null);
   const isNewTemplateRef = useRef(false);
   const newTemplateNameRef = useRef("");
+  // The last document actually persisted to the DB, as a serialized
+  // ild-loop-template/v1 string — the true baseline for the save-review diff
+  // (ADR-0011). Captured when a template/version loads and refreshed after a
+  // successful save; deliberately NOT updated by applyLoopDocument, so AI edits
+  // (which overwrite selectedTemplate) still show up as a pending delta at Save.
+  const lastSavedExportRef = useRef<string>("");
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<Edge | null>(null);
   const [pendingConnection, setPendingConnection] = useState<Connection | null>(null);
@@ -302,6 +309,22 @@ export default function LoopEditor() {
   const [aiProviders, setAiProviders] = useState<AiProvider[]>([]);
   const [errorText, setErrorText] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  // Save-time review gate (ADR-0011): while the diff modal is open, holds the
+  // last-saved vs currently-edited loop JSON AND the frozen graph that was
+  // reviewed. persistSave writes the frozen graph (not the live canvas), so an AI
+  // push arriving mid-review can't change what the human actually saves. Two
+  // representations are kept on purpose: the export `snapshot`/`after` string
+  // drives the whole-document diff view, while `nodes`/`edges` are the lossless
+  // LoopNode[]/LoopNodeEdge[] we persist — the export format omits edge
+  // maxTraversals, so persisting from it would silently drop the traversal cap.
+  // Null when the modal is closed.
+  const [saveDiff, setSaveDiff] = useState<{
+    before: string;
+    after: string;
+    snapshot: LoopTemplateExport;
+    nodes: LoopNode[];
+    edges: LoopNodeEdge[];
+  } | null>(null);
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [showArchived, setShowArchived] = useState(false);
   const [originalNodeConfig, setOriginalNodeConfig] = useState<NodeSettingsSnapshot | null>(null);
@@ -468,6 +491,7 @@ export default function LoopEditor() {
   const selectTemplate = useCallback(
     (template: LoopTemplate) => {
       setSelectedTemplate(template);
+      lastSavedExportRef.current = JSON.stringify(serializeForExport(template), null, 2);
       setNodes(templateToNodes(template));
       setEdges(templateToEdges(template));
       setValidationErrors([]);
@@ -506,6 +530,7 @@ export default function LoopEditor() {
 
   const handleNewTemplate = () => {
     setSelectedTemplate(null);
+    lastSavedExportRef.current = "";
     setNodes([]);
     setEdges([]);
     setValidationErrors([]);
@@ -516,7 +541,11 @@ export default function LoopEditor() {
     if (routeTemplateId) void navigate("/loop-editor");
   };
 
-  const handleSave = async () => {
+  // Human Save opens a review gate (ADR-0011): the local graph check runs first
+  // (so a structurally-broken loop never reaches the modal), then we show the
+  // whole-document JSON diff of last-saved vs currently-edited loop and wait for
+  // an explicit confirm before persisting.
+  const handleSave = () => {
     if (isSaving) return;
 
     const errors = validateLoopGraphLocally(nodes, edges);
@@ -524,13 +553,46 @@ export default function LoopEditor() {
       setValidationErrors(errors);
       return;
     }
+    setValidationErrors([]);
+
+    // Baseline is the last document actually persisted (lastSavedExportRef), NOT
+    // selectedTemplate — an AI edit overwrites selectedTemplate with its own doc,
+    // so diffing against it would hide the AI's change. Freeze the live canvas once
+    // — both the export snapshot (for the diff view/baseline) and the lossless
+    // LoopNode[]/LoopNodeEdge[] (for persistence) — so the reviewed diff, the
+    // persisted payload, and the new baseline are all the same document even if the
+    // canvas mutates while the modal is open.
+    const snapshot = buildExportData();
+    const after = JSON.stringify(snapshot, null, 2);
+    const before = lastSavedExportRef.current;
+    const frozenNodes = nodesToLoopNodes(nodesRef.current);
+    const frozenEdges = edgesToLoopNodeEdges(edgesRef.current);
+    setSaveDiff({ before, after, snapshot, nodes: frozenNodes, edges: frozenEdges });
+  };
+
+  const cancelSave = () => {
+    if (isSaving) return;
+    setSaveDiff(null);
+  };
+
+  const persistSave = async () => {
+    if (isSaving) return;
+    // Persist exactly the snapshot the modal reviewed, never the live canvas — so
+    // an AI applyLoopDocument push landing while the modal is open can't slip
+    // unreviewed changes into the save or drift the baseline.
+    const pending = saveDiff;
+    if (!pending) return;
 
     setIsSaving(true);
     setValidationErrors([]);
 
     try {
-      const loopNodes = nodesToLoopNodes(nodes);
-      const loopEdges = edgesToLoopNodeEdges(edges);
+      // Persist the lossless frozen graph, not the export snapshot — the export
+      // format drops edge maxTraversals, so persisting from it would silently null
+      // out any traversal cap the user set. The snapshot is still used for metadata
+      // (name/description/recoveryPolicy) and the diff/baseline strings.
+      const loopNodes = pending.nodes;
+      const loopEdges = pending.edges;
       const validationResult = await loopTemplateService.validate({
         nodes: loopNodes,
         edges: loopEdges,
@@ -542,21 +604,27 @@ export default function LoopEditor() {
 
       if (isNewTemplate) {
         await loopTemplateService.create({
-          name: newTemplateName,
-          description: "",
-          recoveryPolicy: RecoveryPolicy.AutoResume,
+          name: pending.snapshot.name,
+          description: pending.snapshot.description,
+          recoveryPolicy: pending.snapshot.recoveryPolicy,
           nodes: loopNodes,
           edges: loopEdges,
         });
       } else if (selectedTemplate) {
         await loopTemplateService.update(selectedTemplate.id, {
-          name: selectedTemplate.name,
-          description: selectedTemplate.description,
-          recoveryPolicy: selectedTemplate.recoveryPolicy,
+          name: pending.snapshot.name,
+          description: pending.snapshot.description,
+          recoveryPolicy: pending.snapshot.recoveryPolicy,
           nodes: loopNodes,
           edges: loopEdges,
         });
       }
+
+      // The document we just persisted becomes the new diff baseline — it is
+      // exactly the snapshot the modal reviewed (pending.after === serialized
+      // pending.snapshot). Refresh here (never in applyLoopDocument) so a later
+      // re-save diffs against what is now in the DB.
+      lastSavedExportRef.current = pending.after;
 
       setSaveSuccess(true);
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
@@ -573,6 +641,7 @@ export default function LoopEditor() {
       }
     } finally {
       setIsSaving(false);
+      setSaveDiff(null);
     }
   };
 
@@ -627,6 +696,7 @@ export default function LoopEditor() {
           `${loopTemplateId}/versions/${versionNumber}`,
         );
         setSelectedTemplate(version);
+        lastSavedExportRef.current = JSON.stringify(serializeForExport(version), null, 2);
         setNodes(templateToNodes(version));
         setEdges(templateToEdges(version));
         setReadOnlyVersion(versionNumber);
@@ -644,6 +714,7 @@ export default function LoopEditor() {
   const exitReadOnlyMode = () => {
     setReadOnlyVersion(null);
     setSelectedTemplate(null);
+    lastSavedExportRef.current = "";
     setNodes([]);
     setEdges([]);
     if (routeTemplateId) void navigate("/loop-editor");
@@ -1494,6 +1565,16 @@ export default function LoopEditor() {
           </div>
         </div>
       )}
+
+      {/* Save-time review gate (ADR-0011): whole-document JSON diff before persisting */}
+      <SaveDiffModal
+        isOpen={saveDiff !== null}
+        beforeJson={saveDiff?.before ?? ""}
+        afterJson={saveDiff?.after ?? ""}
+        isSaving={isSaving}
+        onConfirm={persistSave}
+        onCancel={cancelSave}
+      />
 
       {/* Import conflict dialog */}
       {importConflictTemplate && importConflictData && (

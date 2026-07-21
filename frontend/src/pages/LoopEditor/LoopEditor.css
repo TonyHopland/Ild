@@ -1379,3 +1379,49 @@
 .import-conflict-modal {
   min-width: 380px;
 }
+
+/* --- Save-time review diff modal (ADR-0011) --- */
+.save-diff-modal {
+  width: 720px;
+  max-width: 90vw;
+}
+
+.save-diff-view {
+  max-height: 55vh;
+  overflow: auto;
+  margin: 0;
+  padding: 0.5rem 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  background: var(--surface-2, #1e1e1e);
+  border-radius: 6px;
+}
+
+.save-diff-line {
+  display: flex;
+  white-space: pre;
+}
+
+.save-diff-gutter {
+  flex: 0 0 1.4rem;
+  text-align: center;
+  opacity: 0.6;
+  user-select: none;
+}
+
+.save-diff-text {
+  flex: 1 1 auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.save-diff-add {
+  background: rgba(46, 160, 67, 0.18);
+  color: #56d364;
+}
+
+.save-diff-del {
+  background: rgba(248, 81, 73, 0.16);
+  color: #f85149;
+}
