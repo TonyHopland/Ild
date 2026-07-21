@@ -135,9 +135,23 @@ public class WorktreePreviewServiceCustomEnvTests : IDisposable
         Assert.False(File.Exists(Path.Combine(_worktree, ".env")), ".env must not be written to the worktree");
         Assert.False(File.Exists(Path.Combine(_worktree, ".ild.env")), ".ild.env must not be written to the worktree");
         // No stray dotenv file of any name carries the secret into the worktree.
+        // Read bytes and scan defensively so an unreadable/binary file can't make
+        // the assertion throw instead of failing cleanly.
         var leaked = Directory.EnumerateFiles(_worktree, "*", SearchOption.AllDirectories)
-            .Where(f => File.ReadAllText(f).Contains("s3cr3t"))
+            .Where(f => ContainsSecret(f, "s3cr3t"))
             .ToList();
         Assert.Empty(leaked);
+    }
+
+    private static bool ContainsSecret(string path, string secret)
+    {
+        try
+        {
+            return System.Text.Encoding.UTF8.GetString(File.ReadAllBytes(path)).Contains(secret);
+        }
+        catch
+        {
+            return false;
+        }
     }
 }
