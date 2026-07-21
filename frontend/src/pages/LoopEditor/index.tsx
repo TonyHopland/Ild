@@ -64,6 +64,7 @@ import { EdgePanels } from "./components/EdgePanels";
 import { LoopEditorHeader } from "./components/LoopEditorHeader";
 import { LoopEditorSidebar } from "./components/LoopEditorSidebar";
 import { NodeSettingsModal } from "./components/NodeSettingsModal";
+import SaveDiffModal from "./components/SaveDiffModal";
 import type {
   AdapterConfigValue,
   ImportFeedbackItem,
@@ -302,6 +303,9 @@ export default function LoopEditor() {
   const [aiProviders, setAiProviders] = useState<AiProvider[]>([]);
   const [errorText, setErrorText] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  // Save-time review gate (ADR-0011): holds the last-saved vs currently-edited
+  // loop JSON while the diff modal is open; null when the modal is closed.
+  const [saveDiff, setSaveDiff] = useState<{ before: string; after: string } | null>(null);
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [showArchived, setShowArchived] = useState(false);
   const [originalNodeConfig, setOriginalNodeConfig] = useState<NodeSettingsSnapshot | null>(null);
@@ -516,7 +520,11 @@ export default function LoopEditor() {
     if (routeTemplateId) void navigate("/loop-editor");
   };
 
-  const handleSave = async () => {
+  // Human Save opens a review gate (ADR-0011): the local graph check runs first
+  // (so a structurally-broken loop never reaches the modal), then we show the
+  // whole-document JSON diff of last-saved vs currently-edited loop and wait for
+  // an explicit confirm before persisting.
+  const handleSave = () => {
     if (isSaving) return;
 
     const errors = validateLoopGraphLocally(nodes, edges);
@@ -524,6 +532,22 @@ export default function LoopEditor() {
       setValidationErrors(errors);
       return;
     }
+    setValidationErrors([]);
+
+    const after = JSON.stringify(buildExportData(), null, 2);
+    const before = selectedTemplate
+      ? JSON.stringify(serializeForExport(selectedTemplate), null, 2)
+      : "";
+    setSaveDiff({ before, after });
+  };
+
+  const cancelSave = () => {
+    if (isSaving) return;
+    setSaveDiff(null);
+  };
+
+  const persistSave = async () => {
+    if (isSaving) return;
 
     setIsSaving(true);
     setValidationErrors([]);
@@ -573,6 +597,7 @@ export default function LoopEditor() {
       }
     } finally {
       setIsSaving(false);
+      setSaveDiff(null);
     }
   };
 
@@ -1494,6 +1519,16 @@ export default function LoopEditor() {
           </div>
         </div>
       )}
+
+      {/* Save-time review gate (ADR-0011): whole-document JSON diff before persisting */}
+      <SaveDiffModal
+        isOpen={saveDiff !== null}
+        beforeJson={saveDiff?.before ?? ""}
+        afterJson={saveDiff?.after ?? ""}
+        isSaving={isSaving}
+        onConfirm={persistSave}
+        onCancel={cancelSave}
+      />
 
       {/* Import conflict dialog */}
       {importConflictTemplate && importConflictData && (

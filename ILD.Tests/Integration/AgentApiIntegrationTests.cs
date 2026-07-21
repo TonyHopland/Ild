@@ -563,8 +563,20 @@ public class AgentApiIntegrationTests
         Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(put)).StatusCode);
     }
 
+    // A valid ild-loop-template/v1 with Start → AI → Cleanup. Used by the scoped-edit
+    // integration tests as the document the browser stashed this turn.
+    private const string ValidLoopDocument =
+        "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"Live\",\"description\":\"\",\"recoveryPolicy\":\"AutoResume\"," +
+        "\"nodes\":[" +
+        "{\"id\":\"start\",\"type\":\"Start\",\"label\":\"Start\",\"config\":{}}," +
+        "{\"id\":\"ai\",\"type\":\"AI\",\"label\":\"Reviewer\",\"config\":{\"prompt\":\"Review the code.\",\"aiProviderId\":\"prov\"}}," +
+        "{\"id\":\"cleanup\",\"type\":\"Cleanup\",\"label\":\"Cleanup\",\"config\":{}}]," +
+        "\"edges\":[" +
+        "{\"id\":\"e1\",\"sourceNodeId\":\"start\",\"targetNodeId\":\"ai\",\"edgeType\":\"OnSuccess\",\"name\":null}," +
+        "{\"id\":\"e2\",\"sourceNodeId\":\"ai\",\"targetNodeId\":\"cleanup\",\"edgeType\":\"OnSuccess\",\"name\":null}]}";
+
     [Fact]
-    public async Task UpdateCurrentLoop_accepts_a_document_for_the_chat_session()
+    public async Task UpdateCurrentLoop_applies_a_valid_document_and_returns_the_ack()
     {
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
@@ -572,17 +584,168 @@ public class AgentApiIntegrationTests
 
         var put = new HttpRequestMessage(HttpMethod.Put, "/api/v1/agent/current-loop")
         {
+            Content = JsonContent.Create(new { document = ValidLoopDocument }),
+        };
+        put.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        var resp = await client.SendAsync(put);
+        resp.EnsureSuccessStatusCode();
+
+        var ack = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        Assert.True(ack.GetProperty("applied").GetBoolean());
+        Assert.Empty(ack.GetProperty("validationErrors").EnumerateArray());
+        // The applied document is stashed so later scoped edits build on it.
+        Assert.Equal(ValidLoopDocument, factory.Services.GetRequiredService<IChatLoopScratchpad>().Get(chatSessionId));
+    }
+
+    [Fact]
+    public async Task UpdateCurrentLoop_rejects_an_invalid_graph_without_touching_the_scratchpad()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var chatSessionId = await SeedChatSessionAsync(factory);
+        factory.Services.GetRequiredService<IChatLoopScratchpad>().Set(chatSessionId, ValidLoopDocument);
+
+        // A graph with no Start/Cleanup fails validation.
+        var put = new HttpRequestMessage(HttpMethod.Put, "/api/v1/agent/current-loop")
+        {
             Content = JsonContent.Create(new
             {
-                document = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"Edited\",\"nodes\":[]}",
+                document = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"Broken\",\"nodes\":[],\"edges\":[]}",
             }),
         };
         put.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
         var resp = await client.SendAsync(put);
+        resp.EnsureSuccessStatusCode();
 
-        // Fire-and-forget: the push is best-effort (no editor connected here), so the
-        // endpoint only acknowledges acceptance.
-        Assert.Equal(HttpStatusCode.Accepted, resp.StatusCode);
+        var ack = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        Assert.False(ack.GetProperty("applied").GetBoolean());
+        Assert.NotEmpty(ack.GetProperty("validationErrors").EnumerateArray());
+        // Canvas/scratchpad left as it was.
+        Assert.Equal(ValidLoopDocument, factory.Services.GetRequiredService<IChatLoopScratchpad>().Get(chatSessionId));
+    }
+
+    [Fact]
+    public async Task EditLoopNodeField_replaces_a_unique_match_and_stashes_the_result()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var chatSessionId = await SeedChatSessionAsync(factory);
+        factory.Services.GetRequiredService<IChatLoopScratchpad>().Set(chatSessionId, ValidLoopDocument);
+
+        var post = new HttpRequestMessage(HttpMethod.Post, "/api/v1/agent/current-loop/nodes/ai/edit-field")
+        {
+            Content = JsonContent.Create(new { field = "prompt", oldString = "Review the code.", newString = "Review the code thoroughly." }),
+        };
+        post.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        var resp = await client.SendAsync(post);
+        resp.EnsureSuccessStatusCode();
+
+        var ack = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        Assert.True(ack.GetProperty("applied").GetBoolean());
+        Assert.Equal(1, ack.GetProperty("matchCount").GetInt32());
+
+        var stashed = factory.Services.GetRequiredService<IChatLoopScratchpad>().Get(chatSessionId)!;
+        var ai = JsonDocument.Parse(stashed).RootElement.GetProperty("nodes").EnumerateArray()
+            .First(n => n.GetProperty("id").GetString() == "ai");
+        Assert.Equal("Review the code thoroughly.", ai.GetProperty("config").GetProperty("prompt").GetString());
+    }
+
+    [Fact]
+    public async Task EditLoopNodeField_reports_a_missing_match_without_changing_anything()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var chatSessionId = await SeedChatSessionAsync(factory);
+        factory.Services.GetRequiredService<IChatLoopScratchpad>().Set(chatSessionId, ValidLoopDocument);
+
+        var post = new HttpRequestMessage(HttpMethod.Post, "/api/v1/agent/current-loop/nodes/ai/edit-field")
+        {
+            Content = JsonContent.Create(new { field = "prompt", oldString = "nowhere in the prompt", newString = "x" }),
+        };
+        post.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        var resp = await client.SendAsync(post);
+        resp.EnsureSuccessStatusCode();
+
+        var ack = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        Assert.False(ack.GetProperty("applied").GetBoolean());
+        Assert.Equal(0, ack.GetProperty("matchCount").GetInt32());
+        Assert.Equal(ValidLoopDocument, factory.Services.GetRequiredService<IChatLoopScratchpad>().Get(chatSessionId));
+    }
+
+    [Fact]
+    public async Task GetLoopNode_returns_the_decoded_node()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var chatSessionId = await SeedChatSessionAsync(factory);
+        factory.Services.GetRequiredService<IChatLoopScratchpad>().Set(chatSessionId, ValidLoopDocument);
+
+        var get = new HttpRequestMessage(HttpMethod.Get, "/api/v1/agent/current-loop/nodes/ai");
+        get.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        var resp = await client.SendAsync(get);
+        resp.EnsureSuccessStatusCode();
+
+        var node = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        Assert.Equal("AI", node.GetProperty("type").GetString());
+        Assert.Equal("Review the code.", node.GetProperty("config").GetProperty("prompt").GetString());
+    }
+
+    [Fact]
+    public async Task GetLoopNode_reports_not_open_when_no_loop_is_stashed()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var chatSessionId = await SeedChatSessionAsync(factory);
+
+        var get = new HttpRequestMessage(HttpMethod.Get, "/api/v1/agent/current-loop/nodes/ai");
+        get.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        var resp = await client.SendAsync(get);
+        resp.EnsureSuccessStatusCode();
+
+        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        Assert.False(doc.GetProperty("loopEditorOpen").GetBoolean());
+    }
+
+    [Fact]
+    public async Task EditLoopFile_rejects_an_edit_that_breaks_the_graph()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var chatSessionId = await SeedChatSessionAsync(factory);
+        factory.Services.GetRequiredService<IChatLoopScratchpad>().Set(chatSessionId, ValidLoopDocument);
+
+        var post = new HttpRequestMessage(HttpMethod.Post, "/api/v1/agent/current-loop/file/edit")
+        {
+            Content = JsonContent.Create(new { oldString = "\"targetNodeId\":\"ai\"", newString = "\"targetNodeId\":\"nowhere\"" }),
+        };
+        post.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        var resp = await client.SendAsync(post);
+        resp.EnsureSuccessStatusCode();
+
+        var ack = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        Assert.False(ack.GetProperty("applied").GetBoolean());
+        Assert.NotEmpty(ack.GetProperty("validationErrors").EnumerateArray());
+        Assert.Equal(ValidLoopDocument, factory.Services.GetRequiredService<IChatLoopScratchpad>().Get(chatSessionId));
+    }
+
+    [Fact]
+    public async Task ScopedEdit_without_an_open_loop_returns_a_clean_not_open_ack()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var chatSessionId = await SeedChatSessionAsync(factory);
+
+        var post = new HttpRequestMessage(HttpMethod.Post, "/api/v1/agent/current-loop/nodes/ai/edit-field")
+        {
+            Content = JsonContent.Create(new { field = "prompt", oldString = "a", newString = "b" }),
+        };
+        post.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
+        var resp = await client.SendAsync(post);
+        resp.EnsureSuccessStatusCode();
+
+        var ack = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        Assert.False(ack.GetProperty("applied").GetBoolean());
+        Assert.Contains("No loop is open", ack.GetProperty("error").GetString());
     }
 
     [Fact]
