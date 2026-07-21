@@ -67,7 +67,13 @@ export function templateToEdges(template: LoopTemplate): Edge[] {
       sourceHandle,
       targetHandle: "target-handle",
       type: LOOP_EDGE_TYPE,
-      data: { edgeType: edge.edgeType, name: edge.name ?? null },
+      // Round-trip maxTraversals into edge.data so the traversal cap survives a
+      // reload — edgesToLoopNodeEdges reads it back from here on save.
+      data: {
+        edgeType: edge.edgeType,
+        name: edge.name ?? null,
+        maxTraversals: edge.maxTraversals ?? null,
+      },
       animated: edge.edgeType === EdgeType.OnSuccess,
       style: strokeStyle,
       label,

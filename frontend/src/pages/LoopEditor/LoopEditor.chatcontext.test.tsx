@@ -271,4 +271,29 @@ describe("Loop Editor — loop editor context (ADR-0011)", () => {
     expect(labels).toEqual(["Initialize", "Tidy Up"]);
     expect(labels).not.toContain("Boot Up");
   });
+
+  test("save preserves edge maxTraversals (persists the lossless graph, not the export)", async () => {
+    // The export format omits edge maxTraversals; persisting from it would null
+    // the traversal cap. The persist path must use the lossless frozen graph.
+    const templateWithCap = {
+      ...sampleTemplate,
+      edges: [{ ...sampleTemplate.edges[0], maxTraversals: 5 }],
+    };
+    loopTemplateService.getAll.mockResolvedValue([templateWithCap]);
+    aiProviderService.getAll.mockResolvedValue([]);
+    loopTemplateService.validate.mockResolvedValue({ valid: true, errors: [] });
+    loopTemplateService.update.mockResolvedValue({ id: templateWithCap.id });
+
+    renderEditorWithOpenTemplate();
+    await waitFor(() => expect(screen.getByText("Initialize")).toBeTruthy());
+
+    fireEvent.click(screen.getByText("Save"));
+    fireEvent.click(await screen.findByText("Save changes"));
+    await waitFor(() => expect(loopTemplateService.update).toHaveBeenCalled());
+
+    const payload = loopTemplateService.update.mock.calls[0][1] as {
+      edges: Array<{ maxTraversals: number | null }>;
+    };
+    expect(payload.edges[0].maxTraversals).toBe(5);
+  });
 });

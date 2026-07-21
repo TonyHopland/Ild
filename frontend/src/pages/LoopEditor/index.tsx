@@ -310,14 +310,20 @@ export default function LoopEditor() {
   const [errorText, setErrorText] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   // Save-time review gate (ADR-0011): while the diff modal is open, holds the
-  // last-saved vs currently-edited loop JSON AND the frozen export snapshot that
-  // was reviewed. persistSave writes that snapshot (not the live canvas), so an AI
-  // push arriving mid-review can't change what the human actually saves. Null when
-  // the modal is closed.
+  // last-saved vs currently-edited loop JSON AND the frozen graph that was
+  // reviewed. persistSave writes the frozen graph (not the live canvas), so an AI
+  // push arriving mid-review can't change what the human actually saves. Two
+  // representations are kept on purpose: the export `snapshot`/`after` string
+  // drives the whole-document diff view, while `nodes`/`edges` are the lossless
+  // LoopNode[]/LoopNodeEdge[] we persist — the export format omits edge
+  // maxTraversals, so persisting from it would silently drop the traversal cap.
+  // Null when the modal is closed.
   const [saveDiff, setSaveDiff] = useState<{
     before: string;
     after: string;
     snapshot: LoopTemplateExport;
+    nodes: LoopNode[];
+    edges: LoopNodeEdge[];
   } | null>(null);
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [showArchived, setShowArchived] = useState(false);
@@ -551,13 +557,17 @@ export default function LoopEditor() {
 
     // Baseline is the last document actually persisted (lastSavedExportRef), NOT
     // selectedTemplate — an AI edit overwrites selectedTemplate with its own doc,
-    // so diffing against it would hide the AI's change. Snapshot the live canvas
-    // once so the reviewed diff, the persisted payload, and the new baseline are
-    // all the same document even if the canvas mutates while the modal is open.
+    // so diffing against it would hide the AI's change. Freeze the live canvas once
+    // — both the export snapshot (for the diff view/baseline) and the lossless
+    // LoopNode[]/LoopNodeEdge[] (for persistence) — so the reviewed diff, the
+    // persisted payload, and the new baseline are all the same document even if the
+    // canvas mutates while the modal is open.
     const snapshot = buildExportData();
     const after = JSON.stringify(snapshot, null, 2);
     const before = lastSavedExportRef.current;
-    setSaveDiff({ before, after, snapshot });
+    const frozenNodes = nodesToLoopNodes(nodesRef.current);
+    const frozenEdges = edgesToLoopNodeEdges(edgesRef.current);
+    setSaveDiff({ before, after, snapshot, nodes: frozenNodes, edges: frozenEdges });
   };
 
   const cancelSave = () => {
@@ -577,8 +587,12 @@ export default function LoopEditor() {
     setValidationErrors([]);
 
     try {
-      const loopNodes = exportNodesToLoopNodes(pending.snapshot.nodes);
-      const loopEdges = exportEdgesToLoopNodeEdges(pending.snapshot.edges);
+      // Persist the lossless frozen graph, not the export snapshot — the export
+      // format drops edge maxTraversals, so persisting from it would silently null
+      // out any traversal cap the user set. The snapshot is still used for metadata
+      // (name/description/recoveryPolicy) and the diff/baseline strings.
+      const loopNodes = pending.nodes;
+      const loopEdges = pending.edges;
       const validationResult = await loopTemplateService.validate({
         nodes: loopNodes,
         edges: loopEdges,
