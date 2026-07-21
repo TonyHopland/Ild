@@ -508,11 +508,13 @@ function PreviewServiceTable({
 }
 
 /**
- * Repository-wide custom `.env` editor embedded in the Preview tab. The value is
- * a property of the *repository*, not this work item — editing it here is a
- * convenience, so the warning makes the repo-wide, persisted-in-ILD scope explicit.
- * The stored secret is never returned in plaintext (only whether one is set), so
- * the field starts blank and a save replaces it; a blank save is a no-op.
+ * Repository-wide preview environment editor embedded in the Preview tab. Despite
+ * the ".env" label it is NOT a file: the text is stored encrypted in ILD and
+ * injected as environment variables when a preview starts — never written into the
+ * worktree (so it can't be committed) and never returned in plaintext (only whether
+ * one is set). It is a property of the *repository*, not this work item, so the
+ * warning makes the repo-wide, persisted scope explicit. The field starts blank and
+ * a save replaces the stored value; a blank save is a no-op.
  */
 function RepoEnvEditor({
   repository,
@@ -562,9 +564,11 @@ function RepoEnvEditor({
         <span className="preview-env-state">{repository.hasPreviewEnv ? "(set)" : "(none)"}</span>
       </summary>
       <div className="preview-message preview-env-warning" role="note">
-        ⚠ Repository-wide: this is stored in ILD on the <strong>{repository.name}</strong>{" "}
+        ⚠ Repository-wide: stored encrypted in ILD on the <strong>{repository.name}</strong>{" "}
         repository and applies to <strong>every</strong> work item that uses it, not just this one.
-        It persists across runs and takes effect on the next preview start.
+        It is injected as environment variables when a preview starts — never written to a file in
+        the worktree, so it can't be committed to the repo — and takes effect on the next preview
+        start.
       </div>
       <textarea
         className="preview-config-editor preview-env-editor"
@@ -574,13 +578,14 @@ function RepoEnvEditor({
         onChange={(e) => setValue(e.target.value)}
         placeholder={
           repository.hasPreviewEnv
-            ? "•••••• (a custom .env is set — type to replace it)"
+            ? "•••••• (set — type to replace it)"
             : "KEY=value\n# injected into preview processes as environment variables"
         }
       />
       <div className="preview-config-toolbar">
         <span className="preview-message">
-          {message ?? "Injected into preview processes; per-service ild.config env still wins."}
+          {message ??
+            "Injected as env vars on preview start; per-service ild.config env still wins."}
         </span>
         <div className="preview-config-buttons">
           <button

@@ -292,9 +292,10 @@ export default function Repositories() {
                   spellCheck={false}
                 />
                 <span className="repo-hint">
-                  Injected into preview install steps and services. Stored encrypted; the
-                  per-service ild.config.json env still overrides these. Leave blank to keep the
-                  current value.
+                  Stored encrypted in ILD and injected as environment variables into preview install
+                  steps and services on start — never written to a file in the worktree, so it can't
+                  be committed. The per-service ild.config.json env still overrides these. Leave
+                  blank to keep the current value.
                 </span>
               </div>
               <div className="form-group">

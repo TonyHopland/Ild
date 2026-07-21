@@ -3,10 +3,21 @@ using ILD.Data.DTOs;
 namespace ILD.Core.Services.Interfaces;
 
 /// <param name="CustomEnv">
-/// Raw text of the repository's custom <c>.env</c> file (see
-/// <c>Repository.PreviewEnv</c>), or null. Parsed at injection time and merged into
-/// every preview process's environment as a repo-wide baseline: base defaults lose
-/// to it, and the per-service <c>ild.config.json</c> env still overrides it.
+/// Raw text of the repository's custom <c>.env</c> (see <c>Repository.PreviewEnv</c>),
+/// or null. Parsed at injection time and merged into every preview process's
+/// environment as a repo-wide baseline: base defaults lose to it, and the per-service
+/// <c>ild.config.json</c> env still overrides it.
+/// <para>
+/// Security model: this text is stored encrypted at rest (via <c>SecretProtector</c>)
+/// and is injected only as <em>process environment variables</em> on the preview
+/// service/install <see cref="System.Diagnostics.ProcessStartInfo"/> — it is never
+/// written to a file in the worktree, so it cannot be staged by a run's
+/// <c>git add -A</c> and pushed into a PR. It also never enters the coding-agent's
+/// own process environment, and the agent-facing API does not return it, so an agent
+/// can't read it back. This env-var-only injection is deliberately preferred over
+/// materialising a <c>.env</c> file, which would be both committable and directly
+/// readable.
+/// </para>
 /// </param>
 public sealed record WorktreePreviewStartOptions(
     string? ProfileName = null,
