@@ -6,6 +6,8 @@ obj/
 *.cache
 ProjectAssets.json
 project.lock.json
+TestResults/
+*.trx
 
 ## Node
 node_modules/
