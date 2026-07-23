@@ -35,6 +35,9 @@ public class ManagedAgentServiceTests : IDisposable
         public bool ProduceBinary = true;
         // Simulates the container umask 002: npm leaves the tree group-writable.
         public bool GroupWritableInstall;
+        // Mode of the --prefix dir observed at the moment the install runs, i.e.
+        // while the tree is half-built. Null until an install happens.
+        public UnixFileMode? PrefixModeDuringInstall;
         public List<IReadOnlyList<string>> Calls { get; } = new();
 
         // Concurrency instrumentation: when InstallGate is set, an install
@@ -65,6 +68,8 @@ public class ManagedAgentServiceTests : IDisposable
                         await InstallGate.Task;
 
                     var prefix = ArgValue(args, "--prefix")!;
+                    if (OperatingSystem.IsLinux())
+                        PrefixModeDuringInstall = File.GetUnixFileMode(prefix);
                     if (InstallSucceeds && ProduceBinary)
                     {
                         var binDir = Path.Combine(prefix, "node_modules", ".bin");
@@ -206,6 +211,40 @@ public class ManagedAgentServiceTests : IDisposable
         var offenders = AgentWritableEntries(agentRoot);
         Assert.True(offenders.Count == 0,
             "agent-writable after install: " + string.Join(", ", offenders));
+    }
+
+    [Fact]
+    public async Task Install_keeps_the_version_tree_closed_to_the_agent_while_npm_runs()
+    {
+        // The post-install state is not enough: npm builds node_modules as the
+        // orchestrator under umask 002, inheriting the shared group, so the tree is
+        // agent-writable for the whole install — and the orchestrator execs that
+        // very tree. Stripping write only works once the tree is finished, so the
+        // version dir must be closed to the agent WHILE it is being assembled.
+        if (!OperatingSystem.IsLinux()) return;
+
+        var runner = new FakeRunner { VersionAfterInstall = "0.80.2", GroupWritableInstall = true };
+        var handler = new RegistryHandler { Version = "0.80.2" };
+        var service = CreateService(runner, handler, agentUser: "agent");
+
+        await service.UpdateAsync(_agent.Key);
+
+        var during = runner.PrefixModeDuringInstall;
+        Assert.NotNull(during);
+        Assert.False(during!.Value.HasFlag(UnixFileMode.GroupExecute),
+            "agent could traverse into the half-built install tree");
+        Assert.False(during!.Value.HasFlag(UnixFileMode.GroupWrite));
+        Assert.False(during!.Value.HasFlag(UnixFileMode.OtherExecute),
+            "agent could traverse into the half-built install tree");
+        Assert.False(during!.Value.HasFlag(UnixFileMode.OtherWrite));
+
+        // ...and once published it must be traversable and executable again, or the
+        // agent could not run the CLI at all.
+        var versionDir = Directory.EnumerateDirectories(ManagedAgentInstall.VersionsRoot(_dataRoot, _agent)).Single();
+        var after = File.GetUnixFileMode(versionDir);
+        Assert.True(after.HasFlag(UnixFileMode.GroupRead));
+        Assert.True(after.HasFlag(UnixFileMode.GroupExecute));
+        Assert.False(after.HasFlag(UnixFileMode.GroupWrite));
     }
 
     [Fact]

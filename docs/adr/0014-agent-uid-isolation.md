@@ -35,7 +35,13 @@ memory or its private files by virtue of being the same user.
     CLIs are installed onto `/data` at **runtime**, so the boot-time pass has to
     strip group-write that an install introduced (npm writes group-writable under
     the `umask 002` below) — its tripwire checks for excess permission here, not
-    just missing permission as the read/write one does.
+    just missing permission as the read/write one does. During the install itself
+    the version directory is closed to the agent outright (owner-only) and only
+    reopened once the tree is complete and write has been stripped: npm builds
+    `node_modules` as the orchestrator under `umask 002` with the shared group
+    inherited from the setgid parent, so it is agent-writable while it is being
+    assembled — and it is published before the `current` pointer flips to it, so
+    the tree the pointer names is never one the agent could still edit.
 
   `/data` itself is mode `0711`: `agent` can traverse it to reach the shared
   subtrees by exact path but cannot list it or read private sibling files.
@@ -150,10 +156,6 @@ rather than overlooked:
   agent can trigger it itself through the ILD MCP tools. Capabilities are stripped
   from it (above), so the ceiling is `ild`, not root — but it remains a route.
   Moving the preview to the agent uid outright would close it.
-- **`AIProviderService.RunShellAsync` spawns a shell without the capability
-  strip.** It has no production caller today (its `ExecuteToolAsync` entry point
-  is unreachable), so it is latent rather than live; it should be wrapped the
-  next time that file is touched.
 - **The shared credential store is writable by the agent**, so it can write e.g.
   `.claude/settings.json` hooks, which then execute as `ild` when a human opens
   the provider login terminal.
@@ -185,8 +187,10 @@ attacker-controlled input on the orchestrator side.
   bounding set: without this, hijacking one of those commands would have escalated
   from "runs as the orchestrator" to "runs as container root" — the uid split
   would have _raised_ the ceiling of a successful escape while lowering its
-  everyday reach. `ProcessRunner` and both preview spawn sites therefore go
-  through `AgentIsolation.DropInheritedCapabilities`, which wraps them in
+  everyday reach. Every orchestrator-side spawn that can reach agent-authored
+  input therefore goes through `AgentIsolation.DropInheritedCapabilities` —
+  `ProcessRunner` (git, npm), `AIProviderService.RunShellAsync`, and both
+  `WorktreePreviewService` spawn sites — which wraps them in
   `setpriv --inh-caps=-all --ambient-caps=-all` (no uid change, needs no
   privilege).
 - Splitting `$HOME` means any CLI state **not** listed in

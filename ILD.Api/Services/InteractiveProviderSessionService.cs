@@ -61,10 +61,11 @@ public sealed class InteractiveProviderSessionService
             // has to be performed by the uid that later has to read them, or the
             // agent reads as logged-out until the next boot repair. It also means
             // this is no longer a second, unrouted agent-CLI launch path.
+            // The routed command carries the environment the crossing requires
+            // (HOME, so the TUI writes credentials into the agent's home rather
+            // than the orchestrator's); applying it is not optional.
             var routed = AgentIsolation.RouteCommand(binaryPath, Array.Empty<string>());
-            var environment = new Dictionary<string, string>();
-            if (AgentIsolation.AgentHome is { } agentHome)
-                environment["HOME"] = agentHome;
+            var environment = new Dictionary<string, string>(routed.Environment);
 
             var options = new PtyOptions
             {

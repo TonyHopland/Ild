@@ -150,6 +150,13 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         // versions/ would let the agent drop in its own version tree regardless of
         // any mode on the files themselves.
         ProtectAgentRoot(agent);
+        // ...and close the version dir outright for the duration of the install.
+        // npm creates the whole node_modules tree as the orchestrator under the
+        // container's umask 002, inheriting the shared group from the setgid
+        // parent, so it is agent-writable while it is being assembled — and this
+        // is the tree the orchestrator itself later execs. Stripping write only
+        // works on a finished tree, so block traversal instead until it is one.
+        AgentIsolation.HideFromAgent(versionDir, _agentUser);
 
         var spec = $"{agent.NpmPackage}@latest";
 
@@ -185,6 +192,13 @@ public sealed partial class ManagedAgentService : IManagedAgentService
             var binary = ManagedAgentInstall.BinaryIn(versionDir, agent);
             if (!File.Exists(binary))
                 throw new InvalidOperationException($"npm install of {spec} did not produce the expected '{agent.BinaryName}' binary.");
+
+            // Publish the finished tree BEFORE the pointer flips: strip write from
+            // everything npm just wrote, then reopen the version dir so the agent
+            // can traverse and exec it. Doing this after the swap would leave the
+            // agent able to rewrite the tree `current` already points at.
+            AgentIsolation.ProtectFromAgentWrites(versionDir, _agentUser);
+            AgentIsolation.AllowAgentReadExecute(versionDir, _agentUser);
 
             SwapActiveVersion(agent, versionId);
             _logger?.LogInformation("Installed managed agent {Agent} version dir {VersionId} from {Spec}", agent.Key, versionId, spec);
@@ -234,8 +248,12 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         Directory.CreateDirectory(Path.GetDirectoryName(pointer)!);
         var tmp = Path.Combine(ManagedAgentInstall.AgentRoot(_dataRoot, agent), $".current.{versionId}.tmp");
         File.WriteAllText(tmp, versionId);
+        // Protect before the rename, not after: the temp file is created 0664
+        // under umask 002 and File.Move preserves the mode, so protecting
+        // afterwards would leave a window where the live pointer — which decides
+        // which binary the orchestrator execs — is agent-writable.
+        AgentIsolation.ProtectFromAgentWrites(tmp, _agentUser);
         File.Move(tmp, pointer, overwrite: true);
-        ProtectAgentRoot(agent);
     }
 
     /// <summary>

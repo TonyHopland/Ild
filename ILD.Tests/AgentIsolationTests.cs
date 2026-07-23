@@ -127,6 +127,14 @@ public class AgentIsolationTests
         // happened to be set, so assert it holds whatever the environment says.
         Assert.True(Path.IsPathRooted(AgentIsolation.PrivateRoot),
             $"PrivateRoot must be absolute, was '{AgentIsolation.PrivateRoot}'");
+
+        // Reading only the ambient environment would exercise the (already
+        // rooted) fallback and never the configured branch that actually broke,
+        // so drive the resolver directly with a relative value.
+        var fromRelative = AgentIsolation.ResolvePrivateRoot("relative/priv");
+        Assert.True(Path.IsPathRooted(fromRelative),
+            $"a configured relative root must still resolve absolute, was '{fromRelative}'");
+        Assert.True(Path.IsPathRooted(AgentIsolation.ResolvePrivateRoot(null)));
     }
 
     [Fact]
@@ -277,7 +285,7 @@ public class AgentIsolationTests
     public void RouteCommand_wraps_a_pty_launch_to_the_agent_uid()
     {
         var routed = AgentIsolation.RouteCommand("/data/agents/claude-code/bin/claude",
-            Array.Empty<string>(), agentUser: "agent", agentGroup: "agent");
+            Array.Empty<string>(), agentUser: "agent", agentGroup: "agent", agentHome: "/home/agent");
 
         Assert.Equal("setpriv", routed.FileName);
         Assert.Equal(new[]
@@ -293,10 +301,32 @@ public class AgentIsolationTests
     }
 
     [Fact]
+    public void RouteCommand_carries_the_agent_home_with_the_command()
+    {
+        // Setting HOME is half of crossing to the agent uid, so it travels WITH
+        // the routed command. If a caller could get the setpriv wrap without it,
+        // the login TUI would write credentials into the orchestrator's home and
+        // every later run would read as logged-out.
+        var routed = AgentIsolation.RouteCommand("claude", Array.Empty<string>(),
+            agentUser: "agent", agentGroup: "agent", agentHome: "/home/agent");
+
+        Assert.Equal("/home/agent", routed.Environment["HOME"]);
+    }
+
+    [Fact]
+    public void RouteCommand_carries_no_environment_when_isolation_is_off()
+    {
+        var routed = AgentIsolation.RouteCommand("claude", Array.Empty<string>(),
+            agentUser: null, agentGroup: null, agentHome: "/home/agent");
+
+        Assert.Empty(routed.Environment);
+    }
+
+    [Fact]
     public void RouteCommand_is_a_noop_when_isolation_is_off()
     {
         var routed = AgentIsolation.RouteCommand("claude", new[] { "--version" },
-            agentUser: null, agentGroup: null);
+            agentUser: null, agentGroup: null, agentHome: null);
 
         Assert.Equal("claude", routed.FileName);
         Assert.Equal(new[] { "--version" }, routed.Arguments);

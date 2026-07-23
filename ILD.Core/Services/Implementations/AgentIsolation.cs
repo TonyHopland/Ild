@@ -4,7 +4,7 @@ namespace ILD.Core.Services.Implementations;
 
 /// <summary>
 /// The app side of running the coding agent under its own, lower-trust OS user
-/// (<c>docs/adr/0014-agent-uid-isolation.md</c>). It owns three jobs, all of them
+/// (<c>docs/adr/0014-agent-uid-isolation.md</c>). It owns four jobs, all of them
 /// expressed through <c>setpriv</c> and Unix modes:
 ///
 /// <list type="number">
@@ -17,8 +17,12 @@ namespace ILD.Core.Services.Implementations;
 ///   controls.</item>
 ///   <item><b>Placing files both uids must share</b> — <see cref="ScratchRoot"/>,
 ///   the directory whose group/setgid setup lets the two uids hand files back and
-///   forth, and <see cref="ProtectFromAgentWrites(string)"/> for the trees the
-///   agent may execute but must never modify.</item>
+///   forth, and <see cref="ProtectFromAgentWrites(string)"/> /
+///   <see cref="HideFromAgent(string)"/> / <see cref="AllowAgentReadExecute(string)"/>
+///   for the trees the agent may execute but must never modify.</item>
+///   <item><b>Placing files only the orchestrator may see</b> —
+///   <see cref="PrivateRoot"/>, an owner-only root for state that would be a way
+///   back across the boundary if the agent could read or plant it.</item>
 /// </list>
 ///
 /// <para>
@@ -80,11 +84,13 @@ public static class AgentIsolation
     public static string? AgentUser => NonEmpty(Environment.GetEnvironmentVariable(AgentUserEnvVar));
 
     /// <summary>
-    /// The agent user's home, or <c>null</c> when unset. Spawn APIs that build
-    /// their own environment (the interactive terminal's PTY) need it explicitly;
-    /// <see cref="Route(ProcessStartInfo)"/> applies it to the psi itself.
+    /// The agent user's home, or <c>null</c> when unset. Deliberately not public:
+    /// setting <c>HOME</c> is half of crossing to the agent uid, so both
+    /// <see cref="Route(ProcessStartInfo)"/> and
+    /// <see cref="RouteCommand(string, IReadOnlyList{string})"/> apply it
+    /// themselves rather than leaving callers to remember it.
     /// </summary>
-    public static string? AgentHome => NonEmpty(Environment.GetEnvironmentVariable(AgentHomeEnvVar));
+    private static string? AgentHome => NonEmpty(Environment.GetEnvironmentVariable(AgentHomeEnvVar));
 
     /// <summary>
     /// Rewrite <paramref name="psi"/> in place so its command runs as the
@@ -176,21 +182,48 @@ public static class AgentIsolation
     public static AgentCommand RouteCommand(string fileName, IReadOnlyList<string> arguments)
         => RouteCommand(fileName, arguments,
             AgentUser,
-            NonEmpty(Environment.GetEnvironmentVariable(AgentGroupEnvVar)));
+            NonEmpty(Environment.GetEnvironmentVariable(AgentGroupEnvVar)),
+            AgentHome);
 
     /// <inheritdoc cref="RouteCommand(string, IReadOnlyList{string})"/>
-    public static AgentCommand RouteCommand(string fileName, IReadOnlyList<string> arguments, string? agentUser, string? agentGroup)
+    public static AgentCommand RouteCommand(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        string? agentUser,
+        string? agentGroup,
+        string? agentHome)
     {
         var user = NonEmpty(agentUser);
-        if (user is null) return new AgentCommand(fileName, arguments);
+        if (user is null)
+            return new AgentCommand(fileName, arguments, EmptyEnvironment);
 
         var argv = new List<string>(BuildSetprivArgs(user, NonEmpty(agentGroup) ?? user)) { fileName };
         argv.AddRange(arguments);
-        return new AgentCommand(SetprivCommand, argv);
+
+        // The HOME override travels WITH the command, for the same reason Route
+        // applies it to the psi: it is half of the crossing, not an extra the
+        // caller may forget. Forgetting it is silent and expensive — the login TUI
+        // would write credentials into the orchestrator's home and every later run
+        // would read as logged-out, the exact failure routing the terminal to the
+        // agent uid exists to prevent.
+        var environment = NonEmpty(agentHome) is { } home
+            ? new Dictionary<string, string>(StringComparer.Ordinal) { ["HOME"] = home }
+            : EmptyEnvironment;
+
+        return new AgentCommand(SetprivCommand, argv, environment);
     }
 
-    /// <summary>A command line, possibly rewritten to cross to the agent uid.</summary>
-    public readonly record struct AgentCommand(string FileName, IReadOnlyList<string> Arguments);
+    private static readonly IReadOnlyDictionary<string, string> EmptyEnvironment =
+        new Dictionary<string, string>(StringComparer.Ordinal);
+
+    /// <summary>
+    /// A command line, possibly rewritten to cross to the agent uid, together with
+    /// the environment overrides that crossing requires. Callers must apply both.
+    /// </summary>
+    public readonly record struct AgentCommand(
+        string FileName,
+        IReadOnlyList<string> Arguments,
+        IReadOnlyDictionary<string, string> Environment);
 
     /// <summary>
     /// The <c>setpriv</c> argument list, up to and including the <c>--</c>
@@ -312,9 +345,18 @@ public static class AgentIsolation
     /// authenticated clone/fetch/push. Making it unconditional means no
     /// environment can reintroduce that.
     /// </remarks>
-    public static string PrivateRoot
+    public static string PrivateRoot => ResolvePrivateRoot(Environment.GetEnvironmentVariable(PrivateRootEnvVar));
+
+    /// <inheritdoc cref="PrivateRoot"/>
+    /// <param name="configured">
+    /// The configured root, or null/blank for the default. Explicit form so the
+    /// absolute-path guarantee is testable for a CONFIGURED value too — reading
+    /// only the ambient environment would exercise the (already rooted) fallback
+    /// and never the branch that actually broke.
+    /// </param>
+    public static string ResolvePrivateRoot(string? configured)
         => Path.GetFullPath(
-            NonEmpty(Environment.GetEnvironmentVariable(PrivateRootEnvVar))
+            NonEmpty(configured)
             ?? Path.Combine(Path.GetTempPath(), "ild-orchestrator-private"));
 
     /// <summary>
@@ -364,6 +406,67 @@ public static class AgentIsolation
     /// </summary>
     public static void ProtectFromAgentWrites(string path)
         => ProtectFromAgentWrites(path, AgentUser);
+
+    /// <summary>
+    /// Make a directory unreachable by the agent uid entirely (owner-only), for
+    /// use while its contents are still being assembled.
+    ///
+    /// <para>
+    /// <see cref="ProtectFromAgentWrites(string)"/> can only be applied to a
+    /// finished tree: it strips write from what is already there, so during a
+    /// runtime <c>npm install</c> — which creates the whole
+    /// <c>node_modules</c> tree as the orchestrator under the container's
+    /// <c>umask 002</c>, inheriting the shared group from the setgid parent — the
+    /// agent would be free to overwrite files in the very tree the orchestrator
+    /// later execs as itself. Closing the one parent directory is enough and is a
+    /// single chmod: the agent cannot traverse into it however permissive the
+    /// modes beneath happen to be mid-install.
+    /// </para>
+    ///
+    /// <para>Reopened with <see cref="AllowAgentReadExecute"/> once the tree is complete.</para>
+    /// </summary>
+    public static void HideFromAgent(string path) => HideFromAgent(path, AgentUser);
+
+    /// <inheritdoc cref="HideFromAgent(string)"/>
+    public static void HideFromAgent(string path, string? agentUser)
+    {
+        if (NonEmpty(agentUser) is null || !OperatingSystem.IsLinux())
+            return;
+
+        TrySetMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+    }
+
+    /// <summary>
+    /// Reopen a directory closed by <see cref="HideFromAgent(string)"/> so the
+    /// agent can traverse and read it — the inverse, and the step that publishes a
+    /// finished install. Call it only after
+    /// <see cref="ProtectFromAgentWrites(string)"/> has stripped write from the
+    /// contents, so the tree becomes readable and executable but never writable.
+    /// </summary>
+    public static void AllowAgentReadExecute(string path) => AllowAgentReadExecute(path, AgentUser);
+
+    /// <inheritdoc cref="AllowAgentReadExecute(string)"/>
+    public static void AllowAgentReadExecute(string path, string? agentUser)
+    {
+        if (NonEmpty(agentUser) is null || !OperatingSystem.IsLinux())
+            return;
+
+        try
+        {
+            TrySetMode(path, File.GetUnixFileMode(path)
+                | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
+                | UnixFileMode.OtherExecute);
+        }
+        catch (IOException) { /* best effort */ }
+        catch (UnauthorizedAccessException) { /* best effort */ }
+    }
+
+    private static void TrySetMode(string path, UnixFileMode mode)
+    {
+        try { File.SetUnixFileMode(path, mode); }
+        catch (IOException) { /* best effort */ }
+        catch (UnauthorizedAccessException) { /* best effort */ }
+    }
 
     /// <inheritdoc cref="ProtectFromAgentWrites(string)"/>
     public static void ProtectFromAgentWrites(string path, string? agentUser)
