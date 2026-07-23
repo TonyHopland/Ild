@@ -4,6 +4,14 @@ using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations;
 
+/// <summary>
+/// Runs orchestrator-side subprocesses (git, npm agent installs) as the
+/// orchestrator's own uid. This is deliberately <em>not</em> routed through
+/// <see cref="Adapters.AgentUserLauncher"/> (ADR-0014): those are trusted
+/// operations that need to write the private <c>/data</c> tree (the repo store,
+/// agent installs) the agent uid cannot touch. Only the coding-agent CLI launch
+/// crosses to the lower-trust agent user.
+/// </summary>
 public sealed class ProcessRunner : IProcessRunner
 {
     private readonly ILogger<ProcessRunner>? _logger;

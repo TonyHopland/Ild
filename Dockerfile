@@ -72,10 +72,18 @@ ARG WITH_CHROME=0
 ARG WITH_CERTS=0
 ARG APP_UID=10001
 ARG APP_GID=10001
+# Second, lower-trust user the coding-agent CLI runs as, plus the group both it
+# and the orchestrator share for the worktree + /data agent installs (ADR-0014).
+ARG AGENT_UID=10002
+ARG AGENT_GID=10002
+ARG SHARED_GID=10003
 
 # Install base utilities and optional tools before copying source so Docker
 # layer caching skips tool installs when only source code changes.
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates gosu netcat-openbsd && \
+# libcap2-bin (capsh) + util-linux (setpriv): the entrypoint keeps ambient
+# CAP_SETUID/SETGID on the orchestrator so it can drop the agent CLI to a second
+# uid; acl (setfacl): default ACLs make shared dirs read/write across both uids.
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates gosu netcat-openbsd libcap2-bin util-linux acl && \
     mkdir -p /usr/local/share/ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
@@ -95,6 +103,25 @@ RUN existing_group="$(getent group "${APP_GID}" | cut -d: -f1 || true)" && \
     elif [ -z "$existing_user" ]; then \
       useradd --uid ${APP_UID} --gid ${APP_GID} --create-home --home-dir /home/ild --shell /usr/sbin/nologin ild; \
     fi
+
+# Create the lower-trust agent user and the shared group (ADR-0014). The coding
+# agent CLI runs as `agent` so it no longer shares the orchestrator's uid; the
+# `ild-agents` group is what grants both users access to the worktree tree and
+# the /data agent installs, while /data's secrets stay ild-only. Both users are
+# members of the shared group; the runtime paths' ownership/ACLs are applied by
+# the entrypoint (volumes overlay any build-time perms).
+RUN if [ -z "$(getent group "${SHARED_GID}" | cut -d: -f1 || true)" ]; then \
+      groupadd --gid ${SHARED_GID} ild-agents; \
+    fi && \
+    if [ -z "$(getent group "${AGENT_GID}" | cut -d: -f1 || true)" ]; then \
+      groupadd --gid ${AGENT_GID} agent; \
+    fi && \
+    if [ -z "$(getent passwd "${AGENT_UID}" | cut -d: -f1 || true)" ]; then \
+      useradd --uid ${AGENT_UID} --gid ${AGENT_GID} --create-home --home-dir /home/agent --shell /usr/sbin/nologin agent; \
+    fi && \
+    usermod -aG ild-agents ild && \
+    usermod -aG ild-agents agent && \
+    chmod 0755 /home/agent
 
 # Coding agents (Pi, OpenCode, Claude Code) are intentionally NOT baked into
 # the image. They are installed on demand onto the persistent /data volume
@@ -163,8 +190,30 @@ COPY --from=frontend-build --chown=ild:ild /app/frontend/dist ./wwwroot
 ENV HOME=/home/ild
 ENV ILD_DATA_PATH=/data
 ENV ILD_WORKTREES_PATH=/worktrees
-RUN mkdir -p /data /worktrees && \
-  chown ild:ild /app /data /worktrees
+
+# uid-isolation wiring (ADR-0014). The AGENT_*/SHARED_GROUP/RUNTIME_AMBIENT_CAPS/
+# SHARED_RW_DIRS/DATA_TRAVERSE_DIRS vars drive the entrypoint's two-uid setup
+# (they are unset in Dockerfile.WorkItemServer, so its entrypoint keeps the
+# single-uid gosu drop). The ILD_AGENT_* vars are read by the app itself
+# (AgentUserLauncher) to drop each agent-CLI launch to the agent uid.
+ENV AGENT_USER=agent
+ENV AGENT_GROUP=agent
+ENV AGENT_HOME=/home/agent
+ENV SHARED_GROUP=ild-agents
+ENV RUNTIME_AMBIENT_CAPS=cap_setuid,cap_setgid
+ENV SHARED_RW_DIRS="/worktrees /home/ild/.agent-config /data/agents /data/repos /data/chat-sessions"
+ENV DATA_TRAVERSE_DIRS=/data
+ENV ILD_AGENT_USER=agent
+ENV ILD_AGENT_GROUP=agent
+ENV ILD_AGENT_HOME=/home/agent
+
+# Baseline ownership; the entrypoint finalizes modes + default ACLs on the
+# volume-mounted paths at startup (a named volume overlays these build-time
+# perms). /worktrees and the agent-config store are group-owned by the shared
+# group up front; /data stays ild-private and is opened to traverse-only later.
+RUN mkdir -p /data /worktrees /home/ild/.agent-config && \
+  chown ild:ild /app /data && \
+  chown ild:ild-agents /worktrees /home/ild/.agent-config
 
 COPY entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh

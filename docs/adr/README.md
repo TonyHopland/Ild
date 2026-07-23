@@ -16,5 +16,6 @@ Short records of architectural decisions that are **hard to reverse, surprising 
 | [0011](./0011-context-aware-chat.md)                  | Context-aware chat: fixed scratch cwd, worktree by add-dir, client-applied loop edits |
 | [0012](./0012-ghcr-image-tagging-strategy.md)         | GHCR image tagging: `latest` is the newest release, not `main`                        |
 | [0013](./0013-retained-chat-history.md)               | Retained chat history: many chats per user, deleted only on demand                    |
+| [0014](./0014-agent-uid-isolation.md)                 | The coding agent runs under a separate OS user from the orchestrator                  |
 
 New ADRs use the next sequential number; see the format in `.agents/skills/grill-with-docs/ADR-FORMAT.md`.

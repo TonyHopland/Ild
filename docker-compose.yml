@@ -78,12 +78,18 @@ services:
       - GIT_COMMITTER_NAME
       - GIT_COMMITTER_EMAIL
     volumes:
+      # The orchestrator runs as `ild`; the coding-agent CLI runs as a separate,
+      # lower-trust `agent` uid (ADR-0014). /worktrees and the /data agent/repo
+      # subtrees are shared between the two via the `ild-agents` group (setgid +
+      # default ACLs applied by the entrypoint); the rest of /data stays
+      # ild-private. No compose-side ownership tweaks are needed — the image and
+      # entrypoint own the permission scheme.
       - ild-data:/data
       - ild-worktrees:/worktrees
       # One volume to persist all agent CLI config/login dirs (.claude,
-      # .opencode, .pi, ...) across image rebuilds. The entrypoint
-      # symlinks each name listed in AGENT_CONFIG_DIRS from $HOME into
-      # this store, so binary installs in the image stay updatable.
+      # .opencode, .pi, ...) across image rebuilds. The entrypoint symlinks each
+      # name listed in AGENT_CONFIG_DIRS from BOTH homes into this shared store,
+      # so login (as ild) and the agent run (as agent) see one credential set.
       - ild-config:/home/ild/.agent-config
       # Host .gitconfig provides the default commit identity. Point GIT_CONFIG
       # at a different file, or override just the name/email via the

@@ -58,13 +58,13 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             Process? proc = null;
             try
             {
-                proc = Process.Start(BuildRunProcessStartInfo(
+                proc = Process.Start(AgentUserLauncher.Route(BuildRunProcessStartInfo(
                     binaryPath,
                     worktreePath,
                     rendered,
                     opencodeModel,
                     opencodeConfigJson,
-                    sessionIdToUse));
+                    sessionIdToUse)));
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
@@ -72,14 +72,14 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                 {
                     try
                     {
-                        proc = Process.Start(BuildRunProcessStartInfo(
+                        proc = Process.Start(AgentUserLauncher.Route(BuildRunProcessStartInfo(
                             binaryPath,
                             worktreePath,
                             rendered,
                             opencodeModel,
                             opencodeConfigJson,
                             sessionIdToUse,
-                            useWorktreeAsWorkingDirectory: false));
+                            useWorktreeAsWorkingDirectory: false)));
                     }
                     catch (Exception retryEx) when (retryEx is InvalidOperationException or IOException)
                     {
@@ -263,7 +263,9 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             foreach (var argument in arguments)
                 psi.ArgumentList.Add(argument);
 
-            proc = Process.Start(psi);
+            // Session export/import must run as the same agent user as the run
+            // itself, or it would look for the session under the wrong home.
+            proc = Process.Start(AgentUserLauncher.Route(psi));
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException)
         {
@@ -272,7 +274,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                 var retryPsi = BuildProcessStartInfo(binaryPath, worktreePath, useWorktreeAsWorkingDirectory: false);
                 foreach (var argument in arguments)
                     retryPsi.ArgumentList.Add(argument);
-                proc = Process.Start(retryPsi);
+                proc = Process.Start(AgentUserLauncher.Route(retryPsi));
             }
             else
             {

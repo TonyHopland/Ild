@@ -50,6 +50,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
 
             var sessionDirectory = BuildSessionDirectory(ctx.RunContext.LoopRunId);
             Directory.CreateDirectory(sessionDirectory);
+            EnsureAgentWritable(sessionDirectory);
             PrepareRuntimeFiles(settings);
 
             string? sessionIdToUse = ctx.SessionId;
@@ -70,13 +71,13 @@ public sealed class PiAdapter : CliAgentAdapterBase
             Process? proc;
             try
             {
-                proc = Process.Start(BuildRunProcessStartInfo(
+                proc = Process.Start(AgentUserLauncher.Route(BuildRunProcessStartInfo(
                     settings,
                     worktreePath,
                     rendered,
                     sessionDirectory,
                     sessionIdToUse,
-                    sessionPathToUse));
+                    sessionPathToUse)));
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
@@ -470,6 +471,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
             return;
 
         Directory.CreateDirectory(settings.AgentDirectory);
+        EnsureAgentWritable(settings.AgentDirectory);
         File.WriteAllText(Path.Combine(settings.AgentDirectory, "models.json"), settings.ModelsJsonContent);
 
         // Write the ILD extension so Pi can list/create work items via its tool system.
@@ -477,8 +479,35 @@ public sealed class PiAdapter : CliAgentAdapterBase
         {
             var extensionsDir = Path.Combine(settings.AgentDirectory, "extensions");
             Directory.CreateDirectory(extensionsDir);
+            EnsureAgentWritable(extensionsDir);
             File.WriteAllText(Path.Combine(extensionsDir, "ild.ts"), settings.IldExtensionContent);
         }
+    }
+
+    /// <summary>
+    /// Pi's per-run scratch dirs (session dir, agent dir) live under the
+    /// orchestrator's <c>TMPDIR</c> and are created by the orchestrator, but Pi
+    /// writes its session JSONL into them as the <em>agent</em> uid (ADR-0014).
+    /// When uid isolation is active these live outside any shared-group tree, so
+    /// grant world access on the run-scoped dir alone — a throwaway per-run
+    /// directory — rather than plumbing a shared group down into <c>/tmp</c>.
+    /// A no-op without uid isolation (dirs stay orchestrator-private) and on any
+    /// platform that doesn't support Unix modes.
+    /// </summary>
+    private static void EnsureAgentWritable(string directory)
+    {
+        if (AgentUserLauncher.AgentUser is null || !OperatingSystem.IsLinux())
+            return;
+
+        try
+        {
+            File.SetUnixFileMode(directory,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                | UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute
+                | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
+        }
+        catch (IOException) { /* best effort */ }
+        catch (UnauthorizedAccessException) { /* best effort */ }
     }
 
     private static PiAdapterSettings ResolveSettings(AiProvider provider, Guid loopRunId, IReadOnlyList<string>? selectedToolKeys, Guid? chatSessionId = null)
