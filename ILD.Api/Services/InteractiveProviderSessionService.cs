@@ -48,18 +48,33 @@ public sealed class InteractiveProviderSessionService
         var sessionId = Guid.NewGuid();
         var sessionRoot = Path.Combine(Path.GetTempPath(), "ild-sessions", sessionId.ToString("N"));
         Directory.CreateDirectory(sessionRoot);
+        // The TUI runs as the agent uid (below), so it needs to be able to write
+        // its own cwd, which the orchestrator just created.
+        AgentUserLauncher.ShareScratchDirectory(sessionRoot);
 
         try
         {
+            // Run the login TUI as the *agent* uid, exactly like a run (ADR-0014).
+            // These CLIs write their credentials with owner-only modes
+            // (~/.claude/.credentials.json is 0600, opencode's auth.json likewise),
+            // which no group or ACL grant can widen after the fact — so the login
+            // has to be performed by the uid that later has to read them, or the
+            // agent reads as logged-out until the next boot repair. It also means
+            // this is no longer a second, unrouted agent-CLI launch path.
+            var routed = AgentUserLauncher.RouteCommand(binaryPath, Array.Empty<string>());
+            var environment = new Dictionary<string, string>();
+            if (AgentUserLauncher.AgentHome is { } agentHome)
+                environment["HOME"] = agentHome;
+
             var options = new PtyOptions
             {
                 Name = $"ild-{provider.Type}",
                 Cols = Math.Clamp(initialCols, 20, 500),
                 Rows = Math.Clamp(initialRows, 5, 200),
                 Cwd = sessionRoot,
-                App = binaryPath,
-                CommandLine = Array.Empty<string>(),
-                Environment = new Dictionary<string, string>(),
+                App = routed.FileName,
+                CommandLine = routed.Arguments.ToArray(),
+                Environment = environment,
             };
 
             await PtyWebSocketBridge.RunAsync(socket, options, _logger, cancellationToken);

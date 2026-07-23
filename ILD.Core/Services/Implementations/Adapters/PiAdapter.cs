@@ -49,8 +49,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
             // per-directory config to set for ctx.AdditionalAllowedDirectories.
 
             var sessionDirectory = BuildSessionDirectory(ctx.RunContext.LoopRunId);
-            Directory.CreateDirectory(sessionDirectory);
-            AgentUserLauncher.ShareScratchDirectory(sessionDirectory);
+            CreateAgentWritableDirectory(sessionDirectory);
             PrepareRuntimeFiles(settings);
 
             string? sessionIdToUse = ctx.SessionId;
@@ -251,7 +250,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
             return ManagedSessionRestoreResult.StartFresh();
 
         var restoredPath = BuildSnapshotPath(sessionDirectory, sessionId);
-        Directory.CreateDirectory(Path.GetDirectoryName(restoredPath)!);
+        CreateAgentWritableDirectory(Path.GetDirectoryName(restoredPath)!);
         await File.WriteAllTextAsync(restoredPath, snapshot.SessionJson, ctx.Cancel);
         return ManagedSessionRestoreResult.Use(sessionId, restoredPath);
     }
@@ -468,16 +467,14 @@ public sealed class PiAdapter : CliAgentAdapterBase
             || string.IsNullOrWhiteSpace(settings.ModelsJsonContent))
             return;
 
-        Directory.CreateDirectory(settings.AgentDirectory);
-        AgentUserLauncher.ShareScratchDirectory(settings.AgentDirectory);
+        CreateAgentWritableDirectory(settings.AgentDirectory);
         File.WriteAllText(Path.Combine(settings.AgentDirectory, "models.json"), settings.ModelsJsonContent);
 
         // Write the ILD extension so Pi can list/create work items via its tool system.
         if (!string.IsNullOrWhiteSpace(settings.IldExtensionContent))
         {
             var extensionsDir = Path.Combine(settings.AgentDirectory, "extensions");
-            Directory.CreateDirectory(extensionsDir);
-            AgentUserLauncher.ShareScratchDirectory(extensionsDir);
+            CreateAgentWritableDirectory(extensionsDir);
             File.WriteAllText(Path.Combine(extensionsDir, "ild.ts"), settings.IldExtensionContent);
         }
     }

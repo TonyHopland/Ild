@@ -172,6 +172,14 @@ public sealed partial class ManagedAgentService : IManagedAgentService
             if (!File.Exists(binary))
                 throw new InvalidOperationException($"npm install of {spec} did not produce the expected '{agent.BinaryName}' binary.");
 
+            // The agent execs these binaries but must never be able to rewrite
+            // them — the orchestrator runs the same ones as itself. npm just wrote
+            // the tree group-writable (container umask 002), and the entrypoint's
+            // boot-time pass already ran, so assert the invariant here, where the
+            // files are created, rather than relying on the next restart or on the
+            // volume filesystem supporting the default ACL (ADR-0014).
+            AgentUserLauncher.ProtectFromAgentWrites(versionDir);
+
             SwapActiveVersion(agent, versionId);
             _logger?.LogInformation("Installed managed agent {Agent} version dir {VersionId} from {Spec}", agent.Key, versionId, spec);
         }
@@ -196,6 +204,9 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         var tmp = Path.Combine(ManagedAgentInstall.AgentRoot(_dataRoot, agent), $".current.{versionId}.tmp");
         File.WriteAllText(tmp, versionId);
         File.Move(tmp, pointer, overwrite: true);
+        // Which version is active is the orchestrator's decision, not the agent's:
+        // a group-writable pointer would let the agent redirect every later launch.
+        AgentUserLauncher.ProtectFromAgentWrites(pointer);
     }
 
     /// <summary>

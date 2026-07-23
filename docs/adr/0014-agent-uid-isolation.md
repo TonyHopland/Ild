@@ -77,14 +77,19 @@ ambient`) is empty (a non-root→non-root setuid does not auto-clear caps, so th
   `ProcessRunner` (git, npm) is deliberately **not** routed — those are
   orchestrator operations and must keep running as `ild`.
 
-- **Credentials are shared, secrets are not.** The agent CLIs' login state
-  (`~/.claude`, `~/.opencode`, …) lives in the `/home/ild/.agent-config` volume and
-  is symlinked into **both** home directories, so the interactive login terminal
-  (which still runs as `ild`) and the agent run (as `agent`) see the same store.
-  The store is group-shared, so the orchestrator can read the agent's credentials —
-  that direction is fine (the orchestrator is the trusted side). The property that
-  matters is the reverse: `agent` cannot read `/data`'s private secrets or the
-  orchestrator's process memory.
+- **The login terminal runs as the agent too, because file modes decide.** The
+  agent CLIs' login state (`~/.claude`, `~/.opencode`, …) lives in the
+  `/home/ild/.agent-config` volume, symlinked into **both** home directories. But
+  the group and the default ACL are not enough on their own: these CLIs write
+  their credentials owner-only (`~/.claude/.credentials.json` is `0600`,
+  opencode's `auth.json` likewise), and a `0600` create clamps the ACL mask to
+  nothing, so no group grant can widen it after the fact. The interactive provider
+  terminal therefore runs its CLI as `agent` as well — the uid that later has to
+  read those files creates them — instead of being a second, unrouted CLI launch
+  as `ild`. Files the CLIs do _not_ explicitly restrict (e.g. the
+  `.claude/projects` session transcripts the orchestrator snapshots) are created
+  under the container's `umask 002`, so they stay group-readable.
+  `agent` still cannot read `/data`'s private secrets or the orchestrator's memory.
 
 ## What this does not close
 
@@ -98,6 +103,11 @@ rather than overlooked:
   into the base repo's object store. That also puts each base repo's
   `.git/config` and `.git/hooks` in reach, and the orchestrator's own git runs
   against those as `ild` on every worktree add/fetch.
+- **The preview service executes agent-authored commands as `ild`.** The command
+  comes from the worktree's `ild.config.json`, which the agent writes, and the
+  agent can trigger it itself through the ILD MCP tools. Capabilities are stripped
+  from it (above), so the ceiling is `ild`, not root — but it remains a route.
+  Moving the preview to the agent uid outright would close it.
 - **The shared credential store is writable by the agent**, so it can write e.g.
   `.claude/settings.json` hooks, which then execute as `ild` when a human opens
   the provider login terminal.
@@ -116,11 +126,23 @@ attacker-controlled input on the orchestrator side.
 - The orchestrator holds `CAP_SETUID`/`CAP_SETGID`/`CAP_KILL`. It is the trusted
   component; the untrusted agent holds **no** capabilities (the wrap strips them).
   This mirrors how service managers (nginx master, etc.) retain just enough
-  privilege to fork and signal workers. Because the caps are _ambient_, the
-  orchestrator's other trusted subprocesses (git, npm) inherit them too and simply
-  never use them; the one path that strips them is the agent drop, which is the
-  only untrusted child. Tightening that to strip caps from the other children as
-  well is a cheap future hardening.
+  privilege to fork and signal workers.
+- **Ambient capabilities are stripped from every child that touches
+  agent-authored input, not just from the agent.** Ambient capabilities are
+  inherited by _all_ descendants, in the permitted and effective sets. That would
+  be harmless for children whose input the orchestrator controls, but some
+  orchestrator-side commands exist to execute agent-authored input — the preview
+  service runs the worktree's `ild.config.json` command, and npm/git run against
+  agent-writable `package.json` and `.git/config`/`hooks`. A process with
+  effective `CAP_SETUID` can `setuid(0)`, and an exec with euid 0 is treated as if
+  the file's capability sets were all ones, so its permitted set becomes the full
+  bounding set: without this, hijacking one of those commands would have escalated
+  from "runs as the orchestrator" to "runs as container root" — the uid split
+  would have _raised_ the ceiling of a successful escape while lowering its
+  everyday reach. `ProcessRunner` and both preview spawn sites therefore go
+  through `AgentUserLauncher.DropInheritedCapabilities`, which wraps them in
+  `setpriv --inh-caps=-all --ambient-caps=-all` (no uid change, needs no
+  privilege).
 - Splitting `$HOME` means any CLI state **not** listed in
   `AGENT_CONFIG_DIRS`/`AGENT_CONFIG_FILES` is no longer shared between the login
   terminal and the agent run — it would silently read as logged-out on the agent

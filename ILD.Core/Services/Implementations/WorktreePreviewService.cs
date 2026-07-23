@@ -718,7 +718,9 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             psi.Environment[entry.Key] = entry.Value;
         }
 
-        var process = Process.Start(psi)
+        // As above: resolved.Command originates from the agent-writable
+        // ild.config.json, so drop the inherited ambient capabilities (ADR-0014).
+        var process = Process.Start(Adapters.AgentUserLauncher.DropInheritedCapabilities(psi))
             ?? throw new InvalidOperationException($"Failed to start preview service '{service.Name}'.");
 
         var stdoutTask = PumpStreamAsync(process.StandardOutput, writer, writeGate, cancellationToken);
@@ -1129,7 +1131,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             psi.Environment[entry.Key] = entry.Value;
         }
 
-        using var process = Process.Start(psi)
+        // The command text comes from the worktree's ild.config.json — a file the
+        // agent writes — so it must never inherit the orchestrator's ambient
+        // capabilities (ADR-0014). It still runs as the orchestrator's uid.
+        using var process = Process.Start(Adapters.AgentUserLauncher.DropInheritedCapabilities(psi))
             ?? throw new InvalidOperationException($"Failed to start command '{command}'.");
 
         var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);

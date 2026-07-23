@@ -186,17 +186,29 @@ link_agent_config_dirs() {
       chown "$owner:$group" "$link_parent"
     fi
 
+    migrated=
     if [ -d "$link" ] && [ ! -L "$link" ]; then
       # Image-baked real dir: migrate contents (dotfiles included), keeping any
       # already-persisted file, then drop it so the symlink can take its place.
       cp -an "$link/." "$target/" 2>/dev/null || true
       rm -rf "$link"
+      migrated=1
     elif [ -e "$link" ] && [ ! -L "$link" ]; then
       rm -f "$link"
     fi
 
     ln -sfn "$target" "$link"
-    chown -R "$owner:$group" "$target"
+    # Only the migration branch brings in files of unknown ownership, so only it
+    # needs the recursive pass. Doing it unconditionally re-walked the whole store
+    # (which holds the .claude/projects transcripts) on every boot — defeating the
+    # tripwire optimization in ensure_shared_rw below — and seized files the agent
+    # had created back to the orchestrator, which its own `chgrp`-only repair is
+    # careful not to do.
+    if [ -n "$migrated" ]; then
+      chown -R "$owner:$group" "$target"
+    else
+      chown "$owner:$group" "$target"
+    fi
     chown -h "$owner:$group" "$link"
   done
 }
@@ -314,7 +326,23 @@ wait_for_postgres() {
 # later drop the agent CLI to AGENT_USER under no_new_privs; otherwise a plain
 # gosu drop (no retained capabilities) is used.
 drop_and_exec() {
-  if [ -n "$AGENT_USER" ] && [ -n "$RUNTIME_AMBIENT_CAPS" ] && command -v capsh >/dev/null 2>&1; then
+  if [ -n "$AGENT_USER" ]; then
+    # Fail loudly rather than degrading. Silently falling back to the gosu drop
+    # here would leave the orchestrator without the ambient capabilities while the
+    # app still routes every agent launch through setpriv — so isolation would be
+    # off AND every run would fail with an opaque EPERM. The gosu form would also
+    # drop the supplementary groups the shared dirs depend on.
+    if [ -z "$RUNTIME_AMBIENT_CAPS" ]; then
+      echo "FATAL: AGENT_USER=$AGENT_USER but RUNTIME_AMBIENT_CAPS is empty; the orchestrator could not spawn the agent. Unset AGENT_USER to run single-uid." >&2
+      exit 1
+    fi
+    for tool in capsh setpriv; do
+      if ! command -v "$tool" >/dev/null 2>&1; then
+        echo "FATAL: AGENT_USER=$AGENT_USER requires '$tool' (capsh: libcap2-bin, setpriv: util-linux). Unset AGENT_USER to run single-uid." >&2
+        exit 1
+      fi
+    done
+
     amb=""
     inh=""
     for cap in $(echo "$RUNTIME_AMBIENT_CAPS" | tr ',' ' '); do
@@ -341,6 +369,15 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
     # orchestrator writes under the private /data are unaffected in practice:
     # they stay group `ild`, which the agent is not a member of.
     umask 002
+
+    # The app reads ILD_AGENT_* to decide whether (and to whom) it drops each
+    # agent-CLI launch. Derive them here rather than setting them in the image, so
+    # AGENT_USER is the single switch: clearing it turns isolation off for BOTH
+    # the shell-side setup and the app, instead of leaving the app routing
+    # launches through setpriv without the caps or shared dirs to back it.
+    export ILD_AGENT_USER="$AGENT_USER"
+    export ILD_AGENT_GROUP="$AGENT_GROUP"
+    export ILD_AGENT_HOME="$AGENT_HOME"
 
     # Two-uid mode. Order matters: the private roots (/data) are created and
     # locked to traverse-only FIRST, so that the shared subtrees created beneath

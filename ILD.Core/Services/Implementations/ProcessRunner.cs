@@ -47,7 +47,10 @@ public sealed class ProcessRunner : IProcessRunner
 
         _logger?.LogDebug("exec {File} {Args} cwd={Cwd}", fileName, string.Join(' ', args), workingDirectory);
 
-        using var proc = Process.Start(psi)!;
+        // Runs as the orchestrator, but git/npm act on agent-writable input
+        // (package.json, /data/repos/*/.git/config and hooks), so it must not
+        // inherit the orchestrator's ambient capabilities — see ADR-0014.
+        using var proc = Process.Start(Adapters.AgentUserLauncher.DropInheritedCapabilities(psi))!;
         var stdoutTask = proc.StandardOutput.ReadToEndAsync(ct);
         var stderrTask = proc.StandardError.ReadToEndAsync(ct);
         try

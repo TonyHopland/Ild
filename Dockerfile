@@ -194,11 +194,13 @@ ENV HOME=/home/ild
 ENV ILD_DATA_PATH=/data
 ENV ILD_WORKTREES_PATH=/worktrees
 
-# uid-isolation wiring (ADR-0014). The AGENT_*/SHARED_GROUP/RUNTIME_AMBIENT_CAPS/
-# SHARED_RW_DIRS/DATA_TRAVERSE_DIRS vars drive the entrypoint's two-uid setup
-# (they are unset in Dockerfile.WorkItemServer, so its entrypoint keeps the
-# single-uid gosu drop). The ILD_AGENT_* vars are read by the app itself
-# (AgentUserLauncher) to drop each agent-CLI launch to the agent uid.
+# uid-isolation wiring (ADR-0014). These drive the entrypoint's two-uid setup;
+# they are unset in Dockerfile.WorkItemServer, so its entrypoint keeps the
+# single-uid gosu drop. The app-side ILD_AGENT_* vars are deliberately NOT set
+# here: the entrypoint exports them from AGENT_USER/GROUP/HOME so there is one
+# source of truth. Setting them here independently would mean that clearing
+# AGENT_USER (the documented single-uid escape hatch) left the app still routing
+# every launch through setpriv, failing every run with an opaque EPERM.
 ENV AGENT_USER=agent
 ENV AGENT_GROUP=agent
 ENV AGENT_HOME=/home/agent
@@ -218,9 +220,6 @@ ENV SHARED_RW_DIRS="/worktrees /home/ild/.agent-config /data/repos /data/chat-se
 # across the boundary. The orchestrator still installs/updates them as the owner.
 ENV SHARED_RO_DIRS=/data/agents
 ENV DATA_TRAVERSE_DIRS=/data
-ENV ILD_AGENT_USER=agent
-ENV ILD_AGENT_GROUP=agent
-ENV ILD_AGENT_HOME=/home/agent
 
 # Baseline ownership; the entrypoint finalizes modes + default ACLs on the
 # volume-mounted paths at startup (a named volume overlays these build-time

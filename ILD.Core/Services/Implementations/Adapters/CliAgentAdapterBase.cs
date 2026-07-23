@@ -78,6 +78,20 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
         => Process.Start(AgentUserLauncher.Route(psi));
 
     /// <summary>
+    /// Create a directory the agent must be able to write to. Creating it and
+    /// granting the agent access are one act, for the same reason
+    /// <see cref="StartAgentProcess"/> exists: a later scratch directory added
+    /// with a bare <c>Directory.CreateDirectory</c> would silently leave the agent
+    /// unable to write it. Under uid isolation the agent runs as another uid, so
+    /// an orchestrator-created directory is not writable by it by default.
+    /// </summary>
+    protected static void CreateAgentWritableDirectory(string path)
+    {
+        Directory.CreateDirectory(path);
+        AgentUserLauncher.ShareScratchDirectory(path);
+    }
+
+    /// <summary>
     /// Kill a process and its children. Never throws, but unlike a blind
     /// best-effort kill it reports whether the kill actually took effect:
     /// under uid isolation (ADR-0014) the agent runs with a different real

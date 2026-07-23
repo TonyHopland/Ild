@@ -34,13 +34,13 @@ namespace ILD.Core.Services.Implementations.Adapters;
 /// </summary>
 public static class AgentUserLauncher
 {
-    // INVARIANT: these ILD_AGENT_* vars (read here, by the app) must name the
-    // same user/group/home as the entrypoint's AGENT_USER/AGENT_GROUP/AGENT_HOME
-    // (which set up that user's ownership + ACLs on the shared dirs). They are
-    // kept in agreement by co-located ENV lines in the Dockerfile — a drift would
-    // drop the agent to a uid the entrypoint never provisioned filesystem access
-    // for. The two namespaces exist only to separate the shell-side setup from
-    // the app-side drop.
+    // These ILD_AGENT_* vars are exported by the entrypoint from its own
+    // AGENT_USER/AGENT_GROUP/AGENT_HOME, so the user the app drops to is always
+    // the one whose ownership and ACLs the entrypoint just provisioned, and
+    // clearing AGENT_USER turns isolation off on both sides at once. They are
+    // deliberately not set in the image: an independently-set app-side value
+    // would keep routing launches through setpriv after the shell-side setup had
+    // been switched off.
 
     /// <summary>When set, the OS user the agent CLI is dropped to (e.g. <c>agent</c>).</summary>
     public const string AgentUserEnvVar = "ILD_AGENT_USER";
@@ -64,6 +64,13 @@ public static class AgentUserLauncher
     /// the agent uid can write) off this without duplicating the env lookup.
     /// </summary>
     public static string? AgentUser => NonEmpty(Environment.GetEnvironmentVariable(AgentUserEnvVar));
+
+    /// <summary>
+    /// The agent user's home, or <c>null</c> when unset. Spawn APIs that build
+    /// their own environment (the interactive terminal's PTY) need it explicitly;
+    /// <see cref="Route(ProcessStartInfo)"/> applies it to the psi itself.
+    /// </summary>
+    public static string? AgentHome => NonEmpty(Environment.GetEnvironmentVariable(AgentHomeEnvVar));
 
     /// <summary>
     /// Rewrite <paramref name="psi"/> in place so its command runs as the
@@ -104,29 +111,107 @@ public static class AgentUserLauncher
         if (home is not null)
             psi.Environment["HOME"] = home;
 
+        Wrap(psi, BuildSetprivArgs(user, group));
+        return psi;
+    }
+
+    /// <summary>
+    /// Run a command as the <em>orchestrator's own</em> uid but with no inherited
+    /// capabilities. The entrypoint gives the orchestrator ambient
+    /// <c>CAP_SETUID</c>/<c>CAP_SETGID</c>/<c>CAP_KILL</c>, and ambient capabilities
+    /// are inherited by <em>every</em> descendant in both the permitted and
+    /// effective sets. That is fine for children whose input the orchestrator
+    /// controls, but several orchestrator-side commands execute agent-authored
+    /// input — the preview service runs the worktree's <c>ild.config.json</c>
+    /// command, and npm/git run against agent-writable <c>package.json</c> and
+    /// <c>.git/config</c>/<c>hooks</c>. A process holding effective
+    /// <c>CAP_SETUID</c> can <c>setuid(0)</c>, and an exec with euid 0 is treated
+    /// as if the file's capability sets were all ones, so its permitted set
+    /// becomes the full bounding set: hijacking such a command would escalate
+    /// from "runs as the orchestrator" to "runs as container root". Wrapping them
+    /// here keeps the pre-isolation ceiling.
+    ///
+    /// <para>
+    /// Requires no privilege — dropping capabilities from your own inheritable and
+    /// ambient sets is always permitted. A no-op when uid isolation is off, since
+    /// there are then no ambient capabilities to strip.
+    /// </para>
+    /// </summary>
+    public static ProcessStartInfo DropInheritedCapabilities(ProcessStartInfo psi)
+        => DropInheritedCapabilities(psi, AgentUser);
+
+    /// <inheritdoc cref="DropInheritedCapabilities(ProcessStartInfo)"/>
+    /// <param name="psi">The command to wrap.</param>
+    /// <param name="agentUser">
+    /// Isolation marker — when null/blank this is a no-op. Explicit form so the
+    /// rewrite is testable without mutating global process environment variables.
+    /// </param>
+    public static ProcessStartInfo DropInheritedCapabilities(ProcessStartInfo psi, string? agentUser)
+    {
+        if (NonEmpty(agentUser) is null) return psi;
+
+        Wrap(psi, BuildSetprivArgs(user: null, group: null));
+        return psi;
+    }
+
+    /// <summary>
+    /// The agent-uid wrap for spawn APIs that take a command and argv rather than
+    /// a <see cref="ProcessStartInfo"/> — the interactive provider terminal runs
+    /// its CLI through a PTY. Returns the command unchanged when isolation is off.
+    /// </summary>
+    public static AgentCommand RouteCommand(string fileName, IReadOnlyList<string> arguments)
+        => RouteCommand(fileName, arguments,
+            AgentUser,
+            NonEmpty(Environment.GetEnvironmentVariable(AgentGroupEnvVar)));
+
+    /// <inheritdoc cref="RouteCommand(string, IReadOnlyList{string})"/>
+    public static AgentCommand RouteCommand(string fileName, IReadOnlyList<string> arguments, string? agentUser, string? agentGroup)
+    {
+        var user = NonEmpty(agentUser);
+        if (user is null) return new AgentCommand(fileName, arguments);
+
+        var argv = new List<string>(BuildSetprivArgs(user, NonEmpty(agentGroup) ?? user)) { fileName };
+        argv.AddRange(arguments);
+        return new AgentCommand(SetprivCommand, argv);
+    }
+
+    /// <summary>A command line, possibly rewritten to cross to the agent uid.</summary>
+    public readonly record struct AgentCommand(string FileName, IReadOnlyList<string> Arguments);
+
+    /// <summary>
+    /// The <c>setpriv</c> argument list, up to and including the <c>--</c>
+    /// terminator. With a <paramref name="user"/> it switches uid/gid and loads the
+    /// agent's supplementary groups; without one it only drops capabilities,
+    /// leaving the uid alone.
+    ///
+    /// <para>
+    /// The capability clears are what make the child safe either way. A
+    /// non-root→non-root setuid does NOT auto-clear capabilities, so without them
+    /// the child would keep the orchestrator's. Clearing the inheritable + ambient
+    /// sets is enough: the child's post-exec permitted set is
+    /// <c>(inheritable &amp; file-caps) | ambient</c> = empty. Clearing the bounding
+    /// set too would need <c>CAP_SETPCAP</c>, which the orchestrator deliberately
+    /// does not hold — and adds nothing once permitted is empty.
+    /// </para>
+    /// </summary>
+    private static string[] BuildSetprivArgs(string? user, string? group)
+        => user is null
+            ? ["--inh-caps=-all", "--ambient-caps=-all", "--"]
+            : [$"--reuid={user}", $"--regid={group}", "--init-groups", "--inh-caps=-all", "--ambient-caps=-all", "--"];
+
+    /// <summary>Rewrite <paramref name="psi"/> to run its command under <c>setpriv</c> with the given prefix.</summary>
+    private static void Wrap(ProcessStartInfo psi, string[] setprivArgs)
+    {
         var innerFile = psi.FileName;
         var innerArgs = psi.ArgumentList.ToArray();
 
         psi.FileName = SetprivCommand;
         psi.ArgumentList.Clear();
-        psi.ArgumentList.Add($"--reuid={user}");
-        psi.ArgumentList.Add($"--regid={group}");
-        psi.ArgumentList.Add("--init-groups");
-        // Strip the inheritable + ambient capability sets. The orchestrator holds
-        // ambient CAP_SETUID/SETGID to perform this drop; a non-root→non-root
-        // setuid does NOT auto-clear caps, so without these the agent would keep
-        // them. Clearing inheritable + ambient is enough: the agent binary's
-        // post-exec permitted set is (inheritable & file-caps) | ambient = empty.
-        // (Clearing the bounding set too would need CAP_SETPCAP, which the
-        // orchestrator does not hold — and adds nothing once permitted is empty.)
-        psi.ArgumentList.Add("--inh-caps=-all");
-        psi.ArgumentList.Add("--ambient-caps=-all");
-        psi.ArgumentList.Add("--");
+        foreach (var arg in setprivArgs)
+            psi.ArgumentList.Add(arg);
         psi.ArgumentList.Add(innerFile);
         foreach (var arg in innerArgs)
             psi.ArgumentList.Add(arg);
-
-        return psi;
     }
 
     /// <summary>
@@ -150,8 +235,18 @@ public static class AgentUserLauncher
     /// </para>
     /// </summary>
     public static void ShareScratchDirectory(string directory)
+        => ShareScratchDirectory(directory, AgentUser);
+
+    /// <inheritdoc cref="ShareScratchDirectory(string)"/>
+    /// <param name="directory">The orchestrator-created scratch directory.</param>
+    /// <param name="agentUser">
+    /// Isolation marker — when null/blank this is a no-op. Explicit form so the
+    /// granted mode is testable without mutating global process environment
+    /// variables.
+    /// </param>
+    public static void ShareScratchDirectory(string directory, string? agentUser)
     {
-        if (AgentUser is null || !OperatingSystem.IsLinux())
+        if (NonEmpty(agentUser) is null || !OperatingSystem.IsLinux())
             return;
 
         try
@@ -161,6 +256,78 @@ public static class AgentUserLauncher
                 | UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute
                 | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute
                 | UnixFileMode.StickyBit);
+        }
+        catch (IOException) { /* best effort */ }
+        catch (UnauthorizedAccessException) { /* best effort */ }
+    }
+
+    /// <summary>
+    /// Re-assert "the agent may read and execute this, but never write it" on a
+    /// tree the orchestrator just created, by stripping group and other write from
+    /// every entry (the owning orchestrator keeps its own write access).
+    ///
+    /// <para>
+    /// The managed agent CLIs are npm-installed onto <c>/data</c> at <em>runtime</em>,
+    /// which is after the entrypoint's boot-time pass has run, and npm writes them
+    /// group-writable under the container's <c>umask 002</c>. Where a default POSIX
+    /// ACL is in effect it already clamps new entries, but those <c>setfacl</c>
+    /// calls are best-effort, so asserting it here — where the files are created —
+    /// is what makes the guarantee independent of the volume filesystem. Boot
+    /// repair stays as the fallback.
+    /// </para>
+    ///
+    /// <para>
+    /// Symlinks are skipped: their mode is always 0777 and cannot be changed.
+    /// A no-op when uid isolation is off. Best-effort: never throws.
+    /// </para>
+    /// </summary>
+    public static void ProtectFromAgentWrites(string path)
+        => ProtectFromAgentWrites(path, AgentUser);
+
+    /// <inheritdoc cref="ProtectFromAgentWrites(string)"/>
+    public static void ProtectFromAgentWrites(string path, string? agentUser)
+    {
+        if (NonEmpty(agentUser) is null || !OperatingSystem.IsLinux())
+            return;
+
+        try
+        {
+            if (Directory.Exists(path))
+                StripSharedWriteRecursive(new DirectoryInfo(path));
+            else
+                StripSharedWrite(path);
+        }
+        catch (IOException) { /* best effort */ }
+        catch (UnauthorizedAccessException) { /* best effort */ }
+    }
+
+    private static void StripSharedWriteRecursive(DirectoryInfo directory)
+    {
+        foreach (var entry in directory.EnumerateFileSystemInfos())
+        {
+            // A symlink's own mode is always 0777 and chmod cannot change it;
+            // what matters is the mode of the target, which the walk reaches
+            // separately when it lives inside this tree.
+            if (entry.LinkTarget is not null)
+                continue;
+
+            if (entry is DirectoryInfo subdirectory)
+                StripSharedWriteRecursive(subdirectory);
+            else
+                StripSharedWrite(entry.FullName);
+        }
+
+        StripSharedWrite(directory.FullName);
+    }
+
+    private static void StripSharedWrite(string path)
+    {
+        try
+        {
+            var mode = File.GetUnixFileMode(path);
+            var stripped = mode & ~(UnixFileMode.GroupWrite | UnixFileMode.OtherWrite);
+            if (stripped != mode)
+                File.SetUnixFileMode(path, stripped);
         }
         catch (IOException) { /* best effort */ }
         catch (UnauthorizedAccessException) { /* best effort */ }
