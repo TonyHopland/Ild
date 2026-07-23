@@ -26,6 +26,10 @@ public class AgentUserLauncherTests
     {
         var psi = BuildPsi();
         var originalArgs = psi.ArgumentList.ToArray();
+        // Compare against the captured value rather than asserting HOME != the
+        // agent home: the latter only detects a regression when the ambient HOME
+        // of the test process happens to differ from it.
+        psi.Environment.TryGetValue("HOME", out var originalHome);
 
         var routed = AgentUserLauncher.Route(psi, agentUser: null, agentGroup: null, agentHome: "/home/agent");
 
@@ -33,7 +37,8 @@ public class AgentUserLauncherTests
         Assert.Equal("/data/agents/claude-code/versions/v1/node_modules/.bin/claude", psi.FileName);
         Assert.Equal(originalArgs, psi.ArgumentList);
         // HOME must not be forced when isolation is disabled.
-        Assert.False(psi.Environment.ContainsKey("HOME") && psi.Environment["HOME"] == "/home/agent");
+        psi.Environment.TryGetValue("HOME", out var homeAfter);
+        Assert.Equal(originalHome, homeAfter);
     }
 
     [Fact]

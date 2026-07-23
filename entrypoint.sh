@@ -55,29 +55,46 @@ ensure_owned_by_runtime_user() {
 }
 
 # Make a path shared read/write between the orchestrator and the agent uid:
-# owned by the runtime user, group-owned by SHARED_GROUP, setgid (new entries
-# inherit the group) and carrying a default POSIX ACL that grants the group rwx
-# on everything created later. The recursive fix-up runs only when something is
-# out of place (first run, or a stray-owned file) so steady-state startups stay
-# cheap even on a large worktree/repo tree.
+# group-owned by SHARED_GROUP, every directory setgid (so new entries keep
+# inheriting the group) and carrying a default POSIX ACL granting the group rwx
+# on everything created later.
+#
+# The invariant is deliberately about GROUP and MODE, not owner: files in a
+# shared tree legitimately belong to whichever uid created them (the agent owns
+# what it writes into its worktree). Including the owner would both fire the
+# expensive repair on every restart once the agent has written anything, and
+# make the repair seize the agent's files — so the repair is a `chgrp`, and only
+# the root of the tree gets its owner normalized.
+#
+# The recursive repair runs only when the tripwire below finds real drift (first
+# run, a wrong group, a directory that lost setgid/group-rwx, or a file that lost
+# group-read), so steady-state startups stay cheap even on a large worktree/repo
+# tree. The tripwire is a cheap check, not an exhaustive audit: it deliberately
+# does not require group-write on every file, because git creates loose objects
+# read-only (0444) by design and that must not trigger a full re-walk each boot.
 ensure_shared_rw() {
   path="$1"
 
   mkdir -p "$path"
 
-  if find "$path" \( ! -user "$RUNTIME_USER" -o ! -group "$SHARED_GROUP" \) -print -quit 2>/dev/null | grep -q .; then
-    chown -R "$RUNTIME_USER:$SHARED_GROUP" "$path"
-    find "$path" -type d -exec chmod 2775 {} + 2>/dev/null || true
+  if find "$path" \( \
+        ! -group "$SHARED_GROUP" \
+        -o \( -type d ! -perm -2070 \) \
+        -o \( -type f ! -perm -040 \) \
+      \) -print -quit 2>/dev/null | grep -q .; then
+    chgrp -R "$SHARED_GROUP" "$path"
+    find "$path" -type d -exec chmod g+rwxs {} + 2>/dev/null || true
     find "$path" -type f -exec chmod g+rw {} + 2>/dev/null || true
     if command -v setfacl >/dev/null 2>&1; then
       setfacl -R -m g:"$SHARED_GROUP":rwX "$path" 2>/dev/null || true
       # Default ACLs only apply to directories; set them per-dir to avoid errors.
       find "$path" -type d -exec setfacl -d -m g:"$SHARED_GROUP":rwx {} + 2>/dev/null || true
     fi
-  else
-    chown "$RUNTIME_USER:$SHARED_GROUP" "$path"
-    chmod 2775 "$path"
   fi
+
+  # Cheap and idempotent: the root of the shared tree is always normalized.
+  chown "$RUNTIME_USER:$SHARED_GROUP" "$path"
+  chmod 2775 "$path"
 }
 
 # Keep a private directory (e.g. /data holding secrets) owned by the runtime user
@@ -247,7 +264,19 @@ drop_and_exec() {
 
 if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
   if [ -n "$AGENT_USER" ]; then
-    # Two-uid mode: shared paths first, then lock /data down to traverse-only.
+    # Group-writable by default. Where a default ACL is in effect it already
+    # grants the shared group rwx (the umask is ignored for those paths), but the
+    # setfacl calls are best-effort — a volume filesystem without ACL support
+    # would silently leave the agent read-only on files the orchestrator creates.
+    # umask 002 makes the setgid + shared-group scheme work on its own. Files the
+    # orchestrator writes under the private /data are unaffected in practice:
+    # they stay group `ild`, which the agent is not a member of.
+    umask 002
+
+    # Two-uid mode. Order matters: the private roots (/data) are created and
+    # locked to traverse-only FIRST, so that the shared subtrees created beneath
+    # them in the next loop land inside an already-correct parent rather than
+    # having /data implicitly created with default ownership by a `mkdir -p`.
     for path in $DATA_TRAVERSE_DIRS; do
       ensure_traverse "$path"
     done

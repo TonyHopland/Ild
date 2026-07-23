@@ -491,6 +491,9 @@ public sealed class PiAdapter : CliAgentAdapterBase
     /// When uid isolation is active these live outside any shared-group tree, so
     /// grant world access on the run-scoped dir alone — a throwaway per-run
     /// directory — rather than plumbing a shared group down into <c>/tmp</c>.
+    /// The sticky bit is set alongside it (<c>01777</c>, as on <c>/tmp</c> itself)
+    /// so that although both uids may create files here, neither can delete or
+    /// rename the other's.
     /// A no-op without uid isolation (dirs stay orchestrator-private) and on any
     /// platform that doesn't support Unix modes.
     /// </summary>
@@ -504,7 +507,8 @@ public sealed class PiAdapter : CliAgentAdapterBase
             File.SetUnixFileMode(directory,
                 UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
                 | UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute
-                | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
+                | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute
+                | UnixFileMode.StickyBit);
         }
         catch (IOException) { /* best effort */ }
         catch (UnauthorizedAccessException) { /* best effort */ }
