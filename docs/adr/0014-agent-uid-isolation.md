@@ -31,7 +31,11 @@ memory or its private files by virtue of being the same user.
     but must not rewrite them, because the orchestrator runs those same binaries
     as `ild` (version checks, the provider terminal); a writable install would be
     a way straight back across the boundary. Mode `2755` with a `g:ild-agents:r-x`
-    default ACL; the orchestrator still installs/updates them as the owner.
+    default ACL; the orchestrator still installs/updates them as the owner. These
+    CLIs are installed onto `/data` at **runtime**, so the boot-time pass has to
+    strip group-write that an install introduced (npm writes group-writable under
+    the `umask 002` below) — its tripwire checks for excess permission here, not
+    just missing permission as the read/write one does.
 
   `/data` itself is mode `0711`: `agent` can traverse it to reach the shared
   subtrees by exact path but cannot list it or read private sibling files.

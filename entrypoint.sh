@@ -114,13 +114,26 @@ ensure_shared_ro() {
 
   mkdir -p "$path"
 
+  # Unlike the read/write tripwire this must also catch EXCESS permission, not
+  # just missing permission: the agent CLIs are installed onto /data at runtime
+  # (npm, as the orchestrator, under the umask 002 set below), which leaves the
+  # tree group-writable. A missing-only check reports that state as clean — 2775
+  # contains 2050 and 0775 contains 040 — so g-w would never be applied and the
+  # agent could rewrite the very binaries the orchestrator later execs as itself.
+  # The group-write clause is restricted to regular files and directories on
+  # purpose: symlinks are always mode 0777 (npm fills node_modules/.bin with
+  # them) and chmod cannot change that, so including them would report drift
+  # forever and re-walk the whole tree on every boot.
   if find "$path" \( \
         ! -group "$SHARED_GROUP" \
         -o \( -type d ! -perm -2050 \) \
         -o \( -type f ! -perm -040 \) \
+        -o \( \( -type d -o -type f \) -perm -020 \) \
       \) -print -quit 2>/dev/null | grep -q .; then
     chgrp -R "$SHARED_GROUP" "$path"
-    # g+X (capital) keeps execute on dirs and already-executable files only.
+    # Directories keep group r-x + setgid; files gain group read but never group
+    # execute — an already-executable binary keeps the group x it came with, so
+    # the agent can still exec the CLI it must not be able to modify.
     find "$path" -type d -exec chmod g+rxs,g-w {} + 2>/dev/null || true
     find "$path" -type f -exec chmod g+r,g-w {} + 2>/dev/null || true
     if command -v setfacl >/dev/null 2>&1; then
