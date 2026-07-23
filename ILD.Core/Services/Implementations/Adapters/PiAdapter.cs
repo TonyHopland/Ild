@@ -48,8 +48,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
             // turn's Chat Context preamble is already reachable — there is no
             // per-directory config to set for ctx.AdditionalAllowedDirectories.
 
-            var sessionDirectory = BuildSessionDirectory(ctx.RunContext.LoopRunId);
-            CreateAgentWritableDirectory(sessionDirectory);
+            var sessionDirectory = CreateAgentScratchDirectory(SessionDirSegment, ctx.RunContext.LoopRunId.ToString("N"));
             PrepareRuntimeFiles(settings);
 
             string? sessionIdToUse = ctx.SessionId;
@@ -250,7 +249,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
             return ManagedSessionRestoreResult.StartFresh();
 
         var restoredPath = BuildSnapshotPath(sessionDirectory, sessionId);
-        CreateAgentWritableDirectory(Path.GetDirectoryName(restoredPath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(restoredPath)!);
         await File.WriteAllTextAsync(restoredPath, snapshot.SessionJson, ctx.Cancel);
         return ManagedSessionRestoreResult.Use(sessionId, restoredPath);
     }
@@ -394,8 +393,11 @@ public sealed class PiAdapter : CliAgentAdapterBase
         }
     }
 
+    private const string SessionDirSegment = "ild-pi-sessions";
+    private const string AgentDirSegment = "ild-pi-agent";
+
     private static string BuildSessionDirectory(Guid loopRunId)
-        => Path.Combine(Path.GetTempPath(), "ild-pi-sessions", loopRunId.ToString("N"));
+        => Path.Combine(AgentIsolation.ScratchRoot, SessionDirSegment, loopRunId.ToString("N"));
 
     private static string BuildSnapshotPath(string sessionDirectory, string sessionId)
         => Path.Combine(sessionDirectory, $"{SanitizeFileName(sessionId)}.jsonl");
@@ -459,7 +461,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
     }
 
     private static string BuildAgentDirectory(Guid loopRunId)
-        => Path.Combine(Path.GetTempPath(), "ild-pi-agent", loopRunId.ToString("N"));
+        => Path.Combine(AgentIsolation.ScratchRoot, AgentDirSegment, loopRunId.ToString("N"));
 
     private static void PrepareRuntimeFiles(PiAdapterSettings settings)
     {
@@ -467,14 +469,14 @@ public sealed class PiAdapter : CliAgentAdapterBase
             || string.IsNullOrWhiteSpace(settings.ModelsJsonContent))
             return;
 
-        CreateAgentWritableDirectory(settings.AgentDirectory);
+        Directory.CreateDirectory(settings.AgentDirectory);
         File.WriteAllText(Path.Combine(settings.AgentDirectory, "models.json"), settings.ModelsJsonContent);
 
         // Write the ILD extension so Pi can list/create work items via its tool system.
         if (!string.IsNullOrWhiteSpace(settings.IldExtensionContent))
         {
             var extensionsDir = Path.Combine(settings.AgentDirectory, "extensions");
-            CreateAgentWritableDirectory(extensionsDir);
+            Directory.CreateDirectory(extensionsDir);
             File.WriteAllText(Path.Combine(extensionsDir, "ild.ts"), settings.IldExtensionContent);
         }
     }

@@ -213,7 +213,12 @@ ENV SHARED_GROUP=ild-agents
 ENV RUNTIME_AMBIENT_CAPS=cap_setuid,cap_setgid,cap_kill
 # Shared read/write: the agent writes its worktree, and git worktree commits go
 # through the base repo's object store under /data/repos.
-ENV SHARED_RW_DIRS="/worktrees /home/ild/.agent-config /data/repos /data/chat-sessions"
+# Scratch both uids touch (per-run agent session state, the interactive
+# terminal cwd). It lives under /tmp so it is discarded with the container
+# rather than growing on a volume, but it is set up like the other shared trees
+# so that a file the orchestrator seeds there stays writable by the agent.
+ENV AGENT_SCRATCH_DIR=/tmp/ild-agent-scratch
+ENV SHARED_RW_DIRS="/worktrees /home/ild/.agent-config /data/repos /data/chat-sessions /tmp/ild-agent-scratch"
 # Shared read-only: the agent execs the npm-installed CLIs but must not be able
 # to rewrite them — the orchestrator runs those same binaries as ild (version
 # checks, the provider terminal), so a writable install would be a way back

@@ -19,6 +19,7 @@ RUNTIME_DIRS="${RUNTIME_DIRS:-/data /worktrees /home/ild/.agent-config}"
 AGENT_USER="${AGENT_USER:-}"
 AGENT_GROUP="${AGENT_GROUP:-${AGENT_USER}}"
 AGENT_HOME="${AGENT_HOME:-}"
+AGENT_SCRATCH_DIR="${AGENT_SCRATCH_DIR:-}"
 SHARED_GROUP="${SHARED_GROUP:-}"
 RUNTIME_AMBIENT_CAPS="${RUNTIME_AMBIENT_CAPS:-}"
 SHARED_RW_DIRS="${SHARED_RW_DIRS:-}"
@@ -332,6 +333,10 @@ drop_and_exec() {
     # app still routes every agent launch through setpriv — so isolation would be
     # off AND every run would fail with an opaque EPERM. The gosu form would also
     # drop the supplementary groups the shared dirs depend on.
+    if [ -z "$SHARED_GROUP" ]; then
+      echo "FATAL: AGENT_USER=$AGENT_USER but SHARED_GROUP is empty; every shared-directory repair would silently no-op and the agent would have no access to the worktree. Unset AGENT_USER to run single-uid." >&2
+      exit 1
+    fi
     if [ -z "$RUNTIME_AMBIENT_CAPS" ]; then
       echo "FATAL: AGENT_USER=$AGENT_USER but RUNTIME_AMBIENT_CAPS is empty; the orchestrator could not spawn the agent. Unset AGENT_USER to run single-uid." >&2
       exit 1
@@ -378,6 +383,7 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
     export ILD_AGENT_USER="$AGENT_USER"
     export ILD_AGENT_GROUP="$AGENT_GROUP"
     export ILD_AGENT_HOME="$AGENT_HOME"
+    export ILD_AGENT_SCRATCH_ROOT="$AGENT_SCRATCH_DIR"
 
     # Two-uid mode. Order matters: the private roots (/data) are created and
     # locked to traverse-only FIRST, so that the shared subtrees created beneath
@@ -424,9 +430,11 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
 
     if [ -n "$AGENT_USER" ] && [ -n "$AGENT_HOME" ]; then
       # The link helpers above already applied SHARED_GROUP, so this pass only
-      # has to add the setgid bits + default ACL — and its drift tripwire now
-      # finds nothing on subsequent boots instead of re-walking the whole store
-      # (which holds the .claude/projects session transcripts) every start.
+      # has to add the setgid bits + default ACL, and its drift tripwire is no
+      # longer guaranteed to fire every boot. It is not guaranteed to stay quiet
+      # either: the tripwire treats any 0600 file as drift, and these CLIs rewrite
+      # .credentials.json at 0600 on each token refresh, so a boot that follows a
+      # refresh still re-walks the store.
       [ -n "$SHARED_GROUP" ] && ensure_shared_rw "$AGENT_CONFIG_STORE"
 
       agent_home="$(getent passwd "$AGENT_USER" | cut -d: -f6)"

@@ -7,7 +7,7 @@ namespace ILD.Core.Services.Implementations;
 /// <summary>
 /// Runs orchestrator-side subprocesses (git, npm agent installs) as the
 /// orchestrator's own uid. This is deliberately <em>not</em> routed through
-/// <see cref="Adapters.AgentUserLauncher"/> (ADR-0014): those are trusted
+/// <see cref="AgentIsolation"/> (ADR-0014): those are trusted
 /// operations that need to write the private <c>/data</c> tree (the repo store,
 /// agent installs) the agent uid cannot touch. Only the coding-agent CLI launch
 /// crosses to the lower-trust agent user.
@@ -50,7 +50,7 @@ public sealed class ProcessRunner : IProcessRunner
         // Runs as the orchestrator, but git/npm act on agent-writable input
         // (package.json, /data/repos/*/.git/config and hooks), so it must not
         // inherit the orchestrator's ambient capabilities — see ADR-0014.
-        using var proc = Process.Start(Adapters.AgentUserLauncher.DropInheritedCapabilities(psi))!;
+        using var proc = Process.Start(AgentIsolation.DropInheritedCapabilities(psi))!;
         var stdoutTask = proc.StandardOutput.ReadToEndAsync(ct);
         var stderrTask = proc.StandardError.ReadToEndAsync(ct);
         try

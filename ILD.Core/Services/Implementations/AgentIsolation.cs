@@ -1,38 +1,39 @@
 using System.Diagnostics;
 
-namespace ILD.Core.Services.Implementations.Adapters;
+namespace ILD.Core.Services.Implementations;
 
 /// <summary>
-/// Routes a coding-agent CLI launch through a dedicated, lower-trust OS user so
-/// the agent no longer shares the orchestrator's uid — and therefore its
-/// <c>ptrace</c> trust boundary and filesystem reach. See
-/// <c>docs/adr/0014-agent-uid-isolation.md</c>.
+/// The app side of running the coding agent under its own, lower-trust OS user
+/// (<c>docs/adr/0014-agent-uid-isolation.md</c>). It owns three jobs, all of them
+/// expressed through <c>setpriv</c> and Unix modes:
+///
+/// <list type="number">
+///   <item><b>Crossing to the agent uid</b> — <see cref="Route(ProcessStartInfo)"/>
+///   for a spawn, <see cref="RouteCommand(string, IReadOnlyList{string})"/> for
+///   APIs that take a command plus argv (the interactive terminal's PTY).</item>
+///   <item><b>Keeping the orchestrator's capabilities away from agent-authored
+///   code</b> — <see cref="DropInheritedCapabilities(ProcessStartInfo)"/>, for the
+///   orchestrator-side commands (preview, git, npm) whose input the agent
+///   controls.</item>
+///   <item><b>Placing files both uids must share</b> — <see cref="ScratchRoot"/>,
+///   the directory whose group/setgid setup lets the two uids hand files back and
+///   forth, and <see cref="ProtectFromAgentWrites(string)"/> for the trees the
+///   agent may execute but must never modify.</item>
+/// </list>
 ///
 /// <para>
-/// The orchestrator process (the runtime user, e.g. <c>ild</c>) is granted
-/// ambient <c>CAP_SETUID</c>/<c>CAP_SETGID</c> by the container entrypoint, which
-/// lets it — and only it — drop a child to the agent uid via <c>setpriv</c>. This
-/// helper rewrites a <see cref="ProcessStartInfo"/> so its command runs as:
-/// <code>
-/// setpriv --reuid=&lt;agent&gt; --regid=&lt;agent&gt; --init-groups \
-///         --inh-caps=-all --ambient-caps=-all -- &lt;cmd…&gt;
-/// </code>
-/// which switches to the agent uid/gid, loads the agent's supplementary groups
-/// (the shared group granting access to the worktree and the <c>/data</c> agent
-/// installs), and clears the inheritable + ambient sets so the child's post-exec
-/// permitted set is empty. A non-root→non-root setuid does not auto-clear
-/// capabilities, so the explicit clears matter. (The bounding set is left alone —
-/// see <see cref="Route(ProcessStartInfo, string?, string?, string?)"/>.)
+/// The orchestrator (the runtime user, e.g. <c>ild</c>) is granted ambient
+/// <c>CAP_SETUID</c>/<c>CAP_SETGID</c>/<c>CAP_KILL</c> by the container entrypoint,
+/// which is what lets it — and only it — drop a child to the agent uid.
 /// </para>
 ///
 /// <para>
 /// Activation is controlled by <c>ILD_AGENT_USER</c>. When it is unset — local
-/// development, unit tests, any single-uid deployment — this is a no-op and the
-/// command runs inline as the current user, exactly as before. The container
-/// image sets the variable so every real agent launch is isolated.
+/// development, unit tests, any single-uid deployment — every operation here is a
+/// no-op and commands run inline as the current user, exactly as before.
 /// </para>
 /// </summary>
-public static class AgentUserLauncher
+public static class AgentIsolation
 {
     // These ILD_AGENT_* vars are exported by the entrypoint from its own
     // AGENT_USER/AGENT_GROUP/AGENT_HOME, so the user the app drops to is always
@@ -53,6 +54,12 @@ public static class AgentUserLauncher
     /// (e.g. <c>~/.claude</c>) rather than the orchestrator's. Left untouched when unset.
     /// </summary>
     public const string AgentHomeEnvVar = "ILD_AGENT_HOME";
+
+    /// <summary>
+    /// Root for scratch both uids touch. Set by the entrypoint to a shared-group
+    /// setgid directory; unset means "use TMPDIR" (see <see cref="ScratchRoot"/>).
+    /// </summary>
+    public const string ScratchRootEnvVar = "ILD_AGENT_SCRATCH_ROOT";
 
     // The privilege-drop tool. Bare name resolved on PATH (/usr/bin/setpriv,
     // shipped by util-linux in the image).
@@ -202,6 +209,14 @@ public static class AgentUserLauncher
     /// <summary>Rewrite <paramref name="psi"/> to run its command under <c>setpriv</c> with the given prefix.</summary>
     private static void Wrap(ProcessStartInfo psi, string[] setprivArgs)
     {
+        // The legacy single-string Arguments and ArgumentList are mutually
+        // exclusive in .NET. Moving FileName into the argv would leave a non-empty
+        // Arguments applying to setpriv instead of the real command — silently
+        // running the wrong thing. No caller uses it; fail loudly if one starts to.
+        if (!string.IsNullOrEmpty(psi.Arguments))
+            throw new InvalidOperationException(
+                "AgentIsolation cannot wrap a ProcessStartInfo that uses the legacy Arguments string; use ArgumentList.");
+
         var innerFile = psi.FileName;
         var innerArgs = psi.ArgumentList.ToArray();
 
@@ -215,50 +230,45 @@ public static class AgentUserLauncher
     }
 
     /// <summary>
-    /// Grant the agent uid write access to an orchestrator-created scratch
-    /// directory. Adapters call this to say "the agent writes here"; how that is
-    /// granted is this seam's business, not theirs.
+    /// Where scratch that both uids touch must live: per-run agent session state,
+    /// the interactive terminal's cwd. Under uid isolation this is a directory the
+    /// entrypoint set up like the other shared trees — owned by the orchestrator,
+    /// group-owned by the shared group, <c>setgid</c>, with a default ACL — so
+    /// anything created beneath it inherits the shared group and (via the
+    /// container's <c>umask 002</c>) stays group-writable.
     ///
     /// <para>
-    /// Scratch dirs live under the orchestrator's <c>TMPDIR</c>, outside any
-    /// shared-group tree, so there is no group to grant through — the directory
-    /// is opened to world read/write instead, with the sticky bit set (<c>01777</c>,
-    /// as on <c>/tmp</c> itself) so that although both uids may create files here,
-    /// neither can delete or rename the other's. These are throwaway per-run
-    /// directories; a tighter fix is to relocate them under an already
-    /// shared-group tree, which is tracked as follow-up in ADR-0014.
+    /// That inheritance is the whole mechanism, and it is why there is no
+    /// per-directory permission call here any more. The orchestrator frequently
+    /// <em>seeds a file the agent must then keep writing</em> — Pi's restored
+    /// session transcript is created by the orchestrator and appended to by pi for
+    /// the rest of the turn. Granting the directory alone cannot express that:
+    /// create/unlink/rename are governed by the directory, but writing an existing
+    /// file is governed by that file's own mode. Placing the tree under a setgid
+    /// shared-group root makes the seeded file come out group-writable on its own,
+    /// which is exactly why the equivalent claude path (whose transcripts sit in
+    /// the shared config store) already worked.
     /// </para>
     ///
     /// <para>
-    /// A no-op when uid isolation is off (the dir stays orchestrator-private) or
-    /// on a platform without Unix modes. Best-effort: never throws.
+    /// Falls back to the process <c>TMPDIR</c> when unset, which is both the
+    /// pre-isolation behavior and what local development and unit tests get.
     /// </para>
     /// </summary>
-    public static void ShareScratchDirectory(string directory)
-        => ShareScratchDirectory(directory, AgentUser);
+    public static string ScratchRoot
+        => NonEmpty(Environment.GetEnvironmentVariable(ScratchRootEnvVar)) ?? Path.GetTempPath();
 
-    /// <inheritdoc cref="ShareScratchDirectory(string)"/>
-    /// <param name="directory">The orchestrator-created scratch directory.</param>
-    /// <param name="agentUser">
-    /// Isolation marker — when null/blank this is a no-op. Explicit form so the
-    /// granted mode is testable without mutating global process environment
-    /// variables.
-    /// </param>
-    public static void ShareScratchDirectory(string directory, string? agentUser)
+    /// <summary>
+    /// Create a scratch directory under <see cref="ScratchRoot"/> and return its
+    /// path. Going through here rather than composing <c>TMPDIR</c> by hand is what
+    /// keeps a later scratch directory from silently landing outside the shared
+    /// tree and leaving the agent unable to write it.
+    /// </summary>
+    public static string CreateScratchDirectory(params string[] segments)
     {
-        if (NonEmpty(agentUser) is null || !OperatingSystem.IsLinux())
-            return;
-
-        try
-        {
-            File.SetUnixFileMode(directory,
-                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
-                | UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute
-                | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute
-                | UnixFileMode.StickyBit);
-        }
-        catch (IOException) { /* best effort */ }
-        catch (UnauthorizedAccessException) { /* best effort */ }
+        var path = Path.Combine(new[] { ScratchRoot }.Concat(segments).ToArray());
+        Directory.CreateDirectory(path);
+        return path;
     }
 
     /// <summary>

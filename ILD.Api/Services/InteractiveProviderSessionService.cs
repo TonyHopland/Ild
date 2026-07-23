@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.Entities;
 using Porta.Pty;
@@ -46,11 +47,10 @@ public sealed class InteractiveProviderSessionService
         }
 
         var sessionId = Guid.NewGuid();
-        var sessionRoot = Path.Combine(Path.GetTempPath(), "ild-sessions", sessionId.ToString("N"));
-        Directory.CreateDirectory(sessionRoot);
-        // The TUI runs as the agent uid (below), so it needs to be able to write
-        // its own cwd, which the orchestrator just created.
-        AgentUserLauncher.ShareScratchDirectory(sessionRoot);
+        // The TUI runs as the agent uid (below), so its cwd has to be writable by
+        // it. Rooting it at the shared scratch root means the setgid shared-group
+        // tree grants that by inheritance, rather than a per-directory chmod.
+        var sessionRoot = AgentIsolation.CreateScratchDirectory("ild-sessions", sessionId.ToString("N"));
 
         try
         {
@@ -61,9 +61,9 @@ public sealed class InteractiveProviderSessionService
             // has to be performed by the uid that later has to read them, or the
             // agent reads as logged-out until the next boot repair. It also means
             // this is no longer a second, unrouted agent-CLI launch path.
-            var routed = AgentUserLauncher.RouteCommand(binaryPath, Array.Empty<string>());
+            var routed = AgentIsolation.RouteCommand(binaryPath, Array.Empty<string>());
             var environment = new Dictionary<string, string>();
-            if (AgentUserLauncher.AgentHome is { } agentHome)
+            if (AgentIsolation.AgentHome is { } agentHome)
                 environment["HOME"] = agentHome;
 
             var options = new PtyOptions

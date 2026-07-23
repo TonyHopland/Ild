@@ -75,21 +75,18 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     /// would silently run the agent as the orchestrator again.
     /// </summary>
     protected static Process? StartAgentProcess(ProcessStartInfo psi)
-        => Process.Start(AgentUserLauncher.Route(psi));
+        => Process.Start(AgentIsolation.Route(psi));
 
     /// <summary>
-    /// Create a directory the agent must be able to write to. Creating it and
-    /// granting the agent access are one act, for the same reason
-    /// <see cref="StartAgentProcess"/> exists: a later scratch directory added
-    /// with a bare <c>Directory.CreateDirectory</c> would silently leave the agent
-    /// unable to write it. Under uid isolation the agent runs as another uid, so
-    /// an orchestrator-created directory is not writable by it by default.
+    /// Create a scratch directory that both the orchestrator and the agent use.
+    /// Rooted at <see cref="AgentIsolation.ScratchRoot"/> rather than <c>TMPDIR</c>:
+    /// under uid isolation that root is a setgid shared-group tree, so everything
+    /// created beneath it — including files the orchestrator seeds for the agent to
+    /// go on writing — inherits the shared group and stays writable by both. That
+    /// inheritance, not a per-directory grant, is what makes the hand-off work.
     /// </summary>
-    protected static void CreateAgentWritableDirectory(string path)
-    {
-        Directory.CreateDirectory(path);
-        AgentUserLauncher.ShareScratchDirectory(path);
-    }
+    protected static string CreateAgentScratchDirectory(params string[] segments)
+        => AgentIsolation.CreateScratchDirectory(segments);
 
     /// <summary>
     /// Kill a process and its children. Never throws, but unlike a blind

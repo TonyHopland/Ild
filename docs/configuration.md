@@ -177,6 +177,34 @@ Set as build args (e.g. in `.env` consumed by `docker compose build`):
 | `WITH_DOTNET_SDK` | Base the ILD image on the .NET SDK image instead of the ASP.NET runtime image |
 | `WITH_CHROME`     | Install Chrome in the ILD image                                               |
 | `WITH_CERTS`      | Import `.crt` or `.pem` files from `certs/` at build time                     |
+| `AGENT_UID`       | uid of the lower-trust `agent` user the coding agent runs as (default 10002)  |
+| `AGENT_GID`       | gid of that user (default 10002)                                              |
+| `SHARED_GID`      | gid of the `ild-agents` group shared by both users (default 10003)            |
+
+### Agent uid isolation
+
+The orchestrator and the coding-agent CLI run as **two different users** — `ild`
+and `agent` — so the agent cannot read the orchestrator's memory or its private
+files. See [ADR-0014](adr/0014-agent-uid-isolation.md) for the design. The
+`AGENT_UID`/`AGENT_GID`/`SHARED_GID` build args only matter if those ids collide
+with something else on your host for a bind-mounted volume.
+
+The split is controlled at runtime by `AGENT_USER`. Setting it to an empty string
+turns isolation off entirely — the container comes up single-uid, exactly as it
+did before the split:
+
+```yaml
+services:
+  ild:
+    environment:
+      - AGENT_USER= # disable uid isolation
+```
+
+That is the escape hatch the container's `FATAL:` startup messages point at. It
+is one switch on purpose: the app-side variables are derived from it at startup,
+so isolation is never half-on. The container refuses to start rather than
+degrade silently if isolation is requested but `capsh`/`setpriv`, the ambient
+capabilities, or the shared group are missing.
 
 The coding agents (Pi, OpenCode, Claude Code, GitHub Copilot) are **not** baked into the image.
 They install on demand onto the persistent `/data` volume and are updated there

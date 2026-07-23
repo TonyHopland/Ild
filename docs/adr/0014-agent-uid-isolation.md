@@ -69,7 +69,7 @@ ambient`) is empty (a non-root→non-root setuid does not auto-clear caps, so th
 
 - **One code seam.** Every agent launch goes through
   `CliAgentAdapterBase.StartAgentProcess`, which applies
-  `AgentUserLauncher.Route(ProcessStartInfo)` and starts the process — so "a CLI
+  `AgentIsolation.Route(ProcessStartInfo)` and starts the process — so "a CLI
   launch crosses to the agent uid" is owned in one place rather than remembered at
   each of the adapters' call sites. Routing is a no-op unless `ILD_AGENT_USER` is
   set, so local development, unit tests and any single-uid deployment keep the
@@ -91,6 +91,18 @@ ambient`) is empty (a non-root→non-root setuid does not auto-clear caps, so th
   under the container's `umask 002`, so they stay group-readable.
   `agent` still cannot read `/data`'s private secrets or the orchestrator's memory.
 
+- **Shared scratch is a setgid tree, not a per-directory grant.** The orchestrator
+  regularly _seeds a file the agent then keeps writing_ — Pi's restored session
+  transcript is written by the orchestrator and appended to by pi for the rest of
+  the turn. Granting the directory cannot express that: create/unlink/rename are
+  governed by the directory, but writing an existing file is governed by that
+  file's own mode. So this scratch is rooted at `AGENT_SCRATCH_DIR`
+  (`/tmp/ild-agent-scratch`, set up like the other shared trees), and the seeded
+  file inherits the shared group and `umask 002` on its own. It is the same
+  mechanism that already made the equivalent claude path work, whose transcripts
+  live in the shared config store. It sits under `/tmp` so it is discarded with
+  the container instead of growing on a volume.
+
 ## What this does not close
 
 The uid split removes the agent's _direct_ read of orchestrator memory and private
@@ -108,6 +120,10 @@ rather than overlooked:
   agent can trigger it itself through the ILD MCP tools. Capabilities are stripped
   from it (above), so the ceiling is `ild`, not root — but it remains a route.
   Moving the preview to the agent uid outright would close it.
+- **`AIProviderService.RunShellAsync` spawns a shell without the capability
+  strip.** It has no production caller today (its `ExecuteToolAsync` entry point
+  is unreachable), so it is latent rather than live; it should be wrapped the
+  next time that file is touched.
 - **The shared credential store is writable by the agent**, so it can write e.g.
   `.claude/settings.json` hooks, which then execute as `ild` when a human opens
   the provider login terminal.
@@ -140,7 +156,7 @@ attacker-controlled input on the orchestrator side.
   from "runs as the orchestrator" to "runs as container root" — the uid split
   would have _raised_ the ceiling of a successful escape while lowering its
   everyday reach. `ProcessRunner` and both preview spawn sites therefore go
-  through `AgentUserLauncher.DropInheritedCapabilities`, which wraps them in
+  through `AgentIsolation.DropInheritedCapabilities`, which wraps them in
   `setpriv --inh-caps=-all --ambient-caps=-all` (no uid change, needs no
   privilege).
 - Splitting `$HOME` means any CLI state **not** listed in

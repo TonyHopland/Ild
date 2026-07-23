@@ -1,9 +1,9 @@
 using System.Diagnostics;
-using ILD.Core.Services.Implementations.Adapters;
+using ILD.Core.Services.Implementations;
 
 namespace ILD.Tests;
 
-public class AgentUserLauncherTests
+public class AgentIsolationTests
 {
     private static ProcessStartInfo BuildPsi()
     {
@@ -31,7 +31,7 @@ public class AgentUserLauncherTests
         // of the test process happens to differ from it.
         psi.Environment.TryGetValue("HOME", out var originalHome);
 
-        var routed = AgentUserLauncher.Route(psi, agentUser: null, agentGroup: null, agentHome: "/home/agent");
+        var routed = AgentIsolation.Route(psi, agentUser: null, agentGroup: null, agentHome: "/home/agent");
 
         Assert.Same(psi, routed);
         Assert.Equal("/data/agents/claude-code/versions/v1/node_modules/.bin/claude", psi.FileName);
@@ -47,7 +47,7 @@ public class AgentUserLauncherTests
         var psi = BuildPsi();
         var innerBinary = psi.FileName;
 
-        AgentUserLauncher.Route(psi, agentUser: "agent", agentGroup: "agent", agentHome: "/home/agent");
+        AgentIsolation.Route(psi, agentUser: "agent", agentGroup: "agent", agentHome: "/home/agent");
 
         Assert.Equal("setpriv", psi.FileName);
         Assert.Equal(new[]
@@ -70,7 +70,7 @@ public class AgentUserLauncherTests
     {
         var psi = BuildPsi();
 
-        AgentUserLauncher.Route(psi, agentUser: "agent", agentGroup: "agent", agentHome: "/home/agent");
+        AgentIsolation.Route(psi, agentUser: "agent", agentGroup: "agent", agentHome: "/home/agent");
 
         Assert.Equal("/home/agent", psi.Environment["HOME"]);
         Assert.Equal("/worktrees/wi-1", psi.WorkingDirectory);
@@ -87,7 +87,7 @@ public class AgentUserLauncherTests
         // UseShellExecute is false; a null agentHome must leave it exactly as-is.
         psi.Environment.TryGetValue("HOME", out var originalHome);
 
-        AgentUserLauncher.Route(psi, agentUser: "agent", agentGroup: null, agentHome: null);
+        AgentIsolation.Route(psi, agentUser: "agent", agentGroup: null, agentHome: null);
 
         Assert.Equal("setpriv", psi.FileName);
         Assert.Contains("--regid=agent", psi.ArgumentList);
@@ -96,32 +96,34 @@ public class AgentUserLauncherTests
     }
 
     [Fact]
-    public void ShareScratchDirectory_grants_world_write_with_sticky_bit_when_isolation_is_on()
+    public void CreateScratchDirectory_roots_scratch_at_the_scratch_root()
     {
-        // The isolation-ON path is the one that widens a mode, so assert the
-        // granted bits directly: the agent runs as another uid and the scratch
-        // dir sits outside any shared-group tree, so it must be world-writable —
-        // and sticky, so neither uid can remove the other's files.
-        if (!OperatingSystem.IsLinux()) return;
-
-        var dir = Path.Combine(Path.GetTempPath(), $"ild-scratch-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
+        // Scratch the two uids share must land under ScratchRoot — under isolation
+        // that is a setgid shared-group tree, and it is the inheritance from it
+        // (not a per-directory chmod) that makes an orchestrator-seeded file stay
+        // writable by the agent.
+        var created = AgentIsolation.CreateScratchDirectory("ild-scratch-test", Guid.NewGuid().ToString("N"));
         try
         {
-            File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-
-            AgentUserLauncher.ShareScratchDirectory(dir, agentUser: "agent");
-
-            var mode = File.GetUnixFileMode(dir);
-            Assert.True(mode.HasFlag(UnixFileMode.OtherWrite), "agent (a different uid) must be able to write");
-            Assert.True(mode.HasFlag(UnixFileMode.OtherExecute));
-            Assert.True(mode.HasFlag(UnixFileMode.GroupWrite));
-            Assert.True(mode.HasFlag(UnixFileMode.StickyBit), "sticky bit stops either uid deleting the other's files");
+            Assert.True(Directory.Exists(created));
+            Assert.StartsWith(
+                Path.TrimEndingDirectorySeparator(AgentIsolation.ScratchRoot),
+                created,
+                StringComparison.Ordinal);
         }
         finally
         {
-            Directory.Delete(dir, recursive: true);
+            Directory.Delete(created, recursive: true);
         }
+    }
+
+    [Fact]
+    public void ScratchRoot_falls_back_to_tmpdir_when_unconfigured()
+    {
+        // Unset in tests and local development, which must keep the
+        // pre-isolation behavior of using TMPDIR.
+        Assert.Null(Environment.GetEnvironmentVariable(AgentIsolation.ScratchRootEnvVar));
+        Assert.Equal(Path.GetTempPath(), AgentIsolation.ScratchRoot);
     }
 
     [Fact]
@@ -147,7 +149,7 @@ public class AgentUserLauncherTests
             File.SetUnixFileMode(nested, groupWritableExecutable);
             File.SetUnixFileMode(root, groupWritableExecutable);
 
-            AgentUserLauncher.ProtectFromAgentWrites(root, agentUser: "agent");
+            AgentIsolation.ProtectFromAgentWrites(root, agentUser: "agent");
 
             foreach (var path in new[] { root, nested, binary })
             {
@@ -180,7 +182,7 @@ public class AgentUserLauncherTests
                 | UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute;
             File.SetUnixFileMode(dir, groupWritable);
 
-            AgentUserLauncher.ProtectFromAgentWrites(dir, agentUser: null);
+            AgentIsolation.ProtectFromAgentWrites(dir, agentUser: null);
 
             Assert.Equal(groupWritable, File.GetUnixFileMode(dir));
         }
@@ -197,7 +199,7 @@ public class AgentUserLauncherTests
         psi.ArgumentList.Add("-lc");
         psi.ArgumentList.Add("npm run dev");
 
-        AgentUserLauncher.DropInheritedCapabilities(psi, agentUser: "agent");
+        AgentIsolation.DropInheritedCapabilities(psi, agentUser: "agent");
 
         Assert.Equal("setpriv", psi.FileName);
         Assert.Equal(new[]
@@ -221,7 +223,7 @@ public class AgentUserLauncherTests
         psi.ArgumentList.Add("-lc");
         psi.ArgumentList.Add("npm run dev");
 
-        AgentUserLauncher.DropInheritedCapabilities(psi, agentUser: null);
+        AgentIsolation.DropInheritedCapabilities(psi, agentUser: null);
 
         Assert.Equal("/bin/sh", psi.FileName);
         Assert.Equal(new[] { "-lc", "npm run dev" }, psi.ArgumentList);
@@ -230,7 +232,7 @@ public class AgentUserLauncherTests
     [Fact]
     public void RouteCommand_wraps_a_pty_launch_to_the_agent_uid()
     {
-        var routed = AgentUserLauncher.RouteCommand("/data/agents/claude-code/bin/claude",
+        var routed = AgentIsolation.RouteCommand("/data/agents/claude-code/bin/claude",
             Array.Empty<string>(), agentUser: "agent", agentGroup: "agent");
 
         Assert.Equal("setpriv", routed.FileName);
@@ -249,7 +251,7 @@ public class AgentUserLauncherTests
     [Fact]
     public void RouteCommand_is_a_noop_when_isolation_is_off()
     {
-        var routed = AgentUserLauncher.RouteCommand("claude", new[] { "--version" },
+        var routed = AgentIsolation.RouteCommand("claude", new[] { "--version" },
             agentUser: null, agentGroup: null);
 
         Assert.Equal("claude", routed.FileName);
@@ -257,28 +259,15 @@ public class AgentUserLauncherTests
     }
 
     [Fact]
-    public void ShareScratchDirectory_is_a_noop_when_isolation_is_off()
+    public void Wrap_rejects_the_legacy_arguments_string()
     {
-        // ILD_AGENT_USER is not set in the test environment, so the scratch dir
-        // must keep the orchestrator-private mode it was created with rather
-        // than being opened up to other uids.
-        var dir = Path.Combine(Path.GetTempPath(), $"ild-scratch-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(dir);
-        try
-        {
-            if (!OperatingSystem.IsLinux()) return;
-            File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        // Arguments and ArgumentList are mutually exclusive; moving FileName into
+        // the argv would leave a non-empty Arguments applying to setpriv instead
+        // of the real command. No caller uses it — fail loudly if one starts to.
+        var psi = new ProcessStartInfo("claude") { Arguments = "--print hello" };
 
-            AgentUserLauncher.ShareScratchDirectory(dir);
-
-            Assert.Equal(
-                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
-                File.GetUnixFileMode(dir));
-        }
-        finally
-        {
-            Directory.Delete(dir, recursive: true);
-        }
+        Assert.Throws<InvalidOperationException>(
+            () => AgentIsolation.Route(psi, agentUser: "agent", agentGroup: "agent", agentHome: null));
     }
 
     [Fact]
@@ -287,7 +276,7 @@ public class AgentUserLauncherTests
         var psi = BuildPsi();
         psi.Environment["OPENCODE_CONFIG_CONTENT"] = "{}";
 
-        AgentUserLauncher.Route(psi, agentUser: "agent", agentGroup: "agent", agentHome: "/home/agent");
+        AgentIsolation.Route(psi, agentUser: "agent", agentGroup: "agent", agentHome: "/home/agent");
 
         // Adapter-set env must survive the wrap (setpriv passes it through).
         Assert.Equal("{}", psi.Environment["OPENCODE_CONFIG_CONTENT"]);
