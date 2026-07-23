@@ -68,11 +68,53 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
             EventLogSummary: context.EventLogSummary,
             WorktreePath: context.WorktreePath)));
 
-    /// <summary>Best-effort kill of a process and its children; never throws.</summary>
-    protected static void KillProcessTree(Process process)
+    /// <summary>
+    /// Start a coding-agent CLI. Every agent launch goes through here so that
+    /// "a CLI launch crosses to the lower-trust agent uid" (ADR-0014) is owned by
+    /// one place instead of being remembered at each call site — a missed call
+    /// would silently run the agent as the orchestrator again.
+    /// </summary>
+    protected static Process? StartAgentProcess(ProcessStartInfo psi)
+        => Process.Start(AgentUserLauncher.Route(psi));
+
+    /// <summary>
+    /// Kill a process and its children. Never throws, but unlike a blind
+    /// best-effort kill it reports whether the kill actually took effect:
+    /// under uid isolation (ADR-0014) the agent runs with a different real
+    /// <em>and saved</em> uid, so <c>kill(2)</c> fails with <c>EPERM</c> unless
+    /// the orchestrator holds <c>CAP_KILL</c>. Silently swallowing that leaves an
+    /// orphaned agent writing the worktree after a Halt or a node timeout while
+    /// the engine moves on, so callers surface the failure instead.
+    /// </summary>
+    /// <returns><c>true</c> when the process is gone (killed, or already exited).</returns>
+    protected static bool KillProcessTree(Process process)
     {
-        try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
+        try
+        {
+            process.Kill(entireProcessTree: true);
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            // Already exited — that is the outcome we wanted anyway.
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
+
+    /// <summary>
+    /// Kill the agent process tree and build the node's failure message, adding a
+    /// diagnostic when the kill did not take (see <see cref="KillProcessTree"/>)
+    /// so an un-killable agent is visible in the run instead of silent.
+    /// </summary>
+    protected static string KillAndDescribe(Process process, string message)
+        => KillProcessTree(process)
+            ? message
+            : message + " — WARNING: the agent process could not be killed and may still be running. "
+                + "Under uid isolation the orchestrator needs CAP_KILL for the agent uid (see ADR-0014).";
 
     /// <summary>
     /// Hand the freshly-captured session id to the run's <c>OnSessionId</c>

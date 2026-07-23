@@ -71,8 +71,8 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             Process? proc;
             try
             {
-                proc = Process.Start(AgentUserLauncher.Route(
-                    BuildRunProcessStartInfo(binaryPath, worktreePath, rendered, ctx.SessionId, mcpConfigPath, ctx.AdditionalAllowedDirectories)));
+                proc = StartAgentProcess(
+                    BuildRunProcessStartInfo(binaryPath, worktreePath, rendered, ctx.SessionId, mcpConfigPath, ctx.AdditionalAllowedDirectories));
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
@@ -91,8 +91,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             }
             catch (OperationCanceledException)
             {
-                KillProcessTree(process);
-                return NodeExecutionResult.Fail("claude-code timed out");
+                return NodeExecutionResult.Fail(KillAndDescribe(process, "claude-code timed out"));
             }
 
             ClaudeStreamOutput stdout;
@@ -104,8 +103,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             }
             catch (OperationCanceledException)
             {
-                KillProcessTree(process);
-                return NodeExecutionResult.Fail("claude-code stream read timed out");
+                return NodeExecutionResult.Fail(KillAndDescribe(process, "claude-code stream read timed out"));
             }
 
             var effectiveSessionId = stdout.SessionId ?? ctx.SessionId;

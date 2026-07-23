@@ -67,8 +67,9 @@ public static class AgentUserLauncher
 
     /// <summary>
     /// Rewrite <paramref name="psi"/> in place so its command runs as the
-    /// configured agent user, returning the same instance for fluent use at the
-    /// call site (<c>Process.Start(AgentUserLauncher.Route(BuildPsi(...)))</c>).
+    /// configured agent user, returning the same instance for fluent use. Adapters
+    /// do not call this directly — <c>CliAgentAdapterBase.StartAgentProcess</c>
+    /// applies it so no launch site can forget to.
     /// A no-op returning <paramref name="psi"/> unchanged when
     /// <c>ILD_AGENT_USER</c> is unset. Preserves the redirected streams, working
     /// directory and environment already configured on <paramref name="psi"/>;
@@ -126,6 +127,43 @@ public static class AgentUserLauncher
             psi.ArgumentList.Add(arg);
 
         return psi;
+    }
+
+    /// <summary>
+    /// Grant the agent uid write access to an orchestrator-created scratch
+    /// directory. Adapters call this to say "the agent writes here"; how that is
+    /// granted is this seam's business, not theirs.
+    ///
+    /// <para>
+    /// Scratch dirs live under the orchestrator's <c>TMPDIR</c>, outside any
+    /// shared-group tree, so there is no group to grant through — the directory
+    /// is opened to world read/write instead, with the sticky bit set (<c>01777</c>,
+    /// as on <c>/tmp</c> itself) so that although both uids may create files here,
+    /// neither can delete or rename the other's. These are throwaway per-run
+    /// directories; a tighter fix is to relocate them under an already
+    /// shared-group tree, which is tracked as follow-up in ADR-0014.
+    /// </para>
+    ///
+    /// <para>
+    /// A no-op when uid isolation is off (the dir stays orchestrator-private) or
+    /// on a platform without Unix modes. Best-effort: never throws.
+    /// </para>
+    /// </summary>
+    public static void ShareScratchDirectory(string directory)
+    {
+        if (AgentUser is null || !OperatingSystem.IsLinux())
+            return;
+
+        try
+        {
+            File.SetUnixFileMode(directory,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                | UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute
+                | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute
+                | UnixFileMode.StickyBit);
+        }
+        catch (IOException) { /* best effort */ }
+        catch (UnauthorizedAccessException) { /* best effort */ }
     }
 
     private static string? NonEmpty(string? value)

@@ -96,6 +96,31 @@ public class AgentUserLauncherTests
     }
 
     [Fact]
+    public void ShareScratchDirectory_is_a_noop_when_isolation_is_off()
+    {
+        // ILD_AGENT_USER is not set in the test environment, so the scratch dir
+        // must keep the orchestrator-private mode it was created with rather
+        // than being opened up to other uids.
+        var dir = Path.Combine(Path.GetTempPath(), $"ild-scratch-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            if (!OperatingSystem.IsLinux()) return;
+            File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+            AgentUserLauncher.ShareScratchDirectory(dir);
+
+            Assert.Equal(
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
+                File.GetUnixFileMode(dir));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Route_preserves_environment_variables_set_by_the_adapter()
     {
         var psi = BuildPsi();

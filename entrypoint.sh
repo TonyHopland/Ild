@@ -22,6 +22,7 @@ AGENT_HOME="${AGENT_HOME:-}"
 SHARED_GROUP="${SHARED_GROUP:-}"
 RUNTIME_AMBIENT_CAPS="${RUNTIME_AMBIENT_CAPS:-}"
 SHARED_RW_DIRS="${SHARED_RW_DIRS:-}"
+SHARED_RO_DIRS="${SHARED_RO_DIRS:-}"
 DATA_TRAVERSE_DIRS="${DATA_TRAVERSE_DIRS:-}"
 
 # Agent CLI config dirs (.claude, .opencode, .pi, ...) are kept in a single
@@ -38,8 +39,14 @@ DATA_TRAVERSE_DIRS="${DATA_TRAVERSE_DIRS:-}"
 # Under uid isolation the store is group-shared and symlinked into BOTH the
 # orchestrator's and the agent's home, so login (run as the orchestrator in the
 # provider terminal) and the agent run (as AGENT_USER) see one credential store.
+#
+# Names may be nested (e.g. .config/opencode): splitting HOME between the two
+# uids means anything a CLI keeps under an XDG path has to be shared explicitly,
+# or the agent would see an empty home even though the ild-side terminal login
+# succeeded. opencode keeps its auth/state under the XDG data dir, hence the
+# .config/opencode + .local/share/opencode entries.
 AGENT_CONFIG_STORE="${AGENT_CONFIG_STORE:-/home/ild/.agent-config}"
-AGENT_CONFIG_DIRS="${AGENT_CONFIG_DIRS:-.claude .opencode .pi .copilot}"
+AGENT_CONFIG_DIRS="${AGENT_CONFIG_DIRS:-.claude .opencode .pi .copilot .config/opencode .local/share/opencode}"
 AGENT_CONFIG_FILES="${AGENT_CONFIG_FILES:-.claude.json}"
 
 ensure_owned_by_runtime_user() {
@@ -97,6 +104,35 @@ ensure_shared_rw() {
   chmod 2775 "$path"
 }
 
+# Like ensure_shared_rw, but the group only gets read/execute. Used for the
+# managed agent installs: the agent must be able to exec those CLIs, but the
+# orchestrator runs the same binaries as itself (version checks, the provider
+# terminal), so letting the agent rewrite them would hand it a way back across
+# the boundary. The owner (orchestrator) still writes, so installs/updates work.
+ensure_shared_ro() {
+  path="$1"
+
+  mkdir -p "$path"
+
+  if find "$path" \( \
+        ! -group "$SHARED_GROUP" \
+        -o \( -type d ! -perm -2050 \) \
+        -o \( -type f ! -perm -040 \) \
+      \) -print -quit 2>/dev/null | grep -q .; then
+    chgrp -R "$SHARED_GROUP" "$path"
+    # g+X (capital) keeps execute on dirs and already-executable files only.
+    find "$path" -type d -exec chmod g+rxs,g-w {} + 2>/dev/null || true
+    find "$path" -type f -exec chmod g+r,g-w {} + 2>/dev/null || true
+    if command -v setfacl >/dev/null 2>&1; then
+      setfacl -R -m g:"$SHARED_GROUP":rX "$path" 2>/dev/null || true
+      find "$path" -type d -exec setfacl -d -m g:"$SHARED_GROUP":rx {} + 2>/dev/null || true
+    fi
+  fi
+
+  chown "$RUNTIME_USER:$SHARED_GROUP" "$path"
+  chmod 2755 "$path"
+}
+
 # Keep a private directory (e.g. /data holding secrets) owned by the runtime user
 # but world-traversable, so the agent uid can reach the shared subtrees beneath it
 # by exact path without being able to list it or read private sibling files.
@@ -118,7 +154,8 @@ link_agent_config_dirs() {
   store="$1"
   user_home="$2"
   owner="$3"
-  shift 3
+  group="$4"
+  shift 4
 
   [ -d "$store" ] || return 0
 
@@ -128,6 +165,13 @@ link_agent_config_dirs() {
     link="$user_home/$name"
 
     mkdir -p "$target"
+    # Nested names (.config/opencode) need their parent in $HOME to exist and to
+    # belong to the home owner, so the CLI can still write siblings there.
+    link_parent="$(dirname "$link")"
+    if [ "$link_parent" != "$user_home" ]; then
+      mkdir -p "$link_parent"
+      chown "$owner:$group" "$link_parent"
+    fi
 
     if [ -d "$link" ] && [ ! -L "$link" ]; then
       # Image-baked real dir: migrate contents (dotfiles included), keeping any
@@ -139,8 +183,8 @@ link_agent_config_dirs() {
     fi
 
     ln -sfn "$target" "$link"
-    chown -R "$owner:$RUNTIME_GROUP" "$target"
-    chown -h "$owner:$RUNTIME_GROUP" "$link"
+    chown -R "$owner:$group" "$target"
+    chown -h "$owner:$group" "$link"
   done
 }
 
@@ -153,7 +197,8 @@ link_agent_config_files() {
   store="$1"
   user_home="$2"
   owner="$3"
-  shift 3
+  group="$4"
+  shift 4
 
   [ -d "$store" ] || return 0
 
@@ -162,6 +207,12 @@ link_agent_config_files() {
     target="$store/$name"
     link="$user_home/$name"
 
+    link_parent="$(dirname "$link")"
+    if [ "$link_parent" != "$user_home" ]; then
+      mkdir -p "$link_parent"
+      chown "$owner:$group" "$link_parent"
+    fi
+
     if [ -f "$link" ] && [ ! -L "$link" ] && [ ! -e "$target" ]; then
       mv "$link" "$target"
     elif [ -e "$link" ] && [ ! -L "$link" ]; then
@@ -169,8 +220,8 @@ link_agent_config_files() {
     fi
 
     ln -sfn "$target" "$link"
-    [ -e "$target" ] && chown "$owner:$RUNTIME_GROUP" "$target"
-    chown -h "$owner:$RUNTIME_GROUP" "$link"
+    [ -e "$target" ] && chown "$owner:$group" "$target"
+    chown -h "$owner:$group" "$link"
   done
 }
 
@@ -189,6 +240,11 @@ link_secondary_home() {
   for name in "$@"; do
     [ -n "$name" ] || continue
     link="$home/$name"
+    link_parent="$(dirname "$link")"
+    if [ "$link_parent" != "$home" ]; then
+      mkdir -p "$link_parent"
+      chown "$owner:$owner" "$link_parent" 2>/dev/null || true
+    fi
     if [ -e "$link" ] && [ ! -L "$link" ]; then
       rm -rf "$link"
     fi
@@ -283,6 +339,9 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
     for path in $SHARED_RW_DIRS; do
       ensure_shared_rw "$path"
     done
+    for path in $SHARED_RO_DIRS; do
+      ensure_shared_ro "$path"
+    done
   else
     for path in $RUNTIME_DIRS; do
       ensure_owned_by_runtime_user "$path"
@@ -295,17 +354,29 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
     chown "$RUNTIME_USER:$RUNTIME_GROUP" "$runtime_home"
     export HOME="$runtime_home"
 
+    # In two-uid mode the store lives under the runtime user's home and the
+    # agent's dotdirs are symlinks into it, so the agent uid must be able to
+    # traverse this home (useradd's HOME_MODE is 0750 on Debian, which would
+    # break both the shared credentials and the .gitconfig symlink). The store
+    # itself is group-owned, so this grants traversal only, not its contents.
+    config_group="$RUNTIME_GROUP"
+    if [ -n "$AGENT_USER" ]; then
+      chmod 0755 "$runtime_home"
+      [ -n "$SHARED_GROUP" ] && config_group="$SHARED_GROUP"
+    fi
+
     # Intentional word-split on AGENT_CONFIG_DIRS / AGENT_CONFIG_FILES —
     # entries are space-separated names.
     # shellcheck disable=SC2086
-    link_agent_config_dirs "$AGENT_CONFIG_STORE" "$runtime_home" "$RUNTIME_USER" $AGENT_CONFIG_DIRS
+    link_agent_config_dirs "$AGENT_CONFIG_STORE" "$runtime_home" "$RUNTIME_USER" "$config_group" $AGENT_CONFIG_DIRS
     # shellcheck disable=SC2086
-    link_agent_config_files "$AGENT_CONFIG_STORE" "$runtime_home" "$RUNTIME_USER" $AGENT_CONFIG_FILES
+    link_agent_config_files "$AGENT_CONFIG_STORE" "$runtime_home" "$RUNTIME_USER" "$config_group" $AGENT_CONFIG_FILES
 
     if [ -n "$AGENT_USER" ] && [ -n "$AGENT_HOME" ]; then
-      # Re-share the store: the link helpers above chown it to the runtime
-      # group; ensure_shared_rw restores SHARED_GROUP + the default ACL so the
-      # agent uid can read/write the credentials too.
+      # The link helpers above already applied SHARED_GROUP, so this pass only
+      # has to add the setgid bits + default ACL — and its drift tripwire now
+      # finds nothing on subsequent boots instead of re-walking the whole store
+      # (which holds the .claude/projects session transcripts) every start.
       [ -n "$SHARED_GROUP" ] && ensure_shared_rw "$AGENT_CONFIG_STORE"
 
       agent_home="$(getent passwd "$AGENT_USER" | cut -d: -f6)"

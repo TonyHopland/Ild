@@ -109,7 +109,10 @@ RUN existing_group="$(getent group "${APP_GID}" | cut -d: -f1 || true)" && \
 # `ild-agents` group is what grants both users access to the worktree tree and
 # the /data agent installs, while /data's secrets stay ild-only. Both users are
 # members of the shared group; the runtime paths' ownership/ACLs are applied by
-# the entrypoint (volumes overlay any build-time perms).
+# the entrypoint (volumes overlay any build-time perms). /home/ild is forced to
+# 0755 because the agent's dotdirs are symlinks into the credential store beneath
+# it — useradd's Debian default (HOME_MODE 0750) would leave the agent unable to
+# traverse it, breaking both the shared logins and the git commit identity.
 RUN if [ -z "$(getent group "${SHARED_GID}" | cut -d: -f1 || true)" ]; then \
       groupadd --gid ${SHARED_GID} ild-agents; \
     fi && \
@@ -121,7 +124,7 @@ RUN if [ -z "$(getent group "${SHARED_GID}" | cut -d: -f1 || true)" ]; then \
     fi && \
     usermod -aG ild-agents ild && \
     usermod -aG ild-agents agent && \
-    chmod 0755 /home/agent
+    chmod 0755 /home/agent /home/ild
 
 # Coding agents (Pi, OpenCode, Claude Code) are intentionally NOT baked into
 # the image. They are installed on demand onto the persistent /data volume
@@ -200,8 +203,20 @@ ENV AGENT_USER=agent
 ENV AGENT_GROUP=agent
 ENV AGENT_HOME=/home/agent
 ENV SHARED_GROUP=ild-agents
-ENV RUNTIME_AMBIENT_CAPS=cap_setuid,cap_setgid
-ENV SHARED_RW_DIRS="/worktrees /home/ild/.agent-config /data/agents /data/repos /data/chat-sessions"
+# cap_kill is required as well as cap_setuid/cap_setgid: setpriv gives the agent
+# a different real AND saved uid, so kill(2) from the orchestrator returns EPERM
+# without it — Halt and the per-node timeouts would leave the agent orphaned in
+# the worktree. The agent itself still gets no capabilities (setpriv clears the
+# inheritable + ambient sets, so its post-exec permitted set is empty).
+ENV RUNTIME_AMBIENT_CAPS=cap_setuid,cap_setgid,cap_kill
+# Shared read/write: the agent writes its worktree, and git worktree commits go
+# through the base repo's object store under /data/repos.
+ENV SHARED_RW_DIRS="/worktrees /home/ild/.agent-config /data/repos /data/chat-sessions"
+# Shared read-only: the agent execs the npm-installed CLIs but must not be able
+# to rewrite them — the orchestrator runs those same binaries as ild (version
+# checks, the provider terminal), so a writable install would be a way back
+# across the boundary. The orchestrator still installs/updates them as the owner.
+ENV SHARED_RO_DIRS=/data/agents
 ENV DATA_TRAVERSE_DIRS=/data
 ENV ILD_AGENT_USER=agent
 ENV ILD_AGENT_GROUP=agent
