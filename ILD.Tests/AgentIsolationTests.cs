@@ -118,6 +118,50 @@ public class AgentIsolationTests
     }
 
     [Fact]
+    public void PrivateRoot_is_always_absolute()
+    {
+        // This path is handed to git as GIT_ASKPASS, and git runs with the worktree
+        // as its cwd — a relative root resolves inside the worktree, so git dies
+        // with "cannot exec" and every authenticated clone/fetch/push fails. The
+        // regression came from a root that was only absolute when ILD_DATA_PATH
+        // happened to be set, so assert it holds whatever the environment says.
+        Assert.True(Path.IsPathRooted(AgentIsolation.PrivateRoot),
+            $"PrivateRoot must be absolute, was '{AgentIsolation.PrivateRoot}'");
+    }
+
+    [Fact]
+    public void CreatePrivateDirectory_makes_the_root_owner_only()
+    {
+        // "Private" has to be a property of the root itself, not something each
+        // caller remembers to apply to its own files: the agent can traverse to a
+        // known path, so a group/other-readable root exposes everything beneath it.
+        if (!OperatingSystem.IsLinux()) return;
+
+        var created = AgentIsolation.CreatePrivateDirectory("ild-private-test", Guid.NewGuid().ToString("N"));
+        try
+        {
+            Assert.True(Directory.Exists(created));
+            Assert.StartsWith(
+                Path.TrimEndingDirectorySeparator(AgentIsolation.PrivateRoot),
+                created,
+                StringComparison.Ordinal);
+
+            var mode = File.GetUnixFileMode(AgentIsolation.PrivateRoot);
+            Assert.False(mode.HasFlag(UnixFileMode.GroupRead));
+            Assert.False(mode.HasFlag(UnixFileMode.GroupExecute));
+            Assert.False(mode.HasFlag(UnixFileMode.OtherRead));
+            Assert.False(mode.HasFlag(UnixFileMode.OtherExecute));
+            Assert.True(mode.HasFlag(UnixFileMode.UserRead));
+            Assert.True(mode.HasFlag(UnixFileMode.UserWrite));
+            Assert.True(mode.HasFlag(UnixFileMode.UserExecute));
+        }
+        finally
+        {
+            Directory.Delete(created, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ScratchRoot_falls_back_to_tmpdir_when_unconfigured()
     {
         // Unset in tests and local development, which must keep the

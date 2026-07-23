@@ -104,16 +104,22 @@ safe.directory '*'` in the image, every git command the agent runs (the review
   picking up a repo owned by some _other_ user, whereas both uids are ours and the
   sharing is deliberate.
 
-- **Orchestrator-private state moved off fixed `/tmp` paths.** A predictable path
-  in world-writable `/tmp` is harmless while everything is one uid, and a
-  privilege-escalation route once it is not: the agent can create the path first,
-  and orchestrator code that guards on "does it already exist?" then trusts the
-  agent's version. The git askpass helper is the sharp case — it is executed by
-  the orchestrator with the repository token in its environment. Those now live
-  under `{DataRoot}/orchestrator-private`, which is inside the `0711` data root
-  the agent can traverse but not write. (The `/tmp` sticky bit is not enough: it
-  only prevents replacing a file that already exists, and an agent-uid process can
-  run before the orchestrator first creates it.)
+- **Orchestrator-private state lives under a root the entrypoint pre-creates.** A
+  predictable path in world-writable `/tmp` is harmless while everything is one
+  uid, and a privilege-escalation route once it is not: the agent can create the
+  path first, and orchestrator code that guards on "does it already exist?" then
+  trusts the agent's version. The git askpass helper is the sharp case — it is
+  executed by the orchestrator with the repository token in its environment. The
+  entrypoint therefore creates `ORCHESTRATOR_PRIVATE_DIR` owner-only (`0700`)
+  before anything else runs and exports it as `ILD_ORCHESTRATOR_PRIVATE_ROOT`,
+  exactly as it does for the shared scratch root. What closes the attack is that
+  mode plus the root existing first — not the location and not path
+  unpredictability — so this state stays on `/tmp`, where it was before and where
+  it is discarded with the container rather than accumulating forever on the data
+  volume. The app resolves the path to an absolute one unconditionally: it is
+  handed to git as `GIT_ASKPASS`, and git runs with the worktree as its cwd, so a
+  relative root would resolve inside the worktree and break every authenticated
+  fetch and push.
 
 - **Shared scratch is a setgid tree, not a per-directory grant.** The orchestrator
   regularly _seeds a file the agent then keeps writing_ — Pi's restored session

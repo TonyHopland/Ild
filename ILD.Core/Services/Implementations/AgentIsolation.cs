@@ -61,6 +61,13 @@ public static class AgentIsolation
     /// </summary>
     public const string ScratchRootEnvVar = "ILD_AGENT_SCRATCH_ROOT";
 
+    /// <summary>
+    /// Root for orchestrator-only state. Set by the entrypoint to a directory it
+    /// created owner-only; unset means a fixed absolute path under the process
+    /// <c>TMPDIR</c> (see <see cref="PrivateRoot"/>).
+    /// </summary>
+    public const string PrivateRootEnvVar = "ILD_ORCHESTRATOR_PRIVATE_ROOT";
+
     // The privilege-drop tool. Bare name resolved on PATH (/usr/bin/setpriv,
     // shipped by util-linux in the image).
     private const string SetprivCommand = "setpriv";
@@ -273,31 +280,64 @@ public static class AgentIsolation
 
     /// <summary>
     /// Where orchestrator-only state goes — the counterpart to
-    /// <see cref="ScratchRoot"/>. It sits under the data root, which is mode
-    /// <c>0711</c> owned by the orchestrator: the agent can traverse it to reach
-    /// the shared subtrees but cannot create, list or replace anything in it.
+    /// <see cref="ScratchRoot"/>, and provisioned the same way: the entrypoint
+    /// creates it owner-only (<c>0700</c>) before anything else runs and exports
+    /// the path, the app just consumes it.
     ///
     /// <para>
-    /// This exists because a fixed, predictable path in world-writable
-    /// <c>/tmp</c> stops being harmless once the agent is a different uid: the
-    /// agent can create the file first, and orchestrator code that guards on
-    /// "does it already exist?" will then trust and use the agent's version. The
-    /// git askpass helper is the sharp case — it is handed to git as
+    /// It exists because a fixed, predictable path in world-writable <c>/tmp</c>
+    /// stops being harmless once the agent is a different uid: the agent can
+    /// create the file first, and orchestrator code that guards on "does it
+    /// already exist?" will then trust and use the agent's version. The git
+    /// askpass helper is the sharp case — it is handed to git as
     /// <c>GIT_ASKPASS</c> with the repository token in its environment, so a
     /// planted script is both arbitrary code as the orchestrator and credential
-    /// exfiltration. The <c>/tmp</c> sticky bit does not help: it only prevents
-    /// replacing a file that already exists, and an agent-uid process (a chat run,
-    /// the provider-login terminal) can run before the orchestrator first creates it.
+    /// exfiltration.
+    /// </para>
+    ///
+    /// <para>
+    /// What closes that is the <c>0700</c> mode plus the root existing before any
+    /// agent-uid process can run — not the location and not path unpredictability.
+    /// So the root stays on <c>/tmp</c>, where this state used to live and where it
+    /// is discarded with the container, rather than accumulating forever on the
+    /// data volume. (The <c>/tmp</c> sticky bit alone would not be enough: it only
+    /// prevents replacing a file that already exists.)
     /// </para>
     /// </summary>
+    /// <remarks>
+    /// Absolute by construction — <see cref="Path.GetFullPath(string)"/> is applied
+    /// even to a configured value. This path is handed to git as <c>GIT_ASKPASS</c>
+    /// and git runs with the worktree as its cwd, so a relative root resolves
+    /// inside the worktree and git dies with "cannot exec", taking down every
+    /// authenticated clone/fetch/push. Making it unconditional means no
+    /// environment can reintroduce that.
+    /// </remarks>
     public static string PrivateRoot
-        => Path.Combine(Adapters.ManagedAgentInstall.ResolveDataRoot(), "orchestrator-private");
+        => Path.GetFullPath(
+            NonEmpty(Environment.GetEnvironmentVariable(PrivateRootEnvVar))
+            ?? Path.Combine(Path.GetTempPath(), "ild-orchestrator-private"));
 
-    /// <inheritdoc cref="PrivateRoot"/>
-    /// <summary>Create a directory under <see cref="PrivateRoot"/> and return its path.</summary>
+    /// <summary>
+    /// Create a directory under <see cref="PrivateRoot"/> and return its path,
+    /// asserting the root is owner-only so that being private is a property of the
+    /// root itself rather than something every caller has to remember to mode.
+    /// </summary>
     public static string CreatePrivateDirectory(params string[] segments)
     {
-        var path = Path.Combine(new[] { PrivateRoot }.Concat(segments).ToArray());
+        var root = PrivateRoot;
+        Directory.CreateDirectory(root);
+        if (OperatingSystem.IsLinux())
+        {
+            try
+            {
+                File.SetUnixFileMode(root,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+            catch (IOException) { /* best effort */ }
+            catch (UnauthorizedAccessException) { /* best effort */ }
+        }
+
+        var path = Path.Combine(new[] { root }.Concat(segments).ToArray());
         Directory.CreateDirectory(path);
         return path;
     }

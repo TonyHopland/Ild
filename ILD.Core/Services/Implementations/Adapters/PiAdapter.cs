@@ -460,7 +460,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
     // Created here rather than by the caller so that, like the session dir above,
     // naming this tree and rooting it in the shared setgid scratch root are one
     // act — the invariant has a single expression instead of one per call site.
-    private static string BuildAgentDirectory(Guid loopRunId)
+    private static string CreateAgentDirectory(Guid loopRunId)
         => AgentIsolation.CreateScratchDirectory(AgentDirSegment, loopRunId.ToString("N"));
 
     private static void PrepareRuntimeFiles(PiAdapterSettings settings)
@@ -509,7 +509,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
             providerName ??= BuildSyntheticProviderName(provider);
             model = StripProviderPrefix(model, providerName);
 
-            agentDirectory = BuildAgentDirectory(loopRunId);
+            agentDirectory = CreateAgentDirectory(loopRunId);
             apiKeyEnvironmentVariableName = "ILD_PI_PROVIDER_API_KEY";
             modelsJsonContent = BuildModelsJson(provider, providerName!, model, api, apiKeyEnvironmentVariableName, apiKey);
             passApiKeyViaCli = false;

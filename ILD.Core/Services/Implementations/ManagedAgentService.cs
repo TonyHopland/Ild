@@ -38,7 +38,7 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         HttpClient http,
         IProcessRunner runner,
         ILogger<ManagedAgentService>? logger = null)
-        : this(http, runner, ManagedAgentInstall.ResolveDataRoot(), logger)
+        : this(http, runner, ManagedAgentInstall.ResolveDataRoot(), logger, AgentIsolation.AgentUser)
     {
     }
 
@@ -54,7 +54,11 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         _runner = runner;
         _logger = logger;
         _dataRoot = dataRoot;
-        _agentUser = agentUser ?? AgentIsolation.AgentUser;
+        // Taken verbatim: null means "isolation off", not "look it up". The
+        // convenience constructor above resolves the ambient value, so a test can
+        // drive either state deterministically instead of depending on a
+        // process-global env var it shares with every other test.
+        _agentUser = agentUser;
     }
 
     public IReadOnlyList<ManagedAgent> Agents => ManagedAgentCatalog.All;

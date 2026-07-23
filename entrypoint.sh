@@ -20,6 +20,7 @@ AGENT_USER="${AGENT_USER:-}"
 AGENT_GROUP="${AGENT_GROUP:-${AGENT_USER}}"
 AGENT_HOME="${AGENT_HOME:-}"
 AGENT_SCRATCH_DIR="${AGENT_SCRATCH_DIR:-}"
+ORCHESTRATOR_PRIVATE_DIR="${ORCHESTRATOR_PRIVATE_DIR:-}"
 SHARED_GROUP="${SHARED_GROUP:-}"
 RUNTIME_AMBIENT_CAPS="${RUNTIME_AMBIENT_CAPS:-}"
 SHARED_RW_DIRS="${SHARED_RW_DIRS:-}"
@@ -145,6 +146,22 @@ ensure_shared_ro() {
 
   chown "$RUNTIME_USER:$SHARED_GROUP" "$path"
   chmod 2755 "$path"
+}
+
+# Orchestrator-only state: owned by the runtime user, owner-only, and created
+# HERE — before any agent-uid process can run. That ordering is the point. The
+# askpass helper git is handed (with the repository token in its environment) and
+# the preview state dir both live at fixed, guessable paths; if the agent could
+# create one of those paths first, orchestrator code that only writes the file
+# "if it is missing" would execute the agent's version as the orchestrator.
+# Pre-creating the root at 0700 closes that regardless of how guessable the paths
+# beneath it are, which is why this can stay on /tmp and remain ephemeral rather
+# than accumulating on the data volume.
+ensure_private() {
+  path="$1"
+  mkdir -p "$path"
+  chown -R "$RUNTIME_USER:$RUNTIME_GROUP" "$path"
+  chmod 0700 "$path"
 }
 
 # Keep a private directory (e.g. /data holding secrets) owned by the runtime user
@@ -384,6 +401,7 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
     export ILD_AGENT_GROUP="$AGENT_GROUP"
     export ILD_AGENT_HOME="$AGENT_HOME"
     export ILD_AGENT_SCRATCH_ROOT="$AGENT_SCRATCH_DIR"
+    export ILD_ORCHESTRATOR_PRIVATE_ROOT="$ORCHESTRATOR_PRIVATE_DIR"
 
     # Two-uid mode. Order matters: the private roots (/data) are created and
     # locked to traverse-only FIRST, so that the shared subtrees created beneath
@@ -398,6 +416,7 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
     for path in $SHARED_RO_DIRS; do
       ensure_shared_ro "$path"
     done
+    [ -n "$ORCHESTRATOR_PRIVATE_DIR" ] && ensure_private "$ORCHESTRATOR_PRIVATE_DIR"
   else
     for path in $RUNTIME_DIRS; do
       ensure_owned_by_runtime_user "$path"
