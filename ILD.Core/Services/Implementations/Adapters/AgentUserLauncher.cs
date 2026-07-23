@@ -15,12 +15,14 @@ namespace ILD.Core.Services.Implementations.Adapters;
 /// helper rewrites a <see cref="ProcessStartInfo"/> so its command runs as:
 /// <code>
 /// setpriv --reuid=&lt;agent&gt; --regid=&lt;agent&gt; --init-groups \
-///         --inh-caps=-all --ambient-caps=-all --bounding-set=-all -- &lt;cmd…&gt;
+///         --inh-caps=-all --ambient-caps=-all -- &lt;cmd…&gt;
 /// </code>
 /// which switches to the agent uid/gid, loads the agent's supplementary groups
 /// (the shared group granting access to the worktree and the <c>/data</c> agent
-/// installs), and strips every capability from the child. A non-root→non-root
-/// setuid does not auto-clear capabilities, so the explicit clears matter.
+/// installs), and clears the inheritable + ambient sets so the child's post-exec
+/// permitted set is empty. A non-root→non-root setuid does not auto-clear
+/// capabilities, so the explicit clears matter. (The bounding set is left alone —
+/// see <see cref="Route(ProcessStartInfo, string?, string?, string?)"/>.)
 /// </para>
 ///
 /// <para>
@@ -32,6 +34,14 @@ namespace ILD.Core.Services.Implementations.Adapters;
 /// </summary>
 public static class AgentUserLauncher
 {
+    // INVARIANT: these ILD_AGENT_* vars (read here, by the app) must name the
+    // same user/group/home as the entrypoint's AGENT_USER/AGENT_GROUP/AGENT_HOME
+    // (which set up that user's ownership + ACLs on the shared dirs). They are
+    // kept in agreement by co-located ENV lines in the Dockerfile — a drift would
+    // drop the agent to a uid the entrypoint never provisioned filesystem access
+    // for. The two namespaces exist only to separate the shell-side setup from
+    // the app-side drop.
+
     /// <summary>When set, the OS user the agent CLI is dropped to (e.g. <c>agent</c>).</summary>
     public const string AgentUserEnvVar = "ILD_AGENT_USER";
 
