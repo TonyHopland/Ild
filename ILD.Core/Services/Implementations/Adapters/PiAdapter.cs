@@ -48,7 +48,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
             // turn's Chat Context preamble is already reachable — there is no
             // per-directory config to set for ctx.AdditionalAllowedDirectories.
 
-            var sessionDirectory = CreateAgentScratchDirectory(SessionDirSegment, ctx.RunContext.LoopRunId.ToString("N"));
+            var sessionDirectory = AgentIsolation.CreateScratchDirectory(SessionDirSegment, ctx.RunContext.LoopRunId.ToString("N"));
             PrepareRuntimeFiles(settings);
 
             string? sessionIdToUse = ctx.SessionId;
@@ -396,9 +396,6 @@ public sealed class PiAdapter : CliAgentAdapterBase
     private const string SessionDirSegment = "ild-pi-sessions";
     private const string AgentDirSegment = "ild-pi-agent";
 
-    private static string BuildSessionDirectory(Guid loopRunId)
-        => Path.Combine(AgentIsolation.ScratchRoot, SessionDirSegment, loopRunId.ToString("N"));
-
     private static string BuildSnapshotPath(string sessionDirectory, string sessionId)
         => Path.Combine(sessionDirectory, $"{SanitizeFileName(sessionId)}.jsonl");
 
@@ -460,8 +457,11 @@ public sealed class PiAdapter : CliAgentAdapterBase
         return sb.ToString();
     }
 
+    // Created here rather than by the caller so that, like the session dir above,
+    // naming this tree and rooting it in the shared setgid scratch root are one
+    // act — the invariant has a single expression instead of one per call site.
     private static string BuildAgentDirectory(Guid loopRunId)
-        => Path.Combine(AgentIsolation.ScratchRoot, AgentDirSegment, loopRunId.ToString("N"));
+        => AgentIsolation.CreateScratchDirectory(AgentDirSegment, loopRunId.ToString("N"));
 
     private static void PrepareRuntimeFiles(PiAdapterSettings settings)
     {
@@ -469,7 +469,6 @@ public sealed class PiAdapter : CliAgentAdapterBase
             || string.IsNullOrWhiteSpace(settings.ModelsJsonContent))
             return;
 
-        Directory.CreateDirectory(settings.AgentDirectory);
         File.WriteAllText(Path.Combine(settings.AgentDirectory, "models.json"), settings.ModelsJsonContent);
 
         // Write the ILD extension so Pi can list/create work items via its tool system.

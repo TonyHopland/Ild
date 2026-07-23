@@ -78,17 +78,6 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
         => Process.Start(AgentIsolation.Route(psi));
 
     /// <summary>
-    /// Create a scratch directory that both the orchestrator and the agent use.
-    /// Rooted at <see cref="AgentIsolation.ScratchRoot"/> rather than <c>TMPDIR</c>:
-    /// under uid isolation that root is a setgid shared-group tree, so everything
-    /// created beneath it — including files the orchestrator seeds for the agent to
-    /// go on writing — inherits the shared group and stays writable by both. That
-    /// inheritance, not a per-directory grant, is what makes the hand-off work.
-    /// </summary>
-    protected static string CreateAgentScratchDirectory(params string[] segments)
-        => AgentIsolation.CreateScratchDirectory(segments);
-
-    /// <summary>
     /// Kill a process and its children. Never throws, but unlike a blind
     /// best-effort kill it reports whether the kill actually took effect:
     /// under uid isolation (ADR-0014) the agent runs with a different real

@@ -272,6 +272,37 @@ public static class AgentIsolation
     }
 
     /// <summary>
+    /// Where orchestrator-only state goes — the counterpart to
+    /// <see cref="ScratchRoot"/>. It sits under the data root, which is mode
+    /// <c>0711</c> owned by the orchestrator: the agent can traverse it to reach
+    /// the shared subtrees but cannot create, list or replace anything in it.
+    ///
+    /// <para>
+    /// This exists because a fixed, predictable path in world-writable
+    /// <c>/tmp</c> stops being harmless once the agent is a different uid: the
+    /// agent can create the file first, and orchestrator code that guards on
+    /// "does it already exist?" will then trust and use the agent's version. The
+    /// git askpass helper is the sharp case — it is handed to git as
+    /// <c>GIT_ASKPASS</c> with the repository token in its environment, so a
+    /// planted script is both arbitrary code as the orchestrator and credential
+    /// exfiltration. The <c>/tmp</c> sticky bit does not help: it only prevents
+    /// replacing a file that already exists, and an agent-uid process (a chat run,
+    /// the provider-login terminal) can run before the orchestrator first creates it.
+    /// </para>
+    /// </summary>
+    public static string PrivateRoot
+        => Path.Combine(Adapters.ManagedAgentInstall.ResolveDataRoot(), "orchestrator-private");
+
+    /// <inheritdoc cref="PrivateRoot"/>
+    /// <summary>Create a directory under <see cref="PrivateRoot"/> and return its path.</summary>
+    public static string CreatePrivateDirectory(params string[] segments)
+    {
+        var path = Path.Combine(new[] { PrivateRoot }.Concat(segments).ToArray());
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
+    /// <summary>
     /// Re-assert "the agent may read and execute this, but never write it" on a
     /// tree the orchestrator just created, by stripping group and other write from
     /// every entry (the owning orchestrator keeps its own write access).

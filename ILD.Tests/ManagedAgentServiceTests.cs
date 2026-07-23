@@ -211,18 +211,25 @@ public class ManagedAgentServiceTests : IDisposable
     [Fact]
     public async Task Install_leaves_permissions_alone_when_isolation_is_off()
     {
-        // Single-uid deployments and local development must be unaffected.
+        // Single-uid deployments and local development must be unaffected: with no
+        // agent user there is no second uid to protect against, so the group-write
+        // npm left behind must still be there afterwards. Asserting the *presence*
+        // of what the isolation-on test asserts the absence of is what makes this
+        // meaningful — it fails if ProtectFromAgentWrites ignores its agentUser.
         if (!OperatingSystem.IsLinux()) return;
 
-        var runner = new FakeRunner { VersionAfterInstall = "0.80.2" };
+        var runner = new FakeRunner { VersionAfterInstall = "0.80.2", GroupWritableInstall = true };
         var handler = new RegistryHandler { Version = "0.80.2" };
         var service = CreateService(runner, handler, agentUser: null);
 
+        var preVersions = ManagedAgentInstall.VersionsRoot(_dataRoot, _agent);
+        Directory.CreateDirectory(preVersions);
+        File.SetUnixFileMode(preVersions, File.GetUnixFileMode(preVersions) | UnixFileMode.GroupWrite);
+
         await service.UpdateAsync(_agent.Key);
 
-        var versionDir = Directory.EnumerateDirectories(ManagedAgentInstall.VersionsRoot(_dataRoot, _agent)).Single();
-        File.SetUnixFileMode(versionDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute | UnixFileMode.GroupWrite);
-        Assert.True(File.GetUnixFileMode(versionDir).HasFlag(UnixFileMode.GroupWrite));
+        var stillWritable = AgentWritableEntries(ManagedAgentInstall.AgentRoot(_dataRoot, _agent));
+        Assert.NotEmpty(stillWritable);
     }
 
     [Fact]

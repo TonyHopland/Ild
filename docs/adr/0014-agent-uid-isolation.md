@@ -91,6 +91,30 @@ ambient`) is empty (a non-root→non-root setuid does not auto-clear caps, so th
   under the container's `umask 002`, so they stay group-readable.
   `agent` still cannot read `/data`'s private secrets or the orchestrator's memory.
 
+- **git needs `safe.directory` set system-wide.** `git worktree add` runs as the
+  orchestrator, so the worktree, its `.git` file and the gitdir under
+  `/data/repos/<repo>/.git/worktrees/<name>` are owned by `ild` — and since 2.35.2
+  git refuses to operate on a repository whose owner's uid differs from
+  `geteuid()`, regardless of group and mode. Without `git config --system --add
+safe.directory '*'` in the image, every git command the agent runs (the review
+  prompts use `git log`/`diff`/`status`, and it commits its own work) dies with
+  "detected dubious ownership". It has to be system-level — git ignores the
+  setting from repository config, and the agent's `.gitconfig` is a symlink onto
+  the read-only host mount. This gives nothing away: the check guards against
+  picking up a repo owned by some _other_ user, whereas both uids are ours and the
+  sharing is deliberate.
+
+- **Orchestrator-private state moved off fixed `/tmp` paths.** A predictable path
+  in world-writable `/tmp` is harmless while everything is one uid, and a
+  privilege-escalation route once it is not: the agent can create the path first,
+  and orchestrator code that guards on "does it already exist?" then trusts the
+  agent's version. The git askpass helper is the sharp case — it is executed by
+  the orchestrator with the repository token in its environment. Those now live
+  under `{DataRoot}/orchestrator-private`, which is inside the `0711` data root
+  the agent can traverse but not write. (The `/tmp` sticky bit is not enough: it
+  only prevents replacing a file that already exists, and an agent-uid process can
+  run before the orchestrator first creates it.)
+
 - **Shared scratch is a setgid tree, not a per-directory grant.** The orchestrator
   regularly _seeds a file the agent then keeps writing_ — Pi's restored session
   transcript is written by the orchestrator and appended to by pi for the rest of

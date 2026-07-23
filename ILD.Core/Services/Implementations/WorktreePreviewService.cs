@@ -938,10 +938,17 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         throw new InvalidOperationException($"Preview service '{serviceName}' did not become healthy at {healthUrl}.");
     }
 
+    /// <summary>
+    /// Per-worktree preview state (logs, the npm cache used by install steps).
+    /// Rooted at the orchestrator-private root rather than a fixed, fully
+    /// predictable path in world-writable <c>/tmp</c>: the path is a hash of the
+    /// worktree, so the agent — which now runs as a different uid and knows its own
+    /// worktree path — could pre-create it and plant content that install and
+    /// service steps then consume while running as the orchestrator. See ADR-0014.
+    /// </summary>
     private static string BuildStateDirectory(string worktreePath)
     {
-        var root = Path.Combine(Path.GetTempPath(), "ild-preview");
-        Directory.CreateDirectory(root);
+        var root = AgentIsolation.CreatePrivateDirectory("preview");
         var slug = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(worktreePath))).ToLowerInvariant();
         return Path.Combine(root, slug);
     }
@@ -1004,7 +1011,12 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         var home = Environment.GetEnvironmentVariable("HOME");
         if (string.IsNullOrWhiteSpace(home))
         {
-            home = Path.Combine(Path.GetTempPath(), "ild-home");
+            // Not reachable in the container (HOME is always set), but the
+            // fallback must not be a fixed path in world-writable /tmp either:
+            // preview steps run as the orchestrator with HOME pointing here, so a
+            // planted ~/.npmrc would be read by their npm. Same reasoning as the
+            // askpass helper and the preview state dir (ADR-0014).
+            return AgentIsolation.CreatePrivateDirectory("home");
         }
 
         Directory.CreateDirectory(home);

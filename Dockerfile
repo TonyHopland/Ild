@@ -126,6 +126,23 @@ RUN if [ -z "$(getent group "${SHARED_GID}" | cut -d: -f1 || true)" ]; then \
     usermod -aG ild-agents agent && \
     chmod 0755 /home/agent /home/ild
 
+# Let the agent uid run git in trees the orchestrator owns. `git worktree add`
+# runs as ild, so the worktree, its .git file and the gitdir under
+# /data/repos/<repo>/.git/worktrees/<name> are all owned by uid 10001 — and since
+# 2.35.2 git compares the repository owner's uid to geteuid() and refuses with
+# "detected dubious ownership" otherwise. Group membership and mode 2775 do not
+# enter into that check, so without this every git command the agent runs (the
+# review prompts use git log/diff/status, and it commits its own work) fails.
+#
+# This must be system-level: git ignores safe.directory from repository config,
+# and /home/agent/.gitconfig is a symlink onto the read-only host mount so it
+# cannot carry it either. `*` rather than per-path entries because the trailing
+# `/*` form is version-dependent and would fail silently on an older git. It
+# costs nothing here: safe.directory guards against picking up a repo owned by
+# some *other* user, whereas both uids are ours and the sharing is deliberate —
+# the real boundary is the uid/group/mode scheme, not this heuristic.
+RUN git config --system --add safe.directory '*'
+
 # Coding agents (Pi, OpenCode, Claude Code) are intentionally NOT baked into
 # the image. They are installed on demand onto the persistent /data volume
 # from the AI Provider page (npm-based), so they can be updated without
