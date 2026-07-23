@@ -18,8 +18,8 @@ namespace ILD.Core.Services.Implementations;
 ///   <item><b>Placing files both uids must share</b> — <see cref="ScratchRoot"/>,
 ///   the directory whose group/setgid setup lets the two uids hand files back and
 ///   forth, and <see cref="ProtectFromAgentWrites(string)"/> /
-///   <see cref="HideFromAgent(string)"/> / <see cref="AllowAgentReadExecute(string)"/>
-///   for the trees the agent may execute but must never modify.</item>
+///   <see cref="StageForAgentExec(string)"/> for the trees the agent may execute
+///   but must never modify.</item>
 ///   <item><b>Placing files only the orchestrator may see</b> —
 ///   <see cref="PrivateRoot"/>, an owner-only root for state that would be a way
 ///   back across the boundary if the agent could read or plant it.</item>
@@ -408,57 +408,103 @@ public static class AgentIsolation
         => ProtectFromAgentWrites(path, AgentUser);
 
     /// <summary>
-    /// Make a directory unreachable by the agent uid entirely (owner-only), for
-    /// use while its contents are still being assembled.
+    /// Build a tree the agent will execute but must never be able to modify,
+    /// keeping it unreachable while it is incomplete.
     ///
     /// <para>
     /// <see cref="ProtectFromAgentWrites(string)"/> can only be applied to a
-    /// finished tree: it strips write from what is already there, so during a
-    /// runtime <c>npm install</c> — which creates the whole
-    /// <c>node_modules</c> tree as the orchestrator under the container's
-    /// <c>umask 002</c>, inheriting the shared group from the setgid parent — the
-    /// agent would be free to overwrite files in the very tree the orchestrator
-    /// later execs as itself. Closing the one parent directory is enough and is a
-    /// single chmod: the agent cannot traverse into it however permissive the
-    /// modes beneath happen to be mid-install.
+    /// <em>finished</em> tree — it strips write from what is already there. During
+    /// a runtime <c>npm install</c>, which builds the whole <c>node_modules</c>
+    /// tree as the orchestrator under the container's <c>umask 002</c> with the
+    /// shared group inherited from the setgid parent, the agent would otherwise be
+    /// free to overwrite files in the very tree the orchestrator later execs as
+    /// itself. So the directory is closed to the agent for the duration and
+    /// reopened only once its contents are complete and read-only.
     /// </para>
     ///
-    /// <para>Reopened with <see cref="AllowAgentReadExecute"/> once the tree is complete.</para>
+    /// <para>
+    /// The whole transition lives here rather than in the caller because its
+    /// ordering is the security property: closed → build → strip write → reopen →
+    /// only then may anything point at it. Returning a scope also makes the
+    /// failure path right by default — leaving without
+    /// <see cref="AgentExecStaging.Publish"/> simply leaves the tree closed, which
+    /// is exactly what a failed install wants.
+    /// </para>
     /// </summary>
-    public static void HideFromAgent(string path) => HideFromAgent(path, AgentUser);
+    public static AgentExecStaging StageForAgentExec(string directory) => StageForAgentExec(directory, AgentUser);
 
-    /// <inheritdoc cref="HideFromAgent(string)"/>
-    public static void HideFromAgent(string path, string? agentUser)
-    {
-        if (NonEmpty(agentUser) is null || !OperatingSystem.IsLinux())
-            return;
-
-        TrySetMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-    }
+    /// <inheritdoc cref="StageForAgentExec(string)"/>
+    public static AgentExecStaging StageForAgentExec(string directory, string? agentUser)
+        => new(directory, NonEmpty(agentUser));
 
     /// <summary>
-    /// Reopen a directory closed by <see cref="HideFromAgent(string)"/> so the
-    /// agent can traverse and read it — the inverse, and the step that publishes a
-    /// finished install. Call it only after
-    /// <see cref="ProtectFromAgentWrites(string)"/> has stripped write from the
-    /// contents, so the tree becomes readable and executable but never writable.
+    /// The scope returned by <see cref="StageForAgentExec(string)"/>. Closed on
+    /// construction, opened by <see cref="Publish"/>; a no-op throughout when uid
+    /// isolation is off.
     /// </summary>
-    public static void AllowAgentReadExecute(string path) => AllowAgentReadExecute(path, AgentUser);
-
-    /// <inheritdoc cref="AllowAgentReadExecute(string)"/>
-    public static void AllowAgentReadExecute(string path, string? agentUser)
+    public sealed class AgentExecStaging : IDisposable
     {
-        if (NonEmpty(agentUser) is null || !OperatingSystem.IsLinux())
-            return;
+        private readonly string _directory;
+        private readonly string? _agentUser;
+        private readonly UnixFileMode? _restoreMode;
 
-        try
+        internal AgentExecStaging(string directory, string? agentUser)
         {
-            TrySetMode(path, File.GetUnixFileMode(path)
-                | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
-                | UnixFileMode.OtherExecute);
+            _directory = directory;
+            _agentUser = agentUser;
+
+            if (agentUser is null || !OperatingSystem.IsLinux())
+                return;
+
+            try
+            {
+                // Capture the mode so Publish can put it back exactly. Restoring a
+                // captured value rather than OR-ing bits back on is what keeps the
+                // round trip lossless: File.SetUnixFileMode is a raw chmod(2) and
+                // clears setgid, and losing setgid here would desynchronise the
+                // finished install from the shared-group scheme the entrypoint's
+                // tripwire checks — forcing a full re-walk of /data/agents on the
+                // next boot, and dropping the tree out of the shared group in the
+                // window before that.
+                _restoreMode = File.GetUnixFileMode(_directory);
+
+                // Owner-only, but keep setgid so the tree still inherits the shared
+                // group as npm builds it. The agent cannot traverse in regardless of
+                // how permissive the modes beneath happen to be mid-install.
+                TrySetMode(_directory,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                    | (_restoreMode.Value & UnixFileMode.SetGroup));
+            }
+            catch (IOException) { /* best effort */ }
+            catch (UnauthorizedAccessException) { /* best effort */ }
         }
-        catch (IOException) { /* best effort */ }
-        catch (UnauthorizedAccessException) { /* best effort */ }
+
+        /// <summary>
+        /// Make the finished tree read-only to the agent and reopen it. Must be
+        /// called before anything points at the tree.
+        /// </summary>
+        public void Publish()
+        {
+            ProtectFromAgentWrites(_directory, _agentUser);
+
+            if (_restoreMode is not { } mode)
+                return;
+
+            // Group read+execute is the agent's grant; it is a member of the shared
+            // group the tree carries. No "other" bits are added — the shared roots
+            // deny non-members traversal, so widening here would only extend reach
+            // to some future third uid.
+            TrySetMode(_directory, mode | UnixFileMode.GroupRead | UnixFileMode.GroupExecute);
+        }
+
+        /// <summary>
+        /// Deliberately does nothing: if the scope is left without
+        /// <see cref="Publish"/> the tree simply stays closed, which is the correct
+        /// outcome for a failed or abandoned install.
+        /// </summary>
+        public void Dispose()
+        {
+        }
     }
 
     private static void TrySetMode(string path, UnixFileMode mode)

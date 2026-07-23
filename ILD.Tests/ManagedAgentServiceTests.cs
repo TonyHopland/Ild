@@ -213,6 +213,44 @@ public class ManagedAgentServiceTests : IDisposable
             "agent-writable after install: " + string.Join(", ", offenders));
     }
 
+    /// <summary>
+    /// Entries under <paramref name="root"/> that would trip the entrypoint's
+    /// ensure_shared_ro drift check — i.e. the shell-side and app-side views of the
+    /// same tree disagreeing. Mirrors that predicate: every directory setgid with
+    /// group r-x, every regular file group-readable, neither group-writable.
+    /// Symlinks are skipped exactly as the entrypoint skips them (mode 0777 always,
+    /// and chmod cannot change it).
+    /// </summary>
+    private static List<string> SharedReadOnlyDriftEntries(string root)
+    {
+        var drift = new List<string>();
+
+        void Visit(FileSystemInfo entry)
+        {
+            if (entry.LinkTarget is not null) return;
+
+            var mode = File.GetUnixFileMode(entry.FullName);
+            if (entry is DirectoryInfo directory)
+            {
+                if (!mode.HasFlag(UnixFileMode.SetGroup)
+                    || !mode.HasFlag(UnixFileMode.GroupRead)
+                    || !mode.HasFlag(UnixFileMode.GroupExecute)
+                    || mode.HasFlag(UnixFileMode.GroupWrite))
+                    drift.Add($"{entry.FullName} (dir, mode {mode})");
+
+                foreach (var child in directory.EnumerateFileSystemInfos())
+                    Visit(child);
+            }
+            else if (!mode.HasFlag(UnixFileMode.GroupRead) || mode.HasFlag(UnixFileMode.GroupWrite))
+            {
+                drift.Add($"{entry.FullName} (file, mode {mode})");
+            }
+        }
+
+        Visit(new DirectoryInfo(root));
+        return drift;
+    }
+
     [Fact]
     public async Task Install_keeps_the_version_tree_closed_to_the_agent_while_npm_runs()
     {
@@ -227,10 +265,26 @@ public class ManagedAgentServiceTests : IDisposable
         var handler = new RegistryHandler { Version = "0.80.2" };
         var service = CreateService(runner, handler, agentUser: "agent");
 
+        // Reproduce the container's shape: the entrypoint leaves /data/agents
+        // setgid so everything created beneath it inherits the shared group. The
+        // test process runs under umask 022 with no setgid anywhere, so without
+        // this there is no setgid for the install to preserve and the assertions
+        // below would be vacuous.
+        var versions = ManagedAgentInstall.VersionsRoot(_dataRoot, _agent);
+        Directory.CreateDirectory(versions);
+        foreach (var seed in new[] { ManagedAgentInstall.AgentRoot(_dataRoot, _agent), versions })
+            File.SetUnixFileMode(seed, File.GetUnixFileMode(seed) | UnixFileMode.SetGroup);
+
         await service.UpdateAsync(_agent.Key);
 
         var during = runner.PrefixModeDuringInstall;
         Assert.NotNull(during);
+        // setgid must survive being closed: it is what keeps everything npm builds
+        // in the shared group, and the entrypoint's tripwire keys on it. A raw
+        // chmod to an absolute 0700 clears it, desynchronising the finished install
+        // from the shell-side scheme and forcing a full re-walk on the next boot.
+        Assert.True(during!.Value.HasFlag(UnixFileMode.SetGroup),
+            $"setgid was dropped while the tree was staged (mode {during})");
         Assert.False(during!.Value.HasFlag(UnixFileMode.GroupExecute),
             "agent could traverse into the half-built install tree");
         Assert.False(during!.Value.HasFlag(UnixFileMode.GroupWrite));
@@ -245,6 +299,15 @@ public class ManagedAgentServiceTests : IDisposable
         Assert.True(after.HasFlag(UnixFileMode.GroupRead));
         Assert.True(after.HasFlag(UnixFileMode.GroupExecute));
         Assert.False(after.HasFlag(UnixFileMode.GroupWrite));
+        Assert.True(after.HasFlag(UnixFileMode.SetGroup), "setgid was not restored on publish");
+
+        // The published tree must satisfy the same predicate the entrypoint's
+        // ensure_shared_ro tripwire uses, or the first boot after an install does a
+        // full recursive repair of /data/agents — the re-walk that tripwire exists
+        // to avoid, and QA criterion 7.
+        var drift = SharedReadOnlyDriftEntries(ManagedAgentInstall.AgentRoot(_dataRoot, _agent));
+        Assert.True(drift.Count == 0,
+            "post-install tree would trip the entrypoint tripwire: " + string.Join(", ", drift));
     }
 
     [Fact]

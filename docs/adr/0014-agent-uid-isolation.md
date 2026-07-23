@@ -43,11 +43,23 @@ memory or its private files by virtue of being the same user.
     assembled — and it is published before the `current` pointer flips to it, so
     the tree the pointer names is never one the agent could still edit.
 
-  `/data` itself is mode `0711`: `agent` can traverse it to reach the shared
-  subtrees by exact path but cannot list it or read private sibling files.
-  `/home/ild` is explicitly `0755` — the agent's dotdirs are symlinks into the
-  store beneath it, and `useradd`'s Debian default (`HOME_MODE 0750`) would break
-  both the shared credentials and the git identity.
+  Reach is granted **through the group, never through the "other" bits**. `/data`
+  is `0710` group `ild-agents`: `agent` can traverse it to reach the shared
+  subtrees by exact path but cannot list it or read private sibling files — and a
+  process outside the two uids gets nothing. It is deliberately not setgid, so
+  state the orchestrator writes directly there keeps its own private group. The
+  shared roots are likewise `2770`/`2750` rather than `2775`/`2755`: reaching
+  anything inside requires traversing the root, so closing "other" there makes the
+  whole subtree group-only whatever the modes on individual entries say.
+  `/home/ild` is `0710` group `ild-agents` — the agent's dotdirs are symlinks into
+  the store beneath it, so it must traverse (never list) that home, and `useradd`'s
+  Debian default (`HOME_MODE 0750`, group `ild`) would break both the shared
+  credentials and the git identity.
+
+  The one deliberate exception is `/app`, which stays world-readable: the agent
+  reads the MCP-server assemblies from there, and group-owning it would mean a
+  recursive chown over the published output — an extra image layer shipping the
+  build twice — to protect read-only code that is in the image anyway.
 
 - **Cross-user spawn via retained capability, not setuid.** .NET has no native
   cross-user spawn on Linux, and an unprivileged process cannot switch uid. The

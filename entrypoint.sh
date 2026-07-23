@@ -11,8 +11,9 @@ RUNTIME_DIRS="${RUNTIME_DIRS:-/data /worktrees /home/ild/.agent-config}"
 #   * SHARED_RW_DIRS are group-owned by SHARED_GROUP, setgid, and default-ACL'd so
 #     files created by either uid stay read/write for the other (worktrees, the
 #     /data agent installs + repo store, the credential store).
-#   * DATA_TRAVERSE_DIRS (/data) stay ild-private but world-traversable, so the
-#     agent can reach the shared subtrees by exact path without reading secrets.
+#   * DATA_TRAVERSE_DIRS (/data) stay ild-private but traversable by SHARED_GROUP,
+#     so the agent can reach the shared subtrees by exact path without reading
+#     secrets. Reach is granted through the group throughout — no "other" bits.
 #   * The orchestrator is dropped WITH ambient RUNTIME_AMBIENT_CAPS so it — and
 #     only it — can drop the agent to AGENT_USER via setpriv.
 # All unset => single-uid mode, unchanged (Dockerfile.WorkItemServer).
@@ -102,8 +103,11 @@ ensure_shared_rw() {
   fi
 
   # Cheap and idempotent: the root of the shared tree is always normalized.
+  # 2770, not 2775: access to this tree is a GROUP grant, and reaching anything
+  # inside requires traversing this root — so denying "other" here is what makes
+  # the grant group-only, whatever the modes on individual entries beneath say.
   chown "$RUNTIME_USER:$SHARED_GROUP" "$path"
-  chmod 2775 "$path"
+  chmod 2770 "$path"
 }
 
 # Like ensure_shared_rw, but the group only gets read/execute. Used for the
@@ -145,7 +149,7 @@ ensure_shared_ro() {
   fi
 
   chown "$RUNTIME_USER:$SHARED_GROUP" "$path"
-  chmod 2755 "$path"
+  chmod 2750 "$path"
 }
 
 # Orchestrator-only state: owned by the runtime user, owner-only, and created
@@ -165,13 +169,20 @@ ensure_private() {
 }
 
 # Keep a private directory (e.g. /data holding secrets) owned by the runtime user
-# but world-traversable, so the agent uid can reach the shared subtrees beneath it
-# by exact path without being able to list it or read private sibling files.
+# but traversable by the shared group, so the agent uid can reach the shared
+# subtrees beneath it by exact path without being able to list it or read private
+# sibling files.
+#
+# 0710 with the shared group rather than 0711: --x is the same reach for the
+# agent either way, but granting it through the group keeps it scoped to the two
+# uids that are meant to have it instead of to everyone. Deliberately NOT setgid —
+# files the orchestrator writes directly here must keep its own group, or private
+# state would drift into the shared one.
 ensure_traverse() {
   path="$1"
   mkdir -p "$path"
-  chown "$RUNTIME_USER:$RUNTIME_GROUP" "$path"
-  chmod 0711 "$path"
+  chown "$RUNTIME_USER:$SHARED_GROUP" "$path"
+  chmod 0710 "$path"
 }
 
 # For each agent dotdir name, ensure a subdir exists under the config store
@@ -436,7 +447,11 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
     # itself is group-owned, so this grants traversal only, not its contents.
     config_group="$RUNTIME_GROUP"
     if [ -n "$AGENT_USER" ]; then
-      chmod 0755 "$runtime_home"
+      # 0710 + shared group: the agent must traverse this home to resolve the
+      # credential-store and .gitconfig symlinks, but it never needs to list it,
+      # and no one outside the two uids needs anything here.
+      chown "$RUNTIME_USER:$SHARED_GROUP" "$runtime_home"
+      chmod 0710 "$runtime_home"
       [ -n "$SHARED_GROUP" ] && config_group="$SHARED_GROUP"
     fi
 
@@ -459,8 +474,8 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
       agent_home="$(getent passwd "$AGENT_USER" | cut -d: -f6)"
       agent_home="${agent_home:-$AGENT_HOME}"
       mkdir -p "$agent_home"
-      chown "$AGENT_USER:$AGENT_USER" "$agent_home"
-      chmod 0755 "$agent_home"
+      chown "$AGENT_USER:$SHARED_GROUP" "$agent_home"
+      chmod 0750 "$agent_home"
 
       # shellcheck disable=SC2086
       link_secondary_home "$agent_home" "$AGENT_USER" "$AGENT_CONFIG_STORE" $AGENT_CONFIG_DIRS $AGENT_CONFIG_FILES
