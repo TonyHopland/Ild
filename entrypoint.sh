@@ -201,17 +201,31 @@ ensure_traverse() {
 # write. Callers pass the home owner's *private* group here (see link_agent_
 # config_dirs), never the shared agent group, or the agent uid would gain write
 # on the orchestrator's home scaffolding (ADR-0014).
+#
+# The 4th arg opts into best-effort chowns (`|| true`). The entrypoint runs under
+# `set -e`, so the default strict chown aborts the boot if it fails — which is
+# what we want for the ORCHESTRATOR home, where a silently-skipped chown would
+# re-open the exact WI-163 failure. The secondary (agent) home passes best-effort
+# to preserve its original tolerant behavior: it is populated as pure convenience
+# right after agent_home itself is chowned strictly, so a failure there should not
+# be able to take the whole container down.
 ensure_home_link_parent() {
   _home="$1"
-  _ownership="$2"   # chown OWNER:GROUP spec applied to each level of the chain
-  _parent="$(dirname "$3")"
+  _ownership="$2"        # chown OWNER:GROUP spec applied to each level of the chain
+  _link="$3"
+  _best_effort="${4:-}"  # non-empty => tolerate chown failures (`|| true`)
+  _parent="$(dirname "$_link")"
 
   [ "$_parent" != "$_home" ] || return 0
 
   mkdir -p "$_parent"
   _dir="$_parent"
   while [ "$_dir" != "$_home" ] && [ "$_dir" != "/" ]; do
-    chown "$_ownership" "$_dir"
+    if [ -n "$_best_effort" ]; then
+      chown "$_ownership" "$_dir" 2>/dev/null || true
+    else
+      chown "$_ownership" "$_dir"
+    fi
     _dir="$(dirname "$_dir")"
   done
 }
@@ -326,7 +340,9 @@ link_secondary_home() {
   for name in "$@"; do
     [ -n "$name" ] || continue
     link="$home/$name"
-    ensure_home_link_parent "$home" "$owner:$owner" "$link"
+    # best_effort: this agent-home scaffolding is convenience, not the WI-163 fix,
+    # and its symlink chown below is likewise tolerant — keep both from aborting boot.
+    ensure_home_link_parent "$home" "$owner:$owner" "$link" best_effort
     if [ -e "$link" ] && [ ! -L "$link" ]; then
       rm -rf "$link"
     fi
