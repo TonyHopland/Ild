@@ -221,6 +221,80 @@ public class AgentIsolationTests
     }
 
     [Fact]
+    public void StageForAgentExec_closes_the_directory_until_published()
+    {
+        // The abandon path is the whole justification for the scope shape: a
+        // failed install must leave the tree closed, not half-open. Nothing else
+        // asserts it — the managed-agent failure test deletes the version dir.
+        if (!OperatingSystem.IsLinux()) return;
+
+        var dir = Path.Combine(Path.GetTempPath(), $"ild-stage-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        File.SetUnixFileMode(dir,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+            | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
+            | UnixFileMode.SetGroup);
+        try
+        {
+            using (AgentIsolation.StageForAgentExec(dir, agentUser: "agent"))
+            {
+                // Left without Publish() — an abandoned/failed install.
+                var mode = File.GetUnixFileMode(dir);
+                Assert.False(mode.HasFlag(UnixFileMode.GroupRead), "agent could read the half-built tree");
+                Assert.False(mode.HasFlag(UnixFileMode.GroupExecute), "agent could traverse the half-built tree");
+                Assert.False(mode.HasFlag(UnixFileMode.OtherRead));
+                Assert.False(mode.HasFlag(UnixFileMode.OtherExecute));
+            }
+
+            // Dispose does not reopen it.
+            var afterDispose = File.GetUnixFileMode(dir);
+            Assert.False(afterDispose.HasFlag(UnixFileMode.GroupExecute), "an abandoned stage must stay closed");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void StageForAgentExec_publish_never_leaves_the_tree_agent_writable()
+    {
+        // Regression guard for the clamp: the captured mode is whatever the dir had
+        // when staging opened, which under the container's umask 002 + setgid parent
+        // is group-writable (2775). Publish must not restore that write bit — the
+        // tree `current` is about to name would be agent-writable. This distinction
+        // never arises under the test process's umask 022, so it is set explicitly.
+        if (!OperatingSystem.IsLinux()) return;
+
+        var dir = Path.Combine(Path.GetTempPath(), $"ild-stage-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        // 2775: group-writable + setgid, exactly what a mid-install dir carries.
+        File.SetUnixFileMode(dir,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+            | UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute
+            | UnixFileMode.OtherRead | UnixFileMode.OtherExecute
+            | UnixFileMode.SetGroup);
+        try
+        {
+            var staged = AgentIsolation.StageForAgentExec(dir, agentUser: "agent");
+            staged.Publish();
+
+            var mode = File.GetUnixFileMode(dir);
+            Assert.False(mode.HasFlag(UnixFileMode.GroupWrite), "Publish re-granted group write");
+            Assert.False(mode.HasFlag(UnixFileMode.OtherWrite));
+            // But it must still be reachable and executable, and keep the shared
+            // group via setgid, or it drifts out of the shell-side scheme.
+            Assert.True(mode.HasFlag(UnixFileMode.GroupRead));
+            Assert.True(mode.HasFlag(UnixFileMode.GroupExecute));
+            Assert.True(mode.HasFlag(UnixFileMode.SetGroup), "Publish dropped setgid");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ProtectFromAgentWrites_is_a_noop_when_isolation_is_off()
     {
         if (!OperatingSystem.IsLinux()) return;

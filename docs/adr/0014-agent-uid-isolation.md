@@ -30,7 +30,7 @@ memory or its private files by virtue of being the same user.
   - **read-only** — `/data/agents`, the npm-installed CLIs. The agent execs them
     but must not rewrite them, because the orchestrator runs those same binaries
     as `ild` (version checks, the provider terminal); a writable install would be
-    a way straight back across the boundary. Mode `2755` with a `g:ild-agents:r-x`
+    a way straight back across the boundary. Mode `2750` with a `g:ild-agents:r-x`
     default ACL; the orchestrator still installs/updates them as the owner. These
     CLIs are installed onto `/data` at **runtime**, so the boot-time pass has to
     strip group-write that an install introduced (npm writes group-writable under
@@ -59,7 +59,11 @@ memory or its private files by virtue of being the same user.
   The one deliberate exception is `/app`, which stays world-readable: the agent
   reads the MCP-server assemblies from there, and group-owning it would mean a
   recursive chown over the published output — an extra image layer shipping the
-  build twice — to protect read-only code that is in the image anyway.
+  build twice — to protect read-only code that is in the image anyway. It also
+  holds `appsettings.json`, which ships empty (`App:Username`/`Password` are `""`
+  and secrets come from the environment), so nothing leaks today — but a deployer
+  who bakes credentials into it would be handing them to the agent uid, so
+  configuration secrets belong in the environment, not that file.
 
 - **Cross-user spawn via retained capability, not setuid.** .NET has no native
   cross-user spawn on Linux, and an unprivileged process cannot switch uid. The

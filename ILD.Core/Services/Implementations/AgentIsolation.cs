@@ -490,11 +490,20 @@ public static class AgentIsolation
             if (_restoreMode is not { } mode)
                 return;
 
-            // Group read+execute is the agent's grant; it is a member of the shared
-            // group the tree carries. No "other" bits are added — the shared roots
-            // deny non-members traversal, so widening here would only extend reach
-            // to some future third uid.
-            TrySetMode(_directory, mode | UnixFileMode.GroupRead | UnixFileMode.GroupExecute);
+            // Restore the captured mode, grant the agent group read+execute (it is
+            // a member of the shared group the tree carries), and — crucially —
+            // clamp group/other write back off. The clamp is what makes the
+            // read-only guarantee a property of THIS method rather than of the
+            // caller: the capture reflects whatever mode the directory had when the
+            // scope opened, which under the container's umask 002 with a setgid
+            // parent is group-writable (2775), and ProtectFromAgentWrites can also
+            // fail its walk before reaching this directory. Either way, without the
+            // clamp Publish would re-grant write to the tree `current` is about to
+            // name. No "other" bits are added — the shared roots deny non-members
+            // traversal, so widening here would only extend reach to a future uid.
+            TrySetMode(_directory,
+                (mode | UnixFileMode.GroupRead | UnixFileMode.GroupExecute)
+                & ~(UnixFileMode.GroupWrite | UnixFileMode.OtherWrite));
         }
 
         /// <summary>

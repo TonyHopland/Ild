@@ -108,11 +108,13 @@ RUN existing_group="$(getent group "${APP_GID}" | cut -d: -f1 || true)" && \
 # agent CLI runs as `agent` so it no longer shares the orchestrator's uid; the
 # `ild-agents` group is what grants both users access to the worktree tree and
 # the /data agent installs, while /data's secrets stay ild-only. Both users are
-# members of the shared group; the runtime paths' ownership/ACLs are applied by
-# the entrypoint (volumes overlay any build-time perms). /home/ild is forced to
-# 0755 because the agent's dotdirs are symlinks into the credential store beneath
-# it — useradd's Debian default (HOME_MODE 0750) would leave the agent unable to
-# traverse it, breaking both the shared logins and the git commit identity.
+# members of the shared group; the runtime paths' ownership/modes are applied by
+# the entrypoint (volumes overlay any build-time perms). The entrypoint sets both
+# homes to 0710/0750 group ild-agents at runtime — the agent traverses /home/ild
+# to resolve the credential-store and .gitconfig symlinks beneath it via the
+# GROUP, not via world bits; this chmod is only a sane build-time baseline for the
+# non-isolated case (useradd's Debian HOME_MODE is 0750 group ild, which the agent
+# is not in).
 RUN if [ -z "$(getent group "${SHARED_GID}" | cut -d: -f1 || true)" ]; then \
       groupadd --gid ${SHARED_GID} ild-agents; \
     fi && \

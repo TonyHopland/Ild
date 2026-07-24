@@ -442,9 +442,9 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
 
     # In two-uid mode the store lives under the runtime user's home and the
     # agent's dotdirs are symlinks into it, so the agent uid must be able to
-    # traverse this home (useradd's HOME_MODE is 0750 on Debian, which would
-    # break both the shared credentials and the .gitconfig symlink). The store
-    # itself is group-owned, so this grants traversal only, not its contents.
+    # traverse this home. useradd's Debian default is 0750 group ild, which the
+    # agent is not in; the fix is the GROUP, so below this home becomes 0710 group
+    # ild-agents — traversal only (never listing), and never through world bits.
     config_group="$RUNTIME_GROUP"
     if [ -n "$AGENT_USER" ]; then
       # 0710 + shared group: the agent must traverse this home to resolve the
