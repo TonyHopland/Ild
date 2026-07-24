@@ -41,15 +41,20 @@ fail() { echo "FAIL: $*"; failures=$((failures + 1)); }
 pass() { echo "ok: $*"; }
 
 # --- Load the real link helper without running the entrypoint's top-level body.
-# Extract the function definition (header line to its first column-0 `}`) so the
-# test tracks the shipped implementation but is robust to line-number drift.
+# link_agent_config_dirs delegates the parent-chain chown to ensure_home_link_parent
+# (the shared helper that carries the fix), so both are sourced — the test still
+# exercises the shipped implementation, not a copy of it. Each function is
+# extracted from its header line to its first column-0 `}` (an exact match, so it
+# is robust to line-number drift and to `}` appearing mid-body).
 funcs="$(mktemp)"
 trap 'rm -f "$funcs"' EXIT
-awk '/^link_agent_config_dirs\(\) \{$/{p=1} p{print} p&&/^\}$/{exit}' \
-  "$entrypoint" > "$funcs"
-if ! grep -q 'link_agent_config_dirs()' "$funcs"; then
-  echo "FAIL: could not extract link_agent_config_dirs from $entrypoint"; exit 1
-fi
+for fn in ensure_home_link_parent link_agent_config_dirs; do
+  awk -v hdr="$fn() {" '$0==hdr{p=1} p{print} p&&$0=="}"{exit}' \
+    "$entrypoint" >> "$funcs"
+  if ! grep -q "^$fn() {" "$funcs"; then
+    echo "FAIL: could not extract $fn from $entrypoint"; exit 1
+  fi
+done
 # shellcheck disable=SC1090
 . "$funcs"
 

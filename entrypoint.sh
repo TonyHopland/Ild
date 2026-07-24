@@ -185,6 +185,31 @@ ensure_traverse() {
   chmod 0710 "$path"
 }
 
+# Ensure the parent directory of a nested $HOME link exists and that the home
+# owner owns *every* level between $HOME (exclusive) and that parent (inclusive).
+#
+# `mkdir -p`, run as root, creates the intermediate levels too — making
+# $HOME/.local/share also creates $HOME/.local — so chowning only the immediate
+# parent left those intermediates root-owned. The orchestrator could then
+# traverse but not write them, and a later Directory.CreateDirectory(
+# $HOME/.local/bin) at install time was denied (WI-163). Walking the whole chain
+# covers every nested entry, current or future. Only the owner changes; each
+# level keeps its mode, so no one else's access is widened (ADR-0014).
+ensure_home_link_parent() {
+  _home="$1"
+  _ownership="$2"   # chown OWNER[:GROUP] spec
+  _parent="$(dirname "$3")"
+
+  [ "$_parent" != "$_home" ] || return 0
+
+  mkdir -p "$_parent"
+  _dir="$_parent"
+  while [ "$_dir" != "$_home" ] && [ "$_dir" != "/" ]; do
+    chown "$_ownership" "$_dir"
+    _dir="$(dirname "$_dir")"
+  done
+}
+
 # For each agent dotdir name, ensure a subdir exists under the config store
 # and that $HOME/<name> is a symlink pointing at it. The volume is the source
 # of truth across rebuilds. If the image baked in a *real* $HOME/<name>
@@ -209,11 +234,7 @@ link_agent_config_dirs() {
     mkdir -p "$target"
     # Nested names (.config/opencode) need their parent in $HOME to exist and to
     # belong to the home owner, so the CLI can still write siblings there.
-    link_parent="$(dirname "$link")"
-    if [ "$link_parent" != "$user_home" ]; then
-      mkdir -p "$link_parent"
-      chown "$owner:$group" "$link_parent"
-    fi
+    ensure_home_link_parent "$user_home" "$owner:$group" "$link"
 
     migrated=
     if [ -d "$link" ] && [ ! -L "$link" ]; then
@@ -261,11 +282,7 @@ link_agent_config_files() {
     target="$store/$name"
     link="$user_home/$name"
 
-    link_parent="$(dirname "$link")"
-    if [ "$link_parent" != "$user_home" ]; then
-      mkdir -p "$link_parent"
-      chown "$owner:$group" "$link_parent"
-    fi
+    ensure_home_link_parent "$user_home" "$owner:$group" "$link"
 
     if [ -f "$link" ] && [ ! -L "$link" ] && [ ! -e "$target" ]; then
       mv "$link" "$target"
@@ -294,11 +311,7 @@ link_secondary_home() {
   for name in "$@"; do
     [ -n "$name" ] || continue
     link="$home/$name"
-    link_parent="$(dirname "$link")"
-    if [ "$link_parent" != "$home" ]; then
-      mkdir -p "$link_parent"
-      chown "$owner:$owner" "$link_parent" 2>/dev/null || true
-    fi
+    ensure_home_link_parent "$home" "$owner:$owner" "$link"
     if [ -e "$link" ] && [ ! -L "$link" ]; then
       rm -rf "$link"
     fi
