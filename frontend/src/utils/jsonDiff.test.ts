@@ -150,11 +150,11 @@ describe("computeLineDiff intra-line segments", () => {
   });
 
   test("spends one alignment budget across the whole document", () => {
-    // Six pairs that each cost ~249k cells (their first and last words differ, so
+    // Six pairs that each cost ~234k cells (their first and last words differ, so
     // nothing trims and the full token table is built) against a 1M aggregate
     // budget: four fit, the rest keep the whole-line tier. Without a shared
     // budget every one of them would pay, and 200 of them could.
-    const shared = Array.from({ length: 248 }, (_, i) => `w${i}`).join(" ");
+    const shared = Array.from({ length: 240 }, (_, i) => `w${i}`).join(" ");
     const line = (head: string, tail: string) => `${head} ${shared} ${tail}`;
     const before = Array.from({ length: 6 }, (_, i) => line(`p${i}`, `s${i}a`)).join("\n");
     const after = Array.from({ length: 6 }, (_, i) => line(`q${i}`, `s${i}b`)).join("\n");
@@ -187,6 +187,29 @@ describe("computeLineDiff intra-line segments", () => {
     expect(dels[200].segments).toBeUndefined();
     expect(adds[200].segments).toBeUndefined();
     expect(dels[n - 1].segments).toBeUndefined();
+  });
+});
+
+describe("computeWordDiff — cost caps", () => {
+  test("counts the alignment table's sentinel row and column", () => {
+    // The table is (n+1)x(m+1), so a pair whose token counts multiply to exactly
+    // the per-pair cap has already overspent it. These two pairs sit either side
+    // of that boundary — 499 tokens a side needs a 500x500 table and fits, 500
+    // needs 501x501 and does not — and differ only at their ends, so nothing
+    // trims and the similarity guard cannot be what rejects the larger one.
+    // Both assertions flip if MAX_INTRA_LINE_CELLS moves, which is the point:
+    // the boundary should be re-derived rather than silently stop being one.
+    const shared = Array.from({ length: 248 }, (_, i) => `w${i}`).join(" ");
+    // The tails differ from each other, so the extra token in the second pair
+    // survives the common-suffix trim instead of being stripped off both lines.
+    const pair = (tailA: string, tailB: string) =>
+      [`p ${shared} ${tailA}`, `q ${shared} ${tailB}`] as const;
+
+    const [fitsBefore, fitsAfter] = pair("sa", "sb");
+    const [overBefore, overAfter] = pair("sa.", "sb,");
+
+    expect(computeWordDiff(fitsBefore, fitsAfter)).not.toBeNull();
+    expect(computeWordDiff(overBefore, overAfter)).toBeNull();
   });
 });
 

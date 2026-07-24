@@ -30,13 +30,13 @@ export interface DiffLine {
 }
 
 /**
- * Cap on the LCS table size (rows × columns). A loop document can be up to ~1 MB
- * on the server, which pretty-prints to tens of thousands of lines; an unbounded
- * O(n·m) table over that would allocate gigabytes and freeze the tab. We first
- * strip the common prefix/suffix — which collapses the usual case (a localized
- * edit) to a tiny changed middle — and only run the quadratic LCS when the
- * remaining middle fits under this cap; otherwise we degrade to a coarse
- * block-replace so the modal still opens instantly.
+ * Cap on the LCS table size, counted as {@link lcsCells} actually allocates it. A
+ * loop document can be up to ~1 MB on the server, which pretty-prints to tens of
+ * thousands of lines; an unbounded O(n·m) table over that would allocate
+ * gigabytes and freeze the tab. We first strip the common prefix/suffix — which
+ * collapses the usual case (a localized edit) to a tiny changed middle — and only
+ * run the quadratic LCS when the remaining middle fits under this cap; otherwise
+ * we degrade to a coarse block-replace so the modal still opens instantly.
  */
 const MAX_LCS_CELLS = 1_000_000;
 
@@ -111,7 +111,7 @@ export function computeLineDiff(before: string, after: string): DiffLine[] {
 
   const midA = a.slice(start, endA);
   const midB = b.slice(start, endB);
-  if (midA.length * midB.length > MAX_LCS_CELLS) {
+  if (lcsCells(midA, midB) > MAX_LCS_CELLS) {
     // Too large to align line-by-line; show the changed region as a removed
     // block followed by an added block rather than risk wedging the UI.
     for (const line of midA) out.push({ type: "del", text: line });
@@ -150,6 +150,17 @@ function diffMiddle(a: string[], b: string[]): DiffLine[] {
   while (i < n) out.push({ type: "del", text: a[i++] });
   while (j < m) out.push({ type: "add", text: b[j++] });
   return out;
+}
+
+/**
+ * What {@link lcsTable} will allocate for these two sequences, sentinel row and
+ * column included. Every cap in this file is spent through here so a guard can
+ * never drift from the table it is guarding: the sentinels are not a rounding
+ * error for lopsided pairs, where one line against a thousand costs two rows of
+ * a thousand rather than the thousand cells `n × m` would suggest.
+ */
+function lcsCells(a: string[], b: string[]): number {
+  return (a.length + 1) * (b.length + 1);
 }
 
 /**
@@ -248,7 +259,7 @@ export function computeWordDiff(
 
   const midA = a.slice(start, endA);
   const midB = b.slice(start, endB);
-  const cells = midA.length * midB.length;
+  const cells = lcsCells(midA, midB);
   if (cells > MAX_INTRA_LINE_CELLS || cells > budget.cells) return null;
   budget.cells -= cells;
 
