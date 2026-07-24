@@ -185,19 +185,25 @@ ensure_traverse() {
   chmod 0710 "$path"
 }
 
-# Ensure the parent directory of a nested $HOME link exists and that the home
-# owner owns *every* level between $HOME (exclusive) and that parent (inclusive).
+# Ensure the parent directory of a nested $HOME link exists and apply the caller's
+# OWNER:GROUP spec to *every* level between $HOME (exclusive) and that parent
+# (inclusive).
 #
 # `mkdir -p`, run as root, creates the intermediate levels too — making
 # $HOME/.local/share also creates $HOME/.local — so chowning only the immediate
-# parent left those intermediates root-owned. The orchestrator could then
-# traverse but not write them, and a later Directory.CreateDirectory(
-# $HOME/.local/bin) at install time was denied (WI-163). Walking the whole chain
-# covers every nested entry, current or future. Only the owner changes; each
-# level keeps its mode, so no one else's access is widened (ADR-0014).
+# parent left those intermediates root:root. The orchestrator could then traverse
+# but not write them, and a later Directory.CreateDirectory($HOME/.local/bin) at
+# install time was denied (WI-163). Walking the whole chain covers every nested
+# entry, current or future.
+#
+# The chain keeps whatever mode `mkdir -p` gave it (0775 under the entrypoint's
+# umask 002), so the GROUP in the spec — not the mode — decides who else may
+# write. Callers pass the home owner's *private* group here (see link_agent_
+# config_dirs), never the shared agent group, or the agent uid would gain write
+# on the orchestrator's home scaffolding (ADR-0014).
 ensure_home_link_parent() {
   _home="$1"
-  _ownership="$2"   # chown OWNER[:GROUP] spec
+  _ownership="$2"   # chown OWNER:GROUP spec applied to each level of the chain
   _parent="$(dirname "$3")"
 
   [ "$_parent" != "$_home" ] || return 0
@@ -221,8 +227,9 @@ link_agent_config_dirs() {
   store="$1"
   user_home="$2"
   owner="$3"
-  group="$4"
-  shift 4
+  group="$4"        # shared group for the store target + symlink (both uids share it)
+  home_group="$5"   # owner's private group for the $HOME parent-chain scaffolding
+  shift 5
 
   [ -d "$store" ] || return 0
 
@@ -232,9 +239,16 @@ link_agent_config_dirs() {
     link="$user_home/$name"
 
     mkdir -p "$target"
-    # Nested names (.config/opencode) need their parent in $HOME to exist and to
-    # belong to the home owner, so the CLI can still write siblings there.
-    ensure_home_link_parent "$user_home" "$owner:$group" "$link"
+    # Nested names (.config/opencode) need their parent in $HOME to exist and be
+    # writable by the home owner so the CLI can write siblings there. Own the
+    # chain with the orchestrator's PRIVATE group ($home_group, e.g. ild:ild), not
+    # the shared store $group: under umask 002 these dirs are 0775, so the shared
+    # group would hand the agent uid write on $HOME/.local — the parent of
+    # $HOME/.local/bin, which BuildDefaultEnvironment prepends to the PATH of
+    # preview steps that run as the orchestrator. That is the cross-uid tool
+    # shadowing ADR-0014 exists to prevent. The store target + symlink below keep
+    # the shared $group so both uids share the one credential store.
+    ensure_home_link_parent "$user_home" "$owner:$home_group" "$link"
 
     migrated=
     if [ -d "$link" ] && [ ! -L "$link" ]; then
@@ -272,8 +286,9 @@ link_agent_config_files() {
   store="$1"
   user_home="$2"
   owner="$3"
-  group="$4"
-  shift 4
+  group="$4"        # shared group for the store target + symlink
+  home_group="$5"   # owner's private group for the $HOME parent chain (see link_agent_config_dirs)
+  shift 5
 
   [ -d "$store" ] || return 0
 
@@ -282,7 +297,7 @@ link_agent_config_files() {
     target="$store/$name"
     link="$user_home/$name"
 
-    ensure_home_link_parent "$user_home" "$owner:$group" "$link"
+    ensure_home_link_parent "$user_home" "$owner:$home_group" "$link"
 
     if [ -f "$link" ] && [ ! -L "$link" ] && [ ! -e "$target" ]; then
       mv "$link" "$target"
@@ -469,11 +484,14 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
     fi
 
     # Intentional word-split on AGENT_CONFIG_DIRS / AGENT_CONFIG_FILES —
-    # entries are space-separated names.
+    # entries are space-separated names. $config_group is the shared store group
+    # (SHARED_GROUP under isolation); $RUNTIME_GROUP is the orchestrator's own
+    # private group, used for the $HOME parent-chain scaffolding so the agent uid
+    # never gains write on it (single-uid: the two groups are identical anyway).
     # shellcheck disable=SC2086
-    link_agent_config_dirs "$AGENT_CONFIG_STORE" "$runtime_home" "$RUNTIME_USER" "$config_group" $AGENT_CONFIG_DIRS
+    link_agent_config_dirs "$AGENT_CONFIG_STORE" "$runtime_home" "$RUNTIME_USER" "$config_group" "$RUNTIME_GROUP" $AGENT_CONFIG_DIRS
     # shellcheck disable=SC2086
-    link_agent_config_files "$AGENT_CONFIG_STORE" "$runtime_home" "$RUNTIME_USER" "$config_group" $AGENT_CONFIG_FILES
+    link_agent_config_files "$AGENT_CONFIG_STORE" "$runtime_home" "$RUNTIME_USER" "$config_group" "$RUNTIME_GROUP" $AGENT_CONFIG_FILES
 
     if [ -n "$AGENT_USER" ] && [ -n "$AGENT_HOME" ]; then
       # The link helpers above already applied SHARED_GROUP, so this pass only

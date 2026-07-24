@@ -8,7 +8,7 @@
 # Root cause is in link_agent_config_dirs. For a *nested* AGENT_CONFIG_DIRS entry
 # such as `.local/share/opencode` it computes link_parent=$HOME/.local/share and
 # runs `mkdir -p "$link_parent"` — which, as the root uid the entrypoint runs as,
-# also creates the intermediate `$HOME/.local`. It then chowns only the immediate
+# also creates the intermediate `$HOME/.local`. It then chowned only the immediate
 # `$link_parent` to the orchestrator, leaving the intermediate `$HOME/.local`
 # root-owned (0775 under umask 002). The orchestrator user `ild` is then only
 # "other" on it (r-x, no write), so WorktreePreviewService.BuildDefaultEnvironment
@@ -18,12 +18,20 @@
 # shared) is what first drove `.local` two levels deep; `.config/opencode` is
 # only one level deep, so its parent IS the immediate parent and was chowned.
 #
-# This test sources the real link helper, records every path `chown` touches,
-# and asserts the FULL intermediate chain of each nested link — not just the
-# immediate parent — ends up owned by the orchestrator. It must fail until the
-# entrypoint chowns that chain (or otherwise makes `$HOME/.local` orchestrator-
-# writable) WITHOUT widening agent access to orchestrator-private state
-# (docs/adr/0014-agent-uid-isolation.md keeps /home/ild at 0710 ild:ild-agents).
+# The fix must also get the GROUP right, not just the owner. These 0775 dirs are
+# the orchestrator's own home scaffolding; owning the chain with the *shared*
+# agent group would let the agent uid (a member of that group) write $HOME/.local
+# and shadow a tool the orchestrator later execs from $HOME/.local/bin — the
+# cross-uid escalation ADR-0014 exists to prevent. So the chain must be owned by
+# the orchestrator with its *private* group, never the shared one.
+#
+# This test sources the real link helper, records the owner AND group of every
+# path `chown` touches, and asserts the FULL intermediate chain of each nested
+# link — not just the immediate parent — ends up (a) owner = orchestrator and
+# (b) group = the orchestrator-private group, i.e. NOT the shared agent group.
+# It fails both if the chain is left root-owned (the original bug) and if it is
+# owned with the shared group (the write-widening the first fix introduced),
+# honoring docs/adr/0014-agent-uid-isolation.md.
 #
 # Runs unprivileged (no root / no real second uid): the chown stub models
 # ownership so the invariant is checked purely from what the script asks for.
@@ -34,7 +42,9 @@ repo_root="$(cd "$here/../.." && pwd)"
 entrypoint="$repo_root/entrypoint.sh"
 
 owner="ild"            # the orchestrator uid the install step runs as
-group="ild-agents"     # the shared group under uid isolation
+group="ild-agents"     # the shared group under uid isolation (the agent is in it)
+home_group="ild"       # the orchestrator's PRIVATE group; the parent chain must
+                       # use this, never $group, or the agent gains write on it
 
 failures=0
 fail() { echo "FAIL: $*"; failures=$((failures + 1)); }
@@ -66,50 +76,61 @@ if [ -z "$default_dirs" ]; then
   echo "FAIL: could not read default AGENT_CONFIG_DIRS from $entrypoint"; exit 1
 fi
 
-# --- chown stub: record (recursive, owner, path) for each target it is asked to
-# change. Real chown needs root to change owner across uids; the model is what
-# lets this run unprivileged.
+# --- chown stub: record (recursive, owner, group, path) for each target it is
+# asked to change. Real chown needs root to change owner across uids; the model
+# is what lets this run unprivileged. The group is tracked because who-can-write
+# on a 0775 dir turns on it, not just the owner.
 CHOWN_LOG="$(mktemp)"
 trap 'rm -f "$funcs" "$CHOWN_LOG"' EXIT
 chown() {
-  local recursive=0 own="" first=1 a
+  local recursive=0 own="" grp="" first=1 a
   for a in "$@"; do
     case "$a" in
       -R|-*R*) recursive=1; continue ;;
       -h|-*)   continue ;;
     esac
-    if [ "$first" = 1 ]; then own="${a%%:*}"; first=0; continue; fi
-    printf '%s\t%s\t%s\n' "$recursive" "$own" "$a" >> "$CHOWN_LOG"
+    if [ "$first" = 1 ]; then
+      own="${a%%:*}"
+      case "$a" in *:*) grp="${a#*:}" ;; *) grp="" ;; esac
+      first=0; continue
+    fi
+    printf '%s\t%s\t%s\t%s\n' "$recursive" "$own" "$grp" "$a" >> "$CHOWN_LOG"
   done
 }
 
-# Effective owner of a directory = the owner set by the last chown that covers it
-# (directly, or recursively via an ancestor), else "root" (the uid that runs the
-# entrypoint and created it via mkdir -p).
-effective_owner() {
-  local d="$1" result="root" rec own p
-  while IFS=$'\t' read -r rec own p; do
-    if [ "$p" = "$d" ]; then
-      result="$own"
-    elif [ "$rec" = 1 ] && [ "${d#"$p"/}" != "$d" ]; then
-      result="$own"
+# Effective owner:group of a directory = set by the last chown that covers it
+# (directly, or recursively via an ancestor), else "root:root" (the uid/gid that
+# runs the entrypoint and created it via mkdir -p). Printed as "owner:group".
+effective_ownership() {
+  local d="$1" own="root" grp="root" rec o g p
+  while IFS=$'\t' read -r rec o g p; do
+    if [ "$p" = "$d" ] || { [ "$rec" = 1 ] && [ "${d#"$p"/}" != "$d" ]; }; then
+      own="$o"; grp="$g"
     fi
   done < "$CHOWN_LOG"
-  printf '%s' "$result"
+  printf '%s:%s' "$own" "$grp"
 }
 
 # Assert every directory between $HOME (exclusive) and the link's parent
-# (inclusive) is owned by the orchestrator — i.e. writable by it.
+# (inclusive) is owned by the orchestrator (so it is writable by it) AND carries
+# the orchestrator-private group, NOT the shared agent group (so a 0775 mode does
+# not hand the agent uid write on the orchestrator's home scaffolding).
 assert_chain_owned() {
-  local home="$1" name="$2" cur rel eo
+  local home="$1" name="$2" cur rel og eo eg
   cur="$(dirname "$home/$name")"
   while [ "$cur" != "$home" ] && [ "$cur" != "/" ]; do
     rel="${cur#"$home"/}"
-    eo="$(effective_owner "$cur")"
-    if [ "$eo" = "$owner" ]; then
-      pass "$name: \$HOME/$rel owned by $owner (writable)"
-    else
+    og="$(effective_ownership "$cur")"
+    eo="${og%%:*}"
+    eg="${og#*:}"
+    if [ "$eo" != "$owner" ]; then
       fail "$name: \$HOME/$rel left owned by '$eo' (need '$owner') -> install's Directory.CreateDirectory(\$HOME/.local/bin) denied"
+    elif [ "$eg" = "$group" ]; then
+      fail "$name: \$HOME/$rel is group '$eg' (the shared agent group) -> under umask 002 (0775) the agent uid gains WRITE and could shadow a tool the orchestrator execs from \$HOME/.local/bin (ADR-0014)"
+    elif [ "$eg" != "$home_group" ]; then
+      fail "$name: \$HOME/$rel is group '$eg' (expected orchestrator-private '$home_group')"
+    else
+      pass "$name: \$HOME/$rel is $eo:$eg (orchestrator-writable, agent has no group write)"
     fi
     cur="$(dirname "$cur")"
   done
@@ -122,7 +143,7 @@ store="$(mktemp -d)"
 trap 'rm -f "$funcs" "$CHOWN_LOG"; rm -rf "$home" "$store"' EXIT
 
 # shellcheck disable=SC2086
-link_agent_config_dirs "$store" "$home" "$owner" "$group" $default_dirs
+link_agent_config_dirs "$store" "$home" "$owner" "$group" "$home_group" $default_dirs
 
 checked_nested=0
 for name in $default_dirs; do
