@@ -196,11 +196,14 @@ ensure_traverse() {
 # install time was denied (WI-163). Walking the whole chain covers every nested
 # entry, current or future.
 #
-# The chain keeps whatever mode `mkdir -p` gave it (0775 under the entrypoint's
-# umask 002), so the GROUP in the spec — not the mode — decides who else may
-# write. Callers pass the home owner's *private* group here (see link_agent_
-# config_dirs), never the shared agent group, or the agent uid would gain write
-# on the orchestrator's home scaffolding (ADR-0014).
+# The chain keeps whatever mode `mkdir -p` gave it. This matters only in two-uid
+# mode, where the entrypoint sets umask 002 so those dirs are 0775 (group-
+# writable) — then the GROUP in the spec, not the mode, decides who else may
+# write. Callers there pass the home owner's *private* group (see link_agent_
+# config_dirs), never the shared agent group, or the agent uid would gain write on
+# the orchestrator's home scaffolding (ADR-0014). Single-uid mode has no separate
+# agent uid and does not set that umask, so the exposure cannot arise (and the
+# private and store groups coincide there anyway).
 #
 # The 4th arg opts into best-effort chowns (`|| true`). The entrypoint runs under
 # `set -e`, so the default strict chown aborts the boot if it fails — which is
@@ -256,8 +259,8 @@ link_agent_config_dirs() {
     # Nested names (.config/opencode) need their parent in $HOME to exist and be
     # writable by the home owner so the CLI can write siblings there. Own the
     # chain with the orchestrator's PRIVATE group ($home_group, e.g. ild:ild), not
-    # the shared store $group: under umask 002 these dirs are 0775, so the shared
-    # group would hand the agent uid write on $HOME/.local — the parent of
+    # the shared store $group: in two-uid mode these dirs are 0775 (umask 002), so
+    # the shared group would hand the agent uid write on $HOME/.local — the parent of
     # $HOME/.local/bin, which BuildDefaultEnvironment prepends to the PATH of
     # preview steps that run as the orchestrator. That is the cross-uid tool
     # shadowing ADR-0014 exists to prevent. The store target + symlink below keep
