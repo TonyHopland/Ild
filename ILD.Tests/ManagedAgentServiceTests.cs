@@ -33,6 +33,11 @@ public class ManagedAgentServiceTests : IDisposable
         public string? VersionAfterInstall;
         public bool InstallSucceeds = true;
         public bool ProduceBinary = true;
+        // Simulates the container umask 002: npm leaves the tree group-writable.
+        public bool GroupWritableInstall;
+        // Mode of the --prefix dir observed at the moment the install runs, i.e.
+        // while the tree is half-built. Null until an install happens.
+        public UnixFileMode? PrefixModeDuringInstall;
         public List<IReadOnlyList<string>> Calls { get; } = new();
 
         // Concurrency instrumentation: when InstallGate is set, an install
@@ -63,11 +68,21 @@ public class ManagedAgentServiceTests : IDisposable
                         await InstallGate.Task;
 
                     var prefix = ArgValue(args, "--prefix")!;
+                    if (OperatingSystem.IsLinux())
+                        PrefixModeDuringInstall = File.GetUnixFileMode(prefix);
                     if (InstallSucceeds && ProduceBinary)
                     {
                         var binDir = Path.Combine(prefix, "node_modules", ".bin");
                         Directory.CreateDirectory(binDir);
-                        File.WriteAllText(Path.Combine(binDir, BinaryName), "#!/bin/sh\n");
+                        var binary = Path.Combine(binDir, BinaryName);
+                        File.WriteAllText(binary, "#!/bin/sh\n");
+                        // Reproduce what real npm leaves behind inside the
+                        // container, where umask is 002: group-writable.
+                        if (GroupWritableInstall && OperatingSystem.IsLinux())
+                        {
+                            foreach (var path in new[] { binDir, binary })
+                                File.SetUnixFileMode(path, File.GetUnixFileMode(path) | UnixFileMode.GroupWrite);
+                        }
                     }
                     if (InstallSucceeds && VersionAfterInstall is not null)
                         InstalledVersion = VersionAfterInstall;
@@ -126,8 +141,198 @@ public class ManagedAgentServiceTests : IDisposable
         }
     }
 
-    private ManagedAgentService CreateService(FakeRunner runner, RegistryHandler handler)
-        => new(new HttpClient(handler), runner, _dataRoot);
+    private ManagedAgentService CreateService(FakeRunner runner, RegistryHandler handler, string? agentUser = null)
+        => new(new HttpClient(handler), runner, _dataRoot, logger: null, agentUser: agentUser);
+
+    /// <summary>
+    /// Every entry under <paramref name="root"/> (the root itself included, symlinks
+    /// skipped — their mode is always 0777 and cannot be changed) that is still
+    /// writable by the shared group or by others.
+    /// </summary>
+    private static List<string> AgentWritableEntries(string root)
+    {
+        var offenders = new List<string>();
+
+        void Visit(FileSystemInfo entry)
+        {
+            if (entry.LinkTarget is not null) return;
+
+            if (entry is DirectoryInfo directory)
+            {
+                foreach (var child in directory.EnumerateFileSystemInfos())
+                    Visit(child);
+            }
+
+            var mode = File.GetUnixFileMode(entry.FullName);
+            if (mode.HasFlag(UnixFileMode.GroupWrite) || mode.HasFlag(UnixFileMode.OtherWrite))
+                offenders.Add(entry.FullName);
+        }
+
+        Visit(new DirectoryInfo(root));
+        return offenders;
+    }
+
+    [Fact]
+    public async Task Install_leaves_nothing_under_the_agent_root_writable_by_the_agent()
+    {
+        // ADR-0014: the agent execs these binaries, and the orchestrator runs the
+        // same ones as itself on every status poll — so nothing here may be
+        // agent-writable. The agent root and its `versions/` parent matter as much
+        // as the files: create/unlink/rename are governed by the CONTAINING
+        // directory, so a writable `versions/` would let the agent drop in its own
+        // version tree and repoint `current` regardless of any file's mode.
+        // Installs happen at runtime, i.e. after the entrypoint's boot-time pass,
+        // so this must hold with no restart.
+        if (!OperatingSystem.IsLinux()) return;
+
+        var runner = new FakeRunner { VersionAfterInstall = "0.80.2", GroupWritableInstall = true };
+        var handler = new RegistryHandler { Version = "0.80.2" };
+        // Drive isolation ON explicitly rather than via ambient ILD_AGENT_USER,
+        // which is process-global and would race other tests.
+        var service = CreateService(runner, handler, agentUser: "agent");
+
+        // Reproduce the container precondition this defect needs: under umask 002
+        // the agent root and its versions/ parent are created group-writable, and
+        // the setgid bit on /data/agents gives them the shared group. The test
+        // process runs under umask 022, so set it up explicitly.
+        var preAgentRoot = ManagedAgentInstall.AgentRoot(_dataRoot, _agent);
+        var preVersions = ManagedAgentInstall.VersionsRoot(_dataRoot, _agent);
+        Directory.CreateDirectory(preVersions);
+        foreach (var path in new[] { preAgentRoot, preVersions })
+            File.SetUnixFileMode(path, File.GetUnixFileMode(path) | UnixFileMode.GroupWrite);
+
+        await service.UpdateAsync(_agent.Key);
+
+        var agentRoot = ManagedAgentInstall.AgentRoot(_dataRoot, _agent);
+        Assert.True(Directory.Exists(agentRoot));
+        Assert.True(File.Exists(ManagedAgentInstall.PointerFile(_dataRoot, _agent)));
+        Assert.True(Directory.Exists(ManagedAgentInstall.VersionsRoot(_dataRoot, _agent)));
+
+        var offenders = AgentWritableEntries(agentRoot);
+        Assert.True(offenders.Count == 0,
+            "agent-writable after install: " + string.Join(", ", offenders));
+    }
+
+    /// <summary>
+    /// Entries under <paramref name="root"/> that would trip the entrypoint's
+    /// ensure_shared_ro drift check — i.e. the shell-side and app-side views of the
+    /// same tree disagreeing. Mirrors that predicate: every directory setgid with
+    /// group r-x, every regular file group-readable, neither group-writable.
+    /// Symlinks are skipped exactly as the entrypoint skips them (mode 0777 always,
+    /// and chmod cannot change it).
+    /// </summary>
+    private static List<string> SharedReadOnlyDriftEntries(string root)
+    {
+        var drift = new List<string>();
+
+        void Visit(FileSystemInfo entry)
+        {
+            if (entry.LinkTarget is not null) return;
+
+            var mode = File.GetUnixFileMode(entry.FullName);
+            if (entry is DirectoryInfo directory)
+            {
+                if (!mode.HasFlag(UnixFileMode.SetGroup)
+                    || !mode.HasFlag(UnixFileMode.GroupRead)
+                    || !mode.HasFlag(UnixFileMode.GroupExecute)
+                    || mode.HasFlag(UnixFileMode.GroupWrite))
+                    drift.Add($"{entry.FullName} (dir, mode {mode})");
+
+                foreach (var child in directory.EnumerateFileSystemInfos())
+                    Visit(child);
+            }
+            else if (!mode.HasFlag(UnixFileMode.GroupRead) || mode.HasFlag(UnixFileMode.GroupWrite))
+            {
+                drift.Add($"{entry.FullName} (file, mode {mode})");
+            }
+        }
+
+        Visit(new DirectoryInfo(root));
+        return drift;
+    }
+
+    [Fact]
+    public async Task Install_keeps_the_version_tree_closed_to_the_agent_while_npm_runs()
+    {
+        // The post-install state is not enough: npm builds node_modules as the
+        // orchestrator under umask 002, inheriting the shared group, so the tree is
+        // agent-writable for the whole install — and the orchestrator execs that
+        // very tree. Stripping write only works once the tree is finished, so the
+        // version dir must be closed to the agent WHILE it is being assembled.
+        if (!OperatingSystem.IsLinux()) return;
+
+        var runner = new FakeRunner { VersionAfterInstall = "0.80.2", GroupWritableInstall = true };
+        var handler = new RegistryHandler { Version = "0.80.2" };
+        var service = CreateService(runner, handler, agentUser: "agent");
+
+        // Reproduce the container's shape: the entrypoint leaves /data/agents
+        // setgid so everything created beneath it inherits the shared group. The
+        // test process runs under umask 022 with no setgid anywhere, so without
+        // this there is no setgid for the install to preserve and the assertions
+        // below would be vacuous.
+        var versions = ManagedAgentInstall.VersionsRoot(_dataRoot, _agent);
+        Directory.CreateDirectory(versions);
+        foreach (var seed in new[] { ManagedAgentInstall.AgentRoot(_dataRoot, _agent), versions })
+            File.SetUnixFileMode(seed, File.GetUnixFileMode(seed) | UnixFileMode.SetGroup);
+
+        await service.UpdateAsync(_agent.Key);
+
+        var during = runner.PrefixModeDuringInstall;
+        Assert.NotNull(during);
+        // setgid must survive being closed: it is what keeps everything npm builds
+        // in the shared group, and the entrypoint's tripwire keys on it. A raw
+        // chmod to an absolute 0700 clears it, desynchronising the finished install
+        // from the shell-side scheme and forcing a full re-walk on the next boot.
+        Assert.True(during!.Value.HasFlag(UnixFileMode.SetGroup),
+            $"setgid was dropped while the tree was staged (mode {during})");
+        Assert.False(during!.Value.HasFlag(UnixFileMode.GroupExecute),
+            "agent could traverse into the half-built install tree");
+        Assert.False(during!.Value.HasFlag(UnixFileMode.GroupWrite));
+        Assert.False(during!.Value.HasFlag(UnixFileMode.OtherExecute),
+            "agent could traverse into the half-built install tree");
+        Assert.False(during!.Value.HasFlag(UnixFileMode.OtherWrite));
+
+        // ...and once published it must be traversable and executable again, or the
+        // agent could not run the CLI at all.
+        var versionDir = Directory.EnumerateDirectories(ManagedAgentInstall.VersionsRoot(_dataRoot, _agent)).Single();
+        var after = File.GetUnixFileMode(versionDir);
+        Assert.True(after.HasFlag(UnixFileMode.GroupRead));
+        Assert.True(after.HasFlag(UnixFileMode.GroupExecute));
+        Assert.False(after.HasFlag(UnixFileMode.GroupWrite));
+        Assert.True(after.HasFlag(UnixFileMode.SetGroup), "setgid was not restored on publish");
+
+        // The published tree must satisfy the same predicate the entrypoint's
+        // ensure_shared_ro tripwire uses, or the first boot after an install does a
+        // full recursive repair of /data/agents — the re-walk that tripwire exists
+        // to avoid, and QA criterion 7.
+        var drift = SharedReadOnlyDriftEntries(ManagedAgentInstall.AgentRoot(_dataRoot, _agent));
+        Assert.True(drift.Count == 0,
+            "post-install tree would trip the entrypoint tripwire: " + string.Join(", ", drift));
+    }
+
+    [Fact]
+    public async Task Install_leaves_permissions_alone_when_isolation_is_off()
+    {
+        // Single-uid deployments and local development must be unaffected: with no
+        // agent user there is no second uid to protect against, so the group-write
+        // npm left behind must still be there afterwards. Asserting the *presence*
+        // of what the isolation-on test asserts the absence of is what makes this
+        // meaningful — it fails if ProtectFromAgentWrites ignores its agentUser.
+        if (!OperatingSystem.IsLinux()) return;
+
+        var runner = new FakeRunner { VersionAfterInstall = "0.80.2", GroupWritableInstall = true };
+        var handler = new RegistryHandler { Version = "0.80.2" };
+        var service = CreateService(runner, handler, agentUser: null);
+
+        var preVersions = ManagedAgentInstall.VersionsRoot(_dataRoot, _agent);
+        Directory.CreateDirectory(preVersions);
+        File.SetUnixFileMode(preVersions, File.GetUnixFileMode(preVersions) | UnixFileMode.GroupWrite);
+
+        await service.UpdateAsync(_agent.Key);
+
+        var stillWritable = AgentWritableEntries(ManagedAgentInstall.AgentRoot(_dataRoot, _agent));
+        Assert.NotEmpty(stillWritable);
+    }
 
     [Fact]
     public async Task GetStatus_reports_update_available_when_installed_is_behind()

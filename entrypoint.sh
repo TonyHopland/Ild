@@ -5,6 +5,29 @@ RUNTIME_USER="${RUNTIME_USER:-ild}"
 RUNTIME_GROUP="${RUNTIME_GROUP:-ild}"
 RUNTIME_DIRS="${RUNTIME_DIRS:-/data /worktrees /home/ild/.agent-config}"
 
+# uid isolation (docs/adr/0014-agent-uid-isolation.md). When AGENT_USER is set the
+# coding-agent CLI runs as a second, lower-trust uid instead of sharing the
+# orchestrator's. In that mode:
+#   * SHARED_RW_DIRS are group-owned by SHARED_GROUP, setgid, and default-ACL'd so
+#     files created by either uid stay read/write for the other (worktrees, the
+#     /data agent installs + repo store, the credential store).
+#   * DATA_TRAVERSE_DIRS (/data) stay ild-private but traversable by SHARED_GROUP,
+#     so the agent can reach the shared subtrees by exact path without reading
+#     secrets. Reach is granted through the group throughout — no "other" bits.
+#   * The orchestrator is dropped WITH ambient RUNTIME_AMBIENT_CAPS so it — and
+#     only it — can drop the agent to AGENT_USER via setpriv.
+# All unset => single-uid mode, unchanged (Dockerfile.WorkItemServer).
+AGENT_USER="${AGENT_USER:-}"
+AGENT_GROUP="${AGENT_GROUP:-${AGENT_USER}}"
+AGENT_HOME="${AGENT_HOME:-}"
+AGENT_SCRATCH_DIR="${AGENT_SCRATCH_DIR:-}"
+ORCHESTRATOR_PRIVATE_DIR="${ORCHESTRATOR_PRIVATE_DIR:-}"
+SHARED_GROUP="${SHARED_GROUP:-}"
+RUNTIME_AMBIENT_CAPS="${RUNTIME_AMBIENT_CAPS:-}"
+SHARED_RW_DIRS="${SHARED_RW_DIRS:-}"
+SHARED_RO_DIRS="${SHARED_RO_DIRS:-}"
+DATA_TRAVERSE_DIRS="${DATA_TRAVERSE_DIRS:-}"
+
 # Agent CLI config dirs (.claude, .opencode, .pi, ...) are kept in a single
 # persistent volume mounted at AGENT_CONFIG_STORE, then symlinked into
 # $HOME at container start. This lets login state survive image rebuilds
@@ -15,8 +38,18 @@ RUNTIME_DIRS="${RUNTIME_DIRS:-/data /worktrees /home/ild/.agent-config}"
 # the dotdirs — Claude Code's .claude.json (which holds `oauthAccount` and
 # project state) is the canonical example: without it, even a valid
 # .claude/.credentials.json reads as logged-out.
+#
+# Under uid isolation the store is group-shared and symlinked into BOTH the
+# orchestrator's and the agent's home, so login (run as the orchestrator in the
+# provider terminal) and the agent run (as AGENT_USER) see one credential store.
+#
+# Names may be nested (e.g. .config/opencode): splitting HOME between the two
+# uids means anything a CLI keeps under an XDG path has to be shared explicitly,
+# or the agent would see an empty home even though the ild-side terminal login
+# succeeded. opencode keeps its auth/state under the XDG data dir, hence the
+# .config/opencode + .local/share/opencode entries.
 AGENT_CONFIG_STORE="${AGENT_CONFIG_STORE:-/home/ild/.agent-config}"
-AGENT_CONFIG_DIRS="${AGENT_CONFIG_DIRS:-.claude .opencode .pi .copilot}"
+AGENT_CONFIG_DIRS="${AGENT_CONFIG_DIRS:-.claude .opencode .pi .copilot .config/opencode .local/share/opencode}"
 AGENT_CONFIG_FILES="${AGENT_CONFIG_FILES:-.claude.json}"
 
 ensure_owned_by_runtime_user() {
@@ -31,6 +64,127 @@ ensure_owned_by_runtime_user() {
   fi
 }
 
+# Make a path shared read/write between the orchestrator and the agent uid:
+# group-owned by SHARED_GROUP, every directory setgid (so new entries keep
+# inheriting the group) and carrying a default POSIX ACL granting the group rwx
+# on everything created later.
+#
+# The invariant is deliberately about GROUP and MODE, not owner: files in a
+# shared tree legitimately belong to whichever uid created them (the agent owns
+# what it writes into its worktree). Including the owner would both fire the
+# expensive repair on every restart once the agent has written anything, and
+# make the repair seize the agent's files — so the repair is a `chgrp`, and only
+# the root of the tree gets its owner normalized.
+#
+# The recursive repair runs only when the tripwire below finds real drift (first
+# run, a wrong group, a directory that lost setgid/group-rwx, or a file that lost
+# group-read), so steady-state startups stay cheap even on a large worktree/repo
+# tree. The tripwire is a cheap check, not an exhaustive audit: it deliberately
+# does not require group-write on every file, because git creates loose objects
+# read-only (0444) by design and that must not trigger a full re-walk each boot.
+ensure_shared_rw() {
+  path="$1"
+
+  mkdir -p "$path"
+
+  if find "$path" \( \
+        ! -group "$SHARED_GROUP" \
+        -o \( -type d ! -perm -2070 \) \
+        -o \( -type f ! -perm -040 \) \
+      \) -print -quit 2>/dev/null | grep -q .; then
+    chgrp -R "$SHARED_GROUP" "$path"
+    find "$path" -type d -exec chmod g+rwxs {} + 2>/dev/null || true
+    find "$path" -type f -exec chmod g+rw {} + 2>/dev/null || true
+    if command -v setfacl >/dev/null 2>&1; then
+      setfacl -R -m g:"$SHARED_GROUP":rwX "$path" 2>/dev/null || true
+      # Default ACLs only apply to directories; set them per-dir to avoid errors.
+      find "$path" -type d -exec setfacl -d -m g:"$SHARED_GROUP":rwx {} + 2>/dev/null || true
+    fi
+  fi
+
+  # Cheap and idempotent: the root of the shared tree is always normalized.
+  # 2770, not 2775: access to this tree is a GROUP grant, and reaching anything
+  # inside requires traversing this root — so denying "other" here is what makes
+  # the grant group-only, whatever the modes on individual entries beneath say.
+  chown "$RUNTIME_USER:$SHARED_GROUP" "$path"
+  chmod 2770 "$path"
+}
+
+# Like ensure_shared_rw, but the group only gets read/execute. Used for the
+# managed agent installs: the agent must be able to exec those CLIs, but the
+# orchestrator runs the same binaries as itself (version checks, the provider
+# terminal), so letting the agent rewrite them would hand it a way back across
+# the boundary. The owner (orchestrator) still writes, so installs/updates work.
+ensure_shared_ro() {
+  path="$1"
+
+  mkdir -p "$path"
+
+  # Unlike the read/write tripwire this must also catch EXCESS permission, not
+  # just missing permission: the agent CLIs are installed onto /data at runtime
+  # (npm, as the orchestrator, under the umask 002 set below), which leaves the
+  # tree group-writable. A missing-only check reports that state as clean — 2775
+  # contains 2050 and 0775 contains 040 — so g-w would never be applied and the
+  # agent could rewrite the very binaries the orchestrator later execs as itself.
+  # The group-write clause is restricted to regular files and directories on
+  # purpose: symlinks are always mode 0777 (npm fills node_modules/.bin with
+  # them) and chmod cannot change that, so including them would report drift
+  # forever and re-walk the whole tree on every boot.
+  if find "$path" \( \
+        ! -group "$SHARED_GROUP" \
+        -o \( -type d ! -perm -2050 \) \
+        -o \( -type f ! -perm -040 \) \
+        -o \( \( -type d -o -type f \) -perm -020 \) \
+      \) -print -quit 2>/dev/null | grep -q .; then
+    chgrp -R "$SHARED_GROUP" "$path"
+    # Directories keep group r-x + setgid; files gain group read but never group
+    # execute — an already-executable binary keeps the group x it came with, so
+    # the agent can still exec the CLI it must not be able to modify.
+    find "$path" -type d -exec chmod g+rxs,g-w {} + 2>/dev/null || true
+    find "$path" -type f -exec chmod g+r,g-w {} + 2>/dev/null || true
+    if command -v setfacl >/dev/null 2>&1; then
+      setfacl -R -m g:"$SHARED_GROUP":rX "$path" 2>/dev/null || true
+      find "$path" -type d -exec setfacl -d -m g:"$SHARED_GROUP":rx {} + 2>/dev/null || true
+    fi
+  fi
+
+  chown "$RUNTIME_USER:$SHARED_GROUP" "$path"
+  chmod 2750 "$path"
+}
+
+# Orchestrator-only state: owned by the runtime user, owner-only, and created
+# HERE — before any agent-uid process can run. That ordering is the point. The
+# askpass helper git is handed (with the repository token in its environment) and
+# the preview state dir both live at fixed, guessable paths; if the agent could
+# create one of those paths first, orchestrator code that only writes the file
+# "if it is missing" would execute the agent's version as the orchestrator.
+# Pre-creating the root at 0700 closes that regardless of how guessable the paths
+# beneath it are, which is why this can stay on /tmp and remain ephemeral rather
+# than accumulating on the data volume.
+ensure_private() {
+  path="$1"
+  mkdir -p "$path"
+  chown -R "$RUNTIME_USER:$RUNTIME_GROUP" "$path"
+  chmod 0700 "$path"
+}
+
+# Keep a private directory (e.g. /data holding secrets) owned by the runtime user
+# but traversable by the shared group, so the agent uid can reach the shared
+# subtrees beneath it by exact path without being able to list it or read private
+# sibling files.
+#
+# 0710 with the shared group rather than 0711: --x is the same reach for the
+# agent either way, but granting it through the group keeps it scoped to the two
+# uids that are meant to have it instead of to everyone. Deliberately NOT setgid —
+# files the orchestrator writes directly here must keep its own group, or private
+# state would drift into the shared one.
+ensure_traverse() {
+  path="$1"
+  mkdir -p "$path"
+  chown "$RUNTIME_USER:$SHARED_GROUP" "$path"
+  chmod 0710 "$path"
+}
+
 # For each agent dotdir name, ensure a subdir exists under the config store
 # and that $HOME/<name> is a symlink pointing at it. The volume is the source
 # of truth across rebuilds. If the image baked in a *real* $HOME/<name>
@@ -41,7 +195,9 @@ ensure_owned_by_runtime_user() {
 link_agent_config_dirs() {
   store="$1"
   user_home="$2"
-  shift 2
+  owner="$3"
+  group="$4"
+  shift 4
 
   [ -d "$store" ] || return 0
 
@@ -51,19 +207,38 @@ link_agent_config_dirs() {
     link="$user_home/$name"
 
     mkdir -p "$target"
+    # Nested names (.config/opencode) need their parent in $HOME to exist and to
+    # belong to the home owner, so the CLI can still write siblings there.
+    link_parent="$(dirname "$link")"
+    if [ "$link_parent" != "$user_home" ]; then
+      mkdir -p "$link_parent"
+      chown "$owner:$group" "$link_parent"
+    fi
 
+    migrated=
     if [ -d "$link" ] && [ ! -L "$link" ]; then
       # Image-baked real dir: migrate contents (dotfiles included), keeping any
       # already-persisted file, then drop it so the symlink can take its place.
       cp -an "$link/." "$target/" 2>/dev/null || true
       rm -rf "$link"
+      migrated=1
     elif [ -e "$link" ] && [ ! -L "$link" ]; then
       rm -f "$link"
     fi
 
     ln -sfn "$target" "$link"
-    chown -R "$RUNTIME_USER:$RUNTIME_GROUP" "$target"
-    chown -h "$RUNTIME_USER:$RUNTIME_GROUP" "$link"
+    # Only the migration branch brings in files of unknown ownership, so only it
+    # needs the recursive pass. Doing it unconditionally re-walked the whole store
+    # (which holds the .claude/projects transcripts) on every boot — defeating the
+    # tripwire optimization in ensure_shared_rw below — and seized files the agent
+    # had created back to the orchestrator, which its own `chgrp`-only repair is
+    # careful not to do.
+    if [ -n "$migrated" ]; then
+      chown -R "$owner:$group" "$target"
+    else
+      chown "$owner:$group" "$target"
+    fi
+    chown -h "$owner:$group" "$link"
   done
 }
 
@@ -75,7 +250,9 @@ link_agent_config_dirs() {
 link_agent_config_files() {
   store="$1"
   user_home="$2"
-  shift 2
+  owner="$3"
+  group="$4"
+  shift 4
 
   [ -d "$store" ] || return 0
 
@@ -84,6 +261,12 @@ link_agent_config_files() {
     target="$store/$name"
     link="$user_home/$name"
 
+    link_parent="$(dirname "$link")"
+    if [ "$link_parent" != "$user_home" ]; then
+      mkdir -p "$link_parent"
+      chown "$owner:$group" "$link_parent"
+    fi
+
     if [ -f "$link" ] && [ ! -L "$link" ] && [ ! -e "$target" ]; then
       mv "$link" "$target"
     elif [ -e "$link" ] && [ ! -L "$link" ]; then
@@ -91,8 +274,36 @@ link_agent_config_files() {
     fi
 
     ln -sfn "$target" "$link"
-    [ -e "$target" ] && chown "$RUNTIME_USER:$RUNTIME_GROUP" "$target"
-    chown -h "$RUNTIME_USER:$RUNTIME_GROUP" "$link"
+    [ -e "$target" ] && chown "$owner:$group" "$target"
+    chown -h "$owner:$group" "$link"
+  done
+}
+
+# Point a second home's dotdirs/dotfiles at the same store (no migration — the
+# primary home already populated it). Used for the agent user's home so it reads
+# the one shared credential store the orchestrator's login writes to.
+link_secondary_home() {
+  home="$1"
+  owner="$2"
+  store="$3"
+  shift 3
+
+  [ -d "$store" ] || return 0
+  mkdir -p "$home"
+
+  for name in "$@"; do
+    [ -n "$name" ] || continue
+    link="$home/$name"
+    link_parent="$(dirname "$link")"
+    if [ "$link_parent" != "$home" ]; then
+      mkdir -p "$link_parent"
+      chown "$owner:$owner" "$link_parent" 2>/dev/null || true
+    fi
+    if [ -e "$link" ] && [ ! -L "$link" ]; then
+      rm -rf "$link"
+    fi
+    ln -sfn "$store/$name" "$link"
+    chown -h "$owner:$owner" "$link" 2>/dev/null || true
   done
 }
 
@@ -139,10 +350,89 @@ wait_for_postgres() {
   return 0
 }
 
+# Drop from root to the runtime user and exec the app. Under uid isolation the
+# orchestrator keeps ambient RUNTIME_AMBIENT_CAPS (via capsh --keep) so it can
+# later drop the agent CLI to AGENT_USER under no_new_privs; otherwise a plain
+# gosu drop (no retained capabilities) is used.
+drop_and_exec() {
+  if [ -n "$AGENT_USER" ]; then
+    # Fail loudly rather than degrading. Silently falling back to the gosu drop
+    # here would leave the orchestrator without the ambient capabilities while the
+    # app still routes every agent launch through setpriv — so isolation would be
+    # off AND every run would fail with an opaque EPERM. The gosu form would also
+    # drop the supplementary groups the shared dirs depend on.
+    if [ -z "$SHARED_GROUP" ]; then
+      echo "FATAL: AGENT_USER=$AGENT_USER but SHARED_GROUP is empty; every shared-directory repair would silently no-op and the agent would have no access to the worktree. Unset AGENT_USER to run single-uid." >&2
+      exit 1
+    fi
+    if [ -z "$RUNTIME_AMBIENT_CAPS" ]; then
+      echo "FATAL: AGENT_USER=$AGENT_USER but RUNTIME_AMBIENT_CAPS is empty; the orchestrator could not spawn the agent. Unset AGENT_USER to run single-uid." >&2
+      exit 1
+    fi
+    for tool in capsh setpriv; do
+      if ! command -v "$tool" >/dev/null 2>&1; then
+        echo "FATAL: AGENT_USER=$AGENT_USER requires '$tool' (capsh: libcap2-bin, setpriv: util-linux). Unset AGENT_USER to run single-uid." >&2
+        exit 1
+      fi
+    done
+
+    amb=""
+    inh=""
+    for cap in $(echo "$RUNTIME_AMBIENT_CAPS" | tr ',' ' '); do
+      amb="$amb --addamb=$cap"
+      inh="${inh:+$inh,}$cap"
+    done
+    # --keep=1 preserves the caps across the setuid; --inh puts them in the
+    # inheritable set; --addamb raises them ambient so they survive the agent's
+    # exec. The `-- -c 'exec "$@"' -- "$@"` form execs the app via bash.
+    # shellcheck disable=SC2086
+    exec capsh --keep=1 --user="$RUNTIME_USER" --inh="$inh" $amb -- -c 'exec "$@"' -- "$@"
+  fi
+
+  exec gosu "$RUNTIME_USER:$RUNTIME_GROUP" "$@"
+}
+
 if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
-  for path in $RUNTIME_DIRS; do
-    ensure_owned_by_runtime_user "$path"
-  done
+  if [ -n "$AGENT_USER" ]; then
+    # Group-writable by default. Where a default ACL is in effect it already
+    # grants the shared group rwx (the umask is ignored for those paths), but the
+    # setfacl calls are best-effort — a volume filesystem without ACL support
+    # would silently leave the agent read-only on files the orchestrator creates.
+    # umask 002 makes the setgid + shared-group scheme work on its own. Files the
+    # orchestrator writes under the private /data are unaffected in practice:
+    # they stay group `ild`, which the agent is not a member of.
+    umask 002
+
+    # The app reads ILD_AGENT_* to decide whether (and to whom) it drops each
+    # agent-CLI launch. Derive them here rather than setting them in the image, so
+    # AGENT_USER is the single switch: clearing it turns isolation off for BOTH
+    # the shell-side setup and the app, instead of leaving the app routing
+    # launches through setpriv without the caps or shared dirs to back it.
+    export ILD_AGENT_USER="$AGENT_USER"
+    export ILD_AGENT_GROUP="$AGENT_GROUP"
+    export ILD_AGENT_HOME="$AGENT_HOME"
+    export ILD_AGENT_SCRATCH_ROOT="$AGENT_SCRATCH_DIR"
+    export ILD_ORCHESTRATOR_PRIVATE_ROOT="$ORCHESTRATOR_PRIVATE_DIR"
+
+    # Two-uid mode. Order matters: the private roots (/data) are created and
+    # locked to traverse-only FIRST, so that the shared subtrees created beneath
+    # them in the next loop land inside an already-correct parent rather than
+    # having /data implicitly created with default ownership by a `mkdir -p`.
+    for path in $DATA_TRAVERSE_DIRS; do
+      ensure_traverse "$path"
+    done
+    for path in $SHARED_RW_DIRS; do
+      ensure_shared_rw "$path"
+    done
+    for path in $SHARED_RO_DIRS; do
+      ensure_shared_ro "$path"
+    done
+    [ -n "$ORCHESTRATOR_PRIVATE_DIR" ] && ensure_private "$ORCHESTRATOR_PRIVATE_DIR"
+  else
+    for path in $RUNTIME_DIRS; do
+      ensure_owned_by_runtime_user "$path"
+    done
+  fi
 
   runtime_home="$(getent passwd "$RUNTIME_USER" | cut -d: -f6)"
   if [ -n "$runtime_home" ]; then
@@ -150,16 +440,57 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
     chown "$RUNTIME_USER:$RUNTIME_GROUP" "$runtime_home"
     export HOME="$runtime_home"
 
+    # In two-uid mode the store lives under the runtime user's home and the
+    # agent's dotdirs are symlinks into it, so the agent uid must be able to
+    # traverse this home. useradd's Debian default is 0750 group ild, which the
+    # agent is not in; the fix is the GROUP, so below this home becomes 0710 group
+    # ild-agents — traversal only (never listing), and never through world bits.
+    config_group="$RUNTIME_GROUP"
+    if [ -n "$AGENT_USER" ]; then
+      # 0710 + shared group: the agent must traverse this home to resolve the
+      # credential-store and .gitconfig symlinks, but it never needs to list it,
+      # and no one outside the two uids needs anything here.
+      chown "$RUNTIME_USER:$SHARED_GROUP" "$runtime_home"
+      chmod 0710 "$runtime_home"
+      [ -n "$SHARED_GROUP" ] && config_group="$SHARED_GROUP"
+    fi
+
     # Intentional word-split on AGENT_CONFIG_DIRS / AGENT_CONFIG_FILES —
     # entries are space-separated names.
     # shellcheck disable=SC2086
-    link_agent_config_dirs "$AGENT_CONFIG_STORE" "$runtime_home" $AGENT_CONFIG_DIRS
+    link_agent_config_dirs "$AGENT_CONFIG_STORE" "$runtime_home" "$RUNTIME_USER" "$config_group" $AGENT_CONFIG_DIRS
     # shellcheck disable=SC2086
-    link_agent_config_files "$AGENT_CONFIG_STORE" "$runtime_home" $AGENT_CONFIG_FILES
+    link_agent_config_files "$AGENT_CONFIG_STORE" "$runtime_home" "$RUNTIME_USER" "$config_group" $AGENT_CONFIG_FILES
+
+    if [ -n "$AGENT_USER" ] && [ -n "$AGENT_HOME" ]; then
+      # The link helpers above already applied SHARED_GROUP, so this pass only
+      # has to add the setgid bits + default ACL, and its drift tripwire is no
+      # longer guaranteed to fire every boot. It is not guaranteed to stay quiet
+      # either: the tripwire treats any 0600 file as drift, and these CLIs rewrite
+      # .credentials.json at 0600 on each token refresh, so a boot that follows a
+      # refresh still re-walks the store.
+      [ -n "$SHARED_GROUP" ] && ensure_shared_rw "$AGENT_CONFIG_STORE"
+
+      agent_home="$(getent passwd "$AGENT_USER" | cut -d: -f6)"
+      agent_home="${agent_home:-$AGENT_HOME}"
+      mkdir -p "$agent_home"
+      chown "$AGENT_USER:$SHARED_GROUP" "$agent_home"
+      chmod 0750 "$agent_home"
+
+      # shellcheck disable=SC2086
+      link_secondary_home "$agent_home" "$AGENT_USER" "$AGENT_CONFIG_STORE" $AGENT_CONFIG_DIRS $AGENT_CONFIG_FILES
+
+      # Give the agent git the orchestrator's mounted commit identity: its own
+      # home has no .gitconfig, so point one at the read-only mounted file.
+      if [ -e "$runtime_home/.gitconfig" ] || [ -L "$runtime_home/.gitconfig" ]; then
+        ln -sfn "$runtime_home/.gitconfig" "$agent_home/.gitconfig"
+        chown -h "$AGENT_USER:$AGENT_USER" "$agent_home/.gitconfig" 2>/dev/null || true
+      fi
+    fi
   fi
 
   wait_for_postgres
-  exec gosu "$RUNTIME_USER:$RUNTIME_GROUP" "$@"
+  drop_and_exec "$@"
 fi
 
 wait_for_postgres

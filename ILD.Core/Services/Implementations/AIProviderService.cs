@@ -192,7 +192,12 @@ public class AIProviderService : IAIProviderService
         };
         psi.ArgumentList.Add("-c");
         psi.ArgumentList.Add(command);
-        using var proc = Process.Start(psi)!;
+        // Runs a model-authored command as the orchestrator, so it must not
+        // inherit the orchestrator's ambient capabilities — same reasoning as the
+        // preview spawn sites (ADR-0014). Effective CAP_SETUID in a hijacked
+        // orchestrator-side command is the difference between "runs as ild" and
+        // "runs as container root".
+        using var proc = Process.Start(AgentIsolation.DropInheritedCapabilities(psi))!;
         var stdout = await proc.StandardOutput.ReadToEndAsync();
         var stderr = await proc.StandardError.ReadToEndAsync();
         await proc.WaitForExitAsync();

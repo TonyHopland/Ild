@@ -58,7 +58,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             Process? proc = null;
             try
             {
-                proc = Process.Start(BuildRunProcessStartInfo(
+                proc = StartAgentProcess(BuildRunProcessStartInfo(
                     binaryPath,
                     worktreePath,
                     rendered,
@@ -72,7 +72,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                 {
                     try
                     {
-                        proc = Process.Start(BuildRunProcessStartInfo(
+                        proc = StartAgentProcess(BuildRunProcessStartInfo(
                             binaryPath,
                             worktreePath,
                             rendered,
@@ -119,8 +119,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             }
             catch (OperationCanceledException)
             {
-                KillProcessTree(p);
-                return NodeExecutionResult.Fail("opencode timed out");
+                return NodeExecutionResult.Fail(KillAndDescribe(p, "opencode timed out"));
             }
 
             string stdout, stderr;
@@ -131,8 +130,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             }
             catch (OperationCanceledException)
             {
-                KillProcessTree(p);
-                return NodeExecutionResult.Fail("opencode stream read timed out");
+                return NodeExecutionResult.Fail(KillAndDescribe(p, "opencode stream read timed out"));
             }
             var (response, sessionId, jsonError, sawJsonEvents) = ExtractTextAndSessionIdFromJsonEvents(stdout);
 
@@ -263,7 +261,9 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             foreach (var argument in arguments)
                 psi.ArgumentList.Add(argument);
 
-            proc = Process.Start(psi);
+            // Session export/import must run as the same agent user as the run
+            // itself, or it would look for the session under the wrong home.
+            proc = StartAgentProcess(psi);
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException)
         {
@@ -272,7 +272,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                 var retryPsi = BuildProcessStartInfo(binaryPath, worktreePath, useWorktreeAsWorkingDirectory: false);
                 foreach (var argument in arguments)
                     retryPsi.ArgumentList.Add(argument);
-                proc = Process.Start(retryPsi);
+                proc = StartAgentProcess(retryPsi);
             }
             else
             {

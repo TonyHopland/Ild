@@ -48,8 +48,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
             // turn's Chat Context preamble is already reachable — there is no
             // per-directory config to set for ctx.AdditionalAllowedDirectories.
 
-            var sessionDirectory = BuildSessionDirectory(ctx.RunContext.LoopRunId);
-            Directory.CreateDirectory(sessionDirectory);
+            var sessionDirectory = AgentIsolation.CreateScratchDirectory(SessionDirSegment, ctx.RunContext.LoopRunId.ToString("N"));
             PrepareRuntimeFiles(settings);
 
             string? sessionIdToUse = ctx.SessionId;
@@ -70,7 +69,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
             Process? proc;
             try
             {
-                proc = Process.Start(BuildRunProcessStartInfo(
+                proc = StartAgentProcess(BuildRunProcessStartInfo(
                     settings,
                     worktreePath,
                     rendered,
@@ -105,8 +104,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
             }
             catch (OperationCanceledException)
             {
-                KillProcessTree(process);
-                return NodeExecutionResult.Fail("pi timed out");
+                return NodeExecutionResult.Fail(KillAndDescribe(process, "pi timed out"));
             }
 
             PiExecutionOutput stdout;
@@ -118,8 +116,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
             }
             catch (OperationCanceledException)
             {
-                KillProcessTree(process);
-                return NodeExecutionResult.Fail("pi stream read timed out");
+                return NodeExecutionResult.Fail(KillAndDescribe(process, "pi stream read timed out"));
             }
 
             var effectiveSessionId = stdout.SessionId ?? sessionIdToUse;
@@ -396,8 +393,8 @@ public sealed class PiAdapter : CliAgentAdapterBase
         }
     }
 
-    private static string BuildSessionDirectory(Guid loopRunId)
-        => Path.Combine(Path.GetTempPath(), "ild-pi-sessions", loopRunId.ToString("N"));
+    private const string SessionDirSegment = "ild-pi-sessions";
+    private const string AgentDirSegment = "ild-pi-agent";
 
     private static string BuildSnapshotPath(string sessionDirectory, string sessionId)
         => Path.Combine(sessionDirectory, $"{SanitizeFileName(sessionId)}.jsonl");
@@ -460,8 +457,11 @@ public sealed class PiAdapter : CliAgentAdapterBase
         return sb.ToString();
     }
 
-    private static string BuildAgentDirectory(Guid loopRunId)
-        => Path.Combine(Path.GetTempPath(), "ild-pi-agent", loopRunId.ToString("N"));
+    // Created here rather than by the caller so that, like the session dir above,
+    // naming this tree and rooting it in the shared setgid scratch root are one
+    // act — the invariant has a single expression instead of one per call site.
+    private static string CreateAgentDirectory(Guid loopRunId)
+        => AgentIsolation.CreateScratchDirectory(AgentDirSegment, loopRunId.ToString("N"));
 
     private static void PrepareRuntimeFiles(PiAdapterSettings settings)
     {
@@ -469,7 +469,6 @@ public sealed class PiAdapter : CliAgentAdapterBase
             || string.IsNullOrWhiteSpace(settings.ModelsJsonContent))
             return;
 
-        Directory.CreateDirectory(settings.AgentDirectory);
         File.WriteAllText(Path.Combine(settings.AgentDirectory, "models.json"), settings.ModelsJsonContent);
 
         // Write the ILD extension so Pi can list/create work items via its tool system.
@@ -510,7 +509,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
             providerName ??= BuildSyntheticProviderName(provider);
             model = StripProviderPrefix(model, providerName);
 
-            agentDirectory = BuildAgentDirectory(loopRunId);
+            agentDirectory = CreateAgentDirectory(loopRunId);
             apiKeyEnvironmentVariableName = "ILD_PI_PROVIDER_API_KEY";
             modelsJsonContent = BuildModelsJson(provider, providerName!, model, api, apiKeyEnvironmentVariableName, apiKey);
             passApiKeyViaCli = false;

@@ -64,7 +64,8 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
             Process? proc;
             try
             {
-                proc = Process.Start(BuildRunProcessStartInfo(binaryPath, worktreePath, rendered, ctx.AdditionalAllowedDirectories));
+                proc = StartAgentProcess(
+                    BuildRunProcessStartInfo(binaryPath, worktreePath, rendered, ctx.AdditionalAllowedDirectories));
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
@@ -83,8 +84,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
             }
             catch (OperationCanceledException)
             {
-                KillProcessTree(process);
-                return NodeExecutionResult.Fail("copilot timed out");
+                return NodeExecutionResult.Fail(KillAndDescribe(process, "copilot timed out"));
             }
 
             string stdout;
@@ -105,8 +105,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
             }
             catch (OperationCanceledException)
             {
-                KillProcessTree(process);
-                return NodeExecutionResult.Fail("copilot stream read timed out");
+                return NodeExecutionResult.Fail(KillAndDescribe(process, "copilot stream read timed out"));
             }
 
             var response = stdout.Trim();

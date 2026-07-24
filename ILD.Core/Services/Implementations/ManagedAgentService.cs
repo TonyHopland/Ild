@@ -24,6 +24,7 @@ public sealed partial class ManagedAgentService : IManagedAgentService
     private readonly IProcessRunner _runner;
     private readonly ILogger<ManagedAgentService>? _logger;
     private readonly string _dataRoot;
+    private readonly string? _agentUser;
 
     // One in-flight update per agent, shared across every instance: the typed
     // HttpClient registration makes this service transient, so two racing
@@ -37,7 +38,7 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         HttpClient http,
         IProcessRunner runner,
         ILogger<ManagedAgentService>? logger = null)
-        : this(http, runner, ManagedAgentInstall.ResolveDataRoot(), logger)
+        : this(http, runner, ManagedAgentInstall.ResolveDataRoot(), logger, AgentIsolation.AgentUser)
     {
     }
 
@@ -46,12 +47,18 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         HttpClient http,
         IProcessRunner runner,
         string dataRoot,
-        ILogger<ManagedAgentService>? logger = null)
+        ILogger<ManagedAgentService>? logger = null,
+        string? agentUser = null)
     {
         _http = http;
         _runner = runner;
         _logger = logger;
         _dataRoot = dataRoot;
+        // Taken verbatim: null means "isolation off", not "look it up". The
+        // convenience constructor above resolves the ambient value, so a test can
+        // drive either state deterministically instead of depending on a
+        // process-global env var it shares with every other test.
+        _agentUser = agentUser;
     }
 
     public IReadOnlyList<ManagedAgent> Agents => ManagedAgentCatalog.All;
@@ -136,6 +143,16 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         var versionId = Guid.NewGuid().ToString("N");
         var versionDir = ManagedAgentInstall.VersionDir(_dataRoot, agent, versionId);
         Directory.CreateDirectory(versionDir);
+        // CreateDirectory implicitly created <key>/ and <key>/versions/ too, and
+        // under the container umask they land group-writable with the shared group
+        // inherited from /data/agents' setgid bit. Close them immediately: create,
+        // unlink and rename are governed by the CONTAINING directory, so a writable
+        // versions/ would let the agent drop in its own version tree regardless of
+        // any mode on the files themselves.
+        ProtectAgentRoot(agent);
+        // Closed to the agent until the tree is complete and read-only; see
+        // AgentIsolation.StageForAgentExec for why the ordering is the point.
+        using var staged = AgentIsolation.StageForAgentExec(versionDir, _agentUser);
 
         var spec = $"{agent.NpmPackage}@latest";
 
@@ -172,6 +189,10 @@ public sealed partial class ManagedAgentService : IManagedAgentService
             if (!File.Exists(binary))
                 throw new InvalidOperationException($"npm install of {spec} did not produce the expected '{agent.BinaryName}' binary.");
 
+            // Before the pointer flips, never after: `current` must never name a
+            // tree the agent could still be writing.
+            staged.Publish();
+
             SwapActiveVersion(agent, versionId);
             _logger?.LogInformation("Installed managed agent {Agent} version dir {VersionId} from {Spec}", agent.Key, versionId, spec);
         }
@@ -185,6 +206,31 @@ public sealed partial class ManagedAgentService : IManagedAgentService
     }
 
     /// <summary>
+    /// Re-assert "the agent may exec this tree but never write it" over the whole
+    /// of <c>/data/agents/&lt;key&gt;</c> — the version dirs, their shared
+    /// <c>versions/</c> parent, the agent root itself and the <c>current</c>
+    /// pointer (ADR-0014).
+    ///
+    /// <para>
+    /// It has to be the whole root, not just the files: create, unlink and rename
+    /// are governed by write permission on the <em>containing</em> directory. A
+    /// group-writable <c>versions/</c> or <c>&lt;key&gt;/</c> would let the agent
+    /// replace the pointer and drop in its own version tree no matter how the
+    /// files inside are moded — and <c>GetInstalledVersionAsync</c> then runs the
+    /// resolved binary as the orchestrator on every AI Provider status poll.
+    /// </para>
+    ///
+    /// <para>
+    /// Installs happen at runtime, after the entrypoint's boot-time pass, and npm
+    /// writes group-writable under the container's <c>umask 002</c> — so this is
+    /// what makes the guarantee hold without a restart, and without depending on
+    /// the volume filesystem supporting the default ACL.
+    /// </para>
+    /// </summary>
+    private void ProtectAgentRoot(ManagedAgent agent)
+        => AgentIsolation.ProtectFromAgentWrites(ManagedAgentInstall.AgentRoot(_dataRoot, agent), _agentUser);
+
+    /// <summary>
     /// Atomically point the agent at <paramref name="versionId"/> by overwriting
     /// the pointer file via a single rename — the swap either fully happens or
     /// not at all, so a reader never sees a half-written pointer.
@@ -195,6 +241,11 @@ public sealed partial class ManagedAgentService : IManagedAgentService
         Directory.CreateDirectory(Path.GetDirectoryName(pointer)!);
         var tmp = Path.Combine(ManagedAgentInstall.AgentRoot(_dataRoot, agent), $".current.{versionId}.tmp");
         File.WriteAllText(tmp, versionId);
+        // Protect before the rename, not after: the temp file is created 0664
+        // under umask 002 and File.Move preserves the mode, so protecting
+        // afterwards would leave a window where the live pointer — which decides
+        // which binary the orchestrator execs — is agent-writable.
+        AgentIsolation.ProtectFromAgentWrites(tmp, _agentUser);
         File.Move(tmp, pointer, overwrite: true);
     }
 

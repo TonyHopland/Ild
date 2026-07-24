@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.Entities;
 using Porta.Pty;
@@ -46,20 +47,35 @@ public sealed class InteractiveProviderSessionService
         }
 
         var sessionId = Guid.NewGuid();
-        var sessionRoot = Path.Combine(Path.GetTempPath(), "ild-sessions", sessionId.ToString("N"));
-        Directory.CreateDirectory(sessionRoot);
+        // The TUI runs as the agent uid (below), so its cwd has to be writable by
+        // it. Rooting it at the shared scratch root means the setgid shared-group
+        // tree grants that by inheritance, rather than a per-directory chmod.
+        var sessionRoot = AgentIsolation.CreateScratchDirectory("ild-sessions", sessionId.ToString("N"));
 
         try
         {
+            // Run the login TUI as the *agent* uid, exactly like a run (ADR-0014).
+            // These CLIs write their credentials with owner-only modes
+            // (~/.claude/.credentials.json is 0600, opencode's auth.json likewise),
+            // which no group or ACL grant can widen after the fact — so the login
+            // has to be performed by the uid that later has to read them, or the
+            // agent reads as logged-out until the next boot repair. It also means
+            // this is no longer a second, unrouted agent-CLI launch path.
+            // The routed command carries the environment the crossing requires
+            // (HOME, so the TUI writes credentials into the agent's home rather
+            // than the orchestrator's); applying it is not optional.
+            var routed = AgentIsolation.RouteCommand(binaryPath, Array.Empty<string>());
+            var environment = new Dictionary<string, string>(routed.Environment);
+
             var options = new PtyOptions
             {
                 Name = $"ild-{provider.Type}",
                 Cols = Math.Clamp(initialCols, 20, 500),
                 Rows = Math.Clamp(initialRows, 5, 200),
                 Cwd = sessionRoot,
-                App = binaryPath,
-                CommandLine = Array.Empty<string>(),
-                Environment = new Dictionary<string, string>(),
+                App = routed.FileName,
+                CommandLine = routed.Arguments.ToArray(),
+                Environment = environment,
             };
 
             await PtyWebSocketBridge.RunAsync(socket, options, _logger, cancellationToken);

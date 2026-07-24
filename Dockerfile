@@ -72,10 +72,18 @@ ARG WITH_CHROME=0
 ARG WITH_CERTS=0
 ARG APP_UID=10001
 ARG APP_GID=10001
+# Second, lower-trust user the coding-agent CLI runs as, plus the group both it
+# and the orchestrator share for the worktree + /data agent installs (ADR-0014).
+ARG AGENT_UID=10002
+ARG AGENT_GID=10002
+ARG SHARED_GID=10003
 
 # Install base utilities and optional tools before copying source so Docker
 # layer caching skips tool installs when only source code changes.
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates gosu netcat-openbsd && \
+# libcap2-bin (capsh) + util-linux (setpriv): the entrypoint keeps ambient
+# CAP_SETUID/SETGID on the orchestrator so it can drop the agent CLI to a second
+# uid; acl (setfacl): default ACLs make shared dirs read/write across both uids.
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates gosu netcat-openbsd libcap2-bin util-linux acl && \
     mkdir -p /usr/local/share/ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
@@ -95,6 +103,47 @@ RUN existing_group="$(getent group "${APP_GID}" | cut -d: -f1 || true)" && \
     elif [ -z "$existing_user" ]; then \
       useradd --uid ${APP_UID} --gid ${APP_GID} --create-home --home-dir /home/ild --shell /usr/sbin/nologin ild; \
     fi
+
+# Create the lower-trust agent user and the shared group (ADR-0014). The coding
+# agent CLI runs as `agent` so it no longer shares the orchestrator's uid; the
+# `ild-agents` group is what grants both users access to the worktree tree and
+# the /data agent installs, while /data's secrets stay ild-only. Both users are
+# members of the shared group; the runtime paths' ownership/modes are applied by
+# the entrypoint (volumes overlay any build-time perms). The entrypoint sets both
+# homes to 0710/0750 group ild-agents at runtime — the agent traverses /home/ild
+# to resolve the credential-store and .gitconfig symlinks beneath it via the
+# GROUP, not via world bits; this chmod is only a sane build-time baseline for the
+# non-isolated case (useradd's Debian HOME_MODE is 0750 group ild, which the agent
+# is not in).
+RUN if [ -z "$(getent group "${SHARED_GID}" | cut -d: -f1 || true)" ]; then \
+      groupadd --gid ${SHARED_GID} ild-agents; \
+    fi && \
+    if [ -z "$(getent group "${AGENT_GID}" | cut -d: -f1 || true)" ]; then \
+      groupadd --gid ${AGENT_GID} agent; \
+    fi && \
+    if [ -z "$(getent passwd "${AGENT_UID}" | cut -d: -f1 || true)" ]; then \
+      useradd --uid ${AGENT_UID} --gid ${AGENT_GID} --create-home --home-dir /home/agent --shell /usr/sbin/nologin agent; \
+    fi && \
+    usermod -aG ild-agents ild && \
+    usermod -aG ild-agents agent && \
+    chmod 0755 /home/agent /home/ild
+
+# Let the agent uid run git in trees the orchestrator owns. `git worktree add`
+# runs as ild, so the worktree, its .git file and the gitdir under
+# /data/repos/<repo>/.git/worktrees/<name> are all owned by uid 10001 — and since
+# 2.35.2 git compares the repository owner's uid to geteuid() and refuses with
+# "detected dubious ownership" otherwise. Group membership and mode 2775 do not
+# enter into that check, so without this every git command the agent runs (the
+# review prompts use git log/diff/status, and it commits its own work) fails.
+#
+# This must be system-level: git ignores safe.directory from repository config,
+# and /home/agent/.gitconfig is a symlink onto the read-only host mount so it
+# cannot carry it either. `*` rather than per-path entries because the trailing
+# `/*` form is version-dependent and would fail silently on an older git. It
+# costs nothing here: safe.directory guards against picking up a repo owned by
+# some *other* user, whereas both uids are ours and the sharing is deliberate —
+# the real boundary is the uid/group/mode scheme, not this heuristic.
+RUN git config --system --add safe.directory '*'
 
 # Coding agents (Pi, OpenCode, Claude Code) are intentionally NOT baked into
 # the image. They are installed on demand onto the persistent /data volume
@@ -163,8 +212,51 @@ COPY --from=frontend-build --chown=ild:ild /app/frontend/dist ./wwwroot
 ENV HOME=/home/ild
 ENV ILD_DATA_PATH=/data
 ENV ILD_WORKTREES_PATH=/worktrees
-RUN mkdir -p /data /worktrees && \
-  chown ild:ild /app /data /worktrees
+
+# uid-isolation wiring (ADR-0014). These drive the entrypoint's two-uid setup;
+# they are unset in Dockerfile.WorkItemServer, so its entrypoint keeps the
+# single-uid gosu drop. The app-side ILD_AGENT_* vars are deliberately NOT set
+# here: the entrypoint exports them from AGENT_USER/GROUP/HOME so there is one
+# source of truth. Setting them here independently would mean that clearing
+# AGENT_USER (the documented single-uid escape hatch) left the app still routing
+# every launch through setpriv, failing every run with an opaque EPERM.
+ENV AGENT_USER=agent
+ENV AGENT_GROUP=agent
+ENV AGENT_HOME=/home/agent
+ENV SHARED_GROUP=ild-agents
+# cap_kill is required as well as cap_setuid/cap_setgid: setpriv gives the agent
+# a different real AND saved uid, so kill(2) from the orchestrator returns EPERM
+# without it — Halt and the per-node timeouts would leave the agent orphaned in
+# the worktree. The agent itself still gets no capabilities (setpriv clears the
+# inheritable + ambient sets, so its post-exec permitted set is empty).
+ENV RUNTIME_AMBIENT_CAPS=cap_setuid,cap_setgid,cap_kill
+# Shared read/write: the agent writes its worktree, and git worktree commits go
+# through the base repo's object store under /data/repos.
+# Scratch both uids touch (per-run agent session state, the interactive
+# terminal cwd). It lives under /tmp so it is discarded with the container
+# rather than growing on a volume, but it is set up like the other shared trees
+# so that a file the orchestrator seeds there stays writable by the agent.
+ENV AGENT_SCRATCH_DIR=/tmp/ild-agent-scratch
+# Orchestrator-only state (the git askpass helper, preview state). Created
+# owner-only by the entrypoint before anything else runs, which is what stops the
+# agent planting a file the orchestrator would then execute as itself. On /tmp so
+# it stays ephemeral instead of growing on the data volume.
+ENV ORCHESTRATOR_PRIVATE_DIR=/tmp/ild-orchestrator-private
+ENV SHARED_RW_DIRS="/worktrees /home/ild/.agent-config /data/repos /data/chat-sessions /tmp/ild-agent-scratch"
+# Shared read-only: the agent execs the npm-installed CLIs but must not be able
+# to rewrite them — the orchestrator runs those same binaries as ild (version
+# checks, the provider terminal), so a writable install would be a way back
+# across the boundary. The orchestrator still installs/updates them as the owner.
+ENV SHARED_RO_DIRS=/data/agents
+ENV DATA_TRAVERSE_DIRS=/data
+
+# Baseline ownership; the entrypoint finalizes modes + default ACLs on the
+# volume-mounted paths at startup (a named volume overlays these build-time
+# perms). /worktrees and the agent-config store are group-owned by the shared
+# group up front; /data stays ild-private and is opened to traverse-only later.
+RUN mkdir -p /data /worktrees /home/ild/.agent-config && \
+  chown ild:ild /app /data && \
+  chown ild:ild-agents /worktrees /home/ild/.agent-config
 
 COPY entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh

@@ -495,9 +495,19 @@ public class RepositoryManager : IRepositoryManager
         };
     }
 
+    /// <summary>
+    /// Materialize the helper git calls as <c>GIT_ASKPASS</c> to feed it the
+    /// repository token. It lives under the orchestrator-private root, never a
+    /// fixed path in world-writable <c>/tmp</c>: this script is executed by the
+    /// orchestrator with <c>ILD_GIT_PASSWORD</c> in its environment, so a version
+    /// planted by the (now separately-uid'd) agent would be both arbitrary code as
+    /// the orchestrator and credential exfiltration — and the "only write it if it
+    /// is missing" guard below is exactly what would trust the planted copy. See
+    /// <see cref="AgentIsolation.PrivateRoot"/> and ADR-0014.
+    /// </summary>
     private static string EnsureAskPassScript()
     {
-        var path = Path.Combine(Path.GetTempPath(), "ild-git-askpass.sh");
+        var path = Path.Combine(AgentIsolation.CreatePrivateDirectory(), "git-askpass.sh");
         if (!File.Exists(path))
         {
             File.WriteAllText(path, "#!/bin/sh\ncase \"$1\" in\n  *Username*) printf '%s\\n' \"${ILD_GIT_USERNAME:-git}\" ;;\n  *Password*) printf '%s\\n' \"${ILD_GIT_PASSWORD:-}\" ;;\n  *) printf '\\n' ;;\nesac\n");
@@ -505,14 +515,12 @@ public class RepositoryManager : IRepositoryManager
             {
                 if (!OperatingSystem.IsWindows())
                 {
+                    // Owner-only: nothing outside the orchestrator needs to read or
+                    // run it, and the private root already denies the agent access.
                     File.SetUnixFileMode(path,
                         UnixFileMode.UserRead |
                         UnixFileMode.UserWrite |
-                        UnixFileMode.UserExecute |
-                        UnixFileMode.GroupRead |
-                        UnixFileMode.GroupExecute |
-                        UnixFileMode.OtherRead |
-                        UnixFileMode.OtherExecute);
+                        UnixFileMode.UserExecute);
                 }
             }
             catch
