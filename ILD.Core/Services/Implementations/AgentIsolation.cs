@@ -213,8 +213,11 @@ public static class AgentIsolation
         return new AgentCommand(SetprivCommand, argv, environment);
     }
 
+    // Truly immutable so the shared sentinel cannot be mutated by a caller that
+    // casts an AgentCommand.Environment back to Dictionary — that would leak into
+    // every other RouteCommand result.
     private static readonly IReadOnlyDictionary<string, string> EmptyEnvironment =
-        new Dictionary<string, string>(StringComparer.Ordinal);
+        System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty;
 
     /// <summary>
     /// A command line, possibly rewritten to cross to the agent uid, together with

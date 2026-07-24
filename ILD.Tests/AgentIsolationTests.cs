@@ -170,12 +170,14 @@ public class AgentIsolationTests
     }
 
     [Fact]
-    public void ScratchRoot_falls_back_to_tmpdir_when_unconfigured()
+    public void ScratchRoot_is_the_configured_value_or_tmpdir()
     {
-        // Unset in tests and local development, which must keep the
-        // pre-isolation behavior of using TMPDIR.
-        Assert.Null(Environment.GetEnvironmentVariable(AgentIsolation.ScratchRootEnvVar));
-        Assert.Equal(Path.GetTempPath(), AgentIsolation.ScratchRoot);
+        // Don't assert the ambient env var is unset — parallel/CI runs can inherit
+        // it, and that would fail for reasons unrelated to the behavior under test.
+        // Assert the resolution rule directly: configured value wins, else TMPDIR.
+        var configured = Environment.GetEnvironmentVariable(AgentIsolation.ScratchRootEnvVar);
+        var expected = string.IsNullOrWhiteSpace(configured) ? Path.GetTempPath() : configured;
+        Assert.Equal(expected, AgentIsolation.ScratchRoot);
     }
 
     [Fact]

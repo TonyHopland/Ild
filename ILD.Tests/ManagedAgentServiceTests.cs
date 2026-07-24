@@ -173,7 +173,7 @@ public class ManagedAgentServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Install_leaves_nothing_under_the_agent_root_writable_by_the_agent(  )
+    public async Task Install_leaves_nothing_under_the_agent_root_writable_by_the_agent()
     {
         // ADR-0014: the agent execs these binaries, and the orchestrator runs the
         // same ones as itself on every status poll — so nothing here may be
