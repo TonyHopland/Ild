@@ -298,8 +298,16 @@ public static class AgentIsolation
     /// pre-isolation behavior and what local development and unit tests get.
     /// </para>
     /// </summary>
-    public static string ScratchRoot
-        => NonEmpty(Environment.GetEnvironmentVariable(ScratchRootEnvVar)) ?? Path.GetTempPath();
+    public static string ScratchRoot => ResolveScratchRoot(Environment.GetEnvironmentVariable(ScratchRootEnvVar));
+
+    /// <inheritdoc cref="ScratchRoot"/>
+    /// <param name="configured">
+    /// The configured root, or null/blank for the default. Explicit form so both
+    /// branches of the rule are testable without setting the (process-global) env
+    /// var — mirrors <see cref="ResolvePrivateRoot"/>.
+    /// </param>
+    public static string ResolveScratchRoot(string? configured)
+        => NonEmpty(configured) ?? Path.GetTempPath();
 
     /// <summary>
     /// Create a scratch directory under <see cref="ScratchRoot"/> and return its

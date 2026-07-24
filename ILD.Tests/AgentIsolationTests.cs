@@ -172,12 +172,15 @@ public class AgentIsolationTests
     [Fact]
     public void ScratchRoot_is_the_configured_value_or_tmpdir()
     {
-        // Don't assert the ambient env var is unset — parallel/CI runs can inherit
-        // it, and that would fail for reasons unrelated to the behavior under test.
-        // Assert the resolution rule directly: configured value wins, else TMPDIR.
-        var configured = Environment.GetEnvironmentVariable(AgentIsolation.ScratchRootEnvVar);
-        var expected = string.IsNullOrWhiteSpace(configured) ? Path.GetTempPath() : configured;
-        Assert.Equal(expected, AgentIsolation.ScratchRoot);
+        // Drive the resolver directly rather than reading the ambient env var and
+        // re-deriving the expected value with the implementation's own formula —
+        // that would be tautological for the "configured wins" branch and would
+        // never exercise it in CI (var unset). The explicit-parameter seam also
+        // avoids setting the process-global var, which PiAdapter reads live and
+        // xUnit parallelism would race. Mirrors PrivateRoot_is_always_absolute.
+        Assert.Equal("/configured/scratch", AgentIsolation.ResolveScratchRoot("/configured/scratch"));
+        Assert.Equal(Path.GetTempPath(), AgentIsolation.ResolveScratchRoot(null));
+        Assert.Equal(Path.GetTempPath(), AgentIsolation.ResolveScratchRoot("   "));
     }
 
     [Fact]
