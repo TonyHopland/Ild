@@ -10,7 +10,9 @@ namespace ILD.Core.Services.Implementations;
 /// <list type="number">
 ///   <item><b>Crossing to the agent uid</b> — <see cref="Route(ProcessStartInfo)"/>
 ///   for a spawn, <see cref="RouteCommand(string, IReadOnlyList{string})"/> for
-///   APIs that take a command plus argv (the interactive terminal's PTY).</item>
+///   APIs that take a command plus argv (the interactive terminal's PTY). Both
+///   also strip the orchestrator's secrets (<see cref="SecretEnvironmentKeys"/>)
+///   from the environment the agent inherits.</item>
 ///   <item><b>Keeping the orchestrator's capabilities away from agent-authored
 ///   code</b> — <see cref="DropInheritedCapabilities(ProcessStartInfo)"/>, for the
 ///   orchestrator-side commands (preview, git, npm) whose input the agent
@@ -72,9 +74,42 @@ public static class AgentIsolation
     /// </summary>
     public const string PrivateRootEnvVar = "ILD_ORCHESTRATOR_PRIVATE_ROOT";
 
+    /// <summary>
+    /// Extra, deployment-specific environment variable names (comma-separated) to
+    /// strip from the agent's environment on top of <see cref="DefaultSecretEnvKeys"/>.
+    /// </summary>
+    public const string SecretEnvDenylistEnvVar = "ILD_AGENT_ENV_DENYLIST";
+
     // The privilege-drop tool. Bare name resolved on PATH (/usr/bin/setpriv,
     // shipped by util-linux in the image).
     private const string SetprivCommand = "setpriv";
+
+    // Orchestrator-only secrets that must never reach the agent uid — the DB
+    // connection strings, the encryption-at-rest key, the bootstrap password, and
+    // the API tokens/keys the orchestrator uses to talk to itself and the
+    // WorkItem server. .NET pre-populates a child's environment from the current
+    // process, so without stripping these the agent would inherit them verbatim.
+    //
+    // Exact names, not patterns: the adapters set the agent's OWN secrets on the
+    // same environment (e.g. Pi's ILD_PI_PROVIDER_API_KEY, opencode's
+    // OPENCODE_CONFIG_CONTENT) under different names, and a pattern like
+    // "*_API_KEY" or "*TOKEN*" would strip those too. The agent's per-run
+    // callback token reaches its MCP server through the MCP config file, and the
+    // git commit identity travels in GIT_AUTHOR_*/GIT_COMMITTER_*, so neither is
+    // here. New orchestrator secrets must be added to this list (or via
+    // ILD_AGENT_ENV_DENYLIST) — the same discipline the shared-volume scheme uses.
+    private static readonly string[] DefaultSecretEnvKeys =
+    {
+        "ILD_DB_CONNECTION_STRING",
+        "WORKITEM_DB_CONNECTION_STRING",
+        "ILD_SECRET_KEY",
+        "ILD_PASSWORD",
+        "ILD_USERNAME",
+        "WORKITEM_API_KEYS",
+        "ILD_WORKITEM_SERVER_API_KEY",
+        "ILD_API_TOKEN",
+        "ILD_AGENT_TOKEN",
+    };
 
     /// <summary>
     /// The configured agent user, or <c>null</c> when uid isolation is disabled.
@@ -131,8 +166,38 @@ public static class AgentIsolation
         if (home is not null)
             psi.Environment["HOME"] = home;
 
+        // .NET copied the orchestrator's whole environment onto the psi, secrets
+        // included. Remove them so the agent — a different, lower-trust uid — never
+        // sees the DB strings, encryption key, or the orchestrator's API tokens.
+        foreach (var key in SecretEnvironmentKeys)
+            psi.Environment.Remove(key);
+
         Wrap(psi, BuildSetprivArgs(user, group));
         return psi;
+    }
+
+    /// <summary>
+    /// The orchestrator-only environment variables scrubbed from the agent —
+    /// <see cref="DefaultSecretEnvKeys"/> plus any names in
+    /// <c>ILD_AGENT_ENV_DENYLIST</c>.
+    /// </summary>
+    public static IReadOnlyCollection<string> SecretEnvironmentKeys
+        => ResolveSecretEnvironmentKeys(Environment.GetEnvironmentVariable(SecretEnvDenylistEnvVar));
+
+    /// <inheritdoc cref="SecretEnvironmentKeys"/>
+    /// <param name="extraDenylist">
+    /// Comma-separated extra names, or null/blank for none. Explicit form so the
+    /// merge is testable without the process-global env var.
+    /// </param>
+    public static IReadOnlyCollection<string> ResolveSecretEnvironmentKeys(string? extraDenylist)
+    {
+        var keys = new HashSet<string>(DefaultSecretEnvKeys, StringComparer.Ordinal);
+        if (NonEmpty(extraDenylist) is { } extra)
+        {
+            foreach (var name in extra.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                keys.Add(name);
+        }
+        return keys;
     }
 
     /// <summary>
@@ -200,15 +265,25 @@ public static class AgentIsolation
         var argv = new List<string>(BuildSetprivArgs(user, NonEmpty(agentGroup) ?? user)) { fileName };
         argv.AddRange(arguments);
 
-        // The HOME override travels WITH the command, for the same reason Route
-        // applies it to the psi: it is half of the crossing, not an extra the
-        // caller may forget. Forgetting it is silent and expensive — the login TUI
-        // would write credentials into the orchestrator's home and every later run
-        // would read as logged-out, the exact failure routing the terminal to the
-        // agent uid exists to prevent.
-        var environment = NonEmpty(agentHome) is { } home
-            ? new Dictionary<string, string>(StringComparer.Ordinal) { ["HOME"] = home }
-            : EmptyEnvironment;
+        // The environment overrides travel WITH the command, for the same reason
+        // Route applies them to the psi: they are part of the crossing, not extras
+        // the caller may forget.
+        var environment = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        // HOME: forgetting it is silent and expensive — the login TUI would write
+        // credentials into the orchestrator's home and every later run would read
+        // as logged-out, the exact failure routing the terminal to the agent uid
+        // exists to prevent.
+        if (NonEmpty(agentHome) is { } home)
+            environment["HOME"] = home;
+
+        // Secrets: a PTY child inherits the orchestrator's environment and the
+        // caller only *merges* these overrides over it, so — unlike Route, which
+        // owns the psi and can remove keys outright — neutralize each secret to an
+        // empty value. The agent never needs any of them; an empty DB string or
+        // token is inert.
+        foreach (var key in ResolveSecretEnvironmentKeys(Environment.GetEnvironmentVariable(SecretEnvDenylistEnvVar)))
+            environment[key] = string.Empty;
 
         return new AgentCommand(SetprivCommand, argv, environment);
     }

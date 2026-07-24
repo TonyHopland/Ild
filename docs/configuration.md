@@ -206,6 +206,15 @@ so isolation is never half-on. The container refuses to start rather than
 degrade silently if isolation is requested but `capsh`/`setpriv`, the ambient
 capabilities, or the shared group are missing.
 
+Under isolation the orchestrator's own secrets — the DB connection strings,
+`ILD_SECRET_KEY`, `ILD_PASSWORD`, and the API tokens/keys it uses to reach itself
+and the WorkItem server — are stripped from the agent's environment so the
+lower-trust agent uid never sees them. If you introduce additional secret
+environment variables that the orchestrator reads but the agent must not, list
+their names (comma-separated) in `ILD_AGENT_ENV_DENYLIST` and they are stripped
+too. The agent's git commit identity (`GIT_AUTHOR_*`/`GIT_COMMITTER_*`) and any
+provider API key an adapter passes to the CLI are kept.
+
 The coding agents (Pi, OpenCode, Claude Code, GitHub Copilot) are **not** baked into the image.
 They install on demand onto the persistent `/data` volume and are updated there
 without rebuilding the image. `WITH_NODE` must be on, since those installs and

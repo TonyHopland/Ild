@@ -126,6 +126,20 @@ safe.directory '*'` in the image, every git command the agent runs (the review
   picking up a repo owned by some _other_ user, whereas both uids are ours and the
   sharing is deliberate.
 
+- **The agent's environment is scrubbed of orchestrator secrets.** .NET
+  pre-populates a child process's environment from the current process, so a
+  spawned agent would otherwise inherit the DB connection strings, the
+  encryption-at-rest key (`ILD_SECRET_KEY`), the bootstrap password, and the API
+  tokens the orchestrator uses to reach itself and the WorkItem server. The launch
+  seam removes those before the agent runs (for the PTY login terminal, which only
+  merges overrides over the inherited environment, it neutralizes them to empty
+  instead). The list is exact names, not a pattern, because the adapters set the
+  agent's _own_ secrets on the same environment (e.g. a provider API key) under
+  different names and a pattern would strip those too; a deployment can extend it
+  with `ILD_AGENT_ENV_DENYLIST`. The git commit identity (`GIT_AUTHOR_*`/
+  `GIT_COMMITTER_*`) and the agent's per-run MCP callback token (delivered through
+  the MCP config file, not the environment) are deliberately not on the list.
+
 - **Orchestrator-private state lives under a root the entrypoint pre-creates.** A
   predictable path in world-writable `/tmp` is harmless while everything is one
   uid, and a privilege-escalation route once it is not: the agent can create the
@@ -177,13 +191,9 @@ rather than overlooked:
   the provider login terminal.
 - **All runs share the `ild-agents` group**, so one run's agent can reach another
   run's worktree and any repo in the store.
-- **The agent inherits the orchestrator's environment**, including
-  `ILD_DB_CONNECTION_STRING`. This is unchanged from the single-uid design (a
-  same-uid child inherited it too), but the uid split does not fix it.
 
-Narrowing these is follow-up work: per-run uids/groups, brokering secrets out of
-the agent's environment, and treating the shared git/credential state as
-attacker-controlled input on the orchestrator side.
+Narrowing these is follow-up work: per-run uids/groups, and treating the shared
+git/credential state as attacker-controlled input on the orchestrator side.
 
 ## Consequences
 

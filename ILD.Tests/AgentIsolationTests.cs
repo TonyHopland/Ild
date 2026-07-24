@@ -66,6 +66,75 @@ public class AgentIsolationTests
     }
 
     [Fact]
+    public void Route_strips_orchestrator_secrets_but_keeps_the_agent_environment()
+    {
+        var psi = BuildPsi();
+        // An orchestrator secret .NET copied onto the psi, plus things the agent
+        // legitimately needs: an adapter-set provider key (different name), the
+        // git commit identity, and PATH.
+        psi.Environment["ILD_DB_CONNECTION_STRING"] = "Host=postgres;Password=hunter2";
+        psi.Environment["ILD_SECRET_KEY"] = "topsecret";
+        psi.Environment["ILD_API_TOKEN"] = "callback-token";
+        psi.Environment["ILD_PI_PROVIDER_API_KEY"] = "the-agent's-own-key";
+        psi.Environment["GIT_AUTHOR_NAME"] = "ILD Agent";
+        psi.Environment["PATH"] = "/usr/bin";
+
+        AgentIsolation.Route(psi, agentUser: "agent", agentGroup: "agent", agentHome: "/home/agent");
+
+        Assert.False(psi.Environment.ContainsKey("ILD_DB_CONNECTION_STRING"), "DB string leaked to the agent");
+        Assert.False(psi.Environment.ContainsKey("ILD_SECRET_KEY"), "encryption key leaked to the agent");
+        Assert.False(psi.Environment.ContainsKey("ILD_API_TOKEN"), "callback token leaked to the agent");
+        // The adapter's own secret and the agent's working env must survive.
+        Assert.Equal("the-agent's-own-key", psi.Environment["ILD_PI_PROVIDER_API_KEY"]);
+        Assert.Equal("ILD Agent", psi.Environment["GIT_AUTHOR_NAME"]);
+        Assert.Equal("/usr/bin", psi.Environment["PATH"]);
+    }
+
+    [Fact]
+    public void Route_does_not_strip_secrets_when_isolation_is_off()
+    {
+        // Single-uid / local dev: Route is a no-op, so the env is unchanged.
+        var psi = BuildPsi();
+        psi.Environment["ILD_DB_CONNECTION_STRING"] = "Host=postgres";
+
+        AgentIsolation.Route(psi, agentUser: null, agentGroup: null, agentHome: null);
+
+        Assert.Equal("Host=postgres", psi.Environment["ILD_DB_CONNECTION_STRING"]);
+    }
+
+    [Fact]
+    public void RouteCommand_neutralizes_secrets_for_the_merged_pty_environment()
+    {
+        // The PTY merges these overrides over the inherited env rather than
+        // replacing it, so secrets are neutralized to empty rather than removed.
+        var routed = AgentIsolation.RouteCommand("claude", Array.Empty<string>(),
+            agentUser: "agent", agentGroup: "agent", agentHome: "/home/agent");
+
+        Assert.Equal("/home/agent", routed.Environment["HOME"]);
+        Assert.Equal(string.Empty, routed.Environment["ILD_DB_CONNECTION_STRING"]);
+        Assert.Equal(string.Empty, routed.Environment["ILD_SECRET_KEY"]);
+        Assert.Equal(string.Empty, routed.Environment["ILD_WORKITEM_SERVER_API_KEY"]);
+    }
+
+    [Fact]
+    public void ResolveSecretEnvironmentKeys_covers_the_known_secrets_and_the_extra_denylist()
+    {
+        var defaults = AgentIsolation.ResolveSecretEnvironmentKeys(null);
+        Assert.Contains("ILD_DB_CONNECTION_STRING", defaults);
+        Assert.Contains("ILD_SECRET_KEY", defaults);
+        Assert.Contains("ILD_PASSWORD", defaults);
+        Assert.Contains("WORKITEM_API_KEYS", defaults);
+        Assert.Contains("ILD_API_TOKEN", defaults);
+        // The agent's own provider key must never be in the strip set.
+        Assert.DoesNotContain("ILD_PI_PROVIDER_API_KEY", defaults);
+
+        var extended = AgentIsolation.ResolveSecretEnvironmentKeys("MY_CUSTOM_SECRET , ANOTHER_ONE");
+        Assert.Contains("MY_CUSTOM_SECRET", extended);
+        Assert.Contains("ANOTHER_ONE", extended);
+        Assert.Contains("ILD_DB_CONNECTION_STRING", extended); // defaults still present
+    }
+
+    [Fact]
     public void Route_sets_home_and_preserves_working_directory_and_redirects()
     {
         var psi = BuildPsi();
