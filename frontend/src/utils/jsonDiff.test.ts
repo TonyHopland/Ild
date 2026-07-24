@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vite-plus/test";
-import { computeLineDiff } from "./jsonDiff";
+import { computeLineDiff, computeWordDiff } from "./jsonDiff";
 
 describe("computeLineDiff", () => {
   test("marks identical text as all context", () => {
@@ -122,6 +122,20 @@ describe("computeLineDiff intra-line segments", () => {
     ]);
   });
 
+  test("skips segmentation for a wholesale prompt rewrite", () => {
+    // The headline confetti case: two long prompt lines sharing only stopwords
+    // and JSON boilerplate. Left whole, the reader sees one changed line; split,
+    // they would see ~15 boxes a side pivoting on "the" and "this".
+    const diff = computeLineDiff(
+      `      "prompt": "Review the current diff of this worktree against the work item. Report correctness problems and stop.",`,
+      `      "prompt": "Inspect every changed file on this branch, compare it to the specification, and list any defects you can prove.",`,
+    );
+
+    expect(diff.map((l) => l.type)).toEqual(["del", "add"]);
+    expect(diff[0].segments).toBeUndefined();
+    expect(diff[1].segments).toBeUndefined();
+  });
+
   test("falls back to whole-line highlighting for a pair too large to align", () => {
     // ~1400 distinct tokens a side, so the intra-line table blows the cell cap
     // and the pair keeps the light tier instead of stalling the save modal.
@@ -133,6 +147,25 @@ describe("computeLineDiff intra-line segments", () => {
     expect(diff.map((l) => l.type)).toEqual(["del", "add"]);
     expect(diff[0].segments).toBeUndefined();
     expect(diff[1].segments).toBeUndefined();
+  });
+
+  test("spends one alignment budget across the whole document", () => {
+    // Six pairs that each cost ~249k cells (their first and last words differ, so
+    // nothing trims and the full token table is built) against a 1M aggregate
+    // budget: four fit, the rest keep the whole-line tier. Without a shared
+    // budget every one of them would pay, and 200 of them could.
+    const shared = Array.from({ length: 248 }, (_, i) => `w${i}`).join(" ");
+    const line = (head: string, tail: string) => `${head} ${shared} ${tail}`;
+    const before = Array.from({ length: 6 }, (_, i) => line(`p${i}`, `s${i}a`)).join("\n");
+    const after = Array.from({ length: 6 }, (_, i) => line(`q${i}`, `s${i}b`)).join("\n");
+
+    const dels = computeLineDiff(before, after).filter((l) => l.type === "del");
+
+    expect(dels).toHaveLength(6);
+    expect(changed(dels[0])).toEqual(["p0", "s0a"]);
+    expect(dels[3].segments).toBeDefined();
+    expect(dels[4].segments).toBeUndefined();
+    expect(dels[5].segments).toBeUndefined();
   });
 
   test("stops segmenting past the paired-line cap", () => {
@@ -155,4 +188,72 @@ describe("computeLineDiff intra-line segments", () => {
     expect(adds[200].segments).toBeUndefined();
     expect(dels[n - 1].segments).toBeUndefined();
   });
+});
+
+/**
+ * Calibration of the "is this pair worth segmenting?" decision, asserted on the
+ * line pair itself rather than through a document contrived to make the line
+ * diff emit that pair. Every line here is short enough that the cost caps cannot
+ * fire, so a null result means the two lines were judged too dissimilar.
+ */
+describe("computeWordDiff — worth segmenting?", () => {
+  const prompt = (value: string) => `      "prompt": ${JSON.stringify(value)},`;
+  const review =
+    "Review the current diff of this worktree against the work item. Report correctness problems and stop.";
+
+  const segmented: Array<[string, string, string]> = [
+    ["one word replaced", prompt(review), prompt(review.replace("diff", "patch"))],
+    [
+      "a clause appended",
+      prompt("Fix every finding — do not argue with the review."),
+      prompt("Fix every finding — do not argue with the review and do not skip items."),
+    ],
+    [
+      "half the sentence reworded",
+      prompt("Review the current diff of this worktree against the work item."),
+      prompt("Review the current diff of this branch against the acceptance criteria."),
+    ],
+    ["a short value replaced outright", prompt("Do the thing"), prompt("Handle everything else")],
+    ["a node id changed", '      "id": "old-node",', '      "id": "qa",'],
+  ];
+
+  const whole: Array<[string, string, string]> = [
+    [
+      "a wholesale rewrite of the same key",
+      prompt(review),
+      prompt(
+        "Inspect every changed file on this branch, compare it to the specification, and list any defects you can prove.",
+      ),
+    ],
+    [
+      "two long prompts with no word in common",
+      prompt(Array.from({ length: 20 }, (_, i) => `w${i}${i}`).join(" ")),
+      prompt(Array.from({ length: 20 }, (_, i) => `${i}z${i}`).join(" ")),
+    ],
+    [
+      "two different keys",
+      '      "label": "Run the test suite",',
+      '      "prompt": "Summarize the repository layout",',
+    ],
+    ["two unrelated words", "hello", "world"],
+  ];
+
+  for (const [name, before, after] of segmented) {
+    test(`segments ${name}`, () => {
+      const words = computeWordDiff(before, after);
+      expect(words).not.toBeNull();
+      // Whatever it emphasises, the segments still reproduce both lines exactly.
+      expect(words?.del.map((s) => s.text).join("")).toBe(before);
+      expect(words?.add.map((s) => s.text).join("")).toBe(after);
+      // ...and something is actually emphasised, on the added side at minimum
+      // (a line that only grew has nothing to mark on the removed side).
+      expect(words?.add.some((s) => s.changed)).toBeTruthy();
+    });
+  }
+
+  for (const [name, before, after] of whole) {
+    test(`leaves ${name} whole`, () => {
+      expect(computeWordDiff(before, after)).toBeNull();
+    });
+  }
 });
