@@ -21,7 +21,10 @@ export interface SaveDiffModalProps {
  * The repo has no diff library and the files-tab DiffView consumes a
  * precomputed unified-diff string, so we render our own line diff here. Prompt
  * changes therefore show as escaped JSON in this view — an accepted tradeoff for
- * a whole-document review.
+ * a whole-document review. Because those prompt lines run to thousands of
+ * characters, a changed line is shaded in two tiers: the whole line lightly, to
+ * keep the changed region visible in context, and the words that actually
+ * differ from its counterpart strongly, when the line diff could work them out.
  */
 export default function SaveDiffModal({
   isOpen,
@@ -65,7 +68,18 @@ export default function SaveDiffModal({
                   <span className="save-diff-gutter">
                     {line.type === "add" ? "+" : line.type === "del" ? "-" : " "}
                   </span>
-                  <span className="save-diff-text">{line.text}</span>
+                  <span className="save-diff-text">
+                    {line.segments
+                      ? line.segments.map((segment, segIdx) => (
+                          <span
+                            key={segIdx}
+                            className={segment.changed ? `save-diff-seg-${line.type}` : undefined}
+                          >
+                            {segment.text}
+                          </span>
+                        ))
+                      : line.text}
+                  </span>
                 </div>
               ))}
             </div>
