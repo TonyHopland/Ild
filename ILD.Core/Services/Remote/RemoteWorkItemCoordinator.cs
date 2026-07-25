@@ -207,10 +207,14 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
                 {
                     _logger?.LogWarning(ex,
                         "Engine failed to start run for claimed work item {WorkItemId}", ready.Id);
-                    // The item is claimed (Running on the server) with no run
-                    // behind it, so nothing local will ever finish it. Hand it
-                    // back for review and release the slot it took, so the rest
-                    // of this pass can still use it.
+                    // The claim stands on the server with nothing driving it, so
+                    // hand it back for review and give up the slot it took —
+                    // for the rest of this pass only. StartRunAsync commits the
+                    // LoopRun row before the transition that most often throws
+                    // here, so where a row did get written the derived set
+                    // legitimately takes that slot back on the next pass. The
+                    // item is heartbeated again from then on, and the resume
+                    // path drives the orphaned run as soon as a human responds.
                     try
                     {
                         await _client.TransitionAsync(opts, ready.Id, new RemoteTransitionRequest

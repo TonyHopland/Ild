@@ -417,8 +417,9 @@ public sealed class RemoteWorkItemCoordinatorTests
     private static List<(string WorkItemId, LoopRunStatus Status)> NoActiveRuns() => new();
 
     private static RemoteWorkItemCoordinator Coordinator(
-        Mock<IWorkItemServerClient> client, Mock<ILoopRunStore> runStore, ILogger<RemoteWorkItemCoordinator>? logger = null) =>
-        new(client.Object, SingleTemplateResolver().Object, new Mock<ILoopEngine>().Object,
+        Mock<IWorkItemServerClient> client, Mock<ILoopRunStore> runStore,
+        ILogger<RemoteWorkItemCoordinator>? logger = null, Mock<ILoopEngine>? engine = null) =>
+        new(client.Object, SingleTemplateResolver().Object, (engine ?? new Mock<ILoopEngine>()).Object,
             runStore.Object, logger: logger);
 
     [Fact]
@@ -578,6 +579,34 @@ public sealed class RemoteWorkItemCoordinatorTests
             m.Contains(busy, StringComparison.Ordinal) &&
             (m.Contains("cap", StringComparison.OrdinalIgnoreCase) ||
              m.Contains("concurren", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [Fact]
+    public async Task Frees_the_slot_within_the_pass_when_a_claimed_item_fails_to_start()
+    {
+        // The unwind is the one path that hands a slot back mid-pass, and with
+        // the ledger now local to the pass that release is what lets the next
+        // Ready item in. maxConcurrent 1 makes the second claim impossible
+        // unless the first item really did give its slot up.
+        var doomed = Item(NewId(), RemoteWorkItemStatus.Ready, "build");
+        var next = Item(NewId(), RemoteWorkItemStatus.Ready, "build");
+
+        var (client, _) = ScriptedClient(new RemotePollResponse { ReadyItems = new[] { doomed, next } });
+
+        var engine = new Mock<ILoopEngine>();
+        engine.Setup(e => e.StartRunAsync(doomed.Id, It.IsAny<CancellationToken>()))
+              .ThrowsAsync(new InvalidOperationException("no start node"));
+
+        var sut = Coordinator(client, RunStoreWithActive(NoActiveRuns()), engine: engine);
+        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1);
+
+        Assert.Equal(doomed.Id, Assert.Single(result.EscalatedToHumanFeedback).Id);
+        Assert.Contains(next.Id, result.Claimed.Select(c => c.Id));
+        // Handed back for review rather than left Running with no driver.
+        client.Verify(c => c.TransitionAsync(Opts, doomed.Id,
+            It.Is<RemoteTransitionRequest>(r => r.TargetStatus == RemoteWorkItemStatus.HumanFeedback
+                && r.Reason!.Contains("Failed to start run")),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
