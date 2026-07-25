@@ -1,8 +1,15 @@
 /**
- * A minimal line-level diff, enough to drive the save-time review modal in the
- * Loop Editor (ADR-0011). The repo carries no diff library and the files-tab
- * DiffView takes an already-computed unified-diff string, so we compute our own
- * line diff between the last-saved and currently-edited loop JSON here.
+ * Diffing primitives for the two viewers in this app, at two different levels.
+ *
+ * {@link computeLineDiff} is the line level and has one consumer: the Loop
+ * Editor's save-time review modal (ADR-0011), which has no diff to render until
+ * something computes one — the repo carries no diff library, so it diffs the
+ * last-saved against the currently-edited loop JSON here.
+ *
+ * {@link computeWordDiff} is the word level and serves both viewers. The files
+ * tab needs nothing at the line level (the server hands it a ready-made unified
+ * diff, parsed in `utils/unifiedDiff.ts`), but it wants the same "which words
+ * inside this line actually changed" answer, under the same cost caps.
  */
 
 export type DiffLineType = "context" | "add" | "del";
