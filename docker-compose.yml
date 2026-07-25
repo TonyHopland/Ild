@@ -24,6 +24,11 @@ services:
       args:
         DOTNET_VERSION: ${DOTNET_VERSION:-10.0}
     container_name: ild-workitem-server
+    # Same reasoning as `ild` below: the entrypoint drops root to the runtime
+    # user with gosu at startup and nothing afterwards needs to gain privilege
+    # from a setuid bit or a file capability, so refusing that gain is free.
+    security_opt:
+      - "no-new-privileges:true"
     ports:
       - "8081:8081"
     environment:
@@ -52,6 +57,13 @@ services:
         WITH_CHROME: ${WITH_CHROME:-1}
         WITH_CERTS: ${WITH_CERTS:-0}
     container_name: ild
+    # No process here needs to gain privilege on execve: the orchestrator drops
+    # to `ild` while retaining ambient capabilities and spawns the lower-trust
+    # agent uid through `setpriv` rather than a setuid helper (ADR-0014), and the
+    # image ships no setuid/setcap binary. Setting the flag closes setuid bits and
+    # file capabilities as an escalation route for that agent uid at no cost.
+    security_opt:
+      - "no-new-privileges:true"
     ports:
       - "8080:8080"
       - "3100:3100"

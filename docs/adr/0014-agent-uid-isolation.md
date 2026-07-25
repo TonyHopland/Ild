@@ -81,13 +81,17 @@ memory or its private files by virtue of being the same user.
 ambient`) is empty (a non-root→non-root setuid does not auto-clear caps, so this
   is explicit; the bounding set is left alone because dropping it would need
   `CAP_SETPCAP`, which the orchestrator deliberately does not hold). This
-  is chosen over a setuid-root `sudo`/`gosu` helper so that it will survive the
-  `no_new_privs` / `ptrace_scope=2` hardening — a setuid bit or file capability is
-  ignored under `no_new_privs`, whereas a capability the orchestrator already
-  holds is not. **That hardening is not part of this change**: no `security_opt`
-  or `sysctls` are set here, and `kernel.yama.ptrace_scope` is not namespaced so
-  it cannot be set per-container anyway. It is separate (host/compose-level) work;
-  this design is only built so as not to have to be redone when it lands.
+  is chosen over a setuid-root `sudo`/`gosu` helper so that it survives
+  `no_new_privs` — a setuid bit or file capability is ignored under
+  `no_new_privs`, whereas a capability the orchestrator already holds is not.
+  **That is what made `no_new_privs` free to adopt**: `security_opt:
+  ["no-new-privileges:true"]` is now set on the `ild` and `workitem-server`
+  compose services, and this design needed no rework to take it (a regression
+  test guards the flag, since its absence has no runtime symptom). The other
+  half once anticipated here, `kernel.yama.ptrace_scope`, is **not** set and is
+  deliberately not pursued rather than deferred: it is not namespaced, so it can
+  only be set on the Docker host's kernel, which is outside anything this repo
+  provisions. No `sysctls` entry belongs here.
 
 - **One code seam.** Every agent launch goes through
   `CliAgentAdapterBase.StartAgentProcess`, which applies

@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **The `ild` and `workitem-server` containers now run with `no-new-privileges`.** `security_opt: ["no-new-privileges:true"]` makes the kernel refuse any privilege gain on `execve` — setuid/setgid bits and file capabilities are ignored — for every process in those containers. It matters most in `ild`, where the lower-trust `agent` uid (see [ADR-0014](docs/adr/0014-agent-uid-isolation.md)) runs alongside the orchestrator; it removes setuid binaries as an escalation route from that uid. Nothing in either image relied on such a gain, so behavior is unchanged: the orchestrator drops privilege with `capsh` while retaining ambient capabilities and spawns the agent through `setpriv` rather than a setuid helper (chosen in ADR-0014 precisely to be compatible with this flag), the WorkItem server drops with `gosu`, and headless Chrome already runs with `--no-sandbox` on every launch path so it never needs the setuid `chrome-sandbox` helper. A missing `security_opt:` line has no runtime symptom, so a new CI test (`.github/scripts/compose-security-opt.test.sh`) asserts the flag per service rather than letting it regress silently in a future compose refactor. `postgres` is left untouched, to avoid coupling to a third-party image's entrypoint across version bumps.
 - Pin `Microsoft.OpenApi` to 2.7.5 in the API and WorkItem server, off the vulnerable 2.0.0 pulled transitively by `Microsoft.AspNetCore.OpenApi` (GHSA-v5pm-xwqc-g5wc).
 
 ## [0.4.0] - 2026-06-25
