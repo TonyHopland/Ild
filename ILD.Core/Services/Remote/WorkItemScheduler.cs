@@ -72,8 +72,8 @@ public sealed class WorkItemScheduler : BackgroundService, IWorkItemScheduler
                 using var scope = _scopes.CreateScope();
                 var settings = scope.ServiceProvider.GetRequiredService<ISchedulerSettingsService>();
                 // Pause only suppresses auto-promotion of Ready items into Running;
-                // the rest of the pass (heartbeats, WaitingForIld resumes, Done
-                // cleanup, grace polling) keeps running so the system stays live.
+                // the rest of the pass (heartbeats, WaitingForIld resumes, grace
+                // polling) keeps running so the system stays live.
                 var isPaused = await settings.GetIsPausedAsync(stoppingToken);
                 var maxConcurrent = await settings.GetMaxConcurrentAsync(stoppingToken);
                 var coord = scope.ServiceProvider.GetRequiredService<IRemoteWorkItemCoordinator>();

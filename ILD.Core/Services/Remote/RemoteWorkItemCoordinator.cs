@@ -229,8 +229,10 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
 
     /// <summary>
     /// The work items this instance is currently working on: one per local run
-    /// the engine still considers alive — Running, or WaitingHuman parked at a
-    /// Human/PR gate. Derived fresh every pass instead of maintained
+    /// the engine still considers alive — Running, or WaitingHuman, which covers
+    /// both a run parked at a Human/PR gate and one halted mid-node by a human
+    /// (<see cref="ILD.Data.Entities.LoopRun.IsHalted"/>). Both hold a slot and
+    /// stay heartbeated. Derived fresh every pass instead of maintained
     /// incrementally, so a run that ended releases its work item here whatever
     /// status the item itself landed in, and no terminal path has to remember
     /// to say so.
