@@ -24,6 +24,11 @@ services:
       args:
         DOTNET_VERSION: ${DOTNET_VERSION:-10.0}
     container_name: ild-workitem-server
+    # Same reasoning as `ild` below: the entrypoint drops root to the runtime
+    # user with gosu at startup and nothing afterwards needs to gain privilege
+    # from a setuid bit or a file capability, so refusing that gain is free.
+    security_opt:
+      - "no-new-privileges:true"
     ports:
       - "8081:8081"
     environment:
@@ -52,6 +57,16 @@ services:
         WITH_CHROME: ${WITH_CHROME:-1}
         WITH_CERTS: ${WITH_CERTS:-0}
     container_name: ild
+    # This image DOES carry setuid-root binaries — util-linux's mount/su, and
+    # Chrome's chrome-sandbox at the default WITH_CHROME=1 on amd64 — and it runs
+    # lower-trust `agent` uid (ADR-0014), for which they would be an escalation
+    # route. The flag takes them off the table. Nothing here needs the gain it
+    # refuses: the orchestrator drops to `ild` retaining capabilities it already
+    # holds (`capsh --addamb`), spawns the agent through `setpriv` rather than a
+    # setuid helper, and every Chrome launch path passes --no-sandbox, so the
+    # setuid chrome-sandbox helper is never the one relied on.
+    security_opt:
+      - "no-new-privileges:true"
     ports:
       - "8080:8080"
       - "3100:3100"
