@@ -56,6 +56,14 @@ public sealed class WorkItemScheduler : BackgroundService, IWorkItemScheduler
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // Who held the concurrency slots the last time a pass was blocked by the
+        // cap, or null when the last pass was not blocked. Being at the cap is a
+        // steady state, not an event: one item parked at a Human node puts the
+        // loop into grace polling, so a board that is also at the cap would emit
+        // a line every 5s. Log the transitions instead — entering the blocked
+        // state, and every change of who is holding it up.
+        IReadOnlyList<string>? blockedBy = null;
+
         while (!stoppingToken.IsCancellationRequested)
         {
             var opts = _options.CurrentValue;
@@ -85,6 +93,18 @@ public sealed class WorkItemScheduler : BackgroundService, IWorkItemScheduler
                     _log.LogInformation(
                         "Scheduler pass: claimed {Claimed}, resumed {Resumed}, escalated {Escalated}",
                         result.Claimed.Count, result.Resumed.Count, result.EscalatedToHumanFeedback.Count);
+                }
+
+                if (!result.BlockedByCap)
+                {
+                    blockedBy = null;
+                }
+                else if (blockedBy == null || !blockedBy.SequenceEqual(result.SlotHolders, StringComparer.Ordinal))
+                {
+                    _log.LogInformation(
+                        "Scheduler at the concurrency cap ({MaxConcurrent}): Ready work is waiting while slots are held by work items {SlotHolders}",
+                        maxConcurrent, string.Join(", ", result.SlotHolders));
+                    blockedBy = result.SlotHolders;
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

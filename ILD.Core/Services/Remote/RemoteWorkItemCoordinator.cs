@@ -34,6 +34,23 @@ public sealed class PollCycleResult
     public IReadOnlyList<RemoteWorkItem> Resumed { get; init; } = Array.Empty<RemoteWorkItem>();
     public IReadOnlyList<RemoteWorkItem> EscalatedToHumanFeedback { get; init; } = Array.Empty<RemoteWorkItem>();
     public bool HasActiveHumanFeedback { get; init; }
+
+    /// <summary>
+    /// The work items holding concurrency slots when the pass ended: those with
+    /// a run already alive when it started, plus anything it claimed. Ordinal
+    /// ascending, so one pass's holders compare cleanly against the last's.
+    /// </summary>
+    public IReadOnlyList<string> SlotHolders { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// True when the pass had Ready work it could not claim because every slot
+    /// was taken. Worth reporting because from the outside that is
+    /// indistinguishable from an idle board — the failure mode that made the
+    /// slot leak this coordinator used to have so expensive to find. It is a
+    /// steady state rather than an event, though, so the caller owns how often
+    /// to say so: it knows the cadence, and this pass does not.
+    /// </summary>
+    public bool BlockedByCap { get; init; }
 }
 
 public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
@@ -115,12 +132,13 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
         //    Running state on the server.
         var hasActiveHumanFeedback = poll.ActiveItems.Any(w => w.Status == RemoteWorkItemStatus.HumanFeedback);
 
-        // The slot ledger for this pass: the derived set plus the claims made
-        // as we go. Claims are counted here rather than re-derived per item —
-        // StartRunAsync writes the LoopRun row, but re-reading the store
-        // mid-pass costs a round trip per item and can still miss a claim whose
-        // run row is not visible yet.
+        // The slot ledger for this pass: the derived set plus the claims made as
+        // we go. Claims are counted here rather than by re-deriving the set per
+        // item, which would cost a round trip each time and — worse — would hand
+        // a slot straight back if a run started and finished inside this same
+        // pass, letting one pass claim past the cap.
         var slotHolders = new HashSet<string>(activeIds, StringComparer.Ordinal);
+        var blockedByCap = false;
 
         // While paused, leave Ready items untouched: the whole claim loop is the
         // auto-promotion path, so skipping it is what "pause" means. A human can
@@ -129,14 +147,12 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
         {
             if (slotHolders.Count >= maxConcurrent)
             {
-                // The only place that knows both "there is Ready work" and
-                // "there is no room for it". Without this line a board held up
-                // by the cap is indistinguishable from an idle one — which is
-                // what made the leak this derivation removes so expensive to
-                // find.
-                _logger?.LogInformation(
-                    "At the concurrency cap ({MaxConcurrent}) with Ready work waiting — slots held by work items {ActiveWorkItemIds}",
-                    maxConcurrent, string.Join(", ", slotHolders));
+                // There is Ready work and no room for it. This pass is the only
+                // place that knows both halves, so it records the fact; the
+                // scheduler decides how loudly to say it, because being at the
+                // cap persists across passes and only the scheduler knows how
+                // often those run.
+                blockedByCap = true;
                 break;
             }
             if (ct.IsCancellationRequested) break;
@@ -218,12 +234,25 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
             // skipped — the next poll will simply not see the item again.
         }
 
+        var slotHolderIds = slotHolders.OrderBy(id => id, StringComparer.Ordinal).ToList();
+        if (blockedByCap)
+        {
+            // Per-pass detail, for when someone is watching a specific stall.
+            // The Information-level line — one per change of state, not one per
+            // pass — is the scheduler's.
+            _logger?.LogDebug(
+                "At the concurrency cap ({MaxConcurrent}) with Ready work waiting — slots held by work items {SlotHolders}",
+                maxConcurrent, string.Join(", ", slotHolderIds));
+        }
+
         return new PollCycleResult
         {
             Claimed = claimed,
             Resumed = resumed,
             EscalatedToHumanFeedback = escalated,
             HasActiveHumanFeedback = hasActiveHumanFeedback,
+            SlotHolders = slotHolderIds,
+            BlockedByCap = blockedByCap,
         };
     }
 
