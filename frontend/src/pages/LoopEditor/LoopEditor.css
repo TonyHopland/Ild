@@ -1416,12 +1416,30 @@
   word-break: break-word;
 }
 
+/* Light tier: the whole changed line, so the changed region stays visible in
+   context even when only a few words inside it moved. */
 .save-diff-add {
-  background: rgba(46, 160, 67, 0.18);
+  background: rgba(46, 160, 67, 0.12);
   color: #56d364;
 }
 
 .save-diff-del {
-  background: rgba(248, 81, 73, 0.16);
+  background: rgba(248, 81, 73, 0.11);
   color: #f85149;
+}
+
+/* Dark tier: the words that actually differ from the line's counterpart. Roughly
+   3x the light tier's alpha so the two read as clearly different weights; the
+   text lightens to the same hue's bright tint because #56d364/#f85149 over these
+   stronger fills drops under 4.5:1 on --surface-2 (#1e1e1e). */
+.save-diff-seg-add {
+  background: rgba(46, 160, 67, 0.35);
+  color: #7ee787;
+  border-radius: 2px;
+}
+
+.save-diff-seg-del {
+  background: rgba(248, 81, 73, 0.35);
+  color: #ffa198;
+  border-radius: 2px;
 }

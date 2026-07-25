@@ -47,6 +47,52 @@ describe("SaveDiffModal", () => {
     expect(view.querySelector(".save-diff-add")?.textContent).toContain("new");
   });
 
+  test("emphasises the changed words inside a changed line", () => {
+    render(
+      <SaveDiffModal
+        isOpen
+        beforeJson={saved}
+        afterJson={edited}
+        isSaving={false}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    const view = screen.getByTestId("save-diff-view");
+
+    // Only the edited value carries the strong tier; the rest of the line keeps
+    // the light whole-line tier so the changed region still reads in context.
+    const removed = view.querySelector(".save-diff-del .save-diff-text");
+    const added = view.querySelector(".save-diff-add .save-diff-text");
+    expect(removed?.querySelector(".save-diff-seg-del")?.textContent).toBe("old");
+    expect(added?.querySelector(".save-diff-seg-add")?.textContent).toBe("new");
+    expect(removed?.textContent).toContain('"prompt": "old"');
+    expect(added?.textContent).toContain('"prompt": "new"');
+  });
+
+  test("leaves an unpaired added line without emphasised segments", () => {
+    // A whole new property between unchanged lines: a pure insertion with no
+    // removed counterpart, so there is nothing to emphasise within it.
+    const withExtra = JSON.stringify(
+      { $schema: "ild-loop-template/v1", name: "Loop", note: "added", prompt: "old" },
+      null,
+      2,
+    );
+    render(
+      <SaveDiffModal
+        isOpen
+        beforeJson={saved}
+        afterJson={withExtra}
+        isSaving={false}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    const view = screen.getByTestId("save-diff-view");
+    expect(view.querySelector(".save-diff-add")?.textContent).toContain("note");
+    expect(view.querySelector(".save-diff-seg-add")).toBeNull();
+  });
+
   test("Save changes triggers onConfirm (persist)", () => {
     const onConfirm = vi.fn();
     render(
