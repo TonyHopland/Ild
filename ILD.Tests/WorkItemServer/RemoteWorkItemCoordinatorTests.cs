@@ -3,6 +3,7 @@ using ILD.Core.Services.Remote;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
+using Microsoft.Extensions.Logging;
 using Moq;
 
 namespace ILD.Tests.WorkItemServer;
@@ -352,6 +353,249 @@ public sealed class RemoteWorkItemCoordinatorTests
             It.IsAny<string>(), It.IsAny<RemoteWorkItemStatus>(), It.IsAny<RemoteWorkItemStatus>()), Times.Never);
     }
 
+    // ---- WI-165: a slot must be released when the run behind it ends --------
+    //
+    // The active set is both the concurrency gate and the heartbeat list. The
+    // only in-pass release path filters on Status == Done, but the server
+    // echoes every heartbeated id back with its *real* status — so a run that
+    // ends with its item in Backlog / Ready / WorkQueue keeps its slot for the
+    // lifetime of the process. Five of those take effective concurrency to
+    // zero, silently, with a restart as the only recovery.
+    //
+    // These tests drive whole poll passes (claim, then observe what the server
+    // reports next pass) instead of poking the tracker, so they describe
+    // observable behaviour and survive Add/Remove being retired in favour of
+    // an active set derived from live LoopRuns.
+
+    private static string NewId() => Guid.NewGuid().ToString();
+
+    /// <summary>
+    /// A client that serves <paramref name="passes"/> to successive PollAsync
+    /// calls (the last one repeats), records the heartbeat list it was handed
+    /// on each call, and accepts every transition.
+    /// </summary>
+    private static (Mock<IWorkItemServerClient> Client, List<IReadOnlyList<string>> Heartbeats) ScriptedClient(
+        params RemotePollResponse[] passes)
+    {
+        var heartbeats = new List<IReadOnlyList<string>>();
+        var queue = new Queue<RemotePollResponse>(passes);
+
+        var client = new Mock<IWorkItemServerClient>();
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+              .Callback<WorkItemServerOptions, IReadOnlyList<string>, CancellationToken>(
+                  (_, ids, _) => heartbeats.Add(ids.ToList()))
+              .ReturnsAsync(() => queue.Count > 1 ? queue.Dequeue() : queue.Peek());
+        client.Setup(c => c.TransitionAsync(Opts, It.IsAny<string>(), It.IsAny<RemoteTransitionRequest>(), It.IsAny<CancellationToken>()))
+              .ReturnsAsync((WorkItemServerOptions _, string _, RemoteTransitionRequest r, CancellationToken _) =>
+                  new RemoteTransitionResponse { Success = true, ActualStatus = r.TargetStatus });
+
+        return (client, heartbeats);
+    }
+
+    private static Mock<ILoopTemplateResolver> SingleTemplateResolver()
+    {
+        var resolver = new Mock<ILoopTemplateResolver>();
+        resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
+                .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Single, Guid.NewGuid(), Array.Empty<string>()));
+        return resolver;
+    }
+
+    /// <summary>
+    /// A run store whose active runs (Running + WaitingHuman — the set the
+    /// engine considers alive) are read live from <paramref name="active"/> on
+    /// every call, so a test can move runs in and out between passes exactly
+    /// as the engine would. Anything not listed has terminated locally and
+    /// must not hold a slot.
+    /// </summary>
+    private static Mock<ILoopRunStore> RunStoreWithActive(List<(string WorkItemId, LoopRunStatus Status)> active)
+    {
+        var store = new Mock<ILoopRunStore>();
+        store.Setup(s => s.GetActiveRunsAsync())
+             .ReturnsAsync(() => active
+                 .Select(a => new LoopRun { Id = Guid.NewGuid(), WorkItemId = a.WorkItemId, Status = a.Status })
+                 .ToList());
+        return store;
+    }
+
+    private static List<(string WorkItemId, LoopRunStatus Status)> NoActiveRuns() => new();
+
+    private static RemoteWorkItemCoordinator Coordinator(
+        Mock<IWorkItemServerClient> client, Mock<ILoopRunStore> runStore, ILogger<RemoteWorkItemCoordinator>? logger = null) =>
+        new(client.Object, new InMemoryActiveWorkItemTracker(), SingleTemplateResolver().Object,
+            new Mock<ILoopEngine>().Object, loopRunStore: runStore.Object, logger: logger);
+
+    [Fact]
+    public async Task Claims_a_ready_item_after_earlier_claims_terminated_outside_done()
+    {
+        // Five items are claimed, filling maxConcurrent. Their runs then end
+        // without the items reaching Done — the server reports them as
+        // Backlog / Ready / WorkQueue. No local run survives, so all five
+        // slots are free and the next Ready item must be claimed.
+        var leakedIds = Enumerable.Range(0, 5).Select(_ => NewId()).ToArray();
+        var leakedStatuses = new[]
+        {
+            RemoteWorkItemStatus.Backlog,
+            RemoteWorkItemStatus.Ready,
+            RemoteWorkItemStatus.WorkQueue,
+            RemoteWorkItemStatus.Backlog,
+            RemoteWorkItemStatus.WorkQueue,
+        };
+        var fresh = Item(NewId(), RemoteWorkItemStatus.Ready, "build");
+
+        var (client, _) = ScriptedClient(
+            new RemotePollResponse
+            {
+                ReadyItems = leakedIds.Select(id => Item(id, RemoteWorkItemStatus.Ready, "build")).ToArray(),
+            },
+            new RemotePollResponse
+            {
+                // WorkItemService.PollAsync echoes back every heartbeated id
+                // with whatever status it actually holds.
+                ActiveItems = leakedIds.Select((id, i) => Item(id, leakedStatuses[i])).ToArray(),
+                ReadyItems = new[] { fresh },
+            });
+
+        // All five runs are created during the first pass and are terminal
+        // again before the second, so the store never reports one as active.
+        var sut = Coordinator(client, RunStoreWithActive(NoActiveRuns()));
+
+        var first = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
+        var second = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
+
+        // The five claims land in one pass, so the cap has to count claims
+        // made during the pass, not just the set it started with.
+        Assert.Equal(5, first.Claimed.Count);
+        Assert.Contains(fresh.Id, second.Claimed.Select(c => c.Id));
+    }
+
+    [Fact]
+    public async Task Reclaims_an_item_whose_own_previous_run_ended_back_in_ready()
+    {
+        // The #159 self-block. The item is claimed, its run finishes without
+        // the item reaching Done, and the server puts it back in Ready — so it
+        // returns in ActiveItems (the heartbeat echo) *and* in ReadyItems. The
+        // only thing between it and a fresh run is the slot its own dead run
+        // still occupies.
+        var id = NewId();
+
+        var (client, _) = ScriptedClient(
+            new RemotePollResponse { ReadyItems = new[] { Item(id, RemoteWorkItemStatus.Ready, "build") } },
+            new RemotePollResponse
+            {
+                ActiveItems = new[] { Item(id, RemoteWorkItemStatus.Ready) },
+                ReadyItems = new[] { Item(id, RemoteWorkItemStatus.Ready, "build") },
+            });
+
+        // The run created by the first pass is terminal before the second.
+        var sut = Coordinator(client, RunStoreWithActive(NoActiveRuns()));
+
+        var first = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1);
+        var second = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1);
+
+        Assert.Single(first.Claimed);
+        Assert.Single(second.Claimed);
+        Assert.Equal(id, second.Claimed[0].Id);
+    }
+
+    [Fact]
+    public async Task Human_parked_items_keep_their_slots_and_keep_being_heartbeated()
+    {
+        // The other side of the fix: HumanFeedback / WaitingForIld items are
+        // genuinely active — their runs are parked at a gate, not dead. They
+        // must keep occupying a slot AND keep appearing in the heartbeat: the
+        // heartbeat is what the server's ReclaimStaleAsync keys off, so
+        // dropping them hands the item to a second concurrent run. Asserting
+        // only the slot count would miss that half.
+        var parked = NewId();
+        var waiting = NewId();
+        var fresh = Item(NewId(), RemoteWorkItemStatus.Ready, "build");
+
+        var (client, heartbeats) = ScriptedClient(
+            new RemotePollResponse
+            {
+                ReadyItems = new[]
+                {
+                    Item(parked, RemoteWorkItemStatus.Ready, "build"),
+                    Item(waiting, RemoteWorkItemStatus.Ready, "build"),
+                },
+            },
+            new RemotePollResponse
+            {
+                ActiveItems = new[]
+                {
+                    Item(parked, RemoteWorkItemStatus.HumanFeedback),
+                    Item(waiting, RemoteWorkItemStatus.WaitingForIld),
+                },
+                ReadyItems = new[] { fresh },
+            });
+
+        var activeRuns = NoActiveRuns();
+        var sut = Coordinator(client, RunStoreWithActive(activeRuns));
+
+        var first = await sut.RunPollCycleAsync(Opts, maxConcurrent: 2);
+
+        // Both claims produced a run, and both parked at their human gate.
+        activeRuns.Add((parked, LoopRunStatus.WaitingHuman));
+        activeRuns.Add((waiting, LoopRunStatus.WaitingHuman));
+
+        var second = await sut.RunPollCycleAsync(Opts, maxConcurrent: 2);
+
+        Assert.Equal(2, first.Claimed.Count);
+        Assert.Empty(second.Claimed);
+        Assert.Equal(
+            new[] { parked, waiting }.OrderBy(x => x, StringComparer.Ordinal),
+            heartbeats[1].OrderBy(x => x, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task Logs_the_ids_holding_the_slots_when_a_pass_is_blocked_by_the_cap()
+    {
+        // A pass that sees Ready work but has no room must say so and name the
+        // ids holding the slots. Without that line a leaked slot looks exactly
+        // like an idle board — the reason this bug took an hour to find.
+        var busy = NewId();
+        var fresh = Item(NewId(), RemoteWorkItemStatus.Ready, "build");
+
+        var (client, _) = ScriptedClient(
+            new RemotePollResponse { ReadyItems = new[] { Item(busy, RemoteWorkItemStatus.Ready, "build") } },
+            new RemotePollResponse
+            {
+                ActiveItems = new[] { Item(busy, RemoteWorkItemStatus.Running) },
+                ReadyItems = new[] { fresh },
+            });
+
+        var logger = new RecordingLogger<RemoteWorkItemCoordinator>();
+        var activeRuns = NoActiveRuns();
+        var sut = Coordinator(client, RunStoreWithActive(activeRuns), logger);
+
+        await sut.RunPollCycleAsync(Opts, maxConcurrent: 1);
+        // The claim started a run, and it is still going.
+        activeRuns.Add((busy, LoopRunStatus.Running));
+
+        logger.Messages.Clear();
+        var second = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1);
+
+        // Legitimately at the cap — the run really is alive.
+        Assert.Empty(second.Claimed);
+        Assert.Contains(logger.Messages, m =>
+            m.Contains(busy, StringComparison.Ordinal) &&
+            (m.Contains("cap", StringComparison.OrdinalIgnoreCase) ||
+             m.Contains("concurren", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    /// <summary>Captures formatted log messages so a test can assert on the diagnostic text.</summary>
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) => Messages.Add(formatter(state, exception));
+    }
+
     // ---- Resume gating vs. the work item's AI provider override -------------
     //
     // The resume gate must peek the capacity of the provider the AI node will
@@ -419,6 +663,10 @@ public sealed class RemoteWorkItemCoordinatorTests
         runStore.Setup(s => s.GetCurrentByWorkItemAsync(waiting.Id)).ReturnsAsync(run);
         runStore.Setup(s => s.GetNodesForVersionAsync(versionId))
                 .ReturnsAsync(new[] { node });
+        // Unstubbed, Moq hands back null here rather than an empty list, which
+        // blows up any caller that reads the active-run set. These cases are
+        // about the resume gate, not concurrency, so keep the set empty.
+        runStore.Setup(s => s.GetActiveRunsAsync()).ReturnsAsync(Array.Empty<LoopRun>());
 
         var providerStore = new Mock<IProviderStore>();
         foreach (var p in providers)
