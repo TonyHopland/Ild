@@ -57,11 +57,14 @@ services:
         WITH_CHROME: ${WITH_CHROME:-1}
         WITH_CERTS: ${WITH_CERTS:-0}
     container_name: ild
-    # No process here needs to gain privilege on execve: the orchestrator drops
-    # to `ild` while retaining ambient capabilities and spawns the lower-trust
-    # agent uid through `setpriv` rather than a setuid helper (ADR-0014), and the
-    # image ships no setuid/setcap binary. Setting the flag closes setuid bits and
-    # file capabilities as an escalation route for that agent uid at no cost.
+    # This image DOES carry setuid-root binaries — util-linux's mount/su, and
+    # Chrome's chrome-sandbox at the default WITH_CHROME=1 — and it also runs the
+    # lower-trust `agent` uid (ADR-0014), for which they would be an escalation
+    # route. The flag takes them off the table. Nothing here needs the gain it
+    # refuses: the orchestrator drops to `ild` retaining capabilities it already
+    # holds (`capsh --addamb`), spawns the agent through `setpriv` rather than a
+    # setuid helper, and every Chrome launch path passes --no-sandbox, so the
+    # setuid chrome-sandbox helper is never the one relied on.
     security_opt:
       - "no-new-privileges:true"
     ports:

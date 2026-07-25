@@ -6,12 +6,15 @@
 # symptom. The stack builds, boots, and behaves identically without it, so a
 # future compose refactor could drop it and every other check in this repo would
 # stay green. The flag is what stops a process in these containers from gaining
-# privilege on execve through a setuid/setgid bit or a file capability — an
-# escalation route that matters most in the `ild` image, where the lower-trust
-# agent uid (ADR-0014) runs alongside the orchestrator. Neither image relies on
-# such a gain (the orchestrator drops via retained ambient capabilities and
-# spawns the agent through `setpriv`; the WorkItem server drops via `gosu`), so
-# the flag costs nothing to keep and would cost nothing visible to lose.
+# privilege on execve through a setuid/setgid bit or a file capability. That
+# matters most in the `ild` image, which both carries setuid-root binaries
+# (util-linux's mount/su, Chrome's chrome-sandbox) and runs the lower-trust agent
+# uid (ADR-0014) they would be an escalation route for. Nothing in either image
+# needs the gain the flag refuses — the orchestrator drops privilege retaining
+# capabilities it already holds and spawns the agent through `setpriv` rather
+# than a setuid helper, the WorkItem server drops with `gosu`, and every Chrome
+# launch path passes --no-sandbox — so the flag costs nothing to keep and would
+# cost nothing visible to lose.
 #
 # The assertion is deliberately PER SERVICE. A file-wide grep for the string
 # would keep passing after the flag was moved to, or left on, only one of them —
@@ -40,37 +43,22 @@ failures=0
 fail() { echo "FAIL: $*"; failures=$((failures + 1)); }
 pass() { echo "ok: $*"; }
 
-# --- Resolve the compose model to scan. -------------------------------------
-resolved=""
-cleanup() { [ -n "$resolved" ] && rm -f "$resolved"; }
+tmpfiles=""
+# shellcheck disable=SC2086
+cleanup() { [ -n "$tmpfiles" ] && rm -f $tmpfiles; }
 trap cleanup EXIT
-
-model="$compose_file"
-if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-  resolved="$(mktemp)"
-  # Dummies for the `${VAR:?...}` fail-if-unset variables and the bare
-  # `${ILD_PASSWORD}`; their values are irrelevant to what is asserted, they
-  # only have to let interpolation complete.
-  if ! (cd "$repo_root" \
-        && WORKITEM_API_KEYS=ci-dummy ILD_PASSWORD=ci-dummy \
-           docker compose --file "$compose_file" config) > "$resolved" 2>&1; then
-    echo "FAIL: 'docker compose config' could not resolve $compose_file:"
-    cat "$resolved"
-    exit 1
-  fi
-  model="$resolved"
-  echo "input: docker compose config (compose's own resolved view)"
-else
-  echo "input: $compose_file (raw file scan - docker CLI unavailable here)"
-fi
+mktmp() { local f; f="$(mktemp)"; tmpfiles="$tmpfiles $f"; printf '%s' "$f"; }
 
 # --- Read one key's values out of one service's block. -----------------------
 # Tracks the top-level `services:` mapping and the indentation of the wanted
-# service's block, so a match under a *different* service (or under some other
-# top-level key) can never satisfy an assertion. Prints one value per line;
-# prints nothing when the service or the key is absent. Handles both the block
-# list the compose file uses and the flow form (`key: ["a", "b"]`), so a
-# reformat produces a real result rather than a phantom failure.
+# service's block, so a match under a *different* service, deeper inside this
+# one, or under some other top-level key can never satisfy an assertion. Prints
+# one value per line; prints nothing when the service or the key is absent.
+# Handles the three list forms YAML allows here — block sequence indented under
+# its key, block sequence at the key's own indent, and the inline flow form —
+# because the raw compose file may legally use any of them. (`docker compose
+# config` normalises them all to the first, so the other two matter only on the
+# raw-file path, which is exactly the path CI never exercises.)
 extract_awk=$(cat <<'AWK'
 function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
 function unquote(s,   q) {
@@ -102,9 +90,11 @@ ind == svc_ind {
 }
 !in_svc { next }
 { if (key_ind < 0) key_ind = ind }
-# A block-list item continues the list only while it stays inside the key.
+# A block sequence may sit at its key's own indent or deeper, so both continue
+# the list. A sibling key at key_ind fails the `- ` test and closes it; anything
+# at the service or top level was already consumed by the rules above.
 in_list {
-  if (ind > key_ind && text ~ /^- /) { print unquote(substr(text, 3)); next }
+  if (ind >= key_ind && text ~ /^- /) { print unquote(substr(text, 3)); next }
   in_list = 0
 }
 ind == key_ind && index(text, key ":") == 1 {
@@ -116,33 +106,106 @@ ind == key_ind && index(text, key ":") == 1 {
 AWK
 )
 
-service_values() { # <service> <key> -> one value per line
-  awk -v want="$1" -v key="$2" "$extract_awk" "$model"
+values_in() { # <file> <service> <key> -> one value per line
+  awk -v want="$2" -v key="$3" "$extract_awk" "$1"
 }
 
-# --- Self-check: prove the scan is actually service-scoped. ------------------
-# Without this, an extractor bug that leaked values across service blocks would
-# turn every assertion below into the file-wide grep this test exists to avoid:
-# the flag on one service would satisfy both. Two services' `container_name`
-# values must come back distinct and correct for the scoping to be real.
-ild_name="$(service_values ild container_name)"
-pg_name="$(service_values postgres container_name)"
-if [ "$ild_name" = "ild" ] && [ "$pg_name" = "ild-postgres" ]; then
-  pass "scan is service-scoped (ild -> '$ild_name', postgres -> '$pg_name')"
+# --- Self-test: pin the scanner against a fixture before trusting it. --------
+# The scanner is the only part of this test that can be subtly wrong — the two
+# assertions built on it are trivial — so it is exercised against inputs written
+# to break it rather than against values scraped from the file it is asserting
+# on. That keeps both properties the assertions depend on falsifiable: scoping
+# (one service's flag must never satisfy another's) and list-form handling (a
+# legal reformat must not report the flag missing while it sits in the file).
+# It also keeps this test coupled to nothing but `security_opt` — reading real
+# values out of docker-compose.yml as a smoke check would turn an unrelated
+# edit to another service into a security-test failure.
+selftest() {
+  local fixture got want label
+  fixture="$(mktmp)"
+  cat > "$fixture" <<'YAML'
+services:
+  alpha:
+    image: example
+    security_opt:
+      - "no-new-privileges:true"
+      - label:disable
+  beta:
+    image: example
+    security_opt:
+    - no-new-privileges:true
+  gamma:
+    image: example
+    security_opt: ["no-new-privileges:true", label:disable]
+  delta:
+    image: example
+    labels:
+      security_opt: "nested decoy, not this service's setting"
+volumes:
+  security_opt: top-level decoy, not a service at all
+YAML
+
+  expect() { # <label> <expected, space-joined> <service> <key>
+    got="$(values_in "$fixture" "$3" "$4" | tr '\n' ' ')"
+    got="${got%"${got##*[! ]}"}"
+    if [ "$got" = "$2" ]; then pass "scanner: $1"
+    else fail "scanner: $1 - read [$got], expected [$2]"; fi
+  }
+
+  expect "block list indented under its key" \
+    "$required_flag label:disable" alpha security_opt
+  expect "block list at its key's own indent" \
+    "$required_flag" beta security_opt
+  expect "inline flow list" \
+    "$required_flag label:disable" gamma security_opt
+  # The scoping property the per-service assertion rests on: three siblings set
+  # the flag and `delta` does not, so a leaky scan shows up here as a value.
+  expect "sibling services' flags do not leak into a service that has none" \
+    "" delta security_opt
+  # ...and `delta` is genuinely being read, so the empty result above means
+  # "no such key", not "no such service".
+  expect "the service with no security_opt is still found" \
+    "example" delta image
+
+  if [ "$failures" -ne 0 ]; then
+    echo "The service-block scanner is broken, so every assertion below would be"
+    echo "meaningless (a false pass as easily as a false fail). Fix the scanner."
+    exit 1
+  fi
+}
+selftest
+
+# --- Resolve the compose model to assert against. ----------------------------
+model="$compose_file"
+if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+  resolved="$(mktmp)"
+  compose_err="$(mktmp)"
+  # Dummies for the `${VAR:?...}` fail-if-unset variables and the bare
+  # `${ILD_PASSWORD}`; their values are irrelevant to what is asserted, they
+  # only have to let interpolation complete. stderr is kept out of $resolved so
+  # a future compose warning is reported rather than parsed as part of the model.
+  if ! (cd "$repo_root" \
+        && WORKITEM_API_KEYS=ci-dummy ILD_PASSWORD=ci-dummy \
+           docker compose --file "$compose_file" config) \
+       > "$resolved" 2>"$compose_err"; then
+    echo "FAIL: 'docker compose config' could not resolve $compose_file:"
+    cat "$compose_err"
+    exit 1
+  fi
+  [ -s "$compose_err" ] && cat "$compose_err" >&2
+  model="$resolved"
+  echo "input: docker compose config (compose's own resolved view)"
 else
-  echo "FAIL: service-block scan is broken - container_name read back as" \
-       "ild='$ild_name' (want 'ild'), postgres='$pg_name' (want 'ild-postgres')."
-  echo "      Every assertion below would be meaningless; fix the scan first."
-  exit 1
+  echo "input: $compose_file (raw file scan - docker CLI unavailable here)"
 fi
 
 # --- The assertion. ----------------------------------------------------------
 for service in $required_services; do
-  opts="$(service_values "$service" security_opt)"
+  opts="$(values_in "$model" "$service" security_opt)"
   if [ -z "$opts" ]; then
     fail "service '$service' sets no security_opt at all; it needs '$required_flag'" \
-         "(a setuid bit or file capability inside the container would otherwise" \
-         "still be an escalation route - see the header of this script)"
+         "(a setuid binary inside the container would otherwise still be an" \
+         "escalation route - see the header of this script)"
   elif printf '%s\n' "$opts" | grep -Fxq "$required_flag"; then
     pass "service '$service' runs with '$required_flag'"
   else
