@@ -582,6 +582,43 @@ public sealed class RemoteWorkItemCoordinatorTests
     }
 
     [Fact]
+    public async Task Frees_the_slot_of_an_item_the_server_reports_done_and_closes_its_run()
+    {
+        // A run parked at a human gate does not end when someone marks its item
+        // Done — nothing local is watching for that. Left alive it would sit in
+        // the derived set forever, heartbeated and holding a slot, which is the
+        // leak this work item exists to remove, arriving through another door.
+        var finished = NewId();
+        var fresh = Item(NewId(), RemoteWorkItemStatus.Ready, "build");
+
+        var (client, heartbeats) = ScriptedClient(new RemotePollResponse
+        {
+            ActiveItems = new[] { Item(finished, RemoteWorkItemStatus.Done) },
+            ReadyItems = new[] { fresh },
+        });
+
+        var parkedRun = new LoopRun
+        {
+            Id = Guid.NewGuid(), WorkItemId = finished, Status = LoopRunStatus.WaitingHuman,
+        };
+        var runStore = RunStoreWithActive(new List<string> { finished });
+        runStore.Setup(s => s.GetActiveByWorkItemAsync(finished)).ReturnsAsync(parkedRun);
+
+        var result = await Coordinator(client, runStore).RunPollCycleAsync(Opts, maxConcurrent: 1);
+
+        // Its slot came back inside the same pass, so the Ready item got in.
+        Assert.False(result.BlockedByCap);
+        Assert.DoesNotContain(finished, result.SlotHolders);
+        Assert.Contains(fresh.Id, result.Claimed.Select(c => c.Id));
+        // And the run behind it is closed, so it is gone from the next pass's
+        // set too rather than coming back as an immortal WaitingHuman row.
+        runStore.Verify(s => s.MarkRunCancelledAsync(parkedRun, It.IsAny<string>()), Times.Once);
+        // It was still heartbeated on the way in — the pass reacts to what the
+        // poll told it, it cannot know in advance.
+        Assert.Equal(new[] { finished }, heartbeats[0]);
+    }
+
+    [Fact]
     public async Task Frees_the_slot_within_the_pass_when_a_claimed_item_fails_to_start()
     {
         // The unwind is the one path that hands a slot back mid-pass, and with

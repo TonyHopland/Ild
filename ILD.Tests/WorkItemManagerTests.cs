@@ -1350,6 +1350,32 @@ public class WorkItemManagerTests
     }
 
     [Fact]
+    public async Task TransitionToDoneAsync_ends_the_run_parked_behind_the_item()
+    {
+        // Dragging a card to Done, or picking Done from the status menu, is a
+        // human saying the work is over. The run has to end with it: the
+        // scheduler's Active Work Item Set is derived from live runs, so a run
+        // left parked at a human gate under a Done card would be heartbeated
+        // and hold a concurrency slot for the lifetime of the process.
+        var (mgr, db, repoId, _, _) = SetupWithPreview();
+        using var _d = db;
+
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var runId = SeedLoopRun(db, id);
+        var parked = await db.Context.LoopRuns.FindAsync(runId);
+        parked!.Status = LoopRunStatus.WaitingHuman;
+        await db.Context.SaveChangesAsync();
+
+        await mgr.TransitionToDoneAsync(id);
+
+        var after = db.Fresh().LoopRuns.First(r => r.Id == runId);
+        Assert.NotEqual(LoopRunStatus.WaitingHuman, after.Status);
+        Assert.NotNull(after.CompletedAt);
+        // And so it no longer holds a slot or a heartbeat.
+        Assert.DoesNotContain(id, await db.LoopRuns.GetActiveWorkItemIdsAsync());
+    }
+
+    [Fact]
     public async Task TransitionAsync_to_Done_stops_running_preview_and_notifies()
     {
         var (mgr, db, repoId, preview, notifier) = SetupWithPreview();

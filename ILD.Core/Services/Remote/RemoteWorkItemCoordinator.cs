@@ -21,9 +21,10 @@ public interface IRemoteWorkItemCoordinator
     /// <param name="claimReadyItems">
     /// When <c>false</c> (the scheduler is paused) the Ready-items claim loop is
     /// skipped, so nothing auto-promotes from Ready into Running. Every other
-    /// step — heartbeating the active set, resuming WaitingForIld runs,
-    /// reporting active human feedback — runs as normal. Humans can still
-    /// promote Ready items manually through the work-item transition API.
+    /// step — heartbeating the active set, resuming WaitingForIld runs, closing
+    /// runs behind items the server has finished, reporting active human
+    /// feedback — runs as normal. Humans can still promote Ready items manually
+    /// through the work-item transition API.
     /// </param>
     Task<PollCycleResult> RunPollCycleAsync(WorkItemServerOptions opts, int maxConcurrent, bool claimReadyItems = true, CancellationToken ct = default);
 }
@@ -98,6 +99,13 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
         var resumed = new List<RemoteWorkItem>();
         var escalated = new List<RemoteWorkItem>();
 
+        // This pass's slot ledger: the derived set, minus what this pass
+        // finishes, plus what it claims. Claims are counted here rather than by
+        // re-deriving the set per item, which would cost a round trip each time
+        // and — worse — would hand a slot straight back if a run started and
+        // finished inside this same pass, letting one pass claim past the cap.
+        var slotHolders = new HashSet<string>(activeIds, StringComparer.Ordinal);
+
         // 1. Resume anything in WaitingForIld — but only if the run's current
         //    AI node has provider capacity (parallelism gate). The blocking
         //    provider is re-evaluated dynamically each pass: settings can
@@ -132,17 +140,34 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
             }
         }
 
-        // 2. Claim Ready items, room permitting. Tag → template resolution
+        // 2. The server has finished with these items, so whatever local run is
+        //    still open for one of them has nothing left to do. Ending it is
+        //    what takes the item out of the Active Work Item Set — a run parked
+        //    at a human gate when someone marks the item Done would otherwise
+        //    keep its slot and its heartbeat for the lifetime of the process.
+        //    A locally-driven Done already ends its own run; this covers the
+        //    item finished on the server by someone else, which a board shared
+        //    between ILD instances makes routine.
+        foreach (var w in poll.ActiveItems.Where(w => w.Status == RemoteWorkItemStatus.Done))
+        {
+            slotHolders.Remove(w.Id);
+            try
+            {
+                var run = await _loopRunStore.GetActiveByWorkItemAsync(w.Id);
+                if (run != null)
+                    await _loopRunStore.MarkRunCancelledAsync(run, "Work item marked Done on server");
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex,
+                    "Failed to close the local run for work item {WorkItemId} after it went Done", w.Id);
+            }
+        }
+
+        // 3. Claim Ready items, room permitting. Tag → template resolution
         //    happens up-front so no-match / ambiguous cases never enter the
         //    Running state on the server.
         var hasActiveHumanFeedback = poll.ActiveItems.Any(w => w.Status == RemoteWorkItemStatus.HumanFeedback);
-
-        // The slot ledger for this pass: the derived set plus the claims made as
-        // we go. Claims are counted here rather than by re-deriving the set per
-        // item, which would cost a round trip each time and — worse — would hand
-        // a slot straight back if a run started and finished inside this same
-        // pass, letting one pass claim past the cap.
-        var slotHolders = new HashSet<string>(activeIds, StringComparer.Ordinal);
         var blockedByCap = false;
 
         // While paused, leave Ready items untouched: the whole claim loop is the

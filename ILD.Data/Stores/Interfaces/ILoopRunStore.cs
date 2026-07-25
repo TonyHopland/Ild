@@ -58,6 +58,21 @@ public interface ILoopRunStore
     Task<IReadOnlyList<string>> GetActiveWorkItemIdsAsync();
 
     /// <summary>
+    /// Mark <paramref name="run"/> cancelled, with a completion timestamp and
+    /// <paramref name="reason"/> recorded. For when the work-item server has
+    /// moved on from the run's item — finished it, reset it, or deleted it — so
+    /// the run has nothing left to do: while its row still says alive it keeps
+    /// the item in the Active Work Item Set, heartbeated and holding a
+    /// concurrency slot nothing will ever release. A run mid-node stops on its
+    /// own, since the engine re-reads this row each iteration.
+    ///
+    /// Deliberately not <c>ILoopEngine.CancelRunAsync</c>, which hands the work
+    /// item back to HumanFeedback — that would undo the very server state being
+    /// reacted to.
+    /// </summary>
+    Task MarkRunCancelledAsync(LoopRun run, string reason);
+
+    /// <summary>
     /// Terminal runs (Completed/Failed/Cancelled) that completed before
     /// <paramref name="cutoff"/> and are not pinned (<c>Retain == false</c>).
     /// Candidates for the worktree retention sweeper; the caller still applies

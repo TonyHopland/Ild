@@ -58,6 +58,24 @@ public class WorkItemManager : IWorkItemManager
     }
 
     /// <summary>
+    /// Finish a run a human has decided is over: stop it, and leave the row
+    /// terminal with a completion timestamp. That terminal status is what takes
+    /// the work item out of the Active Work Item Set, so the scheduler stops
+    /// heartbeating it and gives its concurrency slot back — a run left alive
+    /// behind a finished item holds that slot for the lifetime of the process.
+    /// Does <b>not</b> touch the worktree or branch: local git state lives
+    /// exactly as long as the run row.
+    /// </summary>
+    private async Task EndRunAsync(LoopRun run)
+    {
+        await CancelRunIfActiveAsync(run);
+        if (run.Status is LoopRunStatus.Running or LoopRunStatus.WaitingHuman)
+            run.Status = LoopRunStatus.Cancelled;
+        run.CompletedAt ??= DateTime.UtcNow;
+        await _loopRunStore.UpdateRunAsync(run);
+    }
+
+    /// <summary>
     /// Stop a still-active run (engine cancel). Does <b>not</b> touch the
     /// run's worktree or branch — local git state lives exactly as long as
     /// the run row and is reclaimed only when the run itself is deleted
@@ -478,8 +496,25 @@ public class WorkItemManager : IWorkItemManager
     public Task<bool> TransitionToHumanFeedbackAsync(string workItemId, string reason)
         => TransitionAsync(workItemId, RemoteWorkItemStatus.HumanFeedback, reason);
 
-    public Task<bool> TransitionToDoneAsync(string workItemId)
-        => TransitionAsync(workItemId, RemoteWorkItemStatus.Done);
+    /// <summary>
+    /// A human declaring the item finished — dragging it to the Done column, or
+    /// picking Done from the status menu. The run behind it is finished too, not
+    /// just relabelled: the Active Work Item Set is derived from live runs, so a
+    /// run left parked at a human gate under a Done card would be heartbeated
+    /// and hold a concurrency slot forever. Ended before the transition, as
+    /// <see cref="CleanupToDoneAsync"/> does, so nothing observes the item Done
+    /// while its run still claims to be alive.
+    ///
+    /// The engine's own completion path is unaffected — it marks its run
+    /// Completed and calls <see cref="TransitionAsync"/> directly.
+    /// </summary>
+    public async Task<bool> TransitionToDoneAsync(string workItemId)
+    {
+        var currentRun = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
+        if (currentRun != null) await EndRunAsync(currentRun);
+        return await TransitionAsync(workItemId, RemoteWorkItemStatus.Done,
+            currentLoopRunId: currentRun?.Id ?? Guid.Empty);
+    }
 
     public async Task<bool> TransitionAsync(
         string workItemId,
@@ -690,19 +725,10 @@ public class WorkItemManager : IWorkItemManager
         var wi = await GetWorkItemAsync(workItemId);
         if (wi == null) return false;
 
-        if (currentRun != null)
-        {
-            // Stop a still-active run but keep its worktree and branch: the
-            // run stays inspectable until the row itself is deleted (manual
-            // delete or the retention sweeper), which reclaims them.
-            await CancelRunIfActiveAsync(currentRun);
-            if (currentRun.Status is LoopRunStatus.Running or LoopRunStatus.WaitingHuman)
-                currentRun.Status = LoopRunStatus.Cancelled;
-            // Terminal timestamp makes the row (and its worktree/branch)
-            // visible to the retention sweeper.
-            currentRun.CompletedAt ??= DateTime.UtcNow;
-            await _loopRunStore.UpdateRunAsync(currentRun);
-        }
+        // The run stays inspectable until the row itself is deleted (manual
+        // delete or the retention sweeper), which reclaims its worktree and
+        // branch; the terminal timestamp is what makes it visible there.
+        if (currentRun != null) await EndRunAsync(currentRun);
 
         // Drive the Done transition through the shared path so it clears the
         // run's feedback reason, notifies clients, and stops the worktree

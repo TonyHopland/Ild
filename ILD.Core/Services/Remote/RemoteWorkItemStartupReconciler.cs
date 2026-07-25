@@ -86,7 +86,7 @@ public sealed class RemoteWorkItemStartupReconciler : IHostedService
                 {
                     // Work item no longer exists on server — cancel the orphan
                     // run so a later restart can't resurrect it.
-                    await CancelLocalRunAsync(loopRunStore, run, "Work item no longer exists on server");
+                    await loopRunStore.MarkRunCancelledAsync(run, "Work item no longer exists on server");
                     cleaned++;
                     _log.LogInformation(
                         "Startup reconcile: work item {WorkItemId} for run {RunId} not found on server — run cancelled",
@@ -130,7 +130,7 @@ public sealed class RemoteWorkItemStartupReconciler : IHostedService
                         // Inconsistent: normal completion marks the run terminal
                         // before the item goes Done. Cancel so the run isn't
                         // resurrected by a later restart.
-                        await CancelLocalRunAsync(loopRunStore, run, "Work item already Done on server");
+                        await loopRunStore.MarkRunCancelledAsync(run, "Work item already Done on server");
                         cleaned++;
                         _log.LogInformation(
                             "Startup reconcile: work item {WorkItemId} is Done on server — cancelled stale run {RunId}",
@@ -142,7 +142,7 @@ public sealed class RemoteWorkItemStartupReconciler : IHostedService
                         // reset the item and will hand it out as a fresh run.
                         // Cancel the local run so two loops never fight over
                         // one work item.
-                        await CancelLocalRunAsync(loopRunStore, run, $"Server reset work item to {wi.Status}");
+                        await loopRunStore.MarkRunCancelledAsync(run, $"Server reset work item to {wi.Status}");
                         cleaned++;
                         _log.LogInformation(
                             "Startup reconcile: work item {WorkItemId} in {Status} — cancelled superseded run {RunId}",
@@ -163,14 +163,6 @@ public sealed class RemoteWorkItemStartupReconciler : IHostedService
         {
             _log.LogWarning(ex, "Startup reconciliation failed — poller will pick up work on next cycle");
         }
-    }
-
-    private static async Task CancelLocalRunAsync(ILoopRunStore store, LoopRun run, string reason)
-    {
-        run.Status = LoopRunStatus.Cancelled;
-        run.CompletedAt ??= DateTime.UtcNow;
-        run.HumanFeedbackReason = reason;
-        await store.UpdateRunAsync(run);
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
