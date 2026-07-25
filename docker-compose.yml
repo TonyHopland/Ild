@@ -58,7 +58,7 @@ services:
         WITH_CERTS: ${WITH_CERTS:-0}
     container_name: ild
     # This image DOES carry setuid-root binaries — util-linux's mount/su, and
-    # Chrome's chrome-sandbox at the default WITH_CHROME=1 — and it also runs the
+    # Chrome's chrome-sandbox at the default WITH_CHROME=1 on amd64 — and it runs
     # lower-trust `agent` uid (ADR-0014), for which they would be an escalation
     # route. The flag takes them off the table. Nothing here needs the gain it
     # refuses: the orchestrator drops to `ild` retaining capabilities it already

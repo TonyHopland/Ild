@@ -110,18 +110,25 @@ values_in() { # <file> <service> <key> -> one value per line
   awk -v want="$2" -v key="$3" "$extract_awk" "$1"
 }
 
-# --- Self-test: pin the scanner against a fixture before trusting it. --------
+# --- Self-test: pin the scanner against fixtures before trusting it. ---------
 # The scanner is the only part of this test that can be subtly wrong — the two
 # assertions built on it are trivial — so it is exercised against inputs written
 # to break it rather than against values scraped from the file it is asserting
-# on. That keeps both properties the assertions depend on falsifiable: scoping
-# (one service's flag must never satisfy another's) and list-form handling (a
-# legal reformat must not report the flag missing while it sits in the file).
-# It also keeps this test coupled to nothing but `security_opt` — reading real
-# values out of docker-compose.yml as a smoke check would turn an unrelated
-# edit to another service into a security-test failure.
+# on. Each case is an exact-equality read, because the failure mode that matters
+# is not only under-capture (the flag reported missing while it sits in the
+# file) but over-capture: a list that never closes would swallow every following
+# key's items, and the `grep -Fxq` assertion below would still find the flag
+# among them and pass. Reading real values out of docker-compose.yml as a smoke
+# check would also couple this security test to unrelated services' settings.
+#
+# Two documents, because the scanner has two dialects to survive: hand-written
+# compose YAML (every list form the file may legally be reformatted into) and
+# the shape `docker compose config` emits — which is the only input CI ever
+# asserts against, and which no amount of exercising the raw file would pin.
 selftest() {
   local fixture got want label
+
+  # --- Dialect 1: hand-written compose YAML, all list forms plus decoys.
   fixture="$(mktmp)"
   cat > "$fixture" <<'YAML'
 services:
@@ -141,6 +148,22 @@ services:
     image: example
     labels:
       security_opt: "nested decoy, not this service's setting"
+  epsilon:
+    image: example
+    security_opt:
+      - "no-new-privileges:true"
+    ports:
+      - "8080:8080"
+      - "3100:3100"
+    volumes:
+      - data:/data
+  zeta:
+    image: example
+    security_opt:
+    - no-new-privileges:true
+    ports:
+    - "8080:8080"
+    - "3100:3100"
 volumes:
   security_opt: top-level decoy, not a service at all
 YAML
@@ -158,7 +181,7 @@ YAML
     "$required_flag" beta security_opt
   expect "inline flow list" \
     "$required_flag label:disable" gamma security_opt
-  # The scoping property the per-service assertion rests on: three siblings set
+  # The scoping property the per-service assertion rests on: four siblings set
   # the flag and `delta` does not, so a leaky scan shows up here as a value.
   expect "sibling services' flags do not leak into a service that has none" \
     "" delta security_opt
@@ -166,6 +189,78 @@ YAML
   # "no such key", not "no such service".
   expect "the service with no security_opt is still found" \
     "example" delta image
+  # Termination. Accepting a block sequence at its key's own indent (not just
+  # deeper) is what makes the non-indented form work, and it is only safe if a
+  # sibling key still closes the list — otherwise `security_opt` swallows the
+  # `ports`/`volumes` items that follow it. `epsilon` and `zeta` are the only
+  # services here whose `security_opt` is NOT their last key, so they are what
+  # holds that: everywhere else the next line is a sibling *service*, which the
+  # service-indent rule consumes before the list rule is reached.
+  expect "list ends at the next key, indented form" \
+    "$required_flag" epsilon security_opt
+  expect "list ends at the next key, at-key-indent form" \
+    "$required_flag" zeta security_opt
+
+  # --- Dialect 2: the shape `docker compose config` emits. Differs from the
+  # file in ways the scanner has to walk past: a leading top-level scalar,
+  # services sorted with `security_opt` mid-block, block sequences of *mappings*
+  # under neighbouring keys, and nested maps under `environment`/`depends_on`.
+  # CI resolves the real file through this path, so this is the dialect the
+  # merge-gating assertion actually runs against.
+  fixture="$(mktmp)"
+  cat > "$fixture" <<'YAML'
+name: ild
+services:
+  ild:
+    build:
+      context: /repo
+      dockerfile: Dockerfile
+    container_name: ild
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: true
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      ILD_DATA_PATH: /data
+    networks:
+      default: null
+    ports:
+      - mode: ingress
+        target: 8080
+        published: "8080"
+        protocol: tcp
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - type: volume
+        source: ild-data
+        target: /data
+        volume: {}
+  postgres:
+    image: postgres:17-alpine
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U postgres
+    networks:
+      default: null
+    restart: unless-stopped
+networks:
+  default:
+    name: ild_default
+volumes:
+  ild-data:
+    name: ild_ild-data
+YAML
+
+  expect "compose-config dialect: flag read exactly, list ends at the next key" \
+    "$required_flag" ild security_opt
+  expect "compose-config dialect: a service without the flag reads empty" \
+    "" postgres security_opt
+  expect "compose-config dialect: that service is genuinely found" \
+    "postgres:17-alpine" postgres image
 
   if [ "$failures" -ne 0 ]; then
     echo "The service-block scanner is broken, so every assertion below would be"
