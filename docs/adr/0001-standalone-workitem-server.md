@@ -1,6 +1,6 @@
 # ADR-0001: Standalone WorkItem Server as the work-item source of truth
 
-Work-item state, dependencies, tags, conversations, repository association, and claim semantics live in a separate `ILD.WorkItemServer` process reached over HTTP with an API key — not inside `ILD.Api`. We did this so multiple ILD instances can coordinate against one authoritative store and claim items atomically without stepping on each other; embedding the data in a single ILD host would have tied the source of truth to one instance's lifecycle. Each ILD instance treats the server as remote and heartbeats the items it is actively working (`ActiveWorkItemTracker`).
+Work-item state, dependencies, tags, conversations, repository association, and claim semantics live in a separate `ILD.WorkItemServer` process reached over HTTP with an API key — not inside `ILD.Api`. We did this so multiple ILD instances can coordinate against one authoritative store and claim items atomically without stepping on each other; embedding the data in a single ILD host would have tied the source of truth to one instance's lifecycle. Each ILD instance treats the server as remote and heartbeats the items it is actively working.
 
 ## Consequences
 

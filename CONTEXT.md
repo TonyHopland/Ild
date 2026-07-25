@@ -86,7 +86,7 @@ The engine's runaway-graph safety net is **per edge**, not per node. Each edge's
 _Avoid_: max node execs, run iteration limit
 
 **Recovery Policy**:
-Per-LoopTemplate setting controlling crash recovery behavior: AutoResume, NeedsReview, or Cancel. The template's policy is pinned onto each `LoopRun` at start (like the template version), and recovery reads the run's copy. On recovery, stale `LoopRunNode` rows with `Status = Running` are transitioned to `Interrupted` and the engine re-enters the loop at `CurrentNodeId`; the node's `ExecuteAsync` is invoked fresh and re-checks its own preconditions. AutoResume does not resume runs at Human or PR nodes in `WaitingHuman` state — those require explicit human action. When the remote work-item scheduler is enabled, startup recovery is owned by `RemoteWorkItemStartupReconciler`, which consults the server first: it recovers via the policy, re-tracks parked (HumanFeedback/WaitingForIld) items so heartbeats resume, and cancels local runs whose work item the server has since reclaimed, finished, or deleted.
+Per-LoopTemplate setting controlling crash recovery behavior: AutoResume, NeedsReview, or Cancel. The template's policy is pinned onto each `LoopRun` at start (like the template version), and recovery reads the run's copy. On recovery, stale `LoopRunNode` rows with `Status = Running` are transitioned to `Interrupted` and the engine re-enters the loop at `CurrentNodeId`; the node's `ExecuteAsync` is invoked fresh and re-checks its own preconditions. AutoResume does not resume runs at Human or PR nodes in `WaitingHuman` state — those require explicit human action. When the remote work-item scheduler is enabled, startup recovery is owned by `RemoteWorkItemStartupReconciler`, which consults the server first: it recovers via the policy, leaves parked (HumanFeedback/WaitingForIld) runs alive so the scheduler keeps heartbeating them, and cancels local runs whose work item the server has since reclaimed, finished, or deleted — cancelling being what takes them out of the [Active Work Item Set](#active-work-item-set).
 _Avoid_: restart policy, failover
 
 **Best-Effort Guarantees**:
@@ -112,6 +112,10 @@ _Avoid_: available, queued
 **Backlog**:
 WorkItem status for items requiring human approval before entering the work queue. Whether new items land here or in Work Queue depends on a per-Repository setting.
 _Avoid_: draft, planned
+
+**Active Work Item Set**:
+The work items this ILD instance is currently working on: one per local `LoopRun` still alive (`Running`, or `WaitingHuman` parked at a Human/PR gate). `RemoteWorkItemCoordinator` **derives** it from `ILoopRunStore.GetActiveRunsAsync()` at the top of every poll pass — it is never maintained incrementally, so a run that ended releases its work item whatever status the item itself landed in. The same set does both jobs: it is the heartbeat list the server's stale reclaimer keys off, and its size is the concurrency gate against `scheduler.maxConcurrent` (claims made during a pass are counted locally on top, since the run row appears mid-pass). The cap is therefore **per instance** — deriving it from the server's `Running` status instead would silently make it global across every instance pointed at the same board. A pass that has Ready work but no room logs the ids holding the slots.
+_Avoid_: active tracker, in-flight set, running set
 
 ### Chat
 

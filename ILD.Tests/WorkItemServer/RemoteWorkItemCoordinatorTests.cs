@@ -17,6 +17,18 @@ public sealed class RemoteWorkItemCoordinatorTests
         Id = id, Title = "w", Status = status, Tags = tags,
     };
 
+    /// <summary>
+    /// A run store reporting no live local runs — the default for cases that
+    /// aren't about the concurrency gate. <c>GetActiveRunsAsync</c> always has
+    /// to be stubbed: unstubbed, Moq hands back null rather than an empty list.
+    /// </summary>
+    private static ILoopRunStore NoLiveRuns()
+    {
+        var store = new Mock<ILoopRunStore>();
+        store.Setup(s => s.GetActiveRunsAsync()).ReturnsAsync(Array.Empty<LoopRun>());
+        return store.Object;
+    }
+
     [Fact]
     public async Task Claims_ready_items_when_template_resolves_uniquely()
     {
@@ -30,17 +42,18 @@ public sealed class RemoteWorkItemCoordinatorTests
                 It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemoteTransitionResponse { Success = true, ActualStatus = RemoteWorkItemStatus.Running });
 
-        var tracker = new InMemoryActiveWorkItemTracker();
         var engine = new Mock<ILoopEngine>();
         var resolver = new Mock<ILoopTemplateResolver>();
         resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
                 .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Single, Guid.NewGuid(), Array.Empty<string>()));
 
-        var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object, engine.Object);
+        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns());
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
         Assert.Single(result.Claimed);
-        Assert.Contains(ready.Id, tracker.Snapshot());
+        // The claim's whole point is the local run behind it — that run is what
+        // holds the slot and keeps the item heartbeated from here on.
+        engine.Verify(e => e.StartRunAsync(ready.Id, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -61,7 +74,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
                 .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.None, null, Array.Empty<string>()));
 
-        var sut = new RemoteWorkItemCoordinator(client.Object, new InMemoryActiveWorkItemTracker(), resolver.Object, engine.Object);
+        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns());
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
         Assert.Single(result.EscalatedToHumanFeedback);
@@ -87,7 +100,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
                 .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Ambiguous, null, new[] { "build", "deploy" }));
 
-        var sut = new RemoteWorkItemCoordinator(client.Object, new InMemoryActiveWorkItemTracker(), resolver.Object, engine.Object);
+        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns());
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
         Assert.Single(result.EscalatedToHumanFeedback);
@@ -98,8 +111,6 @@ public sealed class RemoteWorkItemCoordinatorTests
     public async Task Resumes_waiting_for_ild_items_to_running()
     {
         var waiting = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.WaitingForIld);
-        var tracker = new InMemoryActiveWorkItemTracker();
-        tracker.Add(waiting.Id);
 
         var client = new Mock<IWorkItemServerClient>();
         client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
@@ -111,7 +122,7 @@ public sealed class RemoteWorkItemCoordinatorTests
 
         var engine = new Mock<ILoopEngine>();
         var resolver = new Mock<ILoopTemplateResolver>();
-        var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object, engine.Object);
+        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns());
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
         Assert.Single(result.Resumed);
@@ -134,12 +145,11 @@ public sealed class RemoteWorkItemCoordinatorTests
         resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
                 .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Single, Guid.NewGuid(), Array.Empty<string>()));
 
-        var tracker = new InMemoryActiveWorkItemTracker();
-        var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object, engine.Object);
+        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns());
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1);
 
         Assert.Single(result.Claimed);
-        Assert.Equal(1, tracker.Count);
+        engine.Verify(e => e.StartRunAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -158,31 +168,34 @@ public sealed class RemoteWorkItemCoordinatorTests
         resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
                 .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Single, Guid.NewGuid(), Array.Empty<string>()));
 
-        var tracker = new InMemoryActiveWorkItemTracker();
-        var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object, engine.Object);
+        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns());
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
         Assert.Empty(result.Claimed);
-        Assert.Equal(0, tracker.Count);
+        engine.Verify(e => e.StartRunAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
-    public async Task Drops_done_items_from_tracker()
+    public async Task Stops_heartbeating_an_item_once_its_run_is_over()
     {
-        var done = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.Done);
-        var tracker = new InMemoryActiveWorkItemTracker();
-        tracker.Add(done.Id);
+        // A finished item leaves the heartbeat because its run is gone, not
+        // because the server called it Done — the same release path as every
+        // other terminal status.
+        var done = Item(NewId(), RemoteWorkItemStatus.Done);
 
-        var client = new Mock<IWorkItemServerClient>();
-        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-              .ReturnsAsync(new RemotePollResponse { ActiveItems = new[] { done } });
+        var (client, heartbeats) = ScriptedClient(
+            new RemotePollResponse { ActiveItems = new[] { done } });
 
-        var engine = new Mock<ILoopEngine>();
-        var resolver = new Mock<ILoopTemplateResolver>();
-        var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object, engine.Object);
+        var activeRuns = NoActiveRuns();
+        activeRuns.Add((done.Id, LoopRunStatus.Running));
+        var sut = Coordinator(client, RunStoreWithActive(activeRuns));
+
+        await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
+        activeRuns.Clear(); // the run completed
         await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
-        Assert.DoesNotContain(done.Id, tracker.Snapshot());
+        Assert.Equal(new[] { done.Id }, heartbeats[0]);
+        Assert.Empty(heartbeats[1]);
     }
 
     [Fact]
@@ -196,7 +209,7 @@ public sealed class RemoteWorkItemCoordinatorTests
 
         var engine = new Mock<ILoopEngine>();
         var resolver = new Mock<ILoopTemplateResolver>();
-        var sut = new RemoteWorkItemCoordinator(client.Object, new InMemoryActiveWorkItemTracker(), resolver.Object, engine.Object);
+        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns());
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
         Assert.True(result.HasActiveHumanFeedback);
@@ -220,7 +233,7 @@ public sealed class RemoteWorkItemCoordinatorTests
 
         var notifier = new Mock<IWorkItemNotifier>();
         var sut = new RemoteWorkItemCoordinator(
-            client.Object, new InMemoryActiveWorkItemTracker(), resolver.Object, engine.Object,
+            client.Object, resolver.Object, engine.Object, NoLiveRuns(),
             workItemNotifier: notifier.Object);
 
         await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
@@ -233,8 +246,6 @@ public sealed class RemoteWorkItemCoordinatorTests
     public async Task Notifies_signalr_when_resuming_waiting_for_ild_item()
     {
         var waiting = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.WaitingForIld);
-        var tracker = new InMemoryActiveWorkItemTracker();
-        tracker.Add(waiting.Id);
 
         var client = new Mock<IWorkItemServerClient>();
         client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
@@ -249,7 +260,7 @@ public sealed class RemoteWorkItemCoordinatorTests
 
         var notifier = new Mock<IWorkItemNotifier>();
         var sut = new RemoteWorkItemCoordinator(
-            client.Object, tracker, resolver.Object, engine.Object,
+            client.Object, resolver.Object, engine.Object, NoLiveRuns(),
             workItemNotifier: notifier.Object);
 
         await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
@@ -267,17 +278,15 @@ public sealed class RemoteWorkItemCoordinatorTests
         client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemotePollResponse { ReadyItems = new[] { ready } });
 
-        var tracker = new InMemoryActiveWorkItemTracker();
         var engine = new Mock<ILoopEngine>();
         var resolver = new Mock<ILoopTemplateResolver>();
         resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
                 .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Single, Guid.NewGuid(), Array.Empty<string>()));
 
-        var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object, engine.Object);
+        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns());
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, claimReadyItems: false);
 
         Assert.Empty(result.Claimed);
-        Assert.Equal(0, tracker.Count);
         // Nothing should have been transitioned (no claim, no escalation) and no
         // run started — Ready items are left untouched for a human to promote.
         client.Verify(c => c.TransitionAsync(Opts, It.IsAny<string>(), It.IsAny<RemoteTransitionRequest>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -285,43 +294,31 @@ public sealed class RemoteWorkItemCoordinatorTests
     }
 
     [Fact]
-    public async Task When_paused_still_resumes_waiting_for_ild_and_drops_done()
+    public async Task When_paused_still_resumes_waiting_for_ild_and_heartbeats_only_live_runs()
     {
         // Everything except Ready→Running auto-promotion must keep working while
-        // paused: a parked WaitingForIld run still resumes, a finished item still
-        // leaves the heartbeat set, and a Ready item is left untouched.
-        var waiting = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.WaitingForIld);
-        var done = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.Done);
-        var ready = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.Ready, "build");
+        // paused: a parked WaitingForIld run still resumes, a finished item is
+        // already out of the heartbeat set, and a Ready item is left untouched.
+        var waiting = Item(NewId(), RemoteWorkItemStatus.WaitingForIld);
+        var done = Item(NewId(), RemoteWorkItemStatus.Done);
+        var ready = Item(NewId(), RemoteWorkItemStatus.Ready, "build");
 
-        var tracker = new InMemoryActiveWorkItemTracker();
-        tracker.Add(waiting.Id);
-        tracker.Add(done.Id);
+        var (client, heartbeats) = ScriptedClient(new RemotePollResponse
+        {
+            ActiveItems = new[] { waiting, done },
+            ReadyItems = new[] { ready },
+        });
 
-        var client = new Mock<IWorkItemServerClient>();
-        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-              .ReturnsAsync(new RemotePollResponse
-              {
-                  ActiveItems = new[] { waiting, done },
-                  ReadyItems = new[] { ready },
-              });
-        client.Setup(c => c.TransitionAsync(Opts, waiting.Id,
-                It.Is<RemoteTransitionRequest>(r => r.TargetStatus == RemoteWorkItemStatus.Running),
-                It.IsAny<CancellationToken>()))
-              .ReturnsAsync(new RemoteTransitionResponse { Success = true, ActualStatus = RemoteWorkItemStatus.Running });
+        // Only the parked run is still alive; the Done item's run has ended.
+        var activeRuns = NoActiveRuns();
+        activeRuns.Add((waiting.Id, LoopRunStatus.Running));
+        var sut = Coordinator(client, RunStoreWithActive(activeRuns));
 
-        var engine = new Mock<ILoopEngine>();
-        var resolver = new Mock<ILoopTemplateResolver>();
-        resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
-                .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Single, Guid.NewGuid(), Array.Empty<string>()));
-
-        var sut = new RemoteWorkItemCoordinator(client.Object, tracker, resolver.Object, engine.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, claimReadyItems: false);
 
         Assert.Single(result.Resumed);
-        Assert.DoesNotContain(done.Id, tracker.Snapshot());
         Assert.Empty(result.Claimed);
-        Assert.DoesNotContain(ready.Id, tracker.Snapshot());
+        Assert.Equal(new[] { waiting.Id }, heartbeats[0]);
         // The Ready item was never claimed, but the WaitingForIld resume still fired.
         client.Verify(c => c.TransitionAsync(Opts, ready.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -344,7 +341,7 @@ public sealed class RemoteWorkItemCoordinatorTests
 
         var notifier = new Mock<IWorkItemNotifier>();
         var sut = new RemoteWorkItemCoordinator(
-            client.Object, new InMemoryActiveWorkItemTracker(), resolver.Object, engine.Object,
+            client.Object, resolver.Object, engine.Object, NoLiveRuns(),
             workItemNotifier: notifier.Object);
 
         await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
@@ -421,8 +418,8 @@ public sealed class RemoteWorkItemCoordinatorTests
 
     private static RemoteWorkItemCoordinator Coordinator(
         Mock<IWorkItemServerClient> client, Mock<ILoopRunStore> runStore, ILogger<RemoteWorkItemCoordinator>? logger = null) =>
-        new(client.Object, new InMemoryActiveWorkItemTracker(), SingleTemplateResolver().Object,
-            new Mock<ILoopEngine>().Object, loopRunStore: runStore.Object, logger: logger);
+        new(client.Object, SingleTemplateResolver().Object, new Mock<ILoopEngine>().Object,
+            runStore.Object, logger: logger);
 
     [Fact]
     public async Task Claims_a_ready_item_after_earlier_claims_terminated_outside_done()
@@ -583,6 +580,30 @@ public sealed class RemoteWorkItemCoordinatorTests
              m.Contains("concurren", StringComparison.OrdinalIgnoreCase)));
     }
 
+    [Fact]
+    public async Task Says_nothing_about_the_cap_when_there_is_no_ready_work()
+    {
+        // The pass runs every 60s, 5s in grace mode. Being at the cap is only
+        // worth a line when it is actually holding something up — an idle Ready
+        // queue is not a symptom, and logging it every pass would bury the case
+        // that is.
+        var busy = NewId();
+
+        var (client, _) = ScriptedClient(new RemotePollResponse
+        {
+            ActiveItems = new[] { Item(busy, RemoteWorkItemStatus.Running) },
+        });
+
+        var activeRuns = NoActiveRuns();
+        activeRuns.Add((busy, LoopRunStatus.Running));
+        var logger = new RecordingLogger<RemoteWorkItemCoordinator>();
+
+        await Coordinator(client, RunStoreWithActive(activeRuns), logger)
+            .RunPollCycleAsync(Opts, maxConcurrent: 1);
+
+        Assert.DoesNotContain(logger.Messages, m => m.Contains("cap", StringComparison.OrdinalIgnoreCase));
+    }
+
     /// <summary>Captures formatted log messages so a test can assert on the diagnostic text.</summary>
     private sealed class RecordingLogger<T> : ILogger<T>
     {
@@ -674,9 +695,8 @@ public sealed class RemoteWorkItemCoordinatorTests
         providerStore.Setup(s => s.GetDefaultAiProviderAsync()).ReturnsAsync(defaultProvider);
 
         var sut = new RemoteWorkItemCoordinator(
-            client.Object, new InMemoryActiveWorkItemTracker(),
-            new Mock<ILoopTemplateResolver>().Object, new Mock<ILoopEngine>().Object,
-            loopRunStore: runStore.Object, providerStore: providerStore.Object, aiTracker: concurrency);
+            client.Object, new Mock<ILoopTemplateResolver>().Object, new Mock<ILoopEngine>().Object,
+            runStore.Object, providerStore: providerStore.Object, aiTracker: concurrency);
 
         return (sut, waiting);
     }

@@ -111,7 +111,6 @@ public static class ServiceCollectionExtensions
         // WorkItemServerUrl exists, at which point its options snapshot
         // refreshes the next time the host starts.
         services.AddHttpClient<IWorkItemServerClient, WorkItemServerClient>();
-        services.AddSingleton<IActiveWorkItemTracker, InMemoryActiveWorkItemTracker>();
         services.AddScoped<ILoopTemplateResolver, DbLoopTemplateResolver>();
         services.AddScoped<IWorkItemServerOptionsResolver, DbWorkItemServerOptionsResolver>();
         services.AddScoped<IRemoteWorkItemCoordinator, RemoteWorkItemCoordinator>();

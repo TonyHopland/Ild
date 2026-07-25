@@ -10,7 +10,7 @@
 | WorkItem Server connection | App-wide URL, API key, and poll/grace cadence for reaching the WorkItem Server (stored in app settings, not per provider) |
 | `AiProvider`               | Adapter-resolved AI provider configuration                                                                                |
 | `RecoveryPolicy`           | `AutoResume`, `NeedsReview`, or `Cancel` after restart                                                                    |
-| `ActiveWorkItemTracker`    | Local set of items this ILD instance is actively heartbeating                                                             |
+| Active Work Item Set       | Work items behind this instance's live runs; derived per poll pass, and both the heartbeat list and the concurrency gate  |
 
 ## Node types
 
