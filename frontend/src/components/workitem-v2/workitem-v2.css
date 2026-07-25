@@ -780,6 +780,14 @@
 .wiv2-code,
 .wiv2-diff {
   margin: 0;
+  /* Both scroll horizontally inside .wiv2-files-content, and a pre-formatted
+     row overflows its block box rather than widening it — a background paints
+     the box only, so a changed line would lose its tint past the client width.
+     The rows take `width: max-content` to cover their own text and
+     `min-width: 100%` so short ones end flush with long ones; that percentage
+     resolves against this <pre>, which therefore has to grow to the widest row
+     instead of stopping at the client width. */
+  min-width: max-content;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.78rem;
   line-height: 1.45;
@@ -789,6 +797,8 @@
 .wiv2-code-line {
   display: flex;
   white-space: pre;
+  width: max-content;
+  min-width: 100%;
 }
 
 .wiv2-code-gutter {
@@ -807,6 +817,8 @@
 .wiv2-diff-line {
   white-space: pre;
   padding: 0 0.75rem;
+  width: max-content;
+  min-width: 100%;
 }
 
 /* Light tier: the whole changed line, so the changed region stays visible in
