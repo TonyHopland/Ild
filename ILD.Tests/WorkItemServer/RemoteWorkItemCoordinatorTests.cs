@@ -321,13 +321,14 @@ public sealed class RemoteWorkItemCoordinatorTests
         var doneRun = new LoopRun { Id = Guid.NewGuid(), WorkItemId = done.Id, Status = LoopRunStatus.WaitingHuman };
         var runStore = RunStoreWithActive(activeRuns);
         runStore.Setup(s => s.GetActiveByWorkItemAsync(done.Id)).ReturnsAsync(doneRun);
+        var engine = new Mock<ILoopEngine>();
 
-        var result = await Coordinator(client, runStore)
+        var result = await Coordinator(client, runStore, engine)
             .RunPollCycleAsync(Opts, maxConcurrent: 5, claimReadyItems: false);
 
         Assert.Single(result.Resumed);
         Assert.Empty(result.Claimed);
-        runStore.Verify(s => s.MarkRunCancelledAsync(doneRun, It.IsAny<string>()), Times.Once);
+        engine.Verify(e => e.StopRunAsync(doneRun.Id, It.IsAny<string>()), Times.Once);
         Assert.DoesNotContain(done.Id, result.SlotHolders);
         // The heartbeat is the derived set and nothing else — the two live runs
         // going in, never the Ready item the pause left alone.
@@ -618,7 +619,9 @@ public sealed class RemoteWorkItemCoordinatorTests
         var runStore = RunStoreWithActive(new List<string> { finished });
         runStore.Setup(s => s.GetActiveByWorkItemAsync(finished)).ReturnsAsync(parkedRun);
 
-        var result = await Coordinator(client, runStore).RunPollCycleAsync(Opts, maxConcurrent: 1);
+        var engine = new Mock<ILoopEngine>();
+
+        var result = await Coordinator(client, runStore, engine).RunPollCycleAsync(Opts, maxConcurrent: 1);
 
         // Its slot came back inside the same pass, so the Ready item got in.
         Assert.False(result.BlockedByCap);
@@ -626,7 +629,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         Assert.Contains(fresh.Id, result.Claimed.Select(c => c.Id));
         // And the run behind it is closed, so it is gone from the next pass's
         // set too rather than coming back as an immortal WaitingHuman row.
-        runStore.Verify(s => s.MarkRunCancelledAsync(parkedRun, It.IsAny<string>()), Times.Once);
+        engine.Verify(e => e.StopRunAsync(parkedRun.Id, It.IsAny<string>()), Times.Once);
         // It was still heartbeated on the way in — the pass reacts to what the
         // poll told it, it cannot know in advance.
         Assert.Equal(new[] { finished }, heartbeats[0]);
@@ -651,10 +654,11 @@ public sealed class RemoteWorkItemCoordinatorTests
         var liveRun = new LoopRun { Id = Guid.NewGuid(), WorkItemId = finished, Status = LoopRunStatus.Running };
         var runStore = RunStoreWithActive(new List<string> { finished });
         runStore.Setup(s => s.GetActiveByWorkItemAsync(finished)).ReturnsAsync(liveRun);
-        runStore.Setup(s => s.MarkRunCancelledAsync(liveRun, It.IsAny<string>()))
-                .ThrowsAsync(new InvalidOperationException("database unavailable"));
+        var engine = new Mock<ILoopEngine>();
+        engine.Setup(e => e.StopRunAsync(liveRun.Id, It.IsAny<string>()))
+              .ThrowsAsync(new InvalidOperationException("database unavailable"));
 
-        var result = await Coordinator(client, runStore).RunPollCycleAsync(Opts, maxConcurrent: 1);
+        var result = await Coordinator(client, runStore, engine).RunPollCycleAsync(Opts, maxConcurrent: 1);
 
         Assert.Contains(finished, result.SlotHolders);
         Assert.Empty(result.Claimed);

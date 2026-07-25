@@ -62,6 +62,7 @@ public sealed class RemoteWorkItemStartupReconciler : IHostedService
 
             var loopRunStore = sp.GetRequiredService<ILoopRunStore>();
             var recovery = sp.GetRequiredService<IRecoveryManager>();
+            var engine = sp.GetRequiredService<ILoopEngine>();
             var client = sp.GetRequiredService<IWorkItemServerClient>();
 
             var serverOpts = new WorkItemServerOptions
@@ -86,7 +87,7 @@ public sealed class RemoteWorkItemStartupReconciler : IHostedService
                 {
                     // Work item no longer exists on server — cancel the orphan
                     // run so a later restart can't resurrect it.
-                    await loopRunStore.MarkRunCancelledAsync(run, "Work item no longer exists on server");
+                    await engine.StopRunAsync(run.Id, "Work item no longer exists on server");
                     cleaned++;
                     _log.LogInformation(
                         "Startup reconcile: work item {WorkItemId} for run {RunId} not found on server — run cancelled",
@@ -108,8 +109,13 @@ public sealed class RemoteWorkItemStartupReconciler : IHostedService
                                 "Startup reconcile: work item {WorkItemId} still Running on server — recovering run {RunId}",
                                 run.WorkItemId, run.Id);
                         }
-                        // WaitingHuman runs resume via their pending signal.
-                        reconciled++;
+                        else
+                        {
+                            // WaitingHuman runs resume via their pending signal.
+                            // Counted apart from the resumed ones so the tally
+                            // below adds up to the number of runs seen.
+                            reconciled++;
+                        }
                         break;
 
                     case RemoteWorkItemStatus.HumanFeedback:
@@ -130,7 +136,7 @@ public sealed class RemoteWorkItemStartupReconciler : IHostedService
                         // Inconsistent: normal completion marks the run terminal
                         // before the item goes Done. Cancel so the run isn't
                         // resurrected by a later restart.
-                        await loopRunStore.MarkRunCancelledAsync(run, "Work item already Done on server");
+                        await engine.StopRunAsync(run.Id, "Work item already Done on server");
                         cleaned++;
                         _log.LogInformation(
                             "Startup reconcile: work item {WorkItemId} is Done on server — cancelled stale run {RunId}",
@@ -142,7 +148,7 @@ public sealed class RemoteWorkItemStartupReconciler : IHostedService
                         // reset the item and will hand it out as a fresh run.
                         // Cancel the local run so two loops never fight over
                         // one work item.
-                        await loopRunStore.MarkRunCancelledAsync(run, $"Server reset work item to {wi.Status}");
+                        await engine.StopRunAsync(run.Id, $"Server reset work item to {wi.Status}");
                         cleaned++;
                         _log.LogInformation(
                             "Startup reconcile: work item {WorkItemId} in {Status} — cancelled superseded run {RunId}",

@@ -191,24 +191,43 @@ public sealed class LoopEngine : ILoopEngine
         await _notifier.PausedAsync(runId);
     }
 
-    public async Task CancelRunAsync(Guid runId)
+    public async Task StopRunAsync(Guid runId, string reason)
     {
         using var scope = _sp.CreateScope();
         var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
-        var workItems = scope.ServiceProvider.GetRequiredService<IWorkItemManager>();
         var run = await loopRunStore.GetByIdAsync(runId);
         if (run is null) return;
+
         var old = run.Status;
         run.Status = LoopRunStatus.Cancelled;
-        run.CompletedAt = DateTime.UtcNow;
+        run.CompletedAt ??= DateTime.UtcNow;
+        run.HumanFeedbackReason = reason;
         await loopRunStore.UpdateRunAsync(run);
         _progressBuffer.Clear(runId);
+
+        // A node executing right now is cut off here; one between nodes stops at
+        // its next boundary, where the engine reloads this row and finds it no
+        // longer Running.
         if (_runCts.TryGetValue(runId, out var cts))
         {
             try { cts.Cancel(); } catch { }
         }
         await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.Cancelled);
-        await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+    }
+
+    public async Task CancelRunAsync(Guid runId)
+    {
+        using var scope = _sp.CreateScope();
+        var run = await scope.ServiceProvider.GetRequiredService<ILoopRunStore>().GetByIdAsync(runId);
+        if (run is null) return;
+        var workItemId = run.WorkItemId;
+
+        await StopRunAsync(runId, HumanFeedbackReasons.RunCancelled);
+
+        // The disposition half, which is this method's whole difference from
+        // StopRunAsync: a cancelled run's item is waiting on a human.
+        await scope.ServiceProvider.GetRequiredService<IWorkItemManager>().TransitionAsync(
+            workItemId, RemoteWorkItemStatus.HumanFeedback,
             reason: HumanFeedbackReasons.RunCancelled, humanFeedbackReason: HumanFeedbackReasons.RunCancelled);
     }
 

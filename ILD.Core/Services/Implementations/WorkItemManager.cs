@@ -66,9 +66,13 @@ public class WorkItemManager : IWorkItemManager
     /// Does <b>not</b> touch the worktree or branch: local git state lives
     /// exactly as long as the run row.
     /// </summary>
-    private async Task EndRunAsync(LoopRun run)
+    private async Task EndRunAsync(LoopRun run, string reason)
     {
-        await CancelRunIfActiveAsync(run);
+        await StopRunIfActiveAsync(run, reason);
+
+        // Belt and braces, for the no-engine wiring and for a best-effort stop
+        // that failed: the row has to end terminal and timestamped, or the
+        // retention sweeper never sees it and its work item keeps a slot.
         if (run.Status is LoopRunStatus.Running or LoopRunStatus.WaitingHuman)
             run.Status = LoopRunStatus.Cancelled;
         run.CompletedAt ??= DateTime.UtcNow;
@@ -76,20 +80,27 @@ public class WorkItemManager : IWorkItemManager
     }
 
     /// <summary>
-    /// Stop a still-active run (engine cancel). Does <b>not</b> touch the
-    /// run's worktree or branch — local git state lives exactly as long as
-    /// the run row and is reclaimed only when the run itself is deleted
-    /// (manual delete or the retention sweeper).
+    /// Stop a still-active run, leaving its work item's status to the caller.
+    /// Does <b>not</b> touch the run's worktree or branch — local git state
+    /// lives exactly as long as the run row and is reclaimed only when the run
+    /// itself is deleted (manual delete or the retention sweeper).
+    ///
+    /// <see cref="ILoopEngine.StopRunAsync"/> and not <c>CancelRunAsync</c>:
+    /// the latter parks the work item in HumanFeedback, and every caller here
+    /// is on its way to giving the item a status of its own. Inheriting that
+    /// park would leave a "Run cancelled" message in the item's conversation
+    /// and pop a needs-attention toast on the card the human just finished —
+    /// both outliving the status written over it a moment later.
     /// </summary>
-    private async Task CancelRunIfActiveAsync(LoopRun run)
+    private async Task StopRunIfActiveAsync(LoopRun run, string reason)
     {
-        if (run.Status is LoopRunStatus.Running or LoopRunStatus.WaitingHuman && _engine is not null)
-        {
-            try { await _engine.CancelRunAsync(run.Id); } catch { /* best effort */ }
-            // CancelRunAsync persisted through its own scope; refresh our
-            // tracked instance so we don't write stale state back over it.
-            try { await _loopRunStore.ReloadAsync(run); } catch { /* row may be gone */ }
-        }
+        if (run.Status is not (LoopRunStatus.Running or LoopRunStatus.WaitingHuman) || _engine is null)
+            return;
+
+        try { await _engine.StopRunAsync(run.Id, reason); } catch { /* best effort */ }
+        // StopRunAsync persisted through its own scope; refresh our tracked
+        // instance so we don't write stale state back over it.
+        try { await _loopRunStore.ReloadAsync(run); } catch { /* row may be gone */ }
     }
 
     /// <summary>
@@ -511,7 +522,7 @@ public class WorkItemManager : IWorkItemManager
     public async Task<bool> TransitionToDoneAsync(string workItemId)
     {
         var currentRun = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
-        if (currentRun != null) await EndRunAsync(currentRun);
+        if (currentRun != null) await EndRunAsync(currentRun, "Work item marked Done");
         return await TransitionAsync(workItemId, RemoteWorkItemStatus.Done,
             currentLoopRunId: currentRun?.Id ?? Guid.Empty);
     }
@@ -728,7 +739,7 @@ public class WorkItemManager : IWorkItemManager
         // The run stays inspectable until the row itself is deleted (manual
         // delete or the retention sweeper), which reclaims its worktree and
         // branch; the terminal timestamp is what makes it visible there.
-        if (currentRun != null) await EndRunAsync(currentRun);
+        if (currentRun != null) await EndRunAsync(currentRun, "Work item cleaned up to Done");
 
         // Drive the Done transition through the shared path so it clears the
         // run's feedback reason, notifies clients, and stops the worktree
@@ -751,7 +762,7 @@ public class WorkItemManager : IWorkItemManager
         // them together with the row. The next run gets its own branch and
         // worktree anyway (ADR-0008), so nothing here can leak into it.
         if (currentRun != null)
-            await CancelRunIfActiveAsync(currentRun);
+            await StopRunIfActiveAsync(currentRun, "Work item sent back to Backlog");
 
         try
         {
@@ -1017,7 +1028,7 @@ public class WorkItemManager : IWorkItemManager
         var runs = await _loopRunStore.GetAllByWorkItemAsync(workItemId);
         foreach (var run in runs)
         {
-            await CancelRunIfActiveAsync(run);
+            await StopRunIfActiveAsync(run, "Work item deleted");
             if (!await _runReclaimer.ReclaimLocalStateAsync(run))
                 continue;
             await _loopRunStore.DeleteAsync(run.Id);

@@ -114,15 +114,39 @@ public class RemoteWorkItemStartupReconcilerTests
     private static LoopRunStatus FreshStatus(TestDb db, Guid runId)
         => db.Fresh().LoopRuns.First(r => r.Id == runId).Status;
 
+    /// <summary>
+    /// An engine whose <c>StopRunAsync</c> ends the row the way the real one
+    /// does — terminal status, completion timestamp, reason — so these cases
+    /// keep asserting the outcome the reconciler is responsible for rather than
+    /// the call it makes to get there.
+    /// </summary>
+    private static Mock<ILoopEngine> EngineEndingRuns(TestDb db)
+    {
+        var engine = new Mock<ILoopEngine>();
+        engine.Setup(e => e.StopRunAsync(It.IsAny<Guid>(), It.IsAny<string>()))
+              .Returns(async (Guid runId, string reason) =>
+              {
+                  using var fresh = db.Fresh();
+                  var r = fresh.LoopRuns.First(x => x.Id == runId);
+                  r.Status = LoopRunStatus.Cancelled;
+                  r.CompletedAt ??= DateTime.UtcNow;
+                  r.HumanFeedbackReason = reason;
+                  await fresh.SaveChangesAsync();
+              });
+        return engine;
+    }
+
     private static async Task RunReconcilerAsync(
         TestDb db,
         Mock<IRecoveryManager> recovery,
-        Mock<IWorkItemServerClient> client)
+        Mock<IWorkItemServerClient> client,
+        Mock<ILoopEngine>? engine = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton<ILoopRunStore>(db.LoopRuns);
         services.AddSingleton(recovery.Object);
         services.AddSingleton(client.Object);
+        services.AddSingleton((engine ?? EngineEndingRuns(db)).Object);
         using var sp = services.BuildServiceProvider();
 
         var options = new Mock<IOptionsMonitor<WorkItemSchedulerOptions>>();

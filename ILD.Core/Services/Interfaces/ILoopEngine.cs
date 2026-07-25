@@ -24,6 +24,27 @@ public interface ILoopEngine
     Task StartRunAsync(string workItemId, CancellationToken cancellationToken = default);
     Task PauseRunAsync(Guid runId);
     Task ResumeRunAsync(Guid runId);
+
+    /// <summary>
+    /// End a run and nothing else: stop the in-flight node, write the row
+    /// terminal with <paramref name="reason"/>, and tell the UI. The single
+    /// definition of "ended", the counterpart to <c>LoopRunStore.IsAlive</c>'s
+    /// single definition of "alive" — a run stops holding its work item's
+    /// concurrency slot exactly when this has run.
+    ///
+    /// What the work item should say afterwards is deliberately the caller's
+    /// business: a human finishing it wants Done, the cancel button wants
+    /// HumanFeedback, and a poll pass reacting to the server wants to leave
+    /// alone the status the server already has. Callers that need a disposition
+    /// apply it themselves rather than inheriting one they have to overwrite.
+    /// No-ops on an unknown run id.
+    /// </summary>
+    Task StopRunAsync(Guid runId, string reason);
+
+    /// <summary>
+    /// <see cref="StopRunAsync"/>, then park the work item in HumanFeedback for
+    /// a human to pick up — what the UI's cancel button means.
+    /// </summary>
     Task CancelRunAsync(Guid runId);
 
     /// <summary>

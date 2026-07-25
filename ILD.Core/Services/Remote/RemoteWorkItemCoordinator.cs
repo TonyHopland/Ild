@@ -147,14 +147,16 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
         //    keep its slot and its heartbeat for the lifetime of the process.
         //    A locally-driven Done already ends its own run; this covers the
         //    item finished on the server by someone else, which a board shared
-        //    between ILD instances makes routine.
+        //    between ILD instances makes routine. StopRunAsync rather than
+        //    CancelRunAsync: the item's status is the server's already, and
+        //    parking it in HumanFeedback would undo the Done being reacted to.
         foreach (var w in poll.ActiveItems.Where(w => w.Status == RemoteWorkItemStatus.Done))
         {
             try
             {
                 var run = await _loopRunStore.GetActiveByWorkItemAsync(w.Id);
                 if (run != null)
-                    await _loopRunStore.MarkRunCancelledAsync(run, "Work item marked Done on server");
+                    await _engine.StopRunAsync(run.Id, "Work item marked Done on server");
 
                 // Only once the run is provably over. Releasing first would let
                 // a failed write hand this pass a slot whose run is still very

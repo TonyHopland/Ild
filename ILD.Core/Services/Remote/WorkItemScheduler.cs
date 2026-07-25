@@ -38,7 +38,14 @@ public sealed class WorkItemSchedulerOptions
 public sealed class CapStallReporter
 {
     private readonly ILogger _log;
-    private IReadOnlyList<string>? _announced;
+
+    /// <summary>
+    /// Compared as a set, not a sequence: whether two passes report the same
+    /// holders is not the coordinator's ordering to decide, and a reporter that
+    /// announced whenever the order shifted would be the spam it exists to
+    /// prevent.
+    /// </summary>
+    private HashSet<string>? _announced;
 
     public CapStallReporter(ILogger log) => _log = log;
 
@@ -54,9 +61,9 @@ public sealed class CapStallReporter
             return;
         }
 
-        var isNews = _announced == null
-            || !_announced.SequenceEqual(result.SlotHolders, StringComparer.Ordinal);
-        _announced = result.SlotHolders;
+        var holders = new HashSet<string>(result.SlotHolders, StringComparer.Ordinal);
+        var isNews = _announced == null || !_announced.SetEquals(holders);
+        _announced = holders;
 
         _log.Log(isNews ? LogLevel.Information : LogLevel.Debug,
             "Scheduler at the concurrency cap ({MaxConcurrent}): Ready work is waiting while slots are held by work items {SlotHolders}",

@@ -113,14 +113,6 @@ public class LoopRunStore : ILoopRunStore
             .ToList();
     }
 
-    public async Task MarkRunCancelledAsync(LoopRun run, string reason)
-    {
-        run.Status = LoopRunStatus.Cancelled;
-        run.CompletedAt ??= DateTime.UtcNow;
-        run.HumanFeedbackReason = reason;
-        await UpdateRunAsync(run);
-    }
-
     public async Task<IReadOnlyList<LoopRun>> GetReclaimableRunsAsync(DateTime cutoff, int take = 200)
         => await _db.LoopRuns.AsNoTracking()
             .Where(r => !r.Retain

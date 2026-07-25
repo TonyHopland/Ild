@@ -29,6 +29,22 @@ public class CapStallReporterTests
     }
 
     [Fact]
+    public void Treats_the_same_holders_in_a_different_order_as_the_same_stall()
+    {
+        // The same slots, listed differently, is not news. Comparing as a
+        // sequence would make this depend on how the coordinator happened to
+        // order its ledger, and announce most passes.
+        var log = new RecordingLogger();
+        var reporter = new CapStallReporter(log);
+
+        reporter.Report(Blocked("wi-1", "wi-2"), maxConcurrent: 2);
+        reporter.Report(Blocked("wi-2", "wi-1"), maxConcurrent: 2);
+
+        Assert.Single(log.At(LogLevel.Information));
+        Assert.Single(log.At(LogLevel.Debug));
+    }
+
+    [Fact]
     public void Announces_again_when_the_holders_change()
     {
         // The board moved and is still stuck — the most interesting moment
