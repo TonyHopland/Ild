@@ -10,11 +10,12 @@ namespace ILD.Tests;
 public class WorkItemSchedulerPauseTests
 {
     /// <summary>
-    /// While paused the scheduler must still run the poll cycle — heartbeats and
-    /// WaitingForIld resumes keep working — but it tells the
-    /// coordinator not to auto-promote Ready items, by passing
-    /// <c>claimReadyItems: false</c>. Previously a paused scheduler skipped the
-    /// whole pass, which also froze every other side of the loop.
+    /// While paused the scheduler must still run the poll cycle — heartbeats,
+    /// WaitingForIld resumes, and closing the runs behind items the server has
+    /// finished all keep working — but it tells the coordinator not to
+    /// auto-promote Ready items, by passing <c>claimReadyItems: false</c>.
+    /// Previously a paused scheduler skipped the whole pass, which also froze
+    /// every other side of the loop.
     /// </summary>
     [Fact]
     public async Task Paused_scheduler_still_polls_but_suppresses_ready_claims()

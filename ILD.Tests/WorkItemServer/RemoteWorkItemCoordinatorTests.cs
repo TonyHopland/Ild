@@ -295,11 +295,14 @@ public sealed class RemoteWorkItemCoordinatorTests
     }
 
     [Fact]
-    public async Task When_paused_still_resumes_waiting_for_ild_and_heartbeats_only_live_runs()
+    public async Task When_paused_still_resumes_waiting_for_ild_and_closes_finished_runs()
     {
         // Everything except Ready→Running auto-promotion must keep working while
-        // paused: a parked WaitingForIld run still resumes, a finished item is
-        // already out of the heartbeat set, and a Ready item is left untouched.
+        // paused: a parked WaitingForIld run still resumes, a run behind an item
+        // the server has finished is still closed, and a Ready item is left
+        // untouched. Pause suppresses auto-promotion, not housekeeping — a
+        // paused board that stopped releasing slots would come back from the
+        // pause already stuck.
         var waiting = Item(NewId(), RemoteWorkItemStatus.WaitingForIld);
         var done = Item(NewId(), RemoteWorkItemStatus.Done);
         var ready = Item(NewId(), RemoteWorkItemStatus.Ready, "build");
@@ -310,16 +313,27 @@ public sealed class RemoteWorkItemCoordinatorTests
             ReadyItems = new[] { ready },
         });
 
-        // Only the parked run is still alive; the Done item's run has ended.
+        // Both runs are alive going in; the Done item's is the one this pass
+        // has to close.
         var activeRuns = NoActiveRuns();
         activeRuns.Add(waiting.Id);
-        var sut = Coordinator(client, RunStoreWithActive(activeRuns));
+        activeRuns.Add(done.Id);
+        var doneRun = new LoopRun { Id = Guid.NewGuid(), WorkItemId = done.Id, Status = LoopRunStatus.WaitingHuman };
+        var runStore = RunStoreWithActive(activeRuns);
+        runStore.Setup(s => s.GetActiveByWorkItemAsync(done.Id)).ReturnsAsync(doneRun);
 
-        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, claimReadyItems: false);
+        var result = await Coordinator(client, runStore)
+            .RunPollCycleAsync(Opts, maxConcurrent: 5, claimReadyItems: false);
 
         Assert.Single(result.Resumed);
         Assert.Empty(result.Claimed);
-        Assert.Equal(new[] { waiting.Id }, heartbeats[0]);
+        runStore.Verify(s => s.MarkRunCancelledAsync(doneRun, It.IsAny<string>()), Times.Once);
+        Assert.DoesNotContain(done.Id, result.SlotHolders);
+        // The heartbeat is the derived set and nothing else — the two live runs
+        // going in, never the Ready item the pause left alone.
+        Assert.Equal(
+            new[] { waiting.Id, done.Id }.OrderBy(x => x, StringComparer.Ordinal),
+            heartbeats[0].OrderBy(x => x, StringComparer.Ordinal));
         // The Ready item was never claimed, but the WaitingForIld resume still fired.
         client.Verify(c => c.TransitionAsync(Opts, ready.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -550,9 +564,9 @@ public sealed class RemoteWorkItemCoordinatorTests
         // A pass that sees Ready work but has no room must report that, and name
         // the ids holding the slots. Without it a leaked slot looks exactly like
         // an idle board — the reason this bug took an hour to find. The pass
-        // reports; WorkItemScheduler decides how often to say it out loud (see
-        // WorkItemSchedulerCapLogTests), so this asserts the reported facts
-        // rather than a log string.
+        // reports; CapStallReporter decides how often to say it out loud (see
+        // CapStallReporterTests), so this asserts the reported facts rather
+        // than a log string.
         var busy = NewId();
         var fresh = Item(NewId(), RemoteWorkItemStatus.Ready, "build");
 
