@@ -37,9 +37,17 @@ public interface ILoopEngine
     /// HumanFeedback, and a poll pass reacting to the server wants to leave
     /// alone the status the server already has. Callers that need a disposition
     /// apply it themselves rather than inheriting one they have to overwrite.
-    /// No-ops on an unknown run id.
+    ///
+    /// Returns that run's work item id — the item whose concurrency slot has
+    /// just come back, and the one a caller is about to give a status of its
+    /// own — or <c>null</c> if there is no such run. Handing it back is what
+    /// lets a caller apply its disposition without loading the run itself: an
+    /// entity it tracked before this wrote the row would be stale, and writing
+    /// through it puts the run back the way it was.
+    ///
+    /// Idempotent: a run that has already ended stays exactly as it ended.
     /// </summary>
-    Task StopRunAsync(Guid runId, string reason);
+    Task<string?> StopRunAsync(Guid runId, string reason);
 
     /// <summary>
     /// <see cref="StopRunAsync"/>, then park the work item in HumanFeedback for

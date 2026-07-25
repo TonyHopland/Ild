@@ -132,6 +132,7 @@ public class RemoteWorkItemStartupReconcilerTests
                   r.CompletedAt ??= DateTime.UtcNow;
                   r.HumanFeedbackReason = reason;
                   await fresh.SaveChangesAsync();
+                  return (string?)r.WorkItemId;
               });
         return engine;
     }

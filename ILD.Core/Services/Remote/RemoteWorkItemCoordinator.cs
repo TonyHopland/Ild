@@ -39,7 +39,9 @@ public sealed class PollCycleResult
     /// <summary>
     /// The work items holding concurrency slots when the pass ended: those with
     /// a run already alive when it started, plus anything it claimed. Ordinal
-    /// ascending, so one pass's holders compare cleanly against the last's.
+    /// ascending purely so the log line reads the same way twice — no consumer
+    /// depends on the order (<c>CapStallReporter</c> compares these as a set,
+    /// deliberately).
     /// </summary>
     public IReadOnlyList<string> SlotHolders { get; init; } = Array.Empty<string>();
 
