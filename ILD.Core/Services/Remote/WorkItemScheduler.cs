@@ -99,9 +99,15 @@ public sealed class WorkItemScheduler : BackgroundService, IWorkItemScheduler
                 {
                     blockedBy = null;
                 }
-                else if (blockedBy == null || !blockedBy.SequenceEqual(result.SlotHolders, StringComparer.Ordinal))
+                else
                 {
-                    _log.LogInformation(
+                    // Entering the state, or a change of who is holding it up,
+                    // is news; the passes in between are detail. One template,
+                    // two levels — an operator greps one shape of line whether
+                    // they want the transitions or the whole stall.
+                    var isNews = blockedBy == null
+                        || !blockedBy.SequenceEqual(result.SlotHolders, StringComparer.Ordinal);
+                    _log.Log(isNews ? LogLevel.Information : LogLevel.Debug,
                         "Scheduler at the concurrency cap ({MaxConcurrent}): Ready work is waiting while slots are held by work items {SlotHolders}",
                         maxConcurrent, string.Join(", ", result.SlotHolders));
                     blockedBy = result.SlotHolders;

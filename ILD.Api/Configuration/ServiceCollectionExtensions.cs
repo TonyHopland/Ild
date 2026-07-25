@@ -122,8 +122,15 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ISchedulerSettingsService, SchedulerSettingsService>();
         services.AddSingleton<WorkItemScheduler>();
         services.AddSingleton<IWorkItemScheduler>(sp => sp.GetRequiredService<WorkItemScheduler>());
-        services.AddHostedService(sp => sp.GetRequiredService<WorkItemScheduler>());
+        // Order matters: hosted services start sequentially, and the reconciler
+        // does its whole job inside StartAsync. Registering it first means the
+        // scheduler's first pass derives its active set from runs the reconciler
+        // has already settled. The other way round, a pass can heartbeat orphan
+        // runs that are about to be cancelled and re-claim an item the server
+        // has already reset, leaving it Running on the server behind a cancelled
+        // local run until the stale reclaimer catches it ~15 minutes later.
         services.AddHostedService<RemoteWorkItemStartupReconciler>();
+        services.AddHostedService(sp => sp.GetRequiredService<WorkItemScheduler>());
 
         // PR heartbeat poller: refreshes the persisted PR snapshot and fires
         // PR-node custom edges on state transitions while a run is parked at a

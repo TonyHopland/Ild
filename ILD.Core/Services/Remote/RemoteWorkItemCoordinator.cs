@@ -86,7 +86,12 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
 
     public async Task<PollCycleResult> RunPollCycleAsync(WorkItemServerOptions opts, int maxConcurrent, bool claimReadyItems = true, CancellationToken ct = default)
     {
-        var activeIds = await GetActiveWorkItemIdsAsync();
+        // The Active Work Item Set, derived fresh from the runs still alive
+        // locally. Deliberately local rather than the server's Running status:
+        // the cap is this instance's own capacity, and reading it off the server
+        // would silently turn it into a global cap shared by every ILD instance
+        // pointed at the same board.
+        var activeIds = await _loopRunStore.GetActiveWorkItemIdsAsync();
         var poll = await _client.PollAsync(opts, activeIds, ct);
 
         var claimed = new List<RemoteWorkItem>();
@@ -238,56 +243,15 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
             // skipped — the next poll will simply not see the item again.
         }
 
-        var slotHolderIds = slotHolders.OrderBy(id => id, StringComparer.Ordinal).ToList();
-        if (blockedByCap)
-        {
-            // Per-pass detail, for when someone is watching a specific stall.
-            // The Information-level line — one per change of state, not one per
-            // pass — is the scheduler's.
-            _logger?.LogDebug(
-                "At the concurrency cap ({MaxConcurrent}) with Ready work waiting — slots held by work items {SlotHolders}",
-                maxConcurrent, string.Join(", ", slotHolderIds));
-        }
-
         return new PollCycleResult
         {
             Claimed = claimed,
             Resumed = resumed,
             EscalatedToHumanFeedback = escalated,
             HasActiveHumanFeedback = hasActiveHumanFeedback,
-            SlotHolders = slotHolderIds,
+            SlotHolders = slotHolders.OrderBy(id => id, StringComparer.Ordinal).ToList(),
             BlockedByCap = blockedByCap,
         };
-    }
-
-    /// <summary>
-    /// The work items this instance is currently working on: one per local run
-    /// the engine still considers alive — Running, or WaitingHuman, which covers
-    /// both a run parked at a Human/PR gate and one halted mid-node by a human
-    /// (<see cref="ILD.Data.Entities.LoopRun.IsHalted"/>). Both hold a slot and
-    /// stay heartbeated. Derived fresh every pass instead of maintained
-    /// incrementally, so a run that ended releases its work item here whatever
-    /// status the item itself landed in, and no terminal path has to remember
-    /// to say so.
-    ///
-    /// This one set is both the concurrency gate and the heartbeat the server's
-    /// stale reclaimer keys off, which is what makes deriving it the whole fix:
-    /// an item whose run died locally stops being heartbeated, so the server
-    /// can reclaim it, and its slot comes back on the very next pass.
-    ///
-    /// Deliberately derived from <em>local</em> runs, not from the server's
-    /// Running status: the cap is this instance's own capacity, and reading it
-    /// off the server would silently turn it into a global cap shared by every
-    /// ILD instance pointed at the same board.
-    /// </summary>
-    private async Task<IReadOnlyList<string>> GetActiveWorkItemIdsAsync()
-    {
-        var runs = await _loopRunStore.GetActiveRunsAsync();
-        return runs
-            .Select(r => r.WorkItemId)
-            .Where(id => !string.IsNullOrWhiteSpace(id))
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
     }
 
     /// <summary>

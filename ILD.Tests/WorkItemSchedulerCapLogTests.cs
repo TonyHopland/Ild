@@ -18,15 +18,17 @@ namespace ILD.Tests;
 public class WorkItemSchedulerCapLogTests
 {
     [Fact]
-    public async Task Repeated_blocked_passes_log_the_cap_once()
+    public async Task Repeated_blocked_passes_announce_the_cap_once_and_then_trace_it()
     {
         var log = new RecordingLogger<WorkItemScheduler>();
 
         await RunPassesAsync(log, passes: 4, _ => Blocked("wi-1", "wi-2"));
 
-        var line = Assert.Single(CapLines(log));
+        var line = Assert.Single(CapLines(log, LogLevel.Information));
         Assert.Contains("wi-1", line, StringComparison.Ordinal);
         Assert.Contains("wi-2", line, StringComparison.Ordinal);
+        // The passes in between are still traceable, just not at Information.
+        Assert.NotEmpty(CapLines(log, LogLevel.Debug));
     }
 
     [Fact]
@@ -40,7 +42,7 @@ public class WorkItemSchedulerCapLogTests
             ? Blocked("wi-1", "wi-2")
             : Blocked("wi-2", "wi-3"));
 
-        Assert.Equal(2, CapLines(log).Count);
+        Assert.Equal(2, CapLines(log, LogLevel.Information).Count);
     }
 
     [Fact]
@@ -53,7 +55,7 @@ public class WorkItemSchedulerCapLogTests
             ? new PollCycleResult()
             : Blocked("wi-1"));
 
-        Assert.Equal(2, CapLines(log).Count);
+        Assert.Equal(2, CapLines(log, LogLevel.Information).Count);
     }
 
     [Fact]
@@ -66,7 +68,8 @@ public class WorkItemSchedulerCapLogTests
         await RunPassesAsync(log, passes: 3,
             _ => new PollCycleResult { SlotHolders = new[] { "wi-1" } });
 
-        Assert.Empty(CapLines(log));
+        Assert.Empty(CapLines(log, LogLevel.Information));
+        Assert.Empty(CapLines(log, LogLevel.Debug));
     }
 
     // ----- plumbing -----
@@ -74,8 +77,11 @@ public class WorkItemSchedulerCapLogTests
     private static PollCycleResult Blocked(params string[] slotHolders)
         => new() { BlockedByCap = true, SlotHolders = slotHolders };
 
-    private static List<string> CapLines(RecordingLogger<WorkItemScheduler> log)
-        => log.Messages.Where(m => m.Contains("cap", StringComparison.OrdinalIgnoreCase)).ToList();
+    private static List<string> CapLines(RecordingLogger<WorkItemScheduler> log, LogLevel level)
+        => log.Messages
+            .Where(m => m.Level == level && m.Text.Contains("cap", StringComparison.OrdinalIgnoreCase))
+            .Select(m => m.Text)
+            .ToList();
 
     /// <summary>
     /// Drives the scheduler until it has run at least <paramref name="passes"/>
@@ -129,25 +135,29 @@ public class WorkItemSchedulerCapLogTests
         Assert.True(winner == done.Task, $"Scheduler ran only {next} of {passes} expected passes");
     }
 
+    /// <summary>
+    /// Records level as well as text: what distinguishes the announcement from
+    /// the trace is the level, and only the Information one is on in production.
+    /// </summary>
     private sealed class RecordingLogger<T> : ILogger<T>
     {
-        private readonly List<string> _messages = new();
+        private readonly List<(LogLevel Level, string Text)> _messages = new();
         private readonly Lock _gate = new();
 
         /// <summary>Snapshot — the scheduler writes from its own loop task.</summary>
-        public IReadOnlyList<string> Messages
+        public IReadOnlyList<(LogLevel Level, string Text)> Messages
         {
             get { lock (_gate) return _messages.ToList(); }
         }
 
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Information;
+        public bool IsEnabled(LogLevel logLevel) => true;
 
         public void Log<TState>(
             LogLevel logLevel, EventId eventId, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter)
         {
-            lock (_gate) _messages.Add(formatter(state, exception));
+            lock (_gate) _messages.Add((logLevel, formatter(state, exception)));
         }
     }
 

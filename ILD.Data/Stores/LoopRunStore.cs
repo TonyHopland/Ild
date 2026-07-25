@@ -81,6 +81,25 @@ public class LoopRunStore : ILoopRunStore
             .Where(r => r.Status == LoopRunStatus.Running || r.Status == LoopRunStatus.WaitingHuman)
             .ToListAsync();
 
+    public async Task<IReadOnlyList<string>> GetActiveWorkItemIdsAsync()
+    {
+        // Projecting the one column the caller wants is also what keeps these
+        // rows out of the scope's change tracker — EF tracks entities in a
+        // result, not scalars. AsNoTracking states the intent and holds the line
+        // if the projection ever grows back into an entity.
+        var ids = await _db.LoopRuns.AsNoTracking()
+            .Where(r => r.Status == LoopRunStatus.Running || r.Status == LoopRunStatus.WaitingHuman)
+            .Select(r => r.WorkItemId)
+            .ToListAsync();
+
+        // Deduplicated client-side: SQL DISTINCT would run under the database
+        // collation, and ordinal is how every caller compares these ids.
+        return ids
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+    }
+
     public async Task<IReadOnlyList<LoopRun>> GetReclaimableRunsAsync(DateTime cutoff, int take = 200)
         => await _db.LoopRuns.AsNoTracking()
             .Where(r => !r.Retain
