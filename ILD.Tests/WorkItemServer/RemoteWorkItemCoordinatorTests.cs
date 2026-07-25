@@ -633,6 +633,35 @@ public sealed class RemoteWorkItemCoordinatorTests
     }
 
     [Fact]
+    public async Task Keeps_the_slot_when_closing_a_finished_item_s_run_fails()
+    {
+        // The run is only over once the write says so. Releasing the slot on
+        // the strength of an attempt would let a failed write hand this pass a
+        // slot whose run is still alive, and the pass would claim past the cap
+        // — the same over-subscription from the other direction.
+        var finished = NewId();
+        var fresh = Item(NewId(), RemoteWorkItemStatus.Ready, "build");
+
+        var (client, _) = ScriptedClient(new RemotePollResponse
+        {
+            ActiveItems = new[] { Item(finished, RemoteWorkItemStatus.Done) },
+            ReadyItems = new[] { fresh },
+        });
+
+        var liveRun = new LoopRun { Id = Guid.NewGuid(), WorkItemId = finished, Status = LoopRunStatus.Running };
+        var runStore = RunStoreWithActive(new List<string> { finished });
+        runStore.Setup(s => s.GetActiveByWorkItemAsync(finished)).ReturnsAsync(liveRun);
+        runStore.Setup(s => s.MarkRunCancelledAsync(liveRun, It.IsAny<string>()))
+                .ThrowsAsync(new InvalidOperationException("database unavailable"));
+
+        var result = await Coordinator(client, runStore).RunPollCycleAsync(Opts, maxConcurrent: 1);
+
+        Assert.Contains(finished, result.SlotHolders);
+        Assert.Empty(result.Claimed);
+        Assert.True(result.BlockedByCap);
+    }
+
+    [Fact]
     public async Task Frees_the_slot_within_the_pass_when_a_claimed_item_fails_to_start()
     {
         // The unwind is the one path that hands a slot back mid-pass, and with

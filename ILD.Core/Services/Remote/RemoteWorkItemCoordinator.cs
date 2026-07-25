@@ -150,15 +150,22 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
         //    between ILD instances makes routine.
         foreach (var w in poll.ActiveItems.Where(w => w.Status == RemoteWorkItemStatus.Done))
         {
-            slotHolders.Remove(w.Id);
             try
             {
                 var run = await _loopRunStore.GetActiveByWorkItemAsync(w.Id);
                 if (run != null)
                     await _loopRunStore.MarkRunCancelledAsync(run, "Work item marked Done on server");
+
+                // Only once the run is provably over. Releasing first would let
+                // a failed write hand this pass a slot whose run is still very
+                // much alive, and the pass would claim past the cap on the
+                // strength of it.
+                slotHolders.Remove(w.Id);
             }
             catch (Exception ex)
             {
+                // Slot kept: the run may still be running. The next pass
+                // re-derives the set and tries again.
                 _logger?.LogWarning(ex,
                     "Failed to close the local run for work item {WorkItemId} after it went Done", w.Id);
             }
