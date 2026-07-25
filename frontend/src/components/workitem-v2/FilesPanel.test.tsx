@@ -261,3 +261,84 @@ describe("FilesPanel", () => {
     expect(screen.getByText("b.ts")).toBeTruthy();
   });
 });
+
+/**
+ * The rendering contract only — which rows the parse produces, and why, is
+ * pinned directly in `utils/__tests__/unifiedDiff.test.ts`. What matters here is
+ * that a segmented row survives the trip into the DOM intact: the marker outside
+ * the spans, the raw patch text reproduced, and the class vocabulary the
+ * stylesheet's two tiers key off.
+ */
+describe("FilesPanel diff rendering", () => {
+  async function showDiff(diff: string) {
+    vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: [{ path: "a.ts", changeStatus: "modified" }],
+    });
+    vi.spyOn(authServices.workItemService, "getFileContent").mockResolvedValue({
+      path: "a.ts",
+      changeStatus: "modified",
+      content: "",
+      diff,
+      isBinary: false,
+    });
+
+    await renderPanel(makeWorkItem());
+    await act(async () => {
+      fireEvent.click(screen.getByText("a.ts"));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Diff" }));
+      await Promise.resolve();
+    });
+    return Array.from(document.querySelectorAll(".wiv2-diff-line"));
+  }
+
+  test("renders a paired line as its marker plus strongly shaded word spans", async () => {
+    const [hunk, del, add] = await showDiff(
+      ["@@ -1 +1 @@", "-const timeout = 30;", "+const timeout = 60;"].join("\n"),
+    );
+
+    const strong = (row: Element) =>
+      Array.from(row.querySelectorAll(".wiv2-diff-seg-add, .wiv2-diff-seg-del")).map(
+        (seg) => seg.textContent,
+      );
+    expect(strong(del)).toEqual(["30"]);
+    expect(strong(add)).toEqual(["60"]);
+
+    // Splitting a line into spans must not change what it reads or copies as:
+    // the marker stays outside them and the payload is reproduced in full.
+    expect(del.textContent).toBe("-const timeout = 30;");
+    expect(add.textContent).toBe("+const timeout = 60;");
+    // The marker is a bare leading text node, not part of any segment span, so
+    // it can never pick up the strong tier.
+    for (const [row, marker] of [
+      [del, "-"],
+      [add, "+"],
+    ] as const) {
+      expect(row.firstChild?.nodeType).toBe(Node.TEXT_NODE);
+      expect(row.firstChild?.textContent).toBe(marker);
+    }
+
+    // The light tier still comes from the row, so both tiers stack.
+    expect(del.className).toBe("wiv2-diff-line wiv2-diff-del");
+    expect(add.className).toBe("wiv2-diff-line wiv2-diff-add");
+    expect(hunk.className).toBe("wiv2-diff-line wiv2-diff-hunk");
+  });
+
+  test("renders an unsegmented line as plain text in its shading class", async () => {
+    // "hello" and "world" share nothing, so the pair keeps the light tier alone
+    // and the row stays a single text node.
+    const rows = await showDiff(["@@ -1 +1 @@", "-hello", "+world"].join("\n"));
+
+    expect(document.querySelectorAll(".wiv2-diff-seg-add, .wiv2-diff-seg-del")).toHaveLength(0);
+    expect(rows.map((row) => row.className)).toEqual([
+      "wiv2-diff-line wiv2-diff-hunk",
+      "wiv2-diff-line wiv2-diff-del",
+      "wiv2-diff-line wiv2-diff-add",
+    ]);
+    expect(screen.getByText("-hello")).toBeTruthy();
+    expect(screen.getByText("+world")).toBeTruthy();
+  });
+});

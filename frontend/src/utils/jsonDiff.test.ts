@@ -1,5 +1,10 @@
 import { describe, expect, test } from "vite-plus/test";
-import { computeLineDiff, computeWordDiff } from "./jsonDiff";
+import {
+  computeLineDiff,
+  computeWordDiff,
+  createWordDiffBudget,
+  isWordDiffBudgetSpent,
+} from "./jsonDiff";
 
 describe("computeLineDiff", () => {
   test("marks identical text as all context", () => {
@@ -210,6 +215,44 @@ describe("computeWordDiff — cost caps", () => {
 
     expect(computeWordDiff(fitsBefore, fitsAfter)).not.toBeNull();
     expect(computeWordDiff(overBefore, overAfter)).toBeNull();
+  });
+});
+
+/**
+ * `isWordDiffBudgetSpent` lets a caller stop walking a document once no further
+ * pair can be segmented. Each case pairs the predicate with what
+ * `computeWordDiff` actually does on that budget, because the failure mode is
+ * the two drifting apart: a predicate that says "spent" too early silently drops
+ * segments a reader should have seen.
+ */
+describe("isWordDiffBudgetSpent", () => {
+  const cheap = ["keep this b", "keep this c"] as const;
+
+  test("a fresh budget is not spent", () => {
+    const budget = createWordDiffBudget();
+    expect(isWordDiffBudgetSpent(budget)).toBe(false);
+    expect(computeWordDiff(...cheap, budget)).not.toBeNull();
+  });
+
+  test("out of pairs is spent, and every further pair is refused", () => {
+    const budget = { cells: 1_000_000, pairs: 0 };
+    expect(isWordDiffBudgetSpent(budget)).toBe(true);
+    expect(computeWordDiff(...cheap, budget)).toBeNull();
+  });
+
+  test("out of cells is spent, because the smallest pair still costs one", () => {
+    const budget = { cells: 0, pairs: 200 };
+    expect(isWordDiffBudgetSpent(budget)).toBe(true);
+    expect(computeWordDiff(...cheap, budget)).toBeNull();
+  });
+
+  test("cells left but not enough for the pair in hand is not spent", () => {
+    // The distinction the predicate exists to draw: this pair is refused, and a
+    // cheaper one after it still fits. Stopping the walk here would lose it.
+    const budget = { cells: 10, pairs: 5 };
+    expect(computeWordDiff("p1 p2 p3 p4 p5", "q1 q2 q3 q4 q5", budget)).toBeNull();
+    expect(isWordDiffBudgetSpent(budget)).toBe(false);
+    expect(computeWordDiff(...cheap, budget)).not.toBeNull();
   });
 });
 

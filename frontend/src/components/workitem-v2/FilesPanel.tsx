@@ -7,6 +7,7 @@ import {
 } from "../../types";
 import { workItemService } from "../../services/auth";
 import { buildFileTree, FileTreeNode } from "../../utils/fileTree";
+import { parseUnifiedDiff } from "../../utils/unifiedDiff";
 
 const STATUS_BADGE: Record<Exclude<WorktreeFileChangeStatus, "none">, string> = {
   added: "A",
@@ -327,22 +328,41 @@ function CodeView({ code }: { code: string }) {
   );
 }
 
+/**
+ * The server's unified diff for one file, shaded in two tiers: a changed line
+ * lightly, so the changed region stays visible in context, and the words that
+ * actually differ from its counterpart strongly, wherever
+ * {@link parseUnifiedDiff} could pair a removed line with the added one that
+ * replaced it. Same two-tier treatment the Loop Editor's save-time review gives
+ * its own diff, over a patch git produced rather than one computed here.
+ */
 function DiffView({ diff }: { diff: string }) {
-  const lines = diff.replace(/\n$/, "").split("\n");
+  const rows = useMemo(() => parseUnifiedDiff(diff), [diff]);
   return (
     <pre className="wiv2-diff">
-      {lines.map((line, i) => (
-        <div key={i} className={`wiv2-diff-line ${diffLineClass(line)}`}>
-          {line.length === 0 ? " " : line}
+      {rows.map((row, i) => (
+        <div key={i} className={`wiv2-diff-line wiv2-diff-${row.kind}`}>
+          {row.segments ? (
+            <>
+              {/* The marker stays outside the segments so it never reads as a
+                  changed word, and the line still copies as raw patch text. */}
+              {row.text.slice(0, 1)}
+              {row.segments.map((segment, segIdx) => (
+                <span
+                  key={segIdx}
+                  className={segment.changed ? `wiv2-diff-seg-${row.kind}` : undefined}
+                >
+                  {segment.text}
+                </span>
+              ))}
+            </>
+          ) : row.text.length === 0 ? (
+            " "
+          ) : (
+            row.text
+          )}
         </div>
       ))}
     </pre>
   );
-}
-
-function diffLineClass(line: string): string {
-  if (line.startsWith("@@")) return "wiv2-diff-hunk";
-  if (line.startsWith("+")) return "wiv2-diff-add";
-  if (line.startsWith("-")) return "wiv2-diff-del";
-  return "wiv2-diff-ctx";
 }
