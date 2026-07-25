@@ -1,4 +1,9 @@
-import { computeWordDiff, createWordDiffBudget, DiffSegment } from "./jsonDiff";
+import {
+  computeWordDiff,
+  createWordDiffBudget,
+  DiffSegment,
+  isWordDiffBudgetSpent,
+} from "./jsonDiff";
 
 /**
  * How a diff row is shaded. The members double as CSS class suffixes at the
@@ -59,9 +64,11 @@ export function parseUnifiedDiff(diff: string): DiffRow[] {
   // "have we reached an @@ yet" rather than the prefix, because inside a hunk
   // "---" is genuine content: a deleted line reading "-- note" arrives with its
   // marker as "--- note".
+  // Classification is already done, so once the budget is spent there is nothing
+  // left for this walk to attach and it can stop where it stands.
   let inHunk = false;
   let i = 0;
-  while (i < rows.length) {
+  while (i < rows.length && !isWordDiffBudgetSpent(budget)) {
     if (rows[i].kind === "hunk") {
       inHunk = true;
       i++;
@@ -71,7 +78,7 @@ export function parseUnifiedDiff(diff: string): DiffRow[] {
       const dels = collectRun(rows, i, "del");
       const adds = collectRun(rows, dels.end, "add");
       const pairs = Math.min(dels.indices.length, adds.indices.length);
-      for (let k = 0; k < pairs; k++) {
+      for (let k = 0; k < pairs && !isWordDiffBudgetSpent(budget); k++) {
         const del = rows[dels.indices[k]];
         const add = rows[adds.indices[k]];
         const words = computeWordDiff(del.text.slice(1), add.text.slice(1), budget);

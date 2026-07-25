@@ -206,7 +206,7 @@ function annotateChangedSegments(lines: DiffLine[]): void {
   // than a single expensive one.
   const budget = createWordDiffBudget();
   let i = 0;
-  while (i < lines.length) {
+  while (i < lines.length && !isWordDiffBudgetSpent(budget)) {
     if (lines[i].type !== "del") {
       i++;
       continue;
@@ -217,7 +217,7 @@ function annotateChangedSegments(lines: DiffLine[]): void {
     while (blockEnd < lines.length && lines[blockEnd].type === "add") blockEnd++;
 
     const pairs = Math.min(addStart - i, blockEnd - addStart);
-    for (let k = 0; k < pairs; k++) {
+    for (let k = 0; k < pairs && !isWordDiffBudgetSpent(budget); k++) {
       const del = lines[i + k];
       const add = lines[addStart + k];
       const words = computeWordDiff(del.text, add.text, budget);
@@ -253,6 +253,22 @@ export interface WordDiffBudget {
 /** A full allowance, for one document about to be rendered. */
 export function createWordDiffBudget(): WordDiffBudget {
   return { cells: MAX_INTRA_LINE_TOTAL_CELLS, pairs: MAX_INTRA_LINE_PAIRS };
+}
+
+/**
+ * Has this budget run out for good? Once either field is gone every further
+ * {@link computeWordDiff} returns null — the smallest possible pair still costs
+ * one cell — so a caller walking a long document can stop hunting for pairs
+ * instead of asking once per pair and being refused each time.
+ *
+ * A budget with cells left but not enough for the pair in hand is *not* spent:
+ * that pair is refused, and a cheaper one later still fits. Callers ask rather
+ * than test the fields so the exhaustion rule lives with the caps it depends on;
+ * skipping the check costs a wasted walk but can never overspend, because
+ * {@link computeWordDiff} debits and enforces the caps itself.
+ */
+export function isWordDiffBudgetSpent(budget: WordDiffBudget): boolean {
+  return budget.pairs <= 0 || budget.cells <= 0;
 }
 
 /**
