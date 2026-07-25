@@ -7,6 +7,7 @@ import {
 } from "../../types";
 import { workItemService } from "../../services/auth";
 import { buildFileTree, FileTreeNode } from "../../utils/fileTree";
+import { computeWordDiff, createWordDiffBudget, DiffSegment } from "../../utils/jsonDiff";
 
 const STATUS_BADGE: Record<Exclude<WorktreeFileChangeStatus, "none">, string> = {
   added: "A",
@@ -327,22 +328,146 @@ function CodeView({ code }: { code: string }) {
   );
 }
 
+/**
+ * The server's unified diff for one file, shaded in two tiers: a changed line
+ * lightly, so the changed region stays visible in context, and the words that
+ * actually differ from its counterpart strongly, whenever the pair was one
+ * {@link computeWordDiff} could work out. Same treatment the Loop Editor's
+ * save-time review gives its own diff, over a patch git produced rather than one
+ * computed here.
+ */
 function DiffView({ diff }: { diff: string }) {
-  const lines = diff.replace(/\n$/, "").split("\n");
+  const rows = useMemo(() => parseUnifiedDiff(diff), [diff]);
   return (
     <pre className="wiv2-diff">
-      {lines.map((line, i) => (
-        <div key={i} className={`wiv2-diff-line ${diffLineClass(line)}`}>
-          {line.length === 0 ? " " : line}
+      {rows.map((row, i) => (
+        <div key={i} className={`wiv2-diff-line wiv2-diff-${row.kind}`}>
+          {row.segments ? (
+            <>
+              {/* The marker stays outside the segments so it never reads as a
+                  changed word, and the line still copies as raw patch text. */}
+              {row.text.slice(0, 1)}
+              {row.segments.map((segment, segIdx) => (
+                <span
+                  key={segIdx}
+                  className={segment.changed ? `wiv2-diff-seg-${row.kind}` : undefined}
+                >
+                  {segment.text}
+                </span>
+              ))}
+            </>
+          ) : row.text.length === 0 ? (
+            " "
+          ) : (
+            row.text
+          )}
         </div>
       ))}
     </pre>
   );
 }
 
-function diffLineClass(line: string): string {
-  if (line.startsWith("@@")) return "wiv2-diff-hunk";
-  if (line.startsWith("+")) return "wiv2-diff-add";
-  if (line.startsWith("-")) return "wiv2-diff-del";
-  return "wiv2-diff-ctx";
+type DiffRowKind = "hunk" | "add" | "del" | "ctx";
+
+/** One rendered row of a unified diff. */
+interface DiffRow {
+  /** The raw diff line, marker included — what renders when `segments` is absent. */
+  text: string;
+  kind: DiffRowKind;
+  /**
+   * Word-level runs of the line's payload (`text` past its marker), present only
+   * on a del/add line {@link parseUnifiedDiff} could pair with a counterpart.
+   * They cover the payload in full, so the renderer can shade every run. Absent
+   * for an unpaired line or a pair {@link computeWordDiff} declined — both
+   * ordinary, and both leave the line to the whole-line treatment.
+   */
+  segments?: DiffSegment[];
+}
+
+/**
+ * Classify every line of a unified diff for shading, and pair up the del/add
+ * runs within each hunk so the words that differ can be emphasised.
+ *
+ * Pairing is index-wise: the k-th removed line of a run against the k-th added
+ * line of the run following it, up to the shorter of the two. Lines past that
+ * have no counterpart to compare against, and borrowing one from a neighbour
+ * would emphasise words that were never edited.
+ */
+function parseUnifiedDiff(diff: string): DiffRow[] {
+  const rows: DiffRow[] = diff
+    .replace(/\n$/, "")
+    .split("\n")
+    .map((text) => ({ text, kind: rowKind(text) }));
+
+  // One allowance for the whole file, spent the way the save-diff path spends
+  // it: the caps exist to keep this pass off the critical path, and a fresh
+  // allowance per pair would let a heavily edited file multiply right through
+  // them.
+  const budget = createWordDiffBudget();
+
+  // Only lines inside a hunk are content. The patch preamble's "--- a/x" and
+  // "+++ b/x" are prefixed like a del/add pair and shade like one (longstanding
+  // behaviour, deliberately left alone), but diffing those two paths against
+  // each other would emphasise nothing a reader cares about. The discriminator
+  // has to be "have we reached an @@ yet" rather than the prefix, because inside
+  // a hunk "---" is genuine content: a deleted line reading "-- note" arrives
+  // with its marker as "--- note".
+  let inHunk = false;
+  let i = 0;
+  while (i < rows.length) {
+    if (rows[i].kind === "hunk") {
+      inHunk = true;
+      i++;
+    } else if (!inHunk || rows[i].kind !== "del") {
+      i++;
+    } else {
+      const dels = collectRun(rows, i, "del");
+      const adds = collectRun(rows, dels.end, "add");
+      const pairs = Math.min(dels.indices.length, adds.indices.length);
+      for (let k = 0; k < pairs; k++) {
+        const del = rows[dels.indices[k]];
+        const add = rows[adds.indices[k]];
+        const words = computeWordDiff(del.text.slice(1), add.text.slice(1), budget);
+        if (words) {
+          del.segments = words.del;
+          add.segments = words.add;
+        }
+      }
+      // The del run is never empty here, so this always advances.
+      i = adds.end;
+    }
+  }
+
+  return rows;
+}
+
+/**
+ * The consecutive `kind` lines starting at `from`, and where that run ends.
+ *
+ * A "\ No newline at end of file" marker is stepped over rather than ending the
+ * run: it annotates the line before it, and in a file with no trailing newline
+ * git puts one squarely between the removed and added sides of the pair most
+ * worth segmenting. Inside a hunk a leading backslash can only be that marker —
+ * real content always carries a +, - or space marker first.
+ */
+function collectRun(
+  rows: DiffRow[],
+  from: number,
+  kind: DiffRowKind,
+): { indices: number[]; end: number } {
+  const indices: number[] = [];
+  let i = from;
+  while (i < rows.length) {
+    if (rows[i].kind === kind) indices.push(i);
+    else if (!rows[i].text.startsWith("\\")) break;
+    i++;
+  }
+  return { indices, end: i };
+}
+
+function rowKind(line: string): DiffRowKind {
+  if (line.startsWith("@@")) return "hunk";
+  if (line.startsWith("+")) return "add";
+  if (line.startsWith("-")) return "del";
+  return "ctx";
 }

@@ -57,6 +57,10 @@ const MAX_LCS_CELLS = 1_000_000;
  *
  * Exceeding any of them is not an error: the pair simply keeps no segments and
  * renders as a plain changed line.
+ *
+ * All three are spent through a single {@link WordDiffBudget} that
+ * {@link computeWordDiff} debits itself, so every caller pairing up a document's
+ * worth of lines gets the same discipline without restating it.
  */
 const MAX_INTRA_LINE_CELLS = 250_000;
 const MAX_INTRA_LINE_TOTAL_CELLS = 1_000_000;
@@ -193,10 +197,9 @@ function annotateChangedSegments(lines: DiffLine[]): void {
   // One allowance for the whole document: the quadratic work every pair does is
   // drawn from the same pot, so a document full of expensive pairs costs no more
   // than a single expensive one.
-  const budget = { cells: MAX_INTRA_LINE_TOTAL_CELLS };
-  let pairsLeft = MAX_INTRA_LINE_PAIRS;
+  const budget = createWordDiffBudget();
   let i = 0;
-  while (i < lines.length && pairsLeft > 0) {
+  while (i < lines.length) {
     if (lines[i].type !== "del") {
       i++;
       continue;
@@ -207,8 +210,7 @@ function annotateChangedSegments(lines: DiffLine[]): void {
     while (blockEnd < lines.length && lines[blockEnd].type === "add") blockEnd++;
 
     const pairs = Math.min(addStart - i, blockEnd - addStart);
-    for (let k = 0; k < pairs && pairsLeft > 0; k++) {
-      pairsLeft--;
+    for (let k = 0; k < pairs; k++) {
       const del = lines[i + k];
       const add = lines[addStart + k];
       const words = computeWordDiff(del.text, add.text, budget);
@@ -228,21 +230,46 @@ export interface WordDiff {
 }
 
 /**
+ * What one document's intra-line pass is allowed to spend, drawn down by each
+ * {@link computeWordDiff} call it is passed to. Both fields are aggregate, not
+ * per pair, which is the whole point: pass one object to every pair of a
+ * document — never a fresh one per pair — and the quadratic work cannot multiply
+ * out no matter how many changed lines that document has.
+ */
+export interface WordDiffBudget {
+  /** Alignment cells left to spend ({@link MAX_INTRA_LINE_TOTAL_CELLS}). */
+  cells: number;
+  /** del/add pairs left to tokenize ({@link MAX_INTRA_LINE_PAIRS}). */
+  pairs: number;
+}
+
+/** A full allowance, for one document about to be rendered. */
+export function createWordDiffBudget(): WordDiffBudget {
+  return { cells: MAX_INTRA_LINE_TOTAL_CELLS, pairs: MAX_INTRA_LINE_PAIRS };
+}
+
+/**
  * Word-level diff of one removed line against the added line that replaced it —
  * the pass that turns "this line changed" into "these words changed", and what
  * {@link computeLineDiff} uses to fill {@link DiffLine.segments}.
  *
  * Returns null when the pair is not worth segmenting, leaving both lines to the
- * whole-line treatment: when its alignment table would exceed
- * {@link MAX_INTRA_LINE_CELLS} or what remains of `budget` (which callers pass
- * to share one allowance across a document), or when the two lines are
- * {@link tooDissimilar}.
+ * whole-line treatment: when the document's `budget` is out of pairs, when the
+ * alignment table would exceed {@link MAX_INTRA_LINE_CELLS} or the cells that
+ * budget has left, or when the two lines are {@link tooDissimilar}. Omitting
+ * `budget` gives this pair an allowance of its own, which is right for a one-off
+ * comparison and wrong for a document — see {@link WordDiffBudget}.
  */
 export function computeWordDiff(
   before: string,
   after: string,
-  budget: { cells: number } = { cells: MAX_INTRA_LINE_TOTAL_CELLS },
+  budget: WordDiffBudget = createWordDiffBudget(),
 ): WordDiff | null {
+  // Charged before the tokenize below, since bounding that linear work for a
+  // document made of thousands of cheap pairs is what this cap is for.
+  if (budget.pairs <= 0) return null;
+  budget.pairs--;
+
   const a = tokenize(before);
   const b = tokenize(after);
 

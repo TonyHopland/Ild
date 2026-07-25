@@ -809,6 +809,8 @@
   padding: 0 0.75rem;
 }
 
+/* Light tier: the whole changed line, so the changed region stays visible in
+   context even when only a few words inside it moved. */
 .wiv2-diff-add {
   background-color: rgba(46, 160, 67, 0.18);
   color: #7ee2a0;
@@ -817,6 +819,24 @@
 .wiv2-diff-del {
   background-color: rgba(224, 82, 82, 0.18);
   color: #f0a0a0;
+}
+
+/* Dark tier: within a changed line, the words that actually differ from the
+   line it was paired with. Roughly 3x the light tier's alpha so the two read as
+   clearly different weights. The text lightens to the same hue's bright tint
+   because the fills stack — a segment sits on its line's tint, not on the panel
+   — and #7ee2a0/#f0a0a0 over the result (rgb(40,111,60) / rgb(151,62,69) on
+   #1e1e30) fall to 3.9:1 and 3.3:1; the tints below hold ~5.1:1. */
+.wiv2-diff-seg-add {
+  background-color: rgba(46, 160, 67, 0.54);
+  color: #c8f5d5;
+  border-radius: 2px;
+}
+
+.wiv2-diff-seg-del {
+  background-color: rgba(224, 82, 82, 0.54);
+  color: #ffd6d6;
+  border-radius: 2px;
 }
 
 .wiv2-diff-hunk {
