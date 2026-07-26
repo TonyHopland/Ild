@@ -806,6 +806,12 @@ public sealed class LoopEngine : ILoopEngine
                         await TrySafe(() => loopRunStore.ReloadAsync(run));
                         run.PrUrl = pc.PrUrl;
                         await loopRunStore.UpdateRunAsync(run);
+                        // The run row is throwaway; the PR is not. Tell the
+                        // work item straight away so the link survives the run
+                        // being reclaimed and this instance being reset — the
+                        // manager re-reports it on read if this write is lost.
+                        await TrySafe(() => workItems.RecordPullRequestAsync(
+                            run.WorkItemId, pc.PrUrl, run.Id, merged: false, createdAt: run.StartedAt ?? run.CreatedAt));
                         break;
                     }
                     case NodeOutcome.WorktreeDestroyed _:

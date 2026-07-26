@@ -175,10 +175,12 @@ public class WorkItemManager : IWorkItemManager
 
     public async Task<WorkItemView?> GetWorkItemAsync(string workItemId)
     {
-        var remote = await _server.GetAsync(await _options.ResolveForWorkItemAsync(workItemId), workItemId);
+        var opts = await _options.ResolveForWorkItemAsync(workItemId);
+        var remote = await _server.GetAsync(opts, workItemId);
         if (remote == null) return null;
 
         var runs = await _loopRunStore.GetAllByWorkItemAsync(workItemId);
+        await RecordUnreportedPullRequestsAsync(opts, remote, runs);
         var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
                        ?? runs.FirstOrDefault(r => r.Status == LoopRunStatus.WaitingHuman)
                        ?? runs.FirstOrDefault(r => r.Status == LoopRunStatus.Failed)
@@ -187,8 +189,7 @@ public class WorkItemManager : IWorkItemManager
                               .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
                               .FirstOrDefault();
 
-        var archivedPrs = await _loopRunStore.GetArchivedPullRequestsAsync(new[] { workItemId });
-        return BuildView(remote, currentRun, runs, archivedPrs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty));
+        return BuildView(remote, currentRun, runs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty));
     }
 
     public async Task<IReadOnlyList<WorkItemView>> ListAsync(
@@ -207,7 +208,6 @@ public class WorkItemManager : IWorkItemManager
 
         var allRuns = await _loopRunStore.GetAllAsync(skip: 0, take: int.MaxValue);
         var runsByWorkItem = allRuns.GroupBy(r => r.WorkItemId).ToDictionary(g => g.Key, g => g.ToList());
-        var archivedByWorkItem = await GetArchivedPrsByWorkItemAsync(remoteList.Select(r => r.Id));
 
         var views = new List<WorkItemView>();
         foreach (var r in remoteList)
@@ -216,6 +216,7 @@ public class WorkItemManager : IWorkItemManager
             var runs = runsByWorkItem.GetValueOrDefault(r.Id) ?? new List<LoopRun>();
             if (runs.Count > 0)
             {
+                await RecordUnreportedPullRequestsAsync(opts, r, runs);
                 currentRun = runs.FirstOrDefault(rn => rn.Status == LoopRunStatus.Running)
                            ?? runs.FirstOrDefault(rn => rn.Status == LoopRunStatus.WaitingHuman)
                            ?? runs.FirstOrDefault(rn => rn.Status == LoopRunStatus.Failed)
@@ -224,7 +225,7 @@ public class WorkItemManager : IWorkItemManager
                                   .OrderByDescending(rn => rn.StartedAt ?? rn.CreatedAt)
                                   .FirstOrDefault();
             }
-            var view = BuildView(r, currentRun, runs, archivedByWorkItem.GetValueOrDefault(r.Id), _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty));
+            var view = BuildView(r, currentRun, runs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty));
             if (createdByLoopRunId.HasValue && view.CreatedByLoopRunId != createdByLoopRunId) continue;
             if (repositoryId.HasValue && view.RepositoryId != repositoryId) continue;
             views.Add(view);
@@ -353,24 +354,10 @@ public class WorkItemManager : IWorkItemManager
     private static LoopRun? LatestRun(IEnumerable<LoopRun> runs)
         => runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).FirstOrDefault();
 
-    /// <summary>
-    /// The archived PRs of the given work items, keyed by work item — the half
-    /// of PR history whose runs are already gone. One query for the whole page:
-    /// the taskboard reads every card at once.
-    /// </summary>
-    private async Task<Dictionary<string, List<WorkItemPullRequestRecord>>> GetArchivedPrsByWorkItemAsync(IEnumerable<string> workItemIds)
-    {
-        var archived = await _loopRunStore.GetArchivedPullRequestsAsync(workItemIds.ToList());
-        return archived
-            .GroupBy(p => p.WorkItemId, StringComparer.Ordinal)
-            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
-    }
-
     private static WorkItemView BuildView(
         RemoteWorkItem remote,
         LoopRun? run,
         IReadOnlyList<LoopRun> runs,
-        IReadOnlyList<WorkItemPullRequestRecord>? archivedPrs,
         bool isPreviewRunning)
     {
         var timingRun = LatestRun(runs);
@@ -403,46 +390,45 @@ public class WorkItemManager : IWorkItemManager
             CurrentNodeLabel = ResolveCurrentNodeLabel(run),
             IsPreviewRunning = isPreviewRunning,
             PrStatus = ResolvePrStatus(run?.PrSnapshot),
-            PullRequests = BuildPrHistory(runs, archivedPrs),
+            PullRequests = BuildPrHistory(remote, runs),
         };
     }
 
     /// <summary>
-    /// One observation of a PR on a work item, from a live run or from the
-    /// archived record left behind when that run was deleted. The two sources
-    /// are merged into a single sequence so neither the ordering nor the dedup
-    /// rule has to know which of them an entry came from.
+    /// One observation of a PR on a work item: what the server holds for the
+    /// item, or what a live run still carries. Both collapse into this shape so
+    /// the dedup and ordering rules never have to ask where an entry came from.
     /// </summary>
     private readonly record struct PrSighting(
         string Url,
         Guid? RunId,
         bool Merged,
         string? Snapshot,
-        DateTime FirstSeenAt,
-        DateTime LastSeenAt);
+        DateTime CreatedAt);
 
     /// <summary>
-    /// Every PR ever opened against the work item: the PRs on its live runs plus
-    /// the ones archived when their runs were deleted, deduplicated by URL and
+    /// Every PR ever opened against the work item, deduplicated by URL and
     /// ordered newest run first — the order the detail dialog renders, so the PR
     /// a human most likely wants is at the top.
     ///
-    /// ADR-0008 gives each run at most one PR, so an item's history is one entry
-    /// per distinct URL across its runs. A URL seen on several runs (a retry
-    /// pointed back at its predecessor's PR) collapses to one entry attributed
-    /// to the newest of them; a run id that no longer resolves to a live run is
-    /// dropped, so an entry never links to a run that has been reclaimed.
+    /// The PRs the <b>server</b> holds are the durable record: they survive the
+    /// run being reclaimed and this ILD instance being reset. The PRs on live
+    /// runs are unioned in so a PR shows the moment a run has it, even before
+    /// the server has been told (see
+    /// <see cref="RecordUnreportedPullRequestsAsync"/>) — and because only a
+    /// live run carries the throwaway state a server record has no business
+    /// holding: the heartbeat's badge snapshot, and a run id that still
+    /// resolves to something. ADR-0008 gives each run at most one PR, so a URL
+    /// seen on several runs (a retry pointed back at its predecessor's PR)
+    /// collapses to one entry attributed to the newest of them.
     /// </summary>
-    private static IReadOnlyList<WorkItemPullRequest> BuildPrHistory(
-        IReadOnlyList<LoopRun> runs,
-        IReadOnlyList<WorkItemPullRequestRecord>? archivedPrs)
+    private static IReadOnlyList<WorkItemPullRequest> BuildPrHistory(RemoteWorkItem remote, IReadOnlyList<LoopRun> runs)
     {
         var sightings = runs
             .Where(r => !string.IsNullOrWhiteSpace(r.PrUrl))
-            .Select(r => new PrSighting(r.PrUrl!, r.Id, r.IsPrMerged, r.PrSnapshot, r.StartedAt ?? r.CreatedAt, r.StartedAt ?? r.CreatedAt))
-            .Concat((archivedPrs ?? Array.Empty<WorkItemPullRequestRecord>())
-                .Select(p => new PrSighting(p.Url, p.LoopRunId, p.Merged, p.PrSnapshot, p.FirstSeenAt, p.LastSeenAt)))
-            .OrderByDescending(s => s.LastSeenAt)
+            .Select(r => new PrSighting(r.PrUrl!, r.Id, r.IsPrMerged, r.PrSnapshot, RunPrCreatedAt(r)))
+            .Concat(remote.PullRequests.Select(p => new PrSighting(p.Url, p.LoopRunId, p.Merged, null, p.CreatedAt)))
+            .OrderByDescending(s => s.CreatedAt)
             .ToList();
         if (sightings.Count == 0) return Array.Empty<WorkItemPullRequest>();
 
@@ -455,13 +441,52 @@ public class WorkItemManager : IWorkItemManager
             .GroupBy(s => s.Url, StringComparer.Ordinal)
             .Select(g => new WorkItemPullRequest(
                 g.Key,
-                g.First().RunId is { } runId && liveRunIds.Contains(runId) ? runId : null,
-                // Merge is monotonic: a later run pointed at the same PR never
-                // un-merges it.
+                // Provenance is only worth reporting while the run is still
+                // there to link to; a reclaimed run leaves the entry standing
+                // on its own.
+                g.Select(s => s.RunId).FirstOrDefault(id => id is { } runId && liveRunIds.Contains(runId)),
+                // Merge is monotonic: a later sighting never un-merges a PR.
                 g.Any(s => s.Merged),
                 ResolvePrStatus(g.FirstOrDefault(s => !string.IsNullOrEmpty(s.Snapshot)).Snapshot),
-                g.Min(s => s.FirstSeenAt)))
+                g.Min(s => s.CreatedAt)))
             .ToList();
+    }
+
+    /// <summary>
+    /// When a run's PR entered the work item's history. The run's start, not the
+    /// PR's own creation time: it is what orders history, it is stable across
+    /// re-reads, and it is all the run row knows.
+    /// </summary>
+    private static DateTime RunPrCreatedAt(LoopRun run) => run.StartedAt ?? run.CreatedAt;
+
+    /// <summary>
+    /// Tell the server about any PR a run carries that the work item does not
+    /// already record — the backstop behind the write at PR creation
+    /// (<see cref="RecordPullRequestAsync"/>). It carries PRs opened before this
+    /// instance knew to report them, and re-reports one whose write was lost to
+    /// a restart or an unreachable server; both are one read away from being
+    /// durable again. Also promotes a PR the run has since seen merged.
+    ///
+    /// Best-effort by construction: the view is built from the union of run and
+    /// server state either way, so a failed write costs the caller nothing and
+    /// the next read tries again.
+    /// </summary>
+    private async Task RecordUnreportedPullRequestsAsync(WorkItemServerOptions opts, RemoteWorkItem remote, IReadOnlyList<LoopRun> runs)
+    {
+        foreach (var run in runs)
+        {
+            if (string.IsNullOrWhiteSpace(run.PrUrl)) continue;
+
+            var recorded = remote.PullRequests.FirstOrDefault(p => string.Equals(p.Url, run.PrUrl, StringComparison.Ordinal));
+            if (recorded is not null && (recorded.Merged || !run.IsPrMerged)) continue;
+
+            try
+            {
+                await _server.RecordPullRequestAsync(opts, remote.Id, run.PrUrl, run.Id, run.IsPrMerged, RunPrCreatedAt(run));
+            }
+            catch (HttpRequestException) { /* Next read retries. */ }
+            catch (InvalidOperationException) { /* No remote — local only. */ }
+        }
     }
 
     // The poller persists the snapshot with the web (camelCase) options, so
@@ -722,7 +747,6 @@ public class WorkItemManager : IWorkItemManager
         if (ids.Count == 0) return Array.Empty<WorkItemView>();
 
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
-        var archivedByWorkItem = await GetArchivedPrsByWorkItemAsync(ids);
         var views = new List<WorkItemView>();
         foreach (var id in ids)
         {
@@ -732,7 +756,7 @@ public class WorkItemManager : IWorkItemManager
                 var runs = await _loopRunStore.GetAllByWorkItemAsync(id);
                 var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
                                ?? runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).FirstOrDefault();
-                views.Add(BuildView(remote, currentRun, runs, archivedByWorkItem.GetValueOrDefault(id), _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty)));
+                views.Add(BuildView(remote, currentRun, runs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty)));
             }
         }
         return views;
@@ -743,14 +767,13 @@ public class WorkItemManager : IWorkItemManager
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
         var all = await _server.ListAsync(opts, status: null, tags: null);
         var dependents = all.Where(w => w.Dependencies.Contains(workItemId)).ToList();
-        var archivedByWorkItem = await GetArchivedPrsByWorkItemAsync(dependents.Select(w => w.Id));
         var views = new List<WorkItemView>();
         foreach (var candidate in dependents)
         {
             var runs = await _loopRunStore.GetAllByWorkItemAsync(candidate.Id);
             var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
                            ?? runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).FirstOrDefault();
-            views.Add(BuildView(candidate, currentRun, runs, archivedByWorkItem.GetValueOrDefault(candidate.Id), _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty)));
+            views.Add(BuildView(candidate, currentRun, runs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty)));
         }
         return views;
     }
@@ -800,11 +823,32 @@ public class WorkItemManager : IWorkItemManager
     public async Task<bool> LinkPullRequestAsync(string workItemId, string prUrl)
     {
         var run = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
-        if (run == null) return false;
-        run.PrUrl = prUrl;
-        run.UpdatedAt = DateTime.UtcNow;
-        await _loopRunStore.UpdateRunAsync(run);
-        return true;
+
+        // The link belongs to the work item, so it is recorded even when there
+        // is no run to hang it on — a finished item can still have its PR
+        // linked by hand. When there is a current run, it also gets the URL:
+        // that is what the PR heartbeat and the PR node's re-visit path read.
+        if (run != null)
+        {
+            run.PrUrl = prUrl;
+            run.UpdatedAt = DateTime.UtcNow;
+            await _loopRunStore.UpdateRunAsync(run);
+        }
+
+        return await RecordPullRequestAsync(workItemId, prUrl, run?.Id, merged: false,
+            createdAt: run is null ? null : RunPrCreatedAt(run));
+    }
+
+    public async Task<bool> RecordPullRequestAsync(string workItemId, string prUrl, Guid? loopRunId, bool merged = false, DateTime? createdAt = null)
+    {
+        if (string.IsNullOrWhiteSpace(prUrl)) return false;
+
+        try
+        {
+            var opts = await _options.ResolveForWorkItemAsync(workItemId);
+            return await _server.RecordPullRequestAsync(opts, workItemId, prUrl, loopRunId, merged, createdAt);
+        }
+        catch (InvalidOperationException) { return false; /* No remote — local only. */ }
     }
 
     public async Task<bool> CleanupToDoneAsync(string workItemId)
@@ -1110,12 +1154,6 @@ public class WorkItemManager : IWorkItemManager
                 continue;
             await _loopRunStore.DeleteAsync(run.Id);
         }
-
-        // The PR archive outlives runs by design, so it has to be dropped
-        // explicitly here — including the records the deletions above just
-        // wrote. Nothing is left holding a link to an item that no longer
-        // exists.
-        await _loopRunStore.DeleteArchivedPullRequestsAsync(workItemId);
         return true;
     }
 

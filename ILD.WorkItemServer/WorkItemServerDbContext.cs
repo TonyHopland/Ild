@@ -24,6 +24,9 @@ public sealed class WorkItemServerDbContext : DbContext
             b.Property(w => w.AiProviderOverride).HasConversion<int>();
             // Description is intentionally unbounded — map to PostgreSQL text.
             b.Property(w => w.Description).HasColumnType("text");
+            // Items that predate the column read as "no PRs recorded yet"
+            // rather than as an empty string the JSON reader has to special-case.
+            b.Property(w => w.PullRequestsJson).HasDefaultValue("[]");
         });
     }
 }

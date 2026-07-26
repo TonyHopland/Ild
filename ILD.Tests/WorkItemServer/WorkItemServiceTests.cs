@@ -661,6 +661,92 @@ public class WorkItemServiceTests : IAsyncLifetime
         Assert.Equal(WorkItemStatus.Ready, (await _svc.GetAsync(child.Id))!.Status);
     }
 
+    // ──────────────────────────────────────────────────────────────────
+    // Pull requests (WI-203). A PR touches the repository and is part of the
+    // work item, so the server holds it — unlike the ILD instance's worktree,
+    // branch and PR snapshot, which are throwaway and go with the run.
+    // ──────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task RecordPullRequest_puts_the_PR_on_the_work_item()
+    {
+        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
+        var runId = Guid.NewGuid();
+
+        Assert.True(await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest
+        {
+            Url = "https://forgejo/repo/pulls/1",
+            LoopRunId = runId,
+            CreatedAt = new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc),
+        }));
+
+        var pr = Assert.Single((await _svc.GetAsync(wi.Id))!.PullRequests);
+        Assert.Equal("https://forgejo/repo/pulls/1", pr.Url);
+        Assert.Equal(runId, pr.LoopRunId);
+        Assert.False(pr.Merged);
+        Assert.Equal(new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc), pr.CreatedAt);
+        // Recording a PR is not a lifecycle event.
+        Assert.Equal(WorkItemStatus.Backlog, (await _svc.GetAsync(wi.Id))!.Status);
+    }
+
+    [Fact]
+    public async Task RecordPullRequest_is_keyed_on_the_url_and_never_unmerges()
+    {
+        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
+        const string url = "https://forgejo/repo/pulls/1";
+        var opened = new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        // Opened, then reported merged, then re-reported by a later run that
+        // has no idea it was merged (a retry pointed back at the same PR).
+        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = url, CreatedAt = opened });
+        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = url, Merged = true, CreatedAt = opened });
+        var laterRun = Guid.NewGuid();
+        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest
+        {
+            Url = url,
+            LoopRunId = laterRun,
+            CreatedAt = opened.AddHours(2),
+        });
+
+        var pr = Assert.Single((await _svc.GetAsync(wi.Id))!.PullRequests);
+        Assert.True(pr.Merged);
+        Assert.Equal(laterRun, pr.LoopRunId);
+        // The item has had this PR since the first run opened it.
+        Assert.Equal(opened, pr.CreatedAt);
+    }
+
+    [Fact]
+    public async Task Pull_requests_come_back_newest_first_whatever_order_they_arrive_in()
+    {
+        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
+        var day = new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/2", CreatedAt = day.AddHours(2) });
+        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/1", CreatedAt = day.AddHours(1) });
+        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/3", CreatedAt = day.AddHours(3) });
+
+        Assert.Equal(
+            new[] { "pulls/3", "pulls/2", "pulls/1" },
+            (await _svc.GetAsync(wi.Id))!.PullRequests.Select(p => p.Url));
+    }
+
+    [Fact]
+    public async Task RecordPullRequest_reports_an_unknown_work_item()
+    {
+        Assert.False(await _svc.RecordPullRequestAsync("WI-nope", new RecordPullRequestRequest { Url = "pulls/1" }));
+    }
+
+    [Fact]
+    public async Task Deleting_a_work_item_takes_its_pull_requests_with_it()
+    {
+        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
+        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/1" });
+
+        Assert.True(await _svc.DeleteAsync(wi.Id));
+
+        Assert.Null(await _svc.GetAsync(wi.Id));
+    }
+
     [Fact]
     public async Task ListAsync_filters_by_status_and_tags()
     {

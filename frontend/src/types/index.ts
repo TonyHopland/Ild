@@ -101,8 +101,9 @@ export interface WorkItem {
   /**
    * Every PR ever opened against this item, newest first and deduplicated by
    * URL. Unlike {@link prUrl} — which only shows the *current* run's PR and so
-   * empties out once the run finishes — this outlives the run, the move to
-   * Done, and the retention sweep of the run row (WI-203).
+   * empties out once the run finishes — these belong to the work item itself
+   * and are held by the WorkItem server, so they outlive the run, the move to
+   * Done, the retention sweep of the run row, and the ILD instance (WI-203).
    */
   pullRequests?: WorkItemPullRequest[] | null;
 }
@@ -117,7 +118,10 @@ export interface WorkItemPullRequest {
   /** The run that opened it; null once that run has been reclaimed. */
   runId: string | null;
   merged: boolean;
-  /** Last known badge state, when a PR snapshot was ever captured. */
+  /**
+   * Last known badge state. Read from the run's PR snapshot, which is
+   * ILD-local and throwaway — null once that run is gone.
+   */
   status?: WorkItemPrStatus | null;
   createdAt?: string | null;
 }

@@ -729,15 +729,10 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
   const isLoopTag = makeLoopTagMatcher(detail.templates.map((t) => t.name));
   const fmt = (d: string | null) => (d ? new Date(d).toLocaleString() : "—");
 
-  // Every PR ever opened against the item, newest first. prUrl only ever holds
-  // the *current* run's PR, so it empties out the moment the run finishes and an
-  // item that had several runs could never show more than one (WI-203) — it is
-  // kept here only as the fallback for a payload without the history field.
-  const prHistory: WorkItemPullRequest[] = workItem.pullRequests?.length
-    ? workItem.pullRequests
-    : workItem.prUrl
-      ? [{ url: workItem.prUrl, runId: workItem.currentLoopRunId ?? null, merged: false }]
-      : [];
+  // Every PR ever opened against the item, newest first, and a superset of
+  // prUrl — which only ever holds the *current* run's PR, so it empties out the
+  // moment the run finishes and could never show more than one (WI-203).
+  const prHistory: WorkItemPullRequest[] = workItem.pullRequests ?? [];
 
   // While the item is mid run, surface the pinned loop's name and the node the
   // engine is currently on. Both come from the current run's detail.

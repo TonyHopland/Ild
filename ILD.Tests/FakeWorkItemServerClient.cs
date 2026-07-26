@@ -37,6 +37,9 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         Conversation = dto.Conversation
             .Select(m => new RemoteConversationMessage(m.Role, m.Content, m.Timestamp, m.Name))
             .ToList(),
+        PullRequests = dto.PullRequests
+            .Select(p => new RemoteWorkItemPullRequest(p.Url, p.LoopRunId, p.Merged, p.CreatedAt))
+            .ToList(),
         HumanFeedbackActions = dto.HumanFeedbackActions,
         CreatedByLoopRunId = dto.CreatedByLoopRunId,
         CreatedByChatSessionId = dto.CreatedByChatSessionId,
@@ -114,6 +117,15 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
 
     public Task<bool> AppendConversationAsync(WorkItemServerOptions opts, string id, string role, string content, string? name, CancellationToken ct = default)
         => _svc.AppendConversationAsync(id, role, content, name, ct);
+
+    public Task<bool> RecordPullRequestAsync(WorkItemServerOptions opts, string id, string url, Guid? loopRunId, bool merged, DateTime? createdAt, CancellationToken ct = default)
+        => _svc.RecordPullRequestAsync(id, new RecordPullRequestRequest
+        {
+            Url = url,
+            LoopRunId = loopRunId,
+            Merged = merged,
+            CreatedAt = createdAt,
+        }, ct);
 
     public async Task<RemotePollResponse> PollAsync(WorkItemServerOptions opts, IReadOnlyList<string> activeIds, CancellationToken ct = default)
     {

@@ -41,6 +41,14 @@ public class WorkItem
     /// <summary>JSON-serialized array of <see cref="ConversationMessage"/>.</summary>
     public string ConversationJson { get; set; } = "[]";
 
+    /// <summary>
+    /// JSON-serialized array of <see cref="WorkItemPullRequest"/> — every PR
+    /// ever opened against this item, deduplicated by URL. Lives here rather
+    /// than on the ILD instance's loop runs so it survives the run being
+    /// reclaimed and the ILD instance being reset (WI-203).
+    /// </summary>
+    public string PullRequestsJson { get; set; } = "[]";
+
     [MaxLength(2048)]
     public string? HumanFeedbackActions { get; set; }
 

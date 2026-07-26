@@ -865,46 +865,6 @@ namespace ILD.Data.Migrations
                     b.ToTable("Users");
                 });
 
-            modelBuilder.Entity("ILD.Data.Entities.WorkItemPullRequestRecord", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("FirstSeenAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime>("LastSeenAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid?>("LoopRunId")
-                        .HasColumnType("uuid");
-
-                    b.Property<bool>("Merged")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("PrSnapshot")
-                        .HasColumnType("text");
-
-                    b.Property<string>("Url")
-                        .IsRequired()
-                        .HasMaxLength(2048)
-                        .HasColumnType("character varying(2048)");
-
-                    b.Property<string>("WorkItemId")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("WorkItemId");
-
-                    b.HasIndex("WorkItemId", "Url")
-                        .IsUnique();
-
-                    b.ToTable("WorkItemPullRequestRecords");
-                });
-
             modelBuilder.Entity("ILD.Data.Entities.AdapterSessionSnapshot", b =>
                 {
                     b.HasOne("ILD.Data.Entities.ChatSession", "ChatSession")

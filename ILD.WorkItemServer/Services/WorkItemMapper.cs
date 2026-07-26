@@ -25,6 +25,21 @@ internal static class WorkItemMapper
     public static List<ConversationMessage> ReadConversation(WorkItem w)
         => JsonSerializer.Deserialize<List<ConversationMessage>>(w.ConversationJson, JsonOpts) ?? new();
 
+    /// <summary>
+    /// The item's PRs, newest first — the order clients render, and the reason
+    /// nothing else has to sort them. Stored in observation order; a legacy row
+    /// predating the column reads as empty rather than throwing.
+    /// </summary>
+    public static List<WorkItemPullRequest> ReadPullRequests(WorkItem w)
+    {
+        var prs = string.IsNullOrEmpty(w.PullRequestsJson)
+            ? null
+            : JsonSerializer.Deserialize<List<WorkItemPullRequest>>(w.PullRequestsJson, JsonOpts);
+        prs ??= new();
+        prs.Sort((a, b) => b.CreatedAt.CompareTo(a.CreatedAt));
+        return prs;
+    }
+
     public static void WriteTags(WorkItem w, IReadOnlyList<string> tags)
         => w.TagsJson = JsonSerializer.Serialize(tags, JsonOpts);
 
@@ -33,6 +48,9 @@ internal static class WorkItemMapper
 
     public static void WriteConversation(WorkItem w, IReadOnlyList<ConversationMessage> messages)
         => w.ConversationJson = JsonSerializer.Serialize(messages, JsonOpts);
+
+    public static void WritePullRequests(WorkItem w, IReadOnlyList<WorkItemPullRequest> prs)
+        => w.PullRequestsJson = JsonSerializer.Serialize(prs, JsonOpts);
 
     public static WorkItemDto ToDto(WorkItem w) => new()
     {
@@ -47,6 +65,7 @@ internal static class WorkItemMapper
         Tags = ReadTags(w),
         Dependencies = ReadDependencies(w),
         Conversation = ReadConversation(w),
+        PullRequests = ReadPullRequests(w),
         HumanFeedbackActions = w.HumanFeedbackActions,
         CreatedByLoopRunId = w.CreatedByLoopRunId,
         CreatedByChatSessionId = w.CreatedByChatSessionId,

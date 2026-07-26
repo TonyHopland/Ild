@@ -21,7 +21,6 @@ public class AppDbContext : DbContext
     public DbSet<LoopRun> LoopRuns => Set<LoopRun>();
     public DbSet<LoopRunNode> LoopRunNodes => Set<LoopRunNode>();
     public DbSet<LoopRunAnalyticsBucket> LoopRunAnalyticsBuckets => Set<LoopRunAnalyticsBucket>();
-    public DbSet<WorkItemPullRequestRecord> WorkItemPullRequestRecords => Set<WorkItemPullRequestRecord>();
     public DbSet<AdapterSessionSnapshot> AdapterSessionSnapshots => Set<AdapterSessionSnapshot>();
     public DbSet<LoopRunSessionBinding> LoopRunSessionBindings => Set<LoopRunSessionBinding>();
     public DbSet<LoopRunVariable> LoopRunVariables => Set<LoopRunVariable>();
@@ -147,13 +146,6 @@ public class AppDbContext : DbContext
         {
             e.HasIndex(b => new { b.BucketDate, b.LoopTemplateId, b.AiProvider }).IsUnique();
             e.HasIndex(b => b.BucketDate);
-        });
-
-        modelBuilder.Entity<WorkItemPullRequestRecord>(e =>
-        {
-            // One record per PR per work item — the key the archive upserts on.
-            e.HasIndex(p => new { p.WorkItemId, p.Url }).IsUnique();
-            e.HasIndex(p => p.WorkItemId);
         });
 
         modelBuilder.Entity<AdapterSessionSnapshot>(e =>

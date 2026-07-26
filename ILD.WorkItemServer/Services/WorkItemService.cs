@@ -27,6 +27,20 @@ public interface IWorkItemService
     /// </summary>
     Task<bool> AppendConversationAsync(string id, string role, string content, string? name, CancellationToken ct = default);
 
+    /// <summary>
+    /// Record a pull request against a work item, keyed by URL: a URL the item
+    /// already knows is updated in place rather than duplicated, so a client may
+    /// report the same PR as often as it likes (on creation, on merge, or while
+    /// reconciling what its runs still hold). Returns false when no such work
+    /// item exists.
+    ///
+    /// This is the durable home of a work item's PRs. A run's worktree, branch
+    /// and PR snapshot are throwaway ILD-local state, but the PR itself touches
+    /// the repository and belongs to the item — it has to outlive the run, and
+    /// the ILD instance (WI-203).
+    /// </summary>
+    Task<bool> RecordPullRequestAsync(string id, RecordPullRequestRequest req, CancellationToken ct = default);
+
     Task<PollResponse> PollAsync(IReadOnlyList<string> activeIds, CancellationToken ct = default);
     Task<int> ReclaimStaleAsync(TimeSpan timeout, CancellationToken ct = default);
 
@@ -400,6 +414,45 @@ public sealed class WorkItemService : IWorkItemService
         WorkItemMapper.WriteConversation(w, msgs);
         // Status is intentionally left untouched — an AI turn is dialogue, not
         // a lifecycle transition.
+        w.UpdatedAt = now;
+        await _db.SaveChangesAsync(ct);
+        return true;
+    }
+
+    public async Task<bool> RecordPullRequestAsync(string id, RecordPullRequestRequest req, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(req.Url)) return false;
+
+        var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (w == null) return false;
+
+        var now = _clock.GetUtcNow().UtcDateTime;
+        var prs = WorkItemMapper.ReadPullRequests(w);
+        var existing = prs.FindIndex(p => string.Equals(p.Url, req.Url, StringComparison.Ordinal));
+
+        if (existing >= 0)
+        {
+            var was = prs[existing];
+            // Merge is one-way and the created time is the earliest sighting:
+            // re-reporting a PR can add to what the item knows, never subtract.
+            var updated = was with
+            {
+                LoopRunId = req.LoopRunId ?? was.LoopRunId,
+                Merged = was.Merged || req.Merged,
+                CreatedAt = req.CreatedAt is { } at && at < was.CreatedAt ? at : was.CreatedAt,
+            };
+            if (updated == was) return true;
+            prs[existing] = updated;
+        }
+        else
+        {
+            prs.Add(new WorkItemPullRequest(req.Url, req.LoopRunId, req.Merged, req.CreatedAt ?? now));
+        }
+
+        WorkItemMapper.WritePullRequests(w, prs);
+        // Status is deliberately untouched — linking a PR is a record of what
+        // the item produced, not a lifecycle transition. UpdatedAt moves so
+        // clients ordering by it still see the change.
         w.UpdatedAt = now;
         await _db.SaveChangesAsync(ct);
         return true;

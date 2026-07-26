@@ -15,6 +15,9 @@ public sealed class WorkItemDto
     public IReadOnlyList<string> Tags { get; set; } = Array.Empty<string>();
     public IReadOnlyList<string> Dependencies { get; set; } = Array.Empty<string>();
     public IReadOnlyList<ConversationMessage> Conversation { get; set; } = Array.Empty<ConversationMessage>();
+
+    /// <summary>Every PR opened against this item, newest first.</summary>
+    public IReadOnlyList<WorkItemPullRequest> PullRequests { get; set; } = Array.Empty<WorkItemPullRequest>();
     public string? HumanFeedbackActions { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? CreatedByChatSessionId { get; set; }
@@ -79,6 +82,24 @@ public sealed class AppendConversationRequest
     public string? Role { get; set; }
     public string? Content { get; set; }
     public string? Name { get; set; }
+}
+
+public sealed class RecordPullRequestRequest
+{
+    public string Url { get; set; } = string.Empty;
+
+    /// <summary>The ILD loop run that opened the PR, when it came from one.</summary>
+    public Guid? LoopRunId { get; set; }
+
+    /// <summary>Whether the caller has observed the PR merged. Never un-merges an entry.</summary>
+    public bool Merged { get; set; }
+
+    /// <summary>
+    /// When the PR entered the item's history — the start of the run that
+    /// opened it, so history keeps the runs' order however late the client gets
+    /// around to reporting it. Defaults to the server clock.
+    /// </summary>
+    public DateTime? CreatedAt { get; set; }
 }
 
 public sealed class AddDependencyRequest

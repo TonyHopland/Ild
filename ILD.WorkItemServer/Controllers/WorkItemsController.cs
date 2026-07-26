@@ -99,6 +99,13 @@ public sealed class WorkItemsController : ControllerBase
         return await _svc.AppendConversationAsync(id, role, req.Content, req.Name, ct) ? NoContent() : NotFound();
     }
 
+    [HttpPost("{id}/pull-requests")]
+    public async Task<IActionResult> RecordPullRequest(string id, [FromBody] RecordPullRequestRequest req, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(req.Url)) return BadRequest("Url is required");
+        return await _svc.RecordPullRequestAsync(id, req, ct) ? NoContent() : NotFound();
+    }
+
     private static IReadOnlyList<string> ParseIdList(string? csv)
     {
         if (string.IsNullOrWhiteSpace(csv)) return Array.Empty<string>();

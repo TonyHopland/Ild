@@ -51,15 +51,20 @@ public class WorkItemManagerTests
         return (runId, version.Id);
     }
 
-    private static (WorkItemManager mgr, TestDb db, Guid repoId, Mock<IRepositoryManager> repoMgr, Mock<IEventLogService> eventLog) Setup()
-        => SetupCore(out _);
+    /// <param name="server">
+    /// A WorkItemServer harness to attach to instead of standing up a fresh
+    /// one — for tests that outlive the ILD-local database.
+    /// </param>
+    private static (WorkItemManager mgr, TestDb db, Guid repoId, Mock<IRepositoryManager> repoMgr, Mock<IEventLogService> eventLog) Setup(
+        FakeWorkItemServerHarness? server = null)
+        => SetupCore(out _, server: server);
 
     private static (WorkItemManager mgr, TestDb db, Guid repoId, Mock<IRepositoryManager> repoMgr, Mock<IEventLogService> eventLog) SetupWithEngine(out Mock<ILoopEngine> engine)
         => SetupCore(out engine);
 
-    private static (WorkItemManager mgr, TestDb db, Guid repoId, Mock<IRepositoryManager> repoMgr, Mock<IEventLogService> eventLog) SetupCore(out Mock<ILoopEngine> engine, Mock<IRemoteProvider>? remoteProvider = null)
+    private static (WorkItemManager mgr, TestDb db, Guid repoId, Mock<IRepositoryManager> repoMgr, Mock<IEventLogService> eventLog) SetupCore(out Mock<ILoopEngine> engine, Mock<IRemoteProvider>? remoteProvider = null, FakeWorkItemServerHarness? server = null)
     {
-        var db = new TestDb();
+        var db = new TestDb(server);
         var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
         var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/repo.git" };
         db.Context.RemoteProviders.Add(remote);
@@ -1858,5 +1863,83 @@ public class WorkItemManagerTests
         Assert.Equal(
             new[] { "https://forgejo/repo/pulls/61", "https://forgejo/repo/pulls/60" },
             after.PullRequests.Select(p => p.Url));
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // PR history lives on the work item, i.e. on the WorkItem server — not in
+    // this ILD instance's database. A worktree, a branch and a PR snapshot are
+    // throwaway; the PR touches the repository and is part of the work item.
+    // ──────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task PrHistory_survives_the_ILD_instance_being_reset()
+    {
+        using var server = new FakeWorkItemServerHarness();
+        var (mgr, db, repoId, _, _) = Setup(server);
+        var ltvId = SeedTemplateVersion(db);
+
+        var id = await mgr.CreateWorkItemAsync("outlives its instance", "", repoId);
+        var runId = SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/77", LoopRunStatus.Running, DateTime.UtcNow.AddHours(-1));
+        await CompleteRunAndFinishItemAsync(mgr, db, runId, id);
+        Assert.Equal(new[] { "https://forgejo/repo/pulls/77" }, (await mgr.GetWorkItemAsync(id))!.PullRequests.Select(p => p.Url));
+
+        // Wipe the ILD instance: its database goes, taking every LoopRun,
+        // worktree and branch with it. The work-item server keeps running.
+        db.Dispose();
+        using var restarted = new TestDb(server);
+        var freshMgr = new WorkItemManager(
+            new Mock<IRepositoryManager>().Object, restarted.Providers, new Mock<IEventLogService>().Object,
+            restarted.LoopRuns, restarted.ServerClient, restarted.ServerOptions);
+
+        Assert.Empty(restarted.Context.LoopRuns);
+        var view = (await freshMgr.GetWorkItemAsync(id))!;
+        Assert.Equal(new[] { "https://forgejo/repo/pulls/77" }, view.PullRequests.Select(p => p.Url));
+        // Nothing local is left to attribute it to, and the run-scoped fields
+        // are gone with the instance — the PR link is not.
+        Assert.Null(view.PullRequests[0].RunId);
+        Assert.Null(view.PrUrl);
+        Assert.Null(view.WorktreePath);
+    }
+
+    [Fact]
+    public async Task Linking_a_PR_by_hand_works_on_a_Done_item_with_no_current_run()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        // No run at all: the item is finished, and a human is recording the PR
+        // that came out of it. The link belongs to the item, so it does not
+        // need a run to hang on.
+        var id = await mgr.CreateWorkItemAsync("link it after the fact", "", repoId);
+        await mgr.TransitionAsync(id, RemoteWorkItemStatus.Done);
+
+        Assert.True(await mgr.LinkPullRequestAsync(id, "https://forgejo/repo/pulls/88"));
+
+        var after = await mgr.GetWorkItemAsync(id);
+        Assert.Equal(new[] { "https://forgejo/repo/pulls/88" }, after!.PullRequests.Select(p => p.Url));
+        // prUrl is the current run's PR and there is no run — unchanged (ADR-0002).
+        Assert.Null(after.PrUrl);
+    }
+
+    [Fact]
+    public async Task A_PR_the_server_already_holds_is_not_re_reported_on_every_read()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+        var ltvId = SeedTemplateVersion(db);
+
+        var id = await mgr.CreateWorkItemAsync("read me twice", "", repoId);
+        SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/99", LoopRunStatus.Running, DateTime.UtcNow.AddHours(-1));
+
+        await mgr.GetWorkItemAsync(id);
+        var afterFirstRead = (await db.Server.Service.GetAsync(id))!.UpdatedAt;
+        await mgr.GetWorkItemAsync(id);
+        await mgr.ListAsync(null, null, null, 0, 100);
+
+        // Reads reconcile what the runs still carry, but a PR the item already
+        // records is left alone — the taskboard polls this path continuously.
+        var pr = Assert.Single((await db.Server.Service.GetAsync(id))!.PullRequests);
+        Assert.Equal("https://forgejo/repo/pulls/99", pr.Url);
+        Assert.Equal(afterFirstRead, (await db.Server.Service.GetAsync(id))!.UpdatedAt);
     }
 }

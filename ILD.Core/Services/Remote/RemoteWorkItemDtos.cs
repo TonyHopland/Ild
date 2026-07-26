@@ -40,6 +40,14 @@ public enum RemoteAiProviderOverrideMode
 
 public sealed record RemoteConversationMessage(string Role, string Content, DateTime Timestamp, string? Name = null);
 
+/// <summary>
+/// One PR the server holds against a work item (mirrors the server's
+/// WorkItemPullRequest). The server is the source of truth for these: a PR
+/// touches the repository and belongs to the work item, unlike the worktree,
+/// branch and PR snapshot, which are throwaway ILD-local run state.
+/// </summary>
+public sealed record RemoteWorkItemPullRequest(string Url, Guid? LoopRunId, bool Merged, DateTime CreatedAt);
+
 public sealed class RemoteWorkItem
 {
     public string Id { get; set; } = string.Empty;
@@ -53,6 +61,9 @@ public sealed class RemoteWorkItem
     public IReadOnlyList<string> Tags { get; set; } = Array.Empty<string>();
     public IReadOnlyList<string> Dependencies { get; set; } = Array.Empty<string>();
     public IReadOnlyList<RemoteConversationMessage> Conversation { get; set; } = Array.Empty<RemoteConversationMessage>();
+
+    /// <summary>Every PR opened against this item, newest first.</summary>
+    public IReadOnlyList<RemoteWorkItemPullRequest> PullRequests { get; set; } = Array.Empty<RemoteWorkItemPullRequest>();
     public string? HumanFeedbackActions { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? CreatedByChatSessionId { get; set; }
