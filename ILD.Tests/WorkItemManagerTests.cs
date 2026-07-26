@@ -1332,7 +1332,7 @@ public class WorkItemManagerTests
 
     // ---- Preview teardown on Done ----------------------------------------
 
-    private static (WorkItemManager mgr, TestDb db, Guid repoId, Mock<IWorktreePreviewService> preview, Mock<IWorkItemNotifier> notifier) SetupWithPreview()
+    private static (WorkItemManager mgr, TestDb db, Guid repoId, Mock<IWorktreePreviewService> preview, Mock<IWorkItemNotifier> notifier, Mock<ILoopEngine> engine) SetupWithPreview()
     {
         var db = new TestDb();
         var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
@@ -1344,15 +1344,51 @@ public class WorkItemManagerTests
         var eventLog = new Mock<IEventLogService>();
         var notifier = new Mock<IWorkItemNotifier>();
         var preview = new Mock<IWorktreePreviewService>();
+        var engine = new Mock<ILoopEngine>();
         var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions,
-            notifier.Object, preview.Object, engine: new Mock<ILoopEngine>().Object);
-        return (mgr, db, repo.Id, preview, notifier);
+            notifier.Object, preview.Object, engine: engine.Object);
+        return (mgr, db, repo.Id, preview, notifier, engine);
+    }
+
+    [Fact]
+    public async Task TransitionToDoneAsync_ends_the_run_parked_behind_the_item()
+    {
+        // Dragging a card to Done, or picking Done from the status menu, is a
+        // human saying the work is over. The run has to end with it: the
+        // scheduler's Active Work Item Set is derived from live runs, so a run
+        // left parked at a human gate under a Done card would be heartbeated
+        // and hold a concurrency slot for the lifetime of the process.
+        var (mgr, db, repoId, _, notifier, engine) = SetupWithPreview();
+        using var _d = db;
+
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var runId = SeedLoopRun(db, id);
+        var parked = await db.Context.LoopRuns.FindAsync(runId);
+        parked!.Status = LoopRunStatus.WaitingHuman;
+        await db.Context.SaveChangesAsync();
+
+        await mgr.TransitionToDoneAsync(id);
+
+        var after = db.Fresh().LoopRuns.First(r => r.Id == runId);
+        Assert.NotEqual(LoopRunStatus.WaitingHuman, after.Status);
+        Assert.NotNull(after.CompletedAt);
+        // And so it no longer holds a slot or a heartbeat.
+        Assert.DoesNotContain(id, await db.LoopRuns.GetActiveWorkItemIdsAsync());
+
+        // Stopped, not cancelled: CancelRunAsync parks the work item in
+        // HumanFeedback on the way past, which would leave a "Run cancelled"
+        // message in the conversation of an item the human just finished and
+        // pop a needs-attention toast on its card.
+        engine.Verify(e => e.StopRunAsync(runId, It.IsAny<string>()), Times.Once);
+        engine.Verify(e => e.CancelRunAsync(It.IsAny<Guid>()), Times.Never);
+        notifier.Verify(n => n.WorkItemStateChangedAsync(
+            id, It.IsAny<RemoteWorkItemStatus>(), RemoteWorkItemStatus.HumanFeedback), Times.Never);
     }
 
     [Fact]
     public async Task TransitionAsync_to_Done_stops_running_preview_and_notifies()
     {
-        var (mgr, db, repoId, preview, notifier) = SetupWithPreview();
+        var (mgr, db, repoId, preview, notifier, _) = SetupWithPreview();
         using var _ = db;
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
@@ -1372,7 +1408,7 @@ public class WorkItemManagerTests
     [Fact]
     public async Task TransitionAsync_to_Done_does_not_stop_when_no_preview_running()
     {
-        var (mgr, db, repoId, preview, notifier) = SetupWithPreview();
+        var (mgr, db, repoId, preview, notifier, _) = SetupWithPreview();
         using var _ = db;
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
@@ -1392,7 +1428,7 @@ public class WorkItemManagerTests
     [Fact]
     public async Task TransitionAsync_to_non_Done_leaves_running_preview_alone()
     {
-        var (mgr, db, repoId, preview, _) = SetupWithPreview();
+        var (mgr, db, repoId, preview, _, _) = SetupWithPreview();
         using var _ = db;
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
@@ -1412,7 +1448,7 @@ public class WorkItemManagerTests
     [Fact]
     public async Task CleanupToDoneAsync_stops_running_preview()
     {
-        var (mgr, db, repoId, preview, notifier) = SetupWithPreview();
+        var (mgr, db, repoId, preview, notifier, _) = SetupWithPreview();
         using var _ = db;
 
         var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };

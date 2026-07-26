@@ -22,6 +22,64 @@ public sealed class WorkItemSchedulerOptions
 }
 
 /// <summary>
+/// Reports the scheduler being stuck at its concurrency cap. That is a state
+/// rather than an event — it persists for as many passes as the slots stay
+/// taken, and one item parked at a human gate puts the loop on a 5s grace
+/// interval — so announcing every blocked pass would bury the signal in
+/// hundreds of identical lines an hour. Entering the state and any change of
+/// who is holding the slots is news, at Information; the passes in between are
+/// the same line at Debug. One template either way, so an operator greps one
+/// shape of line whether they want the transitions or the whole stall.
+///
+/// Stateful across passes, which is why it belongs to the scheduler and not to
+/// the coordinator: a poll pass is scoped, derives everything it knows from
+/// live runs, and deliberately remembers nothing.
+/// </summary>
+public sealed class CapStallReporter
+{
+    private readonly ILogger _log;
+
+    /// <summary>
+    /// Compared as a set, not a sequence: whether two passes report the same
+    /// holders is not the coordinator's ordering to decide, and a reporter that
+    /// announced whenever the order shifted would be the spam it exists to
+    /// prevent.
+    /// </summary>
+    private HashSet<string>? _announced;
+
+    public CapStallReporter(ILogger log) => _log = log;
+
+    /// <summary>
+    /// Say whatever <paramref name="result"/> warrants about the cap, and
+    /// remember it for the next pass. Silent unless the pass was blocked.
+    /// </summary>
+    public void Report(PollCycleResult result, int maxConcurrent)
+    {
+        if (!result.BlockedByCap)
+        {
+            _announced = null;
+            return;
+        }
+
+        var holders = new HashSet<string>(result.SlotHolders, StringComparer.Ordinal);
+        var isNews = _announced == null || !_announced.SetEquals(holders);
+        _announced = holders;
+
+        _log.Log(isNews ? LogLevel.Information : LogLevel.Debug,
+            "Scheduler at the concurrency cap ({MaxConcurrent}): Ready work is waiting while slots are held by work items {SlotHolders}",
+            maxConcurrent, string.Join(", ", result.SlotHolders));
+    }
+
+    /// <summary>
+    /// Forget what was last announced, so a board still stuck on the same slots
+    /// is announced again rather than traced. For when the scheduler loses sight
+    /// of the state — a failed pass, or the poller being switched off and back
+    /// on — after which "still stuck, and here is who" is news again.
+    /// </summary>
+    public void Reset() => _announced = null;
+}
+
+/// <summary>
 /// Unified scheduler: periodic remote poll plus on-demand wakeups via
 /// <see cref="IWorkItemScheduler.Pulse"/>. Replaces RemoteWorkItemPoller.
 /// All user-tunable knobs (max concurrent runs, paused) are read from
@@ -56,6 +114,8 @@ public sealed class WorkItemScheduler : BackgroundService, IWorkItemScheduler
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        var capStalls = new CapStallReporter(_log);
+
         while (!stoppingToken.IsCancellationRequested)
         {
             var opts = _options.CurrentValue;
@@ -63,6 +123,9 @@ public sealed class WorkItemScheduler : BackgroundService, IWorkItemScheduler
 
             if (!opts.Enabled || string.IsNullOrWhiteSpace(opts.BaseUrl))
             {
+                // Switched off: whatever we last saw about the cap is no longer
+                // something we are watching.
+                capStalls.Reset();
                 await WaitForNextPassAsync(opts.PollInterval, stoppingToken);
                 continue;
             }
@@ -72,8 +135,9 @@ public sealed class WorkItemScheduler : BackgroundService, IWorkItemScheduler
                 using var scope = _scopes.CreateScope();
                 var settings = scope.ServiceProvider.GetRequiredService<ISchedulerSettingsService>();
                 // Pause only suppresses auto-promotion of Ready items into Running;
-                // the rest of the pass (heartbeats, WaitingForIld resumes, Done
-                // cleanup, grace polling) keeps running so the system stays live.
+                // the rest of the pass (heartbeats, WaitingForIld resumes,
+                // closing runs behind items the server has finished, grace
+                // polling) keeps running so the system stays live.
                 var isPaused = await settings.GetIsPausedAsync(stoppingToken);
                 var maxConcurrent = await settings.GetMaxConcurrentAsync(stoppingToken);
                 var coord = scope.ServiceProvider.GetRequiredService<IRemoteWorkItemCoordinator>();
@@ -86,6 +150,8 @@ public sealed class WorkItemScheduler : BackgroundService, IWorkItemScheduler
                         "Scheduler pass: claimed {Claimed}, resumed {Resumed}, escalated {Escalated}",
                         result.Claimed.Count, result.Resumed.Count, result.EscalatedToHumanFeedback.Count);
                 }
+
+                capStalls.Report(result, maxConcurrent);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -93,6 +159,9 @@ public sealed class WorkItemScheduler : BackgroundService, IWorkItemScheduler
             }
             catch (Exception ex)
             {
+                // The pass told us nothing, so the next one that is blocked is
+                // news again rather than a repeat.
+                capStalls.Reset();
                 _log.LogWarning(ex, "Scheduler pass failed; will retry in {Delay}", delay);
             }
 

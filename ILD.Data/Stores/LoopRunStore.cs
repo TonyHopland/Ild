@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using ILD.Data.Analytics;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -8,6 +9,20 @@ namespace ILD.Data.Stores;
 
 public class LoopRunStore : ILoopRunStore
 {
+    /// <summary>
+    /// The single definition of "alive" — a run the engine still has in flight.
+    /// Hoisted because the queries built on it are two halves of one mechanism:
+    /// the startup reconciler settles the runs <see cref="GetActiveRunsAsync"/>
+    /// returns, and the scheduler heartbeats and gates on the work items
+    /// <see cref="GetActiveWorkItemIdsAsync"/> returns. Were the two predicates
+    /// to drift, a status added to one and not the other would either leave a
+    /// run the reconciler never settles but the scheduler heartbeats forever, or
+    /// drop one out of the heartbeat and let the server hand its item to a
+    /// second concurrent run.
+    /// </summary>
+    private static readonly Expression<Func<LoopRun, bool>> IsAlive =
+        r => r.Status == LoopRunStatus.Running || r.Status == LoopRunStatus.WaitingHuman;
+
     private readonly AppDbContext _db;
 
     public LoopRunStore(AppDbContext db)
@@ -60,8 +75,8 @@ public class LoopRunStore : ILoopRunStore
 
     public async Task<LoopRun?> GetActiveByWorkItemAsync(string workItemId)
         => await _db.LoopRuns
-            .Where(r => r.WorkItemId == workItemId
-                && (r.Status == LoopRunStatus.Running || r.Status == LoopRunStatus.WaitingHuman))
+            .Where(r => r.WorkItemId == workItemId)
+            .Where(IsAlive)
             .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
             .FirstOrDefaultAsync();
 
@@ -77,9 +92,26 @@ public class LoopRunStore : ILoopRunStore
         => await _db.LoopRuns.Where(r => r.Status == LoopRunStatus.Running).ToListAsync();
 
     public async Task<IReadOnlyList<LoopRun>> GetActiveRunsAsync()
-        => await _db.LoopRuns
-            .Where(r => r.Status == LoopRunStatus.Running || r.Status == LoopRunStatus.WaitingHuman)
+        => await _db.LoopRuns.Where(IsAlive).ToListAsync();
+
+    public async Task<IReadOnlyList<string>> GetActiveWorkItemIdsAsync()
+    {
+        // Projecting the one column the caller wants is also what keeps these
+        // rows out of the scope's change tracker — EF tracks entities in a
+        // result, not scalars. AsNoTracking states the intent and holds the line
+        // if the projection ever grows back into an entity.
+        var ids = await _db.LoopRuns.AsNoTracking()
+            .Where(IsAlive)
+            .Select(r => r.WorkItemId)
             .ToListAsync();
+
+        // Deduplicated client-side: SQL DISTINCT would run under the database
+        // collation, and ordinal is how every caller compares these ids.
+        return ids
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+    }
 
     public async Task<IReadOnlyList<LoopRun>> GetReclaimableRunsAsync(DateTime cutoff, int take = 200)
         => await _db.LoopRuns.AsNoTracking()

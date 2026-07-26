@@ -191,24 +191,56 @@ public sealed class LoopEngine : ILoopEngine
         await _notifier.PausedAsync(runId);
     }
 
-    public async Task CancelRunAsync(Guid runId)
+    public async Task<string?> StopRunAsync(Guid runId, string reason)
     {
         using var scope = _sp.CreateScope();
         var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
-        var workItems = scope.ServiceProvider.GetRequiredService<IWorkItemManager>();
         var run = await loopRunStore.GetByIdAsync(runId);
-        if (run is null) return;
+        if (run is null) return null;
+
+        // Callers read a run in their own scope and stop it here in another, so
+        // the engine can finish it in between. A run that has already ended
+        // stays as it ended — relabelling a Completed run Cancelled would lose
+        // how it actually turned out, and fire a state change that never
+        // happened. The work item id still comes back: its slot is free either
+        // way, which is all the caller asked.
+        if (run.Status is not (LoopRunStatus.Running or LoopRunStatus.WaitingHuman))
+            return run.WorkItemId;
+
         var old = run.Status;
         run.Status = LoopRunStatus.Cancelled;
-        run.CompletedAt = DateTime.UtcNow;
+        run.CompletedAt ??= DateTime.UtcNow;
+        run.HumanFeedbackReason = reason;
         await loopRunStore.UpdateRunAsync(run);
         _progressBuffer.Clear(runId);
+
+        // A node executing right now is cut off here; one between nodes stops at
+        // its next boundary, where the engine reloads this row and finds it no
+        // longer Running.
         if (_runCts.TryGetValue(runId, out var cts))
         {
             try { cts.Cancel(); } catch { }
         }
         await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.Cancelled);
-        await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+        return run.WorkItemId;
+    }
+
+    public async Task CancelRunAsync(Guid runId)
+    {
+        // Take the work item id from StopRunAsync rather than loading the run.
+        // A LoopRun tracked in this scope before that call would still say
+        // Running afterwards, and TransitionAsync below re-resolves the run
+        // through this same scope — EF identity resolution would hand it that
+        // stale instance, and UpdateRunAsync writes every column, putting
+        // Running back over the cancel we just performed.
+        var workItemId = await StopRunAsync(runId, HumanFeedbackReasons.RunCancelled);
+        if (workItemId is null) return;
+
+        // The disposition half, which is this method's whole difference from
+        // StopRunAsync: a cancelled run's item is waiting on a human.
+        using var scope = _sp.CreateScope();
+        await scope.ServiceProvider.GetRequiredService<IWorkItemManager>().TransitionAsync(
+            workItemId, RemoteWorkItemStatus.HumanFeedback,
             reason: HumanFeedbackReasons.RunCancelled, humanFeedbackReason: HumanFeedbackReasons.RunCancelled);
     }
 

@@ -11,15 +11,20 @@ using Microsoft.Extensions.Logging;
 /// (resuming them locally), and — while under the concurrency cap — claim
 /// fresh Ready items and start them. Pure orchestration, no timing — that is
 /// the background service's job, which keeps this layer trivially testable.
+///
+/// The active set is derived from the local runs still alive, once per pass,
+/// and carries no state between passes, so the implementation is safe to
+/// register as scoped and resolve fresh each tick.
 /// </summary>
 public interface IRemoteWorkItemCoordinator
 {
     /// <param name="claimReadyItems">
     /// When <c>false</c> (the scheduler is paused) the Ready-items claim loop is
     /// skipped, so nothing auto-promotes from Ready into Running. Every other
-    /// step — heartbeating the active set, resuming WaitingForIld runs, dropping
-    /// Done items, reporting active human feedback — runs as normal. Humans can
-    /// still promote Ready items manually through the work-item transition API.
+    /// step — heartbeating the active set, resuming WaitingForIld runs, closing
+    /// runs behind items the server has finished, reporting active human
+    /// feedback — runs as normal. Humans can still promote Ready items manually
+    /// through the work-item transition API.
     /// </param>
     Task<PollCycleResult> RunPollCycleAsync(WorkItemServerOptions opts, int maxConcurrent, bool claimReadyItems = true, CancellationToken ct = default);
 }
@@ -30,15 +35,33 @@ public sealed class PollCycleResult
     public IReadOnlyList<RemoteWorkItem> Resumed { get; init; } = Array.Empty<RemoteWorkItem>();
     public IReadOnlyList<RemoteWorkItem> EscalatedToHumanFeedback { get; init; } = Array.Empty<RemoteWorkItem>();
     public bool HasActiveHumanFeedback { get; init; }
+
+    /// <summary>
+    /// The work items holding concurrency slots when the pass ended: those with
+    /// a run already alive when it started, plus anything it claimed. Ordinal
+    /// ascending purely so the log line reads the same way twice — no consumer
+    /// depends on the order (<c>CapStallReporter</c> compares these as a set,
+    /// deliberately).
+    /// </summary>
+    public IReadOnlyList<string> SlotHolders { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// True when the pass had Ready work it could not claim because every slot
+    /// was taken. Worth reporting because from the outside that is
+    /// indistinguishable from an idle board — the failure mode that made the
+    /// slot leak this coordinator used to have so expensive to find. It is a
+    /// steady state rather than an event, though, so the caller owns how often
+    /// to say so: it knows the cadence, and this pass does not.
+    /// </summary>
+    public bool BlockedByCap { get; init; }
 }
 
 public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
 {
     private readonly IWorkItemServerClient _client;
-    private readonly IActiveWorkItemTracker _tracker;
     private readonly ILoopTemplateResolver _resolver;
     private readonly ILoopEngine _engine;
-    private readonly ILoopRunStore? _loopRunStore;
+    private readonly ILoopRunStore _loopRunStore;
     private readonly IProviderStore? _providerStore;
     private readonly IAiProviderConcurrencyTracker? _aiTracker;
     private readonly IWorkItemNotifier _workItemNotifier;
@@ -46,17 +69,15 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
 
     public RemoteWorkItemCoordinator(
         IWorkItemServerClient client,
-        IActiveWorkItemTracker tracker,
         ILoopTemplateResolver resolver,
         ILoopEngine engine,
-        ILoopRunStore? loopRunStore = null,
+        ILoopRunStore loopRunStore,
         IProviderStore? providerStore = null,
         IAiProviderConcurrencyTracker? aiTracker = null,
         IWorkItemNotifier? workItemNotifier = null,
         ILogger<RemoteWorkItemCoordinator>? logger = null)
     {
         _client = client;
-        _tracker = tracker;
         _resolver = resolver;
         _engine = engine;
         _loopRunStore = loopRunStore;
@@ -68,11 +89,24 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
 
     public async Task<PollCycleResult> RunPollCycleAsync(WorkItemServerOptions opts, int maxConcurrent, bool claimReadyItems = true, CancellationToken ct = default)
     {
-        var poll = await _client.PollAsync(opts, _tracker.Snapshot(), ct);
+        // The Active Work Item Set, derived fresh from the runs still alive
+        // locally. Deliberately local rather than the server's Running status:
+        // the cap is this instance's own capacity, and reading it off the server
+        // would silently turn it into a global cap shared by every ILD instance
+        // pointed at the same board.
+        var activeIds = await _loopRunStore.GetActiveWorkItemIdsAsync();
+        var poll = await _client.PollAsync(opts, activeIds, ct);
 
         var claimed = new List<RemoteWorkItem>();
         var resumed = new List<RemoteWorkItem>();
         var escalated = new List<RemoteWorkItem>();
+
+        // This pass's slot ledger: the derived set, minus what this pass
+        // finishes, plus what it claims. Claims are counted here rather than by
+        // re-deriving the set per item, which would cost a round trip each time
+        // and — worse — would hand a slot straight back if a run started and
+        // finished inside this same pass, letting one pass claim past the cap.
+        var slotHolders = new HashSet<string>(activeIds, StringComparer.Ordinal);
 
         // 1. Resume anything in WaitingForIld — but only if the run's current
         //    AI node has provider capacity (parallelism gate). The blocking
@@ -99,11 +133,8 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
             // from its current node" semantics we need here.
             try
             {
-                if (_loopRunStore != null)
-                {
-                    var run = await _loopRunStore.GetCurrentByWorkItemAsync(w.Id);
-                    if (run != null) await _engine.ResumeRecoveredRunAsync(run.Id);
-                }
+                var run = await _loopRunStore.GetCurrentByWorkItemAsync(w.Id);
+                if (run != null) await _engine.ResumeRecoveredRunAsync(run.Id);
             }
             catch (Exception ex)
             {
@@ -111,22 +142,60 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
             }
         }
 
-        // 2. Drop any active item the server now reports as Done so the
-        //    heartbeat list shrinks — keeps poll payloads bounded.
+        // 2. The server has finished with these items, so whatever local run is
+        //    still open for one of them has nothing left to do. Ending it is
+        //    what takes the item out of the Active Work Item Set — a run parked
+        //    at a human gate when someone marks the item Done would otherwise
+        //    keep its slot and its heartbeat for the lifetime of the process.
+        //    A locally-driven Done already ends its own run; this covers the
+        //    item finished on the server by someone else, which a board shared
+        //    between ILD instances makes routine. StopRunAsync rather than
+        //    CancelRunAsync: the item's status is the server's already, and
+        //    parking it in HumanFeedback would undo the Done being reacted to.
         foreach (var w in poll.ActiveItems.Where(w => w.Status == RemoteWorkItemStatus.Done))
-            _tracker.Remove(w.Id);
+        {
+            try
+            {
+                var run = await _loopRunStore.GetActiveByWorkItemAsync(w.Id);
+                if (run != null)
+                    await _engine.StopRunAsync(run.Id, "Work item marked Done on server");
+
+                // Only once the run is provably over. Releasing first would let
+                // a failed write hand this pass a slot whose run is still very
+                // much alive, and the pass would claim past the cap on the
+                // strength of it.
+                slotHolders.Remove(w.Id);
+            }
+            catch (Exception ex)
+            {
+                // Slot kept: the run may still be running. The next pass
+                // re-derives the set and tries again.
+                _logger?.LogWarning(ex,
+                    "Failed to close the local run for work item {WorkItemId} after it went Done", w.Id);
+            }
+        }
 
         // 3. Claim Ready items, room permitting. Tag → template resolution
         //    happens up-front so no-match / ambiguous cases never enter the
         //    Running state on the server.
         var hasActiveHumanFeedback = poll.ActiveItems.Any(w => w.Status == RemoteWorkItemStatus.HumanFeedback);
+        var blockedByCap = false;
 
         // While paused, leave Ready items untouched: the whole claim loop is the
         // auto-promotion path, so skipping it is what "pause" means. A human can
         // still promote a Ready item to Running manually via the transition API.
         foreach (var ready in claimReadyItems ? poll.ReadyItems : Enumerable.Empty<RemoteWorkItem>())
         {
-            if (_tracker.Count >= maxConcurrent) break;
+            if (slotHolders.Count >= maxConcurrent)
+            {
+                // There is Ready work and no room for it. This pass is the only
+                // place that knows both halves, so it records the fact; the
+                // scheduler decides how loudly to say it, because being at the
+                // cap persists across passes and only the scheduler knows how
+                // often those run.
+                blockedByCap = true;
+                break;
+            }
             if (ct.IsCancellationRequested) break;
 
             var resolution = _resolver.Resolve(ready.Tags);
@@ -154,7 +223,7 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
             }, ct);
             if (claim.Success)
             {
-                _tracker.Add(ready.Id);
+                slotHolders.Add(ready.Id);
                 claimed.Add(ready);
 
                 // The raw client claim above bypasses WorkItemManager, and
@@ -179,11 +248,14 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
                 {
                     _logger?.LogWarning(ex,
                         "Engine failed to start run for claimed work item {WorkItemId}", ready.Id);
-                    // The item was already claimed (Running on the server) and
-                    // added to the tracker. Leaving it there means it is
-                    // heartbeated forever with no run driving it — stuck and
-                    // permanently occupying a concurrency slot. Hand it back
-                    // for review instead.
+                    // The claim stands on the server with nothing driving it, so
+                    // hand it back for review and give up the slot it took —
+                    // for the rest of this pass only. StartRunAsync commits the
+                    // LoopRun row before the transition that most often throws
+                    // here, so where a row did get written the derived set
+                    // legitimately takes that slot back on the next pass. The
+                    // item is heartbeated again from then on, and the resume
+                    // path drives the orphaned run as soon as a human responds.
                     try
                     {
                         await _client.TransitionAsync(opts, ready.Id, new RemoteTransitionRequest
@@ -191,7 +263,7 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
                             TargetStatus = RemoteWorkItemStatus.HumanFeedback,
                             Reason = $"Failed to start run: {ex.Message}",
                         }, ct);
-                        _tracker.Remove(ready.Id);
+                        slotHolders.Remove(ready.Id);
                         await _workItemNotifier.WorkItemStateChangedAsync(
                             ready.Id, RemoteWorkItemStatus.Running, RemoteWorkItemStatus.HumanFeedback);
                         escalated.Add(ready);
@@ -213,6 +285,8 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
             Resumed = resumed,
             EscalatedToHumanFeedback = escalated,
             HasActiveHumanFeedback = hasActiveHumanFeedback,
+            SlotHolders = slotHolders.OrderBy(id => id, StringComparer.Ordinal).ToList(),
+            BlockedByCap = blockedByCap,
         };
     }
 
@@ -232,7 +306,7 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
     /// </summary>
     private async Task<bool> HasProviderCapacityForResumeAsync(RemoteWorkItem item, CancellationToken ct)
     {
-        if (_loopRunStore == null || _providerStore == null || _aiTracker == null) return true;
+        if (_providerStore == null || _aiTracker == null) return true;
         try
         {
             var run = await _loopRunStore.GetCurrentByWorkItemAsync(item.Id);

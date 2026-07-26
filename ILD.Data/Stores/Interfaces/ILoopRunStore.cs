@@ -39,6 +39,25 @@ public interface ILoopRunStore
     Task<IReadOnlyList<LoopRun>> GetActiveRunsAsync();
 
     /// <summary>
+    /// The Active Work Item Set: the work items this instance is currently
+    /// working on, one per run <see cref="GetActiveRunsAsync"/> considers alive.
+    /// The scheduler derives it fresh on every poll pass rather than maintaining
+    /// it incrementally, so a run that ended releases its work item here
+    /// whatever status the item itself landed in, and no terminal path has to
+    /// remember to say so. That one set is both the concurrency gate and the
+    /// heartbeat the work-item server's stale reclaimer keys off: an item whose
+    /// run died locally stops being heartbeated, so the server can reclaim it,
+    /// and its slot comes back on the very next pass.
+    ///
+    /// Projected on purpose, not filtered from <see cref="GetActiveRunsAsync"/>.
+    /// The caller wants one string column, not the run graphs — and materialising
+    /// those every pass would put them in the scope's change tracker, so a later
+    /// re-read of the same run inside the pass would resolve to the top-of-pass
+    /// snapshot instead of the database.
+    /// </summary>
+    Task<IReadOnlyList<string>> GetActiveWorkItemIdsAsync();
+
+    /// <summary>
     /// Terminal runs (Completed/Failed/Cancelled) that completed before
     /// <paramref name="cutoff"/> and are not pinned (<c>Retain == false</c>).
     /// Candidates for the worktree retention sweeper; the caller still applies

@@ -24,6 +24,50 @@ public interface ILoopEngine
     Task StartRunAsync(string workItemId, CancellationToken cancellationToken = default);
     Task PauseRunAsync(Guid runId);
     Task ResumeRunAsync(Guid runId);
+
+    /// <summary>
+    /// End a run and nothing else: stop the in-flight node, write the row
+    /// terminal with <paramref name="reason"/>, and tell the UI. How a run gets
+    /// ended by the cancel button, by a human sending the work item to Done, by
+    /// a poll pass reacting to a Done the server already holds, and by startup
+    /// reconcile.
+    ///
+    /// Not a choke point, and nothing has to funnel through here. Other writers
+    /// end runs their own way, on purpose: the engine's own lifecycle finishes
+    /// its runs Completed at a Cleanup node or Failed on a node failure or
+    /// crash; <c>StuckRunWatchdog</c> marks a driverless "Completed yet Running"
+    /// row Failed, deliberately keeping the completion timestamp it was
+    /// finalized with; and <c>WorkItemManager</c> writes Completed on the
+    /// Cleanup→Backlog path and Cancelled as its no-engine fallback. Routing any
+    /// of those through here would overwrite the outcome each one means to
+    /// record.
+    ///
+    /// That is the point of the Active Work Item Set being derived: a run stops
+    /// holding its work item's concurrency slot as soon as its row leaves
+    /// <c>LoopRunStore.IsAlive</c>, whichever writer got there first, so no
+    /// terminal path has to remember to release anything.
+    ///
+    /// What the work item should say afterwards is deliberately the caller's
+    /// business: a human finishing it wants Done, the cancel button wants
+    /// HumanFeedback, and a poll pass reacting to the server wants to leave
+    /// alone the status the server already has. Callers that need a disposition
+    /// apply it themselves rather than inheriting one they have to overwrite.
+    ///
+    /// Returns that run's work item id — the item whose concurrency slot has
+    /// just come back, and the one a caller is about to give a status of its
+    /// own — or <c>null</c> if there is no such run. Handing it back is what
+    /// lets a caller apply its disposition without loading the run itself: an
+    /// entity it tracked before this wrote the row would be stale, and writing
+    /// through it puts the run back the way it was.
+    ///
+    /// Idempotent: a run that has already ended stays exactly as it ended.
+    /// </summary>
+    Task<string?> StopRunAsync(Guid runId, string reason);
+
+    /// <summary>
+    /// <see cref="StopRunAsync"/>, then park the work item in HumanFeedback for
+    /// a human to pick up — what the UI's cancel button means.
+    /// </summary>
     Task CancelRunAsync(Guid runId);
 
     /// <summary>
