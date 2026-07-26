@@ -1576,4 +1576,287 @@ public class WorkItemManagerTests
         var wi = await mgr.GetWorkItemAsync(id);
         Assert.Null(wi!.PrStatus);
     }
+
+    // ──────────────────────────────────────────────────────────────────
+    // PR history — WI-203 "PR disappears"
+    //
+    // A work item has no PR field of its own: WorkItemView.PrUrl is projected
+    // from the *current* run, and "current" excludes Completed runs. So the
+    // moment the engine finishes a run (CompleteRunAsync marks it Completed and
+    // moves the item to Done) the PR link, branch and badges vanish from the
+    // view even though the LoopRun row still carries the URL. Later the
+    // retention sweeper deletes that row outright and the link is gone for good.
+    //
+    // The contract these tests pin: WorkItemView.PullRequests carries every PR
+    // ever opened against the item — newest run first, deduplicated by URL —
+    // and survives both the run going terminal and the run row being deleted.
+    // PrUrl is left alone (ADR-0002: /api/v1 is add-only).
+    // ──────────────────────────────────────────────────────────────────
+
+    private static Guid SeedTemplateVersion(TestDb db)
+    {
+        var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "pr-history" };
+        var ltv = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = lt.Id, VersionNumber = 1, CreatedAt = DateTime.UtcNow };
+        db.Context.LoopTemplates.Add(lt);
+        db.Context.LoopTemplateVersions.Add(ltv);
+        db.Context.SaveChanges();
+        return ltv.Id;
+    }
+
+    /// <summary>
+    /// One run of <paramref name="workItemId"/> carrying <paramref name="prUrl"/>.
+    /// <paramref name="startedAt"/> is explicit because it is what orders PR
+    /// history — pass distinct values to pin an order deterministically. A
+    /// Running run is left without a completion timestamp: AppDbContext refuses
+    /// to persist "running yet completed".
+    /// </summary>
+    private static Guid SeedRunWithPr(
+        TestDb db,
+        Guid ltvId,
+        string workItemId,
+        string prUrl,
+        LoopRunStatus status,
+        DateTime startedAt,
+        bool merged = false,
+        string? prSnapshot = null)
+    {
+        var runId = Guid.NewGuid();
+        db.Context.LoopRuns.Add(new LoopRun
+        {
+            Id = runId,
+            WorkItemId = workItemId,
+            LoopTemplateVersionId = ltvId,
+            Status = status,
+            StartedAt = startedAt,
+            CompletedAt = status == LoopRunStatus.Running ? null : startedAt.AddMinutes(5),
+            PrUrl = prUrl,
+            IsPrMerged = merged,
+            PrSnapshot = prSnapshot,
+            BranchName = $"ild/{workItemId}-run-{runId}",
+        });
+        db.Context.SaveChanges();
+        return runId;
+    }
+
+    /// <summary>
+    /// Finish a run the way <c>LoopEngine.CompleteRunAsync</c> does — the run
+    /// goes Completed and the work item goes Done — which is the exact sequence
+    /// that makes the PR disappear today.
+    /// </summary>
+    private static async Task CompleteRunAndFinishItemAsync(WorkItemManager mgr, TestDb db, Guid runId, string workItemId)
+    {
+        var run = await db.Context.LoopRuns.FindAsync(runId);
+        run!.Status = LoopRunStatus.Completed;
+        run.CompletedAt = DateTime.UtcNow;
+        await db.Context.SaveChangesAsync();
+        await mgr.TransitionAsync(workItemId, RemoteWorkItemStatus.Done, currentLoopRunId: runId);
+    }
+
+    [Fact]
+    public async Task PrHistory_survives_the_run_completing_and_the_item_going_Done()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+        var ltvId = SeedTemplateVersion(db);
+
+        var id = await mgr.CreateWorkItemAsync("ship it", "", repoId);
+        var runId = SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/1", LoopRunStatus.Running, DateTime.UtcNow.AddHours(-1));
+
+        // While the run is alive the PR is visible both ways.
+        var before = await mgr.GetWorkItemAsync(id);
+        Assert.Equal("https://forgejo/repo/pulls/1", before!.PrUrl);
+        Assert.Equal(new[] { "https://forgejo/repo/pulls/1" }, before.PullRequests.Select(p => p.Url));
+
+        await CompleteRunAndFinishItemAsync(mgr, db, runId, id);
+
+        var after = await mgr.GetWorkItemAsync(id);
+        Assert.Equal(RemoteWorkItemStatus.Done, after!.Status);
+        Assert.Equal(new[] { "https://forgejo/repo/pulls/1" }, after.PullRequests.Select(p => p.Url));
+    }
+
+    [Fact]
+    public async Task PrHistory_survives_CleanupToDoneAsync()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+        var ltvId = SeedTemplateVersion(db);
+
+        var id = await mgr.CreateWorkItemAsync("clean me up", "", repoId);
+        SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/7", LoopRunStatus.Running, DateTime.UtcNow.AddHours(-1));
+
+        Assert.True(await mgr.CleanupToDoneAsync(id));
+
+        var after = await mgr.GetWorkItemAsync(id);
+        Assert.Equal(RemoteWorkItemStatus.Done, after!.Status);
+        Assert.Equal(new[] { "https://forgejo/repo/pulls/7" }, after.PullRequests.Select(p => p.Url));
+    }
+
+    [Fact]
+    public async Task PrHistory_lists_every_PR_across_sequential_runs_newest_first()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+        var ltvId = SeedTemplateVersion(db);
+
+        // Three attempts at the same item, each (per ADR-0008) with its own run,
+        // branch and PR. All three PRs belong to the item's history.
+        var id = await mgr.CreateWorkItemAsync("third time lucky", "", repoId);
+        SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/10", LoopRunStatus.Completed, DateTime.UtcNow.AddHours(-3));
+        SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/11", LoopRunStatus.Failed, DateTime.UtcNow.AddHours(-2));
+        var newest = SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/12", LoopRunStatus.Running, DateTime.UtcNow.AddHours(-1));
+
+        await CompleteRunAndFinishItemAsync(mgr, db, newest, id);
+
+        // Newest run first — the order the detail view renders, so the PR a
+        // human most likely wants is at the top.
+        var after = await mgr.GetWorkItemAsync(id);
+        Assert.Equal(
+            new[]
+            {
+                "https://forgejo/repo/pulls/12",
+                "https://forgejo/repo/pulls/11",
+                "https://forgejo/repo/pulls/10",
+            },
+            after!.PullRequests.Select(p => p.Url));
+    }
+
+    [Fact]
+    public async Task PrHistory_dedupes_a_PR_url_carried_by_more_than_one_run()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+        var ltvId = SeedTemplateVersion(db);
+
+        // A retried run can be pointed back at the PR its predecessor opened
+        // (PrSyncService and the manual Link PR action both write the URL onto
+        // whatever run is current). The same URL is one PR, listed once.
+        var id = await mgr.CreateWorkItemAsync("retried", "", repoId);
+        SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/5", LoopRunStatus.Failed, DateTime.UtcNow.AddHours(-3));
+        SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/9", LoopRunStatus.Completed, DateTime.UtcNow.AddHours(-2));
+        var newest = SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/5", LoopRunStatus.Running, DateTime.UtcNow.AddHours(-1));
+
+        await CompleteRunAndFinishItemAsync(mgr, db, newest, id);
+
+        var history = (await mgr.GetWorkItemAsync(id))!.PullRequests;
+        Assert.Equal(
+            new[] { "https://forgejo/repo/pulls/5", "https://forgejo/repo/pulls/9" },
+            history.Select(p => p.Url));
+        // The surviving entry is the newest sighting of that URL.
+        Assert.Equal(newest, history[0].RunId);
+    }
+
+    [Fact]
+    public async Task ListAsync_exposes_the_same_PR_history_as_GetWorkItemAsync()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+        var ltvId = SeedTemplateVersion(db);
+
+        // The taskboard reads ListAsync, the detail dialog reads
+        // GetWorkItemAsync — both project the current run and both drop the PR
+        // the same way, so both have to be pinned.
+        var id = await mgr.CreateWorkItemAsync("board and dialog agree", "", repoId);
+        SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/20", LoopRunStatus.Completed, DateTime.UtcNow.AddHours(-2));
+        var newest = SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/21", LoopRunStatus.Running, DateTime.UtcNow.AddHours(-1));
+
+        await CompleteRunAndFinishItemAsync(mgr, db, newest, id);
+
+        var listed = (await mgr.ListAsync(null, null, null, 0, 100)).Single(v => v.Id == id);
+        var fetched = (await mgr.GetWorkItemAsync(id))!;
+        Assert.Equal(
+            new[] { "https://forgejo/repo/pulls/21", "https://forgejo/repo/pulls/20" },
+            listed.PullRequests.Select(p => p.Url));
+        Assert.Equal(fetched.PullRequests.Select(p => p.Url), listed.PullRequests.Select(p => p.Url));
+    }
+
+    [Fact]
+    public async Task PrHistory_survives_deletion_of_the_LoopRun_row()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+        var ltvId = SeedTemplateVersion(db);
+
+        var id = await mgr.CreateWorkItemAsync("swept", "", repoId);
+        var runId = SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/33", LoopRunStatus.Running, DateTime.UtcNow.AddHours(-1));
+        await CompleteRunAndFinishItemAsync(mgr, db, runId, id);
+
+        // Reading the item before the sweep is deliberate, not incidental: in
+        // production a Done item is viewed many times over the days before
+        // RunRetentionDays elapses, so recording PR history lazily on read is a
+        // legitimate implementation. What is *not* legitimate is aggregating
+        // over live LoopRun rows — WorktreeRetentionSweeper hard-deletes
+        // non-Retain terminal runs past the retention window, and "forever" has
+        // to outlive that.
+        Assert.Equal(new[] { "https://forgejo/repo/pulls/33" }, (await mgr.GetWorkItemAsync(id))!.PullRequests.Select(p => p.Url));
+
+        Assert.True(await db.LoopRuns.DeleteAsync(runId));
+        Assert.Empty(db.Fresh().LoopRuns.Where(r => r.WorkItemId == id));
+
+        var after = await mgr.GetWorkItemAsync(id);
+        Assert.Equal(new[] { "https://forgejo/repo/pulls/33" }, after!.PullRequests.Select(p => p.Url));
+    }
+
+    [Fact]
+    public async Task PrHistory_entries_carry_the_run_merged_flag_and_badge_status()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+        var ltvId = SeedTemplateVersion(db);
+
+        var id = await mgr.CreateWorkItemAsync("merged one", "", repoId);
+        var startedAt = DateTime.UtcNow.AddHours(-1);
+        var runId = SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/44", LoopRunStatus.Running, startedAt,
+            merged: true,
+            prSnapshot: SerializePrSnapshot(new RemotePrSnapshot(
+                Title: "Add feature",
+                Body: "body",
+                State: "closed",
+                Merged: true,
+                Mergeable: null,
+                MergeableState: "clean",
+                Ci: RemotePrCiStatus.Passed,
+                Approved: true,
+                ChangesRequested: false,
+                Conversation: Array.Empty<RemotePrConversationEntry>(),
+                FetchedAt: DateTime.UtcNow)));
+
+        await CompleteRunAndFinishItemAsync(mgr, db, runId, id);
+
+        // A history entry has to stand on its own: the run it came from is on
+        // its way to being reclaimed, so the link, who opened it, whether it
+        // landed and its last known badge state all live on the entry.
+        var pr = Assert.Single((await mgr.GetWorkItemAsync(id))!.PullRequests);
+        Assert.Equal("https://forgejo/repo/pulls/44", pr.Url);
+        Assert.Equal(runId, pr.RunId);
+        Assert.True(pr.Merged);
+        Assert.NotNull(pr.Status);
+        Assert.Equal("closed", pr.Status!.State);
+        Assert.Equal(RemotePrCiStatus.Passed, pr.Status.Ci);
+        Assert.NotNull(pr.CreatedAt);
+    }
+
+    [Fact]
+    public async Task PrUrl_keeps_meaning_the_current_runs_PR_once_history_exists()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+        var ltvId = SeedTemplateVersion(db);
+
+        // /api/v1 is add-only (ADR-0002): PR history is a new collection, and
+        // prUrl must keep pointing at the current run's PR — never at the
+        // newest history entry — so existing clients see no behaviour change.
+        var id = await mgr.CreateWorkItemAsync("add only", "", repoId);
+        SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/60", LoopRunStatus.Completed, DateTime.UtcNow.AddHours(-2));
+        var current = SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/61", LoopRunStatus.Running, DateTime.UtcNow.AddHours(-1));
+
+        Assert.Equal("https://forgejo/repo/pulls/61", (await mgr.GetWorkItemAsync(id))!.PrUrl);
+
+        await CompleteRunAndFinishItemAsync(mgr, db, current, id);
+
+        var after = await mgr.GetWorkItemAsync(id);
+        Assert.Null(after!.PrUrl);
+        Assert.Equal(
+            new[] { "https://forgejo/repo/pulls/61", "https://forgejo/repo/pulls/60" },
+            after.PullRequests.Select(p => p.Url));
+    }
 }

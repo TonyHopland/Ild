@@ -98,6 +98,28 @@ export interface WorkItem {
    * is parked awaiting human feedback. Null/undefined when there is no snapshot.
    */
   prStatus?: WorkItemPrStatus | null;
+  /**
+   * Every PR ever opened against this item, newest first and deduplicated by
+   * URL. Unlike {@link prUrl} — which only shows the *current* run's PR and so
+   * empties out once the run finishes — this outlives the run, the move to
+   * Done, and the retention sweep of the run row (WI-203).
+   */
+  pullRequests?: WorkItemPullRequest[] | null;
+}
+
+/**
+ * One PR in a {@link WorkItem}'s history (mirrors the backend's
+ * WorkItemPullRequest). Self-contained, because the run that opened it may
+ * already have been reclaimed.
+ */
+export interface WorkItemPullRequest {
+  url: string;
+  /** The run that opened it; null once that run has been reclaimed. */
+  runId: string | null;
+  merged: boolean;
+  /** Last known badge state, when a PR snapshot was ever captured. */
+  status?: WorkItemPrStatus | null;
+  createdAt?: string | null;
 }
 
 /**

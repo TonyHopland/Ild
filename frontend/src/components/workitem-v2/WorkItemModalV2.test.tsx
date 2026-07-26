@@ -611,6 +611,78 @@ describe("WorkItemModalV2", () => {
     expect(screen.queryByRole("button", { name: "Mark Merged" })).toBeNull();
   });
 
+  // WI-203 "PR disappears". prUrl is projected from the item's *current* run,
+  // and a finished run is not current — so moving an item to Done empties prUrl
+  // and the Overview panel falls back to "No PR linked" even though PRs were
+  // opened against it. The panel has to render the item's PR history instead:
+  // every PR ever opened, newest first, for as long as the item exists.
+  function prLinksInOverview(): string[] {
+    const overview = document.getElementById("wiv2-panel-overview") as HTMLElement;
+    return [...overview.querySelectorAll("a")]
+      .map((a) => a.getAttribute("href"))
+      .filter((href): href is string => !!href && href.includes("/pulls/"));
+  }
+
+  test("a Done item still links the PR its finished run opened", async () => {
+    mockServices();
+    await renderDialog(
+      makeWorkItem({
+        status: WorkItemStatus.Done,
+        // The run that opened it is Completed, so it is no longer the current
+        // run and prUrl is empty — the history is the only source left.
+        prUrl: null,
+        currentLoopRunId: null,
+        pullRequests: [
+          {
+            url: "https://forgejo.example.com/repo/pulls/42",
+            runId: "run-1",
+            merged: true,
+            createdAt: "2025-01-02T00:00:00Z",
+          },
+        ],
+      }),
+    );
+
+    expect(prLinksInOverview()).toEqual(["https://forgejo.example.com/repo/pulls/42"]);
+    const overview = document.getElementById("wiv2-panel-overview") as HTMLElement;
+    expect(within(overview).queryByText("No PR linked")).toBeNull();
+  });
+
+  test("every PR opened against the item is listed, newest first", async () => {
+    mockServices();
+    await renderDialog(
+      makeWorkItem({
+        status: WorkItemStatus.Done,
+        prUrl: null,
+        currentLoopRunId: null,
+        // Three attempts, three runs, three PRs (ADR-0008: one PR per run).
+        // A single field cannot hold this — it has to render as a list.
+        pullRequests: [
+          { url: "https://forgejo.example.com/repo/pulls/12", runId: "run-3", merged: true },
+          { url: "https://forgejo.example.com/repo/pulls/11", runId: "run-2", merged: false },
+          { url: "https://forgejo.example.com/repo/pulls/10", runId: "run-1", merged: false },
+        ],
+      }),
+    );
+
+    expect(prLinksInOverview()).toEqual([
+      "https://forgejo.example.com/repo/pulls/12",
+      "https://forgejo.example.com/repo/pulls/11",
+      "https://forgejo.example.com/repo/pulls/10",
+    ]);
+  });
+
+  test("an item that never had a PR still shows the empty state", async () => {
+    mockServices();
+    await renderDialog(
+      makeWorkItem({ status: WorkItemStatus.Done, prUrl: null, pullRequests: [] }),
+    );
+
+    const overview = document.getElementById("wiv2-panel-overview") as HTMLElement;
+    expect(prLinksInOverview()).toEqual([]);
+    expect(within(overview).getByText("No PR linked")).toBeTruthy();
+  });
+
   test("edit button switches to the inline edit form", async () => {
     mockServices();
     await renderDialog(makeWorkItem());
