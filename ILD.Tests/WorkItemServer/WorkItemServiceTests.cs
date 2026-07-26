@@ -14,6 +14,7 @@ public class WorkItemServiceTests : IAsyncLifetime
     private WorkItemServerDbContext _db = null!;
     private TestClock _clock = null!;
     private WorkItemService _svc = null!;
+    private DbContextOptions<WorkItemServerDbContext> _options = null!;
 
     public async Task InitializeAsync()
     {
@@ -22,6 +23,7 @@ public class WorkItemServiceTests : IAsyncLifetime
         var options = new DbContextOptionsBuilder<WorkItemServerDbContext>()
             .UseSqlite(_conn)
             .Options;
+        _options = options;
         _db = new WorkItemServerDbContext(options);
         await _db.Database.EnsureCreatedAsync();
         _clock = new TestClock(new DateTime(2026, 5, 1, 12, 0, 0, DateTimeKind.Utc));
@@ -728,6 +730,32 @@ public class WorkItemServiceTests : IAsyncLifetime
         Assert.Equal(
             new[] { "pulls/3", "pulls/2", "pulls/1" },
             (await _svc.GetAsync(wi.Id))!.PullRequests.Select(p => p.Url));
+    }
+
+    [Fact]
+    public async Task RecordPullRequest_does_not_lose_a_PR_a_competing_writer_recorded()
+    {
+        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
+        var day = new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc);
+        // This scope has read the item, so it holds a copy of the list from
+        // before anyone else touched it.
+        await _svc.GetAsync(wi.Id);
+
+        // Another writer — a second request, or another ILD instance
+        // reconciling the same item — records a PR this one has never seen.
+        await using var otherDb = new WorkItemServerDbContext(_options);
+        var other = new WorkItemService(otherDb, _clock);
+        Assert.True(await other.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/1", CreatedAt = day }));
+
+        Assert.True(await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/2", CreatedAt = day.AddHours(1) }));
+
+        // Both survive: recording a PR reads the list as it stands and writes
+        // against that snapshot, rather than overwriting it from a stale copy.
+        Assert.Equal(
+            new[] { "pulls/2", "pulls/1" },
+            (await other.GetAsync(wi.Id))!.PullRequests.Select(p => p.Url));
+        // ...and this scope's own view of the item agrees.
+        Assert.Equal(2, (await _svc.GetAsync(wi.Id))!.PullRequests.Count);
     }
 
     [Fact]

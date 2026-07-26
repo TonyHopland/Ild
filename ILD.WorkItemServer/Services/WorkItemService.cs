@@ -419,43 +419,78 @@ public sealed class WorkItemService : IWorkItemService
         return true;
     }
 
+    /// <summary>
+    /// How many times a losing writer re-reads and re-applies its report before
+    /// giving up. Contention is between a handful of reporters at most, so a
+    /// couple of retries covers it; a caller that still loses reports the same
+    /// PR again on its next pass.
+    /// </summary>
+    private const int RecordPullRequestAttempts = 3;
+
     public async Task<bool> RecordPullRequestAsync(string id, RecordPullRequestRequest req, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(req.Url)) return false;
 
-        var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
-        if (w == null) return false;
-
-        var now = _clock.GetUtcNow().UtcDateTime;
-        var prs = WorkItemMapper.ReadPullRequests(w);
-        var existing = prs.FindIndex(p => string.Equals(p.Url, req.Url, StringComparison.Ordinal));
-
-        if (existing >= 0)
+        // Recording a PR is a read-modify-write of the whole list, so it is done
+        // as a compare-and-swap against the column it read: two reporters
+        // arriving together (a PR node opening one while a webhook marks another
+        // merged, or two ILD instances reconciling the same item) would
+        // otherwise silently drop one of the two updates — and losing a PR link
+        // is the entire failure this record exists to prevent. The loser re-runs
+        // its own decision against the winner's list, which is why a retry is
+        // always safe here: every field is add-only.
+        for (var attempt = 0; attempt < RecordPullRequestAttempts; attempt++)
         {
-            var was = prs[existing];
-            // Merge is one-way and the created time is the earliest sighting:
-            // re-reporting a PR can add to what the item knows, never subtract.
-            var updated = was with
+            var w = await _db.WorkItems.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, ct);
+            if (w == null) return false;
+
+            var seen = w.PullRequestsJson;
+            var now = _clock.GetUtcNow().UtcDateTime;
+            var prs = WorkItemMapper.ReadPullRequests(w);
+            var existing = prs.FindIndex(p => string.Equals(p.Url, req.Url, StringComparison.Ordinal));
+
+            if (existing >= 0)
             {
-                LoopRunId = req.LoopRunId ?? was.LoopRunId,
-                Merged = was.Merged || req.Merged,
-                CreatedAt = req.CreatedAt is { } at && at < was.CreatedAt ? at : was.CreatedAt,
-            };
-            if (updated == was) return true;
-            prs[existing] = updated;
-        }
-        else
-        {
-            prs.Add(new WorkItemPullRequest(req.Url, req.LoopRunId, req.Merged, req.CreatedAt ?? now));
+                var was = prs[existing];
+                // Merge is one-way and the created time is the earliest
+                // sighting: re-reporting a PR can add to what the item knows,
+                // never subtract.
+                var updated = was with
+                {
+                    LoopRunId = req.LoopRunId ?? was.LoopRunId,
+                    Merged = was.Merged || req.Merged,
+                    CreatedAt = req.CreatedAt is { } at && at < was.CreatedAt ? at : was.CreatedAt,
+                };
+                // Already known, exactly as reported — the common case on the
+                // read path, and no reason to touch the row.
+                if (updated == was) return true;
+                prs[existing] = updated;
+            }
+            else
+            {
+                prs.Add(new WorkItemPullRequest(req.Url, req.LoopRunId, req.Merged, req.CreatedAt ?? now));
+            }
+
+            var json = WorkItemMapper.SerializePullRequests(prs);
+            // Status is deliberately untouched — linking a PR is a record of
+            // what the item produced, not a lifecycle transition. UpdatedAt
+            // moves so clients ordering by it still see the change.
+            var rows = await _db.WorkItems
+                .Where(x => x.Id == id && x.PullRequestsJson == seen)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(x => x.PullRequestsJson, json)
+                    .SetProperty(x => x.UpdatedAt, now), ct);
+            if (rows == 0) continue;
+
+            // The write went straight to the column, so a copy this scope was
+            // already tracking still holds the old list — refresh it, or a
+            // later read in the same request would answer from it.
+            var tracked = _db.ChangeTracker.Entries<WorkItem>().FirstOrDefault(e => e.Entity.Id == id);
+            if (tracked is not null) await tracked.ReloadAsync(ct);
+            return true;
         }
 
-        WorkItemMapper.WritePullRequests(w, prs);
-        // Status is deliberately untouched — linking a PR is a record of what
-        // the item produced, not a lifecycle transition. UpdatedAt moves so
-        // clients ordering by it still see the change.
-        w.UpdatedAt = now;
-        await _db.SaveChangesAsync(ct);
-        return true;
+        return false;
     }
 
     public async Task<PollResponse> PollAsync(IReadOnlyList<string> activeIds, CancellationToken ct = default)

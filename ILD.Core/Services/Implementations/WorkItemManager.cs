@@ -473,19 +473,32 @@ public class WorkItemManager : IWorkItemManager
     /// </summary>
     private async Task RecordUnreportedPullRequestsAsync(WorkItemServerOptions opts, RemoteWorkItem remote, IReadOnlyList<LoopRun> runs)
     {
+        Dictionary<string, RemoteWorkItemPullRequest>? recorded = null;
+
         foreach (var run in runs)
         {
             if (string.IsNullOrWhiteSpace(run.PrUrl)) continue;
 
-            var recorded = remote.PullRequests.FirstOrDefault(p => string.Equals(p.Url, run.PrUrl, StringComparison.Ordinal));
-            if (recorded is not null && (recorded.Merged || !run.IsPrMerged)) continue;
+            // Built on the first run that actually has a PR — most items have
+            // none, and this runs per card on every taskboard poll.
+            recorded ??= remote.PullRequests.ToDictionary(p => p.Url, StringComparer.Ordinal);
+            if (recorded.TryGetValue(run.PrUrl, out var known) && (known.Merged || !run.IsPrMerged))
+                continue;
 
+            bool written;
             try
             {
-                await _server.RecordPullRequestAsync(opts, remote.Id, run.PrUrl, run.Id, run.IsPrMerged, RunPrCreatedAt(run));
+                written = await _server.RecordPullRequestAsync(opts, remote.Id, run.PrUrl, run.Id, run.IsPrMerged, RunPrCreatedAt(run));
             }
-            catch (HttpRequestException) { /* Next read retries. */ }
-            catch (InvalidOperationException) { /* No remote — local only. */ }
+            catch (HttpRequestException) { written = false; }
+            catch (InvalidOperationException) { return; /* No remote — local only. */ }
+
+            // Whatever refused that write — an unreachable server, one too old
+            // to know the endpoint, a lost compare-and-swap — will refuse the
+            // rest of this item's just the same, so stop rather than retry it
+            // per run. One attempt per read is the bound; the next read starts
+            // over, which is what makes this self-healing.
+            if (!written) return;
         }
     }
 

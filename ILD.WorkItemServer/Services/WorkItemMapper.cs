@@ -26,9 +26,12 @@ internal static class WorkItemMapper
         => JsonSerializer.Deserialize<List<ConversationMessage>>(w.ConversationJson, JsonOpts) ?? new();
 
     /// <summary>
-    /// The item's PRs, newest first — the order clients render, and the reason
-    /// nothing else has to sort them. Stored in observation order; a legacy row
-    /// predating the column reads as empty rather than throwing.
+    /// The item's PRs, sorted newest first on the way out — the order clients
+    /// render, and the reason nothing else has to sort them. The stored order is
+    /// whatever order they were reported in and is not meaningful; sorting here
+    /// rather than on write keeps a list assembled by several reporters (and by
+    /// items that predate this column) consistently ordered. Such an item reads
+    /// as empty rather than throwing.
     /// </summary>
     public static List<WorkItemPullRequest> ReadPullRequests(WorkItem w)
     {
@@ -50,7 +53,15 @@ internal static class WorkItemMapper
         => w.ConversationJson = JsonSerializer.Serialize(messages, JsonOpts);
 
     public static void WritePullRequests(WorkItem w, IReadOnlyList<WorkItemPullRequest> prs)
-        => w.PullRequestsJson = JsonSerializer.Serialize(prs, JsonOpts);
+        => w.PullRequestsJson = SerializePullRequests(prs);
+
+    /// <summary>
+    /// The serialized column value, for the compare-and-swap write in
+    /// <c>RecordPullRequestAsync</c> — which sets the column directly rather
+    /// than through a tracked entity.
+    /// </summary>
+    public static string SerializePullRequests(IReadOnlyList<WorkItemPullRequest> prs)
+        => JsonSerializer.Serialize(prs, JsonOpts);
 
     public static WorkItemDto ToDto(WorkItem w) => new()
     {
