@@ -27,18 +27,25 @@ public interface ILoopEngine
 
     /// <summary>
     /// End a run and nothing else: stop the in-flight node, write the row
-    /// terminal with <paramref name="reason"/>, and tell the UI. The one way the
-    /// <em>control plane</em> ends a run — the cancel button, a human sending
-    /// the work item to Done, a poll pass reacting to a Done the server already
-    /// holds, startup reconcile. Not a choke point for every ending: the
-    /// engine's own lifecycle finishes its runs directly, Completed at a
-    /// Cleanup node or Failed on a node failure or crash.
+    /// terminal with <paramref name="reason"/>, and tell the UI. How a run gets
+    /// ended by the cancel button, by a human sending the work item to Done, by
+    /// a poll pass reacting to a Done the server already holds, and by startup
+    /// reconcile.
     ///
-    /// Nothing has to funnel through here, and that is the point of the
-    /// Active Work Item Set being derived: a run stops holding its work item's
-    /// concurrency slot as soon as its row leaves <c>LoopRunStore.IsAlive</c>,
-    /// whichever writer got there first, so no terminal path has to remember to
-    /// release anything.
+    /// Not a choke point, and nothing has to funnel through here. Other writers
+    /// end runs their own way, on purpose: the engine's own lifecycle finishes
+    /// its runs Completed at a Cleanup node or Failed on a node failure or
+    /// crash; <c>StuckRunWatchdog</c> marks a driverless "Completed yet Running"
+    /// row Failed, deliberately keeping the completion timestamp it was
+    /// finalized with; and <c>WorkItemManager</c> writes Completed on the
+    /// Cleanup→Backlog path and Cancelled as its no-engine fallback. Routing any
+    /// of those through here would overwrite the outcome each one means to
+    /// record.
+    ///
+    /// That is the point of the Active Work Item Set being derived: a run stops
+    /// holding its work item's concurrency slot as soon as its row leaves
+    /// <c>LoopRunStore.IsAlive</c>, whichever writer got there first, so no
+    /// terminal path has to remember to release anything.
     ///
     /// What the work item should say afterwards is deliberately the caller's
     /// business: a human finishing it wants Done, the cancel button wants

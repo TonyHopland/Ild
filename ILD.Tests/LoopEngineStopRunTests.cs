@@ -13,13 +13,13 @@ using Moq;
 namespace ILD.Tests;
 
 /// <summary>
-/// <c>StopRunAsync</c> is how the control plane ends a run — the cancel button,
-/// a human sending the work item to Done, a poll pass reacting to a Done the
-/// server already holds, startup reconcile. The engine's own lifecycle ends its
-/// runs directly instead (Completed at a Cleanup node, Failed on a node failure
-/// or crash), and needs no help doing so: a work item leaves the Active Work
-/// Item Set as soon as its run's row leaves <c>LoopRunStore.IsAlive</c>,
-/// whichever writer got there first.
+/// <c>StopRunAsync</c> is how a run gets ended by the cancel button, by a human
+/// sending the work item to Done, by a poll pass reacting to a Done the server
+/// already holds, and by startup reconcile. Other writers end runs their own
+/// way and need no help doing it — the engine's own lifecycle, the stuck-run
+/// watchdog, the manager's Cleanup→Backlog path — because a work item leaves
+/// the Active Work Item Set as soon as its run's row leaves
+/// <c>LoopRunStore.IsAlive</c>, whichever writer got there first.
 ///
 /// What this one owns is the run and only the run. Deciding what the work item
 /// should say next belongs to whoever asked, because they all want something
