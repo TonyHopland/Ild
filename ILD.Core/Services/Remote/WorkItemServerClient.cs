@@ -31,6 +31,11 @@ public interface IWorkItemServerClient
     /// callers can report freely (on creation, on merge, or while reconciling).
     /// <paramref name="createdAt"/> is the start of the run that opened it, so
     /// the server keeps the item's PRs in the runs' order.
+    ///
+    /// False means only that this attempt did not record it — a server that is
+    /// unreachable, too old to know the endpoint, missing the work item, or
+    /// busy with a competing writer (409). None of them is worth special-casing
+    /// here: the caller reports the PR again on its next pass.
     /// </summary>
     Task<bool> RecordPullRequestAsync(WorkItemServerOptions opts, string id, string url, Guid? loopRunId, bool merged, DateTime? createdAt, CancellationToken ct = default);
 

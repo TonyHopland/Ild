@@ -8,9 +8,11 @@ namespace ILD.WorkItemServer.Domain;
 /// </summary>
 /// <param name="Url">The PR's URL — the identity a work item's PRs are deduplicated on.</param>
 /// <param name="LoopRunId">
-/// The ILD loop run that opened it, recorded for provenance. Opaque here, like
-/// <c>RepositoryId</c>: the run may be reclaimed by its ILD instance, or belong
-/// to an instance this server never hears from again.
+/// The ILD loop run that last reported it — the run that opened it, unless a
+/// later run pointed back at the same PR and reported it too. Provenance only,
+/// and opaque here like <c>RepositoryId</c>: the run may since have been
+/// reclaimed by its ILD instance, or belong to an instance this server never
+/// hears from again.
 /// </param>
 /// <param name="Merged">Whether the PR has been observed merged. Sticky once true.</param>
 /// <param name="CreatedAt">

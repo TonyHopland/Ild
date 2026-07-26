@@ -118,14 +118,18 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
     public Task<bool> AppendConversationAsync(WorkItemServerOptions opts, string id, string role, string content, string? name, CancellationToken ct = default)
         => _svc.AppendConversationAsync(id, role, content, name, ct);
 
-    public Task<bool> RecordPullRequestAsync(WorkItemServerOptions opts, string id, string url, Guid? loopRunId, bool merged, DateTime? createdAt, CancellationToken ct = default)
-        => _svc.RecordPullRequestAsync(id, new RecordPullRequestRequest
+    /// <summary>
+    /// Mirrors the HTTP client, which reports success as the status code: only
+    /// a recorded PR is a success, and every failure — 400/404/409 — is false.
+    /// </summary>
+    public async Task<bool> RecordPullRequestAsync(WorkItemServerOptions opts, string id, string url, Guid? loopRunId, bool merged, DateTime? createdAt, CancellationToken ct = default)
+        => await _svc.RecordPullRequestAsync(id, new RecordPullRequestRequest
         {
             Url = url,
             LoopRunId = loopRunId,
             Merged = merged,
             CreatedAt = createdAt,
-        }, ct);
+        }, ct) == RecordPullRequestOutcome.Recorded;
 
     public async Task<RemotePollResponse> PollAsync(WorkItemServerOptions opts, IReadOnlyList<string> activeIds, CancellationToken ct = default)
     {

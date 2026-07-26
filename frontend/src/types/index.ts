@@ -110,12 +110,16 @@ export interface WorkItem {
 
 /**
  * One PR in a {@link WorkItem}'s history (mirrors the backend's
- * WorkItemPullRequest). Self-contained, because the run that opened it may
+ * WorkItemPullRequest). Self-contained, because the runs it came from may
  * already have been reclaimed.
  */
 export interface WorkItemPullRequest {
   url: string;
-  /** The run that opened it; null once that run has been reclaimed. */
+  /**
+   * The most recent run that reported this PR and still exists — the run that
+   * opened it, unless a later run pointed back at the same PR. Null when no
+   * such run is left to link to.
+   */
   runId: string | null;
   merged: boolean;
   /**

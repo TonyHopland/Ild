@@ -139,6 +139,43 @@ public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTest
     }
 
     [Fact]
+    public async Task Pull_requests_round_trip_on_the_work_item()
+    {
+        var c = AuthedClient();
+        var create = await c.PostAsJsonAsync("/workitems", new CreateWorkItemRequest { Title = "with a PR" });
+        var dto = (await create.Content.ReadFromJsonAsync<WorkItemDto>())!;
+
+        var recorded = await c.PostAsJsonAsync($"/workitems/{dto.Id}/pull-requests", new RecordPullRequestRequest
+        {
+            Url = "https://forgejo/repo/pulls/1",
+            LoopRunId = Guid.NewGuid(),
+            CreatedAt = new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        Assert.Equal(HttpStatusCode.NoContent, recorded.StatusCode);
+
+        var fetched = await c.GetFromJsonAsync<WorkItemDto>($"/workitems/{dto.Id}");
+        Assert.Equal("https://forgejo/repo/pulls/1", Assert.Single(fetched!.PullRequests).Url);
+    }
+
+    [Fact]
+    public async Task Recording_a_PR_answers_a_missing_item_and_a_bad_report_differently()
+    {
+        var c = AuthedClient();
+        var create = await c.PostAsJsonAsync("/workitems", new CreateWorkItemRequest { Title = "x" });
+        var dto = (await create.Content.ReadFromJsonAsync<WorkItemDto>())!;
+
+        var missing = await c.PostAsJsonAsync("/workitems/WI-nope/pull-requests",
+            new RecordPullRequestRequest { Url = "https://forgejo/repo/pulls/1" });
+        var bad = await c.PostAsJsonAsync($"/workitems/{dto.Id}/pull-requests",
+            new RecordPullRequestRequest { Url = "" });
+
+        // Only a genuinely absent work item may answer 404 — a client that is
+        // told that stops asking, and the PR link it was reporting is lost.
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
+    }
+
+    [Fact]
     public async Task Transition_to_Running_via_api_returns_success_response()
     {
         var c = AuthedClient();

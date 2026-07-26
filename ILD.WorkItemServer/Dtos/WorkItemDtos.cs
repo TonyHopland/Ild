@@ -84,6 +84,32 @@ public sealed class AppendConversationRequest
     public string? Name { get; set; }
 }
 
+/// <summary>
+/// What came of recording a PR against a work item. Distinguished rather than
+/// collapsed into a bool because they mean different things to a caller: only
+/// <see cref="NotFound"/> says the request will never succeed, while
+/// <see cref="Conflict"/> is worth retrying and must not be reported to a
+/// client as "no such work item".
+/// </summary>
+public enum RecordPullRequestOutcome
+{
+    /// <summary>Recorded, or already known exactly as reported.</summary>
+    Recorded = 0,
+
+    /// <summary>The report carried no URL, so there was nothing to record.</summary>
+    InvalidRequest = 1,
+
+    /// <summary>No work item with that id.</summary>
+    NotFound = 2,
+
+    /// <summary>
+    /// Other writers kept winning the race for the item's PR list. Nothing was
+    /// recorded and nothing was lost; the same report will go through on a
+    /// later attempt.
+    /// </summary>
+    Conflict = 3,
+}
+
 public sealed class RecordPullRequestRequest
 {
     public string Url { get; set; } = string.Empty;

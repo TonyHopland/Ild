@@ -675,7 +675,7 @@ public class WorkItemServiceTests : IAsyncLifetime
         var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
         var runId = Guid.NewGuid();
 
-        Assert.True(await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest
+        Assert.Equal(RecordPullRequestOutcome.Recorded, await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest
         {
             Url = "https://forgejo/repo/pulls/1",
             LoopRunId = runId,
@@ -745,9 +745,9 @@ public class WorkItemServiceTests : IAsyncLifetime
         // reconciling the same item — records a PR this one has never seen.
         await using var otherDb = new WorkItemServerDbContext(_options);
         var other = new WorkItemService(otherDb, _clock);
-        Assert.True(await other.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/1", CreatedAt = day }));
+        Assert.Equal(RecordPullRequestOutcome.Recorded, await other.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/1", CreatedAt = day }));
 
-        Assert.True(await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/2", CreatedAt = day.AddHours(1) }));
+        Assert.Equal(RecordPullRequestOutcome.Recorded, await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/2", CreatedAt = day.AddHours(1) }));
 
         // Both survive: recording a PR reads the list as it stands and writes
         // against that snapshot, rather than overwriting it from a stale copy.
@@ -759,9 +759,19 @@ public class WorkItemServiceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task RecordPullRequest_reports_an_unknown_work_item()
+    public async Task RecordPullRequest_tells_a_missing_item_apart_from_a_bad_report()
     {
-        Assert.False(await _svc.RecordPullRequestAsync("WI-nope", new RecordPullRequestRequest { Url = "pulls/1" }));
+        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
+
+        // The two are different answers to the caller: one says stop asking,
+        // the other says fix the request. Neither may be reported as the other
+        // (the endpoint maps them to 404 and 400).
+        Assert.Equal(
+            RecordPullRequestOutcome.NotFound,
+            await _svc.RecordPullRequestAsync("WI-nope", new RecordPullRequestRequest { Url = "pulls/1" }));
+        Assert.Equal(
+            RecordPullRequestOutcome.InvalidRequest,
+            await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "  " }));
     }
 
     [Fact]

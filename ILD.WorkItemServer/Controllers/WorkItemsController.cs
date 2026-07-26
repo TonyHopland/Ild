@@ -102,8 +102,16 @@ public sealed class WorkItemsController : ControllerBase
     [HttpPost("{id}/pull-requests")]
     public async Task<IActionResult> RecordPullRequest(string id, [FromBody] RecordPullRequestRequest req, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(req.Url)) return BadRequest("Url is required");
-        return await _svc.RecordPullRequestAsync(id, req, ct) ? NoContent() : NotFound();
+        // A failed record is not automatically a missing work item: telling a
+        // client 404 when its report merely lost a race would send it looking
+        // for a work item that is sitting right there.
+        return await _svc.RecordPullRequestAsync(id, req, ct) switch
+        {
+            RecordPullRequestOutcome.Recorded => NoContent(),
+            RecordPullRequestOutcome.InvalidRequest => BadRequest("Url is required"),
+            RecordPullRequestOutcome.NotFound => NotFound(),
+            _ => Conflict("The work item's pull requests were being written concurrently. Retry."),
+        };
     }
 
     private static IReadOnlyList<string> ParseIdList(string? csv)

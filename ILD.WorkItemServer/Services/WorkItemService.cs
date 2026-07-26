@@ -31,15 +31,19 @@ public interface IWorkItemService
     /// Record a pull request against a work item, keyed by URL: a URL the item
     /// already knows is updated in place rather than duplicated, so a client may
     /// report the same PR as often as it likes (on creation, on merge, or while
-    /// reconciling what its runs still hold). Returns false when no such work
-    /// item exists.
+    /// reconciling what its runs still hold).
     ///
     /// This is the durable home of a work item's PRs. A run's worktree, branch
     /// and PR snapshot are throwaway ILD-local state, but the PR itself touches
     /// the repository and belongs to the item — it has to outlive the run, and
     /// the ILD instance (WI-203).
     /// </summary>
-    Task<bool> RecordPullRequestAsync(string id, RecordPullRequestRequest req, CancellationToken ct = default);
+    /// <returns>
+    /// Which of the outcomes happened — the three ways this can fail are worth
+    /// telling apart, since only one of them means the client should stop
+    /// asking. See <see cref="RecordPullRequestOutcome"/>.
+    /// </returns>
+    Task<RecordPullRequestOutcome> RecordPullRequestAsync(string id, RecordPullRequestRequest req, CancellationToken ct = default);
 
     Task<PollResponse> PollAsync(IReadOnlyList<string> activeIds, CancellationToken ct = default);
     Task<int> ReclaimStaleAsync(TimeSpan timeout, CancellationToken ct = default);
@@ -427,9 +431,9 @@ public sealed class WorkItemService : IWorkItemService
     /// </summary>
     private const int RecordPullRequestAttempts = 3;
 
-    public async Task<bool> RecordPullRequestAsync(string id, RecordPullRequestRequest req, CancellationToken ct = default)
+    public async Task<RecordPullRequestOutcome> RecordPullRequestAsync(string id, RecordPullRequestRequest req, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(req.Url)) return false;
+        if (string.IsNullOrWhiteSpace(req.Url)) return RecordPullRequestOutcome.InvalidRequest;
 
         // Recording a PR is a read-modify-write of the whole list, so it is done
         // as a compare-and-swap against the column it read: two reporters
@@ -442,7 +446,7 @@ public sealed class WorkItemService : IWorkItemService
         for (var attempt = 0; attempt < RecordPullRequestAttempts; attempt++)
         {
             var w = await _db.WorkItems.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, ct);
-            if (w == null) return false;
+            if (w == null) return RecordPullRequestOutcome.NotFound;
 
             var seen = w.PullRequestsJson;
             var now = _clock.GetUtcNow().UtcDateTime;
@@ -463,7 +467,7 @@ public sealed class WorkItemService : IWorkItemService
                 };
                 // Already known, exactly as reported — the common case on the
                 // read path, and no reason to touch the row.
-                if (updated == was) return true;
+                if (updated == was) return RecordPullRequestOutcome.Recorded;
                 prs[existing] = updated;
             }
             else
@@ -487,10 +491,10 @@ public sealed class WorkItemService : IWorkItemService
             // later read in the same request would answer from it.
             var tracked = _db.ChangeTracker.Entries<WorkItem>().FirstOrDefault(e => e.Entity.Id == id);
             if (tracked is not null) await tracked.ReloadAsync(ct);
-            return true;
+            return RecordPullRequestOutcome.Recorded;
         }
 
-        return false;
+        return RecordPullRequestOutcome.Conflict;
     }
 
     public async Task<PollResponse> PollAsync(IReadOnlyList<string> activeIds, CancellationToken ct = default)

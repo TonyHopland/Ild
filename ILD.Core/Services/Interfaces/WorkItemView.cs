@@ -81,7 +81,12 @@ public sealed class WorkItemView
 /// client needs to render the link without one.
 /// </summary>
 /// <param name="Url">The PR's URL — the identity a history entry is deduplicated on.</param>
-/// <param name="RunId">The run that opened it, when that run is still known; null once it has been reclaimed.</param>
+/// <param name="RunId">
+/// The most recent run that reported this PR and still exists on this ILD
+/// instance — the run that opened it, unless a later run pointed back at the
+/// same PR. Null when no such run is left to link to, which is the normal state
+/// for an entry whose runs have been reclaimed.
+/// </param>
 /// <param name="Merged">Whether the PR was observed merged.</param>
 /// <param name="Status">
 /// Last known badge-relevant status, projected from the run's PR snapshot.
