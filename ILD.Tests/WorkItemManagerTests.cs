@@ -1922,6 +1922,34 @@ public class WorkItemManagerTests
     }
 
     [Fact]
+    public async Task A_work_item_carrying_the_same_PR_twice_still_reads()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+        var ltvId = SeedTemplateVersion(db);
+
+        var id = await mgr.CreateWorkItemAsync("duplicated", "", repoId);
+        SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/5", LoopRunStatus.Running, DateTime.UtcNow.AddHours(-1));
+
+        // The upsert never writes a URL twice, but data that predates it — or
+        // that someone edited by hand — can. Reading the work item is not the
+        // place to find out: it would take the whole taskboard down with it.
+        var row = await db.Server.ServerDb.WorkItems.FirstAsync(w => w.Id == id);
+        row.PullRequestsJson =
+            """
+            [{"url":"https://forgejo/repo/pulls/5","loopRunId":null,"merged":false,"createdAt":"2026-04-01T00:00:00Z"},
+             {"url":"https://forgejo/repo/pulls/5","loopRunId":null,"merged":true,"createdAt":"2026-04-01T00:00:00Z"}]
+            """;
+        await db.Server.ServerDb.SaveChangesAsync();
+
+        var pr = Assert.Single((await mgr.GetWorkItemAsync(id))!.PullRequests);
+        Assert.Equal("https://forgejo/repo/pulls/5", pr.Url);
+        // Collapsed to one entry, keeping what the duplicates knew between them.
+        Assert.True(pr.Merged);
+        Assert.Single((await mgr.ListAsync(null, null, null, 0, 100)).Single(v => v.Id == id).PullRequests);
+    }
+
+    [Fact]
     public async Task A_PR_the_server_already_holds_is_not_re_reported_on_every_read()
     {
         var (mgr, db, repoId, _, _) = Setup();

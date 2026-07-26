@@ -473,7 +473,12 @@ public class WorkItemManager : IWorkItemManager
     /// </summary>
     private async Task RecordUnreportedPullRequestsAsync(WorkItemServerOptions opts, RemoteWorkItem remote, IReadOnlyList<LoopRun> runs)
     {
-        Dictionary<string, RemoteWorkItemPullRequest>? recorded = null;
+        // Url → whether the item already records it merged, which is all this
+        // needs to decide. Grouped rather than keyed directly so that an item
+        // carrying the same URL twice — legacy or hand-edited data the upsert
+        // would never produce — is something to shrug at, not something that
+        // fails every read of that work item.
+        Dictionary<string, bool>? recorded = null;
 
         foreach (var run in runs)
         {
@@ -481,8 +486,10 @@ public class WorkItemManager : IWorkItemManager
 
             // Built on the first run that actually has a PR — most items have
             // none, and this runs per card on every taskboard poll.
-            recorded ??= remote.PullRequests.ToDictionary(p => p.Url, StringComparer.Ordinal);
-            if (recorded.TryGetValue(run.PrUrl, out var known) && (known.Merged || !run.IsPrMerged))
+            recorded ??= remote.PullRequests
+                .GroupBy(p => p.Url, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.Any(p => p.Merged), StringComparer.Ordinal);
+            if (recorded.TryGetValue(run.PrUrl, out var knownMerged) && (knownMerged || !run.IsPrMerged))
                 continue;
 
             bool written;

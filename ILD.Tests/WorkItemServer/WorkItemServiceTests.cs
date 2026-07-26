@@ -759,6 +759,26 @@ public class WorkItemServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_unreadable_pull_request_list_reads_as_empty_and_can_be_rebuilt()
+    {
+        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
+        var row = await _db.WorkItems.FirstAsync(x => x.Id == wi.Id);
+        row.PullRequestsJson = "{ this is not the list";
+        await _db.SaveChangesAsync();
+
+        // Every read of the work item goes through this list, so an unreadable
+        // one must not take the item — or the board listing it — down.
+        Assert.Empty((await _svc.GetAsync(wi.Id))!.PullRequests);
+        Assert.Empty(Assert.Single(await _svc.ListAsync(null, null)).PullRequests);
+
+        // And a reporter that still has the PR puts it back.
+        Assert.Equal(
+            RecordPullRequestOutcome.Recorded,
+            await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/1" }));
+        Assert.Equal("pulls/1", Assert.Single((await _svc.GetAsync(wi.Id))!.PullRequests).Url);
+    }
+
+    [Fact]
     public async Task RecordPullRequest_tells_a_missing_item_apart_from_a_bad_report()
     {
         var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });

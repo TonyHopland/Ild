@@ -29,15 +29,29 @@ internal static class WorkItemMapper
     /// The item's PRs, sorted newest first on the way out — the order clients
     /// render, and the reason nothing else has to sort them. The stored order is
     /// whatever order they were reported in and is not meaningful; sorting here
-    /// rather than on write keeps a list assembled by several reporters (and by
-    /// items that predate this column) consistently ordered. Such an item reads
-    /// as empty rather than throwing.
+    /// rather than on write keeps a list assembled by several reporters
+    /// consistently ordered.
+    ///
+    /// An item with nothing stored — one predating this column — reads as empty,
+    /// and so does one whose value cannot be parsed: an unreadable blob must not
+    /// take the whole work item down with it, since every read of the item goes
+    /// through here, and a reporter with a live run puts its PRs back on the
+    /// next pass anyway.
     /// </summary>
     public static List<WorkItemPullRequest> ReadPullRequests(WorkItem w)
     {
-        var prs = string.IsNullOrEmpty(w.PullRequestsJson)
-            ? null
-            : JsonSerializer.Deserialize<List<WorkItemPullRequest>>(w.PullRequestsJson, JsonOpts);
+        List<WorkItemPullRequest>? prs = null;
+        if (!string.IsNullOrEmpty(w.PullRequestsJson))
+        {
+            try
+            {
+                prs = JsonSerializer.Deserialize<List<WorkItemPullRequest>>(w.PullRequestsJson, JsonOpts);
+            }
+            catch (JsonException)
+            {
+                prs = null;
+            }
+        }
         prs ??= new();
         prs.Sort((a, b) => b.CreatedAt.CompareTo(a.CreatedAt));
         return prs;
