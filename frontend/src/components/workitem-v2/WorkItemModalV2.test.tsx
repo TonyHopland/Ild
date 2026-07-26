@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, act, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import WorkItemModalV2 from "./WorkItemModalV2";
+import { pressEscapeUntil } from "../../test-support";
 import {
   WorkItemStatus,
   WorkItemPriority,
@@ -752,12 +753,10 @@ describe("WorkItemModalV2", () => {
     const onClose = vi.fn();
     await renderDialog(makeWorkItem(), { onClose });
 
-    await act(async () => {
-      fireEvent.keyDown(document, { key: "Escape" });
-      await Promise.resolve();
+    await pressEscapeUntil(() => {
+      expect(onClose).toHaveBeenCalledTimes(1);
     });
 
-    expect(onClose).toHaveBeenCalledTimes(1);
     expect(screen.queryByText(/Discard unsaved changes/)).toBeNull();
   });
 
@@ -774,14 +773,11 @@ describe("WorkItemModalV2", () => {
       fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Changed title" } });
       await Promise.resolve();
     });
-    await act(async () => {
-      fireEvent.keyDown(document, { key: "Escape" });
-      await Promise.resolve();
+    // Escape on a dirty edit leaves the dialog open and asks before discarding.
+    await pressEscapeUntil(() => {
+      expect(screen.getByText(/Discard unsaved changes/)).toBeTruthy();
     });
-
-    // Dialog is still open and asks before discarding.
     expect(onClose).not.toHaveBeenCalled();
-    expect(screen.getByText(/Discard unsaved changes/)).toBeTruthy();
 
     // Confirming the discard finally closes.
     await act(async () => {
@@ -958,13 +954,10 @@ describe("WorkItemModalV2 creation", () => {
       fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Half-typed" } });
       await Promise.resolve();
     });
-    await act(async () => {
-      fireEvent.keyDown(document, { key: "Escape" });
-      await Promise.resolve();
+    await pressEscapeUntil(() => {
+      expect(screen.getByText(/Discard unsaved changes/)).toBeTruthy();
     });
-
     expect(onClose).not.toHaveBeenCalled();
-    expect(screen.getByText(/Discard unsaved changes/)).toBeTruthy();
   });
 
   async function openPreviewTab() {

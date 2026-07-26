@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/tes
 import { render, screen, within, cleanup, waitFor, act, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
 import Taskboard from "./index";
+import { pressEscapeUntil } from "../../test-support";
 import { WorkItemStatus, WorkItemPriority, WorkItem, Repository, LoopTemplate } from "../../types";
 import * as authServices from "../../services/auth";
 import * as signalRHook from "../../hooks/useSignalR";
@@ -782,9 +783,7 @@ describe("Taskboard work item URL", () => {
       expect(screen.getByRole("dialog")).toBeTruthy();
     });
 
-    fireEvent.keyDown(document, { key: "Escape" });
-
-    await waitFor(() => {
+    await pressEscapeUntil(() => {
       expect(screen.queryByRole("dialog")).toBeNull();
     });
     expect(screen.getByTestId("location").textContent).toBe("/taskboard");
