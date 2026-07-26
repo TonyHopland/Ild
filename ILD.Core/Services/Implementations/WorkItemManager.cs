@@ -788,41 +788,158 @@ public class WorkItemManager : IWorkItemManager
         return true;
     }
 
-    public async Task<(bool Success, string? Branch, string? Error)> CommitAndPushBranchAsync(string workItemId)
+    /// <summary>
+    /// The worktree, branch and repository credentials every orchestrator-run git
+    /// operation on a work item's run branch needs. Resolved together because a
+    /// caller holding only some of them cannot do anything useful.
+    /// </summary>
+    private sealed record BranchContext(WorkItemView WorkItem, string WorktreePath, string Branch, GitAuthOptions? Auth);
+
+    /// <summary>
+    /// Resolve a work item's <see cref="BranchContext"/>, or the reason it has none.
+    /// Exactly one of the two is non-null.
+    /// </summary>
+    private async Task<(BranchContext? Context, string? Error)> ResolveBranchContextAsync(string workItemId)
     {
         var wi = await GetWorkItemAsync(workItemId);
         if (wi is null)
-            return (false, null, "Work item not found.");
+            return (null, "Work item not found.");
         if (string.IsNullOrWhiteSpace(wi.WorktreePath) || !Directory.Exists(wi.WorktreePath))
-            return (false, null, "Work item does not currently have an active worktree.");
+            return (null, "Work item does not currently have an active worktree.");
         if (wi.RepositoryId is null)
-            return (false, null, "Work item has no associated repository.");
+            return (null, "Work item has no associated repository.");
 
         var repo = await _providerStore.GetRepositoryByIdAsync(wi.RepositoryId.Value);
         if (repo is null)
-            return (false, null, "Repository not found.");
+            return (null, "Repository not found.");
 
         var branch = wi.BranchName
             ?? (wi.CurrentLoopRunId is { } runId ? RunWorktreeNaming.BranchFor(wi.Id, runId) : null);
         if (string.IsNullOrEmpty(branch))
-            return (false, null, "Could not resolve a branch to push.");
+            return (null, "Could not resolve the work item's branch.");
 
         var remoteProvider = await _providerStore.GetRemoteProviderByIdAsync(repo.RemoteProviderId);
         var gitAuth = remoteProvider is null
             ? null
             : new GitAuthOptions(repo.CloneUrl, remoteProvider.ApiKey, remoteProvider.Type);
 
+        return (new BranchContext(wi, wi.WorktreePath, branch, gitAuth), null);
+    }
+
+    public async Task<(bool Success, string? Branch, string? Error)> CommitAndPushBranchAsync(string workItemId)
+    {
+        var (ctx, contextError) = await ResolveBranchContextAsync(workItemId);
+        if (ctx is null)
+            return (false, null, contextError);
+
         // Mirror the PR node's prep: commit only when there is something to
         // commit, then push the branch with the repository's credentials.
-        var diff = await _repoManager.GetDiffAsync(wi.WorktreePath);
-        if (!string.IsNullOrEmpty(diff) && !await _repoManager.CommitAsync(wi.WorktreePath, wi.Title))
+        var diff = await _repoManager.GetDiffAsync(ctx.WorktreePath);
+        if (!string.IsNullOrEmpty(diff) && !await _repoManager.CommitAsync(ctx.WorktreePath, ctx.WorkItem.Title))
             return (false, null, "Failed to commit uncommitted changes.");
 
-        var pushResult = await _repoManager.PushAsync(wi.WorktreePath, branch, default, gitAuth);
+        var pushResult = await _repoManager.PushAsync(ctx.WorktreePath, ctx.Branch, default, ctx.Auth);
         if (!pushResult.Success)
-            return (false, null, $"Failed to push branch '{branch}': {pushResult.Error ?? "unknown error"}");
+            return (false, null, $"Failed to push branch '{ctx.Branch}': {pushResult.Error ?? "unknown error"}");
 
-        return (true, branch, null);
+        return (true, ctx.Branch, null);
+    }
+
+    public async Task<PullBranchResult> PullBranchAsync(string workItemId, CancellationToken cancellationToken = default)
+    {
+        var (ctx, contextError) = await ResolveBranchContextAsync(workItemId);
+        if (ctx is null)
+            return new PullBranchResult(PullBranchOutcome.Failed, null, contextError!, []);
+
+        var upstream = $"origin/{ctx.Branch}";
+
+        // Dirty check first: it is the cheapest, and refusing before the network
+        // call keeps the failure fast. Deliberately no auto-stash — a stash that
+        // silently swallows an agent's in-flight edits is far worse than a refusal,
+        // and CommitAndPushBranchAsync is the one-click way to clear it.
+        var dirty = await _repoManager.GetUncommittedFilesAsync(ctx.WorktreePath);
+        if (dirty.Count > 0)
+            return new PullBranchResult(
+                PullBranchOutcome.DirtyWorktree,
+                ctx.Branch,
+                $"Cannot pull '{ctx.Branch}': the worktree has uncommitted changes to {DescribeFiles(dirty)}. "
+                + "Commit or discard them first (the Push branch action commits and pushes everything).",
+                dirty);
+
+        // The rebase below only ever touches local refs, so this fetch is the one
+        // step that needs the repository's credentials — which is exactly what the
+        // agent uid cannot supply for itself (ADR-0014).
+        if (!await _repoManager.FetchAsync(ctx.WorktreePath, cancellationToken, ctx.Auth))
+            return new PullBranchResult(
+                PullBranchOutcome.Failed,
+                ctx.Branch,
+                "Failed to fetch origin — check the repository's credentials and connectivity.",
+                []);
+
+        if (!await _repoManager.RemoteBranchExistsAsync(ctx.WorktreePath, ctx.Branch))
+            return new PullBranchResult(
+                PullBranchOutcome.NoRemoteBranch,
+                ctx.Branch,
+                $"Nothing to pull: '{ctx.Branch}' has not been pushed to origin yet.",
+                []);
+
+        var behind = await _repoManager.GetCommitsBehindCountAsync(ctx.WorktreePath, upstream);
+        if (behind == 0)
+            return new PullBranchResult(
+                PullBranchOutcome.AlreadyUpToDate,
+                ctx.Branch,
+                $"Already up to date with {upstream}.",
+                []);
+
+        // Rebase rather than merge, matching what the Start node does with the
+        // default branch: the run branch stays a linear series of the run's own
+        // commits on top of whatever origin holds.
+        //
+        // This rewrites far more of the working tree than the commit on the push
+        // path does, and it runs as the ORCHESTRATOR inside a worktree the agent
+        // uid has been writing to. That is safe without any ownership fix-up:
+        // /worktrees is provisioned as a shared read/write tree (setgid + a default
+        // ACL granting the shared group rwx, see entrypoint.sh), so agent-created
+        // files are group-writable by the orchestrator and the files git writes
+        // here come out writable by the agent — ownership differs, access does not.
+        var rebase = await _repoManager.RebaseAsync(ctx.WorktreePath, upstream, cancellationToken);
+        if (!rebase.Success)
+        {
+            // Both outcomes leave the branch untouched, but they ask different
+            // things of the caller: conflicts are resolved file by file, whereas a
+            // refusal (untracked files in the way, a hook, an unusable upstream) has
+            // no files to resolve and only the message to act on.
+            return rebase.ConflictedFiles.Count > 0
+                ? new PullBranchResult(
+                    PullBranchOutcome.Conflict,
+                    ctx.Branch,
+                    $"Rebase onto {upstream} hit conflicts in {DescribeFiles(rebase.ConflictedFiles)} and was aborted; "
+                    + "the branch is unchanged. Resolve them by hand, or push this branch and reconcile on the remote.",
+                    rebase.ConflictedFiles)
+                : new PullBranchResult(
+                    PullBranchOutcome.RebaseRefused,
+                    ctx.Branch,
+                    $"Git refused to rebase onto {upstream} — no conflicts to resolve, and the branch is unchanged: "
+                    + (rebase.Error ?? "unknown error"),
+                    []);
+        }
+
+        return new PullBranchResult(
+            PullBranchOutcome.Updated,
+            ctx.Branch,
+            $"Rebased '{ctx.Branch}' onto {upstream}, picking up {behind} new commit{(behind == 1 ? "" : "s")}.",
+            []);
+    }
+
+    // Names the files inline up to a point, then counts the rest: the message is
+    // read by a human in a dialog and by an agent deciding what to do next, and a
+    // rebase can conflict in hundreds of files.
+    private static string DescribeFiles(IReadOnlyList<string> files)
+    {
+        const int shown = 10;
+        return files.Count <= shown
+            ? string.Join(", ", files)
+            : string.Join(", ", files.Take(shown)) + $" (+{files.Count - shown} more)";
     }
 
     // ──────────────────────────────────────────────────────────────────

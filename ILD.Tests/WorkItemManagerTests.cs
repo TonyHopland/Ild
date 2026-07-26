@@ -738,6 +738,258 @@ public class WorkItemManagerTests
         }
     }
 
+    // ── PullBranchAsync ────────────────────────────────────────────────────
+    //
+    // The inverse of the push path: an orchestrator-credentialed fetch plus a
+    // local rebase of the run branch onto its OWN remote counterpart, so an agent
+    // (which under ADR-0014 has neither the token nor the askpass helper) can pick
+    // up commits pushed to its branch after the run started.
+
+    private const string PullBranchName = "ild/wi-x-run-1";
+    private const string PullUpstream = "origin/" + PullBranchName;
+
+    /// <summary>
+    /// A work item whose current run owns a real (empty) worktree directory on
+    /// <see cref="PullBranchName"/> — the state every pull path starts from. The
+    /// directory is returned so the test can delete it.
+    /// </summary>
+    private static async Task<(string Id, string Worktree)> SeedWorktreeWorkItemAsync(
+        WorkItemManager mgr, TestDb db, Guid repoId)
+    {
+        var worktree = Path.Combine(Path.GetTempPath(), "ild-pull-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(worktree);
+        var id = await mgr.CreateWorkItemAsync("Pull me", "", repoId);
+        var runId = SeedLoopRun(db, id);
+        var run = await db.Context.LoopRuns.FindAsync(runId);
+        run!.WorktreePath = worktree;
+        run.BranchName = PullBranchName;
+        run.RepositoryId = repoId;
+        await db.Context.SaveChangesAsync();
+        return (id, worktree);
+    }
+
+    /// <summary>Clean worktree, reachable origin, remote counterpart present.</summary>
+    private static void SetupPullable(Mock<IRepositoryManager> repoMgr, string worktree, int behind)
+    {
+        repoMgr.Setup(r => r.GetUncommittedFilesAsync(worktree)).ReturnsAsync(Array.Empty<string>());
+        repoMgr.Setup(r => r.FetchAsync(worktree, It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+            .ReturnsAsync(true);
+        repoMgr.Setup(r => r.RemoteBranchExistsAsync(worktree, PullBranchName)).ReturnsAsync(true);
+        repoMgr.Setup(r => r.GetCommitsBehindCountAsync(worktree, PullUpstream)).ReturnsAsync(behind);
+    }
+
+    [Fact]
+    public async Task PullBranch_rebases_onto_the_remote_counterpart_with_the_repository_credentials()
+    {
+        var (mgr, db, repoId, repoMgr, _) = Setup();
+        using var _ = db;
+        var (id, worktree) = await SeedWorktreeWorkItemAsync(mgr, db, repoId);
+        try
+        {
+            SetupPullable(repoMgr, worktree, behind: 2);
+            GitAuthOptions? fetchAuth = null;
+            repoMgr.Setup(r => r.FetchAsync(worktree, It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+                .Callback<string, CancellationToken, GitAuthOptions?>((_, _, auth) => fetchAuth = auth)
+                .ReturnsAsync(true);
+            repoMgr.Setup(r => r.RebaseAsync(worktree, PullUpstream, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new RebaseResult(true, Array.Empty<string>(), null));
+
+            var result = await mgr.PullBranchAsync(id);
+
+            Assert.Equal(PullBranchOutcome.Updated, result.Outcome);
+            Assert.True(result.Success);
+            Assert.Equal(PullBranchName, result.Branch);
+            Assert.Contains("2 new commits", result.Message);
+            Assert.Empty(result.Files);
+
+            // The fetch is the only step that talks to the remote, so it is the
+            // only one that may carry the repository's credentials.
+            Assert.NotNull(fetchAuth);
+            Assert.Equal("https://example/repo.git", fetchAuth!.RemoteUrl);
+            Assert.Equal("Forgejo", fetchAuth.ProviderType);
+            repoMgr.Verify(r => r.RebaseAsync(worktree, PullUpstream, It.IsAny<CancellationToken>()), Times.Once);
+        }
+        finally
+        {
+            Directory.Delete(worktree, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task PullBranch_reports_already_up_to_date_without_rebasing()
+    {
+        var (mgr, db, repoId, repoMgr, _) = Setup();
+        using var _ = db;
+        var (id, worktree) = await SeedWorktreeWorkItemAsync(mgr, db, repoId);
+        try
+        {
+            SetupPullable(repoMgr, worktree, behind: 0);
+
+            var result = await mgr.PullBranchAsync(id);
+
+            Assert.Equal(PullBranchOutcome.AlreadyUpToDate, result.Outcome);
+            Assert.True(result.Success);
+            repoMgr.Verify(r => r.RebaseAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+        finally
+        {
+            Directory.Delete(worktree, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task PullBranch_is_an_explicit_no_op_when_the_branch_was_never_pushed()
+    {
+        var (mgr, db, repoId, repoMgr, _) = Setup();
+        using var _ = db;
+        var (id, worktree) = await SeedWorktreeWorkItemAsync(mgr, db, repoId);
+        try
+        {
+            SetupPullable(repoMgr, worktree, behind: 0);
+            repoMgr.Setup(r => r.RemoteBranchExistsAsync(worktree, PullBranchName)).ReturnsAsync(false);
+
+            var result = await mgr.PullBranchAsync(id);
+
+            // Nothing to pull is not a failure — the branch simply has no remote
+            // counterpart yet.
+            Assert.Equal(PullBranchOutcome.NoRemoteBranch, result.Outcome);
+            Assert.True(result.Success);
+            Assert.Contains("not been pushed", result.Message);
+            repoMgr.Verify(r => r.RebaseAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+        finally
+        {
+            Directory.Delete(worktree, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task PullBranch_refuses_a_dirty_worktree_naming_the_files_and_never_touches_the_remote()
+    {
+        var (mgr, db, repoId, repoMgr, _) = Setup();
+        using var _ = db;
+        var (id, worktree) = await SeedWorktreeWorkItemAsync(mgr, db, repoId);
+        try
+        {
+            SetupPullable(repoMgr, worktree, behind: 3);
+            repoMgr.Setup(r => r.GetUncommittedFilesAsync(worktree))
+                .ReturnsAsync(new[] { "src/App.tsx", "README.md" });
+
+            var result = await mgr.PullBranchAsync(id);
+
+            Assert.Equal(PullBranchOutcome.DirtyWorktree, result.Outcome);
+            Assert.False(result.Success);
+            Assert.Equal(new[] { "src/App.tsx", "README.md" }, result.Files);
+            Assert.Contains("src/App.tsx", result.Message);
+            Assert.Contains("README.md", result.Message);
+            // Fails fast: no network call, and above all no stash — silently
+            // stashing would swallow the agent's in-flight work.
+            repoMgr.Verify(r => r.FetchAsync(It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Never);
+            repoMgr.Verify(r => r.RebaseAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+        finally
+        {
+            Directory.Delete(worktree, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task PullBranch_returns_the_conflicted_files_when_the_rebase_fails()
+    {
+        var (mgr, db, repoId, repoMgr, _) = Setup();
+        using var _ = db;
+        var (id, worktree) = await SeedWorktreeWorkItemAsync(mgr, db, repoId);
+        try
+        {
+            SetupPullable(repoMgr, worktree, behind: 1);
+            repoMgr.Setup(r => r.RebaseAsync(worktree, PullUpstream, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new RebaseResult(false, new[] { "src/App.tsx" }, "CONFLICT (content)"));
+
+            var result = await mgr.PullBranchAsync(id);
+
+            Assert.Equal(PullBranchOutcome.Conflict, result.Outcome);
+            Assert.False(result.Success);
+            Assert.Equal(new[] { "src/App.tsx" }, result.Files);
+            Assert.Contains("src/App.tsx", result.Message);
+        }
+        finally
+        {
+            Directory.Delete(worktree, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task PullBranch_separates_a_refused_rebase_from_a_conflicted_one()
+    {
+        var (mgr, db, repoId, repoMgr, _) = Setup();
+        using var _ = db;
+        var (id, worktree) = await SeedWorktreeWorkItemAsync(mgr, db, repoId);
+        try
+        {
+            SetupPullable(repoMgr, worktree, behind: 1);
+            // Git refused before it started — there are no conflicted files, so
+            // reporting a conflict would send the caller hunting for markers that
+            // do not exist.
+            repoMgr.Setup(r => r.RebaseAsync(worktree, PullUpstream, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new RebaseResult(false, Array.Empty<string>(),
+                    "error: untracked working tree files would be overwritten"));
+
+            var result = await mgr.PullBranchAsync(id);
+
+            Assert.Equal(PullBranchOutcome.RebaseRefused, result.Outcome);
+            Assert.False(result.Success);
+            Assert.Empty(result.Files);
+            Assert.Contains("untracked working tree files would be overwritten", result.Message);
+        }
+        finally
+        {
+            Directory.Delete(worktree, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task PullBranch_fails_when_the_fetch_fails_and_never_rebases()
+    {
+        var (mgr, db, repoId, repoMgr, _) = Setup();
+        using var _ = db;
+        var (id, worktree) = await SeedWorktreeWorkItemAsync(mgr, db, repoId);
+        try
+        {
+            SetupPullable(repoMgr, worktree, behind: 1);
+            repoMgr.Setup(r => r.FetchAsync(worktree, It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+                .ReturnsAsync(false);
+
+            var result = await mgr.PullBranchAsync(id);
+
+            Assert.Equal(PullBranchOutcome.Failed, result.Outcome);
+            Assert.False(result.Success);
+            // A stale remote-tracking ref must not be rebased onto as if it were
+            // current — the same invariant the Start node enforces.
+            repoMgr.Verify(r => r.RebaseAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+        finally
+        {
+            Directory.Delete(worktree, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task PullBranch_fails_when_the_work_item_has_no_worktree()
+    {
+        var (mgr, db, repoId, repoMgr, _) = Setup();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        SeedLoopRun(db, id); // run has no WorktreePath
+
+        var result = await mgr.PullBranchAsync(id);
+
+        Assert.Equal(PullBranchOutcome.Failed, result.Outcome);
+        Assert.Null(result.Branch);
+        Assert.Empty(result.Files);
+        repoMgr.Verify(r => r.FetchAsync(It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Never);
+    }
+
     [Fact]
     public async Task SubmitHumanFeedbackInput_signals_engine_with_success_and_logs_event()
     {

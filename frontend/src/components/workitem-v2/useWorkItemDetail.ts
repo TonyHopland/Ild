@@ -42,6 +42,9 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const [pushBranchLoading, setPushBranchLoading] = useState(false);
   const [pushBranchError, setPushBranchError] = useState<string | null>(null);
   const [pushBranchMessage, setPushBranchMessage] = useState<string | null>(null);
+  const [pullBranchLoading, setPullBranchLoading] = useState(false);
+  const [pullBranchError, setPullBranchError] = useState<string | null>(null);
+  const [pullBranchMessage, setPullBranchMessage] = useState<string | null>(null);
   const [mergeLoading, setMergeLoading] = useState(false);
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [mergeMessage, setMergeMessage] = useState<string | null>(null);
@@ -314,6 +317,31 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
       setPushBranchError((error as { message?: string })?.message ?? "Failed to push branch.");
     } finally {
       setPushBranchLoading(false);
+    }
+  }, [workItem?.id]);
+
+  // Pick up commits pushed to this run's branch after the run started — the
+  // inverse of Push branch, and the only way to get them: git inside the
+  // worktree has no credentials of its own.
+  const handlePullBranch = useCallback(async () => {
+    if (!workItem) return;
+    setPullBranchLoading(true);
+    setPullBranchError(null);
+    setPullBranchMessage(null);
+    try {
+      const result = await workItemService.pullBranch(workItem.id);
+      // A dirty worktree or a conflict comes back as a successful response
+      // carrying success: false — it is an outcome to act on, not a transport
+      // failure — so the outcome, not the HTTP status, decides how it reads.
+      if (result.success) {
+        setPullBranchMessage(result.message);
+      } else {
+        setPullBranchError(result.message);
+      }
+    } catch (error) {
+      setPullBranchError((error as { message?: string })?.message ?? "Failed to pull branch.");
+    } finally {
+      setPullBranchLoading(false);
     }
   }, [workItem?.id]);
 
@@ -653,6 +681,10 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     pushBranchError,
     pushBranchMessage,
     handlePushBranch,
+    pullBranchLoading,
+    pullBranchError,
+    pullBranchMessage,
+    handlePullBranch,
     handleApprove,
     handleReject,
     handleEdge,

@@ -149,8 +149,9 @@ public sealed class StartNodeExecutor : INodeExecutor
         await repoManager.FetchAsync(path, ctx.CancellationToken, gitAuth);
         try
         {
-            var rebaseOk = await repoManager.RebaseAsync(path, $"origin/{defaultBranch}", ctx.CancellationToken);
-            if (!rebaseOk) return (false, null, null, $"rebase onto origin/{defaultBranch} failed — worktree may be stale");
+            var rebase = await repoManager.RebaseAsync(path, $"origin/{defaultBranch}", ctx.CancellationToken);
+            if (!rebase.Success)
+                return (false, null, null, $"rebase onto origin/{defaultBranch} failed — worktree may be stale: {rebase.Error ?? "unknown error"}");
         }
         catch (Exception ex)
         {

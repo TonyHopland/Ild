@@ -104,6 +104,25 @@ public static class ToolDescriptors
         },
     };
 
+    // -- Branch sync (ADR-0014) --
+    //
+    // Mirrors the MCP BranchTools and the agent-API pull-branch endpoint. The
+    // agent uid cannot authenticate to the remote itself, so it asks the
+    // orchestrator to fetch and rebase on its behalf.
+
+    public static readonly ToolDescriptor PullBranch = new()
+    {
+        Name = "ild_pull_branch",
+        Label = "Pull Branch",
+        Description = "Pull the latest changes from origin into this work item's run branch — fetches with ILD's repository credentials and rebases the branch onto origin/<branch>. Use it to pick up commits pushed after the run started; git in the worktree has no credentials. Does NOT sync with the default branch. Returns an outcome of Updated, AlreadyUpToDate, NoRemoteBranch, DirtyWorktree (commit first; 'files' lists them), Conflict (rebase aborted, branch untouched; 'files' lists the conflicts to resolve) or RebaseRefused (git would not rebase at all — nothing to resolve, read 'message').",
+        EndpointPath = "api/v1/agent/workitems/{workItemId}/pull-branch",
+        HttpMethod = HttpMethod.Post,
+        Parameters = new ToolParameterDescriptor[]
+        {
+            new() { Name = "workItemId", Description = "Work item GUID (from the Chat Context).", TsType = "string" },
+        },
+    };
+
     // -- Worktree preview controls (ADR-0011) --
     //
     // Mirror the MCP PreviewTools and the agent-API preview endpoints. Each takes
@@ -371,6 +390,7 @@ public static class ToolDescriptors
         ListRepositories,
         ListLoopTemplates,
         ListLoopRuns,
+        PullBranch,
         GetPreview,
         StartPreview,
         StopPreview,

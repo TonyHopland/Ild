@@ -227,7 +227,7 @@ public class PiAdapterTests
             Assert.Contains("--session-dir", result.Output);
             Assert.Contains("--session", result.Output);
             Assert.Contains("--tools", result.Output);
-            Assert.Contains("read,grep,find,ls,edit,write,bash,ild_list_workitems,ild_get_workitem,ild_create_workitem,ild_list_repositories,ild_list_loop_templates,ild_list_loop_runs,ild_get_preview,ild_start_preview,ild_stop_preview,ild_start_preview_service,ild_stop_preview_service,ild_get_preview_service_config,ild_update_preview_service_config,ild_get_preview_logs", result.Output);
+            Assert.Contains("read,grep,find,ls,edit,write,bash,ild_list_workitems,ild_get_workitem,ild_create_workitem,ild_list_repositories,ild_list_loop_templates,ild_list_loop_runs,ild_pull_branch,ild_get_preview,ild_start_preview,ild_stop_preview,ild_start_preview_service,ild_stop_preview_service,ild_get_preview_service_config,ild_update_preview_service_config,ild_get_preview_logs", result.Output);
             Assert.Contains("openai/gpt-5", result.Output);
             Assert.Contains("sk-test", result.Output);
             Assert.DoesNotContain("\n--\n", result.Output);

@@ -932,6 +932,21 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
               {!detail.pushBranchError && detail.pushBranchMessage && (
                 <span className="preview-message">{detail.pushBranchMessage}</span>
               )}
+              <button
+                type="button"
+                className="btn btn-sm btn-secondary wiv2-meta-btn"
+                onClick={() => void detail.handlePullBranch()}
+                disabled={detail.pullBranchLoading}
+                title="Fetch origin and rebase this branch onto its remote counterpart"
+              >
+                {detail.pullBranchLoading ? "Pulling..." : "Pull branch"}
+              </button>
+              {detail.pullBranchError && (
+                <span className="preview-message preview-error">{detail.pullBranchError}</span>
+              )}
+              {!detail.pullBranchError && detail.pullBranchMessage && (
+                <span className="preview-message">{detail.pullBranchMessage}</span>
+              )}
             </>
           )}
         </div>

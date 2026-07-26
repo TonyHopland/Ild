@@ -396,6 +396,66 @@ describe("WorkItemModalV2", () => {
     expect(screen.queryByRole("button", { name: "Push branch" })).toBeNull();
   });
 
+  test("overview pull branch button reports what the pull integrated", async () => {
+    mockServices();
+    const pullSpy = vi.spyOn(authServices.workItemService, "pullBranch").mockResolvedValue({
+      outcome: "Updated",
+      success: true,
+      branch: "ild/wi-1-run-1",
+      message: "Rebased 'ild/wi-1-run-1' onto origin/ild/wi-1-run-1, picking up 2 new commits.",
+      files: [],
+    });
+    await renderDialog(
+      makeWorkItem({ branchName: "ild/wi-1-run-1", worktreePath: "/tmp/wt/wi-1" }),
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Pull branch" }));
+      await Promise.resolve();
+    });
+
+    expect(pullSpy).toHaveBeenCalledWith("wi-1");
+    expect(
+      screen.getByText(
+        "Rebased 'ild/wi-1-run-1' onto origin/ild/wi-1-run-1, picking up 2 new commits.",
+      ),
+    ).toBeTruthy();
+  });
+
+  test("overview pull branch button surfaces a blocked pull as an error", async () => {
+    mockServices();
+    // A dirty worktree resolves (HTTP 200) with success: false — the outcome,
+    // not the transport, is what makes it an error to the user.
+    vi.spyOn(authServices.workItemService, "pullBranch").mockResolvedValue({
+      outcome: "DirtyWorktree",
+      success: false,
+      branch: "ild/wi-1-run-1",
+      message: "Cannot pull 'ild/wi-1-run-1': the worktree has uncommitted changes to src/App.tsx.",
+      files: ["src/App.tsx"],
+    });
+    await renderDialog(
+      makeWorkItem({ branchName: "ild/wi-1-run-1", worktreePath: "/tmp/wt/wi-1" }),
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Pull branch" }));
+      await Promise.resolve();
+    });
+
+    expect(
+      screen.getByText(
+        "Cannot pull 'ild/wi-1-run-1': the worktree has uncommitted changes to src/App.tsx.",
+      ),
+    ).toBeTruthy();
+  });
+
+  test("overview hides pull branch button when there is no worktree", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem({ branchName: "ild/wi-1-run-1", worktreePath: null }));
+
+    expect(screen.queryByRole("button", { name: "Pull branch" })).toBeNull();
+  });
+
   test("feedback pane lives in the Action tab while waiting on a human", async () => {
     mockServices();
     await renderDialog(

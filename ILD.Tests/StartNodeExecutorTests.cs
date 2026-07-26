@@ -97,7 +97,7 @@ public class StartNodeExecutorTests : IDisposable
         repoManager.Setup(m => m.CreateWorktreeAsync(_baseRepo, It.IsAny<string>()))
             .ReturnsAsync("/tmp/worktree");
         repoManager.Setup(m => m.RebaseAsync("/tmp/worktree", "origin/main", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
+            .ReturnsAsync(new RebaseResult(true, Array.Empty<string>(), null));
 
         var (mgr, sp, run, node) = BuildContext(repoManager);
 
@@ -125,7 +125,7 @@ public class StartNodeExecutorTests : IDisposable
         repoManager.Setup(m => m.CreateWorktreeAsync(_baseRepo, It.IsAny<string>()))
             .ReturnsAsync("/tmp/worktree");
         repoManager.Setup(m => m.RebaseAsync("/tmp/worktree", "origin/main", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
+            .ReturnsAsync(new RebaseResult(true, Array.Empty<string>(), null));
         return repoManager;
     }
 
