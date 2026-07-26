@@ -38,10 +38,18 @@ public interface IRepositoryManager
     /// <summary>
     /// Rebase the branch checked out in <paramref name="worktreePath"/> onto
     /// <paramref name="upstreamBranch"/>. A rebase that cannot complete is
-    /// <em>aborted</em> before returning, so the worktree is never left mid-rebase:
-    /// a half-rebased worktree has no usable HEAD and would break every later node.
-    /// The conflicted paths are captured first and returned to the caller.
-    /// Rebases local refs only — never contacts the remote, so it needs no auth.
+    /// <em>aborted</em> before returning rather than left in place: a half-rebased
+    /// worktree has no usable HEAD and would break every later node. The conflicted
+    /// paths are captured first and returned to the caller.
+    ///
+    /// <para>
+    /// The abort is <c>git rebase --abort</c> and therefore best-effort — git can
+    /// itself fail to unwind (a stale <c>index.lock</c>, an unreadable object) — so
+    /// this closes every path ILD controls, not the residual risk that git's own
+    /// cleanup fails.
+    /// </para>
+    ///
+    /// <para>Rebases local refs only — never contacts the remote, so it needs no auth.</para>
     /// </summary>
     Task<RebaseResult> RebaseAsync(string worktreePath, string upstreamBranch, CancellationToken cancellationToken = default);
 

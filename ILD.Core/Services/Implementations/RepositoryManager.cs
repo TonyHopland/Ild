@@ -144,11 +144,18 @@ public class RepositoryManager : IRepositoryManager
     }
 
     /// <summary>
-    /// Unwind an incomplete rebase, leaving the branch exactly as it was. Always on
+    /// Unwind an incomplete rebase, leaving the branch as it was. Always on
     /// <see cref="CancellationToken.None"/>, never the caller's: on the path that
     /// needs this most the caller's token is already cancelled, and an abort that
     /// was itself cancelled would leave precisely the state it exists to prevent.
-    /// A no-op when no rebase is in progress.
+    ///
+    /// <para>
+    /// Exits non-zero both when there was no rebase to unwind (the common, harmless
+    /// case — a rebase git refused outright never started one) and when the unwind
+    /// itself failed, which git does not distinguish in its exit code. Neither is
+    /// worth failing the caller over, so the code is not inspected; the underlying
+    /// runner logs it.
+    /// </para>
     /// </summary>
     private Task AbortRebaseAsync(string worktreePath)
         => RunAsync(worktreePath, new[] { "rebase", "--abort" }, CancellationToken.None);
