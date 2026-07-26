@@ -115,22 +115,43 @@ public class RepositoryManager : IRepositoryManager
 
     public async Task<RebaseResult> RebaseAsync(string worktreePath, string upstreamBranch, CancellationToken cancellationToken = default)
     {
-        var (code, _, stderr) = await RunAsync(worktreePath, new[] { "rebase", upstreamBranch }, cancellationToken);
+        int code;
+        string stderr;
+        try
+        {
+            (code, _, stderr) = await RunAsync(worktreePath, new[] { "rebase", upstreamBranch }, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancellation kills the git process mid-rebase and propagates as an
+            // exception, so this is the one path that MUST unwind explicitly — and
+            // the one where a half-rebased worktree is most expensive: the worktree
+            // outlives the run that owned it (ADR-0008), so nothing later comes
+            // along to repair it.
+            await AbortRebaseAsync(worktreePath);
+            throw;
+        }
+
         if (code == 0)
             return new RebaseResult(true, Array.Empty<string>(), null);
 
         // Read the unmerged index entries BEFORE unwinding — the abort is what
         // makes a failed rebase safe to retry, but it also erases the evidence.
         var conflicted = await ListZeroSeparatedAsync(worktreePath, "diff", "--name-only", "--diff-filter=U", "-z");
-
-        // Not the caller's cancellation token: a rebase interrupted by a cancelled
-        // run still has to be unwound, or the worktree is left with a detached HEAD
-        // that every later git call trips over. A rebase that never started makes
-        // this a harmless no-op.
-        await RunAsync(worktreePath, new[] { "rebase", "--abort" }, CancellationToken.None);
+        await AbortRebaseAsync(worktreePath);
 
         return new RebaseResult(false, conflicted, FormatGitError(stderr));
     }
+
+    /// <summary>
+    /// Unwind an incomplete rebase, leaving the branch exactly as it was. Always on
+    /// <see cref="CancellationToken.None"/>, never the caller's: on the path that
+    /// needs this most the caller's token is already cancelled, and an abort that
+    /// was itself cancelled would leave precisely the state it exists to prevent.
+    /// A no-op when no rebase is in progress.
+    /// </summary>
+    private Task AbortRebaseAsync(string worktreePath)
+        => RunAsync(worktreePath, new[] { "rebase", "--abort" }, CancellationToken.None);
 
     public async Task<bool> ResetHardAsync(string worktreePath, string revision, CancellationToken cancellationToken = default)
     {

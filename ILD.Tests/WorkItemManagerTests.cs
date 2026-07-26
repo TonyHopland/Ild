@@ -919,6 +919,35 @@ public class WorkItemManagerTests
     }
 
     [Fact]
+    public async Task PullBranch_separates_a_refused_rebase_from_a_conflicted_one()
+    {
+        var (mgr, db, repoId, repoMgr, _) = Setup();
+        using var _ = db;
+        var (id, worktree) = await SeedWorktreeWorkItemAsync(mgr, db, repoId);
+        try
+        {
+            SetupPullable(repoMgr, worktree, behind: 1);
+            // Git refused before it started — there are no conflicted files, so
+            // reporting a conflict would send the caller hunting for markers that
+            // do not exist.
+            repoMgr.Setup(r => r.RebaseAsync(worktree, PullUpstream, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new RebaseResult(false, Array.Empty<string>(),
+                    "error: untracked working tree files would be overwritten"));
+
+            var result = await mgr.PullBranchAsync(id);
+
+            Assert.Equal(PullBranchOutcome.RebaseRefused, result.Outcome);
+            Assert.False(result.Success);
+            Assert.Empty(result.Files);
+            Assert.Contains("untracked working tree files would be overwritten", result.Message);
+        }
+        finally
+        {
+            Directory.Delete(worktree, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task PullBranch_fails_when_the_fetch_fails_and_never_rebases()
     {
         var (mgr, db, repoId, repoMgr, _) = Setup();

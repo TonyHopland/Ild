@@ -114,7 +114,7 @@ public static class ToolDescriptors
     {
         Name = "ild_pull_branch",
         Label = "Pull Branch",
-        Description = "Pull the latest changes from origin into this work item's run branch — fetches with ILD's repository credentials and rebases the branch onto origin/<branch>. Use it to pick up commits pushed after the run started; git in the worktree has no credentials. Does NOT sync with the default branch. Returns an outcome of Updated, AlreadyUpToDate, NoRemoteBranch, DirtyWorktree (commit first; 'files' lists them) or Conflict (rebase aborted, branch untouched; 'files' lists the conflicts).",
+        Description = "Pull the latest changes from origin into this work item's run branch — fetches with ILD's repository credentials and rebases the branch onto origin/<branch>. Use it to pick up commits pushed after the run started; git in the worktree has no credentials. Does NOT sync with the default branch. Returns an outcome of Updated, AlreadyUpToDate, NoRemoteBranch, DirtyWorktree (commit first; 'files' lists them), Conflict (rebase aborted, branch untouched; 'files' lists the conflicts to resolve) or RebaseRefused (git would not rebase at all — nothing to resolve, read 'message').",
         EndpointPath = "api/v1/agent/workitems/{workItemId}/pull-branch",
         HttpMethod = HttpMethod.Post,
         Parameters = new ToolParameterDescriptor[]

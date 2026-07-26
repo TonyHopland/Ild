@@ -546,6 +546,43 @@ public class RepositoryManagerTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(wt, rebaseState)));
     }
 
+    /// <summary>
+    /// Ends the rebase the way <see cref="ProcessRunner"/> does on cancellation —
+    /// it kills the process tree and throws, rather than returning a failure code —
+    /// and records every call with the token it was handed.
+    /// </summary>
+    private sealed class CancellingRebaseRunner : IProcessRunner
+    {
+        public List<(IReadOnlyList<string> Args, CancellationToken Token)> Calls { get; } = new();
+
+        public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> args, string? workingDirectory = null, CancellationToken ct = default, IReadOnlyDictionary<string, string?>? environmentVariables = null)
+        {
+            Calls.Add((args, ct));
+            if (args.Count > 0 && args[0] == "rebase" && !args.Contains("--abort"))
+                throw new OperationCanceledException(ct);
+            return Task.FromResult(new ProcessResult(0, string.Empty, string.Empty));
+        }
+    }
+
+    [Fact]
+    public async Task RebaseAsync_unwinds_before_letting_a_cancellation_propagate()
+    {
+        var runner = new CancellingRebaseRunner();
+        var mgr = new RepositoryManager(runner, worktreesRoot: Path.Combine(_tmp, "wt"));
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => mgr.RebaseAsync(_repo, "origin/ild/wi-6-run-1", cts.Token));
+
+        // Cancelling the run does not clean up after it: the worktree outlives the
+        // run (ADR-0008), so a rebase killed mid-flight has to be unwound here or
+        // it never is. The abort must carry an uncancelled token, or it would be
+        // killed on arrival for the same reason the rebase was.
+        var abort = runner.Calls.Single(c => c.Args.Contains("--abort"));
+        Assert.False(abort.Token.IsCancellationRequested);
+    }
+
     [Fact]
     public async Task Pull_path_authenticates_the_fetch_and_leaks_no_credential_to_the_rebase()
     {

@@ -904,14 +904,25 @@ public class WorkItemManager : IWorkItemManager
         // here come out writable by the agent — ownership differs, access does not.
         var rebase = await _repoManager.RebaseAsync(ctx.WorktreePath, upstream, cancellationToken);
         if (!rebase.Success)
-            return new PullBranchResult(
-                PullBranchOutcome.Conflict,
-                ctx.Branch,
-                rebase.ConflictedFiles.Count > 0
-                    ? $"Rebase onto {upstream} hit conflicts in {DescribeFiles(rebase.ConflictedFiles)} and was aborted; "
-                      + "the branch is unchanged. Resolve them by hand, or push this branch and reconcile on the remote."
-                    : $"Rebase onto {upstream} failed and was aborted; the branch is unchanged: {rebase.Error ?? "unknown error"}",
-                rebase.ConflictedFiles);
+        {
+            // Both outcomes leave the branch untouched, but they ask different
+            // things of the caller: conflicts are resolved file by file, whereas a
+            // refusal (untracked files in the way, a hook, an unusable upstream) has
+            // no files to resolve and only the message to act on.
+            return rebase.ConflictedFiles.Count > 0
+                ? new PullBranchResult(
+                    PullBranchOutcome.Conflict,
+                    ctx.Branch,
+                    $"Rebase onto {upstream} hit conflicts in {DescribeFiles(rebase.ConflictedFiles)} and was aborted; "
+                    + "the branch is unchanged. Resolve them by hand, or push this branch and reconcile on the remote.",
+                    rebase.ConflictedFiles)
+                : new PullBranchResult(
+                    PullBranchOutcome.RebaseRefused,
+                    ctx.Branch,
+                    $"Git refused to rebase onto {upstream} — no conflicts to resolve, and the branch is unchanged: "
+                    + (rebase.Error ?? "unknown error"),
+                    []);
+        }
 
         return new PullBranchResult(
             PullBranchOutcome.Updated,

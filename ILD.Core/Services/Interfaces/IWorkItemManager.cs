@@ -155,8 +155,17 @@ public enum PullBranchOutcome
     /// <summary>Uncommitted changes would be rewritten by the rebase. Commit (or discard) them first.</summary>
     DirtyWorktree,
 
-    /// <summary>The rebase could not be applied; it was aborted, so the branch is exactly as it was.</summary>
+    /// <summary>The rebase hit merge conflicts; it was aborted, so the branch is exactly as it was.</summary>
     Conflict,
+
+    /// <summary>
+    /// Git declined the rebase outright — untracked files in the way, a hook
+    /// refusing it, an unusable upstream — so nothing was applied and there are no
+    /// conflicted files to resolve. Distinct from <see cref="Conflict"/> because a
+    /// caller told "conflict" with an empty file list goes looking for conflict
+    /// markers that do not exist; the reason is in the message.
+    /// </summary>
+    RebaseRefused,
 
     /// <summary>Everything else: no worktree, no repository, unresolvable branch, failed fetch.</summary>
     Failed,

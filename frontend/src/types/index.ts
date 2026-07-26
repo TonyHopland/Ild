@@ -175,7 +175,8 @@ export type PullBranchOutcome =
   | "AlreadyUpToDate"
   | "NoRemoteBranch"
   | "DirtyWorktree"
-  | "Conflict";
+  | "Conflict"
+  | "RebaseRefused";
 
 export interface PullBranchResult {
   outcome: PullBranchOutcome;
