@@ -33,11 +33,20 @@ public class HostedServiceStartOrderTests
         var reconciler = hosted.IndexOf(typeof(RemoteWorkItemStartupReconciler));
         var scheduler = hosted.IndexOf(typeof(WorkItemScheduler));
 
-        Assert.True(reconciler >= 0, "RemoteWorkItemStartupReconciler is not registered as a hosted service");
-        Assert.True(scheduler >= 0, "WorkItemScheduler is not registered as a hosted service");
+        // A registration this probe could not identify shows up as a gap rather
+        // than as an exception from an unrelated service — but if it is one of
+        // the two being compared, the order is unverifiable and that has to
+        // fail, not pass quietly.
+        Assert.True(reconciler >= 0, Unidentified("RemoteWorkItemStartupReconciler", hosted));
+        Assert.True(scheduler >= 0, Unidentified("WorkItemScheduler", hosted));
         Assert.True(reconciler < scheduler,
             $"The reconciler must start before the scheduler, but is registered at {reconciler} and the scheduler at {scheduler}");
     }
+
+    private static string Unidentified(string name, IReadOnlyList<Type?> hosted)
+        => $"{name} was not found among the {hosted.Count} IHostedService registrations "
+           + $"([{string.Join(", ", hosted.Select(t => t?.Name ?? "<unidentified>"))}]). Either it is no longer "
+           + "registered, or its factory could not be probed — see ImplementationTypeOf.";
 
     /// <summary>
     /// The concrete type a hosted-service registration yields. Factory
@@ -45,14 +54,29 @@ public class HostedServiceStartOrderTests
     /// inside the lambda, so run it against a provider that answers every
     /// request with an uninitialized instance — enough to see what comes back,
     /// without constructing anything or needing the real container.
+    ///
+    /// A factory that does more than resolve — touching what it gets back, or
+    /// asking for an interface <c>GetUninitializedObject</c> cannot make —
+    /// throws here. That is one unrelated registration's problem, so it yields
+    /// an unknown type rather than failing the whole test: this is about the
+    /// order of two specific services, and either of those going unidentified
+    /// is caught by the assertions above.
     /// </summary>
     private static Type? ImplementationTypeOf(ServiceDescriptor descriptor)
-        => descriptor.ImplementationType
-           ?? descriptor.ImplementationInstance?.GetType()
-           ?? descriptor.ImplementationFactory?.Invoke(new UninitializedProvider())?.GetType();
+    {
+        if (descriptor.ImplementationType is { } type) return type;
+        if (descriptor.ImplementationInstance is { } instance) return instance.GetType();
+        if (descriptor.ImplementationFactory is not { } factory) return null;
+
+        try { return factory(new UninitializedProvider())?.GetType(); }
+        catch { return null; }
+    }
 
     private sealed class UninitializedProvider : IServiceProvider
     {
-        public object? GetService(Type serviceType) => RuntimeHelpers.GetUninitializedObject(serviceType);
+        public object? GetService(Type serviceType)
+            => serviceType.IsAbstract || serviceType.IsInterface
+                ? null
+                : RuntimeHelpers.GetUninitializedObject(serviceType);
     }
 }
