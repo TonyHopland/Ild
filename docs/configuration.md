@@ -290,5 +290,5 @@ The **Pi** adapter has no MCP support by design and does not expose this field.
 it either.
 
 > The `chrome-devtools` example above requires Chrome in the ILD image
-> (`WITH_CHROME`, amd64 only) and Node/npm (`WITH_NODE`). `--no-sandbox` is
-> required because agents run as a non-root user.
+> (`WITH_CHROME`) and Node/npm (`WITH_NODE`). `--no-sandbox` is required because
+> agents run as a non-root user.

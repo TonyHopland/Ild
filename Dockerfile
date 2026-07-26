@@ -171,25 +171,35 @@ RUN if [ "$WITH_NODE" = "1" ]; then \
   rm -rf /var/lib/apt/lists/*; \
 fi
 
-# Google Chrome ships an amd64-only Linux package, so it is installed only on
-# amd64 — on other architectures (release builds publish amd64 + arm64) the step
-# is a no-op rather than failing on a nonexistent package. The .deb installs
-# /opt/google/chrome/chrome, exactly where Puppeteer's default `--channel
-# stable` resolution looks (used by chrome-devtools-mcp, see opencode.json), so
-# no extra config is needed. We don't purge wget/ca-certificates afterwards
-# because google-chrome-stable depends on both.
+# Google publishes google-chrome-stable for both amd64 and arm64 Linux (arm64
+# since 2025, https://blog.google/chromium/bringing-chrome-to-arm64-linux-devices/),
+# which is exactly the pair of architectures release builds ship (ADR-0012), so
+# WITH_CHROME=1 is honoured on both — the package name is the only difference.
+# Anything else (armhf) has no upstream .deb: that skips with a message instead
+# of failing, unlike the Node step above which exits 1, because Chrome is an
+# opt-in extra and an image without a browser beats no image at all. Both .debs
+# install /opt/google/chrome/chrome, exactly where Puppeteer's default
+# `--channel stable` resolution looks (used by chrome-devtools-mcp, see
+# opencode.json), so no extra config is needed on either architecture. We don't
+# purge wget/ca-certificates afterwards because google-chrome-stable depends on
+# both.
 #
 # --no-install-recommends matters here: Chrome's recommends pull in the full
 # mesa DRI driver set and the Noto font families, which headless Chrome never
 # uses and which cost more than Chrome itself. fonts-liberation is added back
 # explicitly so pages still render with sane default fonts.
-RUN if [ "$WITH_CHROME" = "1" ] && [ "$(dpkg --print-architecture)" = "amd64" ]; then \
-  apt-get update && \
-  apt-get install -y --no-install-recommends wget ca-certificates && \
-  wget -q -O /tmp/google-chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && \
-  apt-get install -y --no-install-recommends /tmp/google-chrome.deb fonts-liberation && \
-  rm -f /tmp/google-chrome.deb && \
-  rm -rf /var/lib/apt/lists/*; \
+RUN if [ "$WITH_CHROME" = "1" ]; then \
+  CHROME_ARCH="$(dpkg --print-architecture)"; \
+  case "$CHROME_ARCH" in \
+    amd64|arm64) \
+      apt-get update && \
+      apt-get install -y --no-install-recommends wget ca-certificates && \
+      wget -q -O /tmp/google-chrome.deb "https://dl.google.com/linux/direct/google-chrome-stable_current_${CHROME_ARCH}.deb" && \
+      apt-get install -y --no-install-recommends /tmp/google-chrome.deb fonts-liberation && \
+      rm -f /tmp/google-chrome.deb && \
+      rm -rf /var/lib/apt/lists/* ;; \
+    *) echo "Skipping Chrome: no upstream package for $CHROME_ARCH" >&2 ;; \
+  esac; \
 fi
 
 COPY --from=build /certs /tmp/extra-certs
