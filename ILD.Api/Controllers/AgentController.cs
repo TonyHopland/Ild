@@ -1,3 +1,4 @@
+using ILD.Api.Contracts;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
@@ -27,7 +28,9 @@ namespace ILD.Api.Controllers;
 ///    other sessions are off-limits (403),
 ///  - read and write per-run loop variables (scoped by the X-ILD-Run-Id
 ///    header) so one node can hand off state to a later node — the values
-///    are also exposed to templates as <c>{{Var.&lt;name&gt;}}</c>.
+///    are also exposed to templates as <c>{{Var.&lt;name&gt;}}</c>,
+///  - pull commits pushed to their own run branch, which needs the
+///    orchestrator's repository token the agent uid cannot reach (ADR-0014).
 ///
 /// Crucially, this controller deliberately does NOT expose start,
 /// transition, link-pr, or human-feedback endpoints. Agents are not
@@ -260,6 +263,26 @@ public class AgentController : ControllerBase
                 ? wi.Conversation.Select(m => new { role = m.Role, content = m.Content, timestamp = m.Timestamp, name = m.Name })
                 : null,
         });
+    }
+
+    // -- Branch sync (ADR-0014) ------------------------------------------------
+    //
+    // The orchestrator holds the repository token and the agent uid can reach
+    // neither it nor the askpass helper, so an agent that needs commits pushed to
+    // its run branch after the run started cannot `git pull` them itself. It asks
+    // here instead: the orchestrator does the authenticated fetch and the local
+    // rebase, and nothing about the credential crosses the uid boundary. This is
+    // not a status transition — the work item stays exactly where it is — so it
+    // does not breach the human-only gate the class summary describes.
+
+    [HttpPost("workitems/{id}/pull-branch")]
+    public async Task<IActionResult> PullBranch(string id, CancellationToken cancellationToken)
+    {
+        var (_, error) = await GetPreviewableWorkItemAsync(id);
+        if (error != null) return error;
+
+        return PullBranchHttpResult.ToActionResult(
+            await _workItems.PullBranchAsync(id, cancellationToken));
     }
 
     // -- Worktree preview controls (ADR-0011) ----------------------------------

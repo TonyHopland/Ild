@@ -113,10 +113,23 @@ public class RepositoryManager : IRepositoryManager
     }
 
 
-    public async Task<bool> RebaseAsync(string worktreePath, string upstreamBranch, CancellationToken cancellationToken = default)
+    public async Task<RebaseResult> RebaseAsync(string worktreePath, string upstreamBranch, CancellationToken cancellationToken = default)
     {
-        var (code, _, _) = await RunAsync(worktreePath, new[] { "rebase", upstreamBranch }, cancellationToken);
-        return code == 0;
+        var (code, _, stderr) = await RunAsync(worktreePath, new[] { "rebase", upstreamBranch }, cancellationToken);
+        if (code == 0)
+            return new RebaseResult(true, Array.Empty<string>(), null);
+
+        // Read the unmerged index entries BEFORE unwinding — the abort is what
+        // makes a failed rebase safe to retry, but it also erases the evidence.
+        var conflicted = await ListZeroSeparatedAsync(worktreePath, "diff", "--name-only", "--diff-filter=U", "-z");
+
+        // Not the caller's cancellation token: a rebase interrupted by a cancelled
+        // run still has to be unwound, or the worktree is left with a detached HEAD
+        // that every later git call trips over. A rebase that never started makes
+        // this a harmless no-op.
+        await RunAsync(worktreePath, new[] { "rebase", "--abort" }, CancellationToken.None);
+
+        return new RebaseResult(false, conflicted, FormatGitError(stderr));
     }
 
     public async Task<bool> ResetHardAsync(string worktreePath, string revision, CancellationToken cancellationToken = default)
@@ -192,9 +205,18 @@ public class RepositoryManager : IRepositoryManager
         return code == 0 ? stdout : null;
     }
 
+    public Task<IReadOnlyList<string>> GetUncommittedFilesAsync(string worktreePath)
+        => ListZeroSeparatedAsync(worktreePath, "diff", "--name-only", "-z", "HEAD");
+
     public async Task<int> GetCommitsAheadCountAsync(string worktreePath, string targetBranch)
     {
         var (code, stdout, _) = await RunAsync(worktreePath, "rev-list", "--count", $"{targetBranch}..HEAD");
+        return code == 0 && int.TryParse(stdout.Trim(), out var count) ? count : 0;
+    }
+
+    public async Task<int> GetCommitsBehindCountAsync(string worktreePath, string upstreamRef)
+    {
+        var (code, stdout, _) = await RunAsync(worktreePath, "rev-list", "--count", $"HEAD..{upstreamRef}");
         return code == 0 && int.TryParse(stdout.Trim(), out var count) ? count : 0;
     }
 
@@ -430,6 +452,12 @@ public class RepositoryManager : IRepositoryManager
     public async Task<bool> LocalBranchExistsAsync(string repoPath, string branchName)
     {
         var (code, _, _) = await RunAsync(repoPath, "rev-parse", "--verify", "--quiet", $"refs/heads/{branchName}");
+        return code == 0;
+    }
+
+    public async Task<bool> RemoteBranchExistsAsync(string repoPath, string branchName)
+    {
+        var (code, _, _) = await RunAsync(repoPath, "rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{branchName}");
         return code == 0;
     }
 

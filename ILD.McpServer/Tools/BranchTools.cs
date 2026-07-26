@@ -1,0 +1,29 @@
+using System.ComponentModel;
+using ModelContextProtocol.Server;
+
+namespace ILD.McpServer.Tools;
+
+/// <summary>
+/// MCP tools that act on a work item's run branch with the orchestrator's
+/// repository credentials. The agent runs under its own, lower-trust uid and can
+/// reach neither the repository token nor the git askpass helper (ADR-0014), so a
+/// plain <c>git pull</c> in the worktree cannot authenticate — it asks the
+/// orchestrator to do the remote half instead.
+///
+/// Drift warning: these names and shapes must stay in lockstep with the Pi
+/// surface (<see cref="ILD.Data.ToolDescriptors"/>) and the agent-API endpoints
+/// (<c>AgentController</c>) so the chat behaves the same whichever CLI backs it.
+/// </summary>
+[McpServerToolType]
+public sealed class BranchTools
+{
+    private readonly IldClient _ild;
+
+    public BranchTools(IldClient ild) { _ild = ild; }
+
+    [McpServerTool(Name = "pull_branch")]
+    [Description("Pull the latest changes from origin into this work item's run branch — fetches origin with ILD's repository credentials and rebases the worktree branch onto its own remote counterpart (origin/<branch>). Use this to pick up commits pushed to the branch after the run started; you cannot do it yourself, git in the worktree has no credentials. It does NOT sync with the repository's default branch. Returns an 'outcome' of Updated, AlreadyUpToDate (nothing new on origin), NoRemoteBranch (the branch was never pushed — nothing to pull, not an error), DirtyWorktree (commit your changes first; 'files' lists them) or Conflict (the rebase was aborted and the branch left untouched; 'files' lists the conflicted paths).")]
+    public Task<string> PullBranch(
+        [Description("Work item GUID (from the Chat Context).")] string workItemId)
+        => _ild.PostJsonAsync($"api/v1/agent/workitems/{Uri.EscapeDataString(workItemId)}/pull-branch", new { });
+}

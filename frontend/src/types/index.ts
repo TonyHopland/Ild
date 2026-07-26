@@ -165,6 +165,27 @@ export interface WorktreeFiles {
   files: WorktreeFileEntry[];
 }
 
+/**
+ * What a pull of the run branch did, or why it could not. `DirtyWorktree` and
+ * `Conflict` come back on a 200 with `success: false` — they are answers the
+ * caller has to act on, not transport errors.
+ */
+export type PullBranchOutcome =
+  | "Updated"
+  | "AlreadyUpToDate"
+  | "NoRemoteBranch"
+  | "DirtyWorktree"
+  | "Conflict";
+
+export interface PullBranchResult {
+  outcome: PullBranchOutcome;
+  success: boolean;
+  branch: string | null;
+  message: string;
+  /** Conflicted paths for `Conflict`, uncommitted ones for `DirtyWorktree`. */
+  files: string[];
+}
+
 export interface WorktreeFileContent {
   path: string;
   changeStatus: WorktreeFileChangeStatus;

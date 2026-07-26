@@ -1,3 +1,4 @@
+using ILD.Api.Contracts;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
@@ -374,6 +375,16 @@ public class WorkItemsController : ControllerBase
         if (!result.Success)
             return BadRequest(new { error = result.Error });
         return Ok(new { branch = result.Branch });
+    }
+
+    [HttpPost("{id}/pull-branch")]
+    public async Task<IActionResult> PullBranch(string id, CancellationToken cancellationToken)
+    {
+        var (_, error) = await GetPreviewableWorkItemAsync(id);
+        if (error != null) return error;
+
+        return PullBranchHttpResult.ToActionResult(
+            await _workItemManager.PullBranchAsync(id, cancellationToken));
     }
 
     [HttpPost("{id}/transition")]

@@ -17,6 +17,7 @@ import {
   LoopNode,
   LoopNodeEdge,
   PrComment,
+  PullBranchResult,
   LoopRunSessionPreview,
   WorktreePreview,
   WorktreePreviewLog,
@@ -183,6 +184,10 @@ export const workItemService = {
 
   pushBranch: async (id: string): Promise<{ branch: string }> => {
     return api.post<{ branch: string }>(`/workitems/${id}/push-branch`, {});
+  },
+
+  pullBranch: async (id: string): Promise<PullBranchResult> => {
+    return api.post<PullBranchResult>(`/workitems/${id}/pull-branch`, {});
   },
 
   cleanupToDone: async (id: string): Promise<void> => {

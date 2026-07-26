@@ -80,6 +80,23 @@ public interface IWorkItemManager
     /// an error message describing why the push could not happen.
     /// </summary>
     Task<(bool Success, string? Branch, string? Error)> CommitAndPushBranchAsync(string workItemId);
+
+    /// <summary>
+    /// The inverse of <see cref="CommitAndPushBranchAsync"/>: pick up commits that
+    /// landed on the run branch's own remote counterpart after the run started — a
+    /// human fix, a review commit, another ILD instance — by fetching origin and
+    /// rebasing the worktree's branch onto <c>origin/&lt;branch&gt;</c>. Syncing onto
+    /// the repository's default branch is the Start node's job (ADR-0006) and is
+    /// deliberately not done here.
+    ///
+    /// <para>
+    /// Runs with the orchestrator's repository credentials, which is the whole point:
+    /// under ADR-0014 the agent uid can reach neither the token nor the askpass
+    /// helper, so an agent that needs the latest remote commits asks for this rather
+    /// than running <c>git pull</c> itself.
+    /// </para>
+    /// </summary>
+    Task<PullBranchResult> PullBranchAsync(string workItemId, CancellationToken cancellationToken = default);
     Task<bool> SubmitHumanFeedbackInputAsync(string workItemId, string input);
     Task<bool> SubmitHumanFeedbackRespondAsync(string workItemId, string input);
 
@@ -117,3 +134,54 @@ public sealed record MergePullRequestResult(
     string? Error,
     bool BranchDeleted,
     string? BranchWarning);
+
+/// <summary>
+/// What <see cref="IWorkItemManager.PullBranchAsync"/> did, or why it could not.
+/// An outcome rather than a bool because the caller — most often an AI node — has
+/// a different next move for each: commit first, resolve the listed conflicts,
+/// push before pulling, or simply carry on.
+/// </summary>
+public enum PullBranchOutcome
+{
+    /// <summary>The branch was rebased onto its remote counterpart.</summary>
+    Updated,
+
+    /// <summary>The remote counterpart held nothing the branch did not already have.</summary>
+    AlreadyUpToDate,
+
+    /// <summary>The branch has never been pushed, so there is nothing to pull. A no-op, not an error.</summary>
+    NoRemoteBranch,
+
+    /// <summary>Uncommitted changes would be rewritten by the rebase. Commit (or discard) them first.</summary>
+    DirtyWorktree,
+
+    /// <summary>The rebase could not be applied; it was aborted, so the branch is exactly as it was.</summary>
+    Conflict,
+
+    /// <summary>Everything else: no worktree, no repository, unresolvable branch, failed fetch.</summary>
+    Failed,
+}
+
+/// <summary>
+/// Outcome of a <see cref="IWorkItemManager.PullBranchAsync"/> call.
+/// <paramref name="Message"/> is human- and agent-readable and always set.
+/// <paramref name="Files"/> holds the paths standing in the way — the conflicted
+/// ones for <see cref="PullBranchOutcome.Conflict"/>, the uncommitted ones for
+/// <see cref="PullBranchOutcome.DirtyWorktree"/> — and is empty otherwise.
+/// </summary>
+public sealed record PullBranchResult(
+    PullBranchOutcome Outcome,
+    string? Branch,
+    string Message,
+    IReadOnlyList<string> Files)
+{
+    /// <summary>
+    /// True when the branch is in sync with its remote counterpart afterwards.
+    /// <see cref="PullBranchOutcome.NoRemoteBranch"/> counts: there is nothing to
+    /// be out of sync with until the branch is pushed.
+    /// </summary>
+    public bool Success => Outcome
+        is PullBranchOutcome.Updated
+        or PullBranchOutcome.AlreadyUpToDate
+        or PullBranchOutcome.NoRemoteBranch;
+}

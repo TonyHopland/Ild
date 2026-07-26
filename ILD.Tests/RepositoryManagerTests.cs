@@ -476,6 +476,121 @@ public class RepositoryManagerTests : IDisposable
 
     // Builds a repo with a real "origin" remote so origin/HEAD (the diff base)
     // resolves the way it does for a cloned-on-demand base repo in production.
+    // ── Branch-sync primitives (the pull-branch path) ──────────────────────
+
+    /// <summary>
+    /// An origin plus a worktree on a run branch that has already been pushed to
+    /// it — the shape <c>PullBranchAsync</c> operates on. The origin path is
+    /// returned so a test can land a commit on the remote branch behind the
+    /// worktree's back, which is exactly the case a pull exists to pick up.
+    /// </summary>
+    private async Task<(string Origin, string Worktree, RepositoryManager Mgr)> PushedRunBranchAsync(string branch)
+    {
+        var (work, mgr) = CloneWithOrigin();
+        var origin = GitOutput(work, "remote", "get-url", "origin").Trim();
+        var wt = await mgr.CreateWorktreeAsync(work, branch);
+        Git(wt, "push", "-u", "origin", branch);
+        return (origin, wt, mgr);
+    }
+
+    /// <summary>Commit <paramref name="content"/> to <paramref name="branch"/> in the origin repo.</summary>
+    private static void CommitOnOrigin(string origin, string branch, string file, string content)
+    {
+        Git(origin, "checkout", branch);
+        File.WriteAllText(Path.Combine(origin, file), content);
+        Git(origin, "add", "-A");
+        Git(origin, "commit", "-m", $"remote edit to {file}");
+    }
+
+    [Fact]
+    public async Task Fetch_then_rebase_picks_up_commits_pushed_to_the_branch_after_it_was_created()
+    {
+        var (origin, wt, mgr) = await PushedRunBranchAsync("ild/wi-1-run-1");
+        CommitOnOrigin(origin, "ild/wi-1-run-1", "mod.txt", "pushed by a human\n");
+
+        Assert.True(await mgr.FetchAsync(wt));
+        Assert.Equal(1, await mgr.GetCommitsBehindCountAsync(wt, "origin/ild/wi-1-run-1"));
+
+        var rebase = await mgr.RebaseAsync(wt, "origin/ild/wi-1-run-1");
+
+        Assert.True(rebase.Success);
+        Assert.Empty(rebase.ConflictedFiles);
+        Assert.Equal("pushed by a human\n", File.ReadAllText(Path.Combine(wt, "mod.txt")));
+        Assert.Equal(0, await mgr.GetCommitsBehindCountAsync(wt, "origin/ild/wi-1-run-1"));
+    }
+
+    [Fact]
+    public async Task RebaseAsync_aborts_a_conflicting_rebase_and_reports_the_conflicted_files()
+    {
+        var (origin, wt, mgr) = await PushedRunBranchAsync("ild/wi-2-run-1");
+
+        // The run's own commit and a remote commit touch the same line.
+        File.WriteAllText(Path.Combine(wt, "mod.txt"), "written by the agent\n");
+        Git(wt, "add", "-A");
+        Git(wt, "commit", "-m", "agent work");
+        var localHead = GitOutput(wt, "rev-parse", "HEAD").Trim();
+        CommitOnOrigin(origin, "ild/wi-2-run-1", "mod.txt", "written by a human\n");
+        Assert.True(await mgr.FetchAsync(wt));
+
+        var rebase = await mgr.RebaseAsync(wt, "origin/ild/wi-2-run-1");
+
+        Assert.False(rebase.Success);
+        Assert.Contains("mod.txt", rebase.ConflictedFiles);
+
+        // The abort is the point: a worktree left mid-rebase has no usable branch
+        // and would break every later node in the run.
+        Assert.Equal(localHead, GitOutput(wt, "rev-parse", "HEAD").Trim());
+        Assert.Equal("written by the agent\n", File.ReadAllText(Path.Combine(wt, "mod.txt")));
+        Assert.Empty(GitOutput(wt, "status", "--porcelain").Trim());
+        var rebaseState = GitOutput(wt, "rev-parse", "--git-path", "rebase-merge").Trim();
+        Assert.False(Directory.Exists(Path.Combine(wt, rebaseState)));
+    }
+
+    [Fact]
+    public async Task Pull_path_authenticates_the_fetch_and_leaks_no_credential_to_the_rebase()
+    {
+        var runner = new RecordingRunner();
+        var mgr = new RepositoryManager(runner, worktreesRoot: Path.Combine(_tmp, "wt"));
+        var auth = new GitAuthOptions("https://git.kube/team/repo.git", "token-123", "Forgejo");
+
+        await mgr.FetchAsync(_repo, auth: auth);
+        await mgr.RebaseAsync(_repo, "origin/ild/wi-3-run-1");
+
+        // The fetch is the only half of a pull that talks to the remote.
+        Assert.Equal("token-123", runner.Calls[0].Environment!["ILD_GIT_PASSWORD"]);
+        Assert.False(string.IsNullOrWhiteSpace(runner.Calls[0].Environment!["GIT_ASKPASS"]));
+        // The rebase is local-only: no token, no askpass path, nothing for an
+        // agent-authored git hook to read back out of the environment (ADR-0014).
+        Assert.Contains("rebase", runner.Calls[1].Args);
+        Assert.Null(runner.Calls[1].Environment);
+    }
+
+    [Fact]
+    public async Task GetUncommittedFilesAsync_names_tracked_changes_and_ignores_untracked_files()
+    {
+        var (_, wt, mgr) = await PushedRunBranchAsync("ild/wi-4-run-1");
+
+        Assert.Empty(await mgr.GetUncommittedFilesAsync(wt));
+
+        File.WriteAllText(Path.Combine(wt, "mod.txt"), "edited\n");
+        File.Delete(Path.Combine(wt, "gone.txt"));
+        // Untracked scratch must not count as dirty: a rebase leaves it alone.
+        File.WriteAllText(Path.Combine(wt, "scratch.log"), "noise\n");
+
+        var dirty = await mgr.GetUncommittedFilesAsync(wt);
+
+        Assert.Equal(new[] { "gone.txt", "mod.txt" }, dirty.OrderBy(f => f, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task RemoteBranchExistsAsync_reports_whether_the_branch_was_ever_pushed()
+    {
+        var (_, wt, mgr) = await PushedRunBranchAsync("ild/wi-5-run-1");
+
+        Assert.True(await mgr.RemoteBranchExistsAsync(wt, "ild/wi-5-run-1"));
+        Assert.False(await mgr.RemoteBranchExistsAsync(wt, "ild/wi-5-run-2"));
+    }
+
     private (string Work, RepositoryManager Mgr) CloneWithOrigin()
     {
         var origin = Path.Combine(_tmp, "origin-" + Guid.NewGuid().ToString("N"));
