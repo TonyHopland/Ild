@@ -187,8 +187,8 @@ public class WorkItemManager : IWorkItemManager
                               .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
                               .FirstOrDefault();
 
-        var timingRun = LatestRun(runs);
-        return BuildView(remote, currentRun, timingRun, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty));
+        var archivedPrs = await _loopRunStore.GetArchivedPullRequestsAsync(new[] { workItemId });
+        return BuildView(remote, currentRun, runs, archivedPrs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty));
     }
 
     public async Task<IReadOnlyList<WorkItemView>> ListAsync(
@@ -207,13 +207,14 @@ public class WorkItemManager : IWorkItemManager
 
         var allRuns = await _loopRunStore.GetAllAsync(skip: 0, take: int.MaxValue);
         var runsByWorkItem = allRuns.GroupBy(r => r.WorkItemId).ToDictionary(g => g.Key, g => g.ToList());
+        var archivedByWorkItem = await GetArchivedPrsByWorkItemAsync(remoteList.Select(r => r.Id));
 
         var views = new List<WorkItemView>();
         foreach (var r in remoteList)
         {
             LoopRun? currentRun = null;
-            LoopRun? timingRun = null;
-            if (runsByWorkItem.TryGetValue(r.Id, out var runs))
+            var runs = runsByWorkItem.GetValueOrDefault(r.Id) ?? new List<LoopRun>();
+            if (runs.Count > 0)
             {
                 currentRun = runs.FirstOrDefault(rn => rn.Status == LoopRunStatus.Running)
                            ?? runs.FirstOrDefault(rn => rn.Status == LoopRunStatus.WaitingHuman)
@@ -222,9 +223,8 @@ public class WorkItemManager : IWorkItemManager
                            ?? runs.Where(rn => rn.Status != LoopRunStatus.Completed)
                                   .OrderByDescending(rn => rn.StartedAt ?? rn.CreatedAt)
                                   .FirstOrDefault();
-                timingRun = LatestRun(runs);
             }
-            var view = BuildView(r, currentRun, timingRun, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty));
+            var view = BuildView(r, currentRun, runs, archivedByWorkItem.GetValueOrDefault(r.Id), _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty));
             if (createdByLoopRunId.HasValue && view.CreatedByLoopRunId != createdByLoopRunId) continue;
             if (repositoryId.HasValue && view.RepositoryId != repositoryId) continue;
             views.Add(view);
@@ -353,8 +353,27 @@ public class WorkItemManager : IWorkItemManager
     private static LoopRun? LatestRun(IEnumerable<LoopRun> runs)
         => runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).FirstOrDefault();
 
-    private static WorkItemView BuildView(RemoteWorkItem remote, LoopRun? run, LoopRun? timingRun, bool isPreviewRunning)
+    /// <summary>
+    /// The archived PRs of the given work items, keyed by work item — the half
+    /// of PR history whose runs are already gone. One query for the whole page:
+    /// the taskboard reads every card at once.
+    /// </summary>
+    private async Task<Dictionary<string, List<WorkItemPullRequestRecord>>> GetArchivedPrsByWorkItemAsync(IEnumerable<string> workItemIds)
     {
+        var archived = await _loopRunStore.GetArchivedPullRequestsAsync(workItemIds.ToList());
+        return archived
+            .GroupBy(p => p.WorkItemId, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.Ordinal);
+    }
+
+    private static WorkItemView BuildView(
+        RemoteWorkItem remote,
+        LoopRun? run,
+        IReadOnlyList<LoopRun> runs,
+        IReadOnlyList<WorkItemPullRequestRecord>? archivedPrs,
+        bool isPreviewRunning)
+    {
+        var timingRun = LatestRun(runs);
         return new WorkItemView
         {
             Id = remote.Id,
@@ -383,8 +402,66 @@ public class WorkItemManager : IWorkItemManager
             CurrentLoopRunId = run?.Id,
             CurrentNodeLabel = ResolveCurrentNodeLabel(run),
             IsPreviewRunning = isPreviewRunning,
-            PrStatus = ResolvePrStatus(run),
+            PrStatus = ResolvePrStatus(run?.PrSnapshot),
+            PullRequests = BuildPrHistory(runs, archivedPrs),
         };
+    }
+
+    /// <summary>
+    /// One observation of a PR on a work item, from a live run or from the
+    /// archived record left behind when that run was deleted. The two sources
+    /// are merged into a single sequence so neither the ordering nor the dedup
+    /// rule has to know which of them an entry came from.
+    /// </summary>
+    private readonly record struct PrSighting(
+        string Url,
+        Guid? RunId,
+        bool Merged,
+        string? Snapshot,
+        DateTime FirstSeenAt,
+        DateTime LastSeenAt);
+
+    /// <summary>
+    /// Every PR ever opened against the work item: the PRs on its live runs plus
+    /// the ones archived when their runs were deleted, deduplicated by URL and
+    /// ordered newest run first — the order the detail dialog renders, so the PR
+    /// a human most likely wants is at the top.
+    ///
+    /// ADR-0008 gives each run at most one PR, so an item's history is one entry
+    /// per distinct URL across its runs. A URL seen on several runs (a retry
+    /// pointed back at its predecessor's PR) collapses to one entry attributed
+    /// to the newest of them; a run id that no longer resolves to a live run is
+    /// dropped, so an entry never links to a run that has been reclaimed.
+    /// </summary>
+    private static IReadOnlyList<WorkItemPullRequest> BuildPrHistory(
+        IReadOnlyList<LoopRun> runs,
+        IReadOnlyList<WorkItemPullRequestRecord>? archivedPrs)
+    {
+        var sightings = runs
+            .Where(r => !string.IsNullOrWhiteSpace(r.PrUrl))
+            .Select(r => new PrSighting(r.PrUrl!, r.Id, r.IsPrMerged, r.PrSnapshot, r.StartedAt ?? r.CreatedAt, r.StartedAt ?? r.CreatedAt))
+            .Concat((archivedPrs ?? Array.Empty<WorkItemPullRequestRecord>())
+                .Select(p => new PrSighting(p.Url, p.LoopRunId, p.Merged, p.PrSnapshot, p.FirstSeenAt, p.LastSeenAt)))
+            .OrderByDescending(s => s.LastSeenAt)
+            .ToList();
+        if (sightings.Count == 0) return Array.Empty<WorkItemPullRequest>();
+
+        var liveRunIds = runs.Select(r => r.Id).ToHashSet();
+
+        // GroupBy keeps both the groups and their contents in source order, so
+        // the newest sighting leads each group and the groups themselves come
+        // out newest-first.
+        return sightings
+            .GroupBy(s => s.Url, StringComparer.Ordinal)
+            .Select(g => new WorkItemPullRequest(
+                g.Key,
+                g.First().RunId is { } runId && liveRunIds.Contains(runId) ? runId : null,
+                // Merge is monotonic: a later run pointed at the same PR never
+                // un-merges it.
+                g.Any(s => s.Merged),
+                ResolvePrStatus(g.FirstOrDefault(s => !string.IsNullOrEmpty(s.Snapshot)).Snapshot),
+                g.Min(s => s.FirstSeenAt)))
+            .ToList();
     }
 
     // The poller persists the snapshot with the web (camelCase) options, so
@@ -393,17 +470,17 @@ public class WorkItemManager : IWorkItemManager
     private static readonly JsonSerializerOptions PrSnapshotJson = JsonSerializerOptions.Web;
 
     /// <summary>
-    /// Projects the run's persisted PR snapshot onto the badge-relevant subset
-    /// the taskboard card renders. Returns null when there is no snapshot yet;
+    /// Projects a persisted PR snapshot onto the badge-relevant subset the
+    /// taskboard card renders. Returns null when there is no snapshot yet;
     /// a corrupt blob degrades to null rather than failing the whole view.
     /// </summary>
-    private static WorkItemPrStatus? ResolvePrStatus(LoopRun? run)
+    private static WorkItemPrStatus? ResolvePrStatus(string? prSnapshot)
     {
-        if (string.IsNullOrEmpty(run?.PrSnapshot)) return null;
+        if (string.IsNullOrEmpty(prSnapshot)) return null;
         RemotePrSnapshot? snapshot;
         try
         {
-            snapshot = JsonSerializer.Deserialize<RemotePrSnapshot>(run.PrSnapshot, PrSnapshotJson);
+            snapshot = JsonSerializer.Deserialize<RemotePrSnapshot>(prSnapshot, PrSnapshotJson);
         }
         catch (JsonException)
         {
@@ -645,6 +722,7 @@ public class WorkItemManager : IWorkItemManager
         if (ids.Count == 0) return Array.Empty<WorkItemView>();
 
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
+        var archivedByWorkItem = await GetArchivedPrsByWorkItemAsync(ids);
         var views = new List<WorkItemView>();
         foreach (var id in ids)
         {
@@ -654,7 +732,7 @@ public class WorkItemManager : IWorkItemManager
                 var runs = await _loopRunStore.GetAllByWorkItemAsync(id);
                 var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
                                ?? runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).FirstOrDefault();
-                views.Add(BuildView(remote, currentRun, LatestRun(runs), _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty)));
+                views.Add(BuildView(remote, currentRun, runs, archivedByWorkItem.GetValueOrDefault(id), _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty)));
             }
         }
         return views;
@@ -664,16 +742,15 @@ public class WorkItemManager : IWorkItemManager
     {
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
         var all = await _server.ListAsync(opts, status: null, tags: null);
+        var dependents = all.Where(w => w.Dependencies.Contains(workItemId)).ToList();
+        var archivedByWorkItem = await GetArchivedPrsByWorkItemAsync(dependents.Select(w => w.Id));
         var views = new List<WorkItemView>();
-        foreach (var candidate in all)
+        foreach (var candidate in dependents)
         {
-            if (candidate.Dependencies.Contains(workItemId))
-            {
-                var runs = await _loopRunStore.GetAllByWorkItemAsync(candidate.Id);
-                var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
-                               ?? runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).FirstOrDefault();
-                views.Add(BuildView(candidate, currentRun, LatestRun(runs), _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty)));
-            }
+            var runs = await _loopRunStore.GetAllByWorkItemAsync(candidate.Id);
+            var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
+                           ?? runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).FirstOrDefault();
+            views.Add(BuildView(candidate, currentRun, runs, archivedByWorkItem.GetValueOrDefault(candidate.Id), _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty)));
         }
         return views;
     }
@@ -1033,6 +1110,12 @@ public class WorkItemManager : IWorkItemManager
                 continue;
             await _loopRunStore.DeleteAsync(run.Id);
         }
+
+        // The PR archive outlives runs by design, so it has to be dropped
+        // explicitly here — including the records the deletions above just
+        // wrote. Nothing is left holding a link to an item that no longer
+        // exists.
+        await _loopRunStore.DeleteArchivedPullRequestsAsync(workItemId);
         return true;
     }
 

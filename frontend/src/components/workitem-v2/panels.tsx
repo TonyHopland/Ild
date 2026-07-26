@@ -4,6 +4,7 @@ import {
   Repository,
   RemotePrSnapshot,
   WorkItem,
+  WorkItemPullRequest,
   WorkItemStatus,
   WorktreePreviewService,
 } from "../../types";
@@ -728,6 +729,16 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
   const isLoopTag = makeLoopTagMatcher(detail.templates.map((t) => t.name));
   const fmt = (d: string | null) => (d ? new Date(d).toLocaleString() : "—");
 
+  // Every PR ever opened against the item, newest first. prUrl only ever holds
+  // the *current* run's PR, so it empties out the moment the run finishes and an
+  // item that had several runs could never show more than one (WI-203) — it is
+  // kept here only as the fallback for a payload without the history field.
+  const prHistory: WorkItemPullRequest[] = workItem.pullRequests?.length
+    ? workItem.pullRequests
+    : workItem.prUrl
+      ? [{ url: workItem.prUrl, runId: workItem.currentLoopRunId ?? null, merged: false }]
+      : [];
+
   // While the item is mid run, surface the pinned loop's name and the node the
   // engine is currently on. Both come from the current run's detail.
   const { currentRun } = detail;
@@ -778,11 +789,20 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
         </div>
       )}
       <div className="wiv2-meta-row wiv2-meta-col">
-        <span className="detail-label">Pull Request</span>
-        {workItem.prUrl ? (
-          <a href={workItem.prUrl} target="_blank" rel="noopener noreferrer" className="pr-link">
-            {workItem.prUrl}
-          </a>
+        <span className="detail-label">
+          {prHistory.length > 1 ? "Pull Requests" : "Pull Request"}
+        </span>
+        {prHistory.length > 0 ? (
+          <ul className="pr-history">
+            {prHistory.map((pr) => (
+              <li key={pr.url} className="pr-history-entry">
+                <a href={pr.url} target="_blank" rel="noopener noreferrer" className="pr-link">
+                  {pr.url}
+                </a>
+                {pr.merged && <span className="pr-history-merged">merged</span>}
+              </li>
+            ))}
+          </ul>
         ) : (
           <span className="detail-value pr-none">No PR linked</span>
         )}

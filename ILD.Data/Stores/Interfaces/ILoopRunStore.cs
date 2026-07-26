@@ -153,6 +153,27 @@ public interface ILoopRunStore
     /// Hard-deletes a loop run and all of its dependent rows (run nodes,
     /// edge traversals, event log entries). Returns false if the run does
     /// not exist or is still Running.
+    ///
+    /// What the run knew that outlives it is archived first: its metrics fold
+    /// into the analytics rollup, and any PR it opened becomes a
+    /// <see cref="WorkItemPullRequestRecord"/> so the work item keeps the link
+    /// (see <see cref="GetArchivedPullRequestsAsync"/>).
     /// </summary>
     Task<bool> DeleteAsync(Guid runId);
+
+    /// <summary>
+    /// The PRs of the given work items whose runs have already been deleted.
+    /// The other half of a work item's PR history is the PRs still on its live
+    /// runs — callers hold those already and merge the two, deduplicating by
+    /// URL, so a PR is sourced from the run while it exists and from here
+    /// afterwards. Empty ids yield an empty list rather than a full scan.
+    /// </summary>
+    Task<IReadOnlyList<WorkItemPullRequestRecord>> GetArchivedPullRequestsAsync(IReadOnlyCollection<string> workItemIds);
+
+    /// <summary>
+    /// Drops a work item's archived PR records, for when the work item itself
+    /// is deleted — nothing else ever removes them, since the whole point is
+    /// that they outlive the runs. Returns how many rows went.
+    /// </summary>
+    Task<int> DeleteArchivedPullRequestsAsync(string workItemId);
 }

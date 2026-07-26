@@ -79,6 +79,12 @@ export default function WorkItemCard({
       ? prStatusBadges(workItem.prStatus)
       : [];
 
+  // Those badges are gated on the item being parked at a PR node, so without
+  // this a card loses every trace of its PRs the moment the run finishes and it
+  // lands in Done. The count, not just a marker: a retried item opens one PR per
+  // run (ADR-0008) and the board should say how many there were (WI-203).
+  const prCount = workItem.pullRequests?.length ?? 0;
+
   return (
     <div
       className="work-item-card"
@@ -114,6 +120,11 @@ export default function WorkItemCard({
               {badge.label}
             </span>
           ))}
+        </div>
+      )}
+      {prCount > 0 && (
+        <div className="work-item-pr-history" title="Pull requests opened for this item">
+          {prCount === 1 ? "1 PR" : `${prCount} PRs`}
         </div>
       )}
       {showRunningMeta && (
@@ -195,6 +206,16 @@ export default function WorkItemCard({
           flex-wrap: wrap;
           gap: 0.25rem;
           margin-bottom: 0.375rem;
+        }
+
+        .work-item-pr-history {
+          display: inline-block;
+          font-size: 0.675rem;
+          padding: 0.1rem 0.4rem;
+          margin-bottom: 0.375rem;
+          border-radius: 0.25rem;
+          background-color: #1a2744;
+          color: #60a5fa;
         }
 
         .work-item-running-meta {

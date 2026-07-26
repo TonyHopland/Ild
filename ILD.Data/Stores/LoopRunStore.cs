@@ -371,12 +371,86 @@ public class LoopRunStore : ILoopRunStore
         // are cascade-deleted, so token/cost/timing history survives reclaim.
         await ArchiveRunAnalyticsAsync(run, eventLogs);
 
+        // Same deal for the PR it opened: this row is the only thing still
+        // holding the link, so record it before it goes (WI-203).
+        await ArchivePullRequestAsync(run);
+
         if (eventLogs.Count > 0)
             _db.EventLogs.RemoveRange(eventLogs);
 
         _db.LoopRuns.Remove(run);
         await _db.SaveChangesAsync();
         return true;
+    }
+
+    public async Task<IReadOnlyList<WorkItemPullRequestRecord>> GetArchivedPullRequestsAsync(IReadOnlyCollection<string> workItemIds)
+    {
+        if (workItemIds.Count == 0) return Array.Empty<WorkItemPullRequestRecord>();
+
+        return await _db.WorkItemPullRequestRecords.AsNoTracking()
+            .Where(p => workItemIds.Contains(p.WorkItemId))
+            .OrderByDescending(p => p.LastSeenAt)
+            .ToListAsync();
+    }
+
+    public async Task<int> DeleteArchivedPullRequestsAsync(string workItemId)
+    {
+        var records = await _db.WorkItemPullRequestRecords
+            .Where(p => p.WorkItemId == workItemId)
+            .ToListAsync();
+        if (records.Count == 0) return 0;
+
+        _db.WorkItemPullRequestRecords.RemoveRange(records);
+        await _db.SaveChangesAsync();
+        return records.Count;
+    }
+
+    /// <summary>
+    /// Record a soon-to-be-deleted run's PR against its work item so the link
+    /// outlives the run row. Queued on the context and committed by the caller's
+    /// <c>SaveChanges</c> alongside the deletion.
+    ///
+    /// Upserts on (work item, URL): several runs can carry the same PR — a
+    /// retried run pointed back at its predecessor's — and they are deleted one
+    /// at a time in whatever order the sweeper reaches them, so the record keeps
+    /// the earliest sighting as its created time and takes the mutable state
+    /// from the latest run it has seen. Merge is sticky: a PR observed merged
+    /// stays merged whichever run reports last.
+    /// </summary>
+    private async Task ArchivePullRequestAsync(LoopRun run)
+    {
+        if (string.IsNullOrWhiteSpace(run.PrUrl)) return;
+
+        var seenAt = run.StartedAt ?? run.CreatedAt;
+        var record = await _db.WorkItemPullRequestRecords
+            .FirstOrDefaultAsync(p => p.WorkItemId == run.WorkItemId && p.Url == run.PrUrl);
+
+        if (record is null)
+        {
+            record = new WorkItemPullRequestRecord
+            {
+                Id = Guid.NewGuid(),
+                WorkItemId = run.WorkItemId,
+                Url = run.PrUrl,
+                FirstSeenAt = seenAt,
+                LastSeenAt = seenAt,
+            };
+            _db.WorkItemPullRequestRecords.Add(record);
+        }
+
+        record.Merged |= run.IsPrMerged;
+        if (seenAt < record.FirstSeenAt) record.FirstSeenAt = seenAt;
+
+        // An older run reaching the archive after a newer one still contributes
+        // its merge flag and its opening time, but must not take the attribution
+        // back off the newer run.
+        if (seenAt < record.LastSeenAt) return;
+
+        record.LastSeenAt = seenAt;
+        record.LoopRunId = run.Id;
+        // Keep the last snapshot that exists: an older run that was polled says
+        // more about the PR than a newer one that never was.
+        record.PrSnapshot = run.PrSnapshot ?? record.PrSnapshot;
     }
 
     /// <summary>
