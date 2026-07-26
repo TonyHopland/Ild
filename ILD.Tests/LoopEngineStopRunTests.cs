@@ -13,13 +13,19 @@ using Moq;
 namespace ILD.Tests;
 
 /// <summary>
-/// <c>StopRunAsync</c> is the single definition of "a run has ended" — the
-/// counterpart to <c>LoopRunStore.IsAlive</c>'s definition of alive, and what a
-/// work item's concurrency slot is released against. It ends the run and
-/// nothing else; deciding what the work item should say next belongs to
-/// whoever asked, because they all want something different — Done for a human
-/// finishing it, HumanFeedback for the cancel button, and nothing at all for a
-/// poll pass reacting to a status the server already has.
+/// <c>StopRunAsync</c> is how the control plane ends a run — the cancel button,
+/// a human sending the work item to Done, a poll pass reacting to a Done the
+/// server already holds, startup reconcile. The engine's own lifecycle ends its
+/// runs directly instead (Completed at a Cleanup node, Failed on a node failure
+/// or crash), and needs no help doing so: a work item leaves the Active Work
+/// Item Set as soon as its run's row leaves <c>LoopRunStore.IsAlive</c>,
+/// whichever writer got there first.
+///
+/// What this one owns is the run and only the run. Deciding what the work item
+/// should say next belongs to whoever asked, because they all want something
+/// different — Done for a human finishing it, HumanFeedback for the cancel
+/// button, and nothing at all for a poll pass reacting to a status the server
+/// already has.
 /// </summary>
 public class LoopEngineStopRunTests
 {

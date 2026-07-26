@@ -27,10 +27,18 @@ public interface ILoopEngine
 
     /// <summary>
     /// End a run and nothing else: stop the in-flight node, write the row
-    /// terminal with <paramref name="reason"/>, and tell the UI. The single
-    /// definition of "ended", the counterpart to <c>LoopRunStore.IsAlive</c>'s
-    /// single definition of "alive" — a run stops holding its work item's
-    /// concurrency slot exactly when this has run.
+    /// terminal with <paramref name="reason"/>, and tell the UI. The one way the
+    /// <em>control plane</em> ends a run — the cancel button, a human sending
+    /// the work item to Done, a poll pass reacting to a Done the server already
+    /// holds, startup reconcile. Not a choke point for every ending: the
+    /// engine's own lifecycle finishes its runs directly, Completed at a
+    /// Cleanup node or Failed on a node failure or crash.
+    ///
+    /// Nothing has to funnel through here, and that is the point of the
+    /// Active Work Item Set being derived: a run stops holding its work item's
+    /// concurrency slot as soon as its row leaves <c>LoopRunStore.IsAlive</c>,
+    /// whichever writer got there first, so no terminal path has to remember to
+    /// release anything.
     ///
     /// What the work item should say afterwards is deliberately the caller's
     /// business: a human finishing it wants Done, the cancel button wants
