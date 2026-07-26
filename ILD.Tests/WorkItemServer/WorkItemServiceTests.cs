@@ -14,6 +14,7 @@ public class WorkItemServiceTests : IAsyncLifetime
     private WorkItemServerDbContext _db = null!;
     private TestClock _clock = null!;
     private WorkItemService _svc = null!;
+    private DbContextOptions<WorkItemServerDbContext> _options = null!;
 
     public async Task InitializeAsync()
     {
@@ -22,6 +23,7 @@ public class WorkItemServiceTests : IAsyncLifetime
         var options = new DbContextOptionsBuilder<WorkItemServerDbContext>()
             .UseSqlite(_conn)
             .Options;
+        _options = options;
         _db = new WorkItemServerDbContext(options);
         await _db.Database.EnsureCreatedAsync();
         _clock = new TestClock(new DateTime(2026, 5, 1, 12, 0, 0, DateTimeKind.Utc));
@@ -659,6 +661,148 @@ public class WorkItemServiceTests : IAsyncLifetime
         // left behind to block the claim.
         await _svc.TransitionAsync(dep2.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Done });
         Assert.Equal(WorkItemStatus.Ready, (await _svc.GetAsync(child.Id))!.Status);
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Pull requests (WI-203). A PR touches the repository and is part of the
+    // work item, so the server holds it — unlike the ILD instance's worktree,
+    // branch and PR snapshot, which are throwaway and go with the run.
+    // ──────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task RecordPullRequest_puts_the_PR_on_the_work_item()
+    {
+        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
+        var runId = Guid.NewGuid();
+
+        Assert.Equal(RecordPullRequestOutcome.Recorded, await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest
+        {
+            Url = "https://forgejo/repo/pulls/1",
+            LoopRunId = runId,
+            CreatedAt = new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc),
+        }));
+
+        var pr = Assert.Single((await _svc.GetAsync(wi.Id))!.PullRequests);
+        Assert.Equal("https://forgejo/repo/pulls/1", pr.Url);
+        Assert.Equal(runId, pr.LoopRunId);
+        Assert.False(pr.Merged);
+        Assert.Equal(new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc), pr.CreatedAt);
+        // Recording a PR is not a lifecycle event.
+        Assert.Equal(WorkItemStatus.Backlog, (await _svc.GetAsync(wi.Id))!.Status);
+    }
+
+    [Fact]
+    public async Task RecordPullRequest_is_keyed_on_the_url_and_never_unmerges()
+    {
+        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
+        const string url = "https://forgejo/repo/pulls/1";
+        var opened = new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        // Opened, then reported merged, then re-reported by a later run that
+        // has no idea it was merged (a retry pointed back at the same PR).
+        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = url, CreatedAt = opened });
+        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = url, Merged = true, CreatedAt = opened });
+        var laterRun = Guid.NewGuid();
+        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest
+        {
+            Url = url,
+            LoopRunId = laterRun,
+            CreatedAt = opened.AddHours(2),
+        });
+
+        var pr = Assert.Single((await _svc.GetAsync(wi.Id))!.PullRequests);
+        Assert.True(pr.Merged);
+        Assert.Equal(laterRun, pr.LoopRunId);
+        // The item has had this PR since the first run opened it.
+        Assert.Equal(opened, pr.CreatedAt);
+    }
+
+    [Fact]
+    public async Task Pull_requests_come_back_newest_first_whatever_order_they_arrive_in()
+    {
+        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
+        var day = new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/2", CreatedAt = day.AddHours(2) });
+        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/1", CreatedAt = day.AddHours(1) });
+        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/3", CreatedAt = day.AddHours(3) });
+
+        Assert.Equal(
+            new[] { "pulls/3", "pulls/2", "pulls/1" },
+            (await _svc.GetAsync(wi.Id))!.PullRequests.Select(p => p.Url));
+    }
+
+    [Fact]
+    public async Task RecordPullRequest_does_not_lose_a_PR_a_competing_writer_recorded()
+    {
+        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
+        var day = new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc);
+        // This scope has read the item, so it holds a copy of the list from
+        // before anyone else touched it.
+        await _svc.GetAsync(wi.Id);
+
+        // Another writer — a second request, or another ILD instance
+        // reconciling the same item — records a PR this one has never seen.
+        await using var otherDb = new WorkItemServerDbContext(_options);
+        var other = new WorkItemService(otherDb, _clock);
+        Assert.Equal(RecordPullRequestOutcome.Recorded, await other.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/1", CreatedAt = day }));
+
+        Assert.Equal(RecordPullRequestOutcome.Recorded, await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/2", CreatedAt = day.AddHours(1) }));
+
+        // Both survive: recording a PR reads the list as it stands and writes
+        // against that snapshot, rather than overwriting it from a stale copy.
+        Assert.Equal(
+            new[] { "pulls/2", "pulls/1" },
+            (await other.GetAsync(wi.Id))!.PullRequests.Select(p => p.Url));
+        // ...and this scope's own view of the item agrees.
+        Assert.Equal(2, (await _svc.GetAsync(wi.Id))!.PullRequests.Count);
+    }
+
+    [Fact]
+    public async Task An_unreadable_pull_request_list_reads_as_empty_and_can_be_rebuilt()
+    {
+        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
+        var row = await _db.WorkItems.FirstAsync(x => x.Id == wi.Id);
+        row.PullRequestsJson = "{ this is not the list";
+        await _db.SaveChangesAsync();
+
+        // Every read of the work item goes through this list, so an unreadable
+        // one must not take the item — or the board listing it — down.
+        Assert.Empty((await _svc.GetAsync(wi.Id))!.PullRequests);
+        Assert.Empty(Assert.Single(await _svc.ListAsync(null, null)).PullRequests);
+
+        // And a reporter that still has the PR puts it back.
+        Assert.Equal(
+            RecordPullRequestOutcome.Recorded,
+            await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/1" }));
+        Assert.Equal("pulls/1", Assert.Single((await _svc.GetAsync(wi.Id))!.PullRequests).Url);
+    }
+
+    [Fact]
+    public async Task RecordPullRequest_tells_a_missing_item_apart_from_a_bad_report()
+    {
+        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
+
+        // The two are different answers to the caller: one says stop asking,
+        // the other says fix the request. Neither may be reported as the other
+        // (the endpoint maps them to 404 and 400).
+        Assert.Equal(
+            RecordPullRequestOutcome.NotFound,
+            await _svc.RecordPullRequestAsync("WI-nope", new RecordPullRequestRequest { Url = "pulls/1" }));
+        Assert.Equal(
+            RecordPullRequestOutcome.InvalidRequest,
+            await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "  " }));
+    }
+
+    [Fact]
+    public async Task Deleting_a_work_item_takes_its_pull_requests_with_it()
+    {
+        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
+        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/1" });
+
+        Assert.True(await _svc.DeleteAsync(wi.Id));
+
+        Assert.Null(await _svc.GetAsync(wi.Id));
     }
 
     [Fact]

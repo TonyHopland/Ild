@@ -53,6 +53,11 @@ public class PrSyncService : IPrSyncService
             run.UpdatedAt = DateTime.UtcNow;
             await _loopRunStore.UpdateRunAsync(run);
 
+            // Merged is the one PR fact worth keeping forever, so it goes onto
+            // the work item's own record and not just the run's.
+            await _workItems.RecordPullRequestAsync(run.WorkItemId, run.PrUrl!, run.Id, merged: true,
+                createdAt: run.StartedAt ?? run.CreatedAt);
+
             // An active run completes through its own graph (PR node signal →
             // ... → Cleanup → Done). Only when the merged PR belongs to the
             // work item's current run and that run is already terminal (no
@@ -92,13 +97,7 @@ public class PrSyncService : IPrSyncService
     public Task SyncPullRequestCommentsAsync(string workItemId, string prUrl) => Task.CompletedTask;
 
     public async Task RegisterWorkItemPrLinkAsync(string workItemId, string prUrl)
-    {
-        var run = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
-        if (run == null) return;
-        run.PrUrl = prUrl;
-        run.UpdatedAt = DateTime.UtcNow;
-        await _loopRunStore.UpdateRunAsync(run);
-    }
+        => await _workItems.LinkPullRequestAsync(workItemId, prUrl);
 
     public async Task<string?> GetPrUrlForWorkItemAsync(string workItemId)
     {

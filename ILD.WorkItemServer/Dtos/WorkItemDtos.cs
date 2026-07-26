@@ -15,6 +15,9 @@ public sealed class WorkItemDto
     public IReadOnlyList<string> Tags { get; set; } = Array.Empty<string>();
     public IReadOnlyList<string> Dependencies { get; set; } = Array.Empty<string>();
     public IReadOnlyList<ConversationMessage> Conversation { get; set; } = Array.Empty<ConversationMessage>();
+
+    /// <summary>Every PR opened against this item, newest first.</summary>
+    public IReadOnlyList<WorkItemPullRequest> PullRequests { get; set; } = Array.Empty<WorkItemPullRequest>();
     public string? HumanFeedbackActions { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? CreatedByChatSessionId { get; set; }
@@ -79,6 +82,50 @@ public sealed class AppendConversationRequest
     public string? Role { get; set; }
     public string? Content { get; set; }
     public string? Name { get; set; }
+}
+
+/// <summary>
+/// What came of recording a PR against a work item. Distinguished rather than
+/// collapsed into a bool because they mean different things to a caller: only
+/// <see cref="NotFound"/> says the request will never succeed, while
+/// <see cref="Conflict"/> is worth retrying and must not be reported to a
+/// client as "no such work item".
+/// </summary>
+public enum RecordPullRequestOutcome
+{
+    /// <summary>Recorded, or already known exactly as reported.</summary>
+    Recorded = 0,
+
+    /// <summary>The report carried no URL, so there was nothing to record.</summary>
+    InvalidRequest = 1,
+
+    /// <summary>No work item with that id.</summary>
+    NotFound = 2,
+
+    /// <summary>
+    /// Other writers kept winning the race for the item's PR list. Nothing was
+    /// recorded and nothing was lost; the same report will go through on a
+    /// later attempt.
+    /// </summary>
+    Conflict = 3,
+}
+
+public sealed class RecordPullRequestRequest
+{
+    public string Url { get; set; } = string.Empty;
+
+    /// <summary>The ILD loop run that opened the PR, when it came from one.</summary>
+    public Guid? LoopRunId { get; set; }
+
+    /// <summary>Whether the caller has observed the PR merged. Never un-merges an entry.</summary>
+    public bool Merged { get; set; }
+
+    /// <summary>
+    /// When the PR entered the item's history — the start of the run that
+    /// opened it, so history keeps the runs' order however late the client gets
+    /// around to reporting it. Defaults to the server clock.
+    /// </summary>
+    public DateTime? CreatedAt { get; set; }
 }
 
 public sealed class AddDependencyRequest

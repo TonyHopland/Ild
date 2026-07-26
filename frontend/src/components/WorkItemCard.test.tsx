@@ -154,6 +154,57 @@ describe("WorkItemCard", () => {
     expect(screen.queryByText("Merge conflict")).toBeNull();
   });
 
+  // WI-203 "PR disappears". The PR badges above are gated on the item being
+  // parked at a PR node, so a card loses every trace of its PR the moment it
+  // lands in Done. An item that produced PRs has to keep saying so on the
+  // board. The marker is `.work-item-pr-history`, mirroring the existing
+  // `.work-item-pr-badges` convention; copy and styling are open.
+  test("a Done card still shows it has a PR", () => {
+    const { container } = render(
+      <WorkItemCard
+        workItem={makeItem({
+          status: WorkItemStatus.Done,
+          // Finished run, so no current run to project a prUrl from.
+          prUrl: null,
+          prStatus: null,
+          pullRequests: [
+            { url: "https://forgejo.example.com/repo/pulls/42", runId: "run-1", merged: true },
+          ],
+        })}
+      />,
+    );
+
+    expect(container.querySelector(".work-item-pr-history")).not.toBeNull();
+  });
+
+  test("a Done card shows how many PRs were opened when there were several", () => {
+    const { container } = render(
+      <WorkItemCard
+        workItem={makeItem({
+          status: WorkItemStatus.Done,
+          prUrl: null,
+          pullRequests: [
+            { url: "https://forgejo.example.com/repo/pulls/12", runId: "run-3", merged: true },
+            { url: "https://forgejo.example.com/repo/pulls/11", runId: "run-2", merged: false },
+            { url: "https://forgejo.example.com/repo/pulls/10", runId: "run-1", merged: false },
+          ],
+        })}
+      />,
+    );
+
+    // Three PRs were opened against this item; one indicator is not enough —
+    // the board has to say all three exist.
+    expect(container.querySelector(".work-item-pr-history")?.textContent).toContain("3");
+  });
+
+  test("a card with no PR history shows no PR indicator", () => {
+    const { container } = render(
+      <WorkItemCard workItem={makeItem({ status: WorkItemStatus.Done, pullRequests: [] })} />,
+    );
+
+    expect(container.querySelector(".work-item-pr-history")).toBeNull();
+  });
+
   test("surfaces a failing PR's conflict and changes-requested badges", () => {
     render(
       <WorkItemCard

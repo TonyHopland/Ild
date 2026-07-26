@@ -66,6 +66,32 @@ describe("TaskboardColumn", () => {
     expect(screen.getByText("0")).toBeTruthy();
   });
 
+  // WI-203 "PR disappears" is observed on the Done column: an item that had a
+  // PR badge in Human Feedback loses it the moment it is dragged across. The
+  // column has to keep surfacing the PR history its cards carry.
+  test("Done column cards keep showing their PR history", () => {
+    const { container } = render(
+      <TaskboardColumn
+        status={WorkItemStatus.Done}
+        label="Done"
+        workItems={[
+          makeItem({
+            id: "1",
+            status: WorkItemStatus.Done,
+            prUrl: null,
+            pullRequests: [
+              { url: "https://forgejo.example.com/repo/pulls/11", runId: "run-2", merged: true },
+              { url: "https://forgejo.example.com/repo/pulls/10", runId: "run-1", merged: false },
+            ],
+          }),
+        ]}
+        onWorkItemUpdate={() => {}}
+      />,
+    );
+
+    expect(container.querySelector(".work-item-pr-history")?.textContent).toContain("2");
+  });
+
   test("renders every item when pageSize is not set", () => {
     const items = Array.from({ length: 8 }, (_, i) =>
       makeItem({ id: String(i), title: `Item ${i}` }),

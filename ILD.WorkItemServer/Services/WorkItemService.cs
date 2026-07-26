@@ -27,6 +27,24 @@ public interface IWorkItemService
     /// </summary>
     Task<bool> AppendConversationAsync(string id, string role, string content, string? name, CancellationToken ct = default);
 
+    /// <summary>
+    /// Record a pull request against a work item, keyed by URL: a URL the item
+    /// already knows is updated in place rather than duplicated, so a client may
+    /// report the same PR as often as it likes (on creation, on merge, or while
+    /// reconciling what its runs still hold).
+    ///
+    /// This is the durable home of a work item's PRs. A run's worktree, branch
+    /// and PR snapshot are throwaway ILD-local state, but the PR itself touches
+    /// the repository and belongs to the item — it has to outlive the run, and
+    /// the ILD instance (WI-203).
+    /// </summary>
+    /// <returns>
+    /// Which of the outcomes happened — the three ways this can fail are worth
+    /// telling apart, since only one of them means the client should stop
+    /// asking. See <see cref="RecordPullRequestOutcome"/>.
+    /// </returns>
+    Task<RecordPullRequestOutcome> RecordPullRequestAsync(string id, RecordPullRequestRequest req, CancellationToken ct = default);
+
     Task<PollResponse> PollAsync(IReadOnlyList<string> activeIds, CancellationToken ct = default);
     Task<int> ReclaimStaleAsync(TimeSpan timeout, CancellationToken ct = default);
 
@@ -403,6 +421,80 @@ public sealed class WorkItemService : IWorkItemService
         w.UpdatedAt = now;
         await _db.SaveChangesAsync(ct);
         return true;
+    }
+
+    /// <summary>
+    /// How many times a losing writer re-reads and re-applies its report before
+    /// giving up. Contention is between a handful of reporters at most, so a
+    /// couple of retries covers it; a caller that still loses reports the same
+    /// PR again on its next pass.
+    /// </summary>
+    private const int RecordPullRequestAttempts = 3;
+
+    public async Task<RecordPullRequestOutcome> RecordPullRequestAsync(string id, RecordPullRequestRequest req, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(req.Url)) return RecordPullRequestOutcome.InvalidRequest;
+
+        // Recording a PR is a read-modify-write of the whole list, so it is done
+        // as a compare-and-swap against the column it read: two reporters
+        // arriving together (a PR node opening one while a webhook marks another
+        // merged, or two ILD instances reconciling the same item) would
+        // otherwise silently drop one of the two updates — and losing a PR link
+        // is the entire failure this record exists to prevent. The loser re-runs
+        // its own decision against the winner's list, which is why a retry is
+        // always safe here: every field is add-only.
+        for (var attempt = 0; attempt < RecordPullRequestAttempts; attempt++)
+        {
+            var w = await _db.WorkItems.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, ct);
+            if (w == null) return RecordPullRequestOutcome.NotFound;
+
+            var seen = w.PullRequestsJson;
+            var now = _clock.GetUtcNow().UtcDateTime;
+            var prs = WorkItemMapper.ReadPullRequests(w);
+            var existing = prs.FindIndex(p => string.Equals(p.Url, req.Url, StringComparison.Ordinal));
+
+            if (existing >= 0)
+            {
+                var was = prs[existing];
+                // Merge is one-way and the created time is the earliest
+                // sighting: re-reporting a PR can add to what the item knows,
+                // never subtract.
+                var updated = was with
+                {
+                    LoopRunId = req.LoopRunId ?? was.LoopRunId,
+                    Merged = was.Merged || req.Merged,
+                    CreatedAt = req.CreatedAt is { } at && at < was.CreatedAt ? at : was.CreatedAt,
+                };
+                // Already known, exactly as reported — the common case on the
+                // read path, and no reason to touch the row.
+                if (updated == was) return RecordPullRequestOutcome.Recorded;
+                prs[existing] = updated;
+            }
+            else
+            {
+                prs.Add(new WorkItemPullRequest(req.Url, req.LoopRunId, req.Merged, req.CreatedAt ?? now));
+            }
+
+            var json = WorkItemMapper.SerializePullRequests(prs);
+            // Status is deliberately untouched — linking a PR is a record of
+            // what the item produced, not a lifecycle transition. UpdatedAt
+            // moves so clients ordering by it still see the change.
+            var rows = await _db.WorkItems
+                .Where(x => x.Id == id && x.PullRequestsJson == seen)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(x => x.PullRequestsJson, json)
+                    .SetProperty(x => x.UpdatedAt, now), ct);
+            if (rows == 0) continue;
+
+            // The write went straight to the column, so a copy this scope was
+            // already tracking still holds the old list — refresh it, or a
+            // later read in the same request would answer from it.
+            var tracked = _db.ChangeTracker.Entries<WorkItem>().FirstOrDefault(e => e.Entity.Id == id);
+            if (tracked is not null) await tracked.ReloadAsync(ct);
+            return RecordPullRequestOutcome.Recorded;
+        }
+
+        return RecordPullRequestOutcome.Conflict;
     }
 
     public async Task<PollResponse> PollAsync(IReadOnlyList<string> activeIds, CancellationToken ct = default)

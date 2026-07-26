@@ -57,7 +57,49 @@ public sealed class WorkItemView
     /// feedback. Null when the current run has no PR snapshot yet.
     /// </summary>
     public WorkItemPrStatus? PrStatus { get; set; }
+
+    /// <summary>
+    /// Every pull request ever opened against this work item, newest first and
+    /// deduplicated by URL. Unlike <see cref="PrUrl"/> — which only ever shows
+    /// the <i>current</i> run's PR and therefore empties out the moment the run
+    /// goes terminal — these belong to the work item and are held by the
+    /// WorkItem server, so they survive the run completing, the item moving to
+    /// Done, the retention sweeper deleting the run row, and this ILD instance
+    /// being reset (WI-203).
+    ///
+    /// Added alongside <see cref="PrUrl"/> rather than replacing it: /api/v1 is
+    /// add-only (ADR-0002), so <c>prUrl</c> keeps its "current run's PR"
+    /// meaning for existing clients.
+    /// </summary>
+    public IReadOnlyList<WorkItemPullRequest> PullRequests { get; set; } = Array.Empty<WorkItemPullRequest>();
 }
+
+/// <summary>
+/// One pull request in a work item's history. ADR-0008 gives each run at most
+/// one PR, so an item accumulates one entry per run that opened one — but the
+/// entry must outlive the run it was observed on, so it carries everything a
+/// client needs to render the link without one.
+/// </summary>
+/// <param name="Url">The PR's URL — the identity a history entry is deduplicated on.</param>
+/// <param name="RunId">
+/// The most recent run that reported this PR and still exists on this ILD
+/// instance — the run that opened it, unless a later run pointed back at the
+/// same PR. Null when no such run is left to link to, which is the normal state
+/// for an entry whose runs have been reclaimed.
+/// </param>
+/// <param name="Merged">Whether the PR was observed merged.</param>
+/// <param name="Status">
+/// Last known badge-relevant status, projected from the run's PR snapshot.
+/// That snapshot is throwaway ILD-local state, so this is null once the run
+/// that held it is gone — unlike the link itself.
+/// </param>
+/// <param name="CreatedAt">When the PR was first recorded against this work item.</param>
+public sealed record WorkItemPullRequest(
+    string Url,
+    Guid? RunId,
+    bool Merged,
+    WorkItemPrStatus? Status,
+    DateTime? CreatedAt);
 
 /// <summary>
 /// Badge-relevant subset of a <see cref="RemotePrSnapshot"/>, projected onto a

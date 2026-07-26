@@ -68,7 +68,25 @@ public interface IWorkItemManager
     Task<IReadOnlyList<WorkItemView>> GetDependenciesAsync(string workItemId);
     Task<IReadOnlyList<WorkItemView>> GetDependentsAsync(string workItemId);
     Task<bool> IsReadyAsync(string workItemId);
+    /// <summary>
+    /// Link a PR to a work item by hand: records it against the item and, when
+    /// the item still has a current run, points that run at it too.
+    /// </summary>
     Task<bool> LinkPullRequestAsync(string workItemId, string prUrl);
+
+    /// <summary>
+    /// Record a PR against the work item on the WorkItem server, which is where
+    /// a work item's PRs live: a run's worktree, branch and PR snapshot are
+    /// throwaway ILD-local state, but the PR touches the repository and belongs
+    /// to the item, so it has to outlive both the run and this ILD instance
+    /// (WI-203). Idempotent on the URL — every path that learns something about
+    /// a PR (the PR node opening one, a webhook reporting a merge, a human
+    /// linking one) reports it here, and reporting the same PR again updates it
+    /// in place. Returns false when there is no remote configured or the server
+    /// rejected the write; callers treat it as best-effort, since the next read
+    /// of the item re-reports anything its runs still carry.
+    /// </summary>
+    Task<bool> RecordPullRequestAsync(string workItemId, string prUrl, Guid? loopRunId, bool merged = false, DateTime? createdAt = null);
     Task<bool> CleanupToDoneAsync(string workItemId);
     Task<bool> CleanupToBacklogAsync(string workItemId);
 

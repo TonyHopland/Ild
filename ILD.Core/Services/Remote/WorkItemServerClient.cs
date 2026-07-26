@@ -25,6 +25,20 @@ public interface IWorkItemServerClient
     Task<bool> AppendFeedbackAsync(WorkItemServerOptions opts, string id, string content, CancellationToken ct = default);
     Task<bool> AppendConversationAsync(WorkItemServerOptions opts, string id, string role, string content, string? name, CancellationToken ct = default);
 
+    /// <summary>
+    /// Record a PR against a work item on the server, keyed by URL — reporting
+    /// the same PR again updates it in place instead of duplicating it, so
+    /// callers can report freely (on creation, on merge, or while reconciling).
+    /// <paramref name="createdAt"/> is the start of the run that opened it, so
+    /// the server keeps the item's PRs in the runs' order.
+    ///
+    /// False means only that this attempt did not record it — a server that is
+    /// unreachable, too old to know the endpoint, missing the work item, or
+    /// busy with a competing writer (409). None of them is worth special-casing
+    /// here: the caller reports the PR again on its next pass.
+    /// </summary>
+    Task<bool> RecordPullRequestAsync(WorkItemServerOptions opts, string id, string url, Guid? loopRunId, bool merged, DateTime? createdAt, CancellationToken ct = default);
+
     Task<RemotePollResponse> PollAsync(WorkItemServerOptions opts, IReadOnlyList<string> activeIds, CancellationToken ct = default);
 }
 
@@ -134,6 +148,14 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
     {
         var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/conversation");
         msg.Content = JsonContent.Create(new { role, content, name }, options: JsonOpts);
+        var resp = await _http.SendAsync(msg, ct);
+        return resp.IsSuccessStatusCode;
+    }
+
+    public async Task<bool> RecordPullRequestAsync(WorkItemServerOptions opts, string id, string url, Guid? loopRunId, bool merged, DateTime? createdAt, CancellationToken ct = default)
+    {
+        var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/pull-requests");
+        msg.Content = JsonContent.Create(new { url, loopRunId, merged, createdAt }, options: JsonOpts);
         var resp = await _http.SendAsync(msg, ct);
         return resp.IsSuccessStatusCode;
     }

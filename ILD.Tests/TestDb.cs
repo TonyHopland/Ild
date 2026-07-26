@@ -40,12 +40,23 @@ public sealed class TestDb : IDisposable
     /// Fake WorkItemServer harness backing the remote-backed
     /// <c>WorkItemManager</c>. Tests that construct a manager pass
     /// <see cref="ServerClient"/> + <see cref="ServerOptions"/> through.
+    /// Owned by this instance unless one was supplied to the constructor — a
+    /// caller-supplied harness outlives the <c>TestDb</c>, which is how a test
+    /// stands a fresh ILD instance up against a server that has been running
+    /// all along.
     /// </summary>
     public FakeWorkItemServerHarness Server { get; }
+
+    private readonly bool _ownsServer;
     public IWorkItemServerClient ServerClient => Server.Client;
     public IWorkItemServerOptionsResolver ServerOptions => Server.Options;
 
-    public TestDb()
+    /// <param name="server">
+    /// An existing WorkItemServer harness to attach to instead of standing up a
+    /// fresh one. Lets a test replace the ILD-local database — an instance
+    /// reset — while the work-item server keeps everything it was told.
+    /// </param>
+    public TestDb(FakeWorkItemServerHarness? server = null)
     {
         _connection = new SqliteConnection("Filename=:memory:");
         _connection.Open();
@@ -61,7 +72,8 @@ public sealed class TestDb : IDisposable
         EventLogs = new EventLogStore(Context);
         Auth = new AuthStore(Context);
         Providers = new ProviderStore(Context);
-        Server = new FakeWorkItemServerHarness();
+        _ownsServer = server is null;
+        Server = server ?? new FakeWorkItemServerHarness();
     }
 
     public AppDbContext Fresh()
@@ -76,6 +88,6 @@ public sealed class TestDb : IDisposable
     {
         Context.Dispose();
         _connection.Dispose();
-        Server.Dispose();
+        if (_ownsServer) Server.Dispose();
     }
 }
