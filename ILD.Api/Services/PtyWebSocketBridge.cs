@@ -86,7 +86,14 @@ public static class PtyWebSocketBridge
             // token, so kill the child to unblock ReadAsync before draining.
             try { pty.Kill(); } catch { }
 
-            try { await ptyToSocket; } catch { }
+            // Bounded for the same reason as the socket drain below: the Kill()
+            // above is the ONLY thing that can unblock a PTY ReadAsync that
+            // ignores the token, and its failure is deliberately swallowed. When
+            // the kill doesn't take, an unbounded await here never returns —
+            // observed hanging a full test run indefinitely with the child still
+            // parked on its pty. The finally block below kills and disposes
+            // again, so giving up early costs nothing.
+            try { await Task.WhenAny(ptyToSocket, Task.Delay(TimeSpan.FromSeconds(3), cancellationToken)); } catch { }
             // Bounded wait: once CloseOutputAsync has sent our close frame the
             // client already shows a clean close, so don't block teardown if it
             // never sends its close reply back.
