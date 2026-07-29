@@ -45,6 +45,12 @@ internal static class TestEnvironmentBaseline
         Environment.SetEnvironmentVariable(AgentIsolation.AgentHomeEnvVar, null);
         Environment.SetEnvironmentVariable(AgentIsolation.ScratchRootEnvVar, null);
 
+        // Not merely defensive: SecretEnvironmentKeys reads this, so a deployment
+        // that sets it widens the scrub set and the tests asserting that set --
+        // including the baseline guard below -- start depending on the ambient
+        // shell after all, which is the exact failure this class exists to stop.
+        Environment.SetEnvironmentVariable(AgentIsolation.SecretEnvDenylistEnvVar, null);
+
         var privateRoot = Path.Combine(Path.GetTempPath(), RootPrefix + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(privateRoot);
         Environment.SetEnvironmentVariable(AgentIsolation.PrivateRootEnvVar, privateRoot);
