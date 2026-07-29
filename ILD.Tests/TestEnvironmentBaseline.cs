@@ -17,25 +17,19 @@ namespace ILD.Tests;
 /// "unless" half, though, so the guarantee only held where the variables happened
 /// to be absent. In a dev worktree <em>inside</em> the running container they are
 /// already set, and 77 tests fail for reasons that have nothing to do with the
-/// code under test:
+/// code under test — <c>setpriv --reuid=agent</c> failing with "initgroups failed"
+/// for a uid holding no <c>CAP_SETUID</c>, and roots the live orchestrator
+/// provisioned for its own uid.
 /// </para>
 ///
-/// <list type="bullet">
-///   <item><c>ILD_AGENT_USER</c> is set, so every spawn is wrapped in
-///   <c>setpriv --reuid=agent</c>, which fails with "initgroups failed" because
-///   the test process is already an unprivileged uid holding no
-///   <c>CAP_SETUID</c> — the adapter, preview and repository tests.</item>
-///   <item><c>ILD_ORCHESTRATOR_PRIVATE_ROOT</c> (and <c>ILD_AGENT_SCRATCH_ROOT</c>)
-///   point at directories the live orchestrator provisioned for <em>its</em> uid,
-///   which the test process cannot write.</item>
-/// </list>
-///
 /// <para>
-/// So the two roots are redirected rather than merely cleared: clearing them falls
-/// back to a fixed path under <c>TMPDIR</c> (<c>/tmp/ild-orchestrator-private</c>),
-/// which is shared, and which the orchestrator has usually already created
-/// <c>0700</c> under a different owner. A per-run directory is also what keeps two
-/// concurrent runs on one machine from colliding.
+/// The two roots need opposite treatment, which is the whole subtlety here.
+/// Clearing <c>ILD_AGENT_SCRATCH_ROOT</c> is enough because its fallback is
+/// <c>TMPDIR</c>, which the test process can write. Clearing
+/// <c>ILD_ORCHESTRATOR_PRIVATE_ROOT</c> is not, because its fallback is a fixed
+/// <c>TMPDIR/ild-orchestrator-private</c> — the very directory the entrypoint has
+/// already created <c>0700</c> under the orchestrator's uid — so it has to be
+/// pointed somewhere this process owns.
 /// </para>
 /// </summary>
 internal static class TestEnvironmentBaseline
@@ -49,33 +43,29 @@ internal static class TestEnvironmentBaseline
         Environment.SetEnvironmentVariable(AgentIsolation.AgentUserEnvVar, null);
         Environment.SetEnvironmentVariable(AgentIsolation.AgentGroupEnvVar, null);
         Environment.SetEnvironmentVariable(AgentIsolation.AgentHomeEnvVar, null);
+        Environment.SetEnvironmentVariable(AgentIsolation.ScratchRootEnvVar, null);
 
-        // A deployment-specific denylist would silently widen the set of names
-        // Route/RouteCommand scrub, so the scrubbing tests assert against a
-        // baseline the environment cannot extend.
-        Environment.SetEnvironmentVariable(AgentIsolation.SecretEnvDenylistEnvVar, null);
+        var privateRoot = Path.Combine(Path.GetTempPath(), RootPrefix + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(privateRoot);
+        Environment.SetEnvironmentVariable(AgentIsolation.PrivateRootEnvVar, privateRoot);
 
+        // Per-run, so concurrent runs on one machine cannot race the fixed-name
+        // files that land at the root of it (the git askpass helper). That makes
+        // cleanup this class's problem: the preview service caches an npm tree
+        // under here, so it is worth removing rather than leaving in TMPDIR.
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => TryDelete(privateRoot);
         SweepStaleRoots();
-
-        var root = Path.Combine(Path.GetTempPath(), RootPrefix + Guid.NewGuid().ToString("N"));
-        Environment.SetEnvironmentVariable(AgentIsolation.ScratchRootEnvVar, CreateDirectory(root, "scratch"));
-        Environment.SetEnvironmentVariable(AgentIsolation.PrivateRootEnvVar, CreateDirectory(root, "private"));
-
-        // The fast path, and the only one that runs for a normal exit. It is not
-        // sufficient on its own: a killed test host never gets here, and the full
-        // suite leaves a preview npm-cache big enough that deleting it can outlast
-        // the runtime's ProcessExit budget. SweepStaleRoots above is what makes
-        // that bounded rather than cumulative.
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => TryDelete(root);
     }
 
-    private const string RootPrefix = "ild-tests-";
+    private const string RootPrefix = "ild-tests-private-";
 
     /// <summary>
-    /// Discard roots abandoned by earlier runs. Age-gated because a concurrent run
-    /// on the same machine owns a sibling root, and deleting it out from under that
-    /// run would be a far worse failure than the litter this collects — a test run
-    /// lasts minutes, so a day-old root belongs to nobody.
+    /// Discard roots abandoned by earlier runs — a killed test host never reaches
+    /// <c>ProcessExit</c>, and deleting a large npm cache can outlast the
+    /// runtime's exit budget even when it does. Age-gated because a concurrent run
+    /// owns a sibling root, and deleting that out from under it would be a far
+    /// worse failure than the litter this collects: a run lasts minutes, so a
+    /// day-old root belongs to nobody.
     /// </summary>
     private static void SweepStaleRoots()
     {
@@ -99,12 +89,5 @@ internal static class TestEnvironmentBaseline
         try { Directory.Delete(path, recursive: true); }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
-    }
-
-    private static string CreateDirectory(string root, string name)
-    {
-        var path = Path.Combine(root, name);
-        Directory.CreateDirectory(path);
-        return path;
     }
 }
