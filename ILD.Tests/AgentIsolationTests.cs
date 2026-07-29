@@ -22,6 +22,31 @@ public class AgentIsolationTests
     }
 
     [Fact]
+    public void Test_run_starts_from_the_single_uid_baseline()
+    {
+        // The suite is written against "isolation is off unless a test turns it on
+        // explicitly" (ADR-0014), but that only holds while the process-global
+        // variables are absent — and a dev worktree runs INSIDE the container,
+        // where the entrypoint has already exported them. TestEnvironmentBaseline
+        // pins them; assert it, so a regression surfaces as this one named failure
+        // instead of ~77 setpriv/permission errors spread across the adapter,
+        // preview and repository suites.
+        Assert.Null(AgentIsolation.AgentUser);
+        Assert.Equal(
+            AgentIsolation.ResolveSecretEnvironmentKeys(null).OrderBy(k => k, StringComparer.Ordinal),
+            AgentIsolation.SecretEnvironmentKeys.OrderBy(k => k, StringComparer.Ordinal));
+
+        // The two roots must be writable by whoever is running the tests rather
+        // than by the orchestrator uid that provisioned the container's copies.
+        foreach (var root in new[] { AgentIsolation.ScratchRoot, AgentIsolation.PrivateRoot })
+        {
+            var probe = Path.Combine(root, Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(probe);
+            Directory.Delete(probe);
+        }
+    }
+
+    [Fact]
     public void Route_is_noop_when_agent_user_is_blank()
     {
         var psi = BuildPsi();

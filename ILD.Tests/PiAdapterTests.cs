@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
@@ -274,7 +275,12 @@ public class PiAdapterTests
                 manageSession: true));
 
             Assert.True(result.Success);
-            var restoredSessionPath = Path.Combine(Path.GetTempPath(), "ild-pi-sessions", runId.ToString("N"), "pi-session-restore.jsonl");
+            // Expected scratch paths come from AgentIsolation.ScratchRoot, which is
+            // what the adapter roots them at. Rebuilding them from Path.GetTempPath()
+            // instead bakes in the "no scratch root configured" fallback, so they
+            // miss wherever one IS configured (in-container runs) or wherever TMPDIR
+            // is not /tmp (macOS). Same for the ild-pi-agent paths below.
+            var restoredSessionPath = Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-sessions", runId.ToString("N"), "pi-session-restore.jsonl");
             Assert.True(File.Exists(restoredSessionPath));
             Assert.Contains("pi-session-restore", (await File.ReadAllTextAsync(restoredSessionPath)));
         }
@@ -338,7 +344,7 @@ public class PiAdapterTests
         var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-pi-local-restore-{Guid.NewGuid():N}");
         Directory.CreateDirectory(worktreeDir);
 
-        var sessionDir = Path.Combine(Path.GetTempPath(), "ild-pi-sessions", runId.ToString("N"), "--tmp-worktree--");
+        var sessionDir = Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-sessions", runId.ToString("N"), "--tmp-worktree--");
         Directory.CreateDirectory(sessionDir);
         var actualSessionPath = Path.Combine(sessionDir, $"{DateTime.UtcNow:yyyyMMddHHmmss}_abcdef12.jsonl");
         await File.WriteAllTextAsync(
@@ -510,12 +516,12 @@ public class PiAdapterTests
 
             Assert.True(result.Success);
 
-            var agentDir = Path.Combine(Path.GetTempPath(), "ild-pi-agent", runId.ToString("N"));
+            var agentDir = Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-agent", runId.ToString("N"));
             Assert.False(Directory.Exists(agentDir));
         }
         finally
         {
-            var agentDir = Path.Combine(Path.GetTempPath(), "ild-pi-agent", runId.ToString("N"));
+            var agentDir = Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-agent", runId.ToString("N"));
             if (Directory.Exists(agentDir))
                 Directory.Delete(agentDir, true);
             Directory.Delete(worktreeDir, true);
@@ -565,7 +571,7 @@ public class PiAdapterTests
             Assert.True(result.Success);
 
             var modelsJsonPath = Path.Combine(
-                Path.GetTempPath(), "ild-pi-agent", runId.ToString("N"), "models.json");
+                AgentIsolation.ScratchRoot, "ild-pi-agent", runId.ToString("N"), "models.json");
             Assert.True(File.Exists(modelsJsonPath));
             var modelsJson = await File.ReadAllTextAsync(modelsJsonPath);
 
@@ -577,7 +583,7 @@ public class PiAdapterTests
         }
         finally
         {
-            var agentDir = Path.Combine(Path.GetTempPath(), "ild-pi-agent", runId.ToString("N"));
+            var agentDir = Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-agent", runId.ToString("N"));
             if (Directory.Exists(agentDir))
                 Directory.Delete(agentDir, true);
             Directory.Delete(worktreeDir, true);
