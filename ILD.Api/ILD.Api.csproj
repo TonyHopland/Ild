@@ -20,6 +20,7 @@
     <PackageReference Include="Serilog" Version="4.3.1" />
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
+    <PackageReference Include="Yarp.ReverseProxy" Version="2.3.0" />
   </ItemGroup>
 
   <ItemGroup>
@@ -48,10 +49,7 @@
       OpenCode adapter to launch. We don't reference its types — only its
       build output — so flip the assembly off.
     -->
-    <ProjectReference Include="..\ILD.McpServer\ILD.McpServer.csproj"
-                     ReferenceOutputAssembly="false"
-                     SkipGetTargetFrameworkProperties="true"
-                     Private="false" />
+    <ProjectReference Include="..\ILD.McpServer\ILD.McpServer.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" Private="false" />
   </ItemGroup>
 
 </Project>

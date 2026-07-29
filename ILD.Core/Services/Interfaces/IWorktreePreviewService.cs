@@ -19,12 +19,79 @@ namespace ILD.Core.Services.Interfaces;
 /// readable.
 /// </para>
 /// </param>
+/// <param name="WorkItemId">
+/// The work item whose worktree is being previewed, or null when the caller does
+/// not know it. Recorded on the runtime purely so a running service's advertised
+/// <c>publicUrl</c> can be built as <c>wi-{id}.{proxy base}</c> when a
+/// <see cref="PreviewProxyBase"/> is configured — nothing else about the preview
+/// depends on it. Without an id (or without a proxy base) the URL falls back to
+/// the historical <c>http://{publicHost}:{port}</c> form.
+/// </param>
 public sealed record WorktreePreviewStartOptions(
     string? ProfileName = null,
     bool SkipInstall = false,
     string? PublicHost = null,
     IReadOnlyDictionary<string, int>? PortOverrides = null,
-    string? CustomEnv = null);
+    string? CustomEnv = null,
+    string? WorkItemId = null);
+
+/// <summary>
+/// Why <see cref="IWorktreePreviewService.ResolvePreviewTargetAsync"/> could not
+/// hand back a port. Each value is a distinct thing a human did wrong or has yet
+/// to do, and the preview proxy renders a different page for each — which is why
+/// resolution reports an outcome rather than a bare bool: "no such work item" and
+/// "you have not started the preview yet" need different words, and only the
+/// resolver knows which one happened.
+/// </summary>
+public enum PreviewTargetOutcome
+{
+    /// <summary>A live port was found; the request can be forwarded.</summary>
+    Resolved,
+
+    /// <summary>
+    /// The hostname sits under the preview base but its label is not
+    /// <c>wi-{workItemId}</c> or <c>wi-{workItemId}-{serviceName}</c>.
+    /// </summary>
+    NotAPreviewHost,
+
+    /// <summary>The work item id in the hostname does not resolve to a work item.</summary>
+    UnknownWorkItem,
+
+    /// <summary>The work item exists but has no worktree to preview (no run has created one).</summary>
+    NoWorktree,
+
+    /// <summary>The worktree exists but no preview runtime is active for it.</summary>
+    PreviewNotRunning,
+
+    /// <summary>
+    /// The preview is running but the addressed service is not — either the named
+    /// service is stopped/exited, or (for the bare <c>wi-{id}</c> form) no service
+    /// marked <c>"public": true</c> is up.
+    /// </summary>
+    ServiceNotRunning,
+}
+
+/// <summary>
+/// Where a preview hostname points. On <see cref="PreviewTargetOutcome.Resolved"/>
+/// the loopback <see cref="Port"/> and the service's <see cref="RewriteHost"/>
+/// preference are set; otherwise <see cref="Message"/> is a human-readable
+/// explanation suitable for showing in a browser.
+/// </summary>
+public sealed record PreviewTarget(
+    PreviewTargetOutcome Outcome,
+    int Port,
+    string? ServiceName,
+    bool RewriteHost,
+    string Message)
+{
+    public bool IsResolved => Outcome == PreviewTargetOutcome.Resolved;
+
+    public static PreviewTarget Resolved(int port, string serviceName, bool rewriteHost)
+        => new(PreviewTargetOutcome.Resolved, port, serviceName, rewriteHost, $"Preview service '{serviceName}' is listening on port {port}.");
+
+    public static PreviewTarget Failed(PreviewTargetOutcome outcome, string message)
+        => new(outcome, 0, null, true, message);
+}
 
 /// <summary>
 /// Result of <see cref="IWorktreePreviewService.InstallAsync"/>.
@@ -142,6 +209,26 @@ public interface IWorktreePreviewService
     /// Does not load config files — only inspects the in-memory runtime dictionary.
     /// </summary>
     bool IsPreviewRunning(string worktreePath);
+
+    /// <summary>
+    /// Turns a preview hostname's leading label into the loopback port a request
+    /// should be forwarded to. <paramref name="hostLabel"/> is what
+    /// <see cref="PreviewProxyBase.TryGetHostLabel"/> peeled off the <c>Host</c>
+    /// header: <c>wi-{workItemId}</c> addresses the profile's single
+    /// <c>"public": true</c> service, and <c>wi-{workItemId}-{serviceName}</c>
+    /// addresses one service by name (service names may contain hyphens — the work
+    /// item id is the digits immediately after <c>wi-</c>, so the split is
+    /// unambiguous).
+    /// <para>
+    /// The whole chain lives here — label to work item to worktree to runtime to
+    /// port — because every step has its own way of coming up empty and the caller
+    /// needs to tell a human which one did. The work item lookup is passed in
+    /// rather than injected: this service is a singleton and
+    /// <see cref="IWorkItemManager"/> is request-scoped, so the caller supplies the
+    /// one from its own scope.
+    /// </para>
+    /// </summary>
+    Task<PreviewTarget> ResolvePreviewTargetAsync(string hostLabel, IWorkItemManager workItems, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -171,4 +258,8 @@ public sealed class NoopPreviewService : IWorktreePreviewService
     public Task<WorktreePreviewValidationResult> ValidateConfigAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
     public bool IsPreviewRunning(string worktreePath) => false;
+    public Task<PreviewTarget> ResolvePreviewTargetAsync(string hostLabel, IWorkItemManager workItems, CancellationToken cancellationToken = default)
+        => Task.FromResult(PreviewTarget.Failed(
+            PreviewTargetOutcome.PreviewNotRunning,
+            "Worktree previews are not available in this environment."));
 }

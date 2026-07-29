@@ -18,10 +18,21 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private const string ConfigFileName = "ild.config.json";
     private static readonly Regex TemplateTokenRegex = new("\\$\\{([^}]+)\\}", RegexOptions.Compiled);
 
+    /// <summary>
+    /// A preview hostname's leading label: <c>wi-{workItemId}</c>, optionally
+    /// followed by <c>-{serviceName}</c>. Anchoring the id to digits is what keeps
+    /// the split unambiguous for service names that themselves contain hyphens
+    /// (<c>wi-12-work-item-server</c> is item 12's <c>work-item-server</c>, not
+    /// item <c>12-work</c>'s <c>item-server</c>).
+    /// </summary>
+    private static readonly Regex PreviewHostLabelRegex =
+        new(@"^wi-(?<id>[0-9]+)(?:-(?<service>.+))?$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     private readonly ConcurrentDictionary<string, PreviewRuntime> _runtimes = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConfiguration _configuration;
+    private readonly PreviewProxyBase _proxyBase;
     private readonly ILogger<WorktreePreviewService> _logger;
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
@@ -38,6 +49,9 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
         _logger = logger;
+        _proxyBase = PreviewProxyBase.FromConfiguration(configuration);
+        if (_proxyBase.ConfigurationError != null)
+            _logger.LogWarning("Ignoring {Key}: {Reason}", PreviewProxyBase.ConfigurationKey, _proxyBase.ConfigurationError);
     }
 
     public async Task<WorktreePreviewResponse> GetStatusAsync(string worktreePath, CancellationToken cancellationToken = default)
@@ -396,6 +410,77 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         return _runtimes.ContainsKey(normalized);
     }
 
+    public async Task<PreviewTarget> ResolvePreviewTargetAsync(string hostLabel, IWorkItemManager workItems, CancellationToken cancellationToken = default)
+    {
+        var match = PreviewHostLabelRegex.Match(hostLabel?.Trim() ?? string.Empty);
+        if (!match.Success)
+        {
+            return PreviewTarget.Failed(
+                PreviewTargetOutcome.NotAPreviewHost,
+                $"'{hostLabel}' is not a worktree preview hostname. Previews are served from "
+                + "wi-<workItemId> (the service marked \"public\": true) or wi-<workItemId>-<serviceName>.");
+        }
+
+        var workItemId = match.Groups["id"].Value;
+        var serviceName = match.Groups["service"].Success ? match.Groups["service"].Value : null;
+
+        var workItem = await workItems.GetWorkItemAsync(workItemId);
+        if (workItem == null)
+        {
+            return PreviewTarget.Failed(
+                PreviewTargetOutcome.UnknownWorkItem,
+                $"There is no work item {workItemId}.");
+        }
+
+        if (string.IsNullOrWhiteSpace(workItem.WorktreePath))
+        {
+            return PreviewTarget.Failed(
+                PreviewTargetOutcome.NoWorktree,
+                $"Work item {workItemId} has no worktree yet, so there is nothing to preview. "
+                + "A worktree is created when a run reaches its Start node.");
+        }
+
+        if (!_runtimes.TryGetValue(NormalizeWorktreePath(workItem.WorktreePath), out var runtime))
+        {
+            return PreviewTarget.Failed(
+                PreviewTargetOutcome.PreviewNotRunning,
+                $"The worktree preview for work item {workItemId} is not running. "
+                + "Start it from the work item's Preview tab.");
+        }
+
+        ManagedPreviewProcess? process;
+        if (serviceName == null)
+        {
+            process = runtime.Processes.FirstOrDefault(p => p.Service.Public && !p.Process.HasExited);
+            if (process == null)
+            {
+                return PreviewTarget.Failed(
+                    PreviewTargetOutcome.ServiceNotRunning,
+                    $"No service marked \"public\": true is running in work item {workItemId}'s preview. "
+                    + $"Start it, or address one service directly as wi-{workItemId}-<serviceName>.");
+            }
+        }
+        else
+        {
+            process = runtime.Processes.FirstOrDefault(p => string.Equals(p.Service.Name, serviceName, StringComparison.OrdinalIgnoreCase));
+            if (process == null || process.Process.HasExited)
+            {
+                return PreviewTarget.Failed(
+                    PreviewTargetOutcome.ServiceNotRunning,
+                    $"Preview service '{serviceName}' is not running in work item {workItemId}'s preview.");
+            }
+        }
+
+        if (!runtime.Ports.TryGetValue(process.Service.Port, out var port) || port <= 0)
+        {
+            return PreviewTarget.Failed(
+                PreviewTargetOutcome.ServiceNotRunning,
+                $"Preview service '{process.Service.Name}' has no port allocated for alias '{process.Service.Port}'.");
+        }
+
+        return PreviewTarget.Resolved(port, process.Service.Name, process.Service.RewriteHost);
+    }
+
     public void Dispose()
     {
         foreach (var runtime in _runtimes.Values)
@@ -614,7 +699,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             publicHost,
             ports,
             new List<ManagedPreviewProcess>(),
-            DotEnvParser.Parse(options.CustomEnv));
+            DotEnvParser.Parse(options.CustomEnv),
+            options.WorkItemId);
 
         if (!options.SkipInstall)
         {
@@ -808,17 +894,15 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private WorktreePreviewServiceResponse BuildServiceResponse(ManagedPreviewProcess process, PreviewRuntime runtime)
     {
         var healthUrl = ResolveHealthUrl(process.Service, runtime);
-        var publicUrl = process.Service.Public
-            ? ResolveOptionalTemplate(process.Service.PublicUrl, runtime, process.Service.Port)
-                ?? $"http://{runtime.PublicHost}:{runtime.Ports[process.Service.Port]}"
-            : null;
+        var port = runtime.Ports.TryGetValue(process.Service.Port, out var allocated) ? allocated : (int?)null;
+        var publicUrl = process.Service.Public ? BuildPublicUrl(process.Service, runtime, port) : null;
 
         return new WorktreePreviewServiceResponse
         {
             Name = process.Service.Name,
             PortAlias = process.Service.Port,
             Status = process.Process.HasExited ? "exited" : "running",
-            Port = runtime.Ports.TryGetValue(process.Service.Port, out var port) ? port : null,
+            Port = port,
             SuggestedPort = process.Service.SuggestedPort,
             HealthUrl = healthUrl,
             PublicUrl = publicUrl,
@@ -826,6 +910,27 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             ProcessId = process.Process.Id,
             ExitCode = process.Process.HasExited ? process.Process.ExitCode : null,
         };
+    }
+
+    /// <summary>
+    /// The URL a human is handed for a <c>"public": true</c> service, in strict
+    /// precedence: the service's own <c>publicUrl</c> template wins (an author who
+    /// spelled out a URL means it); then the preview proxy origin, which is the
+    /// only form reachable when ILD runs behind an ingress that never published the
+    /// service's port; then the historical direct <c>http://{publicHost}:{port}</c>.
+    /// With <c>ILD_PREVIEW_PROXY_BASE</c> unset the middle rung disappears and the
+    /// result is exactly what it has always been.
+    /// </summary>
+    private string? BuildPublicUrl(PreviewServiceConfig service, PreviewRuntime runtime, int? port)
+    {
+        var authored = ResolveOptionalTemplate(service.PublicUrl, runtime, service.Port);
+        if (authored != null)
+            return authored;
+
+        if (_proxyBase.Enabled && !string.IsNullOrWhiteSpace(runtime.WorkItemId))
+            return _proxyBase.BuildUrl($"wi-{runtime.WorkItemId}");
+
+        return port is int allocated ? $"http://{runtime.PublicHost}:{allocated}" : null;
     }
 
     // A configured-but-not-running service in an otherwise live runtime. Health and
@@ -1172,8 +1277,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             string publicHost,
             Dictionary<string, int> ports,
             List<ManagedPreviewProcess> processes,
-            IReadOnlyDictionary<string, string> customEnv)
+            IReadOnlyDictionary<string, string> customEnv,
+            string? workItemId = null)
         {
+            WorkItemId = workItemId;
             WorktreePath = worktreePath;
             ConfigPath = configPath;
             ProfileName = profileName;
@@ -1183,6 +1290,13 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             Processes = processes;
             CustomEnv = customEnv;
         }
+
+        /// <summary>
+        /// The work item this worktree belongs to, when the starter knew it. Only
+        /// used to build <c>wi-{id}.{proxy base}</c> public URLs; null leaves those
+        /// URLs on their loopback form.
+        /// </summary>
+        public string? WorkItemId { get; }
 
         public string WorktreePath { get; }
         public string ConfigPath { get; }
@@ -1258,5 +1372,16 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         public string? HealthUrl { get; set; }
         public bool Public { get; set; }
         public string? PublicUrl { get; set; }
+
+        /// <summary>
+        /// Whether the preview proxy replaces the <c>Host</c> header with the
+        /// loopback authority it forwards to. Defaults to true because dev servers
+        /// that validate the host (Vite, webpack-dev-server, Rails, Django) reject a
+        /// request arriving as <c>wi-12.ild.kube</c> outright. Set false for a
+        /// service that needs to see the real browser-facing host — one that builds
+        /// absolute links or issues host-bound redirects — and add the preview
+        /// wildcard to that service's own allowed-hosts list instead.
+        /// </summary>
+        public bool RewriteHost { get; set; } = true;
     }
 }

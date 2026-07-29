@@ -17,5 +17,6 @@ Short records of architectural decisions that are **hard to reverse, surprising 
 | [0012](./0012-ghcr-image-tagging-strategy.md)         | GHCR image tagging: `latest` is the newest release, not `main`                        |
 | [0013](./0013-retained-chat-history.md)               | Retained chat history: many chats per user, deleted only on demand                    |
 | [0014](./0014-agent-uid-isolation.md)                 | The coding agent runs under a separate OS user from the orchestrator                  |
+| [0015](./0015-wildcard-subdomain-preview-routing.md)  | Worktree previews are routed by wildcard subdomain, not by path prefix                |
 
 New ADRs use the next sequential number; see the format in `.agents/skills/grill-with-docs/ADR-FORMAT.md`.

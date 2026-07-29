@@ -75,6 +75,11 @@ try
 
     builder.Services.AddSignalR();
 
+    // Direct forwarder only — a preview's destination is runtime state (a port
+    // allocated when someone pressed Start), so there is no route/cluster config
+    // for YARP's routing layer to hold.
+    builder.Services.AddHttpForwarder();
+
     builder.Services.AddCors(options =>
     {
         var allowedOrigins = ILD.Api.Configuration.CorsConfiguration.ParseAllowedOrigins(
@@ -185,6 +190,13 @@ try
     // typical reverse proxies, so long-lived interactive terminals don't get
     // torn down as idle and surface to the browser as an abnormal 1006 close.
     app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
+
+    // Worktree previews are served on wildcard subdomains of
+    // ILD_PREVIEW_PROXY_BASE and must be reached before AuthMiddleware: a preview
+    // is a foreign app that cannot carry an ILD session token. It matches only
+    // hostnames under that base — every other request, the whole UI and API
+    // included, passes through untouched. Unset the variable to switch it off.
+    app.UseMiddleware<PreviewProxyMiddleware>();
     app.UseMiddleware<AuthMiddleware>();
     app.UseRouting();
 
