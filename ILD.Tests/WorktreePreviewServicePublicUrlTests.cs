@@ -39,21 +39,30 @@ public class WorktreePreviewServicePublicUrlTests : IDisposable
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(() => new HttpClient());
 
-        var settings = new Dictionary<string, string?>();
-        if (proxyBase != null)
-            settings[PreviewProxyBase.ConfigurationKey] = proxyBase;
-
         _service = new WorktreePreviewService(
             factory.Object,
-            new ConfigurationBuilder().AddInMemoryCollection(settings).Build(),
+            new ConfigurationBuilder().Build(),
+            PreviewProxyBase.Parse(proxyBase),
             NullLogger<WorktreePreviewService>.Instance);
         return _service;
     }
 
-    private void WriteConfig(string? publicUrlTemplate = null)
+    private void WriteConfig(string? publicUrlTemplate = null, string? secondPublicServiceName = null)
     {
         var command = "node -e \\\"require('http').createServer((q,r)=>{r.end('ok')}).listen(process.env.PORT)\\\"";
         var publicUrlLine = publicUrlTemplate == null ? "" : $"\"publicUrl\": \"{publicUrlTemplate}\",";
+        var second = secondPublicServiceName == null
+            ? ""
+            : $$"""
+              ,{
+                    "name": "{{secondPublicServiceName}}",
+                    "port": "second",
+                    "suggestedPort": {{FindFreePort()}},
+                    "command": "PORT=${PORT} {{command}}",
+                    "healthUrl": "http://127.0.0.1:${PORT}/",
+                    "public": true
+                  }
+              """;
         var config = $$"""
         {
           "preview": {
@@ -69,7 +78,7 @@ public class WorktreePreviewServicePublicUrlTests : IDisposable
                     "healthUrl": "http://127.0.0.1:${PORT}/",
                     {{publicUrlLine}}
                     "public": true
-                  }
+                  }{{second}}
                 ]
               }
             }
@@ -130,6 +139,39 @@ public class WorktreePreviewServicePublicUrlTests : IDisposable
             new WorktreePreviewStartOptions(WorkItemId: "7"));
 
         Assert.Equal("https://preview.example.test/app", response.Services.Single(s => s.Name == "app").PublicUrl);
+    }
+
+    [Fact]
+    public async Task Several_public_services_are_each_advertised_under_their_own_hostname()
+    {
+        WriteConfig(secondPublicServiceName: "docs");
+        var service = BuildService("http://ild.kube:8080");
+
+        var response = await service.StartAsync(
+            _worktree,
+            new WorktreePreviewStartOptions(WorkItemId: "7"));
+
+        // The bare wi-7 names one service, so neither may claim it — handing both the
+        // same URL would send one of them to the wrong application.
+        Assert.Equal("http://wi-7-app.ild.kube:8080", response.Services.Single(s => s.Name == "app").PublicUrl);
+        Assert.Equal("http://wi-7-docs.ild.kube:8080", response.Services.Single(s => s.Name == "docs").PublicUrl);
+    }
+
+    [Fact]
+    public async Task A_service_whose_name_cannot_be_a_hostname_keeps_a_reachable_direct_url()
+    {
+        // ild.config.json does not constrain service names to DNS labels, and an
+        // unreachable URL is worse than a loopback one.
+        WriteConfig(secondPublicServiceName: "docs_site");
+        var service = BuildService("http://ild.kube:8080");
+
+        var response = await service.StartAsync(
+            _worktree,
+            new WorktreePreviewStartOptions(WorkItemId: "7"));
+
+        var docs = response.Services.Single(s => s.Name == "docs_site");
+        Assert.Equal($"http://127.0.0.1:{docs.Port}", docs.PublicUrl);
+        Assert.Equal("http://wi-7-app.ild.kube:8080", response.Services.Single(s => s.Name == "app").PublicUrl);
     }
 
     [Fact]

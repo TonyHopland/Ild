@@ -41,14 +41,23 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
         _backend = await PreviewBackend.StartAsync();
         _resolve = _ => PreviewTarget.Resolved(_backend.Port, "app", rewriteHost: true);
 
+        await StartProxyAsync($"http://{BaseHost}");
+
+        // Redirects are asserted on, not followed: a rewritten Location points at a
+        // hostname that deliberately does not resolve anywhere.
+        _client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false })
+        {
+            Timeout = TimeSpan.FromSeconds(30),
+        };
+    }
+
+    private async Task StartProxyAsync(string proxyBase)
+    {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
-        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            [PreviewProxyBase.ConfigurationKey] = $"http://{BaseHost}",
-        });
         builder.Logging.ClearProviders();
         builder.Services.AddHttpForwarder();
+        builder.Services.AddSingleton(PreviewProxyBase.Parse(proxyBase));
         builder.Services.AddSingleton<IWorktreePreviewService>(new StubPreviewService(label => _resolve(label)));
         builder.Services.AddScoped(_ => Mock.Of<IWorkItemManager>());
 
@@ -61,12 +70,19 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
 
         await _proxy.StartAsync();
         _proxyPort = PortOf(_proxy);
-        // Redirects are asserted on, not followed: a rewritten Location points at a
-        // hostname that deliberately does not resolve anywhere.
-        _client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false })
-        {
-            Timeout = TimeSpan.FromSeconds(30),
-        };
+    }
+
+    /// <summary>
+    /// Rebuilds the proxy on a different configured origin. The listener stays plain
+    /// HTTP either way — that is the point: it reproduces ILD in the container,
+    /// where TLS is terminated by the ingress and the request arriving here is
+    /// always http however the browser reached it.
+    /// </summary>
+    private async Task UseProxyBaseAsync(string proxyBase)
+    {
+        await _proxy.StopAsync();
+        await _proxy.DisposeAsync();
+        await StartProxyAsync(proxyBase);
     }
 
     public async Task DisposeAsync()
@@ -171,6 +187,37 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task An_https_base_is_honoured_even_though_the_request_arrives_over_plain_http()
+    {
+        // ILD listens on http and does not run UseForwardedHeaders, so behind a
+        // TLS-terminating ingress every request here looks like plain http. Reading
+        // the scheme off the request would downgrade the browser to http and tell
+        // the preview the wrong protocol.
+        await UseProxyBaseAsync($"https://{BaseHost}");
+
+        var headers = await GetEchoedHeadersAsync();
+        Assert.Equal("https", headers["x-forwarded-proto"]);
+
+        using var response = await _client.SendAsync(Request(HttpMethod.Get, "/redirect"));
+        Assert.Equal($"https://wi-7.{BaseHost}/landed", response.Headers.Location?.ToString());
+    }
+
+    [Fact]
+    public async Task An_https_base_keeps_a_preview_cookie_secure()
+    {
+        await UseProxyBaseAsync($"https://{BaseHost}");
+
+        using var response = await _client.SendAsync(Request(HttpMethod.Get, "/redirect"));
+        var cookie = Assert.Single(response.Headers.GetValues("Set-Cookie"));
+
+        // The browser did receive this over TLS, so stripping Secure — as judging by
+        // the in-container request scheme would — weakens a cookie for no reason.
+        Assert.Contains("Secure", cookie, StringComparison.Ordinal);
+        Assert.Contains("SameSite=None", cookie);
+        Assert.DoesNotContain("Domain=", cookie, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Absolute_redirects_to_somewhere_else_are_left_alone()
     {
         using var response = await _client.SendAsync(Request(HttpMethod.Get, "/redirect-external"));
@@ -251,6 +298,7 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
     [InlineData(PreviewTargetOutcome.NoWorktree, HttpStatusCode.ServiceUnavailable)]
     [InlineData(PreviewTargetOutcome.PreviewNotRunning, HttpStatusCode.ServiceUnavailable)]
     [InlineData(PreviewTargetOutcome.ServiceNotRunning, HttpStatusCode.ServiceUnavailable)]
+    [InlineData(PreviewTargetOutcome.AmbiguousService, HttpStatusCode.NotFound)]
     public async Task Each_unresolved_outcome_gets_its_own_page(PreviewTargetOutcome outcome, HttpStatusCode expected)
     {
         _resolve = _ => PreviewTarget.Failed(outcome, "the explanation for a human");

@@ -42,6 +42,19 @@ The work item id in the hostname is the numeric id shown in the UI. With the
 variable set, the `publicUrl` in the work item's Preview tab is the proxy URL; an
 explicit `publicUrl` in `ild.config.json` still wins over it.
 
+The bare `wi-<workItemId>` form names a single service, so it is only advertised
+when the profile has exactly one service marked `"public": true`. A profile with
+several is advertised — and must be addressed — as `wi-<workItemId>-<serviceName>`
+for each; the bare form then returns a page listing them rather than picking one.
+A service whose name is not a legal DNS label cannot appear in a hostname at all,
+and keeps its direct URL.
+
+`ILD_PREVIEW_PROXY_BASE` also declares the scheme browsers use. Set it to
+`https://…` when an ingress terminates TLS in front of ILD: ILD itself listens on
+plain HTTP, so it is the configured base — not the incoming request — that decides
+the scheme in rewritten redirects, in the `X-Forwarded-Proto` handed to the
+preview, and whether a preview's `Secure` cookies are left intact.
+
 Compose defaults it to `http://ild.localhost:8080`, which works with no setup —
 browsers resolve `*.localhost` to loopback themselves. The UI itself stays on
 `http://localhost:8080`; only `<label>.ild.localhost` hostnames are proxied, and

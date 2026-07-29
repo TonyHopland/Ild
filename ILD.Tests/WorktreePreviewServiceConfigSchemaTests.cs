@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ILD.Core.Services.Implementations;
+using ILD.Core.Services.Interfaces;
 using ILD.McpServer.Tools;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -36,7 +37,8 @@ public class WorktreePreviewServiceConfigSchemaTests : IDisposable
     {
         var factory = new Mock<IHttpClientFactory>();
         var configuration = new ConfigurationBuilder().Build();
-        return new WorktreePreviewService(factory.Object, configuration, NullLogger<WorktreePreviewService>.Instance);
+        return new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
+            NullLogger<WorktreePreviewService>.Instance);
     }
 
     private static JsonElement ToolDocument()

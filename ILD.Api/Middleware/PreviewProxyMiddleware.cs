@@ -66,27 +66,30 @@ public sealed class PreviewProxyMiddleware
     public PreviewProxyMiddleware(
         RequestDelegate next,
         IHttpForwarder forwarder,
-        IConfiguration configuration,
+        PreviewProxyBase proxyBase,
         ILogger<PreviewProxyMiddleware> logger)
     {
         _next = next;
         _forwarder = forwarder;
+        _proxyBase = proxyBase;
         _logger = logger;
-        _proxyBase = PreviewProxyBase.FromConfiguration(configuration);
-
-        if (_proxyBase.ConfigurationError != null)
-            _logger.LogWarning("Worktree preview proxy disabled: {Reason}", _proxyBase.ConfigurationError);
-        else if (_proxyBase.Enabled)
-            _logger.LogInformation("Worktree preview proxy serving *.{Host} (unauthenticated)", _proxyBase.Host);
     }
 
-    public async Task InvokeAsync(HttpContext context, IWorktreePreviewService previews, IWorkItemManager workItems)
+    public async Task InvokeAsync(HttpContext context)
     {
         if (!_proxyBase.TryGetHostLabel(context.Request.Host.Host, out var hostLabel))
         {
             await _next(context);
             return;
         }
+
+        // Resolved here rather than as InvokeAsync parameters: this middleware sits
+        // near the front of the pipeline, so those would be constructed for every
+        // API, SPA and static request — and for every request at all when the
+        // feature is off — and IWorkItemManager drags in the DbContext-backed run
+        // store behind it.
+        var previews = context.RequestServices.GetRequiredService<IWorktreePreviewService>();
+        var workItems = context.RequestServices.GetRequiredService<IWorkItemManager>();
 
         var target = await previews.ResolvePreviewTargetAsync(hostLabel, workItems, context.RequestAborted);
         if (!target.IsResolved)
@@ -99,7 +102,7 @@ public sealed class PreviewProxyMiddleware
         // responses. Buffering any of those turns a live page into a hang.
         context.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
 
-        var transformer = new PreviewProxyTransformer(target.Port, target.RewriteHost);
+        var transformer = new PreviewProxyTransformer(target.Port, target.RewriteHost, _proxyBase.Scheme);
         var error = await _forwarder.SendAsync(
             context,
             $"http://127.0.0.1:{target.Port}",
@@ -135,6 +138,8 @@ public sealed class PreviewProxyMiddleware
         {
             PreviewTargetOutcome.NotAPreviewHost => HttpStatusCode.NotFound,
             PreviewTargetOutcome.UnknownWorkItem => HttpStatusCode.NotFound,
+            // Nothing is down — the hostname just does not name one service.
+            PreviewTargetOutcome.AmbiguousService => HttpStatusCode.NotFound,
             _ => HttpStatusCode.ServiceUnavailable,
         });
 
@@ -144,6 +149,7 @@ public sealed class PreviewProxyMiddleware
             PreviewTargetOutcome.UnknownWorkItem => "Unknown work item",
             PreviewTargetOutcome.NoWorktree => "No worktree yet",
             PreviewTargetOutcome.PreviewNotRunning => "Preview not running",
+            PreviewTargetOutcome.AmbiguousService => "More than one public service",
             _ => "Preview service not running",
         };
 
@@ -169,17 +175,34 @@ public sealed class PreviewProxyMiddleware
     /// The proxy hygiene a preview needs to behave like it was served directly:
     /// forwarded-for/proto/host on the way in, and on the way back the loopback
     /// authority scrubbed out of anything the browser will act on.
+    ///
+    /// <para>
+    /// The public scheme comes from <see cref="PreviewProxyBase.Scheme"/>, never
+    /// from <c>HttpRequest.Scheme</c>. ILD listens on plain HTTP
+    /// (<c>ASPNETCORE_URLS=http://+:8080</c>) and does not run
+    /// <c>UseForwardedHeaders</c>, so behind a TLS-terminating ingress the request
+    /// this middleware sees is always <c>http</c> however the browser reached it.
+    /// Trusting it would downgrade every rewritten <c>Location</c> to <c>http</c>,
+    /// tell the preview the wrong protocol, and strip <c>Secure</c> from cookies
+    /// that were served over TLS. The configured base is what the browser actually
+    /// used, and unlike a request header it cannot be spoofed.
+    /// </para>
     /// </summary>
     private sealed class PreviewProxyTransformer : HttpTransformer
     {
         private readonly int _port;
         private readonly bool _rewriteHost;
+        private readonly string _publicScheme;
 
-        public PreviewProxyTransformer(int port, bool rewriteHost)
+        public PreviewProxyTransformer(int port, bool rewriteHost, string publicScheme)
         {
             _port = port;
             _rewriteHost = rewriteHost;
+            _publicScheme = publicScheme;
         }
+
+        private bool IsPublicSchemeSecure
+            => string.Equals(_publicScheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
 
         public override async ValueTask TransformRequestAsync(
             HttpContext httpContext,
@@ -212,7 +235,7 @@ public sealed class PreviewProxyMiddleware
             if (forwardedFor != null)
                 proxyRequest.Headers.TryAddWithoutValidation("X-Forwarded-For", forwardedFor);
 
-            proxyRequest.Headers.TryAddWithoutValidation("X-Forwarded-Proto", request.Scheme);
+            proxyRequest.Headers.TryAddWithoutValidation("X-Forwarded-Proto", _publicScheme);
             if (request.Host.HasValue)
                 proxyRequest.Headers.TryAddWithoutValidation("X-Forwarded-Host", request.Host.Value);
         }
@@ -253,9 +276,9 @@ public sealed class PreviewProxyMiddleware
                     && Uri.TryCreate(value, UriKind.Absolute, out var uri)
                     && IsUpstreamAuthority(uri))
                 {
-                    // The origin the browser actually used, not the configured base:
-                    // an ingress may terminate TLS or publish a different port.
-                    rewritten[i] = $"{httpContext.Request.Scheme}://{httpContext.Request.Host.Value}{uri.PathAndQuery}{uri.Fragment}";
+                    // The host the browser used, on the scheme the base declares —
+                    // the request's own scheme is the in-container one.
+                    rewritten[i] = $"{_publicScheme}://{httpContext.Request.Host.Value}{uri.PathAndQuery}{uri.Fragment}";
                     changed = true;
                 }
                 else
@@ -280,15 +303,18 @@ public sealed class PreviewProxyMiddleware
         /// mounts the service at the root, so its paths are already correct.
         /// <c>Secure</c> is dropped on a plain-http preview (and <c>SameSite=None</c>
         /// downgraded with it, since browsers reject that pair without Secure),
-        /// otherwise every cookie a preview sets would be silently discarded.
+        /// otherwise every cookie a preview sets would be silently discarded. That
+        /// judgement is made against the public scheme, not the request's: behind a
+        /// TLS-terminating ingress the request is http and stripping <c>Secure</c>
+        /// would weaken a cookie the browser did receive over TLS.
         /// </summary>
-        private static void RewriteSetCookie(HttpContext httpContext)
+        private void RewriteSetCookie(HttpContext httpContext)
         {
             var headers = httpContext.Response.Headers;
             if (!headers.TryGetValue("Set-Cookie", out var values) || values.Count == 0)
                 return;
 
-            var isSecureRequest = httpContext.Request.IsHttps;
+            var isSecureRequest = IsPublicSchemeSecure;
             var rewritten = new string[values.Count];
             var changed = false;
 

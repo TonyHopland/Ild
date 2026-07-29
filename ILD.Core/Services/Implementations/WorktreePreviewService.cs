@@ -44,14 +44,13 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     public WorktreePreviewService(
         IHttpClientFactory httpClientFactory,
         IConfiguration configuration,
+        PreviewProxyBase proxyBase,
         ILogger<WorktreePreviewService> logger)
     {
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
+        _proxyBase = proxyBase;
         _logger = logger;
-        _proxyBase = PreviewProxyBase.FromConfiguration(configuration);
-        if (_proxyBase.ConfigurationError != null)
-            _logger.LogWarning("Ignoring {Key}: {Reason}", PreviewProxyBase.ConfigurationKey, _proxyBase.ConfigurationError);
     }
 
     public async Task<WorktreePreviewResponse> GetStatusAsync(string worktreePath, CancellationToken cancellationToken = default)
@@ -451,14 +450,27 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         ManagedPreviewProcess? process;
         if (serviceName == null)
         {
-            process = runtime.Processes.FirstOrDefault(p => p.Service.Public && !p.Process.HasExited);
-            if (process == null)
+            var publicProcesses = runtime.Processes.Where(p => p.Service.Public && !p.Process.HasExited).ToList();
+            if (publicProcesses.Count == 0)
             {
                 return PreviewTarget.Failed(
                     PreviewTargetOutcome.ServiceNotRunning,
                     $"No service marked \"public\": true is running in work item {workItemId}'s preview. "
                     + $"Start it, or address one service directly as wi-{workItemId}-<serviceName>.");
             }
+
+            // Picking the first would silently serve one of them under a hostname
+            // that just as fairly describes the others.
+            if (publicProcesses.Count > 1)
+            {
+                var names = string.Join(", ", publicProcesses.Select(p => $"wi-{workItemId}-{p.Service.Name}"));
+                return PreviewTarget.Failed(
+                    PreviewTargetOutcome.AmbiguousService,
+                    $"Work item {workItemId}'s preview is running {publicProcesses.Count} services marked "
+                    + $"\"public\": true, so this hostname does not name one. Use {names}.");
+            }
+
+            process = publicProcesses[0];
         }
         else
         {
@@ -870,11 +882,17 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             ? profile.Services
             : runtime.Processes.Select(p => p.Service).ToList();
 
+        // The bare wi-{id} hostname names one service, so it can only be advertised
+        // when the profile has exactly one public service. With more than one, each
+        // is advertised under its own wi-{id}-{name} instead — otherwise both would
+        // be handed the same URL and one of them would reach the wrong application.
+        var singlePublicService = profileServices.Count(service => service.Public) == 1;
+
         var serviceResponses = profileServices.Select(service =>
         {
             var process = runtime.Processes.FirstOrDefault(p => string.Equals(p.Service.Name, service.Name, StringComparison.OrdinalIgnoreCase));
             return process != null
-                ? BuildServiceResponse(process, runtime)
+                ? BuildServiceResponse(process, runtime, singlePublicService)
                 : BuildStoppedServiceResponse(service, runtime);
         }).ToList();
 
@@ -891,11 +909,11 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         };
     }
 
-    private WorktreePreviewServiceResponse BuildServiceResponse(ManagedPreviewProcess process, PreviewRuntime runtime)
+    private WorktreePreviewServiceResponse BuildServiceResponse(ManagedPreviewProcess process, PreviewRuntime runtime, bool singlePublicService)
     {
         var healthUrl = ResolveHealthUrl(process.Service, runtime);
         var port = runtime.Ports.TryGetValue(process.Service.Port, out var allocated) ? allocated : (int?)null;
-        var publicUrl = process.Service.Public ? BuildPublicUrl(process.Service, runtime, port) : null;
+        var publicUrl = process.Service.Public ? BuildPublicUrl(process.Service, runtime, port, singlePublicService) : null;
 
         return new WorktreePreviewServiceResponse
         {
@@ -920,18 +938,48 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// service's port; then the historical direct <c>http://{publicHost}:{port}</c>.
     /// With <c>ILD_PREVIEW_PROXY_BASE</c> unset the middle rung disappears and the
     /// result is exactly what it has always been.
+    /// <para>
+    /// <paramref name="singlePublicService"/> decides whether the bare
+    /// <c>wi-{id}</c> hostname is this service's to claim; when it is not, the
+    /// service is advertised as <c>wi-{id}-{name}</c>. A name that is not a legal
+    /// DNS label cannot appear in a hostname at all, so such a service falls back
+    /// to the direct URL rather than being handed one that cannot resolve.
+    /// </para>
     /// </summary>
-    private string? BuildPublicUrl(PreviewServiceConfig service, PreviewRuntime runtime, int? port)
+    private string? BuildPublicUrl(PreviewServiceConfig service, PreviewRuntime runtime, int? port, bool singlePublicService)
     {
         var authored = ResolveOptionalTemplate(service.PublicUrl, runtime, service.Port);
         if (authored != null)
             return authored;
 
-        if (_proxyBase.Enabled && !string.IsNullOrWhiteSpace(runtime.WorkItemId))
-            return _proxyBase.BuildUrl($"wi-{runtime.WorkItemId}");
+        var proxyLabel = BuildPreviewHostLabel(runtime.WorkItemId, singlePublicService ? null : service.Name);
+        if (_proxyBase.Enabled && proxyLabel != null)
+            return _proxyBase.BuildUrl(proxyLabel);
 
         return port is int allocated ? $"http://{runtime.PublicHost}:{allocated}" : null;
     }
+
+    /// <summary>
+    /// The hostname label for a work item's preview, or null when one cannot be
+    /// formed — no work item id, or a service name that is not a legal DNS label
+    /// (which <c>ild.config.json</c> does not otherwise constrain).
+    /// </summary>
+    private static string? BuildPreviewHostLabel(string? workItemId, string? serviceName)
+    {
+        if (string.IsNullOrWhiteSpace(workItemId))
+            return null;
+
+        if (serviceName == null)
+            return $"wi-{workItemId}";
+
+        return IsDnsLabelSegment(serviceName) ? $"wi-{workItemId}-{serviceName}" : null;
+    }
+
+    private static bool IsDnsLabelSegment(string value)
+        => value.Length > 0
+            && value[0] != '-'
+            && value[^1] != '-'
+            && value.All(c => char.IsAsciiLetterOrDigit(c) || c == '-');
 
     // A configured-but-not-running service in an otherwise live runtime. Health and
     // public URLs are left null: their templates can reference other services' ports

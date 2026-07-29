@@ -1,4 +1,5 @@
 using ILD.Core.Services.Implementations;
+using ILD.Core.Services.Interfaces;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -31,7 +32,8 @@ public class WorktreePreviewServiceInstallTests : IDisposable
     {
         var factory = new Mock<IHttpClientFactory>();
         var configuration = new ConfigurationBuilder().Build();
-        return new WorktreePreviewService(factory.Object, configuration, NullLogger<WorktreePreviewService>.Instance);
+        return new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
+            NullLogger<WorktreePreviewService>.Instance);
     }
 
     private void WriteConfig(string installCommand)

@@ -69,6 +69,16 @@ public enum PreviewTargetOutcome
     /// marked <c>"public": true</c> is up.
     /// </summary>
     ServiceNotRunning,
+
+    /// <summary>
+    /// The bare <c>wi-{id}</c> form was used while more than one <c>"public": true</c>
+    /// service is running, so it names no single service. Distinct from
+    /// <see cref="ServiceNotRunning"/> because nothing is down: the caller has to
+    /// pick, and the message lists the names to pick from. Advertised URLs never
+    /// land here — a profile with several public services has each of them
+    /// advertised as <c>wi-{id}-{name}</c>.
+    /// </summary>
+    AmbiguousService,
 }
 
 /// <summary>

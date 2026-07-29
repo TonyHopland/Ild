@@ -42,6 +42,7 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
         _service = new WorktreePreviewService(
             factory.Object,
             new ConfigurationBuilder().Build(),
+            PreviewProxyBase.Disabled,
             NullLogger<WorktreePreviewService>.Instance);
         return _service;
     }
@@ -62,7 +63,7 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
     /// plain named one, and one whose name contains hyphens — the case that breaks
     /// any parser splitting the label on its first hyphen.
     /// </summary>
-    private void WriteConfig(bool rewriteHostOnApp = true)
+    private void WriteConfig(bool rewriteHostOnApp = true, string? alsoPublic = null)
     {
         var command = "node -e \\\"require('http').createServer((q,r)=>{r.end('ok')}).listen(process.env.PORT)\\\"";
         var config = $$"""
@@ -86,7 +87,8 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
                     "port": "backend",
                     "suggestedPort": {{FindFreePort()}},
                     "command": "PORT=${PORT} {{command}}",
-                    "healthUrl": "http://127.0.0.1:${PORT}/"
+                    "healthUrl": "http://127.0.0.1:${PORT}/",
+                    "public": {{(alsoPublic == "api" ? "true" : "false")}}
                   },
                   {
                     "name": "work-item-server",
@@ -234,6 +236,41 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
         // ...as is a name that does not exist in the profile at all.
         var unknown = await service.ResolvePreviewTargetAsync("wi-7-nope", WorkItemsPointingAtThisWorktree());
         Assert.Equal(PreviewTargetOutcome.ServiceNotRunning, unknown.Outcome);
+    }
+
+    [Fact]
+    public async Task Bare_label_with_several_public_services_running_names_none_of_them()
+    {
+        WriteConfig(alsoPublic: "api");
+        var service = BuildService();
+        await service.StartAsync(_worktree);
+
+        var target = await service.ResolvePreviewTargetAsync("wi-7", WorkItemsPointingAtThisWorktree());
+
+        // Serving whichever came first would put one application behind a hostname
+        // that describes the other just as well.
+        Assert.Equal(PreviewTargetOutcome.AmbiguousService, target.Outcome);
+        Assert.Contains("wi-7-app", target.Message);
+        Assert.Contains("wi-7-api", target.Message);
+
+        // Naming one is unambiguous and still works.
+        var named = await service.ResolvePreviewTargetAsync("wi-7-api", WorkItemsPointingAtThisWorktree());
+        Assert.True(named.IsResolved);
+        Assert.Equal("api", named.ServiceName);
+    }
+
+    [Fact]
+    public async Task Only_one_public_service_running_is_unambiguous_even_when_two_are_configured()
+    {
+        WriteConfig(alsoPublic: "api");
+        var service = BuildService();
+        var started = await service.StartServiceAsync(_worktree, "app");
+
+        var target = await service.ResolvePreviewTargetAsync("wi-7", WorkItemsPointingAtThisWorktree());
+
+        Assert.True(target.IsResolved);
+        Assert.Equal("app", target.ServiceName);
+        Assert.Equal(started.Services.Single(s => s.Name == "app").Port, target.Port);
     }
 
     [Fact]
