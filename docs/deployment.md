@@ -61,6 +61,12 @@ proxied; previews keep their direct `http://<publicHost>:<port>` URLs, reachable
 only by whoever can already reach that port. When you do enable it, put ILD behind
 an authenticating ingress or keep it on a trusted network.
 
+A proxied response also does not inherit the response headers ILD sets for its own
+UI — the `Content-Security-Policy`, `X-Frame-Options` and friends. Those are tuned
+for ILD (`default-src 'self'`) and would break an application that loads a font or
+a script from anywhere else. A preview's own headers are passed through as the
+previewed application sent them.
+
 ### Cluster prerequisites
 
 Two things must exist outside this repository before previews resolve in a

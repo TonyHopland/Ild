@@ -172,6 +172,26 @@ try
     }
 
     app.UseSerilogRequestLogging();
+
+    // Send WebSocket keepalive (Ping) frames well inside the idle timeout of
+    // typical reverse proxies, so long-lived interactive terminals don't get
+    // torn down as idle and surface to the browser as an abnormal 1006 close.
+    // Registered here so the preview proxy below can pass upgrades through.
+    app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
+
+    // Worktree previews are served on wildcard subdomains of
+    // ILD_PREVIEW_PROXY_BASE, and this sits ahead of everything that would claim
+    // or rewrite their responses: the SPA's static files and fallback (which in a
+    // built image would answer a preview request with ILD's own index.html),
+    // AuthMiddleware (a preview is a foreign app and cannot carry an ILD session
+    // token), CORS (which terminates preflights and would answer on the preview's
+    // behalf), and the security headers, whose deliberately strict
+    // `default-src 'self'` CSP is right for the ILD UI and wrong for somebody
+    // else's application. It matches only hostnames under the configured base —
+    // every other request, the whole UI and API included, passes through
+    // untouched. Unset the variable to switch it off.
+    app.UseMiddleware<PreviewProxyMiddleware>();
+
     if (!app.Environment.IsDevelopment())
     {
         app.UseHsts();
@@ -186,17 +206,6 @@ try
         app.UseStaticFiles();
     }
 
-    // Send WebSocket keepalive (Ping) frames well inside the idle timeout of
-    // typical reverse proxies, so long-lived interactive terminals don't get
-    // torn down as idle and surface to the browser as an abnormal 1006 close.
-    app.UseWebSockets(new WebSocketOptions { KeepAliveInterval = TimeSpan.FromSeconds(30) });
-
-    // Worktree previews are served on wildcard subdomains of
-    // ILD_PREVIEW_PROXY_BASE and must be reached before AuthMiddleware: a preview
-    // is a foreign app that cannot carry an ILD session token. It matches only
-    // hostnames under that base — every other request, the whole UI and API
-    // included, passes through untouched. Unset the variable to switch it off.
-    app.UseMiddleware<PreviewProxyMiddleware>();
     app.UseMiddleware<AuthMiddleware>();
     app.UseRouting();
 

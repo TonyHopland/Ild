@@ -339,13 +339,19 @@ public class AgentApiIntegrationTests
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
+        // Either status proves no POST endpoint exists at the path. Which of the two
+        // comes back depends on whether the SPA is present: with a wwwroot — every
+        // real deployment, and now the test host too — MapFallbackToFile matches the
+        // path but accepts only GET/HEAD, so an unrouted POST is 405 rather than 404.
+        var notRouted = new[] { HttpStatusCode.NotFound, HttpStatusCode.MethodNotAllowed };
+
         var startResp = await client.PostAsync("/api/v1/agent/workitems/" + Guid.NewGuid() + "/start", null);
-        Assert.Equal(HttpStatusCode.NotFound, startResp.StatusCode);
+        Assert.Contains(startResp.StatusCode, notRouted);
 
         var trResp = await client.PostAsJsonAsync(
             "/api/v1/agent/workitems/" + Guid.NewGuid() + "/transition",
             new { targetStatus = "Ready" });
-        Assert.Equal(HttpStatusCode.NotFound, trResp.StatusCode);
+        Assert.Contains(trResp.StatusCode, notRouted);
     }
 
     [Fact]

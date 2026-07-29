@@ -1,0 +1,18 @@
+<!doctype html>
+<!--
+  Stands in for the built ILD SPA. The API enables UseDefaultFiles/UseStaticFiles
+  and MapFallbackToFile only when a wwwroot exists next to the entry assembly —
+  true in the shipped image, and true here because this folder is copied to the
+  test output. Without it the whole static-file branch of the pipeline is dead in
+  tests, which is how a preview host being swallowed by the SPA went unnoticed.
+  The markers let a test say which of the two answered.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>ILD</title>
+  </head>
+  <body>
+    ILD-UI-SPA-MARKER
+  </body>
+</html>

@@ -54,6 +54,14 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     {
         builder.UseEnvironment("Testing");
 
+        // The API decides whether to serve the SPA by looking for a wwwroot next to
+        // the entry assembly, but static files and the fallback are then served from
+        // the web root, which WebApplicationFactory otherwise resolves against the
+        // ILD.Api project directory. In the container both are /app; pointing the web
+        // root at the test output makes them agree here too, so the SPA branch of the
+        // pipeline is exercised as shipped rather than registered and then 404ing.
+        builder.UseWebRoot(Path.Combine(AppContext.BaseDirectory, "wwwroot"));
+
         builder.ConfigureAppConfiguration((_, config) =>
         {
             config.AddInMemoryCollection(new Dictionary<string, string?>

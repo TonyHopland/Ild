@@ -258,10 +258,11 @@ public class AIProviderService : IAIProviderService
                 }
             }
 
+            var owner = await ResolvePreviewOwnerAsync(worktreePath);
             var status = await _worktreePreviewService.StartAsync(
                 worktreePath,
                 new WorktreePreviewStartOptions(profileName, skipInstall, publicHost, portOverrides,
-                    await ResolvePreviewEnvAsync(worktreePath)));
+                    owner.CustomEnv, owner.WorkItemId));
             return new ToolExecutionResult(true, JsonSerializer.Serialize(status), null);
         }
         catch (Exception ex)
@@ -274,15 +275,17 @@ public class AIProviderService : IAIProviderService
     // (and its custom .env) back through the run that owns the worktree —
     // worktree → run → work item → repository. This keeps an agent-started preview
     // injecting the same secrets the human WorkItems/Agent controllers and the run's
-    // Start node do. Best-effort: without a run store wired, or an unmatched path,
-    // no custom env is injected.
-    private async Task<string?> ResolvePreviewEnvAsync(string worktreePath)
+    // Start node do. The work item id comes back from the same walk, since the
+    // preview needs it to advertise a wi-{id} proxy URL — an agent-started preview
+    // must get the same URL a human-started one does. Best-effort: without a run
+    // store wired, or an unmatched path, neither is resolved.
+    private async Task<(string? WorkItemId, string? CustomEnv)> ResolvePreviewOwnerAsync(string worktreePath)
     {
-        if (_loopRuns is null) return null;
+        if (_loopRuns is null) return (null, null);
         var run = await _loopRuns.GetByWorktreePathAsync(worktreePath);
-        if (run is null || string.IsNullOrEmpty(run.WorkItemId)) return null;
+        if (run is null || string.IsNullOrEmpty(run.WorkItemId)) return (null, null);
         var workItem = await _workItemManager.GetWorkItemAsync(run.WorkItemId);
-        return await _providerStore.GetRepositoryPreviewEnvAsync(workItem?.RepositoryId);
+        return (run.WorkItemId, await _providerStore.GetRepositoryPreviewEnvAsync(workItem?.RepositoryId));
     }
 
     private async Task<ToolExecutionResult> GetPreviewStatusAsync(string worktreePath)
