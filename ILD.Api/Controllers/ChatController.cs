@@ -7,8 +7,9 @@ namespace ILD.Api.Controllers;
 /// REST surface for the chat bubble (ADR-0010, retained history ADR-0013). The
 /// streaming of a turn happens over the <c>/hubs/chat</c> SignalR hub; these
 /// endpoints start chats, list/resume retained history, submit messages (which
-/// interrupt any in-flight turn rather than queueing), and delete chats (one or
-/// all). A chat is never deleted automatically — only by an explicit delete.
+/// interrupt any in-flight turn rather than queueing), cancel an in-flight turn
+/// on its own, and delete chats (one or all). A chat is never deleted
+/// automatically — only by an explicit delete.
 /// </summary>
 [ApiController]
 [Route("api/v1/chat")]
@@ -70,6 +71,22 @@ public class ChatController : ControllerBase
             return NotFound(new { error = "Chat not found." });
 
         await _runner.SubmitAsync(id, request.Content, request.OpenWorkItemId, request.OpenLoopDocument);
+        return Accepted();
+    }
+
+    [HttpPost("{id:guid}/interrupt")]
+    public async Task<IActionResult> Interrupt(Guid id, CancellationToken ct)
+    {
+        if (!TryResolveUser(out var userId, out var error)) return error;
+
+        // Confirm ownership before cancelling, so a stop can never reach another
+        // user's in-flight turn.
+        if (!await _chat.ExistsForUserAsync(userId, id, ct))
+            return NotFound();
+
+        // Cancelling is idempotent: with no turn in flight the runner no-ops, so a
+        // stop that races the turn finishing is still Accepted.
+        await _runner.InterruptAsync(id);
         return Accepted();
     }
 

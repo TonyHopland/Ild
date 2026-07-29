@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Stop a chat reply mid-flight.** The chat bubble shows a red stop square to the left of **Send** for exactly as long as a turn is in progress, cancelling it over the new `POST /api/v1/chat/{id}/interrupt`. The cancel primitive already existed — it was reachable only by sending another message or deleting the chat, so there was no way to just make the agent stop. The endpoint checks ownership before cancelling, exactly as the per-chat delete does, and the button does not clear the busy state itself: the server persists the partial reply and announces it, so an interrupted turn ends through the same hub events as one that finished on its own and the transcript keeps what the agent had produced (flagged `interrupted`). A stop that loses the race to the turn finishing is a no-op rather than an error.
+
 ### Fixed
 
 - **The .NET test suite no longer depends on the environment that launched it.** `ILD.Tests` pins the [ADR-0014](docs/adr/0014-agent-uid-isolation.md) uid-isolation variables to their documented unit-test baseline before any test runs, so `dotnet test` behaves the same in CI as it does inside the running container as the `agent` uid — where the entrypoint has already exported them and 77 tests failed for reasons unrelated to the code under test. The ADR states the intent ("routing is a no-op unless `ILD_AGENT_USER` is set, so unit tests keep the pre-isolation behavior unchanged") and the tests are written to it, driving isolation through the explicit-parameter overloads; nothing enforced the "unless" half, so the guarantee only held where the variables happened to be absent. The two roots need opposite treatment: clearing `ILD_AGENT_SCRATCH_ROOT` suffices because its fallback is `TMPDIR`, but `ILD_ORCHESTRATOR_PRIVATE_ROOT` has to be redirected, since its fallback is the fixed `TMPDIR/ild-orchestrator-private` the entrypoint has already created `0700` under the orchestrator's uid. A guard test asserts the baseline, so a regression surfaces as one named failure instead of 77 scattered ones.

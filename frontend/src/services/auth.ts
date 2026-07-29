@@ -518,6 +518,15 @@ export const chatService = {
     });
   },
 
+  /**
+   * Cancel the chat's in-flight turn. The partial reply is still persisted and
+   * announced over the hub, so the caller waits for `ChatTurnCompleted` rather
+   * than clearing its own busy state. A no-op when the turn already finished.
+   */
+  interrupt: async (sessionId: string): Promise<void> => {
+    await api.post<void>(`/chat/${sessionId}/interrupt`, {});
+  },
+
   /** Hard-delete one retained chat. */
   deleteOne: async (id: string): Promise<void> => {
     await api.delete<void>(`/chat/${id}`);
