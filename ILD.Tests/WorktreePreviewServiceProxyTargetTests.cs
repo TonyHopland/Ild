@@ -286,6 +286,52 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
         Assert.Contains("public", target.Message);
     }
 
+    /// <summary>
+    /// The proxy resolves a target on every HTTP request to a preview hostname —
+    /// every asset, XHR and reload poll — while start/stop keeps changing the set of
+    /// running processes. Enumerating a list that is being mutated throws
+    /// "Collection was modified", which here would surface as a bare 500 on a page
+    /// that happened to be loading when someone restarted a service.
+    /// <para>
+    /// A stress test can only ever fail to reproduce a race, never falsely report
+    /// one, so this is a guard rather than a proof: it fails reliably against an
+    /// in-place mutated list and cannot fail against the copy-on-write one.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Resolving_a_target_while_services_restart_does_not_tear()
+    {
+        WriteConfig();
+        var service = BuildService();
+        await service.StartAsync(_worktree);
+        var workItems = WorkItemsPointingAtThisWorktree();
+
+        using var done = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var resolutions = 0;
+
+        var reader = Task.Run(async () =>
+        {
+            while (!done.IsCancellationRequested)
+            {
+                // Both forms: one filters the collection, the other scans it.
+                await service.ResolvePreviewTargetAsync("wi-7", workItems);
+                await service.ResolvePreviewTargetAsync("wi-7-api", workItems);
+                Interlocked.Increment(ref resolutions);
+            }
+        });
+
+        for (var i = 0; i < 6 && !done.IsCancellationRequested; i++)
+        {
+            await service.StopServiceAsync(_worktree, "api");
+            await service.StartServiceAsync(_worktree, "api");
+        }
+
+        done.Cancel();
+        await reader; // An unhandled enumeration failure surfaces here.
+
+        Assert.True(resolutions > 0, "the reader should have resolved at least once");
+    }
+
     private static int FindFreePort()
     {
         using var listener = new TcpListener(IPAddress.Loopback, 0);

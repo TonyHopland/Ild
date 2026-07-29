@@ -48,8 +48,10 @@ public class PreviewProxyPipelineTests
         using var response = await client.SendAsync(Request(path, PreviewHost));
         var body = await response.Content.ReadAsStringAsync();
 
-        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        // No preview is running, so the proxy's own 404 — not the SPA, and not a 401.
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);
+        Assert.Contains("No worktree preview is running at this address.", body);
         Assert.DoesNotContain("ILD-UI-SPA-MARKER", body);
         Assert.DoesNotContain("ILD-UI-BUNDLE-MARKER", body);
     }

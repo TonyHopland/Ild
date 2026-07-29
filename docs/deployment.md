@@ -45,9 +45,16 @@ explicit `publicUrl` in `ild.config.json` still wins over it.
 The bare `wi-<workItemId>` form names a single service, so it is only advertised
 when the profile has exactly one service marked `"public": true`. A profile with
 several is advertised — and must be addressed — as `wi-<workItemId>-<serviceName>`
-for each; the bare form then returns a page listing them rather than picking one.
+for each; the bare form then 404s rather than picking one, and the reason is logged.
 A service whose name is not a legal DNS label cannot appear in a hostname at all,
 and keeps its direct URL.
+
+**Anything the proxy will not forward is a flat 404.** A hostname that isn't a
+preview address, a work item that doesn't exist, one with no worktree, a preview
+nobody started, a service that is stopped or has crashed — all answer with the same
+page, so the response says nothing about what does or doesn't exist inside ILD. Why
+a particular request wasn't served is written to ILD's log instead, at `Debug` for
+the routine cases and `Warning` for a misconfiguration.
 
 `ILD_PREVIEW_PROXY_BASE` also declares the scheme browsers use. Set it to
 `https://…` when an ingress terminates TLS in front of ILD: ILD itself listens on
@@ -62,17 +69,30 @@ the apex `ild.localhost` is not one of them.
 
 ### Security
 
-**Proxied previews are unauthenticated.** The proxy runs ahead of ILD's
-authentication because a preview is a foreign application that knows nothing
-about ILD sessions and cannot present a token. Anyone who can resolve a preview
-hostname and reach ILD's port can therefore use the running service — including
-any secrets a repository's preview `.env` (`Repository.PreviewEnv`) injected into
-it, and any data the previewed branch's code touches.
+**A running proxied preview is unauthenticated.** The proxy runs ahead of ILD's
+authentication because a preview is a foreign application that knows nothing about
+ILD sessions and cannot present a token. Anyone who reaches a running preview can
+use it — including any secrets a repository's preview `.env`
+(`Repository.PreviewEnv`) injected into it, and any data the previewed branch's
+code touches.
 
-`ILD_PREVIEW_PROXY_BASE` is the opt-in gate. Leave it unset and no request is ever
-proxied; previews keep their direct `http://<publicHost>:<port>` URLs, reachable
-only by whoever can already reach that port. When you do enable it, put ILD behind
-an authenticating ingress or keep it on a trusted network.
+Be clear about what "reaches" means: the preview hostname is carried in the `Host`
+header, which the client chooses. **Wildcard DNS is a convenience for browsers, not
+a control** — anyone who can open a connection to ILD's port can send
+`Host: wi-12.<base>` by hand, with no DNS involved. The boundary is therefore
+network access to ILD's port, nothing more. Put ILD behind an authenticating
+ingress or keep it on a trusted network.
+
+What the boundary protects is narrower than it looks, because nothing is served
+unless someone has started that preview: with no preview running, every preview
+hostname is a 404 that reveals nothing. The exposure lasts as long as the preview
+does.
+
+`ILD_PREVIEW_PROXY_BASE` remains the switch. Leave it unset — or set it to an empty
+value, which is why compose uses `${ILD_PREVIEW_PROXY_BASE-…}` rather than `:-` —
+and no request is ever proxied; previews keep their direct
+`http://<publicHost>:<port>` URLs, reachable only by whoever can already reach that
+port.
 
 A proxied response also does not inherit the response headers ILD sets for its own
 UI — the `Content-Security-Policy`, `X-Frame-Options` and friends. Those are tuned
@@ -82,15 +102,16 @@ previewed application sent them.
 
 ### Cluster prerequisites
 
-Two things must exist outside this repository before previews resolve in a
-cluster, and neither can be created from here:
+Two things must exist outside this repository before a browser can reach a preview
+in a cluster, and neither can be created from here:
 
 1. **Wildcard DNS** for `*.<base host>` pointing at the ingress.
 2. **A wildcard SAN** (`*.<base host>`) on the certificate the ingress serves, if
    previews are on HTTPS.
 
-Until both are in place, preview hostnames will not resolve and nothing about the
-proxy will appear to work.
+Until both are in place, preview hostnames will not resolve in a browser and
+nothing about the proxy will appear to work. Note again that this is about
+usability, not access control — see [Security](#security).
 
 The Kubernetes manifests on `feature/flux-example-setup` also still need updating:
 a wildcard host on the Ingress, `ILD_PREVIEW_PROXY_BASE` in the Deployment,

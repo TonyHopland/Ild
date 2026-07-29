@@ -114,7 +114,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
             foreach (var service in profile.Services)
             {
-                runtime.Processes.Add(await LaunchServiceProcessAsync(service, runtime, cancellationToken));
+                runtime.AddProcess(await LaunchServiceProcessAsync(service, runtime, cancellationToken));
             }
 
             foreach (var service in profile.Services)
@@ -190,7 +190,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                     // An exited process lingers in the runtime so its log/exit code
                     // stays visible; restarting the service replaces it cleanly.
                     await StopProcessAsync(existing, cancellationToken);
-                    runtime.Processes.Remove(existing);
+                    runtime.RemoveProcess(existing);
                 }
 
                 EnsureServicePortAllocated(service, runtime, options.PortOverrides);
@@ -201,7 +201,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 _runtimes[normalized] = runtime;
             }
 
-            runtime.Processes.Add(await LaunchServiceProcessAsync(service, runtime, cancellationToken));
+            runtime.AddProcess(await LaunchServiceProcessAsync(service, runtime, cancellationToken));
             await WaitForHealthAsync(service.Name, ResolveHealthUrl(service, runtime), cancellationToken);
 
             return BuildResponse(loaded, runtime);
@@ -227,7 +227,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             if (process != null)
             {
                 await StopProcessAsync(process, cancellationToken);
-                runtime.Processes.Remove(process);
+                runtime.RemoveProcess(process);
             }
 
             if (runtime.Processes.Count == 0)
@@ -450,7 +450,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         ManagedPreviewProcess? process;
         if (serviceName == null)
         {
-            var publicProcesses = runtime.Processes.Where(p => p.Service.Public && !p.Process.HasExited).ToList();
+            var publicProcesses = runtime.Processes.Where(p => p.Service.Public && p.IsRunning).ToList();
             if (publicProcesses.Count == 0)
             {
                 return PreviewTarget.Failed(
@@ -475,7 +475,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         else
         {
             process = runtime.Processes.FirstOrDefault(p => string.Equals(p.Service.Name, serviceName, StringComparison.OrdinalIgnoreCase));
-            if (process == null || process.Process.HasExited)
+            if (process == null || !process.IsRunning)
             {
                 return PreviewTarget.Failed(
                     PreviewTargetOutcome.ServiceNotRunning,
@@ -836,11 +836,15 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             await StopProcessAsync(process, cancellationToken);
         }
 
-        runtime.Processes.Clear();
+        runtime.ClearProcesses();
     }
 
     private async Task StopProcessAsync(ManagedPreviewProcess process, CancellationToken cancellationToken)
     {
+        // Claim it first: from here on the Process gets killed and disposed, so an
+        // unsynchronized reader (the preview proxy) must stop treating it as live.
+        process.MarkStopped();
+
         try
         {
             if (!process.Process.HasExited)
@@ -1335,7 +1339,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             StateDirectory = stateDirectory;
             PublicHost = publicHost;
             Ports = ports;
-            Processes = processes;
+            _processes = processes.ToArray();
             CustomEnv = customEnv;
         }
 
@@ -1352,7 +1356,33 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         public string StateDirectory { get; }
         public string PublicHost { get; }
         public Dictionary<string, int> Ports { get; }
-        public List<ManagedPreviewProcess> Processes { get; }
+
+        private volatile IReadOnlyList<ManagedPreviewProcess> _processes;
+
+        /// <summary>
+        /// The service processes started for this runtime. The list is replaced
+        /// wholesale on every change rather than mutated in place, so a reader always
+        /// enumerates a complete snapshot and can never see the collection halfway
+        /// through a modification.
+        /// <para>
+        /// The writers here are already serialized by the service's start/stop gate,
+        /// but that gate is held across process launches and health probes — seconds
+        /// to minutes — and the preview proxy reads this on <em>every</em> HTTP request
+        /// to a preview hostname: every asset, XHR and reload poll. Making readers wait
+        /// on the gate would stall a loading page behind a service restart, so instead
+        /// the read takes no lock and the writer pays for a copy of a list that never
+        /// holds more than a handful of entries.
+        /// </para>
+        /// </summary>
+        public IReadOnlyList<ManagedPreviewProcess> Processes => _processes;
+
+        public void AddProcess(ManagedPreviewProcess process)
+            => _processes = [.. _processes, process];
+
+        public void RemoveProcess(ManagedPreviewProcess process)
+            => _processes = _processes.Where(p => !ReferenceEquals(p, process)).ToArray();
+
+        public void ClearProcesses() => _processes = [];
 
         /// <summary>Parsed repository custom <c>.env</c> (see <c>Repository.PreviewEnv</c>),
         /// injected into every step's environment. Empty when none is configured.</summary>
@@ -1386,6 +1416,43 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         public Task StdOutPump { get; }
         public Task StdErrPump { get; }
         public string LogFilePath { get; }
+
+        private volatile bool _stopped;
+
+        /// <summary>
+        /// Records that the teardown path has taken this process over, before it
+        /// disposes <see cref="Process"/>.
+        /// </summary>
+        public void MarkStopped() => _stopped = true;
+
+        /// <summary>
+        /// Whether this service is up — safe to ask from any thread at any time, which
+        /// <see cref="Process"/> is not: reading <c>HasExited</c> on a disposed
+        /// <see cref="System.Diagnostics.Process"/> throws
+        /// <see cref="InvalidOperationException"/>, and teardown can dispose it at any
+        /// moment. The preview proxy asks this on every request to a preview hostname
+        /// without holding the service's start/stop gate, so it cannot assume a stop in
+        /// flight has either not begun or fully finished. Callers that do hold the gate
+        /// may read <see cref="Process"/> directly, and do, to report exit codes.
+        /// </summary>
+        public bool IsRunning
+        {
+            get
+            {
+                if (_stopped)
+                    return false;
+
+                try
+                {
+                    return !Process.HasExited;
+                }
+                catch (InvalidOperationException)
+                {
+                    // Disposed between the flag check and here.
+                    return false;
+                }
+            }
+        }
     }
 
     private sealed class IldWorkspaceConfig

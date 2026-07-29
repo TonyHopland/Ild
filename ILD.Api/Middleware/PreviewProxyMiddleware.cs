@@ -94,7 +94,15 @@ public sealed class PreviewProxyMiddleware
         var target = await previews.ResolvePreviewTargetAsync(hostLabel, workItems, context.RequestAborted);
         if (!target.IsResolved)
         {
-            await WriteUnavailablePageAsync(context, target);
+            // Several public services is a misconfiguration the operator has to fix,
+            // so it earns a warning; the rest is the routine "nobody pressed Start"
+            // and stays out of the way.
+            if (target.Outcome == PreviewTargetOutcome.AmbiguousService)
+                _logger.LogWarning("Preview {HostLabel} not served: {Reason}", hostLabel, target.Message);
+            else
+                _logger.LogDebug("Preview {HostLabel} not served: {Reason}", hostLabel, target.Message);
+
+            await WriteNotFoundAsync(context);
             return;
         }
 
@@ -112,63 +120,46 @@ public sealed class PreviewProxyMiddleware
 
         if (error != ForwarderError.None && !context.Response.HasStarted)
         {
-            var exception = context.GetForwarderErrorFeature()?.Exception;
             _logger.LogWarning(
-                exception,
-                "Preview proxy for {HostLabel} -> 127.0.0.1:{Port} failed: {Error}",
-                hostLabel, target.Port, error);
+                context.GetForwarderErrorFeature()?.Exception,
+                "Preview {HostLabel} -> 127.0.0.1:{Port} ({Service}) did not answer: {Error}",
+                hostLabel, target.Port, target.ServiceName, error);
 
-            context.Response.StatusCode = (int)HttpStatusCode.BadGateway;
-            await WriteHtmlAsync(
-                context,
-                "Preview unreachable",
-                $"The preview service '{target.ServiceName}' is registered on port {target.Port} but did not answer. "
-                + "It may have crashed — check its log in the work item's Preview tab.");
+            await WriteNotFoundAsync(context);
         }
     }
 
     /// <summary>
-    /// Renders the four ways a preview hostname can fail to point at anything.
-    /// A human typed this hostname into a browser, so they get a page saying what
-    /// to do next rather than a bare status code.
+    /// Every request this middleware will not forward gets the same 404 — an
+    /// address with no preview at it is indistinguishable from one that was never a
+    /// preview address, whichever rung of the resolution chain came up empty and
+    /// whether the service is missing, stopped or simply not answering.
+    ///
+    /// <para>
+    /// The alternative, a page per outcome, told an unauthenticated caller whether
+    /// a given work item exists, whether it has a worktree, and the names of the
+    /// services running in it. None of that is visible to them anywhere else, and
+    /// the hostname it keys off is a client-supplied header, so it was free to
+    /// enumerate. The reason is still written down — <see cref="PreviewTarget"/>
+    /// carries it out of the resolver — but to the log, where the operator
+    /// debugging their own preview can read it and a stranger cannot.
+    /// </para>
     /// </summary>
-    private static Task WriteUnavailablePageAsync(HttpContext context, PreviewTarget target)
+    private static Task WriteNotFoundAsync(HttpContext context)
     {
-        context.Response.StatusCode = (int)(target.Outcome switch
-        {
-            PreviewTargetOutcome.NotAPreviewHost => HttpStatusCode.NotFound,
-            PreviewTargetOutcome.UnknownWorkItem => HttpStatusCode.NotFound,
-            // Nothing is down — the hostname just does not name one service.
-            PreviewTargetOutcome.AmbiguousService => HttpStatusCode.NotFound,
-            _ => HttpStatusCode.ServiceUnavailable,
-        });
-
-        var title = target.Outcome switch
-        {
-            PreviewTargetOutcome.NotAPreviewHost => "Not a preview hostname",
-            PreviewTargetOutcome.UnknownWorkItem => "Unknown work item",
-            PreviewTargetOutcome.NoWorktree => "No worktree yet",
-            PreviewTargetOutcome.PreviewNotRunning => "Preview not running",
-            PreviewTargetOutcome.AmbiguousService => "More than one public service",
-            _ => "Preview service not running",
-        };
-
-        return WriteHtmlAsync(context, title, target.Message);
-    }
-
-    private static Task WriteHtmlAsync(HttpContext context, string title, string message)
-    {
+        context.Response.StatusCode = (int)HttpStatusCode.NotFound;
         context.Response.ContentType = "text/html; charset=utf-8";
-        var html = $"""
+        return context.Response.WriteAsync(
+            """
             <!doctype html>
-            <html lang="en"><head><meta charset="utf-8"><title>{WebUtility.HtmlEncode(title)}</title></head>
+            <html lang="en"><head><meta charset="utf-8"><title>Not found</title></head>
             <body style="font-family:system-ui,sans-serif;max-width:40rem;margin:4rem auto;padding:0 1rem;line-height:1.5">
-            <h1 style="font-size:1.25rem">{WebUtility.HtmlEncode(title)}</h1>
-            <p>{WebUtility.HtmlEncode(message)}</p>
+            <h1 style="font-size:1.25rem">Not found</h1>
+            <p>No worktree preview is running at this address.</p>
             <p style="color:#666;font-size:.875rem">ILD worktree preview</p>
             </body></html>
-            """;
-        return context.Response.WriteAsync(html, Encoding.UTF8);
+            """,
+            Encoding.UTF8);
     }
 
     /// <summary>
@@ -220,20 +211,23 @@ public sealed class PreviewProxyMiddleware
             // that opts out keeps the real browser-facing host instead.
             proxyRequest.Headers.Host = _rewriteHost ? null : request.Host.Value;
 
-            // Whatever the client claimed about forwarding is not evidence; replace
-            // it with what this hop actually observed.
-            var forwardedFor = proxyRequest.Headers.TryGetValues("X-Forwarded-For", out var existing)
-                ? string.Join(", ", existing)
-                : null;
+            // Whatever the client claimed about forwarding is not evidence; replace it
+            // with what this hop actually observed.
+            //
+            // X-Forwarded-For is *replaced*, not appended to. Appending is the right
+            // thing inside a chain of proxies that trust each other, but this hop is
+            // directly reachable and unauthenticated, so an inbound value is just a
+            // string an attacker chose. Preserving it would put that string leftmost —
+            // exactly where an application behind a proxy looks for the client IP, and
+            // exactly what an allowlist or a per-IP rate limiter would then trust. A
+            // preview gets one entry here, and it is the peer we actually saw.
             proxyRequest.Headers.Remove("X-Forwarded-For");
             proxyRequest.Headers.Remove("X-Forwarded-Proto");
             proxyRequest.Headers.Remove("X-Forwarded-Host");
 
             var remoteIp = httpContext.Connection.RemoteIpAddress?.ToString();
             if (remoteIp != null)
-                forwardedFor = forwardedFor == null ? remoteIp : $"{forwardedFor}, {remoteIp}";
-            if (forwardedFor != null)
-                proxyRequest.Headers.TryAddWithoutValidation("X-Forwarded-For", forwardedFor);
+                proxyRequest.Headers.TryAddWithoutValidation("X-Forwarded-For", remoteIp);
 
             proxyRequest.Headers.TryAddWithoutValidation("X-Forwarded-Proto", _publicScheme);
             if (request.Host.HasValue)

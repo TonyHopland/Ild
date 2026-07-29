@@ -157,12 +157,21 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
         var request = Request(HttpMethod.Get, "/echo-headers");
         request.Headers.TryAddWithoutValidation("X-Forwarded-Proto", "https");
         request.Headers.TryAddWithoutValidation("X-Forwarded-Host", "evil.example.com");
+        request.Headers.TryAddWithoutValidation("X-Forwarded-For", "10.0.0.1");
 
         using var response = await _client.SendAsync(request);
         var headers = ParseHeaders(await response.Content.ReadAsStringAsync());
 
         Assert.Equal("http", headers["x-forwarded-proto"]);
         Assert.Equal($"wi-7.{BaseHost}", headers["x-forwarded-host"]);
+
+        // X-Forwarded-For is replaced outright rather than appended to. This hop is
+        // directly reachable and unauthenticated, so an inbound value is a string the
+        // caller chose — and preserving it would leave 10.0.0.1 leftmost, which is
+        // where an app behind a proxy reads the client IP from and what an allowlist
+        // or per-IP rate limiter would go on to trust.
+        Assert.DoesNotContain("10.0.0.1", headers["x-forwarded-for"]);
+        Assert.Equal("127.0.0.1", headers["x-forwarded-for"]);
     }
 
     [Fact]
@@ -293,35 +302,42 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData(PreviewTargetOutcome.NotAPreviewHost, HttpStatusCode.NotFound)]
-    [InlineData(PreviewTargetOutcome.UnknownWorkItem, HttpStatusCode.NotFound)]
-    [InlineData(PreviewTargetOutcome.NoWorktree, HttpStatusCode.ServiceUnavailable)]
-    [InlineData(PreviewTargetOutcome.PreviewNotRunning, HttpStatusCode.ServiceUnavailable)]
-    [InlineData(PreviewTargetOutcome.ServiceNotRunning, HttpStatusCode.ServiceUnavailable)]
-    [InlineData(PreviewTargetOutcome.AmbiguousService, HttpStatusCode.NotFound)]
-    public async Task Each_unresolved_outcome_gets_its_own_page(PreviewTargetOutcome outcome, HttpStatusCode expected)
+    [InlineData(PreviewTargetOutcome.NotAPreviewHost)]
+    [InlineData(PreviewTargetOutcome.UnknownWorkItem)]
+    [InlineData(PreviewTargetOutcome.NoWorktree)]
+    [InlineData(PreviewTargetOutcome.PreviewNotRunning)]
+    [InlineData(PreviewTargetOutcome.ServiceNotRunning)]
+    [InlineData(PreviewTargetOutcome.AmbiguousService)]
+    public async Task Every_unresolved_outcome_is_the_same_404_and_leaks_nothing(PreviewTargetOutcome outcome)
     {
-        _resolve = _ => PreviewTarget.Failed(outcome, "the explanation for a human");
+        // The resolver's message names internal state — which work item, which
+        // services. It belongs in ILD's log, not in a response anyone can ask for.
+        _resolve = _ => PreviewTarget.Failed(outcome, "work item 12 is running api, frontend");
 
         using var response = await _client.SendAsync(Request(HttpMethod.Get, "/"));
         var body = await response.Content.ReadAsStringAsync();
 
-        Assert.Equal(expected, response.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);
-        Assert.Contains("the explanation for a human", body);
+        Assert.DoesNotContain("work item 12", body);
+        Assert.DoesNotContain("api, frontend", body);
+        Assert.DoesNotContain(outcome.ToString(), body);
     }
 
     [Fact]
-    public async Task A_preview_that_stopped_listening_reports_a_bad_gateway()
+    public async Task A_preview_that_stopped_listening_is_indistinguishable_from_one_that_never_existed()
     {
         // A port nothing is bound to: the runtime still lists the service, but the
-        // process behind it has gone.
+        // process behind it has gone. Reporting that as a 502 would confirm the
+        // preview exists, which is exactly what the 404 is there to avoid.
         _resolve = _ => PreviewTarget.Resolved(_backend.ClosedPort, "app", rewriteHost: true);
 
         using var response = await _client.SendAsync(Request(HttpMethod.Get, "/"));
+        var body = await response.Content.ReadAsStringAsync();
 
-        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
-        Assert.Contains("did not answer", await response.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.DoesNotContain("app", body);
+        Assert.DoesNotContain($"{_backend.ClosedPort}", body);
     }
 
     private async Task<Dictionary<string, string>> GetEchoedHeadersAsync()

@@ -37,11 +37,16 @@ public sealed record WorktreePreviewStartOptions(
 
 /// <summary>
 /// Why <see cref="IWorktreePreviewService.ResolvePreviewTargetAsync"/> could not
-/// hand back a port. Each value is a distinct thing a human did wrong or has yet
-/// to do, and the preview proxy renders a different page for each — which is why
-/// resolution reports an outcome rather than a bare bool: "no such work item" and
-/// "you have not started the preview yet" need different words, and only the
-/// resolver knows which one happened.
+/// hand back a port. Each value is a distinct thing a human did wrong or has yet to
+/// do, and only the resolver is in a position to know which — hence an outcome
+/// rather than a bare bool.
+/// <para>
+/// The distinction is for ILD's own log, not for the caller: the proxy answers every
+/// one of these with the same 404, because the alternative told an unauthenticated
+/// stranger which work items exist and what is running in them. The outcome decides
+/// how loudly it is logged — a misconfiguration is worth a warning, "nobody pressed
+/// Start" is not — and lets tests pin each path exactly.
+/// </para>
 /// </summary>
 public enum PreviewTargetOutcome
 {
@@ -84,8 +89,9 @@ public enum PreviewTargetOutcome
 /// <summary>
 /// Where a preview hostname points. On <see cref="PreviewTargetOutcome.Resolved"/>
 /// the loopback <see cref="Port"/> and the service's <see cref="RewriteHost"/>
-/// preference are set; otherwise <see cref="Message"/> is a human-readable
-/// explanation suitable for showing in a browser.
+/// preference are set; otherwise <see cref="Message"/> explains what was missing.
+/// That message is for ILD's log and names internal state freely — it is deliberately
+/// never sent to the client.
 /// </summary>
 public sealed record PreviewTarget(
     PreviewTargetOutcome Outcome,

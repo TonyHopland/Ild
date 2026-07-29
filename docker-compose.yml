@@ -86,9 +86,14 @@ services:
       # Serves worktree previews on wildcard subdomains of this origin
       # (wi-<workItemId>[-<serviceName>].ild.localhost:8080). Browsers resolve
       # *.localhost to loopback with no /etc/hosts entry, so this works out of the
-      # box for compose. PROXIED PREVIEWS ARE UNAUTHENTICATED — unset this to turn
-      # the feature off. See docs/deployment.md.
-      - ILD_PREVIEW_PROXY_BASE=${ILD_PREVIEW_PROXY_BASE:-http://ild.localhost:8080}
+      # box for compose. A hostname with no running preview behind it is a flat 404,
+      # but a running one IS UNAUTHENTICATED — see docs/deployment.md.
+      #
+      # `-` rather than `:-` on purpose: the default applies only when the variable
+      # is absent, so `ILD_PREVIEW_PROXY_BASE=` in .env turns the feature off. With
+      # `:-` an explicit empty value would be overridden by the default and there
+      # would be no way to disable it without editing this file.
+      - ILD_PREVIEW_PROXY_BASE=${ILD_PREVIEW_PROXY_BASE-http://ild.localhost:8080}
       - ILD_WORKITEM_SERVER_URL=${ILD_WORKITEM_SERVER_URL:-http://workitem-server:8081}
       - "ILD_WORKITEM_SERVER_API_KEY=${ILD_WORKITEM_SERVER_API_KEY:-${WORKITEM_API_KEYS:?Set WORKITEM_API_KEYS in your .env (generate one with: openssl rand -hex 32)}}"
       - ASPNETCORE_URLS=http://+:8080
