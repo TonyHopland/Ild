@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import TaskboardColumn from "./TaskboardColumn";
 import WorkItemCard from "./WorkItemCard";
 import { WorkItem, WorkItemPriority, WorkItemStatus } from "../types";
@@ -7,6 +7,9 @@ import * as authServices from "../services/auth";
 
 afterEach(() => {
   cleanup();
+  // Service spies are per-test; without this a spy's calls leak into the next
+  // test that spies on the same method.
+  vi.restoreAllMocks();
 });
 
 function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
@@ -160,6 +163,41 @@ describe("TaskboardColumn", () => {
 
     expect(screen.getByText("Item 4")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Load more" })).toBeFalsy();
+  });
+
+  // Moving a Ready item that never started back to Backlog is a legal reset for
+  // re-planning. The board is not the thing blocking it — it posts the move like
+  // any other — so this pins the request the column already sends and guards the
+  // path while the API side is fixed.
+  test("dropping a Ready work item into the Backlog column transitions it to Backlog", async () => {
+    const transitionSpy = vi
+      .spyOn(authServices.workItemService, "transition")
+      .mockResolvedValue(undefined as unknown as void);
+    const moved = makeItem({ id: "1", status: WorkItemStatus.Backlog });
+    vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(moved);
+
+    const onWorkItemUpdate = vi.fn();
+    const onError = vi.fn();
+    // The dragged card lives in the Ready column, so the Backlog column it is
+    // dropped on does not hold it.
+    render(
+      <TaskboardColumn
+        status={WorkItemStatus.Backlog}
+        label="Backlog"
+        workItems={[]}
+        onWorkItemUpdate={onWorkItemUpdate}
+        onError={onError}
+      />,
+    );
+
+    const column = screen.getByText("Backlog").closest("div");
+    fireEvent.drop(column!, {
+      dataTransfer: { getData: () => "1" },
+    } as unknown as DragEvent);
+
+    await waitFor(() => expect(transitionSpy).toHaveBeenCalledWith("1", WorkItemStatus.Backlog));
+    await waitFor(() => expect(onWorkItemUpdate).toHaveBeenCalledWith(moved));
+    expect(onError).not.toHaveBeenCalled();
   });
 
   test("does not call transition when dropping work item into the same column", () => {
