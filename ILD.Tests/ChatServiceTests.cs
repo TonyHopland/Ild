@@ -1,4 +1,5 @@
 using ILD.Core.Services.Implementations;
+using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
@@ -87,7 +88,7 @@ public sealed class ChatServiceTests : IDisposable
         => Mock.Of<IAgentAdapterRegistry>(r =>
             r.ResolveForProvider(It.IsAny<AiProvider>()) == (Func<IAgentAdapter>)(() => adapter));
 
-    private async Task<AiProvider> SeedProviderAsync(string type = "claude-code")
+    private async Task<AiProvider> SeedProviderAsync(string type = "claude-code", string? config = null)
     {
         var provider = new AiProvider
         {
@@ -97,6 +98,7 @@ public sealed class ChatServiceTests : IDisposable
             BaseUrl = "http://localhost",
             Model = "m",
             Parallelism = 1,
+            Config = config,
             CreatedAt = DateTime.UtcNow,
         };
         _db.Context.AiProviders.Add(provider);
@@ -398,6 +400,97 @@ public sealed class ChatServiceTests : IDisposable
 
         // No loop editor open ⇒ the loop primer is not paid for.
         Assert.DoesNotContain("Loop authoring guide", adapter.LastContext!.Prompt);
+    }
+
+    // ---------------------------------------------------------------------
+    // A chat turn is not a template. The preamble and the human's message are
+    // ambient text for the model, so whatever the service composes must reach
+    // the agent CLI byte-for-byte — nothing in the pipeline may expand, strip,
+    // or otherwise rewrite it. These tests drive a real CLI adapter against a
+    // fake `claude` binary and assert on the prompt that binary was handed.
+    // ---------------------------------------------------------------------
+
+    [Fact]
+    public async Task ExecuteTurnAsync_still_gives_the_adapter_a_run_context_for_the_session_scratch_dir()
+    {
+        var provider = await SeedProviderAsync();
+        var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
+        var svc = NewService(adapter);
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+
+        await svc.ExecuteTurnAsync(started.Id, "hi", CancellationToken.None);
+
+        // A chat turn has no run, but adapters read the run context for the
+        // agent's cwd and its session key — it carries the session, not a
+        // template context, so it stays even though nothing is rendered.
+        var scratchPath = _db.Context.ChatSessions.Single().ScratchPath;
+        Assert.Equal(started.Id, adapter.LastContext!.RunContext.LoopRunId);
+        Assert.Equal(scratchPath, adapter.LastContext.RunContext.WorktreePath);
+    }
+
+    [Fact]
+    public async Task ExecuteTurnAsync_delivers_the_loop_authoring_guide_to_the_cli_with_every_placeholder_intact()
+    {
+        using var cli = new PromptCapturingCli();
+        var provider = await SeedProviderAsync(config: cli.ProviderConfigJson);
+        var adapter = new RecordingAdapter(new ClaudeCodeAdapter());
+        var svc = NewService(adapter);
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+
+        const string document = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"L\",\"nodes\":[]}";
+        await svc.ExecuteTurnAsync(started.Id, "how do loop variables work?", openWorkItemId: null, document, CancellationToken.None);
+
+        var sent = cli.CapturedPrompt;
+        // What the service composed is exactly what the agent process received.
+        Assert.Equal(adapter.LastContext!.Prompt, sent);
+        // The guide teaches the placeholder grammar by quoting it, so every form
+        // it names has to survive the trip literally — an emptied token would
+        // teach the agent the wrong syntax and can end up written into a loop.
+        Assert.Contains("{{WorkItem.Title}}/{{WorkItem.Description}}", sent);
+        Assert.Contains("{{PreviousNode.Output}}", sent);
+        Assert.Contains("{{EventLog.LastN}}", sent);
+        Assert.Contains("{{Var.<name>}}", sent);
+        Assert.Contains("{{Node.Input}}", sent);
+    }
+
+    [Fact]
+    public async Task ExecuteTurnAsync_delivers_a_user_message_containing_placeholders_to_the_cli_verbatim()
+    {
+        using var cli = new PromptCapturingCli();
+        var provider = await SeedProviderAsync(config: cli.ProviderConfigJson);
+        var adapter = new RecordingAdapter(new ClaudeCodeAdapter());
+        var svc = NewService(adapter);
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+
+        // The reported symptom: a human asking about the syntax had their own
+        // question rewritten before the agent ever saw it. The angle-bracket
+        // form is the shape the report named; both must arrive untouched.
+        const string message = "Why do {{WorkItem.Title}}, {{Var.handoff}} and <Foo.Bar> vanish from my prompt?";
+        await svc.ExecuteTurnAsync(started.Id, message, CancellationToken.None);
+
+        Assert.Equal(message, cli.CapturedPrompt);
+        Assert.Equal(adapter.LastContext!.Prompt, cli.CapturedPrompt);
+    }
+
+    [Fact]
+    public async Task ExecuteTurnAsync_does_not_inline_scratch_files_named_by_a_worktree_placeholder()
+    {
+        using var cli = new PromptCapturingCli();
+        var provider = await SeedProviderAsync(config: cli.ProviderConfigJson);
+        var adapter = new RecordingAdapter(new ClaudeCodeAdapter());
+        var svc = NewService(adapter);
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild", "read" });
+
+        var scratchPath = _db.Context.ChatSessions.Single().ScratchPath;
+        File.WriteAllText(Path.Combine(scratchPath, "notes.txt"), "INLINED-FILE-BODY");
+
+        const string message = "What does {{WorkTree.File:notes.txt}} mean?";
+        await svc.ExecuteTurnAsync(started.Id, message, CancellationToken.None);
+
+        // Chat has no file-inlining side channel: the agent already runs with
+        // scratch as its cwd and reads files with its own tools.
+        Assert.Equal(message, cli.CapturedPrompt);
+        Assert.DoesNotContain("INLINED-FILE-BODY", cli.CapturedPrompt);
     }
 
     [Fact]
