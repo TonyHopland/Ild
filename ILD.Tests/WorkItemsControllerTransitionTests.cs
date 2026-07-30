@@ -193,6 +193,26 @@ public class WorkItemsControllerTransitionTests
         Assert.Equal(RemoteWorkItemStatus.HumanFeedback, (await mgr.GetWorkItemAsync(id))!.Status);
     }
 
+    // The other half of the refusal, and the one the live-run check cannot
+    // stand in for: a finished item has no run left alive, so only the source
+    // whitelist keeps it out. Re-opening something already declared Done is a
+    // decision the board does not get to make silently — it goes back through
+    // WorkQueue like anything else entering the queue.
+    [Fact]
+    public async Task Transition_to_Backlog_is_refused_from_Done_even_with_no_run_alive()
+    {
+        var (controller, mgr, db, repoId) = Setup();
+        using var _ = db;
+
+        var id = await SeedIdleItemAsync(mgr, repoId, RemoteWorkItemStatus.Done);
+        Assert.Null(await db.LoopRuns.GetActiveByWorkItemAsync(id));
+
+        var result = await controller.Transition(id, new WorkItemTransitionRequest { TargetStatus = "Backlog" });
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Equal(RemoteWorkItemStatus.Done, (await mgr.GetWorkItemAsync(id))!.Status);
+    }
+
     // Guard on the fix: widening the endpoint must not turn a typo into a
     // silent no-op transition.
     [Fact]
