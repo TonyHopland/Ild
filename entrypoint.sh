@@ -260,11 +260,18 @@ link_agent_config_dirs() {
     # writable by the home owner so the CLI can write siblings there. Own the
     # chain with the orchestrator's PRIVATE group ($home_group, e.g. ild:ild), not
     # the shared store $group: in two-uid mode these dirs are 0775 (umask 002), so
-    # the shared group would hand the agent uid write on $HOME/.local — the parent of
-    # $HOME/.local/bin, which BuildDefaultEnvironment prepends to the PATH of
-    # preview steps that run as the orchestrator. That is the cross-uid tool
-    # shadowing ADR-0014 exists to prevent. The store target + symlink below keep
-    # the shared $group so both uids share the one credential store.
+    # the shared group would hand the agent uid write on the ORCHESTRATOR's home
+    # scaffolding — $HOME/.local and every level below it.
+    #
+    # Nothing in the orchestrator's home is meant to be agent-writable except the
+    # credential store, which is shared deliberately (the target + symlink below
+    # keep $group for exactly that). $HOME/.local is the sharp case because
+    # $HOME/.local/bin is on the orchestrator's own PATH, so anything the agent
+    # could plant there would be exec'd as the orchestrator — the cross-uid tool
+    # shadowing ADR-0014 exists to prevent. Note that the preview's npm prefix is
+    # NOT what makes that true any more: under ADR-0016 the preview runs as the
+    # agent and installs into $AGENT_HOME/.local instead, which is provisioned for
+    # the agent further down. This chain stays private on its own account.
     ensure_home_link_parent "$user_home" "$owner:$home_group" "$link"
 
     migrated=

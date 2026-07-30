@@ -517,6 +517,34 @@ public class AgentIsolationTests
             () => AgentIsolation.Route(psi, agentUser: "agent", agentGroup: "agent", agentHome: null));
     }
 
+    [Theory]
+    [InlineData("agent", "/home/agent", "/home/agent")]
+    [InlineData("agent", null, null)]        // routed, but the crossing leaves HOME alone
+    [InlineData("agent", "  ", null)]        // blank is unset throughout AgentIsolation
+    [InlineData(null, "/home/agent", null)]  // isolation off: a configured home is inert
+    public void ResolveChildHome_answers_what_the_crossing_does_to_HOME(string? user, string? home, string? expected)
+    {
+        // The single owner of the rule: Route applies this answer, and callers that
+        // derive paths from where the child's HOME ends up (the preview's npm
+        // prefix) read the same one instead of re-deriving it. The two middle cases
+        // are why — a user without a home is routed but keeps the inherited HOME,
+        // so anything hung off it has to fall back with it.
+        Assert.Equal(expected, AgentIsolation.ResolveChildHome(user, home));
+    }
+
+    [Fact]
+    public void Route_leaves_HOME_alone_when_no_agent_home_is_configured()
+    {
+        var psi = BuildPsi();
+        psi.Environment.TryGetValue("HOME", out var originalHome);
+
+        AgentIsolation.Route(psi, agentUser: "agent", agentGroup: "agent", agentHome: null);
+
+        psi.Environment.TryGetValue("HOME", out var home);
+        Assert.Equal(originalHome, home);
+        Assert.Equal("setpriv", psi.FileName);
+    }
+
     [Fact]
     public void StripOrchestratorEnvironment_removes_every_secret_and_topology_variable()
     {

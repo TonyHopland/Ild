@@ -31,6 +31,8 @@ public class WorktreePreviewServiceAgentUidTests : IDisposable
     private readonly string _shimDirectory;
     private readonly string _shimLog;
     private readonly string? _originalPath;
+    private readonly string? _originalHome;
+    private string? _redirectedHome;
     private WorktreePreviewService? _service;
 
     public WorktreePreviewServiceAgentUidTests()
@@ -45,7 +47,22 @@ public class WorktreePreviewServiceAgentUidTests : IDisposable
         Directory.CreateDirectory(_shimDirectory);
 
         _originalPath = Environment.GetEnvironmentVariable("PATH");
+        _originalHome = Environment.GetEnvironmentVariable("HOME");
         InstallSetprivShim();
+    }
+
+    /// <summary>
+    /// Point the orchestrator's own <c>HOME</c> at an empty directory for the
+    /// duration of one test. Process-global, and safe only inside the serialized
+    /// <c>EnvironmentPath</c> collection — the same reason the shim can live on
+    /// <c>PATH</c>.
+    /// </summary>
+    private string RedirectOrchestratorHome()
+    {
+        _redirectedHome = Path.Combine(Path.GetTempPath(), "ild-agentuid-orchhome-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_redirectedHome);
+        Environment.SetEnvironmentVariable("HOME", _redirectedHome);
+        return _redirectedHome;
     }
 
     public void Dispose()
@@ -53,8 +70,10 @@ public class WorktreePreviewServiceAgentUidTests : IDisposable
         try { _service?.StopAsync(_worktree).GetAwaiter().GetResult(); } catch { /* best effort */ }
         try { _service?.Dispose(); } catch { /* best effort */ }
         Environment.SetEnvironmentVariable("PATH", _originalPath);
-        foreach (var directory in new[] { _worktree, _agentHome, _shimDirectory })
+        Environment.SetEnvironmentVariable("HOME", _originalHome);
+        foreach (var directory in new[] { _worktree, _agentHome, _shimDirectory, _redirectedHome })
         {
+            if (directory is null) continue;
             try { Directory.Delete(directory, recursive: true); } catch { /* best effort */ }
         }
         GC.SuppressFinalize(this);
@@ -84,14 +103,14 @@ public class WorktreePreviewServiceAgentUidTests : IDisposable
     private string[] ShimArguments()
         => File.Exists(_shimLog) ? File.ReadAllLines(_shimLog) : Array.Empty<string>();
 
-    private WorktreePreviewService BuildService(string? agentUser = AgentUser)
+    private WorktreePreviewService BuildService(string? agentUser = AgentUser, bool withAgentHome = true)
     {
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(() => new HttpClient());
         var configuration = new ConfigurationBuilder().Build();
         _service = new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
             NullLogger<WorktreePreviewService>.Instance,
-            agentUser, agentGroup: "ild-agents", agentHome: _agentHome);
+            agentUser, agentGroup: "ild-agents", agentHome: withAgentHome ? _agentHome : null);
         return _service;
     }
 
@@ -195,6 +214,35 @@ public class WorktreePreviewServiceAgentUidTests : IDisposable
 
         Assert.False(Directory.Exists(Path.Combine(_agentHome, ".local")),
             "the orchestrator must not create the npm prefix inside the agent's home");
+    }
+
+    [Fact]
+    public async Task A_crossing_with_no_agent_home_keeps_the_prefix_where_it_can_create_it()
+    {
+        // An agent user without an agent home is a shape the crossing explicitly
+        // allows — Route leaves HOME as-is when the home is null, and the
+        // entrypoint would export exactly this if AGENT_HOME were cleared. The
+        // prefix then falls back to the orchestrator's own home, and the
+        // orchestrator both may and must create it: the two questions "is
+        // isolation on" and "is this path inside the agent's home" come apart
+        // here, and keying the skip on the former left npm install -g with no
+        // prefix and EnsureInstalledToolsOnProcessPath advertising a directory
+        // that did not exist.
+        WriteInstallConfig();
+        // Redirect HOME to somewhere empty, so "the prefix was created" is a real
+        // assertion rather than one the test host's own ~/.local/bin satisfies.
+        var orchestratorHome = RedirectOrchestratorHome();
+
+        await BuildService(withAgentHome: false).InstallAsync(_worktree);
+
+        var child = ReadChildEnvironment();
+        Assert.Equal(orchestratorHome, child["HOME"]);
+        Assert.Equal(Path.Combine(orchestratorHome, ".local"), child["NPM_CONFIG_PREFIX"]);
+        Assert.True(Directory.Exists(Path.Combine(orchestratorHome, ".local", "bin")),
+            "the prefix outside the agent's home must still be created");
+
+        // Still routed — only the HOME half of the crossing is absent.
+        Assert.Contains("--reuid=" + AgentUser, ShimArguments());
     }
 
     [Fact]

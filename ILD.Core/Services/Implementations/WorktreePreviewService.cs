@@ -84,12 +84,14 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     }
 
     /// <summary>
-    /// Whether this preview crosses to the agent uid. <c>ILD_AGENT_USER</c> is the
-    /// single switch (ADR-0014): unset means local development, unit tests or any
-    /// single-uid deployment, where every isolation-keyed decision here has to
-    /// reduce to the pre-isolation behaviour.
+    /// The <c>HOME</c> a preview step actually runs with once it has crossed to the
+    /// agent uid, or <c>null</c> when the crossing leaves <c>HOME</c> alone — which
+    /// covers both "isolation is off" and "isolation is on but no agent home is
+    /// configured". <see cref="AgentIsolation.ResolveChildHome"/> owns the rule and
+    /// the crossing applies the same answer, so the npm prefix derived from it here
+    /// cannot drift from the <c>HOME</c> the child is really given.
     /// </summary>
-    private bool IsAgentIsolated => _agentUser is not null;
+    private string? ChildHome => AgentIsolation.ResolveChildHome(_agentUser, _agentHome);
 
     private static string? NonEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 
@@ -1209,8 +1211,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// </summary>
     private string ResolveHomeDirectory()
     {
-        if (IsAgentIsolated && _agentHome is not null)
-            return _agentHome;
+        if (ChildHome is { } childHome)
+            return childHome;
 
         var home = Environment.GetEnvironmentVariable("HOME");
         if (string.IsNullOrWhiteSpace(home))
@@ -1241,15 +1243,30 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// The entrypoint provisions that home's scaffolding as the agent uid; a
     /// directory the orchestrator created there would be owned by the orchestrator,
     /// in a home whose group the agent is not a member of, and the agent's own
-    /// <c>npm install -g</c> would then fail on a prefix it cannot write. Under
-    /// isolation the orchestrator only <em>names</em> these paths.
+    /// <c>npm install -g</c> would then fail on a prefix it cannot write. There, the
+    /// orchestrator only <em>names</em> the path.
+    ///
+    /// <para>
+    /// The test is containment in the home the child is actually given, not "is
+    /// isolation on" — those are different questions when a crossing is configured
+    /// with a user but no home. The prefix then lands in the orchestrator's own
+    /// home, where the orchestrator both may and must create it: skipping would
+    /// leave <see cref="EnsureInstalledToolsOnProcessPath"/> advertising a
+    /// directory that does not exist.
+    /// </para>
     /// </summary>
     private void EnsureNpmDirectory(string path)
     {
-        if (IsAgentIsolated)
+        if (ChildHome is { } childHome && IsInside(path, childHome))
             return;
 
         Directory.CreateDirectory(path);
+    }
+
+    private static bool IsInside(string path, string root)
+    {
+        var prefix = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)) + Path.DirectorySeparatorChar;
+        return Path.GetFullPath(path).StartsWith(prefix, StringComparison.Ordinal);
     }
 
     /// <summary>

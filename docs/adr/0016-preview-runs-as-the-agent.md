@@ -82,7 +82,14 @@ tree is the cause; one uid removes the class.
   exists for.
 - **The npm global prefix follows the agent's home**, so `npm install -g` in an
   install step writes where the uid running it can write and the agent-uid nodes
-  that later exec the tool can reach it.
+  that later exec the tool can reach it. "The agent's home" means whatever
+  `AgentIsolation.ResolveChildHome` says the crossing does to `HOME`, which is the
+  same answer `Route` applies — one rule, one owner, so the prefix cannot be
+  derived from a different premise than the `HOME` the child actually gets. A
+  crossing configured with a user but no home leaves `HOME` inherited and the
+  prefix therefore in the orchestrator's own home, where ILD creates it as it
+  always did; the container exports the two together, so this is a shape only a
+  hand-built deployment reaches.
 
 ## Consequences
 

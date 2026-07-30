@@ -127,21 +127,39 @@ public static class AgentIsolation
     public static string? AgentGroup => NonEmpty(Environment.GetEnvironmentVariable(AgentGroupEnvVar));
 
     /// <summary>
-    /// The agent user's home, or <c>null</c> when unset.
-    ///
-    /// <para>
-    /// Reading this is <em>not</em> how a caller sets <c>HOME</c> on a crossing —
-    /// that is half of crossing to the agent uid, so
-    /// <see cref="Route(ProcessStartInfo)"/> and
-    /// <see cref="RouteCommand(string, IReadOnlyList{string})"/> still apply it
-    /// themselves rather than leaving each launch site to remember it. It is public
-    /// for the callers that must <em>derive paths</em> from the agent's home: the
-    /// Worktree Preview installs tools with <c>npm install -g</c> and has to point
-    /// the prefix at a directory the uid running the install can write and the
-    /// agent-uid nodes that follow can execute (ADR-0016).
-    /// </para>
+    /// The configured agent home, or <c>null</c> when unset. Callers deciding what a
+    /// crossing does to <c>HOME</c> want <see cref="ResolveChildHome"/>, not this —
+    /// a home configured while <c>ILD_AGENT_USER</c> is not is inert.
     /// </summary>
     public static string? AgentHome => NonEmpty(Environment.GetEnvironmentVariable(AgentHomeEnvVar));
+
+    /// <summary>
+    /// The <c>HOME</c> a routed child actually runs with, or <c>null</c> when the
+    /// crossing leaves <c>HOME</c> alone — because isolation is off, or because no
+    /// agent home is configured.
+    ///
+    /// <para>
+    /// This is the single owner of that rule. <see cref="Route(ProcessStartInfo, string?, string?, string?)"/>
+    /// and <see cref="RouteCommand(string, IReadOnlyList{string}, string?, string?, string?)"/>
+    /// apply it as part of the crossing, so no launch site has to remember to; and
+    /// callers that must <em>derive paths</em> from where the child's <c>HOME</c>
+    /// ends up read the same answer here rather than re-deriving it. The Worktree
+    /// Preview is the reason it is public: it points <c>NPM_CONFIG_PREFIX</c> at
+    /// <c>$HOME/.local</c>, and a prefix computed from a different rule than the one
+    /// that set <c>HOME</c> would send <c>npm install -g</c> somewhere the uid
+    /// running it cannot write (ADR-0016).
+    /// </para>
+    ///
+    /// <para>
+    /// A crossing configured with a user but no home is a real, if odd, shape — the
+    /// container's entrypoint always exports the two together, but the parameters
+    /// are independent. It resolves to <c>null</c>: the child keeps whatever
+    /// <c>HOME</c> it inherited, which is the pre-isolation behaviour and is what
+    /// every path derived from it must also fall back to.
+    /// </para>
+    /// </summary>
+    public static string? ResolveChildHome(string? agentUser, string? agentHome)
+        => NonEmpty(agentUser) is null ? null : NonEmpty(agentHome);
 
     /// <summary>
     /// Rewrite <paramref name="psi"/> in place so its command runs as the
@@ -170,13 +188,12 @@ public static class AgentIsolation
         if (user is null) return psi;
 
         var group = NonEmpty(agentGroup) ?? user;
-        var home = NonEmpty(agentHome);
 
         // The agent resolves its login/config state from $HOME. Point it at the
         // agent user's home so it reads the shared credential store through that
         // home's symlinks (and can freely create its own ~/.cache etc.) instead
         // of the orchestrator's home, which it cannot write to.
-        if (home is not null)
+        if (ResolveChildHome(user, agentHome) is { } home)
             psi.Environment["HOME"] = home;
 
         // .NET copied the orchestrator's whole environment onto the psi, secrets
@@ -343,7 +360,7 @@ public static class AgentIsolation
         // credentials into the orchestrator's home and every later run would read
         // as logged-out, the exact failure routing the terminal to the agent uid
         // exists to prevent.
-        if (NonEmpty(agentHome) is { } home)
+        if (ResolveChildHome(user, agentHome) is { } home)
             environment["HOME"] = home;
 
         // Secrets: a PTY child inherits the orchestrator's environment and the
