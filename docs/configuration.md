@@ -182,6 +182,11 @@ they inherit wholesale ([ADR-0016](adr/0016-preview-runs-as-the-agent.md)). With
 `AGENT_USER` empty the container is single-uid and everything runs as the runtime
 user, exactly as before.
 
+Worth keeping in view throughout this section: `ild.config.json` lives in the
+worktree, so the coding agent working on that work item can edit the commands a
+preview runs, and can start a preview itself through the ILD MCP tools. Whatever a
+preview process is given, an agent-authored command can read.
+
 Three things follow that are worth knowing when you write a profile:
 
 - **Files your preview creates are owned by `agent`**, the same user that owns
@@ -213,9 +218,20 @@ Three things follow that are worth knowing when you write a profile:
 Nothing is inherited on your behalf, so anything your app needs — a database URL,
 an API key, a bucket name — you supply, in the repository's encrypted preview
 `.env` (Repositories page, or a work item's **Preview** tab) or in a service's
-`env` block. The `.env` is the right home for secrets: it is stored encrypted,
-never written into the worktree, and never returned through the agent API, so a
-coding agent cannot read it back.
+`env` block. The `.env` is the better of the two for a credential: it is stored
+encrypted, never written into the worktree, and never returned through the agent
+API, so it does not end up committed to your repository or readable straight out
+of ILD.
+
+**It is not a vault, though, and the difference matters.** ILD injects the `.env`
+into every preview process, which is the whole point of it — and the commands
+those processes run come from `ild.config.json`, which the coding agent writes. An
+install step of `env > leak.txt` hands the values back, exactly the way it would
+have handed back ILD's own secrets before this release. So the rule is the same
+one that governs the credentials on your laptop: **scope what you put here to the
+preview's own infrastructure.** A throwaway database, a sandbox API key, a bucket
+you would not mind someone emptying. Not production, and not a credential that
+also unlocks something else.
 
 Removing a name from what is _inherited_ does not stop you setting it
 deliberately. The strip runs before your values are applied, so anything you set
