@@ -131,7 +131,6 @@ The repository's own `ild.config.json` defines an `app` profile that boots three
             "port": "workitem-server",
             "env": {
               "WORKITEM_DATA_PATH": "${STATE_DIR}/workitem-data",
-              "WORKITEM_API_KEYS": "preview-api-key",
               "ASPNETCORE_URLS": "http://${HOST}:${PORT}"
             },
             "healthUrl": "http://127.0.0.1:${PORT}/health"
@@ -147,7 +146,6 @@ The repository's own `ild.config.json` defines an `app` profile that boots three
               "ILD_DATA_PATH": "${STATE_DIR}/data",
               "ILD_WORKTREES_PATH": "${STATE_DIR}/worktrees",
               "ILD_WORKITEM_SERVER_URL": "http://127.0.0.1:${PORT:workitem-server}",
-              "ILD_WORKITEM_SERVER_API_KEY": "preview-api-key",
               "ASPNETCORE_URLS": "http://${HOST}:${PORT}"
             },
             "healthUrl": "http://127.0.0.1:${PORT}/api/v1/health"
@@ -173,6 +171,56 @@ The repository's own `ild.config.json` defines an `app` profile that boots three
 ```
 
 `app` runs Vite, which rejects requests whose `Host` it does not recognise, so it keeps the default `"rewriteHost": true` and sees the request as if it arrived on its own loopback port. The value is spelled out here only to show the field; omitting it means the same thing.
+
+Note what this profile does **not** contain: any connection string, API key, or
+password beyond the throwaway `letmein` bootstrap. Those come from the
+repository's encrypted preview `.env`, and they have to come from somewhere — see
+below.
+
+### What a preview process runs as, and what it inherits
+
+Under [agent uid isolation](#agent-uid-isolation) a preview's install steps and
+services run as the **`agent`** user, not as the orchestrator. The commands come
+from `ild.config.json`, a file the coding agent writes, so they get exactly the
+privileges the agent already has and nothing more
+([ADR-0016](adr/0016-preview-runs-as-the-agent.md)). With `AGENT_USER` empty the
+container is single-uid and they run as the runtime user, exactly as before.
+
+Three consequences worth knowing when you write a profile:
+
+- **The environment is constructed, not inherited.** ILD removes its own secrets
+  (both DB connection strings, `ILD_SECRET_KEY`, `ILD_PASSWORD`, `ILD_USERNAME`,
+  and the API tokens it uses to reach itself and the WorkItem Server, plus
+  anything named in `ILD_AGENT_ENV_DENYLIST`) and the five variables describing
+  its own uid topology (`ILD_AGENT_USER`, `ILD_AGENT_GROUP`, `ILD_AGENT_HOME`,
+  `ILD_AGENT_SCRATCH_ROOT`, `ILD_ORCHESTRATOR_PRIVATE_ROOT`). Everything else is
+  inherited as before.
+
+- **A preview that needs a database must be given its own connection string**, in
+  the repository's preview `.env` or the service's `env` block. Removing a name
+  from what is _inherited_ does not stop you setting it deliberately — the strip
+  runs before your values are applied, so anything you set wins. Before this,
+  a previewed app that read `ILD_DB_CONNECTION_STRING` from the environment
+  silently attached to ILD's own database.
+
+- **`${STATE_DIR}` lives under the shared scratch root** (`/tmp/ild-agent-scratch`
+  by default), not under the orchestrator-private root, because both uids now
+  touch it: the preview writes there and ILD reads the service logs back for the
+  Preview tab and `get_preview_logs`. It is still per-worktree and still
+  discarded with the container.
+
+### Previewing ILD inside ILD
+
+This repository's own profile boots a second ILD. That works with no per-repo
+workaround: the nested instance inherits none of the outer one's identity, so it
+comes up single-uid, and its interactive provider terminal opens instead of
+failing with `setpriv: setresuid failed`. It does need its own
+`ILD_DB_CONNECTION_STRING` and `WORKITEM_DB_CONNECTION_STRING` in the
+repository's preview `.env` — pointed at a database of its own, since a nested
+ILD runs its background services for real and would otherwise sweep the outer
+instance's work items. `HOME` is still the shared agent home, so the nested
+instance's Claude session is already logged in against the same credential store;
+[ADR-0016](adr/0016-preview-runs-as-the-agent.md) records why that is deliberate.
 
 ## Build-time container options
 
@@ -220,7 +268,9 @@ lower-trust agent uid never sees them. If you introduce additional secret
 environment variables that the orchestrator reads but the agent must not, list
 their names (comma-separated) in `ILD_AGENT_ENV_DENYLIST` and they are stripped
 too. The agent's git commit identity (`GIT_AUTHOR_*`/`GIT_COMMITTER_*`) and any
-provider API key an adapter passes to the CLI are kept.
+provider API key an adapter passes to the CLI are kept. The same denylist governs
+what a Worktree Preview's processes inherit — see
+[What a preview process runs as](#what-a-preview-process-runs-as-and-what-it-inherits).
 
 The coding agents (Pi, OpenCode, Claude Code, GitHub Copilot) are **not** baked into the image.
 They install on demand onto the persistent `/data` volume and are updated there

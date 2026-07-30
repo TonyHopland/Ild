@@ -89,6 +89,26 @@ public class WorktreePreviewServiceLogTests : IDisposable
     }
 
     [Fact]
+    public async Task GetServiceLogAsync_reads_a_log_that_lives_under_the_shared_scratch_root()
+    {
+        // The preview's state directory moved out of the orchestrator-private root
+        // when its steps moved to the agent uid (ADR-0016). The orchestrator still
+        // owns and reads these files — that is what get_preview_logs and the
+        // Preview tab's Log column depend on — so assert the new location rather
+        // than assuming the move left reading intact.
+        WriteConfig(FindFreePort());
+        var service = BuildService();
+
+        var started = await service.StartAsync(_worktree, cancellationToken: CancellationToken.None);
+        Assert.Equal("running", started.State);
+        Assert.StartsWith(
+            Path.TrimEndingDirectorySeparator(AgentIsolation.ScratchRoot) + Path.DirectorySeparatorChar,
+            started.Services.Single().LogFilePath);
+
+        Assert.NotNull(await service.GetServiceLogAsync(_worktree, "web"));
+    }
+
+    [Fact]
     public async Task GetServiceLogAsync_returns_null_when_the_preview_was_never_started()
     {
         // Configured worktree, but nothing started yet — there is no log file on

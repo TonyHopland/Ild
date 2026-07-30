@@ -530,6 +530,17 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
       # shellcheck disable=SC2086
       link_secondary_home "$agent_home" "$AGENT_USER" "$AGENT_CONFIG_STORE" $AGENT_CONFIG_DIRS $AGENT_CONFIG_FILES
 
+      # The npm global prefix a Worktree Preview's install steps use. The preview
+      # runs as the agent (ADR-0016), so `npm install -g` writes here and the
+      # agent-uid Cmd nodes and CLI adapters that follow exec from here. It has to
+      # be created now, as root, and owned by the agent: the orchestrator prepends
+      # $AGENT_HOME/.local/bin to its own PATH and would otherwise create it
+      # itself, leaving a prefix owned by a uid the agent is not — and npm would
+      # fail on it. `mkdir -p` also covers .local, which link_secondary_home may
+      # already have made for .local/share/opencode.
+      mkdir -p "$agent_home/.local/bin"
+      chown "$AGENT_USER:$AGENT_USER" "$agent_home/.local" "$agent_home/.local/bin"
+
       # Give the agent git the orchestrator's mounted commit identity: its own
       # home has no .gitconfig, so point one at the read-only mounted file.
       if [ -e "$runtime_home/.gitconfig" ] || [ -L "$runtime_home/.gitconfig" ]; then

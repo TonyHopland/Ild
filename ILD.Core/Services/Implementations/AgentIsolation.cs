@@ -121,13 +121,27 @@ public static class AgentIsolation
     public static string? AgentUser => NonEmpty(Environment.GetEnvironmentVariable(AgentUserEnvVar));
 
     /// <summary>
-    /// The agent user's home, or <c>null</c> when unset. Deliberately not public:
-    /// setting <c>HOME</c> is half of crossing to the agent uid, so both
-    /// <see cref="Route(ProcessStartInfo)"/> and
-    /// <see cref="RouteCommand(string, IReadOnlyList{string})"/> apply it
-    /// themselves rather than leaving callers to remember it.
+    /// The group for the drop's <c>--regid</c>, or <c>null</c> when unset (in which
+    /// case the crossing defaults it to the agent user's own name).
     /// </summary>
-    private static string? AgentHome => NonEmpty(Environment.GetEnvironmentVariable(AgentHomeEnvVar));
+    public static string? AgentGroup => NonEmpty(Environment.GetEnvironmentVariable(AgentGroupEnvVar));
+
+    /// <summary>
+    /// The agent user's home, or <c>null</c> when unset.
+    ///
+    /// <para>
+    /// Reading this is <em>not</em> how a caller sets <c>HOME</c> on a crossing —
+    /// that is half of crossing to the agent uid, so
+    /// <see cref="Route(ProcessStartInfo)"/> and
+    /// <see cref="RouteCommand(string, IReadOnlyList{string})"/> still apply it
+    /// themselves rather than leaving each launch site to remember it. It is public
+    /// for the callers that must <em>derive paths</em> from the agent's home: the
+    /// Worktree Preview installs tools with <c>npm install -g</c> and has to point
+    /// the prefix at a directory the uid running the install can write and the
+    /// agent-uid nodes that follow can execute (ADR-0016).
+    /// </para>
+    /// </summary>
+    public static string? AgentHome => NonEmpty(Environment.GetEnvironmentVariable(AgentHomeEnvVar));
 
     /// <summary>
     /// Rewrite <paramref name="psi"/> in place so its command runs as the
@@ -140,10 +154,7 @@ public static class AgentIsolation
     /// <c>setpriv</c> inherits all three and passes them through to the agent.
     /// </summary>
     public static ProcessStartInfo Route(ProcessStartInfo psi)
-        => Route(psi,
-            AgentUser,
-            NonEmpty(Environment.GetEnvironmentVariable(AgentGroupEnvVar)),
-            NonEmpty(Environment.GetEnvironmentVariable(AgentHomeEnvVar)));
+        => Route(psi, AgentUser, AgentGroup, AgentHome);
 
     /// <summary>
     /// The wrap primitive with explicit parameters — the env-based
@@ -306,10 +317,7 @@ public static class AgentIsolation
     /// its CLI through a PTY. Returns the command unchanged when isolation is off.
     /// </summary>
     public static AgentCommand RouteCommand(string fileName, IReadOnlyList<string> arguments)
-        => RouteCommand(fileName, arguments,
-            AgentUser,
-            NonEmpty(Environment.GetEnvironmentVariable(AgentGroupEnvVar)),
-            AgentHome);
+        => RouteCommand(fileName, arguments, AgentUser, AgentGroup, AgentHome);
 
     /// <inheritdoc cref="RouteCommand(string, IReadOnlyList{string})"/>
     public static AgentCommand RouteCommand(

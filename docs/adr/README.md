@@ -18,5 +18,6 @@ Short records of architectural decisions that are **hard to reverse, surprising 
 | [0013](./0013-retained-chat-history.md)               | Retained chat history: many chats per user, deleted only on demand                    |
 | [0014](./0014-agent-uid-isolation.md)                 | The coding agent runs under a separate OS user from the orchestrator                  |
 | [0015](./0015-wildcard-subdomain-preview-routing.md)  | Worktree previews are routed by wildcard subdomain, not by path prefix                |
+| [0016](./0016-preview-runs-as-the-agent.md)           | A Worktree Preview runs as the agent, with an environment ILD constructs              |
 
 New ADRs use the next sequential number; see the format in `.agents/skills/grill-with-docs/ADR-FORMAT.md`.

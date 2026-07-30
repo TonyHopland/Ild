@@ -185,11 +185,6 @@ rather than overlooked:
   into the base repo's object store. That also puts each base repo's
   `.git/config` and `.git/hooks` in reach, and the orchestrator's own git runs
   against those as `ild` on every worktree add/fetch.
-- **The preview service executes agent-authored commands as `ild`.** The command
-  comes from the worktree's `ild.config.json`, which the agent writes, and the
-  agent can trigger it itself through the ILD MCP tools. Capabilities are stripped
-  from it (above), so the ceiling is `ild`, not root — but it remains a route.
-  Moving the preview to the agent uid outright would close it.
 - **The shared credential store is writable by the agent**, so it can write e.g.
   `.claude/settings.json` hooks, which then execute as `ild` when a human opens
   the provider login terminal.
@@ -219,10 +214,20 @@ git/credential state as attacker-controlled input on the orchestrator side.
   would have _raised_ the ceiling of a successful escape while lowering its
   everyday reach. Every orchestrator-side spawn that can reach agent-authored
   input therefore goes through `AgentIsolation.DropInheritedCapabilities` —
-  `ProcessRunner` (git, npm), `AIProviderService.RunShellAsync`, and both
-  `WorktreePreviewService` spawn sites — which wraps them in
-  `setpriv --inh-caps=-all --ambient-caps=-all` (no uid change, needs no
+  `ProcessRunner` (git, npm) and `AIProviderService.RunShellAsync` — which wraps
+  them in `setpriv --inh-caps=-all --ambient-caps=-all` (no uid change, needs no
   privilege).
+- **The preview service was the one place where dropping capabilities was not
+  enough, and it now runs as the agent outright.** Its command comes from the
+  worktree's `ild.config.json`, which the agent writes and can trigger itself
+  through the ILD MCP tools, so stripping capabilities left the ceiling at `ild`
+  rather than root but left the route open — and, because .NET pre-populates a
+  child's environment from the current process, handed that command the
+  orchestrator's DB connection strings and encryption key as well. Both preview
+  spawn sites now cross to the agent uid and receive an environment ILD
+  constructs rather than one they inherit. This was originally recorded below as
+  an accepted residual; [ADR-0016](./0016-preview-runs-as-the-agent.md) closes it,
+  and states what moving the preview to the agent uid costs in return.
 - Splitting `$HOME` means any CLI state **not** listed in
   `AGENT_CONFIG_DIRS`/`AGENT_CONFIG_FILES` is no longer shared between the login
   terminal and the agent run — it would silently read as logged-out on the agent
@@ -230,9 +235,8 @@ git/credential state as attacker-controlled input on the orchestrator side.
   `.config/opencode` and `.local/share/opencode`, which is where it keeps auth),
   and adding an adapter means checking where its CLI stores credentials.
 - The residual cross-boundary routes above (`/data/repos`, the credential store,
-  the shared group, the inherited environment) are the follow-up backlog; changes
-  there should keep the group/ACL scheme rather than re-hardcoding single-owner
-  ownership.
+  the shared group) are the follow-up backlog; changes there should keep the
+  group/ACL scheme rather than re-hardcoding single-owner ownership.
 - `WorkItemServer` keeps its original single-uid `gosu` drop — it spawns no agent
   and needs no split (the entrypoint's split path only activates when `AGENT_USER`
   is set).
