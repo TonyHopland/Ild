@@ -25,11 +25,19 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     private readonly SqliteConnection _connection;
     private readonly FakeWorkItemServerHarness _serverHarness = new();
     private readonly string _dataRoot;
+    private readonly IReadOnlyDictionary<string, string?> _extraConfiguration;
 
     public string AdminPassword { get; } = "ild-int-tests-admin-pw";
 
-    public ApiFactory()
+    /// <param name="extraConfiguration">
+    /// Configuration entries layered over the defaults, for host-level settings the
+    /// API reads straight from configuration rather than from the database — e.g.
+    /// <c>ILD_PREVIEW_PROXY_BASE</c>. Supplied here rather than as environment
+    /// variables so parallel factories cannot see each other's values.
+    /// </param>
+    public ApiFactory(IReadOnlyDictionary<string, string?>? extraConfiguration = null)
     {
+        _extraConfiguration = extraConfiguration ?? new Dictionary<string, string?>();
         _connection = new SqliteConnection("DataSource=:memory:");
         _connection.Open();
         _dataRoot = Path.Combine(Path.GetTempPath(), "ild-int-" + Guid.NewGuid().ToString("N"));
@@ -46,6 +54,14 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     {
         builder.UseEnvironment("Testing");
 
+        // The API decides whether to serve the SPA by looking for a wwwroot next to
+        // the entry assembly, but static files and the fallback are then served from
+        // the web root, which WebApplicationFactory otherwise resolves against the
+        // ILD.Api project directory. In the container both are /app; pointing the web
+        // root at the test output makes them agree here too, so the SPA branch of the
+        // pipeline is exercised as shipped rather than registered and then 404ing.
+        builder.UseWebRoot(Path.Combine(AppContext.BaseDirectory, "wwwroot"));
+
         builder.ConfigureAppConfiguration((_, config) =>
         {
             config.AddInMemoryCollection(new Dictionary<string, string?>
@@ -54,6 +70,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
                 ["Storage:WorktreesSubdir"] = "worktrees",
                 ["Serilog:WriteToConsole"] = "false",
             });
+            config.AddInMemoryCollection(_extraConfiguration);
         });
 
         builder.ConfigureServices(services =>

@@ -322,7 +322,8 @@ public class AgentController : ControllerBase
                     request?.SkipInstall == true,
                     request?.PublicHost,
                     request?.PortOverrides,
-                    await _providerStore.GetRepositoryPreviewEnvAsync(workItem!.RepositoryId)));
+                    await _providerStore.GetRepositoryPreviewEnvAsync(workItem!.RepositoryId),
+                    workItem!.Id));
             await _notifier.PreviewStateChangedAsync(id);
             return Ok(response);
         }
@@ -367,7 +368,8 @@ public class AgentController : ControllerBase
                     request?.SkipInstall == true,
                     request?.PublicHost,
                     request?.PortOverrides,
-                    await _providerStore.GetRepositoryPreviewEnvAsync(workItem!.RepositoryId)));
+                    await _providerStore.GetRepositoryPreviewEnvAsync(workItem!.RepositoryId),
+                    workItem!.Id));
             await _notifier.PreviewStateChangedAsync(id);
             return Ok(response);
         }

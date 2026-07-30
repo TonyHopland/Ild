@@ -28,6 +28,16 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <!--
+    The API only wires up static files and the SPA fallback when a wwwroot sits
+    next to the entry assembly. Shipping this stand-in to the test output makes
+    that branch live for every host an integration test boots, so the pipeline
+    under test has the same shape as the one in the container.
+  -->
+  <ItemGroup>
+    <Content Include="wwwroot\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\ILD.Core\ILD.Core.csproj" />
     <ProjectReference Include="..\ILD.Api\ILD.Api.csproj" />

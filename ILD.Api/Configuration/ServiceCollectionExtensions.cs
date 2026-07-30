@@ -48,6 +48,20 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ManagedAgentProvisioner>();
         services.AddSingleton<IManagedAgentProvisioner>(sp => sp.GetRequiredService<ManagedAgentProvisioner>());
         services.AddHostedService(sp => sp.GetRequiredService<ManagedAgentProvisioner>());
+        // The one place ILD_PREVIEW_PROXY_BASE is read. Both the preview service
+        // (which advertises preview URLs) and the proxy middleware (which matches
+        // and serves them) take this instance, so there is a single parsed origin
+        // and a single startup message about it.
+        services.AddSingleton(sp =>
+        {
+            var proxyBase = PreviewProxyBase.FromConfiguration(sp.GetRequiredService<IConfiguration>());
+            var logger = sp.GetRequiredService<ILogger<PreviewProxyBase>>();
+            if (proxyBase.ConfigurationError != null)
+                logger.LogWarning("Worktree preview proxy disabled: {Reason}", proxyBase.ConfigurationError);
+            else if (proxyBase.Enabled)
+                logger.LogInformation("Worktree previews served on *.{Host} over {Scheme} (unauthenticated)", proxyBase.Host, proxyBase.Scheme);
+            return proxyBase;
+        });
         services.AddSingleton<IWorktreePreviewService, WorktreePreviewService>();
         services.AddSingleton<EventLogOptions>();
         services.AddScoped<IEventLogService, EventLogService>();

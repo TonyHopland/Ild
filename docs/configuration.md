@@ -18,6 +18,8 @@ Remote providers, the WorkItem Server connection, repositories, AI providers, an
 | `ILD_WORKITEM_SERVER_API_KEY`                | API key used to auto-seed the global WorkItem Server connection                                                   |
 | `ILD_API_URL`                                | Base URL agents and the MCP server use to call back into the ILD API                                              |
 | `ILD_ALLOWED_ORIGINS`                        | Comma-separated CORS origins allowed to call the ILD API                                                          |
+| `ILD_PREVIEW_PROXY_BASE`                     | Origin worktree previews are served under, e.g. `http://ild.localhost:8080`. Unset ⇒ preview proxying is off      |
+| `ILD_PREVIEW_PUBLIC_HOST`                    | Host used to build direct preview URLs when no proxy base is set (default `127.0.0.1`)                            |
 | `WORKITEM_API_KEYS`                          | Accepted bearer keys for the WorkItem Server (comma-separated)                                                    |
 | `WORKITEM_DATA_PATH`                         | Base data directory for WorkItem Server runtime files                                                             |
 | `WORKITEM_LOG_LEVEL`                         | Serilog level for the WorkItem Server (docker compose defaults it to `ILD_LOG_LEVEL`)                             |
@@ -83,16 +85,18 @@ Place an `ild.config.json` file in the root of a repository to enable QA preview
 
 ### Service fields
 
-| Field           | Type    | Description                                                                                       |
-| --------------- | ------- | ------------------------------------------------------------------------------------------------- |
-| `name`          | string  | Unique service name within the profile; used to reference this service's port in other services   |
-| `cwd`           | string  | Working directory relative to the worktree root                                                   |
-| `command`       | string  | Shell command to start the service                                                                |
-| `port`          | string  | Logical port name assigned to this service (resolved to a free port at runtime)                   |
-| `suggestedPort` | integer | Preferred port number; ILD uses it if free, otherwise picks another                               |
-| `env`           | object  | Environment variables injected into the service process (values may use token syntax — see below) |
-| `healthUrl`     | string  | URL polled after startup; the service is considered ready once it returns HTTP 2xx                |
-| `public`        | boolean | When `true`, this service's port is exposed as the primary preview URL in the UI                  |
+| Field           | Type    | Description                                                                                                                                                                                                                                                                                                                                                                                              |
+| --------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`          | string  | Unique service name within the profile; used to reference this service's port in other services                                                                                                                                                                                                                                                                                                          |
+| `cwd`           | string  | Working directory relative to the worktree root                                                                                                                                                                                                                                                                                                                                                          |
+| `command`       | string  | Shell command to start the service                                                                                                                                                                                                                                                                                                                                                                       |
+| `port`          | string  | Logical port name assigned to this service (resolved to a free port at runtime)                                                                                                                                                                                                                                                                                                                          |
+| `suggestedPort` | integer | Preferred port number; ILD uses it if free, otherwise picks another                                                                                                                                                                                                                                                                                                                                      |
+| `env`           | object  | Environment variables injected into the service process (values may use token syntax — see below)                                                                                                                                                                                                                                                                                                        |
+| `healthUrl`     | string  | URL polled after startup; the service is considered ready once it returns HTTP 2xx                                                                                                                                                                                                                                                                                                                       |
+| `public`        | boolean | When `true`, this service's port is exposed as the primary preview URL in the UI                                                                                                                                                                                                                                                                                                                         |
+| `publicUrl`     | string  | Overrides the advertised URL outright; may use `${PUBLIC_HOST}` and `${PORT}`                                                                                                                                                                                                                                                                                                                            |
+| `rewriteHost`   | boolean | Default `true`. Whether the [preview proxy](./deployment.md#worktree-preview-proxy) replaces the `Host` header with the loopback address it forwards to. Leave it on for host-checking dev servers (Vite, webpack-dev-server, Rails, Django); set it to `false` only for a service that must see the browser-facing hostname, and allow the preview wildcard in that service's own configuration instead |
 
 ### Token syntax
 
@@ -158,7 +162,8 @@ The repository's own `ild.config.json` defines an `app` profile that boots three
               "ILD_API_PROXY_TARGET": "http://127.0.0.1:${PORT:backend}"
             },
             "healthUrl": "http://127.0.0.1:${PORT}/",
-            "public": true
+            "public": true,
+            "rewriteHost": true
           }
         ]
       }
@@ -166,6 +171,8 @@ The repository's own `ild.config.json` defines an `app` profile that boots three
   }
 }
 ```
+
+`app` runs Vite, which rejects requests whose `Host` it does not recognise, so it keeps the default `"rewriteHost": true` and sees the request as if it arrived on its own loopback port. The value is spelled out here only to show the field; omitting it means the same thing.
 
 ## Build-time container options
 
