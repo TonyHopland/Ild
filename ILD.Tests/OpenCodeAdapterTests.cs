@@ -463,7 +463,7 @@ public class OpenCodeAdapterTests
         var psi = OpenCodeAdapter.BuildRunProcessStartInfo(
             binaryPath: "opencode",
             worktreePath: "/tmp/worktree",
-            renderedPrompt: "prompt text",
+            prompt: "prompt text",
             opencodeModel: "provider/model",
             opencodeConfigJson: "{\"config\":true}",
             sessionId: "session-123",

@@ -220,7 +220,7 @@ public class CopilotAdapterTests
         var psi = CopilotAdapter.BuildRunProcessStartInfo(
             binaryPath: "copilot",
             worktreePath: "/tmp/wt",
-            renderedPrompt: "fix it");
+            prompt: "fix it");
 
         Assert.Equal("/tmp/wt", psi.WorkingDirectory);
         Assert.Equal(new[]
@@ -243,7 +243,7 @@ public class CopilotAdapterTests
         var psi = CopilotAdapter.BuildRunProcessStartInfo(
             binaryPath: "copilot",
             worktreePath: "/tmp/wt",
-            renderedPrompt: "fix it",
+            prompt: "fix it",
             additionalAllowedDirectories: new[] { "/tmp/wt", "/data/worktrees/wi-99" });
 
         var args = psi.ArgumentList.ToList();

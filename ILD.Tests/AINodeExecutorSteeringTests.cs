@@ -39,7 +39,7 @@ public class AINodeExecutorSteeringTests
         public string[] GetAllSupportedProviderTypes() => ["claude-code"];
     }
 
-    private static (IServiceProvider sp, CapturingAdapter adapter) BuildServices(TestDb db)
+    private static (IServiceProvider sp, CapturingAdapter adapter) BuildServices(TestDb db, string workItemTitle = "")
     {
         var provider = new AiProvider
         {
@@ -54,7 +54,11 @@ public class AINodeExecutorSteeringTests
 
         var wim = Mock.Of<IWorkItemManager>(m =>
             m.GetWorkItemAsync(It.IsAny<string>())
-                == Task.FromResult<WorkItemView?>(new WorkItemView { Id = "WI-1", RepositoryId = null }));
+                == Task.FromResult<WorkItemView?>(new WorkItemView { Id = "WI-1", Title = workItemTitle, RepositoryId = null }));
+
+        var eventLog = new Mock<IEventLogService>();
+        eventLog.Setup(s => s.GetByRunIdAsync(It.IsAny<Guid>(), It.IsAny<int?>()))
+            .ReturnsAsync(Array.Empty<EventLogEntry>());
 
         var adapter = new CapturingAdapter();
         var services = new ServiceCollection();
@@ -62,6 +66,10 @@ public class AINodeExecutorSteeringTests
         services.AddSingleton<ILoopRunStore>(db.LoopRuns);
         services.AddSingleton(wim);
         services.AddSingleton<IAgentAdapterRegistry>(new FakeRegistry(adapter));
+        // Production always has the rendering service in scope, so the steering
+        // path must be exercised with it present.
+        services.AddSingleton<IPromptRenderingService>(new ILD.Core.Services.Implementations.PromptRenderingService(
+            new ILD.Core.Services.Implementations.PromptTemplateResolver(), eventLog.Object, db.LoopRuns));
         return (services.BuildServiceProvider(), adapter);
     }
 
@@ -136,6 +144,40 @@ public class AINodeExecutorSteeringTests
 
         var reloaded = db.Fresh().LoopRuns.First(r => r.Id == run.Id);
         Assert.Null(reloaded.SteeringNote);
+    }
+
+    [Fact]
+    public async Task Steering_note_reaches_the_agent_verbatim()
+    {
+        using var db = new TestDb();
+        var (sp, adapter) = BuildServices(db, workItemTitle: "Fix the widget");
+        // A steering note is the human's own words, not a template field: the
+        // grammar they quote must survive, exactly as it does in a chat turn.
+        const string note = "explain what {{WorkItem.Title}} and {{Var.handoff}} expand to";
+        var run = SeedRun(db, steeringNote: note, sessionId: "sess-live-4");
+        var node = AiNode("{\"useSession\":false,\"prompt\":\"{{WorkItem.Title}}\"}");
+        var ctx = new NodeExecutionContext(run, node, sp, CancellationToken.None);
+
+        await DrainAsync(new AINodeExecutor(), ctx);
+
+        Assert.Equal(note, adapter.Captured!.Prompt);
+        Assert.DoesNotContain("Fix the widget", adapter.Captured.Prompt);
+    }
+
+    [Fact]
+    public async Task No_steering_note_renders_the_nodes_own_prompt_template()
+    {
+        using var db = new TestDb();
+        var (sp, adapter) = BuildServices(db, workItemTitle: "Fix the widget");
+        var run = SeedRun(db, steeringNote: null, sessionId: "sess-live-5");
+        var node = AiNode("{\"useSession\":false,\"prompt\":\"Work on {{WorkItem.Title}}\"}");
+        var ctx = new NodeExecutionContext(run, node, sp, CancellationToken.None);
+
+        await DrainAsync(new AINodeExecutor(), ctx);
+
+        // The configured prompt IS a template field — not rendering it would be
+        // the opposite mistake.
+        Assert.Equal("Work on Fix the widget", adapter.Captured!.Prompt);
     }
 
     [Fact]

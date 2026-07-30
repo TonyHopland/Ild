@@ -63,7 +63,7 @@ public class AIProviderServiceTests
             .Callback<string, WorktreePreviewStartOptions?, CancellationToken>((_, o, _) => captured = o)
             .ReturnsAsync(new WorktreePreviewResponse { State = "running", WorktreePath = worktreePath });
 
-        var svc = new AIProviderService(db.Providers, workItems.Object, preview.Object, new HttpClient(), null, db.LoopRuns);
+        var svc = new AIProviderService(db.Providers, workItems.Object, preview.Object, new HttpClient(), db.LoopRuns);
 
         var result = await svc.ExecuteToolAsync("ild.preview_start", "{}", worktreePath);
 
@@ -85,7 +85,7 @@ public class AIProviderServiceTests
             .Callback<string, WorktreePreviewStartOptions?, CancellationToken>((_, o, _) => captured = o)
             .ReturnsAsync(new WorktreePreviewResponse { State = "running" });
 
-        var svc = new AIProviderService(db.Providers, Mock.Of<IWorkItemManager>(), preview.Object, new HttpClient(), null, db.LoopRuns);
+        var svc = new AIProviderService(db.Providers, Mock.Of<IWorkItemManager>(), preview.Object, new HttpClient(), db.LoopRuns);
 
         var result = await svc.ExecuteToolAsync("ild.preview_start", "{}", "/tmp/unknown-worktree");
 
@@ -93,18 +93,6 @@ public class AIProviderServiceTests
         Assert.NotNull(captured);
         Assert.Null(captured!.CustomEnv);
     }
-    [Fact]
-    public async Task RenderPrompt_substitutes_known_placeholders()
-    {
-        using var db = new TestDb();
-        var svc = new AIProviderService(db.Providers, Mock.Of<IWorkItemManager>(), Mock.Of<IWorktreePreviewService>(), new HttpClient());
-
-        var ctx = new LoopRunContext(Guid.NewGuid(), Guid.NewGuid().ToString(), "Title", "Desc", "/tmp/x", "feat", new List<string> { "a", "b" }, "prev");
-        var rendered = await svc.RenderPromptAsync("T={{WorkItem.Title}} P={{PreviousNode.Output}}", ctx);
-
-        Assert.Equal("T=Title P=prev", rendered);
-    }
-
     [Fact]
     public async Task ValidatePromptTemplate_rejects_unknown_placeholders()
     {

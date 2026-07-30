@@ -233,7 +233,7 @@ public class ClaudeCodeAdapterTests
         var psi = ClaudeCodeAdapter.BuildRunProcessStartInfo(
             binaryPath: "claude",
             worktreePath: "/tmp/wt",
-            renderedPrompt: "fix it",
+            prompt: "fix it",
             sessionId: "abc");
 
         Assert.Equal("/tmp/wt", psi.WorkingDirectory);
@@ -260,7 +260,7 @@ public class ClaudeCodeAdapterTests
         var psi = ClaudeCodeAdapter.BuildRunProcessStartInfo(
             binaryPath: "claude",
             worktreePath: "/tmp/wt",
-            renderedPrompt: "fix it",
+            prompt: "fix it",
             sessionId: null);
 
         Assert.DoesNotContain("--resume", psi.ArgumentList);
@@ -275,7 +275,7 @@ public class ClaudeCodeAdapterTests
         var psi = ClaudeCodeAdapter.BuildRunProcessStartInfo(
             binaryPath: "claude",
             worktreePath: "/tmp/wt",
-            renderedPrompt: "fix it",
+            prompt: "fix it",
             sessionId: null,
             mcpConfigPath: null,
             additionalAllowedDirectories: new[] { "/tmp/wt", "/data/worktrees/wi-99" });

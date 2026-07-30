@@ -115,8 +115,14 @@ public sealed class AINodeExecutor : INodeExecutor
         var prompt = isSteering
             ? (string.IsNullOrWhiteSpace(steeringNote) ? "Continue where you left off." : steeringNote!)
             : (cfg.Prompt ?? string.Empty);
+
+        // The node's configured prompt is a template field: it is rendered here,
+        // exactly once, and what substitution pulls in is never re-scanned. A
+        // steering note is not a template field — it is the human's own words,
+        // typed at halt→resume — so it reaches the agent verbatim, for the same
+        // reason a chat turn is not rendered (ADR-0011).
         string rendered = prompt;
-        if (rendering is not null)
+        if (!isSteering && rendering is not null)
             rendered = await rendering.RenderAsync(prompt, ctx.Run.Id, wi, ctx.Run.PreviousNodeOutput);
 
         if (isSteering && scopeFactory is not null)
