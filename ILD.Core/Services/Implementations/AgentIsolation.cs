@@ -16,7 +16,9 @@ namespace ILD.Core.Services.Implementations;
 ///   <item><b>Keeping the orchestrator's capabilities away from agent-authored
 ///   code</b> — <see cref="DropInheritedCapabilities(ProcessStartInfo)"/>, for the
 ///   orchestrator-side commands (preview, git, npm) whose input the agent
-///   controls.</item>
+///   controls, and <see cref="StripOrchestratorEnvironment(ProcessStartInfo)"/>
+///   for the ones that must not inherit the orchestrator's secrets or its own
+///   runtime topology either.</item>
 ///   <item><b>Placing files both uids must share</b> — <see cref="ScratchRoot"/>,
 ///   the directory whose group/setgid setup lets the two uids hand files back and
 ///   forth, and <see cref="ProtectFromAgentWrites(string)"/> /
@@ -198,6 +200,65 @@ public static class AgentIsolation
                 keys.Add(name);
         }
         return keys;
+    }
+
+    /// <summary>
+    /// The variables that describe <em>this</em> orchestrator process's identity and
+    /// its private directories, exported by the container entrypoint. Unlike
+    /// <see cref="SecretEnvironmentKeys"/> these are not secret — they are simply
+    /// wrong for any child that is not this orchestrator, and wrong silently.
+    ///
+    /// <para>
+    /// A nested ILD (a Worktree Preview of this repository) that inherits them
+    /// concludes uid isolation is on and routes its own agent launches through
+    /// <c>setpriv --reuid</c> without holding <c>CAP_SETUID</c>, and it points its
+    /// orchestrator-private root at the outer instance's — the directory holding the
+    /// git askpass helper that is handed to git as <c>GIT_ASKPASS</c> with a
+    /// repository token in its environment. Both uids being the same means the
+    /// collision produces no error, just an overwrite.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyCollection<string> OrchestratorTopologyEnvKeys { get; } =
+    [
+        AgentUserEnvVar,
+        AgentGroupEnvVar,
+        AgentHomeEnvVar,
+        ScratchRootEnvVar,
+        PrivateRootEnvVar,
+    ];
+
+    /// <summary>
+    /// Remove everything a child inherits by accident rather than by decision: the
+    /// orchestrator's secrets (<see cref="SecretEnvironmentKeys"/>) and its own
+    /// runtime topology (<see cref="OrchestratorTopologyEnvKeys"/>). .NET
+    /// pre-populates a child's environment from the current process, so an
+    /// unprepared <see cref="ProcessStartInfo"/> hands both over verbatim.
+    ///
+    /// <para>
+    /// This is deliberately <em>not</em> folded into
+    /// <see cref="DropInheritedCapabilities(ProcessStartInfo)"/>. That helper also
+    /// wraps <c>ProcessRunner</c> (git, npm) and <c>AIProviderService.RunShellAsync</c>
+    /// (Cmd nodes), where a user's command may legitimately rely on the inherited
+    /// environment; scrubbing there would change those silently. Callers that must
+    /// not inherit say so by name.
+    /// </para>
+    ///
+    /// <para>
+    /// Call it <em>before</em> layering the child's own environment on, not after:
+    /// stripping is about what was inherited, and a value the caller set
+    /// deliberately — a Worktree Preview's <c>ild.config.json</c> supplying its own
+    /// database connection string, say — has to survive.
+    /// </para>
+    /// </summary>
+    public static ProcessStartInfo StripOrchestratorEnvironment(ProcessStartInfo psi)
+    {
+        foreach (var key in SecretEnvironmentKeys)
+            psi.Environment.Remove(key);
+
+        foreach (var key in OrchestratorTopologyEnvKeys)
+            psi.Environment.Remove(key);
+
+        return psi;
     }
 
     /// <summary>

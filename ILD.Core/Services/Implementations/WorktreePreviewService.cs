@@ -771,7 +771,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 continue;
 
             var resolved = BuildResolvedStep(step, runtime, null);
-            var result = await RunCommandAsync(resolved.Command, resolved.WorkingDirectory, resolved.Environment, cancellationToken);
+            var result = await RunCommandAsync(resolved, cancellationToken);
 
             var builder = new StringBuilder();
             builder.AppendLine($"> {resolved.Command}");
@@ -802,23 +802,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         };
         var writeGate = new SemaphoreSlim(1, 1);
 
-        var psi = new ProcessStartInfo("/bin/sh")
-        {
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            WorkingDirectory = resolved.WorkingDirectory,
-        };
-        psi.ArgumentList.Add("-lc");
-        psi.ArgumentList.Add(resolved.Command);
-        foreach (var entry in resolved.Environment)
-        {
-            psi.Environment[entry.Key] = entry.Value;
-        }
-
-        // As above: resolved.Command originates from the agent-writable
-        // ild.config.json, so drop the inherited ambient capabilities (ADR-0014).
-        var process = Process.Start(AgentIsolation.DropInheritedCapabilities(psi))
+        var process = Process.Start(BuildPreviewProcess(resolved))
             ?? throw new InvalidOperationException($"Failed to start preview service '{service.Name}'.");
 
         var stdoutTask = PumpStreamAsync(process.StandardOutput, writer, writeGate, cancellationToken);
@@ -1280,31 +1264,62 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         return string.IsNullOrWhiteSpace(value) ? null : ResolveTemplate(value, runtime, currentPortAlias);
     }
 
-    private static async Task<CommandResult> RunCommandAsync(
-        string command,
-        string workingDirectory,
-        IReadOnlyDictionary<string, string> environment,
-        CancellationToken cancellationToken)
+    /// <summary>
+    /// The one place a preview child's privileges and environment are decided —
+    /// both spawn sites (install steps and long-running services) go through it, so
+    /// neither can drift from the other.
+    ///
+    /// <para>
+    /// The command text comes from the worktree's <c>ild.config.json</c>, a file the
+    /// agent writes and can trigger itself through the ILD MCP tools, so it is
+    /// agent-authored input executed on the orchestrator's side of ADR-0014's
+    /// boundary. Two things follow. It must not keep the orchestrator's ambient
+    /// capabilities: <c>CAP_SETUID</c> in the effective set means <c>setuid(0)</c>,
+    /// and an exec with euid 0 is treated as if the file's capability sets were all
+    /// ones — so a hijacked preview command would run as container root rather than
+    /// merely as the orchestrator. And it must not inherit the orchestrator's
+    /// environment: .NET pre-populates a child's from the current process, which
+    /// would hand a preview command the DB connection strings, the
+    /// encryption-at-rest key and the orchestrator's own API tokens (ADR-0016).
+    /// </para>
+    ///
+    /// <para>
+    /// The ordering is the point. Stripping happens before the resolved step's
+    /// environment is applied, never after, so what the strip removes is only ever
+    /// what was <em>inherited</em>. A preview that legitimately needs one of those
+    /// names — this repository's own profile previews an ILD, which needs a database
+    /// of its own — sets it in <c>ild.config.json</c> or the repository's preview
+    /// <c>.env</c> and that value survives, pointed wherever the config points it
+    /// rather than at the orchestrator's.
+    /// </para>
+    /// </summary>
+    private static ProcessStartInfo BuildPreviewProcess(ResolvedStep resolved)
     {
         var psi = new ProcessStartInfo("/bin/sh")
         {
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            WorkingDirectory = workingDirectory,
+            WorkingDirectory = resolved.WorkingDirectory,
         };
         psi.ArgumentList.Add("-lc");
-        psi.ArgumentList.Add(command);
-        foreach (var entry in environment)
+        psi.ArgumentList.Add(resolved.Command);
+
+        AgentIsolation.StripOrchestratorEnvironment(psi);
+        AgentIsolation.DropInheritedCapabilities(psi);
+
+        foreach (var entry in resolved.Environment)
         {
             psi.Environment[entry.Key] = entry.Value;
         }
 
-        // The command text comes from the worktree's ild.config.json — a file the
-        // agent writes — so it must never inherit the orchestrator's ambient
-        // capabilities (ADR-0014). It still runs as the orchestrator's uid.
-        using var process = Process.Start(AgentIsolation.DropInheritedCapabilities(psi))
-            ?? throw new InvalidOperationException($"Failed to start command '{command}'.");
+        return psi;
+    }
+
+    private static async Task<CommandResult> RunCommandAsync(ResolvedStep resolved, CancellationToken cancellationToken)
+    {
+        using var process = Process.Start(BuildPreviewProcess(resolved))
+            ?? throw new InvalidOperationException($"Failed to start command '{resolved.Command}'.");
 
         var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);

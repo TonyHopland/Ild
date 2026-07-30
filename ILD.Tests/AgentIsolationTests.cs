@@ -518,6 +518,119 @@ public class AgentIsolationTests
     }
 
     [Fact]
+    public void StripOrchestratorEnvironment_removes_every_secret_and_topology_variable()
+    {
+        // Seeded straight onto the psi rather than onto the process: the strip is a
+        // psi transform, and ILD_AGENT_USER in particular cannot be set
+        // process-wide without turning isolation on for the whole test host — the
+        // thing TestEnvironmentBaseline exists to prevent. The preview-level tests
+        // then prove the wiring end-to-end with variables that are inert here.
+        var psi = new ProcessStartInfo("/bin/sh");
+        psi.ArgumentList.Add("-lc");
+        psi.ArgumentList.Add("env");
+
+        var scrubbed = AgentIsolation.SecretEnvironmentKeys
+            .Concat(AgentIsolation.OrchestratorTopologyEnvKeys)
+            .ToArray();
+        foreach (var key in scrubbed)
+            psi.Environment[key] = "inherited-" + key;
+
+        AgentIsolation.StripOrchestratorEnvironment(psi);
+
+        Assert.Equal(Array.Empty<string>(), scrubbed.Where(psi.Environment.ContainsKey).ToArray());
+    }
+
+    [Fact]
+    public void StripOrchestratorEnvironment_covers_the_nine_orchestrator_secrets()
+    {
+        // Pinned by name. These are the values a preview command could otherwise
+        // read straight out of `env` — the DB strings, the encryption-at-rest key,
+        // the bootstrap credentials and the orchestrator's own API tokens — so a
+        // new one being added to the app without being added here is the
+        // regression this guards.
+        Assert.Equal(new[]
+        {
+            "ILD_AGENT_TOKEN",
+            "ILD_API_TOKEN",
+            "ILD_DB_CONNECTION_STRING",
+            "ILD_PASSWORD",
+            "ILD_SECRET_KEY",
+            "ILD_USERNAME",
+            "WORKITEM_API_KEYS",
+            "WORKITEM_DB_CONNECTION_STRING",
+            "ILD_WORKITEM_SERVER_API_KEY",
+        }.OrderBy(k => k, StringComparer.Ordinal),
+        AgentIsolation.SecretEnvironmentKeys.OrderBy(k => k, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void StripOrchestratorEnvironment_names_the_five_topology_variables()
+    {
+        Assert.Equal(new[]
+        {
+            AgentIsolation.AgentUserEnvVar,
+            AgentIsolation.AgentGroupEnvVar,
+            AgentIsolation.AgentHomeEnvVar,
+            AgentIsolation.ScratchRootEnvVar,
+            AgentIsolation.PrivateRootEnvVar,
+        }.OrderBy(k => k, StringComparer.Ordinal),
+        AgentIsolation.OrchestratorTopologyEnvKeys.OrderBy(k => k, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void StripOrchestratorEnvironment_leaves_everything_else_alone()
+    {
+        // The scrub is by exact name, not by pattern: a preview's own secrets and
+        // the git commit identity travel on the same environment under different
+        // names and must survive.
+        var psi = new ProcessStartInfo("/bin/sh");
+        psi.Environment["ILD_PI_PROVIDER_API_KEY"] = "agents-own-key";
+        psi.Environment["GIT_AUTHOR_NAME"] = "ILD";
+        psi.Environment["ILD_DATA_PATH"] = "/data";
+
+        AgentIsolation.StripOrchestratorEnvironment(psi);
+
+        Assert.Equal("agents-own-key", psi.Environment["ILD_PI_PROVIDER_API_KEY"]);
+        Assert.Equal("ILD", psi.Environment["GIT_AUTHOR_NAME"]);
+        Assert.Equal("/data", psi.Environment["ILD_DATA_PATH"]);
+    }
+
+    [Fact]
+    public void StripOrchestratorEnvironment_does_not_change_the_command()
+    {
+        // It scrubs the environment and nothing else — the uid/capability decision
+        // stays with Route/DropInheritedCapabilities, which callers apply
+        // separately.
+        var psi = new ProcessStartInfo("/bin/sh");
+        psi.ArgumentList.Add("-lc");
+        psi.ArgumentList.Add("npm run dev");
+
+        AgentIsolation.StripOrchestratorEnvironment(psi);
+
+        Assert.Equal("/bin/sh", psi.FileName);
+        Assert.Equal(new[] { "-lc", "npm run dev" }, psi.ArgumentList);
+    }
+
+    [Fact]
+    public void DropInheritedCapabilities_leaves_the_environment_untouched()
+    {
+        // ProcessRunner (git, npm) and AIProviderService.RunShellAsync share this
+        // helper, and a Cmd node may legitimately rely on the inherited
+        // environment. Folding the preview's scrub in here would change both
+        // silently, so the two concerns stay separate helpers (ADR-0016).
+        var psi = new ProcessStartInfo("/bin/sh");
+        psi.ArgumentList.Add("-lc");
+        psi.ArgumentList.Add("git status");
+        psi.Environment["ILD_DB_CONNECTION_STRING"] = "Host=db";
+        psi.Environment[AgentIsolation.PrivateRootEnvVar] = "/tmp/private";
+
+        AgentIsolation.DropInheritedCapabilities(psi, agentUser: "agent");
+
+        Assert.Equal("Host=db", psi.Environment["ILD_DB_CONNECTION_STRING"]);
+        Assert.Equal("/tmp/private", psi.Environment[AgentIsolation.PrivateRootEnvVar]);
+    }
+
+    [Fact]
     public void Route_preserves_environment_variables_set_by_the_adapter()
     {
         var psi = BuildPsi();
