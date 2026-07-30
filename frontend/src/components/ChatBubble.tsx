@@ -56,6 +56,8 @@ export default function ChatBubble() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState("");
   const [busy, setBusy] = useState(false);
+  // Set while a stop request is in flight, so a second click cannot fire another.
+  const [stopping, setStopping] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
   // Retained chat history (ADR-0013): the user's past chats, shown under Start
@@ -360,6 +362,24 @@ export default function ChatBubble() {
     }
   };
 
+  // Cancel the in-flight turn. `busy` is deliberately left alone: the server
+  // persists the partial reply and announces it over the hub, so the normal
+  // ChatMessageAppended/ChatTurnCompleted handlers end the turn just as they do
+  // for one that finished on its own. The turn can also finish between render and
+  // click, which makes the call a no-op (or a 404 on a chat already gone) —
+  // nothing to report, so it is swallowed.
+  const stop = async () => {
+    if (!session || stopping) return;
+    setStopping(true);
+    try {
+      await chatService.interrupt(session.id);
+    } catch {
+      /* nothing left to cancel */
+    } finally {
+      setStopping(false);
+    }
+  };
+
   // Drop the in-conversation view and return to the chat list. The chat is
   // retained and resumable — Back never deletes (ADR-0013). Refresh history so the
   // chat re-sorts to the top with its freshly-derived name.
@@ -602,6 +622,21 @@ export default function ChatBubble() {
               onChange={(e) => setInput(e.target.value)}
               aria-label="Chat message"
             />
+            {/* Only offered while a turn is in flight — the same window the
+                Thinking/Responding indicator covers. */}
+            {busy && (
+              <button
+                type="button"
+                className="chat-stop-btn"
+                aria-label="Stop"
+                disabled={stopping}
+                onClick={() => void stop()}
+              >
+                <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+                  <rect x="0" y="0" width="16" height="16" rx="2" />
+                </svg>
+              </button>
+            )}
             <button type="submit" className="chat-primary-btn" disabled={!input.trim()}>
               Send
             </button>

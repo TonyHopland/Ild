@@ -15,6 +15,7 @@ const { handlers, chatService, aiProviderService, getOpenLoopDocument, setCurren
       getById: vi.fn(),
       start: vi.fn(),
       sendMessage: vi.fn(),
+      interrupt: vi.fn(),
       deleteOne: vi.fn(),
       deleteAll: vi.fn(),
     },
@@ -376,6 +377,80 @@ describe("ChatBubble", () => {
     });
     await waitFor(() => expect(screen.queryByRole("status")).toBeNull());
     expect(screen.getByText("half an answer")).toBeTruthy();
+  });
+
+  test("the stop button only exists while a turn is in flight, and cancels it", async () => {
+    chatService.sendMessage.mockResolvedValue(undefined);
+    chatService.interrupt.mockResolvedValue(undefined);
+    await openResumed(chatSession());
+
+    // Idle: nothing to stop.
+    expect(screen.queryByLabelText("Stop")).toBeNull();
+
+    const input = await screen.findByLabelText("Chat message");
+    fireEvent.change(input, { target: { value: "long task" } });
+    fireEvent.click(screen.getByText("Send"));
+
+    // In flight: the stop button appears alongside the (still present) Send.
+    const stop = await screen.findByLabelText("Stop");
+    expect(screen.getByText("Send")).toBeTruthy();
+
+    fireEvent.click(stop);
+    await waitFor(() => expect(chatService.interrupt).toHaveBeenCalledWith("s1"));
+
+    // Busy is not cleared optimistically — the server ends the turn over the hub.
+    expect(screen.getByLabelText("Stop")).toBeTruthy();
+    act(() => {
+      handlers.ChatTurnCompleted?.({ payload: { chatSessionId: "s1", interrupted: true } });
+    });
+    await waitFor(() => expect(screen.queryByLabelText("Stop")).toBeNull());
+  });
+
+  test("a stop that loses the race to the turn finishing is swallowed", async () => {
+    chatService.sendMessage.mockResolvedValue(undefined);
+    // The turn completed between render and click, so the chat no longer has one.
+    chatService.interrupt.mockRejectedValue(new Error("Chat not found."));
+    await openResumed(chatSession());
+
+    const input = await screen.findByLabelText("Chat message");
+    fireEvent.change(input, { target: { value: "long task" } });
+    fireEvent.click(screen.getByText("Send"));
+
+    fireEvent.click(await screen.findByLabelText("Stop"));
+
+    await waitFor(() => expect(chatService.interrupt).toHaveBeenCalledWith("s1"));
+    // No error surfaced, and the button is still live for another attempt.
+    expect(screen.queryByText("Chat not found.")).toBeNull();
+    await waitFor(() =>
+      expect((screen.getByLabelText("Stop") as HTMLButtonElement).disabled).toBe(false),
+    );
+  });
+
+  test("a second click cannot fire a stop while the first is in flight", async () => {
+    chatService.sendMessage.mockResolvedValue(undefined);
+    let release!: () => void;
+    chatService.interrupt.mockReturnValue(
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    );
+    await openResumed(chatSession());
+
+    const input = await screen.findByLabelText("Chat message");
+    fireEvent.change(input, { target: { value: "long task" } });
+    fireEvent.click(screen.getByText("Send"));
+
+    fireEvent.click(await screen.findByLabelText("Stop"));
+    await waitFor(() =>
+      expect((screen.getByLabelText("Stop") as HTMLButtonElement).disabled).toBe(true),
+    );
+
+    fireEvent.click(screen.getByLabelText("Stop"));
+    expect(chatService.interrupt).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      release();
+    });
   });
 
   test("streams a turn and flags an interrupted partial reply", async () => {

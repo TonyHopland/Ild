@@ -174,6 +174,40 @@
   cursor: not-allowed;
 }
 
+/* Cancels the in-flight turn. Sits left of Send and matches its height and
+   radius so the input row does not jump when it appears; the red square is the
+   only colour it carries. */
+.chat-stop-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #2a2a40;
+  border: 1px solid #3a3a5c;
+  border-radius: 0.35rem;
+  color: #ef4444;
+  padding: 0.45rem 0.6rem;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.chat-stop-btn svg {
+  fill: currentColor;
+}
+
+.chat-stop-btn:hover {
+  background: #33334d;
+}
+
+.chat-stop-btn:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 1px;
+}
+
+.chat-stop-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 .chat-msg {
   max-width: 85%;
   padding: 0.45rem 0.65rem;

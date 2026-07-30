@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Stop a chat reply mid-flight.** The chat bubble shows a red stop square to the left of **Send** for exactly as long as a turn is in progress, cancelling it over the new `POST /api/v1/chat/{id}/interrupt`. The cancel primitive already existed — it was reachable only by sending another message or deleting the chat, so there was no way to just make the agent stop. The endpoint checks ownership before cancelling, exactly as the per-chat delete does, and the button does not clear the busy state itself: the server persists the partial reply and announces it, so an interrupted turn ends through the same hub events as one that finished on its own and the transcript keeps what the agent had produced (flagged `interrupted`). A stop that loses the race to the turn finishing is a no-op rather than an error.
+
 ## [0.6.0] - 2026-07-30
 
 ### Added
