@@ -44,7 +44,8 @@ public sealed class ConfigTools
         "Each service declares a 'port' alias; ILD allocates an actual free port (preferring 'suggestedPort' when free) and exposes it to that service's command/env/healthUrl as ${PORT}.",
         "Reference another service's allocated port with ${PORT:<alias>} to wire services together (e.g. a frontend proxying to the backend).",
         "Commands run under /bin/sh from 'cwd' (relative to the worktree root). Install steps run before any service starts.",
-        "A service is ready when an HTTP GET of its resolved 'healthUrl' succeeds. Set 'public': true on the user-facing service."
+        "A service is ready when an HTTP GET of its resolved 'healthUrl' succeeds. Set 'public': true on the user-facing service.",
+        "When the ILD instance is configured with a preview proxy base, services are reached on wildcard subdomains — wi-<workItemId> for the single 'public' service, wi-<workItemId>-<serviceName> for any other — and the allocated port is never exposed directly. Mark exactly one service 'public': true; with several, the bare wi-<workItemId> form names none of them and each must be addressed by name. Service names appear in hostnames, so keep them to letters, digits and hyphens. ILD rewrites the Host header to the loopback target so host-checking dev servers work unchanged; set 'rewriteHost': false on a service that must see the browser-facing hostname."
       ],
       "templateTokens": {
         "${WORKTREE}": "Absolute path to the prepared git worktree root.",
@@ -68,6 +69,7 @@ public sealed class ConfigTools
         "services[].healthUrl": "Required. URL polled until it responds; marks the service ready. Typically uses ${PORT}.",
         "services[].public": "Optional. Set true on the user-facing service whose URL is surfaced to the user.",
         "services[].publicUrl": "Optional. Override for the advertised public URL; may use ${PUBLIC_HOST} and ${PORT}.",
+        "services[].rewriteHost": "Optional, default true. When ILD serves previews on wildcard subdomains, it replaces the Host header with the loopback address it forwards to, so host-checking dev servers (Vite, webpack-dev-server, Rails, Django) accept the request. Set false only for a service that must see the browser-facing hostname, and add the preview wildcard to that service's own allowed-hosts list instead.",
         "services[].env": "Optional. Environment variables for the service; values may use any template token."
       },
       "schema": {
@@ -125,7 +127,8 @@ public sealed class ConfigTools
               "suggestedPort": { "type": "integer", "minimum": 1 },
               "healthUrl": { "type": "string", "minLength": 1 },
               "public": { "type": "boolean" },
-              "publicUrl": { "type": "string" }
+              "publicUrl": { "type": "string" },
+              "rewriteHost": { "type": "boolean" }
             },
             "required": ["name", "command", "port", "healthUrl"],
             "additionalProperties": false

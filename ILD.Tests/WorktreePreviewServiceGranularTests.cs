@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ILD.Core.Services.Implementations;
+using ILD.Core.Services.Interfaces;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -40,7 +41,8 @@ public class WorktreePreviewServiceGranularTests : IDisposable
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(() => new HttpClient());
         var configuration = new ConfigurationBuilder().Build();
-        _service = new WorktreePreviewService(factory.Object, configuration, NullLogger<WorktreePreviewService>.Instance);
+        _service = new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
+            NullLogger<WorktreePreviewService>.Instance);
         return _service;
     }
 

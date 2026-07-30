@@ -107,6 +107,14 @@ internal static class TestHostServiceCollectionExtensions
 
         public bool IsPreviewRunning(string worktreePath)
             => false;
+
+        // Reached on every request to a *.{ILD_PREVIEW_PROXY_BASE} hostname, so it
+        // reports "not running" rather than throwing — a test host that sets the
+        // proxy base is exercising the proxy, not misusing the preview service.
+        public Task<PreviewTarget> ResolvePreviewTargetAsync(string hostLabel, IWorkItemManager workItems, CancellationToken cancellationToken = default)
+            => Task.FromResult(PreviewTarget.Failed(
+                PreviewTargetOutcome.PreviewNotRunning,
+                $"No preview runtime in the test host for '{hostLabel}'."));
     }
 
     private sealed class ThrowingRemoteProvider : IRemoteProvider
