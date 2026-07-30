@@ -4,6 +4,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
+using ILD.Data.Enums;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -120,6 +121,53 @@ public class WorkItemsControllerTransitionTests
     [Fact]
     public async Task Transition_from_HumanFeedback_to_Backlog_is_allowed()
         => await AssertMovesToBacklogAsync(RemoteWorkItemStatus.HumanFeedback);
+
+    /// <summary>
+    /// Give the item a run the engine still considers alive — the case the
+    /// board move deliberately does not cover.
+    /// </summary>
+    private static void SeedLiveRun(TestDb db, string workItemId)
+    {
+        var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
+        var ltv = new LoopTemplateVersion
+        {
+            Id = Guid.NewGuid(),
+            LoopTemplateId = lt.Id,
+            VersionNumber = 1,
+            CreatedAt = DateTime.UtcNow,
+        };
+        db.Context.LoopTemplates.Add(lt);
+        db.Context.LoopTemplateVersions.Add(ltv);
+        db.Context.LoopRuns.Add(new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = workItemId,
+            LoopTemplateVersionId = ltv.Id,
+            Status = LoopRunStatus.WaitingHuman,
+            StartedAt = DateTime.UtcNow,
+        });
+        db.Context.SaveChanges();
+    }
+
+    // The board move is for items that have not started. One parked at a human
+    // gate with its run still alive keeps the 400 it has always answered:
+    // relabelling the card would leave the run heartbeating underneath it,
+    // holding a concurrency slot. Stopping the run and resetting the item is
+    // CleanupToBacklogAsync / POST {id}/cleanup-to-backlog, from the modal.
+    [Fact]
+    public async Task Transition_to_Backlog_is_refused_while_the_items_run_is_still_alive()
+    {
+        var (controller, mgr, db, repoId) = Setup();
+        using var _ = db;
+
+        var id = await SeedIdleItemAsync(mgr, repoId, RemoteWorkItemStatus.HumanFeedback);
+        SeedLiveRun(db, id);
+
+        var result = await controller.Transition(id, new WorkItemTransitionRequest { TargetStatus = "Backlog" });
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Equal(RemoteWorkItemStatus.HumanFeedback, (await mgr.GetWorkItemAsync(id))!.Status);
+    }
 
     // Guard on the fix: widening the endpoint must not turn a typo into a
     // silent no-op transition.

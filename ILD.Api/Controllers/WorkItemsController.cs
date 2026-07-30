@@ -396,6 +396,7 @@ public class WorkItemsController : ControllerBase
             return BadRequest(new { error = "Invalid target status" });
         var ok = target switch
         {
+            WorkItemStatus.Backlog => await _workItemManager.TransitionToBacklogAsync(id),
             WorkItemStatus.WorkQueue => await _workItemManager.TransitionToWorkQueueAsync(id),
             WorkItemStatus.Ready => await _workItemManager.TransitionToReadyAsync(id),
             WorkItemStatus.Running => await _workItemManager.TransitionToRunningAsync(id),
