@@ -122,11 +122,34 @@ public class WorkItemsControllerTransitionTests
     public async Task Transition_from_HumanFeedback_to_Backlog_is_allowed()
         => await AssertMovesToBacklogAsync(RemoteWorkItemStatus.HumanFeedback);
 
+    // A second lap round the board: the item ran, its run ended, and it is
+    // sitting in Ready again. Nothing is alive underneath it, so it moves back
+    // like any unstarted item — the refusal below keys on a live run, not on
+    // the item ever having had one.
+    [Fact]
+    public async Task Transition_to_Backlog_is_allowed_when_the_items_earlier_run_has_finished()
+    {
+        var (controller, mgr, db, repoId) = Setup();
+        using var _ = db;
+
+        var id = await SeedIdleItemAsync(mgr, repoId, RemoteWorkItemStatus.Ready);
+        SeedRun(db, id, LoopRunStatus.Completed, completed: true);
+
+        var result = await controller.Transition(id, new WorkItemTransitionRequest { TargetStatus = "Backlog" });
+
+        if (result is BadRequestObjectResult bad)
+            Assert.Fail($"Ready -> Backlog with a finished run was rejected: 400 {JsonSerializer.Serialize(bad.Value)}");
+        Assert.Equal(RemoteWorkItemStatus.Backlog, (await mgr.GetWorkItemAsync(id))!.Status);
+    }
+
     /// <summary>
     /// Give the item a run the engine still considers alive — the case the
     /// board move deliberately does not cover.
     /// </summary>
     private static void SeedLiveRun(TestDb db, string workItemId)
+        => SeedRun(db, workItemId, LoopRunStatus.WaitingHuman, completed: false);
+
+    private static void SeedRun(TestDb db, string workItemId, LoopRunStatus status, bool completed)
     {
         var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
         var ltv = new LoopTemplateVersion
@@ -143,8 +166,9 @@ public class WorkItemsControllerTransitionTests
             Id = Guid.NewGuid(),
             WorkItemId = workItemId,
             LoopTemplateVersionId = ltv.Id,
-            Status = LoopRunStatus.WaitingHuman,
+            Status = status,
             StartedAt = DateTime.UtcNow,
+            CompletedAt = completed ? DateTime.UtcNow : null,
         });
         db.Context.SaveChanges();
     }
