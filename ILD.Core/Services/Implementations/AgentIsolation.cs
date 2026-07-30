@@ -237,13 +237,15 @@ public static class AgentIsolation
     /// wrong for any child that is not this orchestrator, and wrong silently.
     ///
     /// <para>
-    /// A nested ILD (a Worktree Preview of this repository) that inherits them
-    /// concludes uid isolation is on and routes its own agent launches through
-    /// <c>setpriv --reuid</c> without holding <c>CAP_SETUID</c>, and it points its
-    /// orchestrator-private root at the outer instance's — the directory holding the
-    /// git askpass helper that is handed to git as <c>GIT_ASKPASS</c> with a
-    /// repository token in its environment. Both uids being the same means the
-    /// collision produces no error, just an overwrite.
+    /// The demonstration is a child that reads the same names ILD does — in
+    /// practice a Worktree Preview of an ILD. It concludes uid isolation is on and
+    /// routes its own agent launches through <c>setpriv --reuid</c> without holding
+    /// <c>CAP_SETUID</c>, and it points its orchestrator-private root at the outer
+    /// instance's, the directory holding the git askpass helper that is handed to
+    /// git as <c>GIT_ASKPASS</c> with a repository token in its environment. Both
+    /// uids being the same means the collision produces no error, just an
+    /// overwrite. That shape is rare; the rule is not, which is why these are
+    /// removed for every child rather than for the one that visibly breaks.
     /// </para>
     /// </summary>
     public static IReadOnlyCollection<string> OrchestratorTopologyEnvKeys { get; } =

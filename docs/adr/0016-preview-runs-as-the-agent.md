@@ -30,19 +30,29 @@ read back the exact values the uid split exists to withhold from it, with a
 `"public": true` service on the wildcard preview host as a ready exfiltration
 channel.
 
+Note that a previewed app never had to _read_ any of those names to be a problem.
+The leak is to the shell command in `ild.config.json`, which runs with all of them
+in `env` — so a debug `printenv`, a crash reporter that captures the environment,
+or any script that forwards it carried them out of the boundary regardless of what
+the application itself reads.
+
 **The orchestrator's own runtime topology reached it too**, which is a different
 category: `ILD_AGENT_USER`, `ILD_AGENT_GROUP`, `ILD_AGENT_HOME`,
 `ILD_AGENT_SCRATCH_ROOT` and `ILD_ORCHESTRATOR_PRIVATE_ROOT` are not secret, they
 are simply wrong for any child that is not this orchestrator — and wrong
-silently. A nested ILD (previewing this repository inside itself) inherited
-`ILD_AGENT_USER=agent`, concluded uid isolation was on, and routed its own
-interactive provider terminal through `setpriv --reuid=agent` without holding
-`CAP_SETUID`, dying with `setpriv: setresuid failed: Operation not permitted`.
-Sharper still, it pointed its orchestrator-private root at the outer instance's,
-where the git askpass helper lives — the script handed to git as `GIT_ASKPASS`
-with a repository token in its environment. Both instances run as the same uid,
-so the collision raised no permission error; the inner instance simply overwrote
-the outer's helper.
+silently. The clearest demonstration is an app that reads the same names ILD does,
+which in practice means previewing an ILD: this repository's own profile boots
+one, and it inherited `ILD_AGENT_USER=agent`, concluded uid isolation was on, and
+routed its own interactive provider terminal through `setpriv --reuid=agent`
+without holding `CAP_SETUID`, dying with
+`setpriv: setresuid failed: Operation not permitted`. Sharper still, it pointed
+its orchestrator-private root at the outer instance's, where the git askpass
+helper lives — the script handed to git as `GIT_ASKPASS` with a repository token
+in its environment. Both instances run as the same uid, so the collision raised no
+permission error; the inner instance simply overwrote the outer's helper. That
+nested case is a developer's scenario rather than a common one, and it is here as
+the sharpest available evidence of a general rule: a child that is not this
+orchestrator has no business being handed this orchestrator's identity.
 
 **Cross-uid builds failed outright.** A preview building as `ild` in a worktree
 the agent had already built in as `agent` hit `MSB3021` (the destination
@@ -70,12 +80,13 @@ tree is the cause; one uid removes the class.
   after. What is removed is therefore only ever what was _inherited_: a preview
   that legitimately needs one of these names sets it in `ild.config.json` or the
   repository's encrypted preview `.env`, and that value survives — pointed at the
-  preview's own infrastructure rather than the orchestrator's. That is what makes
-  a preview of an ILD-shaped app possible at all, and it is why the three
-  per-service workarounds this repository carried (`ILD_AGENT_USER: ""`,
+  preview's own infrastructure rather than the orchestrator's. Refusing to inherit
+  is not the same as refusing to be configured, and keeping those separate is what
+  makes the strip safe to apply to every repository by default. It is also why the
+  three per-service workarounds this repository carried (`ILD_AGENT_USER: ""`,
   `ILD_ORCHESTRATOR_PRIVATE_ROOT`, `ILD_AGENT_SCRATCH_ROOT`) are gone: the
-  behaviour they bought is now the default for every repository, which is where it
-  belongs.
+  behaviour they bought belongs to every preview, not to one repository that
+  happened to discover it needed it.
 - **Preview state moves from the orchestrator-private root to the shared scratch
   root.** Logs and the npm cache are now written by the agent and read by the
   orchestrator, which is exactly what that setgid, shared-group, default-ACL tree
@@ -115,17 +126,21 @@ tree is the cause; one uid removes the class.
   created would be owned by a uid the agent is not, and the agent's own
   `npm install -g` would fail on it.
 
-- **A preview that needs a database must be given one.** Previously it silently
-  attached to the orchestrator's, which is how a preview of this repository came
-  up as a second ILD instance pointed at the live database — its
-  `workitem-server.log` shows it sweeping real `WorkItems` for stale heartbeats. A
-  preview now gets no connection string unless its repository's preview `.env` or
-  its `ild.config.json` supplies one. Whether previewing ILD _should_ reach real
-  infrastructure at all is a separate question; this makes the connection explicit
+- **A preview that needs configuration must be given it.** This is the one
+  migration cost, and it falls on any existing profile whose service came up on
+  values nobody wrote down: those values were the orchestrator's, and are now
+  absent. A database connection string is the usual case. The failure mode it
+  removes is worth the churn — an app reading one of ILD's names silently attached
+  to ILD's own database, which is how a preview of this repository came up as a
+  second instance pointed at the live one, its `workitem-server.log` showing it
+  sweeping real `WorkItems` for stale heartbeats. Whether a preview _should_ reach
+  real infrastructure is a separate question; this makes the connection explicit
   and configurable rather than automatic.
 
 - **`$HOME` is the agent's, but the credential store behind it is still shared —
-  deliberately.** The agent home's dotdirs are symlinks into the
+  deliberately.** This only matters for a preview that runs an agent CLI of its
+  own, which in practice means previewing an ILD. The agent home's dotdirs are
+  symlinks into the
   `/home/ild/.agent-config` store, so a nested ILD preview's Claude session opens
   already logged in against the outer instance's credentials, and can write that
   store. A clean-room preview would mean scoping `HOME` to the preview's own state

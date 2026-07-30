@@ -1397,11 +1397,11 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// tokens, and the variables describing this process's identity and private
     /// directories. Stripping happens before the resolved step's environment is
     /// applied, never after, so what it removes is only ever what was
-    /// <em>inherited</em>. A preview that legitimately needs one of those names —
-    /// this repository's own profile previews an ILD, which needs a database of its
-    /// own — sets it in <c>ild.config.json</c> or the repository's preview
-    /// <c>.env</c> and that value survives, pointed wherever the config points it
-    /// rather than at the orchestrator's.
+    /// <em>inherited</em>: refusing to inherit is not refusing to be configured. A
+    /// preview that legitimately needs one of those names sets it in
+    /// <c>ild.config.json</c> or the repository's preview <c>.env</c>, and that
+    /// value survives — pointed wherever the config points it rather than at the
+    /// orchestrator's.
     /// </para>
     /// </summary>
     private ProcessStartInfo BuildPreviewProcess(ResolvedStep resolved)
