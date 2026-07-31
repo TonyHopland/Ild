@@ -40,10 +40,9 @@ ILD has.
 - The drain **waits** for the driving loops, and that wait is the feature rather
   than a courtesy. The park is written before the agent process is killed, but
   the interrupted-node bookkeeping happens as the loop unwinds; a process that
-  exited first would leave the half-written state this removes. Hence the
-  budget nesting `ILD_SHUTDOWN_DRAIN_SECONDS < host shutdown timeout <
-supervisor grace period`, documented in
-  [configuration.md](../configuration.md#graceful-shutdown).
+  exited first would leave the half-written state this removes. Hence the budget
+  nesting — drain < host shutdown timeout < supervisor grace period — documented
+  in [configuration.md](../configuration.md#graceful-shutdown).
 - A shutdown park makes **no work-item transition**. Leaving the item `Running`
   on the server is what lets the startup reconciler recognise the run as still
   ours; moving it to `HumanFeedback` would both ask a person for something and
