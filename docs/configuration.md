@@ -131,7 +131,6 @@ The repository's own `ild.config.json` defines an `app` profile that boots three
             "port": "workitem-server",
             "env": {
               "WORKITEM_DATA_PATH": "${STATE_DIR}/workitem-data",
-              "WORKITEM_API_KEYS": "preview-api-key",
               "ASPNETCORE_URLS": "http://${HOST}:${PORT}"
             },
             "healthUrl": "http://127.0.0.1:${PORT}/health"
@@ -147,7 +146,6 @@ The repository's own `ild.config.json` defines an `app` profile that boots three
               "ILD_DATA_PATH": "${STATE_DIR}/data",
               "ILD_WORKTREES_PATH": "${STATE_DIR}/worktrees",
               "ILD_WORKITEM_SERVER_URL": "http://127.0.0.1:${PORT:workitem-server}",
-              "ILD_WORKITEM_SERVER_API_KEY": "preview-api-key",
               "ASPNETCORE_URLS": "http://${HOST}:${PORT}"
             },
             "healthUrl": "http://127.0.0.1:${PORT}/api/v1/health"
@@ -173,6 +171,89 @@ The repository's own `ild.config.json` defines an `app` profile that boots three
 ```
 
 `app` runs Vite, which rejects requests whose `Host` it does not recognise, so it keeps the default `"rewriteHost": true` and sees the request as if it arrived on its own loopback port. The value is spelled out here only to show the field; omitting it means the same thing.
+
+### What a preview process runs as
+
+Your preview is a foreign application, and ILD treats it as one. Under
+[agent uid isolation](#agent-uid-isolation) a preview's install steps and
+services run as the **`agent`** user — the same user the coding agent runs as, and
+not the one ILD itself runs as — with an environment ILD builds rather than one
+they inherit wholesale ([ADR-0016](adr/0016-preview-runs-as-the-agent.md)). With
+`AGENT_USER` empty the container is single-uid and everything runs as the runtime
+user, exactly as before.
+
+Worth keeping in view throughout this section: `ild.config.json` lives in the
+worktree, so the coding agent working on that work item can edit the commands a
+preview runs, and can start a preview itself through the ILD MCP tools. Whatever a
+preview process is given, an agent-authored command can read.
+
+Three things follow that are worth knowing when you write a profile:
+
+- **Files your preview creates are owned by `agent`**, the same user that owns
+  everything the coding agent wrote in the worktree. This is what lets a preview
+  build in a worktree the agent has already built in — a build that spans two
+  users fails on ownership-gated operations no permission scheme can fix (see
+  [Troubleshooting](troubleshooting.md)).
+
+- **Your commands do not see ILD's own secrets.** ILD removes them from the
+  environment before your command runs: both of its database connection strings,
+  `ILD_SECRET_KEY`, `ILD_PASSWORD`, `ILD_USERNAME`, the API tokens it uses to
+  reach itself and the WorkItem Server, and anything you have named in
+  `ILD_AGENT_ENV_DENYLIST`. It also removes the five variables describing its own
+  uid topology (`ILD_AGENT_USER`, `ILD_AGENT_GROUP`, `ILD_AGENT_HOME`,
+  `ILD_AGENT_SCRATCH_ROOT`, `ILD_ORCHESTRATOR_PRIVATE_ROOT`), which describe the
+  ILD process and are wrong for anything else. Everything else is inherited as
+  before. This matters even if your app reads none of those names, because your
+  _shell command_ still ran with them in `env` — one debug `printenv`, a crash
+  reporter that captures the environment, or a script that forwards it somewhere
+  was enough to carry them out.
+
+- **`${STATE_DIR}` lives under the shared scratch root** (`/tmp/ild-agent-scratch`
+  by default), because your preview writes there and now does so as `agent`. It is
+  still per-worktree and still discarded with the container. Your service's **log
+  file is not** in it: ILD opens, appends to and serves those itself, so they stay
+  in a directory only ILD can reach. Read them through the Preview tab or
+  `get_preview_logs` rather than by path — if your service wants a log file of its
+  own to manage, put that under `${STATE_DIR}`.
+
+### Giving a preview its own configuration
+
+Nothing is inherited on your behalf, so anything your app needs — a database URL,
+an API key, a bucket name — you supply, in the repository's encrypted preview
+`.env` (Repositories page, or a work item's **Preview** tab) or in a service's
+`env` block. The `.env` is the better of the two for a credential: it is stored
+encrypted, never written into the worktree, and never returned through the agent
+API, so it does not end up committed to your repository or readable straight out
+of ILD.
+
+**It is not a vault, though, and the difference matters.** ILD injects the `.env`
+into every preview process, which is the whole point of it — and the commands
+those processes run come from `ild.config.json`, which the coding agent writes. An
+install step of `env > leak.txt` hands the values back, exactly the way it would
+have handed back ILD's own secrets before this release. So the rule is the same
+one that governs the credentials on your laptop: **scope what you put here to the
+preview's own infrastructure.** A throwaway database, a sandbox API key, a bucket
+you would not mind someone emptying. Not production, and not a credential that
+also unlocks something else.
+
+Removing a name from what is _inherited_ does not stop you setting it
+deliberately. The strip runs before your values are applied, so anything you set
+wins — including one of ILD's own names, if your app genuinely uses it. Point it
+at your own infrastructure rather than expecting ILD's.
+
+This is the only migration step for an existing profile: if a service used to come
+up without configuration you never wrote down, it was reading ILD's, and it now
+needs its own.
+
+**Previewing an ILD-shaped app.** If the application you are previewing reads the
+same `ILD_*` variables ILD does — in practice, ILD itself; this repository's own
+profile boots one — it is now cleanly separated from the outer instance rather
+than quietly sharing its identity, private directories and database. Give it its
+own `ILD_DB_CONNECTION_STRING` and `WORKITEM_DB_CONNECTION_STRING`; a second ILD
+runs its background services for real and would otherwise act on the outer
+instance's work items. `HOME` remains the shared agent home, so an agent CLI
+inside the preview is already logged in against the same credential store —
+[ADR-0016](adr/0016-preview-runs-as-the-agent.md) records why that is deliberate.
 
 ## Build-time container options
 
@@ -220,7 +301,9 @@ lower-trust agent uid never sees them. If you introduce additional secret
 environment variables that the orchestrator reads but the agent must not, list
 their names (comma-separated) in `ILD_AGENT_ENV_DENYLIST` and they are stripped
 too. The agent's git commit identity (`GIT_AUTHOR_*`/`GIT_COMMITTER_*`) and any
-provider API key an adapter passes to the CLI are kept.
+provider API key an adapter passes to the CLI are kept. The same denylist governs
+what a Worktree Preview's processes inherit — see
+[What a preview process runs as](#what-a-preview-process-runs-as).
 
 The coding agents (Pi, OpenCode, Claude Code, GitHub Copilot) are **not** baked into the image.
 They install on demand onto the persistent `/data` volume and are updated there

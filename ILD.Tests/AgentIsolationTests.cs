@@ -47,6 +47,34 @@ public class AgentIsolationTests
     }
 
     [Fact]
+    public void The_privilege_drop_tool_is_an_absolute_path_everywhere()
+    {
+        // setpriv is the binary that performs the drop, so whoever controls its
+        // resolution controls whether the drop happens at all. .NET resolves a bare
+        // FileName against the CHILD environment's PATH — and both a Worktree
+        // Preview's children and the orchestrator's own process PATH include an
+        // agent-writable npm bin directory (ADR-0016). A planted `setpriv` there
+        // would be exec'd in place of the real one, as the orchestrator, with the
+        // ambient CAP_SETUID still held because nothing dropped it: an escalation
+        // wearing the name of the guard against it. Pin every path that names it.
+        var psi = BuildPsi();
+        AgentIsolation.Route(psi, agentUser: "agent", agentGroup: "agent", agentHome: "/home/agent");
+        Assert.True(Path.IsPathRooted(psi.FileName), $"Route: '{psi.FileName}' is not absolute");
+
+        var dropped = BuildPsi();
+        AgentIsolation.DropInheritedCapabilities(dropped, agentUser: "agent");
+        Assert.True(Path.IsPathRooted(dropped.FileName), $"DropInheritedCapabilities: '{dropped.FileName}' is not absolute");
+
+        var routed = AgentIsolation.RouteCommand("claude", Array.Empty<string>(),
+            agentUser: "agent", agentGroup: "agent", agentHome: "/home/agent");
+        Assert.True(Path.IsPathRooted(routed.FileName), $"RouteCommand: '{routed.FileName}' is not absolute");
+
+        // And it is where the image actually puts it, so the absolute path is not
+        // merely absolute but correct.
+        Assert.Equal("/usr/bin/setpriv", psi.FileName);
+    }
+
+    [Fact]
     public void Route_is_noop_when_agent_user_is_blank()
     {
         var psi = BuildPsi();
@@ -74,7 +102,7 @@ public class AgentIsolationTests
 
         AgentIsolation.Route(psi, agentUser: "agent", agentGroup: "agent", agentHome: "/home/agent");
 
-        Assert.Equal("setpriv", psi.FileName);
+        Assert.Equal("/usr/bin/setpriv", psi.FileName);
         Assert.Equal(new[]
         {
             "--reuid=agent",
@@ -183,7 +211,7 @@ public class AgentIsolationTests
 
         AgentIsolation.Route(psi, agentUser: "agent", agentGroup: null, agentHome: null);
 
-        Assert.Equal("setpriv", psi.FileName);
+        Assert.Equal("/usr/bin/setpriv", psi.FileName);
         Assert.Contains("--regid=agent", psi.ArgumentList);
         psi.Environment.TryGetValue("HOME", out var homeAfter);
         Assert.Equal(originalHome, homeAfter);
@@ -426,7 +454,7 @@ public class AgentIsolationTests
 
         AgentIsolation.DropInheritedCapabilities(psi, agentUser: "agent");
 
-        Assert.Equal("setpriv", psi.FileName);
+        Assert.Equal("/usr/bin/setpriv", psi.FileName);
         Assert.Equal(new[]
         {
             "--inh-caps=-all",
@@ -460,7 +488,7 @@ public class AgentIsolationTests
         var routed = AgentIsolation.RouteCommand("/data/agents/claude-code/bin/claude",
             Array.Empty<string>(), agentUser: "agent", agentGroup: "agent", agentHome: "/home/agent");
 
-        Assert.Equal("setpriv", routed.FileName);
+        Assert.Equal("/usr/bin/setpriv", routed.FileName);
         Assert.Equal(new[]
         {
             "--reuid=agent",
@@ -515,6 +543,147 @@ public class AgentIsolationTests
 
         Assert.Throws<InvalidOperationException>(
             () => AgentIsolation.Route(psi, agentUser: "agent", agentGroup: "agent", agentHome: null));
+    }
+
+    [Theory]
+    [InlineData("agent", "/home/agent", "/home/agent")]
+    [InlineData("agent", null, null)]        // routed, but the crossing leaves HOME alone
+    [InlineData("agent", "  ", null)]        // blank is unset throughout AgentIsolation
+    [InlineData(null, "/home/agent", null)]  // isolation off: a configured home is inert
+    public void ResolveChildHome_answers_what_the_crossing_does_to_HOME(string? user, string? home, string? expected)
+    {
+        // The single owner of the rule: Route applies this answer, and callers that
+        // derive paths from where the child's HOME ends up (the preview's npm
+        // prefix) read the same one instead of re-deriving it. The two middle cases
+        // are why — a user without a home is routed but keeps the inherited HOME,
+        // so anything hung off it has to fall back with it.
+        Assert.Equal(expected, AgentIsolation.ResolveChildHome(user, home));
+    }
+
+    [Fact]
+    public void Route_leaves_HOME_alone_when_no_agent_home_is_configured()
+    {
+        var psi = BuildPsi();
+        psi.Environment.TryGetValue("HOME", out var originalHome);
+
+        AgentIsolation.Route(psi, agentUser: "agent", agentGroup: "agent", agentHome: null);
+
+        psi.Environment.TryGetValue("HOME", out var home);
+        Assert.Equal(originalHome, home);
+        Assert.Equal("/usr/bin/setpriv", psi.FileName);
+    }
+
+    [Fact]
+    public void StripOrchestratorEnvironment_removes_every_secret_and_topology_variable()
+    {
+        // Seeded straight onto the psi rather than onto the process: the strip is a
+        // psi transform, and ILD_AGENT_USER in particular cannot be set
+        // process-wide without turning isolation on for the whole test host — the
+        // thing TestEnvironmentBaseline exists to prevent. The preview-level tests
+        // then prove the wiring end-to-end with variables that are inert here.
+        var psi = new ProcessStartInfo("/bin/sh");
+        psi.ArgumentList.Add("-lc");
+        psi.ArgumentList.Add("env");
+
+        var scrubbed = AgentIsolation.SecretEnvironmentKeys
+            .Concat(AgentIsolation.OrchestratorTopologyEnvKeys)
+            .ToArray();
+        foreach (var key in scrubbed)
+            psi.Environment[key] = "inherited-" + key;
+
+        AgentIsolation.StripOrchestratorEnvironment(psi);
+
+        Assert.Equal(Array.Empty<string>(), scrubbed.Where(psi.Environment.ContainsKey).ToArray());
+    }
+
+    [Fact]
+    public void StripOrchestratorEnvironment_covers_the_nine_orchestrator_secrets()
+    {
+        // Pinned by name. These are the values a preview command could otherwise
+        // read straight out of `env` — the DB strings, the encryption-at-rest key,
+        // the bootstrap credentials and the orchestrator's own API tokens — so a
+        // new one being added to the app without being added here is the
+        // regression this guards.
+        Assert.Equal(new[]
+        {
+            "ILD_AGENT_TOKEN",
+            "ILD_API_TOKEN",
+            "ILD_DB_CONNECTION_STRING",
+            "ILD_PASSWORD",
+            "ILD_SECRET_KEY",
+            "ILD_USERNAME",
+            "WORKITEM_API_KEYS",
+            "WORKITEM_DB_CONNECTION_STRING",
+            "ILD_WORKITEM_SERVER_API_KEY",
+        }.OrderBy(k => k, StringComparer.Ordinal),
+        AgentIsolation.SecretEnvironmentKeys.OrderBy(k => k, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void StripOrchestratorEnvironment_names_the_five_topology_variables()
+    {
+        Assert.Equal(new[]
+        {
+            AgentIsolation.AgentUserEnvVar,
+            AgentIsolation.AgentGroupEnvVar,
+            AgentIsolation.AgentHomeEnvVar,
+            AgentIsolation.ScratchRootEnvVar,
+            AgentIsolation.PrivateRootEnvVar,
+        }.OrderBy(k => k, StringComparer.Ordinal),
+        AgentIsolation.OrchestratorTopologyEnvKeys.OrderBy(k => k, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void StripOrchestratorEnvironment_leaves_everything_else_alone()
+    {
+        // The scrub is by exact name, not by pattern: a preview's own secrets and
+        // the git commit identity travel on the same environment under different
+        // names and must survive.
+        var psi = new ProcessStartInfo("/bin/sh");
+        psi.Environment["ILD_PI_PROVIDER_API_KEY"] = "agents-own-key";
+        psi.Environment["GIT_AUTHOR_NAME"] = "ILD";
+        psi.Environment["ILD_DATA_PATH"] = "/data";
+
+        AgentIsolation.StripOrchestratorEnvironment(psi);
+
+        Assert.Equal("agents-own-key", psi.Environment["ILD_PI_PROVIDER_API_KEY"]);
+        Assert.Equal("ILD", psi.Environment["GIT_AUTHOR_NAME"]);
+        Assert.Equal("/data", psi.Environment["ILD_DATA_PATH"]);
+    }
+
+    [Fact]
+    public void StripOrchestratorEnvironment_does_not_change_the_command()
+    {
+        // It scrubs the environment and nothing else — the uid/capability decision
+        // stays with Route/DropInheritedCapabilities, which callers apply
+        // separately.
+        var psi = new ProcessStartInfo("/bin/sh");
+        psi.ArgumentList.Add("-lc");
+        psi.ArgumentList.Add("npm run dev");
+
+        AgentIsolation.StripOrchestratorEnvironment(psi);
+
+        Assert.Equal("/bin/sh", psi.FileName);
+        Assert.Equal(new[] { "-lc", "npm run dev" }, psi.ArgumentList);
+    }
+
+    [Fact]
+    public void DropInheritedCapabilities_leaves_the_environment_untouched()
+    {
+        // ProcessRunner (git, npm) and AIProviderService.RunShellAsync share this
+        // helper, and a Cmd node may legitimately rely on the inherited
+        // environment. Folding the preview's scrub in here would change both
+        // silently, so the two concerns stay separate helpers (ADR-0016).
+        var psi = new ProcessStartInfo("/bin/sh");
+        psi.ArgumentList.Add("-lc");
+        psi.ArgumentList.Add("git status");
+        psi.Environment["ILD_DB_CONNECTION_STRING"] = "Host=db";
+        psi.Environment[AgentIsolation.PrivateRootEnvVar] = "/tmp/private";
+
+        AgentIsolation.DropInheritedCapabilities(psi, agentUser: "agent");
+
+        Assert.Equal("Host=db", psi.Environment["ILD_DB_CONNECTION_STRING"]);
+        Assert.Equal("/tmp/private", psi.Environment[AgentIsolation.PrivateRootEnvVar]);
     }
 
     [Fact]

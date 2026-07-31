@@ -16,7 +16,9 @@ namespace ILD.Core.Services.Implementations;
 ///   <item><b>Keeping the orchestrator's capabilities away from agent-authored
 ///   code</b> — <see cref="DropInheritedCapabilities(ProcessStartInfo)"/>, for the
 ///   orchestrator-side commands (preview, git, npm) whose input the agent
-///   controls.</item>
+///   controls, and <see cref="StripOrchestratorEnvironment(ProcessStartInfo)"/>
+///   for the ones that must not inherit the orchestrator's secrets or its own
+///   runtime topology either.</item>
 ///   <item><b>Placing files both uids must share</b> — <see cref="ScratchRoot"/>,
 ///   the directory whose group/setgid setup lets the two uids hand files back and
 ///   forth, and <see cref="ProtectFromAgentWrites(string)"/> /
@@ -80,9 +82,20 @@ public static class AgentIsolation
     /// </summary>
     public const string SecretEnvDenylistEnvVar = "ILD_AGENT_ENV_DENYLIST";
 
-    // The privilege-drop tool. Bare name resolved on PATH (/usr/bin/setpriv,
-    // shipped by util-linux in the image).
-    private const string SetprivCommand = "setpriv";
+    // The privilege-drop tool, by absolute path. Shipped by util-linux in the
+    // image (Dockerfile installs it explicitly), so the location is ours to fix.
+    //
+    // It must NOT be a bare name resolved on PATH. This is the binary that both
+    // crossings and DropInheritedCapabilities exec, so whoever controls its
+    // resolution controls whether the drop happens at all — and .NET resolves a
+    // bare FileName against the PATH of the *child* environment, which for a
+    // Worktree Preview leads with an agent-writable npm bin directory. A planted
+    // `setpriv` there would be exec'd in place of the real one, as the
+    // orchestrator, with the ambient capabilities still held because nothing ever
+    // dropped them: exactly the escalation the wrap exists to prevent, wearing its
+    // name. An absolute path removes the resolution step and with it the whole
+    // class.
+    private const string SetprivCommand = "/usr/bin/setpriv";
 
     // Orchestrator-only secrets that must never reach the agent uid — the DB
     // connection strings, the encryption-at-rest key, the bootstrap password, and
@@ -119,13 +132,45 @@ public static class AgentIsolation
     public static string? AgentUser => NonEmpty(Environment.GetEnvironmentVariable(AgentUserEnvVar));
 
     /// <summary>
-    /// The agent user's home, or <c>null</c> when unset. Deliberately not public:
-    /// setting <c>HOME</c> is half of crossing to the agent uid, so both
-    /// <see cref="Route(ProcessStartInfo)"/> and
-    /// <see cref="RouteCommand(string, IReadOnlyList{string})"/> apply it
-    /// themselves rather than leaving callers to remember it.
+    /// The group for the drop's <c>--regid</c>, or <c>null</c> when unset (in which
+    /// case the crossing defaults it to the agent user's own name).
     /// </summary>
-    private static string? AgentHome => NonEmpty(Environment.GetEnvironmentVariable(AgentHomeEnvVar));
+    public static string? AgentGroup => NonEmpty(Environment.GetEnvironmentVariable(AgentGroupEnvVar));
+
+    /// <summary>
+    /// The configured agent home, or <c>null</c> when unset. Callers deciding what a
+    /// crossing does to <c>HOME</c> want <see cref="ResolveChildHome"/>, not this —
+    /// a home configured while <c>ILD_AGENT_USER</c> is not is inert.
+    /// </summary>
+    public static string? AgentHome => NonEmpty(Environment.GetEnvironmentVariable(AgentHomeEnvVar));
+
+    /// <summary>
+    /// The <c>HOME</c> a routed child actually runs with, or <c>null</c> when the
+    /// crossing leaves <c>HOME</c> alone — because isolation is off, or because no
+    /// agent home is configured.
+    ///
+    /// <para>
+    /// This is the single owner of that rule. <see cref="Route(ProcessStartInfo, string?, string?, string?)"/>
+    /// and <see cref="RouteCommand(string, IReadOnlyList{string}, string?, string?, string?)"/>
+    /// apply it as part of the crossing, so no launch site has to remember to; and
+    /// callers that must <em>derive paths</em> from where the child's <c>HOME</c>
+    /// ends up read the same answer here rather than re-deriving it. The Worktree
+    /// Preview is the reason it is public: it points <c>NPM_CONFIG_PREFIX</c> at
+    /// <c>$HOME/.local</c>, and a prefix computed from a different rule than the one
+    /// that set <c>HOME</c> would send <c>npm install -g</c> somewhere the uid
+    /// running it cannot write (ADR-0016).
+    /// </para>
+    ///
+    /// <para>
+    /// A crossing configured with a user but no home is a real, if odd, shape — the
+    /// container's entrypoint always exports the two together, but the parameters
+    /// are independent. It resolves to <c>null</c>: the child keeps whatever
+    /// <c>HOME</c> it inherited, which is the pre-isolation behaviour and is what
+    /// every path derived from it must also fall back to.
+    /// </para>
+    /// </summary>
+    public static string? ResolveChildHome(string? agentUser, string? agentHome)
+        => NonEmpty(agentUser) is null ? null : NonEmpty(agentHome);
 
     /// <summary>
     /// Rewrite <paramref name="psi"/> in place so its command runs as the
@@ -138,10 +183,7 @@ public static class AgentIsolation
     /// <c>setpriv</c> inherits all three and passes them through to the agent.
     /// </summary>
     public static ProcessStartInfo Route(ProcessStartInfo psi)
-        => Route(psi,
-            AgentUser,
-            NonEmpty(Environment.GetEnvironmentVariable(AgentGroupEnvVar)),
-            NonEmpty(Environment.GetEnvironmentVariable(AgentHomeEnvVar)));
+        => Route(psi, AgentUser, AgentGroup, AgentHome);
 
     /// <summary>
     /// The wrap primitive with explicit parameters — the env-based
@@ -157,13 +199,12 @@ public static class AgentIsolation
         if (user is null) return psi;
 
         var group = NonEmpty(agentGroup) ?? user;
-        var home = NonEmpty(agentHome);
 
         // The agent resolves its login/config state from $HOME. Point it at the
         // agent user's home so it reads the shared credential store through that
         // home's symlinks (and can freely create its own ~/.cache etc.) instead
         // of the orchestrator's home, which it cannot write to.
-        if (home is not null)
+        if (ResolveChildHome(user, agentHome) is { } home)
             psi.Environment["HOME"] = home;
 
         // .NET copied the orchestrator's whole environment onto the psi, secrets
@@ -198,6 +239,67 @@ public static class AgentIsolation
                 keys.Add(name);
         }
         return keys;
+    }
+
+    /// <summary>
+    /// The variables that describe <em>this</em> orchestrator process's identity and
+    /// its private directories, exported by the container entrypoint. Unlike
+    /// <see cref="SecretEnvironmentKeys"/> these are not secret — they are simply
+    /// wrong for any child that is not this orchestrator, and wrong silently.
+    ///
+    /// <para>
+    /// The demonstration is a child that reads the same names ILD does — in
+    /// practice a Worktree Preview of an ILD. It concludes uid isolation is on and
+    /// routes its own agent launches through <c>setpriv --reuid</c> without holding
+    /// <c>CAP_SETUID</c>, and it points its orchestrator-private root at the outer
+    /// instance's, the directory holding the git askpass helper that is handed to
+    /// git as <c>GIT_ASKPASS</c> with a repository token in its environment. Both
+    /// uids being the same means the collision produces no error, just an
+    /// overwrite. That shape is rare; the rule is not, which is why these are
+    /// removed for every child rather than for the one that visibly breaks.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyCollection<string> OrchestratorTopologyEnvKeys { get; } =
+    [
+        AgentUserEnvVar,
+        AgentGroupEnvVar,
+        AgentHomeEnvVar,
+        ScratchRootEnvVar,
+        PrivateRootEnvVar,
+    ];
+
+    /// <summary>
+    /// Remove everything a child inherits by accident rather than by decision: the
+    /// orchestrator's secrets (<see cref="SecretEnvironmentKeys"/>) and its own
+    /// runtime topology (<see cref="OrchestratorTopologyEnvKeys"/>). .NET
+    /// pre-populates a child's environment from the current process, so an
+    /// unprepared <see cref="ProcessStartInfo"/> hands both over verbatim.
+    ///
+    /// <para>
+    /// This is deliberately <em>not</em> folded into
+    /// <see cref="DropInheritedCapabilities(ProcessStartInfo)"/>. That helper also
+    /// wraps <c>ProcessRunner</c> (git, npm) and <c>AIProviderService.RunShellAsync</c>
+    /// (Cmd nodes), where a user's command may legitimately rely on the inherited
+    /// environment; scrubbing there would change those silently. Callers that must
+    /// not inherit say so by name.
+    /// </para>
+    ///
+    /// <para>
+    /// Call it <em>before</em> layering the child's own environment on, not after:
+    /// stripping is about what was inherited, and a value the caller set
+    /// deliberately — a Worktree Preview's <c>ild.config.json</c> supplying its own
+    /// database connection string, say — has to survive.
+    /// </para>
+    /// </summary>
+    public static ProcessStartInfo StripOrchestratorEnvironment(ProcessStartInfo psi)
+    {
+        foreach (var key in SecretEnvironmentKeys)
+            psi.Environment.Remove(key);
+
+        foreach (var key in OrchestratorTopologyEnvKeys)
+            psi.Environment.Remove(key);
+
+        return psi;
     }
 
     /// <summary>
@@ -245,10 +347,7 @@ public static class AgentIsolation
     /// its CLI through a PTY. Returns the command unchanged when isolation is off.
     /// </summary>
     public static AgentCommand RouteCommand(string fileName, IReadOnlyList<string> arguments)
-        => RouteCommand(fileName, arguments,
-            AgentUser,
-            NonEmpty(Environment.GetEnvironmentVariable(AgentGroupEnvVar)),
-            AgentHome);
+        => RouteCommand(fileName, arguments, AgentUser, AgentGroup, AgentHome);
 
     /// <inheritdoc cref="RouteCommand(string, IReadOnlyList{string})"/>
     public static AgentCommand RouteCommand(
@@ -274,7 +373,7 @@ public static class AgentIsolation
         // credentials into the orchestrator's home and every later run would read
         // as logged-out, the exact failure routing the terminal to the agent uid
         // exists to prevent.
-        if (NonEmpty(agentHome) is { } home)
+        if (ResolveChildHome(user, agentHome) is { } home)
             environment["HOME"] = home;
 
         // Secrets: a PTY child inherits the orchestrator's environment and the
