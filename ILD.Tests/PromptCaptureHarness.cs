@@ -5,17 +5,44 @@ using ILD.Data.DTOs;
 
 namespace ILD.Tests;
 
+/// <summary>How a CLI receives its prompt, and therefore where to record it.</summary>
+internal enum PromptCaptureMode
+{
+    /// <summary>Last on the command line (claude-code, opencode, copilot).</summary>
+    LastArgument,
+
+    /// <summary>Written to the process's standard input (pi).</summary>
+    StandardInput,
+}
+
 /// <summary>
-/// A stand-in coding-agent CLI that records the prompt argv it is launched with
-/// and then replays a minimal successful claude-code turn.
+/// A stand-in coding-agent CLI that records the prompt it is launched with and
+/// then replays a minimal successful turn in its CLI's own output shape.
 ///
 /// The prompt the agent process actually receives is the only place the whole
 /// prompt pipeline is observable from outside, so the templating tests assert
 /// against that rather than against any internal render hook — the assertions
-/// stay meaningful no matter which layer the rendering lives in.
+/// stay meaningful no matter which layer the rendering lives in. Asserting on
+/// an adapter's own <c>ResolvedPrompt</c> instead would not: an adapter sets it
+/// from the same field it launches with, so a re-render at the launch site
+/// would sail past.
 /// </summary>
 internal sealed class PromptCapturingCli : IDisposable
 {
+    /// <summary>Claude Code's `--output-format stream-json` turn.</summary>
+    public const string ClaudeCodeTurn =
+        "echo '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"sess-cap\"}'\n"
+        + "echo '{\"type\":\"assistant\",\"session_id\":\"sess-cap\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}}'\n"
+        + "echo '{\"type\":\"result\",\"session_id\":\"sess-cap\",\"is_error\":false,\"result\":\"ok\"}'\n";
+
+    /// <summary>Pi's JSONL session + assistant message.</summary>
+    public const string PiTurn =
+        "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-1\",\"cwd\":\"/tmp\"}'\n"
+        + "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ok\"}]}}'\n";
+
+    /// <summary>Exit 0 saying nothing — enough for opencode and copilot to succeed.</summary>
+    public const string SilentSuccess = "";
+
     private readonly string _capturePath;
 
     /// <summary>A real directory usable as the run's worktree.</summary>
@@ -23,21 +50,21 @@ internal sealed class PromptCapturingCli : IDisposable
 
     public string BinaryPath { get; }
 
-    public PromptCapturingCli()
+    public PromptCapturingCli(PromptCaptureMode capture = PromptCaptureMode.LastArgument, string turn = ClaudeCodeTurn)
     {
         WorkDir = Path.Combine(Path.GetTempPath(), $"ild-prompt-capture-{Guid.NewGuid():N}");
         Directory.CreateDirectory(WorkDir);
         _capturePath = Path.Combine(WorkDir, "captured-prompt.txt");
         BinaryPath = Path.Combine(WorkDir, "fake-agent.sh");
 
-        File.WriteAllText(BinaryPath,
-            "#!/bin/sh\n"
-            // Every CLI adapter puts the prompt last on the command line.
-            + "for a in \"$@\"; do last=\"$a\"; done\n"
-            + $"printf '%s' \"$last\" > '{_capturePath}'\n"
-            + "echo '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"sess-cap\"}'\n"
-            + "echo '{\"type\":\"assistant\",\"session_id\":\"sess-cap\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}}'\n"
-            + "echo '{\"type\":\"result\",\"session_id\":\"sess-cap\",\"is_error\":false,\"result\":\"ok\"}'\n");
+        var record = capture == PromptCaptureMode.LastArgument
+            ? "for a in \"$@\"; do last=\"$a\"; done\n"
+                + $"printf '%s' \"$last\" > '{_capturePath}'\n"
+            // The adapter closes stdin after writing the prompt, so this reads
+            // the whole prompt and terminates.
+            : $"cat > '{_capturePath}'\n";
+
+        File.WriteAllText(BinaryPath, "#!/bin/sh\n" + record + turn);
         Process.Start("chmod", "+x " + BinaryPath)!.WaitForExit();
     }
 

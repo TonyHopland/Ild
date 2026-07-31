@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
@@ -54,86 +53,57 @@ public class CliAdapterPromptPassThroughTests
             ExecutionCount: 1,
             Cancel: CancellationToken.None);
 
-    private static string CreateWorktree()
+    /// <summary>
+    /// Run one adapter against a fake CLI that records the prompt where that CLI
+    /// really receives it, and assert on the recording. <c>ResolvedPrompt</c> is
+    /// checked too, but only as a secondary: each adapter reports it from the
+    /// same field it launches with, so on its own it could not catch a re-render.
+    /// </summary>
+    private static async Task AssertPromptReachesTheProcessAsync(
+        IAgentAdapter adapter,
+        string providerType,
+        PromptCapturingCli cli)
     {
-        var path = Path.Combine(Path.GetTempPath(), $"ild-passthrough-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(path);
-        return path;
-    }
+        var result = await adapter.ExecuteAsync(Context(providerType, cli.BinaryPath, cli.WorkDir));
 
-    [Fact]
-    public async Task ClaudeCode_hands_the_prompt_to_the_agent_process_byte_for_byte()
-    {
-        using var cli = new PromptCapturingCli();
-
-        var result = await new ClaudeCodeAdapter().ExecuteAsync(
-            Context("claude-code", cli.BinaryPath, cli.WorkDir));
-
-        // The strongest form of the invariant: what the agent process was
-        // launched with is exactly what the caller handed the adapter.
         Assert.Equal(Prompt, cli.CapturedPrompt);
         Assert.True(result.Success);
         Assert.Equal(Prompt, result.ResolvedPrompt);
     }
 
     [Fact]
-    public async Task OpenCode_records_the_prompt_it_was_given_as_the_resolved_prompt()
+    public async Task ClaudeCode_hands_the_prompt_to_the_agent_process_byte_for_byte()
     {
-        var worktree = CreateWorktree();
-        try
-        {
-            var result = await new OpenCodeAdapter().ExecuteAsync(
-                Context("opencode", "/bin/true", worktree));
+        // The strongest form of the invariant: what the agent process was
+        // launched with is exactly what the caller handed the adapter.
+        using var cli = new PromptCapturingCli();
 
-            Assert.True(result.Success);
-            Assert.Equal(Prompt, result.ResolvedPrompt);
-        }
-        finally
-        {
-            Directory.Delete(worktree, true);
-        }
+        await AssertPromptReachesTheProcessAsync(new ClaudeCodeAdapter(), "claude-code", cli);
     }
 
     [Fact]
-    public async Task Copilot_records_the_prompt_it_was_given_as_the_resolved_prompt()
+    public async Task OpenCode_hands_the_prompt_to_the_agent_process_byte_for_byte()
     {
-        var worktree = CreateWorktree();
-        try
-        {
-            var result = await new CopilotAdapter().ExecuteAsync(
-                Context("copilot", "/bin/true", worktree));
+        using var cli = new PromptCapturingCli(turn: PromptCapturingCli.SilentSuccess);
 
-            Assert.True(result.Success);
-            Assert.Equal(Prompt, result.ResolvedPrompt);
-        }
-        finally
-        {
-            Directory.Delete(worktree, true);
-        }
+        await AssertPromptReachesTheProcessAsync(new OpenCodeAdapter(), "opencode", cli);
     }
 
     [Fact]
-    public async Task Pi_records_the_prompt_it_was_given_as_the_resolved_prompt()
+    public async Task Copilot_hands_the_prompt_to_the_agent_process_byte_for_byte()
     {
-        var worktree = CreateWorktree();
-        var scriptPath = Path.Combine(worktree, "fake-pi.sh");
-        File.WriteAllText(scriptPath,
-            "#!/bin/sh\n"
-            + "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-1\",\"cwd\":\"$PWD\"}'\n"
-            + "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ok\"}]}}'\n");
-        Process.Start("chmod", "+x " + scriptPath)!.WaitForExit();
+        using var cli = new PromptCapturingCli(turn: PromptCapturingCli.SilentSuccess);
 
-        try
-        {
-            var result = await new PiAdapter().ExecuteAsync(
-                Context("pi", scriptPath, worktree));
+        await AssertPromptReachesTheProcessAsync(new CopilotAdapter(), "copilot", cli);
+    }
 
-            Assert.True(result.Success);
-            Assert.Equal(Prompt, result.ResolvedPrompt);
-        }
-        finally
-        {
-            Directory.Delete(worktree, true);
-        }
+    [Fact]
+    public async Task Pi_writes_the_prompt_to_the_agent_process_stdin_byte_for_byte()
+    {
+        // Pi is the one CLI that takes its turn on stdin rather than argv, so
+        // that is where the prompt has to be observed.
+        using var cli = new PromptCapturingCli(PromptCaptureMode.StandardInput, PromptCapturingCli.PiTurn);
+
+        await AssertPromptReachesTheProcessAsync(new PiAdapter(), "pi", cli);
     }
 }
