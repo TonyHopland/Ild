@@ -367,7 +367,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             return null;
 
         var normalized = NormalizeWorktreePath(worktreePath);
-        var logPath = Path.Combine(BuildStateDirectory(normalized), $"{serviceName}.log");
+        var logPath = Path.Combine(BuildLogDirectory(normalized), $"{serviceName}.log");
         if (!File.Exists(logPath))
             return null;
 
@@ -399,6 +399,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
         var stateDirectory = BuildStateDirectory(normalized);
         Directory.CreateDirectory(stateDirectory);
+        var logDirectory = BuildLogDirectory(normalized);
 
         // Install needs no ports or running services — build a port-less runtime so
         // the shared install runner resolves ${WORKTREE}/${STATE_DIR} the same way
@@ -408,6 +409,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             loaded.ConfigPath!,
             resolvedProfileName,
             stateDirectory,
+            logDirectory,
             _configuration["ILD_PREVIEW_PUBLIC_HOST"] ?? "127.0.0.1",
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase),
             new List<ManagedPreviewProcess>(),
@@ -743,6 +745,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         var publicHost = ResolvePublicHost(options.PublicHost);
         var stateDirectory = BuildStateDirectory(normalized);
         Directory.CreateDirectory(stateDirectory);
+        var logDirectory = BuildLogDirectory(normalized);
 
         var ports = AllocatePorts(profile, options.PortOverrides);
         var runtime = new PreviewRuntime(
@@ -750,6 +753,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             loaded.ConfigPath!,
             profileName,
             stateDirectory,
+            logDirectory,
             publicHost,
             ports,
             new List<ManagedPreviewProcess>(),
@@ -806,7 +810,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         if (installSteps.Count == 0)
             return;
 
-        var installLogPath = Path.Combine(runtime.StateDirectory, "install.log");
+        var installLogPath = Path.Combine(runtime.LogDirectory, "install.log");
         foreach (var step in installSteps)
         {
             if (string.IsNullOrWhiteSpace(step.Command))
@@ -837,7 +841,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private async Task<ManagedPreviewProcess> LaunchServiceProcessAsync(PreviewServiceConfig service, PreviewRuntime runtime, CancellationToken cancellationToken)
     {
         var resolved = BuildResolvedStep(service, runtime, service.Port);
-        var logPath = Path.Combine(runtime.StateDirectory, $"{service.Name}.log");
+        var logPath = Path.Combine(runtime.LogDirectory, $"{service.Name}.log");
         var writer = new StreamWriter(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
         {
             AutoFlush = true,
@@ -1122,35 +1126,60 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     }
 
     /// <summary>
-    /// Per-worktree preview state (logs, the npm cache used by install steps).
-    /// Rooted at the shared scratch root — the setgid, shared-group tree with a
-    /// default ACL that the entrypoint provisions for exactly this: state both uids
-    /// touch. The preview's steps run as the agent and write here; the orchestrator
-    /// creates the directory, owns the log files it pumps each service's output
-    /// into, and reads them back for <c>get_preview_logs</c>.
+    /// Per-worktree preview state the <em>preview itself</em> writes — the npm cache
+    /// its install steps populate, and whatever a profile puts under
+    /// <c>${STATE_DIR}</c>. Rooted at the shared scratch root: the setgid,
+    /// shared-group tree with a default ACL that the entrypoint provisions for
+    /// exactly this. The preview's steps run as the agent (ADR-0016) and must be
+    /// able to write here, which the orchestrator-private root would not allow.
     ///
     /// <para>
-    /// It used to live under the orchestrator-private root, because a path derived
-    /// from the worktree is one the agent can predict and pre-create, and content it
-    /// planted there would have been consumed by steps running as the orchestrator.
-    /// Those steps now run as the agent (ADR-0016), so the agent planting something
-    /// its own uid then reads is not a crossing of any boundary. What it does mean
-    /// is that preview state is reachable by every run's agent through the shared
-    /// <c>ild-agents</c> group — the residual ADR-0014 already states for every
-    /// other shared tree, not a new one.
+    /// The old private-root rationale — the agent can predict this path, so it could
+    /// pre-create it and plant content the steps then consume — does not survive the
+    /// steps becoming the agent: the agent planting something its own uid then reads
+    /// crosses no boundary. It survives for anything the <em>orchestrator</em>
+    /// touches, which is why the log files are not here; see
+    /// <see cref="BuildLogDirectory"/>. What this does cost is that preview state is
+    /// reachable by every run's agent through the shared <c>ild-agents</c> group —
+    /// the residual ADR-0014 already states for every other shared tree, not a new
+    /// one.
     /// </para>
     /// </summary>
     private static string BuildStateDirectory(string worktreePath)
-    {
-        var root = AgentIsolation.CreateScratchDirectory("preview");
-        var slug = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(worktreePath))).ToLowerInvariant();
-        return Path.Combine(root, slug);
-    }
+        => AgentIsolation.CreateScratchDirectory("preview", WorktreeSlug(worktreePath));
+
+    /// <summary>
+    /// Where the per-service and install logs go. Deliberately <em>not</em> the
+    /// shared state directory: these files are opened, appended to and read back by
+    /// the orchestrator — the stdout/stderr pumps
+    /// (<see cref="LaunchServiceProcessAsync"/>, <see cref="RunInstallStepsAsync"/>)
+    /// run in-process, and <see cref="GetServiceLogAsync"/> serves them to
+    /// <c>get_preview_logs</c>. Moving the preview's steps to the agent uid did
+    /// nothing to move those.
+    ///
+    /// <para>
+    /// So the private root's reasoning applies here undiminished. The path is a hash
+    /// of the worktree, which the agent knows, and a shared-group directory would let
+    /// it pre-create <c>install.log</c> as a symlink to somewhere only the
+    /// orchestrator can write — <c>~/.profile</c>, say, which the next
+    /// <c>/bin/sh -lc</c> preview spawn would then execute as the orchestrator. The
+    /// read side is the mirror: an arbitrary orchestrator-readable file, served
+    /// through the API. The <c>0700</c> root, created before any agent-uid process
+    /// runs, is what forecloses both; it is the same guarantee the git askpass helper
+    /// relies on (ADR-0014).
+    /// </para>
+    /// </summary>
+    private static string BuildLogDirectory(string worktreePath)
+        => AgentIsolation.CreatePrivateDirectory("preview", WorktreeSlug(worktreePath));
+
+    private static string WorktreeSlug(string worktreePath)
+        => Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(worktreePath))).ToLowerInvariant();
 
     private ResolvedStep BuildResolvedStep(PreviewCommandConfig step, PreviewRuntime runtime, string? currentPortAlias)
     {
         var workingDirectory = ResolveWorkingDirectory(step.Cwd, runtime, currentPortAlias);
-        var environment = BuildDefaultEnvironment(runtime);
+        var environment = BuildDefaultEnvironment(runtime.StateDirectory);
 
         // Precedence: base defaults < repo custom .env < per-service ild.config env.
         // The repo .env is a repo-wide baseline; committed per-service config wins.
@@ -1175,14 +1204,21 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             environment);
     }
 
-    private Dictionary<string, string> BuildDefaultEnvironment(PreviewRuntime runtime)
+    /// <summary>
+    /// The base environment every preview step starts from, before the repository's
+    /// <c>.env</c> and the service's own <c>env</c> are layered over it. Takes the
+    /// state directory rather than the whole runtime because that is the only part
+    /// it needs — which also makes what a preview child's <c>HOME</c> and npm prefix
+    /// resolve to assertable without standing up a runtime.
+    /// </summary>
+    internal Dictionary<string, string> BuildDefaultEnvironment(string stateDirectory)
     {
         var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         var home = ResolveHomeDirectory();
         var npmPrefix = Path.Combine(home, ".local");
         var npmBin = GetNpmGlobalBinDirectory();
-        var npmCache = Path.Combine(runtime.StateDirectory, "npm-cache");
+        var npmCache = Path.Combine(stateDirectory, "npm-cache");
 
         EnsureNpmDirectory(npmPrefix);
         EnsureNpmDirectory(npmBin);
@@ -1265,17 +1301,33 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     private static bool IsInside(string path, string root)
     {
-        var prefix = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)) + Path.DirectorySeparatorChar;
-        return Path.GetFullPath(path).StartsWith(prefix, StringComparison.Ordinal);
+        // Resolve the root through any symlinks first. Path.GetFullPath normalizes
+        // ".." but not links, so a symlinked agent home would compare against a name
+        // that is not where the directory actually lives and the containment test
+        // could answer wrong in either direction.
+        var prefix = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Resolve(root))) + Path.DirectorySeparatorChar;
+        return Path.GetFullPath(Resolve(path)).StartsWith(prefix, StringComparison.Ordinal);
+
+        static string Resolve(string value)
+        {
+            try
+            {
+                // Only an existing entry can be resolved; a path yet to be created
+                // has no link to follow, so its literal form is already the answer.
+                return new DirectoryInfo(value).ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? value;
+            }
+            catch (IOException) { return value; }
+            catch (UnauthorizedAccessException) { return value; }
+        }
     }
 
     /// <summary>
-    /// Prepend the npm global bin directory onto the host process PATH so the
-    /// agents can resolve tools an install step put there. Cmd nodes and the AI
-    /// CLI adapters launch their processes with the inherited host-process
-    /// environment, which does not otherwise include <c>$HOME/.local/bin</c>;
-    /// without this, <c>npm install -g</c>'d binaries are invisible to every
-    /// node that runs after the Start node's install. Idempotent.
+    /// Add the npm global bin directory to the host process PATH so the agents can
+    /// resolve tools an install step put there. Cmd nodes and the AI CLI adapters
+    /// launch their processes with the inherited host-process environment, which
+    /// does not otherwise include <c>$HOME/.local/bin</c>; without this,
+    /// <c>npm install -g</c>'d binaries are invisible to every node that runs after
+    /// the Start node's install. Idempotent.
     ///
     /// <para>
     /// Under uid isolation both ends of that hand-off are the agent — the install
@@ -1284,6 +1336,18 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// approximately: before, a binary under the orchestrator's
     /// <c>/home/ild/.local/bin</c> was executable by the agent only by accident of
     /// mode bits.
+    /// </para>
+    ///
+    /// <para>
+    /// It is <em>appended</em>, not prepended. This is the orchestrator's own PATH,
+    /// and under isolation the directory being added is agent-writable, so a planted
+    /// binary sharing a name with something the image ships would otherwise be
+    /// preferred by every orchestrator-side spawn that resolves by bare name — git
+    /// and npm through <c>ProcessRunner</c>, for instance. Appending means the
+    /// image's copy wins ties and only genuinely new tools are contributed, which is
+    /// all this was ever for. (The preview's own children still get it first: they
+    /// run as the agent, where a tool it installed beating one in the image is the
+    /// intended behaviour and crosses no boundary.)
     /// </para>
     /// </summary>
     private void EnsureInstalledToolsOnProcessPath()
@@ -1307,7 +1371,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
         Environment.SetEnvironmentVariable(
             "PATH",
-            string.IsNullOrWhiteSpace(currentPath) ? npmBin : $"{npmBin}{Path.PathSeparator}{currentPath}");
+            string.IsNullOrWhiteSpace(currentPath) ? npmBin : $"{currentPath}{Path.PathSeparator}{npmBin}");
     }
 
     private string ResolveHealthUrl(PreviewServiceConfig service, PreviewRuntime runtime)
@@ -1404,7 +1468,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// orchestrator's.
     /// </para>
     /// </summary>
-    private ProcessStartInfo BuildPreviewProcess(ResolvedStep resolved)
+    internal ProcessStartInfo BuildPreviewProcess(ResolvedStep resolved)
     {
         var psi = new ProcessStartInfo("/bin/sh")
         {
@@ -1442,7 +1506,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     private sealed record LoadedPreviewConfig(bool Configured, string WorktreePath, string ConfigPath, IldWorkspaceConfig? Config, string? Message);
 
-    private sealed record ResolvedStep(string Command, string WorkingDirectory, IReadOnlyDictionary<string, string> Environment);
+    internal sealed record ResolvedStep(string Command, string WorkingDirectory, IReadOnlyDictionary<string, string> Environment);
     private sealed record CommandResult(int ExitCode, string StdOut, string StdErr);
 
     private sealed class PreviewRuntime
@@ -1452,6 +1516,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             string configPath,
             string profileName,
             string stateDirectory,
+            string logDirectory,
             string publicHost,
             Dictionary<string, int> ports,
             List<ManagedPreviewProcess> processes,
@@ -1463,6 +1528,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             ConfigPath = configPath;
             ProfileName = profileName;
             StateDirectory = stateDirectory;
+            LogDirectory = logDirectory;
             PublicHost = publicHost;
             Ports = ports;
             _processes = processes.ToArray();
@@ -1479,7 +1545,13 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         public string WorktreePath { get; }
         public string ConfigPath { get; }
         public string ProfileName { get; }
+
+        /// <summary>Shared with the agent — see <c>BuildStateDirectory</c>.</summary>
         public string StateDirectory { get; }
+
+        /// <summary>Orchestrator-private — see <c>BuildLogDirectory</c>.</summary>
+        public string LogDirectory { get; }
+
         public string PublicHost { get; }
         public Dictionary<string, int> Ports { get; }
 

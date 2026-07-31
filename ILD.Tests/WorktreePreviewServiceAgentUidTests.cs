@@ -11,51 +11,73 @@ namespace ILD.Tests;
 /// to write follows it there (ADR-0016).
 ///
 /// <para>
-/// The crossing is driven through the explicit-parameter constructor rather than
-/// the process-global <c>ILD_AGENT_USER</c>, which would turn isolation on for
-/// every other test in the host. The <c>setpriv</c> the crossing execs is a shim on
-/// <c>PATH</c> — <c>AgentIsolation</c> resolves the bare name deliberately, and a
-/// real <c>setpriv --reuid</c> needs <c>CAP_SETUID</c> and a second uid, neither of
-/// which a test host has. The shim records the arguments it was handed and then
-/// execs the wrapped command unchanged, so the assertions cover both halves: that
-/// the preview is routed, and what the routed child actually saw.
+/// Isolation is driven through the explicit-parameter constructor rather than the
+/// process-global <c>ILD_AGENT_USER</c>, which would turn it on for every other
+/// test in the host. The assertions are made against the constructed
+/// <c>ProcessStartInfo</c> rather than a spawned process, because a real crossing
+/// execs <c>setpriv --reuid ... --init-groups</c>, which needs <c>CAP_SETUID</c>
+/// and <c>CAP_SETGID</c> and a second uid — this host has neither (verified: it
+/// fails with "initgroups failed"). Inspecting the psi is also the stronger check,
+/// since it sees the absolute <c>setpriv</c> path that a PATH-based interception
+/// could not.
 /// </para>
 /// </summary>
 [Collection("EnvironmentPath")]
 public class WorktreePreviewServiceAgentUidTests : IDisposable
 {
     private const string AgentUser = "agent";
+    private const string AgentGroup = "ild-agents";
 
-    private readonly string _worktree;
     private readonly string _agentHome;
-    private readonly string _shimDirectory;
-    private readonly string _shimLog;
-    private readonly string? _originalPath;
+    private readonly string _stateDirectory;
     private readonly string? _originalHome;
+    private readonly string? _originalPath;
     private string? _redirectedHome;
-    private WorktreePreviewService? _service;
 
     public WorktreePreviewServiceAgentUidTests()
     {
         var id = Guid.NewGuid().ToString("N");
-        _worktree = Path.Combine(Path.GetTempPath(), "ild-agentuid-tests-" + id);
         _agentHome = Path.Combine(Path.GetTempPath(), "ild-agentuid-home-" + id);
-        _shimDirectory = Path.Combine(Path.GetTempPath(), "ild-agentuid-shim-" + id);
-        _shimLog = Path.Combine(_shimDirectory, "setpriv-args");
-        Directory.CreateDirectory(_worktree);
+        _stateDirectory = Path.Combine(Path.GetTempPath(), "ild-agentuid-state-" + id);
         Directory.CreateDirectory(_agentHome);
-        Directory.CreateDirectory(_shimDirectory);
+        Directory.CreateDirectory(_stateDirectory);
 
-        _originalPath = Environment.GetEnvironmentVariable("PATH");
+        // BuildDefaultEnvironment reads (and EnsureInstalledToolsOnProcessPath
+        // mutates) the process HOME/PATH; restore both so no other test inherits it.
         _originalHome = Environment.GetEnvironmentVariable("HOME");
-        InstallSetprivShim();
+        _originalPath = Environment.GetEnvironmentVariable("PATH");
     }
 
+    public void Dispose()
+    {
+        Environment.SetEnvironmentVariable("HOME", _originalHome);
+        Environment.SetEnvironmentVariable("PATH", _originalPath);
+        foreach (var directory in new[] { _agentHome, _stateDirectory, _redirectedHome })
+        {
+            if (directory is null) continue;
+            try { Directory.Delete(directory, recursive: true); } catch { /* best effort */ }
+        }
+        GC.SuppressFinalize(this);
+    }
+
+    private WorktreePreviewService BuildService(string? agentUser = AgentUser, bool withAgentHome = true)
+    {
+        var factory = new Mock<IHttpClientFactory>();
+        var configuration = new ConfigurationBuilder().Build();
+        return new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
+            NullLogger<WorktreePreviewService>.Instance,
+            agentUser, AgentGroup, withAgentHome ? _agentHome : null);
+    }
+
+    private WorktreePreviewService.ResolvedStep Step() => new(
+        "npm run dev",
+        _stateDirectory,
+        new Dictionary<string, string>(StringComparer.Ordinal));
+
     /// <summary>
-    /// Point the orchestrator's own <c>HOME</c> at an empty directory for the
-    /// duration of one test. Process-global, and safe only inside the serialized
-    /// <c>EnvironmentPath</c> collection — the same reason the shim can live on
-    /// <c>PATH</c>.
+    /// Point the orchestrator's own <c>HOME</c> at an empty directory for one test.
+    /// Process-global, and safe only inside the serialized <c>EnvironmentPath</c>
+    /// collection.
     /// </summary>
     private string RedirectOrchestratorHome()
     {
@@ -65,257 +87,106 @@ public class WorktreePreviewServiceAgentUidTests : IDisposable
         return _redirectedHome;
     }
 
-    public void Dispose()
-    {
-        try { _service?.StopAsync(_worktree).GetAwaiter().GetResult(); } catch { /* best effort */ }
-        try { _service?.Dispose(); } catch { /* best effort */ }
-        Environment.SetEnvironmentVariable("PATH", _originalPath);
-        Environment.SetEnvironmentVariable("HOME", _originalHome);
-        foreach (var directory in new[] { _worktree, _agentHome, _shimDirectory, _redirectedHome })
-        {
-            if (directory is null) continue;
-            try { Directory.Delete(directory, recursive: true); } catch { /* best effort */ }
-        }
-        GC.SuppressFinalize(this);
-    }
-
-    // Records the argv it was called with, then drops the setpriv options up to the
-    // "--" terminator and execs the real command as the current user.
-    private void InstallSetprivShim()
-    {
-        var shim = Path.Combine(_shimDirectory, "setpriv");
-        File.WriteAllText(shim, $"""
-        #!/bin/sh
-        printf '%s\n' "$@" >> '{_shimLog}'
-        while [ "$1" != "--" ]; do shift; done
-        shift
-        exec "$@"
-
-        """);
-        File.SetUnixFileMode(shim,
-            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
-            | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
-            | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
-
-        Environment.SetEnvironmentVariable("PATH", _shimDirectory + Path.PathSeparator + _originalPath);
-    }
-
-    private string[] ShimArguments()
-        => File.Exists(_shimLog) ? File.ReadAllLines(_shimLog) : Array.Empty<string>();
-
-    private WorktreePreviewService BuildService(string? agentUser = AgentUser, bool withAgentHome = true)
-    {
-        var factory = new Mock<IHttpClientFactory>();
-        factory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(() => new HttpClient());
-        var configuration = new ConfigurationBuilder().Build();
-        _service = new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
-            NullLogger<WorktreePreviewService>.Instance,
-            agentUser, agentGroup: "ild-agents", agentHome: withAgentHome ? _agentHome : null);
-        return _service;
-    }
-
-    private void WriteInstallConfig()
-    {
-        var config = """
-        {
-          "preview": {
-            "defaultProfile": "app",
-            "profiles": {
-              "app": {
-                "install": [ { "cwd": ".", "command": "env > install-env.marker" } ],
-                "services": []
-              }
-            }
-          }
-        }
-        """;
-        File.WriteAllText(Path.Combine(_worktree, "ild.config.json"), config);
-    }
-
-    private Dictionary<string, string> ReadChildEnvironment()
-    {
-        var environment = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var line in File.ReadAllLines(Path.Combine(_worktree, "install-env.marker")))
-        {
-            var separator = line.IndexOf('=');
-            if (separator > 0)
-                environment.TryAdd(line[..separator], line[(separator + 1)..]);
-        }
-        return environment;
-    }
-
     [Fact]
-    public async Task Install_steps_cross_to_the_agent_uid()
+    public void Preview_commands_cross_to_the_agent_uid()
     {
-        WriteInstallConfig();
-
-        await BuildService().InstallAsync(_worktree);
+        var psi = BuildService().BuildPreviewProcess(Step());
 
         // --reuid is the whole difference from the capability-only wrap the preview
         // used to get: the preview and the agent's own builds in the same worktree
         // are now one uid, which is what removes the MSB3021/MSB3374 class of
         // failure on files the other side owns.
-        Assert.Contains("--reuid=" + AgentUser, ShimArguments());
-        Assert.Contains("--regid=ild-agents", ShimArguments());
-        Assert.Contains("--init-groups", ShimArguments());
-        Assert.Contains("--ambient-caps=-all", ShimArguments());
+        Assert.Equal("/usr/bin/setpriv", psi.FileName);
+        Assert.Contains("--reuid=" + AgentUser, psi.ArgumentList);
+        Assert.Contains("--regid=" + AgentGroup, psi.ArgumentList);
+        Assert.Contains("--init-groups", psi.ArgumentList);
+        Assert.Contains("--inh-caps=-all", psi.ArgumentList);
+        Assert.Contains("--ambient-caps=-all", psi.ArgumentList);
+
+        // The real command still follows the terminator, unaltered.
+        var terminator = psi.ArgumentList.IndexOf("--");
+        Assert.Equal(new[] { "/bin/sh", "-lc", "npm run dev" }, psi.ArgumentList.Skip(terminator + 1));
     }
 
     [Fact]
-    public async Task Services_cross_to_the_agent_uid()
+    public void The_privilege_drop_tool_is_never_resolved_through_PATH()
     {
-        WriteServiceConfig(FindFreePort());
+        // setpriv is what performs the drop, so whoever controls its resolution
+        // controls whether the drop happens. .NET resolves a bare FileName against
+        // the child environment's PATH, and a preview child's PATH includes an
+        // agent-writable npm bin directory — a planted `setpriv` there would be
+        // exec'd as the orchestrator with the ambient capabilities still held,
+        // because nothing ever dropped them. An absolute path removes the lookup.
+        var psi = BuildService().BuildPreviewProcess(Step());
 
-        var started = await BuildService().StartAsync(_worktree, cancellationToken: CancellationToken.None);
-
-        Assert.Equal("running", started.State);
-        Assert.Contains("--reuid=" + AgentUser, ShimArguments());
+        Assert.True(Path.IsPathRooted(psi.FileName),
+            $"the privilege-drop tool must be an absolute path, was '{psi.FileName}'");
     }
 
     [Fact]
-    public async Task Nothing_is_routed_when_isolation_is_off()
+    public void Nothing_is_routed_when_isolation_is_off()
     {
         // The documented escape hatch: ILD_AGENT_USER unset means the command runs
         // inline as the current user, exactly as before uid isolation existed.
-        WriteInstallConfig();
+        var psi = BuildService(agentUser: null).BuildPreviewProcess(Step());
 
-        await BuildService(agentUser: null).InstallAsync(_worktree);
-
-        Assert.Empty(ShimArguments());
+        Assert.Equal("/bin/sh", psi.FileName);
+        Assert.Equal(new[] { "-lc", "npm run dev" }, psi.ArgumentList);
     }
 
     [Fact]
-    public async Task The_npm_prefix_follows_the_agent_home()
+    public void The_npm_prefix_follows_the_agent_home()
     {
         // $HOME/.local is where `npm install -g` puts a global CLI, and the agent
         // uid is both what runs the install and what execs the result afterwards.
         // Pointing it at the orchestrator's home instead leaves the install writing
         // into a 0710 directory it cannot enter.
-        WriteInstallConfig();
+        var environment = BuildService().BuildDefaultEnvironment(_stateDirectory);
 
-        await BuildService().InstallAsync(_worktree);
-
-        var child = ReadChildEnvironment();
-        Assert.Equal(_agentHome, child["HOME"]);
-        Assert.Equal(Path.Combine(_agentHome, ".local"), child["NPM_CONFIG_PREFIX"]);
-        Assert.Contains(Path.Combine(_agentHome, ".local", "bin"), child["PATH"].Split(Path.PathSeparator));
+        Assert.Equal(_agentHome, environment["HOME"]);
+        Assert.Equal(Path.Combine(_agentHome, ".local"), environment["NPM_CONFIG_PREFIX"]);
+        Assert.Contains(Path.Combine(_agentHome, ".local", "bin"),
+            environment["PATH"].Split(Path.PathSeparator));
     }
 
     [Fact]
-    public async Task The_orchestrator_creates_nothing_inside_the_agent_home()
+    public void The_orchestrator_creates_nothing_inside_the_agent_home()
     {
         // A prefix directory the orchestrator created would be owned by the
         // orchestrator, in a home whose group the agent is not in, and the agent's
         // own `npm install -g` would fail on it. The entrypoint provisions this
         // scaffolding as the agent instead.
-        WriteInstallConfig();
-
-        await BuildService().InstallAsync(_worktree);
+        BuildService().BuildDefaultEnvironment(_stateDirectory);
 
         Assert.False(Directory.Exists(Path.Combine(_agentHome, ".local")),
             "the orchestrator must not create the npm prefix inside the agent's home");
     }
 
     [Fact]
-    public async Task A_crossing_with_no_agent_home_keeps_the_prefix_where_it_can_create_it()
+    public void A_crossing_with_no_agent_home_keeps_the_prefix_where_it_can_create_it()
     {
         // An agent user without an agent home is a shape the crossing explicitly
-        // allows — Route leaves HOME as-is when the home is null, and the
-        // entrypoint would export exactly this if AGENT_HOME were cleared. The
-        // prefix then falls back to the orchestrator's own home, and the
-        // orchestrator both may and must create it: the two questions "is
-        // isolation on" and "is this path inside the agent's home" come apart
-        // here, and keying the skip on the former left npm install -g with no
-        // prefix and EnsureInstalledToolsOnProcessPath advertising a directory
-        // that did not exist.
-        WriteInstallConfig();
-        // Redirect HOME to somewhere empty, so "the prefix was created" is a real
-        // assertion rather than one the test host's own ~/.local/bin satisfies.
+        // allows — Route leaves HOME as-is when the home is null. The prefix then
+        // falls back to the orchestrator's own home, and the orchestrator both may
+        // and must create it: keying the skip on "is isolation on" rather than on
+        // containment left `npm install -g` with no prefix at all.
         var orchestratorHome = RedirectOrchestratorHome();
 
-        await BuildService(withAgentHome: false).InstallAsync(_worktree);
+        var environment = BuildService(withAgentHome: false).BuildDefaultEnvironment(_stateDirectory);
 
-        var child = ReadChildEnvironment();
-        Assert.Equal(orchestratorHome, child["HOME"]);
-        Assert.Equal(Path.Combine(orchestratorHome, ".local"), child["NPM_CONFIG_PREFIX"]);
+        Assert.Equal(orchestratorHome, environment["HOME"]);
+        Assert.Equal(Path.Combine(orchestratorHome, ".local"), environment["NPM_CONFIG_PREFIX"]);
         Assert.True(Directory.Exists(Path.Combine(orchestratorHome, ".local", "bin")),
             "the prefix outside the agent's home must still be created");
-
-        // Still routed — only the HOME half of the crossing is absent.
-        Assert.Contains("--reuid=" + AgentUser, ShimArguments());
     }
 
     [Fact]
-    public async Task Preview_state_lives_under_the_shared_scratch_root()
+    public void The_npm_cache_stays_in_the_shared_state_directory()
     {
-        // Logs and the npm cache are written by both uids, so they belong in the
-        // setgid shared-group tree, not the orchestrator-private root the preview
-        // used while its steps still ran as the orchestrator.
-        WriteServiceConfig(FindFreePort());
-        var service = BuildService();
-        var started = await service.StartAsync(_worktree, cancellationToken: CancellationToken.None);
-        Assert.Equal("running", started.State);
+        // The one thing under ${STATE_DIR} the agent genuinely writes, which is why
+        // that directory stays on the shared scratch root while the logs do not.
+        var environment = BuildService().BuildDefaultEnvironment(_stateDirectory);
 
-        var status = await service.GetStatusAsync(_worktree);
-
-        Assert.NotNull(status.StateDirectory);
-        Assert.StartsWith(
-            Path.TrimEndingDirectorySeparator(AgentIsolation.ScratchRoot) + Path.DirectorySeparatorChar,
-            status.StateDirectory);
-        Assert.False(status.StateDirectory!.StartsWith(
-            Path.TrimEndingDirectorySeparator(AgentIsolation.PrivateRoot) + Path.DirectorySeparatorChar,
-            StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public async Task The_orchestrator_can_still_read_a_routed_services_log()
-    {
-        // get_preview_logs and the Preview tab's Log column read these files as the
-        // orchestrator while the service that produced them runs as the agent, so
-        // the move to the shared root has to keep that readable.
-        WriteServiceConfig(FindFreePort());
-        var service = BuildService();
-        var started = await service.StartAsync(_worktree, cancellationToken: CancellationToken.None);
-        Assert.Equal("running", started.State);
-
-        var log = await service.GetServiceLogAsync(_worktree, "web");
-
-        Assert.NotNull(log);
-        Assert.Contains("node -e", log);
-    }
-
-    private void WriteServiceConfig(int port)
-    {
-        var listen = "node -e \\\"require('http').createServer((q,r)=>{r.end('ok')}).listen(process.env.PORT)\\\"";
-        var config = $$"""
-        {
-          "preview": {
-            "defaultProfile": "app",
-            "profiles": {
-              "app": {
-                "services": [
-                  {
-                    "name": "web",
-                    "port": "web",
-                    "suggestedPort": {{port}},
-                    "command": "PORT=${PORT} {{listen}}",
-                    "healthUrl": "http://127.0.0.1:${PORT}/"
-                  }
-                ]
-              }
-            }
-          }
-        }
-        """;
-        File.WriteAllText(Path.Combine(_worktree, "ild.config.json"), config);
-    }
-
-    private static int FindFreePort()
-    {
-        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
+        Assert.Equal(Path.Combine(_stateDirectory, "npm-cache"), environment["NPM_CONFIG_CACHE"]);
     }
 }

@@ -87,10 +87,19 @@ tree is the cause; one uid removes the class.
   `ILD_ORCHESTRATOR_PRIVATE_ROOT`, `ILD_AGENT_SCRATCH_ROOT`) are gone: the
   behaviour they bought belongs to every preview, not to one repository that
   happened to discover it needed it.
-- **Preview state moves from the orchestrator-private root to the shared scratch
-  root.** Logs and the npm cache are now written by the agent and read by the
-  orchestrator, which is exactly what that setgid, shared-group, default-ACL tree
-  exists for.
+- **What the preview writes moves to the shared scratch root; what the
+  orchestrator writes does not.** The npm cache and anything a profile puts under
+  `${STATE_DIR}` are written by the agent, so they belong in the setgid,
+  shared-group, default-ACL tree that exists for exactly that. The install and
+  service **logs stay in the orchestrator-private root**, because moving the
+  preview's steps to the agent moved nothing about the logs: the stdout/stderr
+  pumps run in-process as the orchestrator, and `get_preview_logs` reads them back
+  the same way. The path is a hash of the worktree, which the agent knows, so a
+  shared-group log directory would let it pre-create `install.log` as a symlink to
+  a file only the orchestrator can write — `~/.profile`, say, which the next
+  `/bin/sh -lc` preview spawn then executes as the orchestrator — with the reader
+  giving the mirror primitive. Splitting the two directories is what keeps the
+  private root's guarantee exactly where it still applies.
 - **The npm global prefix follows the agent's home**, so `npm install -g` in an
   install step writes where the uid running it can write and the agent-uid nodes
   that later exec the tool can reach it. "The agent's home" means whatever
@@ -107,24 +116,46 @@ tree is the cause; one uid removes the class.
 - **Preview state is agent-readable and reachable across runs.** The private
   root's stated threat — the agent pre-creating a path derived from its own
   worktree and planting content that steps then consume _while running as the
-  orchestrator_ — evaporates once those steps are the agent. What replaces it is
-  the ordinary shared-group reach ADR-0014 already accepts for `/worktrees` and
-  `/data/repos`: one run's agent can read another run's preview state. That is the
-  existing "all runs share the `ild-agents` group" residual, not a new one, and
-  per-run groups remain the follow-up that narrows it. The code comment that
-  asserted the old rationale was rewritten rather than left standing, because a
-  future reader would otherwise restore the private root and re-break the preview.
+  orchestrator_ — evaporates for the steps once those steps are the agent. What
+  replaces it is the ordinary shared-group reach ADR-0014 already accepts for
+  `/worktrees` and `/data/repos`: one run's agent can read another run's preview
+  state. That is the existing "all runs share the `ild-agents` group" residual, not
+  a new one, and per-run groups remain the follow-up that narrows it.
 
-- **The npm prefix on the orchestrator's `PATH` is now agent-writable.** ILD
-  prepends `$AGENT_HOME/.local/bin` to its own process `PATH` so tools an install
-  step provisioned are resolvable to the Cmd nodes and CLI adapters that run
-  afterwards, and Cmd nodes run as the orchestrator. This is a change of
-  directness, not of capability: the contents of that directory were always
-  agent-controlled, because what writes them is an agent-authored install command.
-  It is stated here rather than left implicit, and it is the reason the entrypoint
-  provisions that directory as the agent up front — a prefix the orchestrator
-  created would be owned by a uid the agent is not, and the agent's own
-  `npm install -g` would fail on it.
+  The premise is worth stating precisely, because it is easy to over-apply and we
+  did over-apply it once: it retires only for files whose **writer and reader are
+  both the agent**. Anything the orchestrator still touches on that path keeps the
+  old threat in full, which is why the logs are split out above. The rule for
+  future work is the writer and the reader, not the directory.
+
+- **The npm prefix on the orchestrator's `PATH` is now agent-writable.** ILD adds
+  `$AGENT_HOME/.local/bin` to its own process `PATH` so tools an install step
+  provisioned are resolvable to the Cmd nodes and CLI adapters that run afterwards,
+  and Cmd nodes run as the orchestrator. The contents of that directory were always
+  agent-controlled — what writes them is an agent-authored install command — but
+  the change in _directness_ is large: the agent CLI now writes it with an ordinary
+  `echo >`, needing no preview config and no orchestrator-executed step. Two things
+  follow, and neither was obvious enough to leave implicit:
+  - **`setpriv` is referenced by absolute path, never resolved through `PATH`.**
+    This is the sharp one. `setpriv` is what performs the capability drop and the
+    uid switch, and .NET resolves a bare `FileName` against the _child's_ `PATH` —
+    which is precisely the `PATH` that now leads with an agent-writable directory.
+    A planted `setpriv` would be exec'd in its place, as the orchestrator, with the
+    ambient `CAP_SETUID` still held because nothing dropped it; from there
+    `setuid(0)` and an exec give the full bounding set. That is not "a change of
+    directness" — it is the guard disabling itself — so `AgentIsolation` names
+    `/usr/bin/setpriv` outright and a test pins that every path naming it is
+    absolute.
+  - **The directory is _appended_ to the orchestrator's `PATH`, not prepended**, so
+    image-shipped binaries win ties. `ProcessRunner` resolves bare `git` and `npm`,
+    and there is no reason a preview-installed file should be able to answer for
+    them.
+
+  It is also why the entrypoint provisions the directory as the agent up front — a
+  prefix the orchestrator created would be owned by a uid the agent is not, and the
+  agent's own `npm install -g` would fail on it. Narrowing the remaining exposure
+  means changing how Cmd nodes reach installed tools at all, which is a broader
+  decision than this ADR.
 
 - **A preview that needs configuration must be given it.** This is the one
   migration cost, and it falls on any existing profile whose service came up on

@@ -247,10 +247,12 @@ ENV RUNTIME_AMBIENT_CAPS=cap_setuid,cap_setgid,cap_kill
 # rather than growing on a volume, but it is set up like the other shared trees
 # so that a file the orchestrator seeds there stays writable by the agent.
 ENV AGENT_SCRATCH_DIR=/tmp/ild-agent-scratch
-# Orchestrator-only state (the git askpass helper, preview state). Created
-# owner-only by the entrypoint before anything else runs, which is what stops the
-# agent planting a file the orchestrator would then execute as itself. On /tmp so
-# it stays ephemeral instead of growing on the data volume.
+# Orchestrator-only state (the git askpass helper; a preview's install and
+# service logs, which the orchestrator opens, appends to and serves back even
+# though the preview itself runs as the agent). Created owner-only by the
+# entrypoint before anything else runs, which is what stops the agent planting a
+# file — or a symlink — the orchestrator would then write or execute as itself.
+# On /tmp so it stays ephemeral instead of growing on the data volume.
 ENV ORCHESTRATOR_PRIVATE_DIR=/tmp/ild-orchestrator-private
 ENV SHARED_RW_DIRS="/worktrees /home/ild/.agent-config /data/repos /data/chat-sessions /tmp/ild-agent-scratch"
 # Shared read-only: the agent execs the npm-installed CLIs but must not be able

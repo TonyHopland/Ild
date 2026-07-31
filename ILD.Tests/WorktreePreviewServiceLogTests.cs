@@ -89,21 +89,40 @@ public class WorktreePreviewServiceLogTests : IDisposable
     }
 
     [Fact]
-    public async Task GetServiceLogAsync_reads_a_log_that_lives_under_the_shared_scratch_root()
+    public async Task Service_logs_stay_in_the_orchestrator_private_root()
     {
-        // The preview's state directory moved out of the orchestrator-private root
-        // when its steps moved to the agent uid (ADR-0016). The orchestrator still
-        // owns and reads these files — that is what get_preview_logs and the
-        // Preview tab's Log column depend on — so assert the new location rather
-        // than assuming the move left reading intact.
+        // The log files are opened, appended to and read back by the orchestrator —
+        // the stdout pump runs in-process and GetServiceLogAsync serves
+        // get_preview_logs — none of which moved when the preview's *steps* moved to
+        // the agent uid. Their path is a hash of the worktree, so putting them in
+        // the shared scratch root would let the agent pre-create one as a symlink
+        // and turn the pump into an arbitrary orchestrator-uid write (and the reader
+        // into an arbitrary read). The 0700 private root forecloses both.
         WriteConfig(FindFreePort());
         var service = BuildService();
 
         var started = await service.StartAsync(_worktree, cancellationToken: CancellationToken.None);
         Assert.Equal("running", started.State);
+
+        var logPath = started.Services.Single().LogFilePath!;
+        Assert.StartsWith(
+            Path.TrimEndingDirectorySeparator(AgentIsolation.PrivateRoot) + Path.DirectorySeparatorChar,
+            logPath);
+
+        // The state directory the preview itself writes stays shared, so the two are
+        // genuinely split rather than both having moved back. Asserted as "the log
+        // is not under the state directory" rather than "not under the scratch
+        // root": the unit-test baseline points the private root at a subdirectory of
+        // TMPDIR, which is also the scratch-root fallback, so the roots nest here in
+        // a way they never do in the container.
         Assert.StartsWith(
             Path.TrimEndingDirectorySeparator(AgentIsolation.ScratchRoot) + Path.DirectorySeparatorChar,
-            started.Services.Single().LogFilePath);
+            started.StateDirectory);
+        Assert.False(
+            logPath.StartsWith(
+                Path.TrimEndingDirectorySeparator(started.StateDirectory!) + Path.DirectorySeparatorChar,
+                StringComparison.Ordinal),
+            "service logs must not live in the state directory the agent can write");
 
         Assert.NotNull(await service.GetServiceLogAsync(_worktree, "web"));
     }

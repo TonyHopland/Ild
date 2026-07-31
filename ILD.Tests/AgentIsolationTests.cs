@@ -47,6 +47,34 @@ public class AgentIsolationTests
     }
 
     [Fact]
+    public void The_privilege_drop_tool_is_an_absolute_path_everywhere()
+    {
+        // setpriv is the binary that performs the drop, so whoever controls its
+        // resolution controls whether the drop happens at all. .NET resolves a bare
+        // FileName against the CHILD environment's PATH — and both a Worktree
+        // Preview's children and the orchestrator's own process PATH include an
+        // agent-writable npm bin directory (ADR-0016). A planted `setpriv` there
+        // would be exec'd in place of the real one, as the orchestrator, with the
+        // ambient CAP_SETUID still held because nothing dropped it: an escalation
+        // wearing the name of the guard against it. Pin every path that names it.
+        var psi = BuildPsi();
+        AgentIsolation.Route(psi, agentUser: "agent", agentGroup: "agent", agentHome: "/home/agent");
+        Assert.True(Path.IsPathRooted(psi.FileName), $"Route: '{psi.FileName}' is not absolute");
+
+        var dropped = BuildPsi();
+        AgentIsolation.DropInheritedCapabilities(dropped, agentUser: "agent");
+        Assert.True(Path.IsPathRooted(dropped.FileName), $"DropInheritedCapabilities: '{dropped.FileName}' is not absolute");
+
+        var routed = AgentIsolation.RouteCommand("claude", Array.Empty<string>(),
+            agentUser: "agent", agentGroup: "agent", agentHome: "/home/agent");
+        Assert.True(Path.IsPathRooted(routed.FileName), $"RouteCommand: '{routed.FileName}' is not absolute");
+
+        // And it is where the image actually puts it, so the absolute path is not
+        // merely absolute but correct.
+        Assert.Equal("/usr/bin/setpriv", psi.FileName);
+    }
+
+    [Fact]
     public void Route_is_noop_when_agent_user_is_blank()
     {
         var psi = BuildPsi();
@@ -74,7 +102,7 @@ public class AgentIsolationTests
 
         AgentIsolation.Route(psi, agentUser: "agent", agentGroup: "agent", agentHome: "/home/agent");
 
-        Assert.Equal("setpriv", psi.FileName);
+        Assert.Equal("/usr/bin/setpriv", psi.FileName);
         Assert.Equal(new[]
         {
             "--reuid=agent",
@@ -183,7 +211,7 @@ public class AgentIsolationTests
 
         AgentIsolation.Route(psi, agentUser: "agent", agentGroup: null, agentHome: null);
 
-        Assert.Equal("setpriv", psi.FileName);
+        Assert.Equal("/usr/bin/setpriv", psi.FileName);
         Assert.Contains("--regid=agent", psi.ArgumentList);
         psi.Environment.TryGetValue("HOME", out var homeAfter);
         Assert.Equal(originalHome, homeAfter);
@@ -426,7 +454,7 @@ public class AgentIsolationTests
 
         AgentIsolation.DropInheritedCapabilities(psi, agentUser: "agent");
 
-        Assert.Equal("setpriv", psi.FileName);
+        Assert.Equal("/usr/bin/setpriv", psi.FileName);
         Assert.Equal(new[]
         {
             "--inh-caps=-all",
@@ -460,7 +488,7 @@ public class AgentIsolationTests
         var routed = AgentIsolation.RouteCommand("/data/agents/claude-code/bin/claude",
             Array.Empty<string>(), agentUser: "agent", agentGroup: "agent", agentHome: "/home/agent");
 
-        Assert.Equal("setpriv", routed.FileName);
+        Assert.Equal("/usr/bin/setpriv", routed.FileName);
         Assert.Equal(new[]
         {
             "--reuid=agent",
@@ -542,7 +570,7 @@ public class AgentIsolationTests
 
         psi.Environment.TryGetValue("HOME", out var home);
         Assert.Equal(originalHome, home);
-        Assert.Equal("setpriv", psi.FileName);
+        Assert.Equal("/usr/bin/setpriv", psi.FileName);
     }
 
     [Fact]

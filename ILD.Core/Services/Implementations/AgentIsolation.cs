@@ -82,9 +82,20 @@ public static class AgentIsolation
     /// </summary>
     public const string SecretEnvDenylistEnvVar = "ILD_AGENT_ENV_DENYLIST";
 
-    // The privilege-drop tool. Bare name resolved on PATH (/usr/bin/setpriv,
-    // shipped by util-linux in the image).
-    private const string SetprivCommand = "setpriv";
+    // The privilege-drop tool, by absolute path. Shipped by util-linux in the
+    // image (Dockerfile installs it explicitly), so the location is ours to fix.
+    //
+    // It must NOT be a bare name resolved on PATH. This is the binary that both
+    // crossings and DropInheritedCapabilities exec, so whoever controls its
+    // resolution controls whether the drop happens at all — and .NET resolves a
+    // bare FileName against the PATH of the *child* environment, which for a
+    // Worktree Preview leads with an agent-writable npm bin directory. A planted
+    // `setpriv` there would be exec'd in place of the real one, as the
+    // orchestrator, with the ambient capabilities still held because nothing ever
+    // dropped them: exactly the escalation the wrap exists to prevent, wearing its
+    // name. An absolute path removes the resolution step and with it the whole
+    // class.
+    private const string SetprivCommand = "/usr/bin/setpriv";
 
     // Orchestrator-only secrets that must never reach the agent uid — the DB
     // connection strings, the encryption-at-rest key, the bootstrap password, and

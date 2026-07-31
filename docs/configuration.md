@@ -209,9 +209,12 @@ Three things follow that are worth knowing when you write a profile:
   was enough to carry them out.
 
 - **`${STATE_DIR}` lives under the shared scratch root** (`/tmp/ild-agent-scratch`
-  by default). Both users touch it now: your preview writes there and ILD reads
-  the service logs back for the Preview tab and `get_preview_logs`. It is still
-  per-worktree and still discarded with the container.
+  by default), because your preview writes there and now does so as `agent`. It is
+  still per-worktree and still discarded with the container. Your service's **log
+  file is not** in it: ILD opens, appends to and serves those itself, so they stay
+  in a directory only ILD can reach. Read them through the Preview tab or
+  `get_preview_logs` rather than by path — if your service wants a log file of its
+  own to manage, put that under `${STATE_DIR}`.
 
 ### Giving a preview its own configuration
 
