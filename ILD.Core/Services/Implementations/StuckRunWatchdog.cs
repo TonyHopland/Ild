@@ -93,16 +93,17 @@ public sealed class StuckRunWatchdog : BackgroundService
         var recovery = sp.GetRequiredService<IRecoveryManager>();
         var workItems = sp.GetRequiredService<IWorkItemManager>();
 
-        // Superset of the orphaned-Running sweep by one shape: a run the shutdown
-        // drain parked (WaitingHuman + HaltReason.Shutdown) that startup never
-        // came back for. Startup reconciliation is skipped wholesale when the
+        // Superset of the orphaned-Running sweep by one shape — the shutdown park
+        // startup never came back for — which is exactly what makes it the same
+        // question recovery asks, so LoopRun.IsRecoverable answers both. Startup
+        // reconciliation is skipped wholesale when the
         // work-item server is unreachable — exactly what happens when one deploy
         // rolls both containers — and swallows its own failures, so without this
         // backstop the tidiest possible shutdown could park a run forever, which
         // is worse than the hard kill it replaces. Every per-run guard below then
         // applies unchanged.
         var running = (await runStore.GetActiveRunsAsync())
-            .Where(r => r.Status == LoopRunStatus.Running || r.IsShutdownHalted)
+            .Where(r => r.IsRecoverable)
             .ToList();
         if (running.Count == 0) return;
 

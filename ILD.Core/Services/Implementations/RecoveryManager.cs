@@ -28,16 +28,17 @@ public class RecoveryManager : IRecoveryManager
         // Two shapes, one query: a run left Running by a crash, and a run the
         // shutdown drain parked at WaitingHuman. The latter is invisible to a
         // Running-only read, and nothing else would ever come back for it.
+        // Which shapes those are is LoopRun.IsRecoverable's to say.
         var runs = await _loopRunStore.GetActiveRunsAsync();
-        return runs.Where(r => r.Status == LoopRunStatus.Running || r.IsShutdownHalted).Select(r => r.Id);
+        return runs.Where(r => r.IsRecoverable).Select(r => r.Id);
     }
 
     public async Task<bool> RecoverRunAsync(Guid runId)
     {
         var run = await _loopRunStore.GetByIdAsync(runId);
-        if (run == null) return false;
+        if (run == null || !run.IsRecoverable) return false;
+        // Which of the two recoverable shapes this is decides how it resumes.
         var shutdownHalted = run.IsShutdownHalted;
-        if (run.Status != LoopRunStatus.Running && !shutdownHalted) return false;
 
         var policy = run.RecoveryPolicy;
         if (policy == RecoveryPolicy.Cancel)

@@ -256,6 +256,30 @@ public class GracefulShutdownDrainTests
     }
 
     [Fact]
+    public async Task ApplicationStopping_raises_the_flag_before_any_service_has_stopped()
+    {
+        // The flag has to rise here rather than at the drain's own StopAsync:
+        // ApplicationStopping fires once, before any hosted service stops, and
+        // the window between it and the drain is precisely when the scheduler
+        // would otherwise claim a work item and launch a run nobody parks.
+        var engine = new Mock<ILoopEngine>();
+        var shutdown = new ShutdownState();
+        var lifetime = new NoopLifetime();
+        var service = new GracefulRunDrainService(
+            engine.Object, shutdown, new ShutdownOptions(), lifetime,
+            NullLogger<GracefulRunDrainService>.Instance);
+
+        await service.StartAsync(CancellationToken.None);
+        Assert.False(shutdown.IsStopping);
+
+        lifetime.StopApplication();
+
+        Assert.True(shutdown.IsStopping);
+        // Nothing has been drained yet — the host has only announced the stop.
+        engine.Verify(e => e.DrainForShutdownAsync(It.IsAny<TimeSpan>()), Times.Never);
+    }
+
+    [Fact]
     public async Task The_hosted_service_signals_stopping_and_drains_on_stop()
     {
         var engine = new Mock<ILoopEngine>();

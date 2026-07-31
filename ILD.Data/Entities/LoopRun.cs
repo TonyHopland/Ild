@@ -55,6 +55,24 @@ public class LoopRun : IHasUpdatedAt
         Status == LoopRunStatus.WaitingHuman && IsHalted && HaltReason == Enums.HaltReason.Shutdown;
 
     /// <summary>
+    /// The run needs a driver again and nobody else is coming for it: either a
+    /// crash left it <see cref="LoopRunStatus.Running"/> with its driving loop
+    /// gone, or the shutdown drain parked it on the way out. The two arrive at
+    /// startup in different row shapes but want the same answer to the only
+    /// question startup asks — is this ours to pick up? — so the shapes are
+    /// spelled out once here rather than at each of the readers (recovery, the
+    /// stuck-run watchdog), which would otherwise have to be edited in step
+    /// whenever a halt reason or status is added.
+    ///
+    /// Deliberately <b>not</b> a database query: both callers already read the
+    /// live set through <c>ILoopRunStore.GetActiveRunsAsync</c> and filter in
+    /// memory, and translating this to SQL would put the same knowledge back in
+    /// a second place.
+    /// </summary>
+    [NotMapped]
+    public bool IsRecoverable => Status == LoopRunStatus.Running || IsShutdownHalted;
+
+    /// <summary>
     /// The live AI session id captured mid-stream by the active adapter, so a
     /// halted run can be resumed against the SAME agent session. Written by the
     /// AI node executor in its own DI scope as the session id arrives.
