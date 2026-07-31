@@ -206,6 +206,77 @@ public class StuckRunWatchdogTests
         db.Dispose();
     }
 
+    [Fact]
+    public async Task Recovers_a_shutdown_halted_run_that_startup_never_picked_up()
+    {
+        // The backstop, and it is not optional: startup reconciliation is skipped
+        // wholesale when the work-item server is unreachable — what happens when
+        // one deploy rolls both containers — and swallows its own failures.
+        // Without this the tidiest possible shutdown could park a run forever.
+        var db = new TestDb();
+        var (version, _) = SeedTemplate(db);
+        var run = SeedRun(db, version.Id, LoopRunStatus.WaitingHuman,
+            updatedAt: DateTime.UtcNow.AddMinutes(-10),
+            isHalted: true, haltReason: HaltReason.Shutdown);
+
+        var engine = EngineWithActiveRuns(/* none */);
+        var recovery = RecoveryReturning(true);
+        var workItems = WorkItemsReturning(RemoteWorkItemStatus.Running);
+
+        await InvokeSweepOnceAsync(BuildWatchdog(db, engine.Object, recovery.Object, workItems.Object));
+
+        recovery.Verify(r => r.RecoverRunAsync(run.Id), Times.Once);
+        db.Dispose();
+    }
+
+    [Fact]
+    public async Task Never_touches_a_human_halted_run()
+    {
+        // Same row shape as above but no shutdown stamp — a person halted this
+        // one and is waiting to steer it. Sweeping it up would resume it out from
+        // under them a minute later.
+        var db = new TestDb();
+        var (version, _) = SeedTemplate(db);
+        SeedRun(db, version.Id, LoopRunStatus.WaitingHuman,
+            updatedAt: DateTime.UtcNow.AddMinutes(-10), isHalted: true, haltReason: null);
+
+        var engine = EngineWithActiveRuns(/* none */);
+        var recovery = RecoveryReturning(true);
+        var workItems = WorkItemsReturning(RemoteWorkItemStatus.Running);
+
+        await InvokeSweepOnceAsync(BuildWatchdog(db, engine.Object, recovery.Object, workItems.Object));
+
+        recovery.Verify(r => r.RecoverRunAsync(It.IsAny<Guid>()), Times.Never);
+        db.Dispose();
+    }
+
+    [Fact]
+    public async Task Does_not_heal_a_shutdown_halted_run_that_carries_a_completion_timestamp()
+    {
+        // CompletedAt alone used to trigger the completed-yet-Running heal. A
+        // parked run is WaitingHuman, so it is not in that invalid state at all —
+        // and healing it would fail the very run the drain parked to keep.
+        var db = new TestDb();
+        var (version, _) = SeedTemplate(db);
+        var run = SeedRun(db, version.Id, LoopRunStatus.WaitingHuman,
+            updatedAt: DateTime.UtcNow.AddMinutes(-10),
+            isHalted: true, haltReason: HaltReason.Shutdown);
+        var completedAt = DateTime.UtcNow.AddMinutes(-9);
+        await db.Fresh().LoopRuns.Where(r => r.Id == run.Id)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.CompletedAt, completedAt));
+
+        var engine = EngineWithActiveRuns(/* none */);
+        var recovery = RecoveryReturning(true);
+        var workItems = WorkItemsReturning(RemoteWorkItemStatus.Running);
+
+        await InvokeSweepOnceAsync(
+            BuildWatchdog(new LoopRunStore(db.Fresh()), engine.Object, recovery.Object, workItems.Object));
+
+        recovery.Verify(r => r.RecoverRunAsync(run.Id), Times.Once);
+        Assert.Equal(LoopRunStatus.WaitingHuman, db.Fresh().LoopRuns.AsNoTracking().First(r => r.Id == run.Id).Status);
+        db.Dispose();
+    }
+
     private static (LoopTemplateVersion version, LoopTemplate template) SeedTemplate(TestDb db)
     {
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume };
@@ -217,7 +288,7 @@ public class StuckRunWatchdogTests
     }
 
     private static LoopRun SeedRun(TestDb db, Guid versionId, LoopRunStatus status,
-        DateTime updatedAt, bool isPaused = false)
+        DateTime updatedAt, bool isPaused = false, bool isHalted = false, HaltReason? haltReason = null)
     {
         var run = new LoopRun
         {
@@ -227,6 +298,8 @@ public class StuckRunWatchdogTests
             RecoveryPolicy = RecoveryPolicy.AutoResume,
             Status = status,
             IsPaused = isPaused,
+            IsHalted = isHalted,
+            HaltReason = haltReason,
             StartedAt = updatedAt,
             CreatedAt = updatedAt,
             // TouchUpdatedAt only stamps Modified entries, so this explicit value

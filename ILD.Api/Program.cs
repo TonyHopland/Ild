@@ -63,6 +63,14 @@ try
 
     builder.Services.AddIldServices();
 
+    // The run drain happens inside the host stop, so the host must be willing to
+    // wait strictly longer than the drain (its own default is 30s regardless of
+    // what the drain was configured to take). Configured off the same
+    // ShutdownOptions singleton the drain reads, so the two budgets cannot drift.
+    builder.Services.AddOptions<HostOptions>()
+        .Configure<ILD.Api.Services.ShutdownOptions>((host, shutdown) =>
+            host.ShutdownTimeout = shutdown.HostShutdownTimeout);
+
     builder.Services.AddSingleton<LoggingLevelSwitch>(loggingLevelSwitch);
 
     builder.Services.AddControllers()

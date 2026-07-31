@@ -128,6 +128,12 @@ services:
         condition: service_healthy
       workitem-server:
         condition: service_started
+    # Compose's default is 10s, which is SHORTER than the 20s run drain
+    # (ILD_SHUTDOWN_DRAIN_SECONDS) — SIGKILL would land while runs were still
+    # being parked, restoring exactly the hard kill the drain replaces. The
+    # required nesting is drain < host shutdown timeout (drain + 5s) < this.
+    # Raise it alongside the drain if you lengthen that.
+    stop_grace_period: 30s
     restart: unless-stopped
 
 volumes:

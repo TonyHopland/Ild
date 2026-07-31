@@ -173,6 +173,29 @@ A `vX.Y.Z` git tag publishes `X.Y.Z`, `X.Y`, and `latest` for both images (amd64
 
 **One-time setup:** the first push lands each package **private**. Flip each to **public** once in its GHCR package settings (Package → Settings → Change visibility).
 
+## Shutdown and run draining
+
+On SIGTERM, ILD stops claiming work and parks the runs it is driving — in-flight
+AI nodes are halted at a known point, keeping their agent session, and resumed
+automatically on the next start. The mechanics and the resume rules are in
+[Configuration](./configuration.md#graceful-shutdown); what matters here is the
+one budget that lives outside ILD, the supervisor's grace period. The nesting is
+`ILD_SHUTDOWN_DRAIN_SECONDS` (20s) < host shutdown timeout (drain + 5s, derived)
+< supervisor grace period. If the outermost is too small the supervisor SIGKILLs
+mid-park and you are back to the hard kill draining exists to replace.
+
+- **docker-compose:** the default `stop_grace_period` is **10s** — shorter than
+  the drain. This repository's `docker-compose.yml` sets `stop_grace_period: 30s`
+  on the `ild` service. Any compose file of your own must do the same.
+- **Kubernetes:** the default `terminationGracePeriodSeconds` is **30s**, which
+  already clears the 25s host timeout. No manifest change is needed unless you
+  raise `ILD_SHUTDOWN_DRAIN_SECONDS`; if you do, raise this to match.
+
+Note that draining bounds how long a stop takes, not whether a run survives one:
+a process down longer than the work-item server's stale-claim window (~15
+minutes) still has its item reclaimed and its local run cancelled on startup, as
+it always did.
+
 ## First-startup behavior
 
 On first successful ILD startup:
@@ -181,4 +204,4 @@ On first successful ILD startup:
 2. The bootstrap user is created on first login from `ILD_USERNAME` (default `admin`) and `ILD_PASSWORD`.
 3. Seed loop templates are created: `Simple Code Change`, `AI-Assisted Feature`, and `Plan`.
 4. The global WorkItem Server connection is auto-seeded when `ILD_WORKITEM_SERVER_URL` and `ILD_WORKITEM_SERVER_API_KEY` are present and no URL is configured yet.
-5. Recoverable runs are inspected and recovery is attempted according to each run's policy.
+5. Recoverable runs are inspected and recovery is attempted according to each run's policy. Two shapes count as recoverable: a run left `Running` by a crash, which is re-driven from its current node, and a run the shutdown drain parked on the way out, which is resumed against the agent session it was parked on rather than re-run cold (see [Shutdown and run draining](#shutdown-and-run-draining)). A halt a **human** pressed is neither, and is left exactly where they left it.

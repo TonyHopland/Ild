@@ -20,6 +20,7 @@ Remote providers, the WorkItem Server connection, repositories, AI providers, an
 | `ILD_ALLOWED_ORIGINS`                        | Comma-separated CORS origins allowed to call the ILD API                                                          |
 | `ILD_PREVIEW_PROXY_BASE`                     | Origin worktree previews are served under, e.g. `http://ild.localhost:8080`. Unset ⇒ preview proxying is off      |
 | `ILD_PREVIEW_PUBLIC_HOST`                    | Host used to build direct preview URLs when no proxy base is set (default `127.0.0.1`)                            |
+| `ILD_SHUTDOWN_DRAIN_SECONDS`                 | Seconds the shutdown drain may spend parking in-flight runs (default `20`; see below)                             |
 | `WORKITEM_API_KEYS`                          | Accepted bearer keys for the WorkItem Server (comma-separated)                                                    |
 | `WORKITEM_DATA_PATH`                         | Base data directory for WorkItem Server runtime files                                                             |
 | `WORKITEM_LOG_LEVEL`                         | Serilog level for the WorkItem Server (docker compose defaults it to `ILD_LOG_LEVEL`)                             |
@@ -31,6 +32,67 @@ Remote providers, the WorkItem Server connection, repositories, AI providers, an
 The ILD API log level is also changeable at runtime through `PUT /api/v1/logging/level` without restarting; `ILD_LOG_LEVEL` only sets the starting level. The WorkItem Server has no runtime endpoint; its level is fixed at startup.
 
 The ILD container additionally uses an `ILD_AGENT_TOKEN` for agent/MCP calls back into the local API. It is auto-generated at startup if unset, so you normally don't need to provide one.
+
+## Graceful shutdown
+
+When ILD is asked to stop — `docker compose stop`, a Kubernetes rollout, a
+GitOps image bump — it parks the runs it is driving instead of dying with its
+agent CLIs mid-step, and picks exactly those runs up again on the next start.
+`ILD_SHUTDOWN_DRAIN_SECONDS` is how long it may spend doing so. Anything
+malformed or non-positive falls back to the 20s default; `0` in particular would
+silently restore the hard kill this replaces.
+
+**The sequence.** `ApplicationStopping` fires once, before any hosted service
+stops, and raises a single flag every component reads at the same moment. From
+that instant no new run driver launches and the scheduler claims no new work
+items, while heartbeats keep running so live runs hold the claims they already
+have. The drain then, for each run this process is driving:
+
+1. Parks it at its current node if that node is an **AI** node — `WaitingHuman`
+   with the halt flag set, keeping `CurrentNodeId` and the captured agent
+   session, and stamped as a shutdown halt rather than a human one. No work-item
+   transition is made: leaving the item `Running` on the server is what lets the
+   next start recognise the run as still ours.
+2. Cancels the run, killing the agent process, park or no park. A run on a Cmd
+   or Condition node is **not** parked — it is cheap to redo, so it is cancelled
+   and left `Running` for ordinary crash recovery.
+3. Waits for the driving loops to unwind, up to the drain timeout. This wait is
+   the point rather than a courtesy: the park is written before the agent is
+   killed, but each loop still has its interrupted-node bookkeeping to do on the
+   way out. A timeout logs a warning and never fails the shutdown.
+
+**Resume semantics.** On the next start a shutdown-parked run resumes through
+the halt path, against the same agent session, with the prompt `"Continue where
+you left off."` — the node is not re-run cold and its session context is not
+discarded. Three paths look for these runs: startup recovery, the remote
+work-item startup reconciler (the live path when `ILD_WORKITEM_SERVER_URL` is
+set), and the stuck-run watchdog as a backstop for when the work-item server is
+unreachable at startup — which is what happens when one deploy rolls both
+containers.
+
+A halt a **human** pressed is never auto-resumed by any of them. The two look
+identical in the run row apart from the reason stamp, which is exactly why the
+stamp exists; it is null for every row written before this feature, so those
+read as human halts and are left alone.
+
+**RecoveryPolicy still decides.** A run whose policy is `Cancel` or
+`NeedsReview` gets that treatment on restart even though the shutdown was a tidy
+one — the policy is an operator's explicit statement about restarts, and this is
+a restart. Worktree health is checked before any resume, as it always was.
+
+**Budgets must nest**, or the outer one cuts the inner one off mid-park:
+
+```
+ILD_SHUTDOWN_DRAIN_SECONDS (20s)
+  < host shutdown timeout (drain + 5s, set automatically)
+  < supervisor grace period (compose stop_grace_period / k8s terminationGracePeriodSeconds)
+```
+
+The host timeout is derived, not configured — the drain runs _inside_ the host
+stop, so the host has to be willing to wait strictly longer than the drain.
+Only the supervisor's grace period is outside ILD's reach; see
+[deployment.md](./deployment.md#shutdown-and-run-draining) for the compose and
+Kubernetes settings. If you raise the drain, raise the grace period with it.
 
 ## Secret encryption at rest
 

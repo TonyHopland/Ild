@@ -34,6 +34,27 @@ public class LoopRun : IHasUpdatedAt
     public bool IsHalted { get; set; }
 
     /// <summary>
+    /// Who caused the halt, when <see cref="IsHalted"/> is set. Null means a
+    /// human pressed Halt — which is what every row written before shutdown
+    /// draining existed says, and what a run resumed by any path says again
+    /// (every path that clears <see cref="IsHalted"/> nulls this too, or a
+    /// later human halt would be auto-resumed out from under the person who
+    /// asked for it).
+    /// </summary>
+    public HaltReason? HaltReason { get; set; }
+
+    /// <summary>
+    /// The run was parked by the shutdown drain, not by a person: the halt this
+    /// process inflicted on itself on the way out, and the one it resumes on the
+    /// next start. Computed rather than stored so the four readers that decide
+    /// whether to auto-resume — recovery, the startup reconciler, the stuck-run
+    /// watchdog and the drain's own tests — cannot drift apart.
+    /// </summary>
+    [NotMapped]
+    public bool IsShutdownHalted =>
+        Status == LoopRunStatus.WaitingHuman && IsHalted && HaltReason == Enums.HaltReason.Shutdown;
+
+    /// <summary>
     /// The live AI session id captured mid-stream by the active adapter, so a
     /// halted run can be resumed against the SAME agent session. Written by the
     /// AI node executor in its own DI scope as the session id arrives.

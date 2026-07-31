@@ -35,7 +35,7 @@ internal sealed class LoopEngineHarness : IDisposable
     private readonly ServiceProvider _sp;
     private readonly LoopEngine _engine;
 
-    public LoopEngineHarness(IRunNotifier? notifier = null)
+    public LoopEngineHarness(IRunNotifier? notifier = null, IShutdownState? shutdown = null)
     {
         Db = new TestDb();
 
@@ -74,7 +74,8 @@ internal sealed class LoopEngineHarness : IDisposable
         services.AddSingleton<ILoopEngine>(sp =>
         {
             return new LoopEngine(sp, Registry, sp.GetRequiredService<IRunNotifier>(),
-                NullLogger<LoopEngine>.Instance, sp.GetRequiredService<IWorkItemNotifier>());
+                NullLogger<LoopEngine>.Instance, sp.GetRequiredService<IWorkItemNotifier>(),
+                progressBuffer: null, shutdown: shutdown);
         });
         _sp = services.BuildServiceProvider();
         Services = _sp;
@@ -111,7 +112,11 @@ internal sealed class LoopEngineHarness : IDisposable
         Db.Context.SaveChanges();
     }
 
-    public LoopRun SeedRun(string startNodeKey, LoopRunStatus status = LoopRunStatus.Running)
+    public LoopRun SeedRun(
+        string startNodeKey,
+        LoopRunStatus status = LoopRunStatus.Running,
+        bool isHalted = false,
+        HaltReason? haltReason = null)
     {
         var run = new LoopRun
         {
@@ -122,11 +127,29 @@ internal sealed class LoopEngineHarness : IDisposable
             StartedAt = DateTime.UtcNow,
             CurrentNodeId = NodesById[startNodeKey].Id,
             RecoveryPolicy = RecoveryPolicy.AutoResume,
+            IsHalted = isHalted,
+            HaltReason = haltReason,
         };
         Db.Context.LoopRuns.Add(run);
         Db.Context.SaveChanges();
         RunId = run.Id;
         return run;
+    }
+
+    /// <summary>
+    /// Starts the run's real background driving loop — the one <see cref="RunAsync"/>
+    /// deliberately bypasses. Everything keyed off run <i>ownership</i> (the launch
+    /// gate, <see cref="ILoopEngine.GetActiveRunIdsAsync"/>, the shutdown drain)
+    /// only sees a run that got here, because ownership is claimed inside the
+    /// private <c>LaunchAsync</c> that <c>RunUntilParkAsync</c> is invoked beneath.
+    /// Returns as soon as the loop is scheduled — pair it with a
+    /// <see cref="BlockingExecutor"/> to know when the node is actually running.
+    /// </summary>
+    public Task LaunchAsync()
+    {
+        var method = typeof(LoopEngine).GetMethod("LaunchAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        return (Task)method.Invoke(_engine, new object[] { RunId })!;
     }
 
     /// <summary>Drives the engine inline until it parks. Returns when no node is currently executing.</summary>
@@ -224,6 +247,33 @@ internal sealed class ScriptedExecutorRegistry : INodeExecutorRegistry
     public INodeExecutor Get(NodeType type) => _byType.TryGetValue(type, out var e)
         ? e
         : throw new InvalidOperationException($"No executor registered for {type}");
+}
+
+/// <summary>
+/// A node that starts and then never finishes on its own — the shape of a live
+/// AI node. It reports when the engine has entered it (after the
+/// <see cref="NodeOutcome.NodeStarting"/> the engine turns into a Running
+/// <c>LoopRunNode</c> row), then blocks on the run's cancellation token and lets
+/// the <see cref="OperationCanceledException"/> out, exactly as a real executor
+/// whose agent process was killed does.
+/// </summary>
+internal sealed class BlockingExecutor : INodeExecutor
+{
+    private readonly TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public BlockingExecutor(NodeType type) => NodeType = type;
+
+    public NodeType NodeType { get; }
+
+    /// <summary>Completes once the node is running and the engine is waiting on it.</summary>
+    public Task Entered => _entered.Task;
+
+    public async IAsyncEnumerable<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
+    {
+        yield return new NodeOutcome.NodeStarting("blocking");
+        _entered.TrySetResult();
+        await Task.Delay(Timeout.Infinite, ctx.CancellationToken);
+    }
 }
 
 /// <summary>Emits a fixed sequence of NodeOutcome values each time the engine

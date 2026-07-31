@@ -23,6 +23,7 @@ public sealed class LoopEngine : ILoopEngine
     private readonly IRunNotifier _notifier;
     private readonly IRunProgressBuffer _progressBuffer;
     private readonly IWorkItemNotifier _workItemNotifier;
+    private readonly IShutdownState _shutdown;
     private readonly ILogger<LoopEngine> _logger;
 
     private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _runCts = new();
@@ -56,7 +57,8 @@ public sealed class LoopEngine : ILoopEngine
         IRunNotifier notifier,
         ILogger<LoopEngine> logger,
         IWorkItemNotifier? workItemNotifier = null,
-        IRunProgressBuffer? progressBuffer = null)
+        IRunProgressBuffer? progressBuffer = null,
+        IShutdownState? shutdown = null)
     {
         _sp = sp;
         _registry = registry;
@@ -64,6 +66,9 @@ public sealed class LoopEngine : ILoopEngine
         _logger = logger;
         _workItemNotifier = workItemNotifier ?? new NoopWorkItemNotifier();
         _progressBuffer = progressBuffer ?? new RunProgressBuffer();
+        // Defaulting to a never-signalled flag keeps an engine constructed
+        // without one behaving exactly as it did before draining existed.
+        _shutdown = shutdown ?? ShutdownState.NeverStopping;
     }
 
     public async Task StartRunAsync(string workItemId, CancellationToken cancellationToken = default)
@@ -284,6 +289,90 @@ public sealed class LoopEngine : ILoopEngine
             currentLoopRunId: run.Id, name: node.Label);
     }
 
+    public async Task DrainForShutdownAsync(TimeSpan timeout)
+    {
+        // Snapshot the owned runs before touching any of them: the cancellations
+        // below make each driving loop remove itself from _runCts as it unwinds,
+        // so iterating the live keys would race the teardown being driven.
+        var owned = _runCts.Keys.ToArray();
+        if (owned.Length == 0) return;
+
+        _logger.LogInformation("Shutdown drain: stopping {Count} in-flight run(s)", owned.Length);
+
+        foreach (var runId in owned)
+        {
+            // A park that failed must not cost the other runs their cancellation
+            // — nor leave this one's agent process alive past process exit.
+            try { await HaltForShutdownAsync(runId); }
+            catch (Exception ex) { _logger.LogError(ex, "Shutdown drain: failed to park run {RunId}", runId); }
+
+            // Cancel whether or not the park applied: a run on a non-AI node is
+            // deliberately left Running for ordinary crash recovery, but its
+            // in-flight work still has to stop.
+            if (_runCts.TryGetValue(runId, out var cts))
+            {
+                try { cts.Cancel(); } catch { }
+            }
+        }
+
+        var drivers = owned
+            .Select(id => _runTasks.TryGetValue(id, out var t) ? t : null)
+            .OfType<Task>()
+            .ToArray();
+        if (drivers.Length == 0) return;
+
+        // Waiting is the point of the drain, not a courtesy: the park is already
+        // written, but each loop still has its interrupted-node bookkeeping to do
+        // on the way out, and a process that exited here would leave exactly the
+        // half-written state this feature removes.
+        var unwound = Task.WhenAll(drivers);
+        if (await Task.WhenAny(unwound, Task.Delay(timeout)).ConfigureAwait(false) != unwound)
+        {
+            _logger.LogWarning(
+                "Shutdown drain timed out after {Timeout}: {Count} run(s) were still unwinding and are being abandoned",
+                timeout, drivers.Count(d => !d.IsCompleted));
+        }
+    }
+
+    /// <summary>
+    /// <see cref="HaltRunAsync"/> for a host shutdown, differing in exactly three
+    /// ways: the halt is stamped <see cref="HaltReason.Shutdown"/> so startup can
+    /// tell it from a human's; <c>HumanFeedbackReason</c> is left null, because
+    /// that field drives the "human input needed" badge and this park is not
+    /// asking anyone for anything; and the work item is not transitioned at all,
+    /// since leaving it Running on the server is what lets the startup reconciler
+    /// recognise the run as still ours. Same guards and same park-before-cancel
+    /// ordering otherwise.
+    /// </summary>
+    private async Task HaltForShutdownAsync(Guid runId)
+    {
+        using var scope = _sp.CreateScope();
+        var sp = scope.ServiceProvider;
+        var loopRunStore = sp.GetRequiredService<ILoopRunStore>();
+        var templateStore = sp.GetRequiredService<ILoopTemplateStore>();
+        var run = await loopRunStore.GetByIdAsync(runId);
+        if (run is null) return;
+
+        if (run.Status != LoopRunStatus.Running || run.CurrentNodeId is null) return;
+        var nodes = await templateStore.GetNodesForVersionAsync(run.LoopTemplateVersionId);
+        var node = nodes.FirstOrDefault(n => n.Id == run.CurrentNodeId.Value);
+        if (node is null || node.NodeType != NodeType.AI) return;
+
+        var old = run.Status;
+        run.Status = LoopRunStatus.WaitingHuman;
+        run.IsHalted = true;
+        run.HaltReason = HaltReason.Shutdown;
+        run.HumanFeedbackReason = null;
+        await loopRunStore.UpdateRunAsync(run);
+
+        _logger.LogInformation(
+            "Shutdown drain: parked run {RunId} at AI node {NodeLabel} (session {SessionId})",
+            runId, node.Label, run.CurrentAiSessionId ?? "none");
+
+        await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.WaitingHuman);
+        await _notifier.HaltedAsync(runId);
+    }
+
     public async Task ResumeFromHaltAsync(Guid runId, string? note)
     {
         using var scope = _sp.CreateScope();
@@ -300,6 +389,9 @@ public sealed class LoopEngine : ILoopEngine
         // captured session; the executor consumes and clears it one-shot.
         run.SteeringNote = note ?? string.Empty;
         run.IsHalted = false;
+        // Clear the stamp with the halt: left set, the next halt a human presses
+        // would look like a shutdown park and be auto-resumed out from under them.
+        run.HaltReason = null;
         run.HumanFeedbackReason = null;
         run.Status = LoopRunStatus.Running;
         await loopRunStore.UpdateRunAsync(run);
@@ -402,6 +494,7 @@ public sealed class LoopEngine : ILoopEngine
         // dialog stays stuck on (it gates on IsHalted + WaitingHuman) the next time
         // the run parks at a genuine human-feedback node. Mirrors ResumeFromHaltAsync.
         run.IsHalted = false;
+        run.HaltReason = null;
         run.SteeringNote = null;
         run.HumanFeedbackReason = null;
         run.Status = LoopRunStatus.Running;
@@ -445,6 +538,15 @@ public sealed class LoopEngine : ILoopEngine
 
     private Task LaunchAsync(Guid runId)
     {
+        // Ahead of the ownership gate below, because a claim, resume or webhook
+        // landing mid-shutdown would otherwise spawn a driver the drain has
+        // already walked past — one nothing will park and nothing will wait for.
+        if (_shutdown.IsStopping)
+        {
+            _logger.LogDebug("LaunchAsync skipped for run {RunId}: host is stopping", runId);
+            return Task.CompletedTask;
+        }
+
         // Single-owner gate. The CancellationTokenSource entry IS the ownership
         // token: whoever wins this atomic TryAdd owns the run's driving loop for
         // its entire lifetime (the entry is removed only in the task's finally
