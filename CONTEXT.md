@@ -149,6 +149,7 @@ _Avoid_: chat scope, session context, focus
 - `AiProvider.Config` is a free-form JSON blob; each adapter reads what it needs
 - Rebase happens only at loop start, not before each node
 - Failed/cancelled WorkItems: "Done" finishes the current run and discards; "Backlog" fully resets for re-planning. Neither destroys the run's worktree or branch — those live as long as the run row and are reclaimed by run deletion (manual or retention)
+- Moving a **WorkItem** back to Backlog from the board (drag, keyboard move, or status dropdown) is for an item that has not started: allowed from Work Queue, Ready and HumanFeedback, and only while no run of the item is still alive (Running or WaitingHuman). An item with a live run is refused rather than relabelled — the Active Work Item Set is derived from live runs, so a run left alive under a Backlog card would keep being heartbeated and holding a concurrency slot. Sending a _started_ item back is the reset above, which stops the run first
 - Safety net (max edge traversals): when an edge is traversed more than its `MaxTraversals` (default 50 via `LoopEngine.DefaultMaxEdgeTraversals`), the engine fails the run with "Max traversals exceeded for edge …"
 
 ## Example Dialogue

@@ -36,6 +36,12 @@ public interface IWorkItemManager
     /// bodies. Lets an agent orient before drilling into individual items.
     /// </summary>
     Task<BacklogSummary> GetBacklogSummaryAsync(Guid? repositoryId);
+    /// <summary>
+    /// Send an item that has not started back to Backlog for re-planning.
+    /// Refused for an item with a live run behind it — that is
+    /// <see cref="CleanupToBacklogAsync"/>'s job.
+    /// </summary>
+    Task<bool> TransitionToBacklogAsync(string workItemId);
     Task<bool> TransitionToWorkQueueAsync(string workItemId);
     Task<bool> TransitionToReadyAsync(string workItemId);
     Task<bool> TransitionToRunningAsync(string workItemId);

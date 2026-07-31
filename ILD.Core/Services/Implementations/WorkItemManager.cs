@@ -593,6 +593,31 @@ public class WorkItemManager : IWorkItemManager
     // Transitions
     // ──────────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// A human sending an item back to Backlog — dragging the card to the
+    /// Backlog column, the keyboard move, or picking Backlog from the status
+    /// menu. Backlog is the full reset for re-planning, so it is reachable from
+    /// every column an item can sit in before its run starts.
+    ///
+    /// An item with a live run behind it is refused here rather than quietly
+    /// relabelled: the Active Work Item Set is derived from live runs, so a run
+    /// left alive under a Backlog card would keep being heartbeated and hold a
+    /// concurrency slot — the same hazard <see cref="TransitionToDoneAsync"/>
+    /// guards against. Stopping that run and resetting the item is
+    /// <see cref="CleanupToBacklogAsync"/>, reached from the work-item modal.
+    /// </summary>
+    public async Task<bool> TransitionToBacklogAsync(string workItemId)
+    {
+        var wi = await GetWorkItemAsync(workItemId);
+        if (wi == null) return false;
+        if (wi.Status is not (RemoteWorkItemStatus.WorkQueue
+            or RemoteWorkItemStatus.Ready
+            or RemoteWorkItemStatus.HumanFeedback))
+            return false;
+        if (await _loopRunStore.GetActiveByWorkItemAsync(workItemId) != null) return false;
+        return await TransitionAsync(workItemId, RemoteWorkItemStatus.Backlog);
+    }
+
     public async Task<bool> TransitionToWorkQueueAsync(string workItemId)
     {
         var wi = await GetWorkItemAsync(workItemId);
