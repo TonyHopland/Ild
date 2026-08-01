@@ -154,6 +154,17 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IPrStatusPoller>(sp => sp.GetRequiredService<PrStatusPoller>());
         services.AddHostedService(sp => sp.GetRequiredService<PrStatusPoller>());
 
+        // Graceful shutdown drain. Registered LAST, and the position is
+        // load-bearing: hosted services stop in reverse registration order, so
+        // last-registered drains first — while the notifier it publishes
+        // through, the scopes it opens and the scheduler whose heartbeats hold
+        // the work-item claims are all still standing. Moved earlier, the drain
+        // would park runs into a half-torn-down process (GracefulShutdownDrainTests
+        // holds this line, since a comment cannot).
+        services.AddSingleton<IShutdownState, ShutdownState>();
+        services.AddSingleton(_ => ShutdownOptions.FromEnvironment());
+        services.AddHostedService<GracefulRunDrainService>();
+
         return services;
     }
 }

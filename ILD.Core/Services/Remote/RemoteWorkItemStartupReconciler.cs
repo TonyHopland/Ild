@@ -109,6 +109,20 @@ public sealed class RemoteWorkItemStartupReconciler : IHostedService
                                 "Startup reconcile: work item {WorkItemId} still Running on server — recovering run {RunId}",
                                 run.WorkItemId, run.Id);
                         }
+                        else if (run.IsShutdownHalted)
+                        {
+                            // The one WaitingHuman run with no pending signal
+                            // coming: what it was waiting for was this process
+                            // starting again. Through the recovery manager, so
+                            // its RecoveryPolicy and worktree health still get a
+                            // say, and it resumes against the agent session the
+                            // drain parked it on.
+                            await recovery.RecoverRunAsync(run.Id);
+                            resumed++;
+                            _log.LogInformation(
+                                "Startup reconcile: run {RunId} was parked by a shutdown drain and its work item {WorkItemId} is still Running — resuming",
+                                run.Id, run.WorkItemId);
+                        }
                         else
                         {
                             // WaitingHuman runs resume via their pending signal.

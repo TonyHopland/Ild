@@ -79,9 +79,59 @@ public class RemoteWorkItemStartupReconcilerTests
         Assert.Equal(LoopRunStatus.Cancelled, FreshStatus(db, run.Id));
     }
 
+    [Fact]
+    public async Task Shutdown_halted_run_is_resumed_when_the_server_still_says_Running()
+    {
+        // The one WaitingHuman run with no pending signal coming: what it was
+        // waiting for was this process starting again. Through the recovery
+        // manager, so its policy and worktree health still get a say.
+        var (db, run) = SeedRun(LoopRunStatus.WaitingHuman, isHalted: true, haltReason: HaltReason.Shutdown);
+        using var _ = db;
+        var recovery = new Mock<IRecoveryManager>();
+
+        await RunReconcilerAsync(db, recovery,
+            ServerReturns(run.WorkItemId, RemoteWorkItemStatus.Running));
+
+        recovery.Verify(r => r.RecoverRunAsync(run.Id), Times.Once);
+    }
+
+    [Fact]
+    public async Task Human_halted_run_is_left_parked_even_when_the_server_says_Running()
+    {
+        // A person is waiting to steer it. The work item stays Running on the
+        // server because the halt path parks the item in HumanFeedback and the
+        // server may not have caught up — either way this is not ours to resume.
+        var (db, run) = SeedRun(LoopRunStatus.WaitingHuman, isHalted: true, haltReason: null);
+        using var _ = db;
+        var recovery = new Mock<IRecoveryManager>();
+
+        await RunReconcilerAsync(db, recovery,
+            ServerReturns(run.WorkItemId, RemoteWorkItemStatus.Running));
+
+        recovery.Verify(r => r.RecoverRunAsync(It.IsAny<Guid>()), Times.Never);
+        Assert.Equal(LoopRunStatus.WaitingHuman, FreshStatus(db, run.Id));
+    }
+
+    [Fact]
+    public async Task Shutdown_halted_run_whose_item_the_server_reclaimed_is_cancelled_not_resumed()
+    {
+        // The item is being handed out as a fresh run. Resuming ours would put
+        // two loops on one work item — the drain's park does not change that.
+        var (db, run) = SeedRun(LoopRunStatus.WaitingHuman, isHalted: true, haltReason: HaltReason.Shutdown);
+        using var _ = db;
+        var recovery = new Mock<IRecoveryManager>();
+
+        await RunReconcilerAsync(db, recovery,
+            ServerReturns(run.WorkItemId, RemoteWorkItemStatus.Ready));
+
+        recovery.Verify(r => r.RecoverRunAsync(It.IsAny<Guid>()), Times.Never);
+        Assert.Equal(LoopRunStatus.Cancelled, FreshStatus(db, run.Id));
+    }
+
     // ----- plumbing -----
 
-    private static (TestDb db, LoopRun run) SeedRun(LoopRunStatus status)
+    private static (TestDb db, LoopRun run) SeedRun(
+        LoopRunStatus status, bool isHalted = false, HaltReason? haltReason = null)
     {
         var db = new TestDb();
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t" };
@@ -95,6 +145,8 @@ public class RemoteWorkItemStartupReconcilerTests
             LoopTemplateVersionId = version.Id,
             Status = status,
             StartedAt = DateTime.UtcNow,
+            IsHalted = isHalted,
+            HaltReason = haltReason,
         };
         db.Context.LoopRuns.Add(run);
         db.Context.SaveChanges();

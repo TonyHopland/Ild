@@ -93,7 +93,18 @@ public sealed class StuckRunWatchdog : BackgroundService
         var recovery = sp.GetRequiredService<IRecoveryManager>();
         var workItems = sp.GetRequiredService<IWorkItemManager>();
 
-        var running = await runStore.GetRunningRunsAsync();
+        // Superset of the orphaned-Running sweep by one shape — the shutdown park
+        // startup never came back for — which is exactly what makes it the same
+        // question recovery asks, so LoopRun.IsRecoverable answers both. Startup
+        // reconciliation is skipped wholesale when the
+        // work-item server is unreachable — exactly what happens when one deploy
+        // rolls both containers — and swallows its own failures, so without this
+        // backstop the tidiest possible shutdown could park a run forever, which
+        // is worse than the hard kill it replaces. Every per-run guard below then
+        // applies unchanged.
+        var running = (await runStore.GetActiveRunsAsync())
+            .Where(r => r.IsRecoverable)
+            .ToList();
         if (running.Count == 0) return;
 
         // In-process liveness: any run with a driving task is healthy and is
@@ -122,7 +133,11 @@ public sealed class StuckRunWatchdog : BackgroundService
             // Running nodes, and park the work item for review so it stops hanging
             // in the Running column. The save-boundary guard prevents new runs from
             // reaching this state; this recovers ones already stuck in it.
-            if (run.CompletedAt is not null)
+            // The status half of the condition is what keeps a shutdown-halted
+            // run out of here: it is WaitingHuman, so it is not in the invalid
+            // "completed yet Running" state at all, and healing it would fail the
+            // very run the drain parked to keep.
+            if (run.Status == LoopRunStatus.Running && run.CompletedAt is not null)
             {
                 // Guard per run, like the RecoverRunAsync path below: a throw from
                 // the interrupt/update/transition here must not abort the sweep and
@@ -157,8 +172,8 @@ public sealed class StuckRunWatchdog : BackgroundService
             if (wi.Status != RemoteWorkItemStatus.Running) continue;
 
             _log.LogWarning(
-                "Recovering orphaned run {RunId} (work item {WorkItemId}): Running with no driving task since {LastTouched:o}",
-                run.Id, run.WorkItemId, lastTouched);
+                "Recovering orphaned run {RunId} (work item {WorkItemId}): {Status} with no driving task since {LastTouched:o}",
+                run.Id, run.WorkItemId, run.Status, lastTouched);
             try
             {
                 if (await recovery.RecoverRunAsync(run.Id)) recovered++;

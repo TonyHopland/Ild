@@ -92,18 +92,21 @@ public sealed class WorkItemScheduler : BackgroundService, IWorkItemScheduler
     private readonly IOptionsMonitor<WorkItemSchedulerOptions> _options;
     private readonly ILogger<WorkItemScheduler> _log;
     private readonly TimeProvider _time;
+    private readonly IShutdownState _shutdown;
     private readonly SemaphoreSlim _pulse = new(0, 1);
 
     public WorkItemScheduler(
         IServiceScopeFactory scopes,
         IOptionsMonitor<WorkItemSchedulerOptions> options,
         ILogger<WorkItemScheduler> log,
-        TimeProvider time)
+        TimeProvider time,
+        IShutdownState? shutdown = null)
     {
         _scopes = scopes;
         _options = options;
         _log = log;
         _time = time;
+        _shutdown = shutdown ?? ShutdownState.NeverStopping;
     }
 
     public void Pulse()
@@ -142,7 +145,12 @@ public sealed class WorkItemScheduler : BackgroundService, IWorkItemScheduler
                 var maxConcurrent = await settings.GetMaxConcurrentAsync(stoppingToken);
                 var coord = scope.ServiceProvider.GetRequiredService<IRemoteWorkItemCoordinator>();
                 var serverOpts = new WorkItemServerOptions { BaseUrl = opts.BaseUrl, ApiKey = opts.ApiKey };
-                var result = await coord.RunPollCycleAsync(serverOpts, maxConcurrent, claimReadyItems: !isPaused, stoppingToken);
+                // Stopping suppresses claiming for the same reason a pause does,
+                // and nothing else: the rest of the pass — heartbeats above all —
+                // has to keep running so live runs hold their claims right up to
+                // the moment the drain parks them.
+                var claimReadyItems = !isPaused && !_shutdown.IsStopping;
+                var result = await coord.RunPollCycleAsync(serverOpts, maxConcurrent, claimReadyItems, stoppingToken);
                 if (result.HasActiveHumanFeedback) delay = opts.GracePollInterval;
                 if (result.Claimed.Count > 0 || result.Resumed.Count > 0 || result.EscalatedToHumanFeedback.Count > 0)
                 {

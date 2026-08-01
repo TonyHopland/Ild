@@ -86,6 +86,28 @@ public interface ILoopEngine
     /// distinct from <see cref="ResumeRunAsync"/>, which refuses WaitingHuman runs.
     /// </summary>
     Task ResumeFromHaltAsync(Guid runId, string? note);
+
+    /// <summary>
+    /// Park every run this process is driving for a host shutdown, then wait up
+    /// to <paramref name="timeout"/> for their driving loops to unwind.
+    ///
+    /// A run on an AI node is halted the way <see cref="HaltRunAsync"/> halts
+    /// one — <c>WaitingHuman</c> + <c>IsHalted</c>, keeping <c>CurrentNodeId</c>
+    /// and the captured agent session — but stamped
+    /// <c>HaltReason.Shutdown</c> and with no work-item transition, so the
+    /// item stays Running on the server and the next start recognises the run as
+    /// still ours and resumes it against the same session. A run on any other
+    /// node is only cancelled and left <c>Running</c> for ordinary crash
+    /// recovery: a Cmd or Condition node is cheap to redo and not worth a park
+    /// a human might have to clear.
+    ///
+    /// The wait is the point rather than a courtesy: the park is written before
+    /// the agent is killed, but the interrupted-node bookkeeping happens as the
+    /// loop unwinds, so a process that exited first would leave exactly the
+    /// half-written state this removes. Never throws — a drain that failed must
+    /// not hold the process open.
+    /// </summary>
+    Task DrainForShutdownAsync(TimeSpan timeout);
     Task<LoopRunStatus?> GetRunStatusAsync(Guid runId);
     Task<IEnumerable<Guid>> GetActiveRunIdsAsync();
 

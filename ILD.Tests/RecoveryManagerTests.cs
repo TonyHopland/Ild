@@ -281,6 +281,116 @@ public class RecoveryManagerTests
         engine.Verify(e => e.CancelRunAsync(It.IsAny<Guid>()), Times.Never);
     }
 
+    // ----- shutdown-halted runs -----
+
+    /// <summary>
+    /// A run the shutdown drain parked, as the store hands it back: WaitingHuman,
+    /// halted, and stamped Shutdown. <paramref name="haltReason"/> is null for the
+    /// other shape this file cares about — a halt a <i>human</i> pressed, which
+    /// every row written before shutdown draining existed also looks like.
+    /// </summary>
+    private static LoopRun HaltedRun(Guid runId, string wiId, HaltReason? haltReason,
+        RecoveryPolicy policy = RecoveryPolicy.AutoResume, string? worktreePath = null)
+        => new()
+        {
+            Id = runId,
+            WorkItemId = wiId,
+            Status = LoopRunStatus.WaitingHuman,
+            IsHalted = true,
+            HaltReason = haltReason,
+            RecoveryPolicy = policy,
+            CurrentNodeId = Guid.NewGuid(),
+            WorktreePath = worktreePath,
+        };
+
+    [Fact]
+    public async Task RecoverRunAsync_resumes_a_shutdown_halted_run_through_the_halt_path()
+    {
+        // Not ResumeRecoveredRunAsync: that re-drives the AI node cold and throws
+        // away the agent session the park exists to keep. A null note is what
+        // makes the executor continue that session.
+        var (mgr, _, runStore, _, _, _, engine) = Build();
+        var runId = Guid.NewGuid();
+        runStore.Setup(s => s.GetByIdAsync(runId))
+            .ReturnsAsync(HaltedRun(runId, "wi-1", HaltReason.Shutdown));
+
+        Assert.True(await mgr.RecoverRunAsync(runId));
+
+        engine.Verify(e => e.ResumeFromHaltAsync(runId, null), Times.Once);
+        engine.Verify(e => e.ResumeRecoveredRunAsync(It.IsAny<Guid>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RecoverRunAsync_leaves_a_human_halted_run_completely_alone()
+    {
+        // The whole point of discriminating the two halts: a person is waiting to
+        // steer this run, and a restart is not their cue to have it taken away.
+        var (mgr, wiMgr, runStore, _, _, _, engine) = Build();
+        var runId = Guid.NewGuid();
+        runStore.Setup(s => s.GetByIdAsync(runId))
+            .ReturnsAsync(HaltedRun(runId, "wi-1", haltReason: null));
+
+        Assert.False(await mgr.RecoverRunAsync(runId));
+
+        engine.Verify(e => e.ResumeFromHaltAsync(It.IsAny<Guid>(), It.IsAny<string?>()), Times.Never);
+        engine.Verify(e => e.ResumeRecoveredRunAsync(It.IsAny<Guid>()), Times.Never);
+        engine.Verify(e => e.CancelRunAsync(It.IsAny<Guid>()), Times.Never);
+        wiMgr.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task RecoverRunAsync_honours_the_Cancel_policy_for_a_shutdown_halt()
+    {
+        // "The restart was a tidy one" is not grounds to overrule an operator's
+        // explicit statement about what a restart should do to their runs.
+        var (mgr, _, runStore, _, _, _, engine) = Build();
+        var runId = Guid.NewGuid();
+        runStore.Setup(s => s.GetByIdAsync(runId))
+            .ReturnsAsync(HaltedRun(runId, "wi-1", HaltReason.Shutdown, RecoveryPolicy.Cancel));
+
+        Assert.True(await mgr.RecoverRunAsync(runId));
+
+        engine.Verify(e => e.CancelRunAsync(runId), Times.Once);
+        engine.Verify(e => e.ResumeFromHaltAsync(It.IsAny<Guid>(), It.IsAny<string?>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task RecoverRunAsync_still_checks_worktree_health_for_a_shutdown_halt()
+    {
+        var (mgr, wiMgr, runStore, _, _, repo, engine) = Build();
+        var runId = Guid.NewGuid();
+        const string worktreePath = "/tmp/wt";
+        runStore.Setup(s => s.GetByIdAsync(runId))
+            .ReturnsAsync(HaltedRun(runId, "wi-1", HaltReason.Shutdown, worktreePath: worktreePath));
+        repo.Setup(r => r.ValidateWorktreeHealthAsync(worktreePath)).ReturnsAsync(false);
+
+        Assert.True(await mgr.RecoverRunAsync(runId));
+
+        engine.Verify(e => e.ResumeFromHaltAsync(It.IsAny<Guid>(), It.IsAny<string?>()), Times.Never);
+        wiMgr.Verify(m => m.TransitionAsync("wi-1", RemoteWorkItemStatus.HumanFeedback,
+            It.Is<string?>(reason => reason != null && reason.Contains(worktreePath, StringComparison.Ordinal)),
+            It.IsAny<string?>(), It.IsAny<Guid?>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task GetRecoverableRunIdsAsync_covers_crashed_and_shutdown_halted_runs_only()
+    {
+        // One query over the alive set, filtered to the two shapes startup can do
+        // something about: a Running run left by a crash, and a run the drain
+        // parked. A human halt — and a genuine Human/PR-node park — stay out.
+        var (mgr, _, runStore, _, _, _, _) = Build();
+        var crashed = new LoopRun { Id = Guid.NewGuid(), Status = LoopRunStatus.Running };
+        var drained = HaltedRun(Guid.NewGuid(), "wi-2", HaltReason.Shutdown);
+        var humanHalted = HaltedRun(Guid.NewGuid(), "wi-3", haltReason: null);
+        var parked = new LoopRun { Id = Guid.NewGuid(), Status = LoopRunStatus.WaitingHuman };
+        runStore.Setup(s => s.GetActiveRunsAsync())
+            .ReturnsAsync(new List<LoopRun> { crashed, drained, humanHalted, parked });
+
+        var ids = (await mgr.GetRecoverableRunIdsAsync()).ToList();
+
+        Assert.Equal(new[] { crashed.Id, drained.Id }, ids);
+    }
+
     [Fact]
     public async Task SetRecoveryPolicyAsync_persists_policy_via_template_store()
     {

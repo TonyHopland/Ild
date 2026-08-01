@@ -25,14 +25,20 @@ public class RecoveryManager : IRecoveryManager
 
     public async Task<IEnumerable<Guid>> GetRecoverableRunIdsAsync()
     {
-        var runs = await _loopRunStore.GetRunningRunsAsync();
-        return runs.Select(r => r.Id);
+        // Two shapes, one query: a run left Running by a crash, and a run the
+        // shutdown drain parked at WaitingHuman. The latter is invisible to a
+        // Running-only read, and nothing else would ever come back for it.
+        // Which shapes those are is LoopRun.IsRecoverable's to say.
+        var runs = await _loopRunStore.GetActiveRunsAsync();
+        return runs.Where(r => r.IsRecoverable).Select(r => r.Id);
     }
 
     public async Task<bool> RecoverRunAsync(Guid runId)
     {
         var run = await _loopRunStore.GetByIdAsync(runId);
-        if (run == null || run.Status != LoopRunStatus.Running) return false;
+        if (run == null || !run.IsRecoverable) return false;
+        // Which of the two recoverable shapes this is decides how it resumes.
+        var shutdownHalted = run.IsShutdownHalted;
 
         var policy = run.RecoveryPolicy;
         if (policy == RecoveryPolicy.Cancel)
@@ -49,8 +55,10 @@ public class RecoveryManager : IRecoveryManager
             return true;
         }
 
-        // Don't auto-resume runs waiting for human input
-        if (run.CurrentNodeId.HasValue)
+        // Don't auto-resume runs waiting for human input. A shutdown-halted run
+        // is parked at its AI node, not at a node asking for a person — that
+        // park is the engine's own, and resuming it is the whole point.
+        if (!shutdownHalted && run.CurrentNodeId.HasValue)
         {
             var runNode = await _loopRunStore.GetRunNodeAsync(runId, run.CurrentNodeId.Value);
             if (runNode?.Status == LoopRunNodeStatus.WaitingHuman)
@@ -74,7 +82,15 @@ public class RecoveryManager : IRecoveryManager
             return true;
         }
 
-        await _engine.ResumeRecoveredRunAsync(runId);
+        // A shutdown-halted run resumes through the halt path, against the agent
+        // session it was parked on: ResumeRecoveredRunAsync would re-drive the AI
+        // node cold and throw away the session — the very cost this park exists
+        // to avoid. A null note is what makes the executor continue that session
+        // with "Continue where you left off."
+        if (shutdownHalted)
+            await _engine.ResumeFromHaltAsync(runId, null);
+        else
+            await _engine.ResumeRecoveredRunAsync(runId);
         return true;
     }
 
