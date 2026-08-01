@@ -250,6 +250,16 @@ public static class ToolDescriptors
     // sends. update_current_loop is a full-document replacement applied to the open
     // editor's transient client state — there is no persist tool.
 
+    public static readonly ToolDescriptor GetLoopAuthoringGuide = new()
+    {
+        Name = "ild_get_loop_authoring_guide",
+        Label = "Get Loop Authoring Guide",
+        Description = "Read the loop authoring guide: the node/edge vocabulary, the config field semantics you cannot infer from the name, the graph rules a human's save enforces, and the authoring practices. Call this before writing or restructuring a loop, and again whenever you are unsure of a rule — the chat sends it once per session, so this is how you get it back.",
+        EndpointPath = "api/v1/agent/loop-authoring-guide",
+        HttpMethod = HttpMethod.Get,
+        Parameters = Array.Empty<ToolParameterDescriptor>(),
+    };
+
     public static readonly ToolDescriptor GetCurrentLoop = new()
     {
         Name = "ild_get_current_loop",
@@ -399,6 +409,7 @@ public static class ToolDescriptors
         GetPreviewServiceConfig,
         UpdatePreviewServiceConfig,
         GetPreviewLogs,
+        GetLoopAuthoringGuide,
         GetCurrentLoop,
         GetLoopNode,
         EditLoopNodeField,

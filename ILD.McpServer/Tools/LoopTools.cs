@@ -33,6 +33,11 @@ public sealed class LoopTools
 
     public LoopTools(IldClient ild) { _ild = ild; }
 
+    [McpServerTool(Name = "get_loop_authoring_guide")]
+    [Description("Read the loop authoring guide: the node/edge vocabulary, the config field semantics you cannot infer from the name, the graph rules a human's save enforces, and the authoring practices. Call this before writing or restructuring a loop, and again whenever you are unsure of a rule — the chat sends it once per session, so this is how you get it back. Static text; it does not depend on which loop is open.")]
+    public Task<string> GetLoopAuthoringGuide()
+        => _ild.GetRawAsync("api/v1/agent/loop-authoring-guide");
+
     [McpServerTool(Name = "get_current_loop")]
     [Description("Read the loop the user currently has open in the Loop Editor as an ild-loop-template/v1 JSON document (its live, possibly-unsaved nodes and edges). Returns {\"loopEditorOpen\": false} when no loop editor is open. Token cost is paid only when this tool is called.")]
     public Task<string> GetCurrentLoop()

@@ -60,6 +60,17 @@ public class ChatSession : IHasUpdatedAt
     [MaxLength(256)]
     public string? CurrentSessionId { get; set; }
 
+    /// <summary>
+    /// The adapter session the loop authoring guide has already been delivered into,
+    /// or null if it never has been. A resumed session keeps everything it was ever
+    /// sent, so the guide is pushed once per session rather than on every turn the
+    /// Loop Editor is open; comparing this against <see cref="CurrentSessionId"/>
+    /// re-briefs an agent session that was rebound or forked, and survives a restart
+    /// because it is durable alongside the binding it describes.
+    /// </summary>
+    [MaxLength(256)]
+    public string? LoopGuideSessionId { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     /// <summary>Last-activity timestamp; shown as the history row's date-stamp.</summary>
