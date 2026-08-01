@@ -154,15 +154,43 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
             var runtime = await CreateRuntimeAsync(normalized, loaded, profileName, profile, options, cancellationToken);
 
-            foreach (var service in profile.Services)
+            // The runtime only becomes reachable — to StopAsync, to Dispose, to every
+            // status surface — on the last line of this block. Anything that fails in
+            // between must therefore take the services it already launched down with
+            // it: an orphan keeps running with this attempt's ports and ${PORT:alias}
+            // values baked in, holds those ports against the next start, and keeps
+            // appending to the same per-service log, with no stop path able to reach it.
+            try
             {
-                runtime.AddProcess(await LaunchServiceProcessAsync(service, runtime, cancellationToken));
-            }
+                foreach (var service in profile.Services)
+                {
+                    runtime.AddProcess(await LaunchServiceProcessAsync(service, runtime, cancellationToken));
+                }
 
-            foreach (var service in profile.Services)
+                foreach (var service in profile.Services)
+                {
+                    var healthUrl = ResolveHealthUrl(service, runtime);
+                    await WaitForHealthAsync(service.Name, healthUrl, cancellationToken);
+                }
+            }
+            catch
             {
-                var healthUrl = ResolveHealthUrl(service, runtime);
-                await WaitForHealthAsync(service.Name, healthUrl, cancellationToken);
+                try
+                {
+                    // Teardown is not the caller's to cancel: the token that just aborted
+                    // the start is typically already cancelled, and stopping is what makes
+                    // the failure clean.
+                    await StopRuntimeAsync(runtime, CancellationToken.None);
+                }
+                catch (Exception teardownEx)
+                {
+                    // Why the start failed is what the caller has to act on; that the
+                    // cleanup after it also failed is a second fact about the same event,
+                    // never a replacement for the first.
+                    _logger.LogError(teardownEx, "Failed to stop preview services after a failed start of profile {Profile} in {Worktree}", profileName, normalized);
+                }
+
+                throw;
             }
 
             _runtimes[normalized] = runtime;
@@ -221,14 +249,21 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             var service = profile.Services.FirstOrDefault(s => string.Equals(s.Name, serviceName, StringComparison.OrdinalIgnoreCase))
                 ?? throw new InvalidOperationException($"Preview service '{serviceName}' not found in profile '{profileName}'.");
 
-            if (_runtimes.TryGetValue(normalized, out var runtime))
+            var runtime = _runtimes.TryGetValue(normalized, out var live) ? live : null;
+            var existing = runtime?.Processes.FirstOrDefault(p => string.Equals(p.Service.Name, service.Name, StringComparison.OrdinalIgnoreCase));
+            if (existing != null && !existing.Process.HasExited)
+                return BuildResponse(loaded, runtime!);
+
+            // Past here this call really does launch the service, which is what makes
+            // the guard its business: a reference to a service that is not up cannot be
+            // honoured, and launching anyway is the failure it exists to prevent. It
+            // runs before anything is created, so a refusal leaves nothing behind.
+            EnsureCrossReferencedServicesAreRunning(service, profileName, profile, runtime);
+
+            if (runtime != null)
             {
-                var existing = runtime.Processes.FirstOrDefault(p => string.Equals(p.Service.Name, service.Name, StringComparison.OrdinalIgnoreCase));
                 if (existing != null)
                 {
-                    if (!existing.Process.HasExited)
-                        return BuildResponse(loaded, runtime);
-
                     // An exited process lingers in the runtime so its log/exit code
                     // stays visible; restarting the service replaces it cleanly.
                     await StopProcessAsync(existing, cancellationToken);
@@ -805,6 +840,70 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         runtime.Ports[service.Port] = port;
     }
 
+    /// <summary>
+    /// Refuses to start a single service whose templates point at another service's
+    /// port alias while that service is not up.
+    ///
+    /// <para>
+    /// Such a reference resolves perfectly well — every profile service's port is
+    /// allocated when the runtime is built, precisely so per-service starts can wire to
+    /// each other — so without this the service launches holding a port number nothing
+    /// is listening on, and then reports healthy, because its own health probe only
+    /// asks about itself. Every surface a human checks agrees the preview is fine while
+    /// the link between the two services is dead; the reference is also baked into the
+    /// child's environment for as long as it runs, so the next start of the referenced
+    /// service (a fresh ephemeral port, unless <c>suggestedPort</c> pins it) cannot
+    /// repair it.
+    /// </para>
+    ///
+    /// <para>
+    /// Starting a whole profile does not come through here: that call launches every
+    /// service itself, so each reference is live by the time it matters and the order
+    /// services are declared in stays irrelevant.
+    /// </para>
+    /// </summary>
+    private static void EnsureCrossReferencedServicesAreRunning(
+        PreviewServiceConfig service,
+        string profileName,
+        PreviewProfileConfig profile,
+        PreviewRuntime? runtime)
+    {
+        foreach (var alias in CrossReferencedPortAliases(service))
+        {
+            var isLive = runtime?.Processes.Any(p =>
+                string.Equals(p.Service.Port, alias, StringComparison.OrdinalIgnoreCase) && p.IsRunning) == true;
+            if (isLive)
+                continue;
+
+            var owner = profile.Services.FirstOrDefault(s => string.Equals(s.Port, alias, StringComparison.OrdinalIgnoreCase));
+            throw new InvalidOperationException(
+                $"Preview service '{service.Name}' references port alias '{alias}', but "
+                + (owner == null
+                    ? $"no service in profile '{profileName}' defines it."
+                    : $"service '{owner.Name}' is not running. Start '{owner.Name}' first — starting "
+                      + $"'{service.Name}' now would hand it a port nothing is listening on."));
+        }
+    }
+
+    /// <summary>
+    /// The port aliases a service's templates name other than its own — its
+    /// cross-service references, which are the ones that only mean anything while the
+    /// service owning the alias is up. Reads the fields <see cref="BuildResolvedStep"/>
+    /// and <see cref="ResolveHealthUrl"/> resolve for a launch, so a reference cannot
+    /// hide in one this does not look at. Deliberately not <c>publicUrl</c>: it never
+    /// reaches the child, and is resolved for display against a port map that always
+    /// holds every alias — so a reference there is never handed to anything.
+    /// </summary>
+    private static IEnumerable<string> CrossReferencedPortAliases(PreviewServiceConfig service)
+        => new[] { service.Command, service.Cwd, service.HealthUrl }
+            .Concat(service.Env?.Values ?? Enumerable.Empty<string>())
+            .Where(template => !string.IsNullOrEmpty(template))
+            .SelectMany(template => TemplateTokenRegex.Matches(template!).Select(match => match.Groups[1].Value))
+            .Where(token => token.StartsWith("PORT:", StringComparison.OrdinalIgnoreCase))
+            .Select(token => token["PORT:".Length..])
+            .Where(alias => !string.Equals(alias, service.Port, StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
     private async Task RunInstallStepsAsync(IReadOnlyList<PreviewCommandConfig> installSteps, PreviewRuntime runtime, CancellationToken cancellationToken)
     {
         if (installSteps.Count == 0)
@@ -848,15 +947,33 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         };
         var writeGate = new SemaphoreSlim(1, 1);
 
-        var process = Process.Start(BuildPreviewProcess(resolved))
-            ?? throw new InvalidOperationException($"Failed to start preview service '{service.Name}'.");
+        try
+        {
+            // Echo the command before spawning, not after: everything from Process.Start
+            // to the return must be incapable of throwing, or a started process would be
+            // lost before its caller could ever track it (see StartAsync). It also puts
+            // the command line ahead of the output it produced, and keeps this write off
+            // the gate the pumps contend for.
+            await writer.WriteLineAsync($"> {resolved.Command}");
 
-        var stdoutTask = PumpStreamAsync(process.StandardOutput, writer, writeGate, cancellationToken);
-        var stderrTask = PumpStreamAsync(process.StandardError, writer, writeGate, cancellationToken);
+            var process = Process.Start(BuildPreviewProcess(resolved))
+                ?? throw new InvalidOperationException($"Failed to start preview service '{service.Name}'.");
 
-        await writer.WriteLineAsync($"> {resolved.Command}");
+            var stdoutTask = PumpStreamAsync(process.StandardOutput, writer, writeGate, cancellationToken);
+            var stderrTask = PumpStreamAsync(process.StandardError, writer, writeGate, cancellationToken);
 
-        return new ManagedPreviewProcess(service, process, writer, writeGate, stdoutTask, stderrTask, logPath);
+            return new ManagedPreviewProcess(service, process, writer, writeGate, stdoutTask, stderrTask, logPath);
+        }
+        catch
+        {
+            // Only reachable while the spawn itself fails, so there is no process to
+            // stop — just the log handle this method opened, which nothing else will
+            // ever hold a reference to. StopProcessAsync owns it once the returned
+            // ManagedPreviewProcess exists.
+            writer.Dispose();
+            writeGate.Dispose();
+            throw;
+        }
     }
 
     private async Task StopRuntimeAsync(PreviewRuntime runtime, CancellationToken cancellationToken)
@@ -901,9 +1018,20 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             // Ignore log pump failures during shutdown.
         }
 
-        process.Writer.Dispose();
-        process.WriteGate.Dispose();
-        process.Process.Dispose();
+        try
+        {
+            // Disposing the writer flushes whatever the pumps last buffered, so this is
+            // real I/O and can fail. The process is already dead by here and there is
+            // nothing a caller could do about a log handle, while letting it throw would
+            // abandon every service StopRuntimeAsync has not reached yet.
+            process.Writer.Dispose();
+            process.WriteGate.Dispose();
+            process.Process.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to release preview service {Service} resources", process.Service.Name);
+        }
     }
 
     private WorktreePreviewResponse BuildResponse(LoadedPreviewConfig loaded, PreviewRuntime runtime)
