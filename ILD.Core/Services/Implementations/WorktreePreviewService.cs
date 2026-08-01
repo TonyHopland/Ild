@@ -175,10 +175,21 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             }
             catch
             {
-                // Teardown is not the caller's to cancel: the token that just aborted
-                // the start is typically already cancelled, and stopping is what makes
-                // the failure clean.
-                await StopRuntimeAsync(runtime, CancellationToken.None);
+                try
+                {
+                    // Teardown is not the caller's to cancel: the token that just aborted
+                    // the start is typically already cancelled, and stopping is what makes
+                    // the failure clean.
+                    await StopRuntimeAsync(runtime, CancellationToken.None);
+                }
+                catch (Exception teardownEx)
+                {
+                    // Why the start failed is what the caller has to act on; that the
+                    // cleanup after it also failed is a second fact about the same event,
+                    // never a replacement for the first.
+                    _logger.LogError(teardownEx, "Failed to stop preview services after a failed start of profile {Profile} in {Worktree}", profileName, normalized);
+                }
+
                 throw;
             }
 
@@ -1007,9 +1018,20 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             // Ignore log pump failures during shutdown.
         }
 
-        process.Writer.Dispose();
-        process.WriteGate.Dispose();
-        process.Process.Dispose();
+        try
+        {
+            // Disposing the writer flushes whatever the pumps last buffered, so this is
+            // real I/O and can fail. The process is already dead by here and there is
+            // nothing a caller could do about a log handle, while letting it throw would
+            // abandon every service StopRuntimeAsync has not reached yet.
+            process.Writer.Dispose();
+            process.WriteGate.Dispose();
+            process.Process.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to release preview service {Service} resources", process.Service.Name);
+        }
     }
 
     private WorktreePreviewResponse BuildResponse(LoadedPreviewConfig loaded, PreviewRuntime runtime)
