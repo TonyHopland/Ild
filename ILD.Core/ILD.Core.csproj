@@ -19,4 +19,16 @@
     <ProjectReference Include="..\ILD.Data\ILD.Data.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The uid-isolation decisions in WorktreePreviewService (which uid a preview
+         command crosses to, which HOME its npm prefix follows) can only be observed
+         end-to-end by actually running a setpriv uid switch, which needs CAP_SETUID
+         and CAP_SETGID and a second uid: no test host has them. Asserting the
+         constructed ProcessStartInfo instead is what keeps them covered, and it is
+         strictly more precise than intercepting the spawn, since it also sees the
+         absolute setpriv path. Nothing production-facing is widened here;
+         AgentIsolation itself stays public. -->
+    <InternalsVisibleTo Include="ILD.Tests" />
+  </ItemGroup>
+
 </Project>

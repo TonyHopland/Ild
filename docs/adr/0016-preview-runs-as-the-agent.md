@@ -1,0 +1,206 @@
+# ADR-0016: A Worktree Preview runs as the agent, with an environment ILD constructs
+
+A **Worktree Preview** executes the commands in the worktree's `ild.config.json`
+— a file the coding agent writes, and can trigger through the ILD MCP tools
+whenever it likes. Those commands used to run as the **orchestrator** uid with the
+orchestrator's whole environment inherited. They now run as the **agent** uid,
+with an environment ILD builds deliberately rather than one the child picks up by
+default. The principle is that agent-authored code executes with exactly the
+privileges the agent already has and nothing more — which is what
+[ADR-0014](./0014-agent-uid-isolation.md) set out to establish and listed the
+preview as the outstanding exception to.
+
+## What was actually wrong
+
+Three separate failures, one root cause. .NET pre-populates a child process's
+environment from the current process, and the preview's spawn sites only wrapped
+their child in `setpriv --inh-caps=-all --ambient-caps=-all` — a capability drop,
+not an environment decision.
+
+**The orchestrator's secrets reached the preview.** Every name in
+`AgentIsolation`'s secret list — both database connection strings, `ILD_SECRET_KEY`,
+the bootstrap credentials, and the API tokens ILD uses to reach itself and the
+WorkItem Server — arrived in the child verbatim. This was observed, not inferred:
+previewing this repository produced an `api.log` containing a
+`SELECT … FROM public."__EFMigrationsHistory"` against the orchestrator's own
+Postgres, because `ILD.Api` reads its connection string from the environment and
+the preview's config never set one. A hostile agent needed only
+`command: "env > leak.txt"` in `ild.config.json` and a `start_preview` call to
+read back the exact values the uid split exists to withhold from it, with a
+`"public": true` service on the wildcard preview host as a ready exfiltration
+channel.
+
+Note that a previewed app never had to _read_ any of those names to be a problem.
+The leak is to the shell command in `ild.config.json`, which runs with all of them
+in `env` — so a debug `printenv`, a crash reporter that captures the environment,
+or any script that forwards it carried them out of the boundary regardless of what
+the application itself reads.
+
+**The orchestrator's own runtime topology reached it too**, which is a different
+category: `ILD_AGENT_USER`, `ILD_AGENT_GROUP`, `ILD_AGENT_HOME`,
+`ILD_AGENT_SCRATCH_ROOT` and `ILD_ORCHESTRATOR_PRIVATE_ROOT` are not secret, they
+are simply wrong for any child that is not this orchestrator — and wrong
+silently. The clearest demonstration is an app that reads the same names ILD does,
+which in practice means previewing an ILD: this repository's own profile boots
+one, and it inherited `ILD_AGENT_USER=agent`, concluded uid isolation was on, and
+routed its own interactive provider terminal through `setpriv --reuid=agent`
+without holding `CAP_SETUID`, dying with
+`setpriv: setresuid failed: Operation not permitted`. Sharper still, it pointed
+its orchestrator-private root at the outer instance's, where the git askpass
+helper lives — the script handed to git as `GIT_ASKPASS` with a repository token
+in its environment. Both instances run as the same uid, so the collision raised no
+permission error; the inner instance simply overwrote the outer's helper. That
+nested case is a developer's scenario rather than a common one, and it is here as
+the sharpest available evidence of a general rule: a child that is not this
+orchestrator has no business being handed this orchestrator's identity.
+
+**Cross-uid builds failed outright.** A preview building as `ild` in a worktree
+the agent had already built in as `agent` hit `MSB3021` (the destination
+`apphost` copy was created `0755` by the agent's build, clamping the inherited
+`g:ild-agents:rwx` ACL to an effective `r-x`) and `MSB3374` (setting an explicit
+mtime through `utimensat` requires being the file's owner or holding
+`CAP_FOWNER`, so no mode or ACL scheme can grant it). Two uids building in one
+tree is the cause; one uid removes the class.
+
+## The decision
+
+- **Both preview spawn sites cross to the agent uid** via `AgentIsolation.Route`,
+  which drops uid and gid, loads the shared group, and clears the inheritable and
+  ambient capability sets. With `ILD_AGENT_USER` unset it is a no-op and commands
+  run inline as the current user — the single-uid escape hatch ADR-0014 documents,
+  which local development and the unit-test suite depend on, is preserved exactly.
+- **The child's environment is constructed, not inherited.** A named helper,
+  `AgentIsolation.StripOrchestratorEnvironment`, removes the secrets and the five
+  topology variables. It is deliberately **not** folded into
+  `DropInheritedCapabilities`, which `ProcessRunner` (git, npm) and
+  `AIProviderService.RunShellAsync` (Cmd nodes) also use and where a user's command
+  may legitimately rely on the inherited environment; scrubbing there would change
+  both silently.
+- **Stripping happens before the resolved step's environment is applied**, never
+  after. What is removed is therefore only ever what was _inherited_: a preview
+  that legitimately needs one of these names sets it in `ild.config.json` or the
+  repository's encrypted preview `.env`, and that value survives — pointed at the
+  preview's own infrastructure rather than the orchestrator's. Refusing to inherit
+  is not the same as refusing to be configured, and keeping those separate is what
+  makes the strip safe to apply to every repository by default. It is also why the
+  three per-service workarounds this repository carried (`ILD_AGENT_USER: ""`,
+  `ILD_ORCHESTRATOR_PRIVATE_ROOT`, `ILD_AGENT_SCRATCH_ROOT`) are gone: the
+  behaviour they bought belongs to every preview, not to one repository that
+  happened to discover it needed it.
+- **What the preview writes moves to the shared scratch root; what the
+  orchestrator writes does not.** The npm cache and anything a profile puts under
+  `${STATE_DIR}` are written by the agent, so they belong in the setgid,
+  shared-group, default-ACL tree that exists for exactly that. The install and
+  service **logs stay in the orchestrator-private root**, because moving the
+  preview's steps to the agent moved nothing about the logs: the stdout/stderr
+  pumps run in-process as the orchestrator, and `get_preview_logs` reads them back
+  the same way. The path is a hash of the worktree, which the agent knows, so a
+  shared-group log directory would let it pre-create `install.log` as a symlink to
+  a file only the orchestrator can write — `~/.profile`, say, which the next
+  `/bin/sh -lc` preview spawn then executes as the orchestrator — with the reader
+  giving the mirror primitive. Splitting the two directories is what keeps the
+  private root's guarantee exactly where it still applies.
+- **The npm global prefix follows the agent's home**, so `npm install -g` in an
+  install step writes where the uid running it can write and the agent-uid nodes
+  that later exec the tool can reach it. "The agent's home" means whatever
+  `AgentIsolation.ResolveChildHome` says the crossing does to `HOME`, which is the
+  same answer `Route` applies — one rule, one owner, so the prefix cannot be
+  derived from a different premise than the `HOME` the child actually gets. A
+  crossing configured with a user but no home leaves `HOME` inherited and the
+  prefix therefore in the orchestrator's own home, where ILD creates it as it
+  always did; the container exports the two together, so this is a shape only a
+  hand-built deployment reaches.
+
+## Consequences
+
+- **Preview state is agent-readable and reachable across runs.** The private
+  root's stated threat — the agent pre-creating a path derived from its own
+  worktree and planting content that steps then consume _while running as the
+  orchestrator_ — evaporates for the steps once those steps are the agent. What
+  replaces it is the ordinary shared-group reach ADR-0014 already accepts for
+  `/worktrees` and `/data/repos`: one run's agent can read another run's preview
+  state. That is the existing "all runs share the `ild-agents` group" residual, not
+  a new one, and per-run groups remain the follow-up that narrows it.
+
+  The premise is worth stating precisely, because it is easy to over-apply and we
+  did over-apply it once: it retires only for files whose **writer and reader are
+  both the agent**. Anything the orchestrator still touches on that path keeps the
+  old threat in full, which is why the logs are split out above. The rule for
+  future work is the writer and the reader, not the directory.
+
+- **The npm prefix on the orchestrator's `PATH` is now agent-writable.** ILD adds
+  `$AGENT_HOME/.local/bin` to its own process `PATH` so tools an install step
+  provisioned are resolvable to the Cmd nodes and CLI adapters that run afterwards,
+  and Cmd nodes run as the orchestrator. The contents of that directory were always
+  agent-controlled — what writes them is an agent-authored install command — but
+  the change in _directness_ is large: the agent CLI now writes it with an ordinary
+  `echo >`, needing no preview config and no orchestrator-executed step. Two things
+  follow, and neither was obvious enough to leave implicit:
+  - **`setpriv` is referenced by absolute path, never resolved through `PATH`.**
+    This is the sharp one. `setpriv` is what performs the capability drop and the
+    uid switch, and .NET resolves a bare `FileName` against the _child's_ `PATH` —
+    which is precisely the `PATH` that now leads with an agent-writable directory.
+    A planted `setpriv` would be exec'd in its place, as the orchestrator, with the
+    ambient `CAP_SETUID` still held because nothing dropped it; from there
+    `setuid(0)` and an exec give the full bounding set. That is not "a change of
+    directness" — it is the guard disabling itself — so `AgentIsolation` names
+    `/usr/bin/setpriv` outright and a test pins that every path naming it is
+    absolute.
+  - **The directory is _appended_ to the orchestrator's `PATH`, not prepended**, so
+    image-shipped binaries win ties. `ProcessRunner` resolves bare `git` and `npm`,
+    and there is no reason a preview-installed file should be able to answer for
+    them.
+
+  It is also why the entrypoint provisions the directory as the agent up front — a
+  prefix the orchestrator created would be owned by a uid the agent is not, and the
+  agent's own `npm install -g` would fail on it. Narrowing the remaining exposure
+  means changing how Cmd nodes reach installed tools at all, which is a broader
+  decision than this ADR.
+
+- **A preview that needs configuration must be given it.** This is the one
+  migration cost, and it falls on any existing profile whose service came up on
+  values nobody wrote down: those values were the orchestrator's, and are now
+  absent. A database connection string is the usual case. The failure mode it
+  removes is worth the churn — an app reading one of ILD's names silently attached
+  to ILD's own database, which is how a preview of this repository came up as a
+  second instance pointed at the live one, its `workitem-server.log` showing it
+  sweeping real `WorkItems` for stale heartbeats. Whether a preview _should_ reach
+  real infrastructure is a separate question; this makes the connection explicit
+  and configurable rather than automatic.
+
+- **`$HOME` is the agent's, but the credential store behind it is still shared —
+  deliberately.** This only matters for a preview that runs an agent CLI of its
+  own, which in practice means previewing an ILD. The agent home's dotdirs are
+  symlinks into the
+  `/home/ild/.agent-config` store, so a nested ILD preview's Claude session opens
+  already logged in against the outer instance's credentials, and can write that
+  store. A clean-room preview would mean scoping `HOME` to the preview's own state
+  directory, at the cost of a separate login inside every preview and of the
+  preview no longer exercising the code path the real deployment uses. We keep the
+  shared store: the agent could already write it (ADR-0014 lists that as a
+  residual), so scoping `HOME` here would buy a partial fix for one caller while
+  making previews meaningfully harder to use. Closing it belongs with the
+  credential-store residual as a whole, not with this change.
+
+- **Stopping a preview and proxying it are unaffected.** The orchestrator retains
+  `CAP_KILL` precisely so it can signal agent-uid processes, and the reverse proxy
+  and health checks are HTTP over a port, which is uid-agnostic.
+
+- **A worktree previewed before this change may still hold mixed-ownership
+  `bin`/`obj` trees** and needs them cleared once. See
+  [Troubleshooting](../troubleshooting.md).
+
+## Considered and rejected
+
+- **Grant the orchestrator `CAP_FOWNER`/`CAP_DAC_OVERRIDE`** so its preview builds
+  could write the agent's files. Self-defeating in the safe form and dangerous in
+  the useful one: the preview child has its capability sets cleared, so it would
+  never receive them anyway, and letting it keep them would hand repo-authored
+  shell commands an ownership-check bypass over the entire container — inverting
+  the boundary ADR-0014 draws instead of completing it.
+
+- **A per-uid MSBuild `ArtifactsPath`**, so the two uids never write the same
+  `bin`/`obj`. It works, and it treats the symptom: the builds collide because two
+  trust levels share one tree, and the collision is the visible edge of the
+  privilege problem, not the problem. It is also .NET-specific, where the same
+  mismatch would resurface for any other toolchain a previewed repository uses.

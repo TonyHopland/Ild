@@ -89,6 +89,45 @@ public class WorktreePreviewServiceLogTests : IDisposable
     }
 
     [Fact]
+    public async Task Service_logs_stay_in_the_orchestrator_private_root()
+    {
+        // The log files are opened, appended to and read back by the orchestrator —
+        // the stdout pump runs in-process and GetServiceLogAsync serves
+        // get_preview_logs — none of which moved when the preview's *steps* moved to
+        // the agent uid. Their path is a hash of the worktree, so putting them in
+        // the shared scratch root would let the agent pre-create one as a symlink
+        // and turn the pump into an arbitrary orchestrator-uid write (and the reader
+        // into an arbitrary read). The 0700 private root forecloses both.
+        WriteConfig(FindFreePort());
+        var service = BuildService();
+
+        var started = await service.StartAsync(_worktree, cancellationToken: CancellationToken.None);
+        Assert.Equal("running", started.State);
+
+        var logPath = started.Services.Single().LogFilePath!;
+        Assert.StartsWith(
+            Path.TrimEndingDirectorySeparator(AgentIsolation.PrivateRoot) + Path.DirectorySeparatorChar,
+            logPath);
+
+        // The state directory the preview itself writes stays shared, so the two are
+        // genuinely split rather than both having moved back. Asserted as "the log
+        // is not under the state directory" rather than "not under the scratch
+        // root": the unit-test baseline points the private root at a subdirectory of
+        // TMPDIR, which is also the scratch-root fallback, so the roots nest here in
+        // a way they never do in the container.
+        Assert.StartsWith(
+            Path.TrimEndingDirectorySeparator(AgentIsolation.ScratchRoot) + Path.DirectorySeparatorChar,
+            started.StateDirectory);
+        Assert.False(
+            logPath.StartsWith(
+                Path.TrimEndingDirectorySeparator(started.StateDirectory!) + Path.DirectorySeparatorChar,
+                StringComparison.Ordinal),
+            "service logs must not live in the state directory the agent can write");
+
+        Assert.NotNull(await service.GetServiceLogAsync(_worktree, "web"));
+    }
+
+    [Fact]
     public async Task GetServiceLogAsync_returns_null_when_the_preview_was_never_started()
     {
         // Configured worktree, but nothing started yet — there is no log file on
