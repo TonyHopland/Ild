@@ -54,11 +54,12 @@ public class WorktreePreviewServicePortReferenceTests : IDisposable
     }
 
     /// <summary>
-    /// The service's own stop paths cannot reach a process a failed start orphaned — that
-    /// is the defect
+    /// Belt and braces. A failed start now stops what it launched, so there should be
+    /// nothing here to reap — but a process the service's own stop paths cannot reach is
+    /// exactly what
     /// <see cref="A_start_that_fails_partway_does_not_leave_already_launched_services_running"/>
-    /// pins. Until it is fixed, the test harness has to reap it itself, or the leaked node
-    /// server outlives the test run and keeps its port.
+    /// guards against, and if that guard ever fails the leaked node server would outlive
+    /// the whole test run holding its port. So the harness keeps the means to kill it.
     /// </summary>
     private void KillOrphanedService()
     {
@@ -210,12 +211,13 @@ public class WorktreePreviewServicePortReferenceTests : IDisposable
     /// stale value."
     ///
     /// <para>
-    /// <b>RED BY DESIGN</b> until WI-19 is implemented — no such validation exists today.
     /// Starting only the referencing service resolves <c>${PORT:dep}</c> against an
-    /// allocation nothing is listening on, and the consumer comes up reporting healthy
-    /// while the link it needs is dead: exactly the "everything looks fine and the feature
-    /// quietly does nothing" property the work item wants removed. The message assertion is
-    /// deliberately loose (it must name the alias) so the implementer picks the wording.
+    /// allocation nothing is listening on — every alias in the profile is allocated up
+    /// front — so without the refusal the consumer comes up reporting healthy while the
+    /// link it needs is dead: exactly the "everything looks fine and the feature quietly
+    /// does nothing" property the work item wants removed. The message assertion is
+    /// deliberately loose (it must name the alias) so the wording stays the
+    /// implementation's to choose.
     /// </para>
     /// </summary>
     [Fact]
@@ -271,19 +273,20 @@ public class WorktreePreviewServicePortReferenceTests : IDisposable
     }
 
     /// <summary>
-    /// <b>RED BY DESIGN.</b> Not the bug as described, but the mechanism that best explains
-    /// the field report — found while reproducing it.
+    /// A start is all-or-nothing: one that fails partway stops the services it already
+    /// launched. Not the bug as described, but the mechanism that best explains the field
+    /// report — found while reproducing it.
     ///
     /// <para>
     /// <c>StartAsync</c> registers the runtime in <c>_runtimes</c> only <em>after</em> every
-    /// service has launched and passed its health probe. A failure anywhere in between
-    /// therefore leaves already-launched services running and untracked: <c>StopAsync</c>
-    /// finds no runtime, <c>Dispose</c> finds no runtime, and nothing ever kills them. They
-    /// keep their environment from that attempt — including a <c>${PORT:alias}</c> value the
-    /// next start will not reuse — hold their ports, and keep appending to the same
+    /// service has launched and passed its health probe, so a failure in between has nothing
+    /// left to reach the launched services by: <c>StopAsync</c> would find no runtime,
+    /// <c>Dispose</c> would find no runtime, and nothing would ever kill them. Left running
+    /// they keep their environment from that attempt — including a <c>${PORT:alias}</c> value
+    /// the next start will not reuse — hold their ports, and go on appending to the same
     /// per-service log file, where their output is indistinguishable from the current run's.
     /// That is precisely the reported shape: a service polling a dead port for as long as it
-    /// runs while every surface reports healthy.
+    /// runs while every surface reports healthy. Hence the teardown this pins.
     /// </para>
     /// </summary>
     [Fact]
@@ -369,9 +372,10 @@ public class WorktreePreviewServicePortReferenceTests : IDisposable
 
     /// <summary>
     /// Waits (briefly) for the <c>first</c> service to record its pid — which is both how
-    /// the test knows it is up and the only handle the harness has for reaping it while the
-    /// leak is unfixed (see <see cref="KillOrphanedService"/>). Returns false if it never
-    /// does, which is not by itself a failure.
+    /// the test knows it got far enough to be worth checking on, and the only handle the
+    /// harness would have for reaping it if the teardown ever regressed (see
+    /// <see cref="KillOrphanedService"/>). Returns false if it never records one, which is
+    /// not by itself a failure.
     /// </summary>
     private async Task<bool> WaitForPidFileAsync()
     {

@@ -877,11 +877,14 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// <summary>
     /// The port aliases a service's templates name other than its own — its
     /// cross-service references, which are the ones that only mean anything while the
-    /// service owning the alias is up. Reads every templated field a service config can
-    /// carry, so a reference cannot hide in one this does not look at.
+    /// service owning the alias is up. Reads the fields <see cref="BuildResolvedStep"/>
+    /// and <see cref="ResolveHealthUrl"/> resolve for a launch, so a reference cannot
+    /// hide in one this does not look at. Deliberately not <c>publicUrl</c>: it never
+    /// reaches the child, and is resolved for display against a port map that always
+    /// holds every alias — so a reference there is never handed to anything.
     /// </summary>
     private static IEnumerable<string> CrossReferencedPortAliases(PreviewServiceConfig service)
-        => new[] { service.Command, service.Cwd, service.HealthUrl, service.PublicUrl }
+        => new[] { service.Command, service.Cwd, service.HealthUrl }
             .Concat(service.Env?.Values ?? Enumerable.Empty<string>())
             .Where(template => !string.IsNullOrEmpty(template))
             .SelectMany(template => TemplateTokenRegex.Matches(template!).Select(match => match.Groups[1].Value))
