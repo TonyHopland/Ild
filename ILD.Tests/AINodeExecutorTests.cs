@@ -137,6 +137,41 @@ public class AINodeExecutorTests
         Assert.Equal("Review", success.EdgeName);
     }
 
+    // Matching sets no RegexOptions beyond IgnoreCase, so ^ and $ bind to the
+    // whole output rather than to a line. These two pin the anchoring advice in
+    // the Chat Context loop authoring guide (ChatService.LoopAuthoringGuide) to
+    // what SelectLastMatchingRule actually does: the guide recommends (?m)
+    // precisely because the bare anchors below misroute in silence.
+    [Fact]
+    public async Task A_bare_anchored_verdict_never_fires_on_a_narrated_output()
+    {
+        const string config =
+            @"{""matchRules"":[{""pattern"":""^TO_REVIEW$"",""edgeName"":""Review""}]}";
+
+        var outcome = await LastOutcomeAsync(
+            config, NodeExecutionResult.Ok("Tests pass and the diff is small.\nTO_REVIEW"));
+
+        // No match, so the node falls through to OnSuccess and the Review edge is
+        // never taken — the failure an author would otherwise debug at run time.
+        var success = Assert.IsType<NodeOutcome.Success>(outcome);
+        Assert.Equal(EdgeType.OnSuccess, success.Edge);
+        Assert.Null(success.EdgeName);
+    }
+
+    [Fact]
+    public async Task An_inline_multiline_anchored_verdict_routes_on_the_closing_line()
+    {
+        const string config =
+            @"{""matchRules"":[{""pattern"":""(?m)^TO_REVIEW$"",""edgeName"":""Review""}]}";
+
+        var outcome = await LastOutcomeAsync(
+            config, NodeExecutionResult.Ok("Tests pass and the diff is small.\nTO_REVIEW"));
+
+        var success = Assert.IsType<NodeOutcome.Success>(outcome);
+        Assert.Equal(EdgeType.Custom, success.Edge);
+        Assert.Equal("Review", success.EdgeName);
+    }
+
     // The regression this rule change exists for: a reviewer that narrates its
     // reasoning mentions "reject" on the way to approving, and used to be routed
     // down the reject edge.
