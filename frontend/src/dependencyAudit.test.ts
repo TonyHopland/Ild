@@ -29,16 +29,14 @@ function major(version: string): number {
 // copy must clear the floor for its own major, and an unexpected major (one with
 // no floor) fails loudly rather than slipping through unverified.
 const patchedFloors: { name: string; floors: Record<number, string>; advisory: string }[] = [
-  // GHSA-8x6r-g9mw-2r78 (DoS) and GHSA-84g9-w2xq-vcv6 (CSRF).
+  // GHSA-8x6r-g9mw-2r78 (DoS), GHSA-84g9-w2xq-vcv6 (CSRF) and GHSA-qwww-vcr4-c8h2
+  // (RSC-mode CSRF). The last is patched only in 8.3.0, and no 7.x carries the fix,
+  // so the floor is the whole 8 major: v8 drops the `react-router-dom` re-export
+  // shim, and depending on it again is what would strand this back on 7.x.
   {
     name: "react-router",
-    floors: { 7: "7.15.1" },
-    advisory: "GHSA-8x6r-g9mw-2r78 / GHSA-84g9-w2xq-vcv6",
-  },
-  {
-    name: "react-router-dom",
-    floors: { 7: "7.15.1" },
-    advisory: "GHSA-8x6r-g9mw-2r78 / GHSA-84g9-w2xq-vcv6",
+    floors: { 8: "8.3.0" },
+    advisory: "GHSA-8x6r-g9mw-2r78 / GHSA-84g9-w2xq-vcv6 / GHSA-qwww-vcr4-c8h2",
   },
   // ws@7 GHSA-96hv-2xvq-fx4p (patched 7.5.11); ws@8 GHSA-58qx-3vcg-4xpx /
   // memory-exhaustion DoS (patched 8.21.0).
@@ -49,6 +47,17 @@ const patchedFloors: { name: string; floors: Record<number, string>; advisory: s
   },
   // vite GHSA-fx2h-pf6j-xcff and launch-editor NTLMv2 disclosure (patched 8.0.16).
   { name: "vite", floors: { 8: "8.0.16" }, advisory: "GHSA-fx2h-pf6j-xcff / GHSA-v6wh-96g9-6wx3" },
+  // postcss GHSA-r28c-9q8g-f849 (path traversal), patched 8.5.18. Reached through
+  // the vite-plus toolchain, so a toolchain downgrade is what would reintroduce it.
+  { name: "postcss", floors: { 8: "8.5.18" }, advisory: "GHSA-r28c-9q8g-f849" },
+  // undici 7.x carries seven advisories with no patched 7.x release, so the fix was
+  // the major itself: jsdom 30 moved to undici 8. The floor is therefore the whole
+  // major — any 7.x copy reappearing is vulnerable no matter its patch level.
+  {
+    name: "undici",
+    floors: { 8: "8.9.0" },
+    advisory: "GHSA-vxpw-j846-p89q / GHSA-hm92-r4w5-c3mj / GHSA-vmh5-mc38-953g",
+  },
 ];
 
 describe("dependency security audit", () => {

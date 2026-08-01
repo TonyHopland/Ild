@@ -3,11 +3,9 @@ packages:
 
 catalog:
   vite: npm:@voidzero-dev/vite-plus-core@latest
-  vite-plus: ^0.1.24
-  vitest: npm:@voidzero-dev/vite-plus-test@latest
+  vite-plus: ^0.2.7
 overrides:
   vite: "catalog:"
-  vitest: "catalog:"
   "vite@>=8.0.0 <8.0.16": "^8.0.16"
   ws@7: "^7.5.11"
   ws@8: "^8.21.0"

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useMatch } from "react-router-dom";
+import { useMatch } from "react-router";
 import { useSignalR } from "../hooks/useSignalR";
 import { useChatEnabled } from "../hooks/useChatEnabled";
 import { aiProviderService, chatService } from "../services/auth";
