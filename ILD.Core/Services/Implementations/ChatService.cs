@@ -23,9 +23,9 @@ namespace ILD.Core.Services.Implementations;
 /// A turn resumes the provider's agent session rather than replaying our own
 /// transcript, so the preamble is only ambient from ILD's side — every copy it
 /// sends stays in the agent's history. Anything constant therefore goes in once
-/// per session (<see cref="ChatSession.LoopGuideSessionId"/>) and is pullable
-/// afterwards via <c>ild_get_loop_authoring_guide</c>; only genuinely per-turn
-/// state rides the prompt every turn.
+/// per session as a <see cref="SessionBriefings">briefing</see> and is pullable
+/// afterwards (the loop guide via <c>ild_get_loop_authoring_guide</c>); only
+/// genuinely per-turn state rides the prompt every turn.
 /// </summary>
 public sealed class ChatService : IChatService
 {
@@ -179,7 +179,8 @@ public sealed class ChatService : IChatService
         // that is rebound or forked is briefed again rather than left without it.
         var loopEditor =
             string.IsNullOrWhiteSpace(openLoopDocument) ? LoopEditorContext.Closed
-            : session.LoopGuideSessionId is not null && session.LoopGuideSessionId == session.CurrentSessionId
+            : SessionBriefings.IsDelivered(
+                session.DeliveredBriefings, SessionBriefings.LoopAuthoring, session.CurrentSessionId)
                 ? LoopEditorContext.Briefed
                 : LoopEditorContext.NeedsBriefing;
 
@@ -261,7 +262,8 @@ public sealed class ChatService : IChatService
         // later turn would ever brief that session again. Erring this way costs one
         // redundant copy; erring the other way is silent and permanent.
         if (loopEditor == LoopEditorContext.NeedsBriefing && boundThisTurn is not null)
-            session.LoopGuideSessionId = boundThisTurn;
+            session.DeliveredBriefings = SessionBriefings.Record(
+                session.DeliveredBriefings, SessionBriefings.LoopAuthoring, boundThisTurn);
 
         await FinalizeAssistantAsync(session, nextSeq + 1, content, interrupted, newSessionId, ct);
     }

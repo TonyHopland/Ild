@@ -439,7 +439,8 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         // Turn 4 is the first one that can see it, and briefs the new session.
         Assert.Contains(GuideMarker, adapter.Prompts[3]);
         Assert.Contains(GuideTailMarker, adapter.Prompts[3]);
-        Assert.Equal("sess-rebound", _db.Context.ChatSessions.Single().LoopGuideSessionId);
+        Assert.True(SessionBriefings.IsDelivered(
+            _db.Context.ChatSessions.Single().DeliveredBriefings, SessionBriefings.LoopAuthoring, "sess-rebound"));
         // ...after which the rebound session is treated like any other: briefed once.
         Assert.DoesNotContain(GuideMarker, adapter.Prompts[4]);
     }
@@ -473,7 +474,8 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
 
         var session = _db.Context.ChatSessions.Single();
         Assert.Contains(GuideMarker, adapter.Prompts[1]);
-        Assert.Null(session.LoopGuideSessionId);
+        Assert.False(SessionBriefings.IsDelivered(
+            session.DeliveredBriefings, SessionBriefings.LoopAuthoring, session.CurrentSessionId));
         // The binding itself survives the failed turn — that is exactly why the
         // guide flag must not be inferred from it.
         Assert.Equal("sess-1", session.CurrentSessionId);
@@ -482,7 +484,8 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         await svc.ExecuteTurnAsync(started.Id, "three", "wi-11", OpenLoopDocument, CancellationToken.None);
         Assert.Contains(GuideMarker, adapter.Prompts[2]);
         Assert.Contains(GuideTailMarker, adapter.Prompts[2]);
-        Assert.Equal("sess-1", _db.Context.ChatSessions.Single().LoopGuideSessionId);
+        Assert.True(SessionBriefings.IsDelivered(
+            _db.Context.ChatSessions.Single().DeliveredBriefings, SessionBriefings.LoopAuthoring, "sess-1"));
 
         // ...once.
         await svc.ExecuteTurnAsync(started.Id, "four", "wi-11", OpenLoopDocument, CancellationToken.None);
@@ -534,6 +537,91 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         // future edit to the guide cannot leave the two halves disagreeing.
         Assert.Contains(GuideMarker, LoopAuthoringGuide.Text);
         Assert.Contains(GuideTailMarker, LoopAuthoringGuide.Text);
+    }
+
+    // ------------------------------------------------------------------
+    // The budget — what stops the next static block being inlined here.
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// The guard the loop guide did not have. Every turn's preamble is re-sent into
+    /// a resumed session, so anything constant that lands in it costs the turn count
+    /// squared — the bug this work item exists for. Once a session is briefed, what
+    /// remains should be per-turn state and pointers only, and that is small.
+    ///
+    /// Deliberately a budget on the whole steady-state preamble rather than a check
+    /// for the guide by name: the failure mode is not "someone re-adds the guide",
+    /// it is "someone adds the NEXT one" — a work-item authoring primer, a preview
+    /// how-to — and a guide-shaped test would not see that coming. The number is
+    /// generous against today's ~750 chars with everything open; it is a tripwire
+    /// for a block an order of magnitude larger, not a style rule.
+    /// </summary>
+    [Fact]
+    public async Task The_steady_state_preamble_stays_within_its_per_turn_budget()
+    {
+        const int budgetChars = 1500;
+
+        var adapter = new RecordingChatAdapter();
+        var provider = await SeedProviderAsync();
+        var svc = NewService(adapter);
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild", "write" });
+        var worktreePath = await SeedActiveRunAsync("wi-99");
+
+        // Everything the Chat Context can carry at once: an open work item, its
+        // active-run worktree and grant, and an open Loop Editor.
+        await svc.ExecuteTurnAsync(started.Id, "one", "wi-99", OpenLoopDocument, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, "two", "wi-99", OpenLoopDocument, CancellationToken.None);
+
+        const string message = "two";
+        var steadyState = adapter.Prompts[1].Length - message.Length - 2; // minus "\n\n"
+        _out.WriteLine($"[budget] steady-state preamble {steadyState} chars of {budgetChars} (work item + worktree + editor).");
+
+        // Sanity: the per-turn state really is all still in there, so a preamble
+        // that shrank by losing content cannot pass this.
+        Assert.Contains("wi-99", adapter.Prompts[1]);
+        Assert.Contains(worktreePath, adapter.Prompts[1]);
+        Assert.Contains("Loop Editor", adapter.Prompts[1]);
+
+        Assert.True(
+            steadyState <= budgetChars,
+            $"the per-turn Chat Context preamble is {steadyState} chars, over its {budgetChars}-char budget. "
+            + "Every turn re-sends it into a resumed agent session, so constant text here costs the turn "
+            + "count squared. If what you added is constant for the session, deliver it once as a "
+            + "SessionBriefings briefing and leave a pointer here — see ChatService and work item #27.");
+    }
+
+    // ------------------------------------------------------------------
+    // The briefing record itself.
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// A briefing belongs to the agent session that received it. Re-recording the
+    /// same key must therefore replace the old session's entry rather than append,
+    /// or a chat that is rebound repeatedly would grow the column until it hit the
+    /// length cap — a smaller version of the accumulation this work item removes.
+    /// Other keys are left alone, which is the point of keying at all.
+    /// </summary>
+    [Fact]
+    public void Recording_a_briefing_replaces_its_own_key_and_leaves_others()
+    {
+        var afterFirst = SessionBriefings.Record(null, SessionBriefings.LoopAuthoring, "sess-1");
+        Assert.True(SessionBriefings.IsDelivered(afterFirst, SessionBriefings.LoopAuthoring, "sess-1"));
+        Assert.False(SessionBriefings.IsDelivered(afterFirst, SessionBriefings.LoopAuthoring, "sess-2"));
+
+        // A second key coexists...
+        var withOther = SessionBriefings.Record(afterFirst, "other-primer", "sess-1");
+        Assert.True(SessionBriefings.IsDelivered(withOther, SessionBriefings.LoopAuthoring, "sess-1"));
+        Assert.True(SessionBriefings.IsDelivered(withOther, "other-primer", "sess-1"));
+
+        // ...and re-recording one key moves only that key.
+        var rebound = SessionBriefings.Record(withOther, SessionBriefings.LoopAuthoring, "sess-2");
+        Assert.True(SessionBriefings.IsDelivered(rebound, SessionBriefings.LoopAuthoring, "sess-2"));
+        Assert.False(SessionBriefings.IsDelivered(rebound, SessionBriefings.LoopAuthoring, "sess-1"));
+        Assert.True(SessionBriefings.IsDelivered(rebound, "other-primer", "sess-1"));
+        Assert.Equal(2, rebound.Split('\n').Length);
+
+        // Nothing is delivered into a session that does not exist yet.
+        Assert.False(SessionBriefings.IsDelivered(rebound, SessionBriefings.LoopAuthoring, null));
     }
 
     // ------------------------------------------------------------------

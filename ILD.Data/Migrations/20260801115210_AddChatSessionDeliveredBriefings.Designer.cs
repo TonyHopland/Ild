@@ -12,8 +12,8 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace ILD.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20260801111244_AddChatSessionLoopGuideSessionId")]
-    partial class AddChatSessionLoopGuideSessionId
+    [Migration("20260801115210_AddChatSessionDeliveredBriefings")]
+    partial class AddChatSessionDeliveredBriefings
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -205,9 +205,9 @@ namespace ILD.Data.Migrations
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
 
-                    b.Property<string>("LoopGuideSessionId")
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
+                    b.Property<string>("DeliveredBriefings")
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)");
 
                     b.Property<string>("Name")
                         .HasMaxLength(120)

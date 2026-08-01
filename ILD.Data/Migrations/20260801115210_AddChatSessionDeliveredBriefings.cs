@@ -5,16 +5,16 @@
 namespace ILD.Data.Migrations
 {
     /// <inheritdoc />
-    public partial class AddChatSessionLoopGuideSessionId : Migration
+    public partial class AddChatSessionDeliveredBriefings : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.AddColumn<string>(
-                name: "LoopGuideSessionId",
+                name: "DeliveredBriefings",
                 table: "ChatSessions",
-                type: "character varying(256)",
-                maxLength: 256,
+                type: "character varying(2048)",
+                maxLength: 2048,
                 nullable: true);
         }
 
@@ -22,7 +22,7 @@ namespace ILD.Data.Migrations
         protected override void Down(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.DropColumn(
-                name: "LoopGuideSessionId",
+                name: "DeliveredBriefings",
                 table: "ChatSessions");
         }
     }
