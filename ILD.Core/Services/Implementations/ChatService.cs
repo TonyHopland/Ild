@@ -177,13 +177,14 @@ public sealed class ChatService : IChatService
         // replaying our own transcript, so a copy sent on an earlier turn is still
         // in front of the agent. Keyed on the session that holds it, so a session
         // that is rebound or forked is briefed again rather than left without it.
-        var loopEditorOpen = !string.IsNullOrWhiteSpace(openLoopDocument);
-        var guideResident = session.LoopGuideSessionId is not null
-            && session.LoopGuideSessionId == session.CurrentSessionId;
-        var deliverStaticGuidance = loopEditorOpen && !guideResident;
+        var loopEditor =
+            string.IsNullOrWhiteSpace(openLoopDocument) ? LoopEditorContext.Closed
+            : session.LoopGuideSessionId is not null && session.LoopGuideSessionId == session.CurrentSessionId
+                ? LoopEditorContext.Briefed
+                : LoopEditorContext.NeedsBriefing;
 
         var (contextPreamble, additionalAllowedDirectories) =
-            await BuildChatContextAsync(openWorkItemId, loopEditorOpen, deliverStaticGuidance, tools);
+            await BuildChatContextAsync(openWorkItemId, loopEditor, tools);
         var promptForAgent = contextPreamble is null
             ? userMessage
             : $"{contextPreamble}\n\n{userMessage}";
@@ -245,13 +246,22 @@ public sealed class ChatService : IChatService
         else
             content = !string.IsNullOrWhiteSpace(result.Output) ? result.Output! : $"[chat-error] {result.Error}";
 
-        var newSessionId = result.SessionId ?? capturedSessionId ?? session.CurrentSessionId;
+        // This turn's OWN binding, which is not the same thing as the session the
+        // turn ends on: newSessionId below falls back to the binding we were already
+        // resuming, so a turn that never reached an agent still ends on one. Every
+        // adapter failure path returns no session id (the claude launch failing, the
+        // process throwing before it started, ExecuteAsync throwing above), so a null
+        // here is precisely "the prompt did not land".
+        var boundThisTurn = result.SessionId ?? capturedSessionId;
+        var newSessionId = boundThisTurn ?? session.CurrentSessionId;
 
-        // Record the guide as resident only against a session that actually bound —
-        // a turn that never reached an agent session has nowhere to have left it, so
-        // the next turn must deliver it again rather than assume it landed.
-        if (deliverStaticGuidance && newSessionId is not null)
-            session.LoopGuideSessionId = newSessionId;
+        // Only a turn that reached the agent can have left the guide with it. Using
+        // newSessionId here instead would record a briefing that never arrived
+        // whenever the agent failed to launch on an already-bound session, and no
+        // later turn would ever brief that session again. Erring this way costs one
+        // redundant copy; erring the other way is silent and permanent.
+        if (loopEditor == LoopEditorContext.NeedsBriefing && boundThisTurn is not null)
+            session.LoopGuideSessionId = boundThisTurn;
 
         await FinalizeAssistantAsync(session, nextSeq + 1, content, interrupted, newSessionId, ct);
     }
@@ -263,21 +273,18 @@ public sealed class ChatService : IChatService
     /// open. The worktree path is granted only when BOTH a filesystem grant is held
     /// AND the open item has an active (non-terminal) run with a worktree on disk;
     /// otherwise the agent gets the id-only preamble and scratch access alone. When
-    /// <paramref name="loopEditorOpen"/> is set, the preamble names the open Loop
-    /// Editor as a thin pointer — the agent reads/edits the loop via the
-    /// <c>get_current_loop</c>/<c>update_current_loop</c> tools.
-    ///
-    /// <paramref name="deliverStaticGuidance"/> splits the loop-editor half in two:
-    /// the constant brief and authoring guide travel only on the turn that first
-    /// briefs an agent session, while the per-turn pointer travels every turn the
-    /// editor is open. Everything else here is per-turn state by nature and is
+    /// <paramref name="loopEditor"/> is open, the preamble names it as a thin pointer
+    /// — the agent reads/edits the loop via the
+    /// <c>get_current_loop</c>/<c>update_current_loop</c> tools — and, on the turn
+    /// that first briefs an agent session, carries the constant brief and authoring
+    /// guide as well. Everything else here is per-turn state by nature and is
     /// rebuilt on each call.
     /// </summary>
     private async Task<(string? Preamble, IReadOnlyList<string>? AllowedDirectories)> BuildChatContextAsync(
-        string? openWorkItemId, bool loopEditorOpen, bool deliverStaticGuidance, IReadOnlyList<string> tools)
+        string? openWorkItemId, LoopEditorContext loopEditor, IReadOnlyList<string> tools)
     {
         var hasWorkItem = !string.IsNullOrWhiteSpace(openWorkItemId);
-        if (!hasWorkItem && !loopEditorOpen)
+        if (!hasWorkItem && loopEditor == LoopEditorContext.Closed)
             return (null, null);
 
         var lines = new List<string> { "[Chat Context]" };
@@ -312,20 +319,37 @@ public sealed class ChatService : IChatService
             }
         }
 
-        if (loopEditorOpen)
+        switch (loopEditor)
         {
-            if (deliverStaticGuidance)
-            {
+            case LoopEditorContext.NeedsBriefing:
                 lines.Add(LoopEditorBrief);
                 lines.Add(LoopAuthoringGuide.Text);
-            }
-            else
-            {
+                break;
+            case LoopEditorContext.Briefed:
                 lines.Add(LoopEditorReminder);
-            }
+                break;
         }
 
         return (string.Join("\n", lines), allowedDirectories);
+    }
+
+    /// <summary>
+    /// What the Loop Editor half of the Chat Context owes a turn. The two underlying
+    /// facts — whether an editor is open, and whether this agent session already
+    /// holds the guide — are not independent: "brief now" is meaningless with no
+    /// editor open. One value makes that combination unrepresentable rather than
+    /// merely unused.
+    /// </summary>
+    private enum LoopEditorContext
+    {
+        /// <summary>No Loop Editor open: the loop half of the preamble is skipped.</summary>
+        Closed,
+
+        /// <summary>Open, and this agent session already holds the guide: pointer only.</summary>
+        Briefed,
+
+        /// <summary>Open, and this agent session does not hold the guide yet: full brief.</summary>
+        NeedsBriefing,
     }
 
     /// <summary>

@@ -444,6 +444,51 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         Assert.DoesNotContain(GuideMarker, adapter.Prompts[4]);
     }
 
+    /// <summary>
+    /// A briefing turn that never reached an agent has not briefed anything, and the
+    /// distinction is not academic: the session a turn ENDS on is not the session it
+    /// bound. A failed turn keeps the binding it was already resuming, so recording
+    /// against that would mark a session briefed by a prompt it never saw — and
+    /// because the guide is only ever sent on a mismatch, no later turn would put
+    /// that right. The failure is silent and permanent, which is the one shape of
+    /// bug the send-once design has to be proof against.
+    /// </summary>
+    [Fact]
+    public async Task A_briefing_turn_that_never_reached_the_agent_does_not_count_as_briefed()
+    {
+        var adapter = new RecordingChatAdapter();
+        var provider = await SeedProviderAsync();
+        var svc = NewService(adapter);
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+
+        // Turn 1 binds a session, with no editor open — so nothing is briefed yet
+        // and the session id is already there to be wrongly recorded against.
+        await svc.ExecuteTurnAsync(started.Id, "one", "wi-11", openLoopDocument: null, CancellationToken.None);
+        Assert.Equal("sess-1", _db.Context.ChatSessions.Single().CurrentSessionId);
+
+        // Turn 2 opens the editor, so it carries the guide — and the CLI fails to
+        // launch, so the agent never sees it.
+        adapter.FailNextTurnBeforeLaunch = true;
+        await svc.ExecuteTurnAsync(started.Id, "two", "wi-11", OpenLoopDocument, CancellationToken.None);
+
+        var session = _db.Context.ChatSessions.Single();
+        Assert.Contains(GuideMarker, adapter.Prompts[1]);
+        Assert.Null(session.LoopGuideSessionId);
+        // The binding itself survives the failed turn — that is exactly why the
+        // guide flag must not be inferred from it.
+        Assert.Equal("sess-1", session.CurrentSessionId);
+
+        // So turn 3 briefs the session for real.
+        await svc.ExecuteTurnAsync(started.Id, "three", "wi-11", OpenLoopDocument, CancellationToken.None);
+        Assert.Contains(GuideMarker, adapter.Prompts[2]);
+        Assert.Contains(GuideTailMarker, adapter.Prompts[2]);
+        Assert.Equal("sess-1", _db.Context.ChatSessions.Single().LoopGuideSessionId);
+
+        // ...once.
+        await svc.ExecuteTurnAsync(started.Id, "four", "wi-11", OpenLoopDocument, CancellationToken.None);
+        Assert.DoesNotContain(GuideMarker, adapter.Prompts[3]);
+    }
+
     // ------------------------------------------------------------------
     // Reachability — the guide left the per-turn channel, not the session.
     // ------------------------------------------------------------------
@@ -544,6 +589,13 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         /// </summary>
         public string? NextSessionId { get; set; }
 
+        /// <summary>
+        /// Set to make the next turn throw the way an adapter does when the CLI
+        /// never launches — before any session is bound, so nothing this turn was
+        /// handed can have reached an agent. Cleared once it has fired.
+        /// </summary>
+        public bool FailNextTurnBeforeLaunch { get; set; }
+
         public string Name => "fake";
         public string[] SupportedProviderTypes => ["fake"];
         public ConfigFieldDescriptor[] ConfigSchema => [];
@@ -551,6 +603,11 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
         {
             Contexts.Add(context);
+            if (FailNextTurnBeforeLaunch)
+            {
+                FailNextTurnBeforeLaunch = false;
+                throw new InvalidOperationException("claude: command not found");
+            }
             // Bind a session on the first turn and hold it, exactly as a real CLI
             // does — this is what makes turn 2 a resume rather than a fresh start.
             return Task.FromResult(
