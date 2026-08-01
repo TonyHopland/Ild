@@ -8,9 +8,11 @@ namespace ILD.Data;
 /// <para>
 /// It lives here, beside <see cref="ToolDescriptors"/>, because it has two
 /// consumers and must not drift between them: the chat's Chat Context delivers it
-/// once per agent session when a Loop Editor is open (ADR-0011), and
-/// <c>ild_get_loop_authoring_guide</c> serves the same bytes on demand for the rest
-/// of that session. The pull path is what makes the once-per-session push safe —
+/// once per agent session when a Loop Editor is open (ADR-0011), and the guide tool
+/// serves the same bytes on demand for the rest of that session — named
+/// <c>get_loop_authoring_guide</c> on the MCP surface and
+/// <c>ild_get_loop_authoring_guide</c> on the Pi one, as every ILD tool is.
+/// The pull path is what makes the once-per-session push safe —
 /// an agent that has lost the guide from effective context can fetch it back
 /// instead of going without, so the guidance stays reachable without being re-sent
 /// on every turn.

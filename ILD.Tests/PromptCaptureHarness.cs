@@ -98,9 +98,10 @@ internal sealed class PromptCapturingCli : IDisposable
         => File.Exists(_countPath) ? int.Parse(File.ReadAllText(_countPath).Trim()) : 0;
 
     /// <summary>
-    /// The argv (excluding argv[0]) of the <paramref name="turn"/>'th launch,
-    /// 1-based. This is the whole of what the CLI was told: the prompt, the
-    /// <c>--resume</c> flag, every <c>--add-dir</c> grant.
+    /// The arguments of the <paramref name="turn"/>'th launch, 1-based. This is the
+    /// whole of what the CLI was told: the prompt, the <c>--resume</c> flag, every
+    /// <c>--add-dir</c> grant. argv[0] is not among them and never was — the capture
+    /// writes <c>"$@"</c>, which is the positional parameters only.
     /// </summary>
     public string[] ArgvFor(int turn)
     {
@@ -109,9 +110,11 @@ internal sealed class PromptCapturingCli : IDisposable
             throw new InvalidOperationException(
                 $"the fake agent CLI was launched {InvocationCount} time(s); there is no turn {turn}");
 
-        // `printf '%s\0'` emits a trailing NUL, so the split leaves one empty
-        // tail element to drop. Skip(1) drops argv[0] (the script path itself).
-        return File.ReadAllText(path).Split('\0')[..^1].Skip(1).ToArray();
+        // `printf '%s\0'` emits a trailing NUL, so the split leaves one empty tail
+        // element to drop — and only that one. Dropping a leading element too would
+        // silently eat the CLI's first real flag, which is exactly what an argv
+        // assertion is here to see.
+        return File.ReadAllText(path).Split('\0')[..^1];
     }
 
     /// <summary>The positional prompt argument of the <paramref name="turn"/>'th launch (1-based).</summary>

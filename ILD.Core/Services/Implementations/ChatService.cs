@@ -24,8 +24,9 @@ namespace ILD.Core.Services.Implementations;
 /// transcript, so the preamble is only ambient from ILD's side — every copy it
 /// sends stays in the agent's history. Anything constant therefore goes in once
 /// per session as a <see cref="SessionBriefings">briefing</see> and is pullable
-/// afterwards (the loop guide via <c>ild_get_loop_authoring_guide</c>); only
-/// genuinely per-turn state rides the prompt every turn.
+/// afterwards (the loop guide via <c>get_loop_authoring_guide</c>, the name the
+/// preamble itself uses); only genuinely per-turn state rides the prompt every
+/// turn.
 /// </summary>
 public sealed class ChatService : IChatService
 {

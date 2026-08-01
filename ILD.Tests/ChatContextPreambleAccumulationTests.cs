@@ -112,6 +112,12 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
 
         // The session is resumed, not replayed: turn 1 opens the session and every
         // later turn re-enters it by id, which is exactly why one copy suffices.
+        //
+        // The first flag is asserted positionally because everything below is a
+        // claim about what is ABSENT from an argv, and those are only as honest as
+        // the capture: a harness that quietly dropped a leading argument would make
+        // "no --resume on turn 1" true for free.
+        Assert.Equal("--print", cli.ArgvFor(1)[0]);
         Assert.DoesNotContain("--resume", cli.ArgvFor(1));
         var sessionId = _db.Context.ChatSessions.Single().CurrentSessionId;
         Assert.False(string.IsNullOrWhiteSpace(sessionId));
