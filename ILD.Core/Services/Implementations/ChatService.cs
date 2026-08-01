@@ -19,6 +19,14 @@ namespace ILD.Core.Services.Implementations;
 /// into the model context via a small prompt preamble; the worktree is reached
 /// by absolute path through an extra allowed directory, never by relocating the
 /// agent's working directory off its durable scratch dir.
+///
+/// A turn resumes the provider's agent session rather than replaying our own
+/// transcript, so the preamble is only ambient from ILD's side — every copy it
+/// sends stays in the agent's history. Anything constant therefore goes in once
+/// per session as a <see cref="SessionBriefings">briefing</see> and is pullable
+/// afterwards (the loop guide via <c>get_loop_authoring_guide</c>, the name the
+/// preamble itself uses); only genuinely per-turn state rides the prompt every
+/// turn.
 /// </summary>
 public sealed class ChatService : IChatService
 {
@@ -128,8 +136,11 @@ public sealed class ChatService : IChatService
         if (nextSeq == 0 && string.IsNullOrEmpty(session.Name))
             session.Name = DeriveName(userMessage);
 
-        // Persist the human's verbatim message; the Chat Context preamble is an
-        // ambient per-turn hint for the model only, never part of the transcript.
+        // Persist the human's verbatim message only — the Chat Context preamble is
+        // never part of OUR transcript. It is not transient for the model, though:
+        // a turn resumes the provider's session, so whatever the preamble carries
+        // stays in the agent's history for the rest of that session. That is why the
+        // static half is delivered once per session and not per turn (#27).
         var userEntry = await AppendMessageAsync(chatSessionId, "user", userMessage, interrupted: false, nextSeq, ct);
         await _notifier.MessageAppendedAsync(chatSessionId, ToView(userEntry));
 
@@ -160,8 +171,22 @@ public sealed class ChatService : IChatService
         // the open work item that is pushed into the model context, plus the
         // active-run worktree path granted as an extra allowed directory when the
         // session also holds a filesystem grant.
+        //
+        // The loop authoring guide is the one part of the preamble that is neither
+        // per-turn nor small, so it is delivered once per agent session instead of
+        // once per turn (#27): a turn resumes the provider's session rather than
+        // replaying our own transcript, so a copy sent on an earlier turn is still
+        // in front of the agent. Keyed on the session that holds it, so a session
+        // that is rebound or forked is briefed again rather than left without it.
+        var loopEditor =
+            string.IsNullOrWhiteSpace(openLoopDocument) ? LoopEditorContext.Closed
+            : SessionBriefings.IsDelivered(
+                session.DeliveredBriefings, SessionBriefings.LoopAuthoring, session.CurrentSessionId)
+                ? LoopEditorContext.Briefed
+                : LoopEditorContext.NeedsBriefing;
+
         var (contextPreamble, additionalAllowedDirectories) =
-            await BuildChatContextAsync(openWorkItemId, !string.IsNullOrWhiteSpace(openLoopDocument), tools);
+            await BuildChatContextAsync(openWorkItemId, loopEditor, tools);
         var promptForAgent = contextPreamble is null
             ? userMessage
             : $"{contextPreamble}\n\n{userMessage}";
@@ -223,7 +248,24 @@ public sealed class ChatService : IChatService
         else
             content = !string.IsNullOrWhiteSpace(result.Output) ? result.Output! : $"[chat-error] {result.Error}";
 
-        var newSessionId = result.SessionId ?? capturedSessionId ?? session.CurrentSessionId;
+        // This turn's OWN binding, which is not the same thing as the session the
+        // turn ends on: newSessionId below falls back to the binding we were already
+        // resuming, so a turn that never reached an agent still ends on one. Every
+        // adapter failure path returns no session id (the claude launch failing, the
+        // process throwing before it started, ExecuteAsync throwing above), so a null
+        // here is precisely "the prompt did not land".
+        var boundThisTurn = result.SessionId ?? capturedSessionId;
+        var newSessionId = boundThisTurn ?? session.CurrentSessionId;
+
+        // Only a turn that reached the agent can have left the guide with it. Using
+        // newSessionId here instead would record a briefing that never arrived
+        // whenever the agent failed to launch on an already-bound session, and no
+        // later turn would ever brief that session again. Erring this way costs one
+        // redundant copy; erring the other way is silent and permanent.
+        if (loopEditor == LoopEditorContext.NeedsBriefing && boundThisTurn is not null)
+            session.DeliveredBriefings = SessionBriefings.Record(
+                session.DeliveredBriefings, SessionBriefings.LoopAuthoring, boundThisTurn);
+
         await FinalizeAssistantAsync(session, nextSeq + 1, content, interrupted, newSessionId, ct);
     }
 
@@ -234,15 +276,18 @@ public sealed class ChatService : IChatService
     /// open. The worktree path is granted only when BOTH a filesystem grant is held
     /// AND the open item has an active (non-terminal) run with a worktree on disk;
     /// otherwise the agent gets the id-only preamble and scratch access alone. When
-    /// <paramref name="loopEditorOpen"/> is set, the preamble names the open Loop
-    /// Editor as a thin pointer — the agent reads/edits the loop via the
-    /// <c>get_current_loop</c>/<c>update_current_loop</c> tools.
+    /// <paramref name="loopEditor"/> is open, the preamble names it as a thin pointer
+    /// — the agent reads/edits the loop via the
+    /// <c>get_current_loop</c>/<c>update_current_loop</c> tools — and, on the turn
+    /// that first briefs an agent session, carries the constant brief and authoring
+    /// guide as well. Everything else here is per-turn state by nature and is
+    /// rebuilt on each call.
     /// </summary>
     private async Task<(string? Preamble, IReadOnlyList<string>? AllowedDirectories)> BuildChatContextAsync(
-        string? openWorkItemId, bool loopEditorOpen, IReadOnlyList<string> tools)
+        string? openWorkItemId, LoopEditorContext loopEditor, IReadOnlyList<string> tools)
     {
         var hasWorkItem = !string.IsNullOrWhiteSpace(openWorkItemId);
-        if (!hasWorkItem && !loopEditorOpen)
+        if (!hasWorkItem && loopEditor == LoopEditorContext.Closed)
             return (null, null);
 
         var lines = new List<string> { "[Chat Context]" };
@@ -277,66 +322,71 @@ public sealed class ChatService : IChatService
             }
         }
 
-        if (loopEditorOpen)
+        switch (loopEditor)
         {
-            lines.Add(
-                "The user has a loop open in the Loop Editor. Call get_current_loop to read it as the "
-                + "ild-loop-template/v1 document. To EDIT it, prefer the targeted tools — they change only "
-                + "what you name (never corrupting an unrelated node) and each returns a synchronous ack "
-                + "{ applied, matchCount, validationErrors }: use get_loop_node + edit_loop_node_field for a "
-                + "prompt/config tweak (plain-text find-and-replace, the server handles JSON escaping; "
-                + "old_string must match exactly once), set_loop_node_field to overwrite a whole field, and "
-                + "edit_loop_file for structural nudges (edges, ids). update_current_loop (full replacement) "
-                + "is a last resort. Every edit applies to the live canvas immediately but is transient — only "
-                + "the human can save.");
-            lines.Add(LoopAuthoringGuide);
+            case LoopEditorContext.NeedsBriefing:
+                lines.Add(LoopEditorBrief);
+                lines.Add(LoopAuthoringGuide.Text);
+                break;
+            case LoopEditorContext.Briefed:
+                lines.Add(LoopEditorReminder);
+                break;
         }
 
         return (string.Join("\n", lines), allowedDirectories);
     }
 
     /// <summary>
-    /// A compact primer on the loop template model so the chat agent can author a
-    /// valid <c>ild-loop-template/v1</c> document — included in the Chat Context only
-    /// when a Loop Editor is open (ADR-0011). Mirrors the node/edge vocabulary in
-    /// CONTEXT.md and the config fields the editor reads/writes.
+    /// What the Loop Editor half of the Chat Context owes a turn. The two underlying
+    /// facts — whether an editor is open, and whether this agent session already
+    /// holds the guide — are not independent: "brief now" is meaningless with no
+    /// editor open. One value makes that combination unrepresentable rather than
+    /// merely unused.
     /// </summary>
-    private const string LoopAuthoringGuide =
-        """
-        Loop authoring guide — a loop is a directed graph executed from its Start node.
-        Document shape: { "$schema": "ild-loop-template/v1", "name", "description", "recoveryPolicy" (AutoResume|NeedsReview|Cancel), "nodes": [...], "edges": [...] }.
-        Each node: { "id", "type", "label" (unique), "config": {...} }. Each edge: { "id", "sourceNodeId", "targetNodeId", "edgeType" (OnSuccess|OnFailure|Custom), "name" (Custom only) }.
-        Node types and their key config fields:
-        - Start: entry point; creates the worktree/branch. config.createWorktree (bool), config.runInstall (bool).
-        - Cmd: runs a shell command in the worktree, succeeds on exit 0. config.command.
-        - AI: runs the agent. config.prompt, config.aiProviderId, config.toolAllowlist (string[]), config.matchRules ([{ "pattern", "edgeName" }] routing the AI output to Custom edges by name; no match takes OnSuccess).
-        - Human: pauses for human input (becomes {{PreviousNode.Output}}). config.inputLabel, config.prompt, config.customEdges (string[] of Custom edge names this node may emit).
-        - Prompt: renders a templated string as its Output (compose a downstream AI prompt). config.prompt. Always routes OnSuccess.
-        - PR: opens/maintains a pull request. config.prDescriptionTemplate, config.prCommentTemplate, config.customEdges. Reserved PR edges: on_rejected, on_merge_conflict, on_ci_failed, on_approved, on_ci_passed, on_merged, on_abandoned — wire on_merged/on_abandoned to reach a terminal path.
-        - Condition: a switch. config.cases ([{ "variant" (TextMatches|PrExists|HasTag), "subject"+"pattern" for TextMatches, "tag" for HasTag, "edgeName" }]), config.defaultEdge (the Custom edge taken when no case matches), config.output (the pass-through).
-        - Cleanup: terminal sink (incoming edges only); marks the run finished.
-        Field semantics you cannot infer from the name:
-        - id: yours to choose, and only internal consistency matters — saving mints fresh GUIDs and remaps every reference. An edge whose sourceNodeId or targetNodeId names no node in the same document is silently dropped, with no error and no validation failure. After any structural edit, re-read the document and confirm each edge you added is still there.
-        - aiProviderId: omit it unless a GUID was handed to you — you have no way to list providers. Unset or non-GUID falls back to the default provider; a GUID that no longer exists fails the run outright.
-        - toolAllowlist: exactly four keys exist — "read", "write", "execute", "ild" — and only opencode/pi/claude-code providers honour them. Unknown keys are filtered out, and an empty, omitted or fully-filtered list means the PROVIDER DEFAULTS, not "no tools"; you cannot express "no tools" here.
-        - Condition subject and output: template strings rendered through the placeholder pipeline before matching, both defaulting to {{Node.Input}}.
-        - Precedence, and they differ: for AI matchRules the rule matching LAST in the output wins, so a closing verdict beats a word mentioned earlier; for Condition cases the FIRST matching case wins. Both match case-insensitively with no other regex options, each against a whole string — the AI node's output, or the Condition case's rendered subject — so ^ and $ bind to that whole string rather than to a line, and . does not cross newlines; write (?m) or (?s) inline when you need otherwise.
-        - Only AI matchRules are pattern-checked at save (invalid, zero-width — x*, \b, (?=...) — and catastrophically slow patterns are rejected). A Condition case pattern is only compile-checked, so a zero-width one saves cleanly and then matches everything: being the first case, it wins forever and no later case or defaultEdge is ever reached. Make every Condition pattern require real characters yourself.
-        Graph rules enforced when the human saves — a rejected save costs a whole round trip, so check them before you hand back:
-        - A Start node and a Cleanup node must exist, and at least one path must run Start → Cleanup.
-        - EVERY node must be reachable from Start. This is the rule a hand-written document fails most often: a node you added but never wired in rejects the entire save, not just itself.
-        - Per source node: at most one OnSuccess and one OnFailure edge. Custom edges only on Human/AI/PR/Condition, each with a non-empty name unique within that node. Cleanup takes no outgoing edges.
-        - A Condition needs ≥1 case and a defaultEdge, must have NO OnSuccess edge, and its case/default edge names must match its wired Custom edges exactly, both ways.
-        - An AI node's matchRules and its Custom edges must likewise match both ways: a Custom edge no rule routes to, or a rule naming an edge that is not wired, rejects the save. Add the rule and the edge together, always.
-        Edges: give every non-terminal node an OnSuccess edge. Use OnFailure edges sparingly — only when you genuinely want a distinct recovery path (e.g. an AI fix/retry loop). Most failures are transient (an AI node out of tokens or a throttled provider, a flaky command); a node that fails with NO OnFailure edge fails in place and parks the run for human feedback, so a human can fix and restart that node. That is almost always better than wiring OnFailure to Cleanup, which discards the run on a hiccup — do not route failures to Cleanup.
-        Variables: templated fields expand placeholders — {{WorkItem.Title}}/{{WorkItem.Description}}, {{PreviousNode.Output}} (also spelled {{Node.Input}}), {{EventLog.LastN}}, and {{Var.<name>}}. A field is expanded exactly once, by the node that owns it; text a placeholder pulls in is never scanned again, so a prompt, a description or a variable value may quote the grammar safely. A Loop Variable is a mutable per-run string an AI node writes (via the agent variable API/tools) for a later node to read; names match [A-Za-z][A-Za-z0-9_]*.
-        Sessions: config.useSession=true turns session handling on and REQUIRES a non-empty config.sessionPlaceholder="<name>" — useSession with only a forkFromPlaceholder is rejected at save. The placeholder names the session this node binds to and resumes on a later visit (use it when the node continues its own earlier work). Adding config.forkFromPlaceholder="<name>" re-copies that other placeholder's session into this one on every visit (use it when a branch needs that context without writing back into it). Without useSession every visit starts fresh — prefer that for work that does not depend on an earlier conversation, since it is cheaper and cannot inherit a stale plan.
-        Authoring practices:
-        - Keep an AI node's config.prompt down to a single placeholder, e.g. {{PreviousNode.Output}}, and put the full brief in an upstream Prompt node. The AI node re-renders and re-sends config.prompt on EVERY visit, so a brief inlined there is paid again on each retry pass around the loop.
-        - Anchor matchRules on a verdict you instruct the agent to emit last, but anchor it with (?m)^TO_REVIEW$ — a bare ^TO_REVIEW$ requires the verdict to be the ENTIRE AI output, so an agent that explains itself first never matches it and falls through to OnSuccess instead. An unanchored token is the riskier fallback: it also matches a passing mention, and when no other rule matches later in the output that incidental hit is the one that routes.
-        - Point config.defaultEdge somewhere useful — a terminal path or a human gate. Every output your cases did not anticipate lands there, so a token branch silently swallows the interesting cases.
-        - Hand work across branches with {{Var.<name>}}, not {{PreviousNode.Output}}. Output is positional — only the node that just ran — while a loop variable is run-scoped and readable from any later node, whichever branch wrote it.
-        """;
+    private enum LoopEditorContext
+    {
+        /// <summary>No Loop Editor open: the loop half of the preamble is skipped.</summary>
+        Closed,
+
+        /// <summary>Open, and this agent session already holds the guide: pointer only.</summary>
+        Briefed,
+
+        /// <summary>Open, and this agent session does not hold the guide yet: full brief.</summary>
+        NeedsBriefing,
+    }
+
+    /// <summary>
+    /// The full loop-editor brief, delivered on the turn that first opens the Loop
+    /// Editor in an agent session and immediately followed by
+    /// <see cref="LoopAuthoringGuide.Text"/>. Both are constant for the session's
+    /// life, so they are pushed once into the resumed agent session rather than
+    /// re-sent per turn; <see cref="LoopEditorReminder"/> carries the per-turn state
+    /// afterwards.
+    /// </summary>
+    private const string LoopEditorBrief =
+        "The user has a loop open in the Loop Editor. Call get_current_loop to read it as the "
+        + "ild-loop-template/v1 document. To EDIT it, prefer the targeted tools — they change only "
+        + "what you name (never corrupting an unrelated node) and each returns a synchronous ack "
+        + "{ applied, matchCount, validationErrors }: use get_loop_node + edit_loop_node_field for a "
+        + "prompt/config tweak (plain-text find-and-replace, the server handles JSON escaping; "
+        + "old_string must match exactly once), set_loop_node_field to overwrite a whole field, and "
+        + "edit_loop_file for structural nudges (edges, ids). update_current_loop (full replacement) "
+        + "is a last resort. Every edit applies to the live canvas immediately but is transient — only "
+        + "the human can save. The authoring guide below is sent once for this session; call "
+        + "get_loop_authoring_guide to read it again at any point.";
+
+    /// <summary>
+    /// The standing per-turn line for a Loop Editor that is open but has already been
+    /// briefed. Whether an editor is open at all is per-turn state, so something must
+    /// travel every turn — this is the thin pointer ADR-0011 asks for, and it names
+    /// the tool that pulls the guide back, so dropping the guide from the per-turn
+    /// channel does not put it out of reach.
+    /// </summary>
+    private const string LoopEditorReminder =
+        "The user has a loop open in the Loop Editor. Read it with get_current_loop and change it "
+        + "with the targeted loop tools; edits reach the live canvas immediately but are transient — "
+        + "only the human can save. Call get_loop_authoring_guide for the loop model, the field "
+        + "semantics and the save-time graph rules.";
 
     public async Task<bool> DeleteAsync(string userId, Guid sessionId, CancellationToken ct = default)
     {

@@ -44,6 +44,8 @@ internal sealed class PromptCapturingCli : IDisposable
     public const string SilentSuccess = "";
 
     private readonly string _capturePath;
+    private readonly string _countPath;
+    private readonly PromptCaptureMode _mode;
 
     /// <summary>A real directory usable as the run's worktree.</summary>
     public string WorkDir { get; }
@@ -52,9 +54,11 @@ internal sealed class PromptCapturingCli : IDisposable
 
     public PromptCapturingCli(PromptCaptureMode capture = PromptCaptureMode.LastArgument, string turn = ClaudeCodeTurn)
     {
+        _mode = capture;
         WorkDir = Path.Combine(Path.GetTempPath(), $"ild-prompt-capture-{Guid.NewGuid():N}");
         Directory.CreateDirectory(WorkDir);
         _capturePath = Path.Combine(WorkDir, "captured-prompt.txt");
+        _countPath = Path.Combine(WorkDir, "invocation-count.txt");
         BinaryPath = Path.Combine(WorkDir, "fake-agent.sh");
 
         var record = capture == PromptCaptureMode.LastArgument
@@ -64,7 +68,21 @@ internal sealed class PromptCapturingCli : IDisposable
             // the whole prompt and terminates.
             : $"cat > '{_capturePath}'\n";
 
-        File.WriteAllText(BinaryPath, "#!/bin/sh\n" + record + turn);
+        // A multi-turn chat launches this CLI once per turn, and the whole point
+        // of such a test is what the SECOND launch was handed — which a
+        // last-write-wins capture file has already overwritten. So each launch
+        // also lands in its own numbered file: the full argv, NUL-separated
+        // because a prompt argument legitimately contains newlines.
+        var recordPerInvocation =
+            $"n=$(cat '{_countPath}' 2>/dev/null || echo 0)\n"
+            + "n=$((n+1))\n"
+            + $"printf '%s' \"$n\" > '{_countPath}'\n"
+            + $"printf '%s\\0' \"$@\" > '{WorkDir}/argv-'\"$n\"'.bin'\n"
+            + (capture == PromptCaptureMode.StandardInput
+                ? $"cp '{_capturePath}' '{WorkDir}/stdin-'\"$n\"'.txt'\n"
+                : string.Empty);
+
+        File.WriteAllText(BinaryPath, "#!/bin/sh\n" + record + recordPerInvocation + turn);
         Process.Start("chmod", "+x " + BinaryPath)!.WaitForExit();
     }
 
@@ -74,6 +92,36 @@ internal sealed class PromptCapturingCli : IDisposable
             ? File.ReadAllText(_capturePath)
             : throw new InvalidOperationException(
                 "the fake agent CLI was never invoked — the adapter failed before launching it");
+
+    /// <summary>How many times the adapter launched the CLI.</summary>
+    public int InvocationCount
+        => File.Exists(_countPath) ? int.Parse(File.ReadAllText(_countPath).Trim()) : 0;
+
+    /// <summary>
+    /// The arguments of the <paramref name="turn"/>'th launch, 1-based. This is the
+    /// whole of what the CLI was told: the prompt, the <c>--resume</c> flag, every
+    /// <c>--add-dir</c> grant. argv[0] is not among them and never was — the capture
+    /// writes <c>"$@"</c>, which is the positional parameters only.
+    /// </summary>
+    public string[] ArgvFor(int turn)
+    {
+        var path = Path.Combine(WorkDir, $"argv-{turn}.bin");
+        if (!File.Exists(path))
+            throw new InvalidOperationException(
+                $"the fake agent CLI was launched {InvocationCount} time(s); there is no turn {turn}");
+
+        // `printf '%s\0'` emits a trailing NUL, so the split leaves one empty tail
+        // element to drop — and only that one. Dropping a leading element too would
+        // silently eat the CLI's first real flag, which is exactly what an argv
+        // assertion is here to see.
+        return File.ReadAllText(path).Split('\0')[..^1];
+    }
+
+    /// <summary>The positional prompt argument of the <paramref name="turn"/>'th launch (1-based).</summary>
+    public string PromptFor(int turn)
+        => _mode == PromptCaptureMode.StandardInput
+            ? File.ReadAllText(Path.Combine(WorkDir, $"stdin-{turn}.txt"))
+            : ArgvFor(turn)[^1];
 
     /// <summary>An AiProvider.Config JSON pinning the adapter to this fake CLI.</summary>
     public string ProviderConfigJson

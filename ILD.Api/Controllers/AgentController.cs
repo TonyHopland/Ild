@@ -2,6 +2,7 @@ using ILD.Api.Contracts;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
+using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -628,6 +629,14 @@ public class AgentController : ControllerBase
     // to the chat session via the X-ILD-Chat-Session-Id header. The agent is never
     // given a persist tool — update_current_loop mutates transient client state
     // only; the sole write to a LoopTemplateVersion stays the editor's human Save.
+
+    // The authoring guide is static text, so it is served without a chat session:
+    // it describes the loop template model itself, not the loop anyone has open. The
+    // chat pushes it once per agent session and this endpoint is how the agent gets
+    // it back for the rest of that session (#27).
+    [HttpGet("loop-authoring-guide")]
+    public IActionResult GetLoopAuthoringGuide()
+        => Content(LoopAuthoringGuide.Text, "text/plain");
 
     [HttpGet("current-loop")]
     public async Task<IActionResult> GetCurrentLoop()

@@ -60,6 +60,18 @@ public class ChatSession : IHasUpdatedAt
     [MaxLength(256)]
     public string? CurrentSessionId { get; set; }
 
+    /// <summary>
+    /// Which one-per-session briefings this chat's agent has already been given, and
+    /// the adapter session each went to — see <see cref="SessionBriefings"/> for the
+    /// what and the why. A resumed session keeps everything it was ever sent, so a
+    /// block that is constant for the session's life is pushed once rather than on
+    /// every turn; comparing the recorded session against <see cref="CurrentSessionId"/>
+    /// re-briefs an agent session that was rebound or forked. Durable alongside the
+    /// binding it describes, so it survives a restart with it.
+    /// </summary>
+    [MaxLength(2048)]
+    public string? DeliveredBriefings { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     /// <summary>Last-activity timestamp; shown as the history row's date-stamp.</summary>
