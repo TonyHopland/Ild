@@ -171,6 +171,33 @@ String values in `command`, `env`, and `healthUrl` may contain tokens that ILD e
 | `${PORT:name}` | The port allocated to the named service (for wiring services together)            |
 | `${STATE_DIR}` | A per-preview state directory for data files that should not land in the worktree |
 
+### Ports across restarts
+
+Every port alias in the profile is allocated when the preview starts — including
+aliases whose service you have not started yet, which is what lets `${PORT:name}`
+resolve on a per-service start. Stopping the preview discards the allocations;
+starting it again allocates afresh, so a service without a `suggestedPort` draws a
+different ephemeral port on each run. Tokens are expanded per launch against the
+current run's allocation, so a `${PORT:name}` cross-reference always carries the
+port the referenced service is listening on **in the run that launched it**.
+
+What a process cannot do is change its mind afterwards: an environment is fixed at
+launch. Two rules follow from that, and both are enforced rather than left to you:
+
+- **Restarting one service keeps its alias's allocation.** A service restarted on
+  its own comes back on the port it already had, so every still-running service
+  that references it stays correct. Only stopping the whole preview releases the
+  alias.
+- **A service is not started while a service it references is down.** Starting it
+  would hand it a port nothing is listening on and then report it healthy — its
+  own health check only asks about itself — so the start is refused with a message
+  naming both services. Start the referenced service first, or start the whole
+  profile, which launches everything in one run.
+
+`suggestedPort` pins a service to a fixed port across restarts (ILD uses it when
+it is free and falls back to an ephemeral port when it is not), which is worth
+having for a stable browser URL. Cross-references do not need it.
+
 ### Example
 
 The repository's own `ild.config.json` defines an `app` profile that boots three services — a WorkItem Server, the ILD API, and the Vite frontend — and wires them together via `${PORT:name}` references:
@@ -191,6 +218,7 @@ The repository's own `ild.config.json` defines an `app` profile that boots three
             "cwd": ".",
             "command": "dotnet run --project ILD.WorkItemServer --no-launch-profile",
             "port": "workitem-server",
+            "suggestedPort": 5200,
             "env": {
               "WORKITEM_DATA_PATH": "${STATE_DIR}/workitem-data",
               "ASPNETCORE_URLS": "http://${HOST}:${PORT}"
