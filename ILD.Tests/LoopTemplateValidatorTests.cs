@@ -268,6 +268,17 @@ public class LoopTemplateValidatorTests
     }
 
     [Fact]
+    public void The_multiline_anchored_verdict_pattern_the_authoring_guide_recommends_saves_cleanly()
+    {
+        // The Chat Context loop authoring guide (ChatService.LoopAuthoringGuide)
+        // tells agents to anchor a verdict rule as (?m)^TO_REVIEW$. Advice that
+        // cannot be saved is worse than none, so pin it here: the inline (?m)
+        // must not read as zero-width to the probe.
+        var errs = LoopTemplateValidator.Validate(GraphWithAiPattern("(?m)^TO_REVIEW$"));
+        Assert.Empty(errs);
+    }
+
+    [Fact]
     public void Ai_match_rule_with_a_catastrophically_backtracking_pattern_is_invalid()
     {
         // "(.|.)+#" blows up on the validator's own short probe string: before

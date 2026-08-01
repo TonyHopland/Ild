@@ -386,6 +386,11 @@ public sealed class ChatServiceTests : IDisposable
         // place for a human restart rather than route to Cleanup.
         Assert.Contains("OnFailure edges sparingly", prompt);
         Assert.Contains("fails in place", prompt);
+        // The two failure modes an agent cannot discover by reading the document:
+        // an edge naming a missing node vanishes without an error, and every node
+        // must be wired in or the human's save is rejected wholesale.
+        Assert.Contains("silently dropped", prompt);
+        Assert.Contains("reachable from Start", prompt);
     }
 
     [Fact]
