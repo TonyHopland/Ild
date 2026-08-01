@@ -10,17 +10,23 @@ namespace ILD.Core.Services.Implementations.Adapters;
 
 /// <summary>
 /// Shared scaffolding for CLI-backed <see cref="IAgentAdapter"/> implementations
-/// (claude-code, opencode, pi). These adapters all render the same prompt
-/// template, persist/restore managed sessions through the same snapshot store,
-/// and parse JSON event streams the same way; this base owns those identical
-/// pieces so they live in exactly one place. The per-CLI parts — how the
-/// process is launched and how its output is parsed/finalized — stay in the
-/// concrete adapter.
+/// (claude-code, opencode, pi). These adapters all persist/restore managed
+/// sessions through the same snapshot store and parse JSON event streams the
+/// same way; this base owns those identical pieces so they live in exactly one
+/// place. The per-CLI parts — how the process is launched and how its output is
+/// parsed/finalized — stay in the concrete adapter.
+///
+/// Adapters are transport, not templating: <see cref="AgentExecutionContext.Prompt"/>
+/// reaches the CLI unchanged. Placeholder expansion belongs to the node
+/// executors, which own the run context a template needs and render each
+/// template field exactly once (see docs/adr/0011-context-aware-chat.md).
+/// Rendering here would be a second pass over already-substituted content, run
+/// against a strictly weaker context, so tokens quoted in a work item
+/// description or a loop variable value would be silently eaten — and a chat
+/// turn, which is not a template at all, would be holed the same way.
 /// </summary>
 public abstract class CliAgentAdapterBase : IAgentAdapter
 {
-    private static readonly IPromptTemplateResolver Resolver = new PromptTemplateResolver();
-
     /// <summary>Null when constructed without DI (e.g. unit tests); session snapshot helpers no-op in that case.</summary>
     protected IServiceScopeFactory? ScopeFactory { get; }
 
@@ -58,15 +64,6 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
             + "Invalid JSON is ignored and never fails a run. The reserved name \"ild\" is ignored.");
 
     public abstract Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context);
-
-    /// <summary>Render an AI-node prompt template against the run's placeholder context.</summary>
-    protected static Task<string> RenderPromptAsync(string template, LoopRunContext context)
-        => Task.FromResult(Resolver.Render(template, new PromptContext(
-            WorkItemTitle: context.WorkItemTitle,
-            WorkItemDescription: context.WorkItemDescription,
-            PreviousNodeOutput: context.PreviousNodeOutput,
-            EventLogSummary: context.EventLogSummary,
-            WorktreePath: context.WorktreePath)));
 
     /// <summary>
     /// Start a coding-agent CLI. Every agent launch goes through here so that

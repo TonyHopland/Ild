@@ -29,8 +29,6 @@ public class OpenCodeAdapter : CliAgentAdapterBase
     {
         try
         {
-            var rendered = await RenderPromptAsync(ctx.Prompt, ctx.RunContext);
-
             var binaryPath = AiProviderConfig.Parse(ctx.Provider.Config)
                 .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.OpenCode));
 
@@ -61,7 +59,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                 proc = StartAgentProcess(BuildRunProcessStartInfo(
                     binaryPath,
                     worktreePath,
-                    rendered,
+                    ctx.Prompt,
                     opencodeModel,
                     opencodeConfigJson,
                     sessionIdToUse));
@@ -75,7 +73,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                         proc = StartAgentProcess(BuildRunProcessStartInfo(
                             binaryPath,
                             worktreePath,
-                            rendered,
+                            ctx.Prompt,
                             opencodeModel,
                             opencodeConfigJson,
                             sessionIdToUse,
@@ -183,7 +181,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                 return NodeExecutionResult.Fail(response);
 
             return p.ExitCode == 0
-                ? NodeExecutionResult.Ok(response, rendered, effectiveSessionId, ctx.IncomingSessionId, AdapterUsageParser.Parse(stdout))
+                ? NodeExecutionResult.Ok(response, ctx.Prompt, effectiveSessionId, ctx.IncomingSessionId, AdapterUsageParser.Parse(stdout))
                 : NodeExecutionResult.Fail($"exit={p.ExitCode} stderr={stderr}", response);
         }
         catch (Exception ex)
@@ -346,7 +344,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
     public static ProcessStartInfo BuildRunProcessStartInfo(
         string binaryPath,
         string worktreePath,
-        string renderedPrompt,
+        string prompt,
         string opencodeModel,
         string opencodeConfigJson,
         string? sessionId,
@@ -367,7 +365,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             psi.ArgumentList.Add(sessionId);
         }
         psi.ArgumentList.Add("--");
-        psi.ArgumentList.Add(renderedPrompt);
+        psi.ArgumentList.Add(prompt);
         return psi;
     }
 

@@ -52,7 +52,6 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
     {
         try
         {
-            var rendered = await RenderPromptAsync(ctx.Prompt, ctx.RunContext);
             var binaryPath = AiProviderConfig.Parse(ctx.Provider.Config)
                 .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.Copilot));
 
@@ -65,7 +64,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
             try
             {
                 proc = StartAgentProcess(
-                    BuildRunProcessStartInfo(binaryPath, worktreePath, rendered, ctx.AdditionalAllowedDirectories));
+                    BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.AdditionalAllowedDirectories));
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
@@ -119,7 +118,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
             // Single-turn: no session id is bound (see class remarks), so the
             // result carries none and the run does not chain to a later --resume.
             return process.ExitCode == 0
-                ? NodeExecutionResult.Ok(response, rendered)
+                ? NodeExecutionResult.Ok(response, ctx.Prompt)
                 : NodeExecutionResult.Fail($"exit={process.ExitCode} stderr={stderr}", response);
         }
         catch (Exception ex)
@@ -131,7 +130,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
     public static ProcessStartInfo BuildRunProcessStartInfo(
         string binaryPath,
         string worktreePath,
-        string renderedPrompt,
+        string prompt,
         IReadOnlyList<string>? additionalAllowedDirectories = null)
     {
         var psi = new ProcessStartInfo(binaryPath)
@@ -171,7 +170,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
         // `-p` runs a single turn non-interactively and exits. Keep it last so
         // the prompt text is unambiguously the option's value.
         psi.ArgumentList.Add("-p");
-        psi.ArgumentList.Add(renderedPrompt);
+        psi.ArgumentList.Add(prompt);
         return psi;
     }
 

@@ -57,9 +57,6 @@ internal static class TestHostServiceCollectionExtensions
         public Task<string> CompleteAsync(string prompt, string? providerId = null, CancellationToken cancellationToken = default)
             => throw Unexpected(nameof(IAIProviderService));
 
-        public Task<string> RenderPromptAsync(string template, LoopRunContext context)
-            => throw Unexpected(nameof(IAIProviderService));
-
         public Task<bool> ValidatePromptTemplateAsync(string template)
             => throw Unexpected(nameof(IAIProviderService));
 

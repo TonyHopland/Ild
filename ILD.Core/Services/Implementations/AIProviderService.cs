@@ -12,7 +12,7 @@ using Microsoft.Extensions.Logging;
 namespace ILD.Core.Services.Implementations;
 
 /// <summary>
-/// OpenAI-compatible chat completion client + simple template renderer.
+/// OpenAI-compatible chat completion client, template validation and tool execution.
 /// </summary>
 public class AIProviderService : IAIProviderService
 {
@@ -20,17 +20,15 @@ public class AIProviderService : IAIProviderService
     private readonly IWorkItemManager _workItemManager;
     private readonly IWorktreePreviewService _worktreePreviewService;
     private readonly HttpClient _http;
-    private readonly IPromptTemplateResolver _resolver;
     private readonly ILoopRunStore? _loopRuns;
     private readonly ILogger<AIProviderService>? _logger;
 
-    public AIProviderService(IProviderStore providerStore, IWorkItemManager workItemManager, IWorktreePreviewService worktreePreviewService, HttpClient http, IPromptTemplateResolver? resolver = null, ILoopRunStore? loopRuns = null, ILogger<AIProviderService>? logger = null)
+    public AIProviderService(IProviderStore providerStore, IWorkItemManager workItemManager, IWorktreePreviewService worktreePreviewService, HttpClient http, ILoopRunStore? loopRuns = null, ILogger<AIProviderService>? logger = null)
     {
         _providerStore = providerStore;
         _workItemManager = workItemManager;
         _worktreePreviewService = worktreePreviewService;
         _http = http;
-        _resolver = resolver ?? new PromptTemplateResolver();
         _loopRuns = loopRuns;
         _logger = logger;
     }
@@ -75,17 +73,6 @@ public class AIProviderService : IAIProviderService
         {
             throw new AiProviderException($"AI provider call failed: {ex.Message}", ex);
         }
-    }
-
-    public Task<string> RenderPromptAsync(string template, LoopRunContext context)
-    {
-        var rendered = _resolver.Render(template, new PromptContext(
-            WorkItemTitle: context.WorkItemTitle,
-            WorkItemDescription: context.WorkItemDescription,
-            PreviousNodeOutput: context.PreviousNodeOutput,
-            EventLogSummary: context.EventLogSummary,
-            WorktreePath: context.WorktreePath));
-        return Task.FromResult(rendered);
     }
 
     public Task<bool> ValidatePromptTemplateAsync(string template)

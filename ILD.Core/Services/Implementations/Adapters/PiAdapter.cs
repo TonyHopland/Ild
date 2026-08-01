@@ -29,7 +29,6 @@ public sealed class PiAdapter : CliAgentAdapterBase
     {
         try
         {
-            var rendered = await RenderPromptAsync(ctx.Prompt, ctx.RunContext);
             var settings = ResolveSettings(ctx.Provider, ctx.RunContext.LoopRunId, ctx.ToolAllowlist, ctx.ChatSessionId);
 
             if (string.IsNullOrWhiteSpace(settings.BinaryPath))
@@ -72,7 +71,6 @@ public sealed class PiAdapter : CliAgentAdapterBase
                 proc = StartAgentProcess(BuildRunProcessStartInfo(
                     settings,
                     worktreePath,
-                    rendered,
                     sessionDirectory,
                     sessionIdToUse,
                     sessionPathToUse));
@@ -85,7 +83,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
             using var process = proc ?? throw new InvalidOperationException("Process.Start returned null");
             try
             {
-                await process.StandardInput.WriteAsync(rendered.AsMemory(), ctx.Cancel);
+                await process.StandardInput.WriteAsync(ctx.Prompt.AsMemory(), ctx.Cancel);
                 await process.StandardInput.FlushAsync(ctx.Cancel);
             }
             catch (IOException)
@@ -152,7 +150,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
                 return NodeExecutionResult.Fail(response);
 
             return process.ExitCode == 0
-                ? NodeExecutionResult.Ok(response, rendered, effectiveSessionId, ctx.IncomingSessionId, AdapterUsageParser.Parse(stdout.RawStdout))
+                ? NodeExecutionResult.Ok(response, ctx.Prompt, effectiveSessionId, ctx.IncomingSessionId, AdapterUsageParser.Parse(stdout.RawStdout))
                 : NodeExecutionResult.Fail($"exit={process.ExitCode} stderr={stderr}", response);
         }
         catch (Exception ex)
@@ -161,10 +159,11 @@ public sealed class PiAdapter : CliAgentAdapterBase
         }
     }
 
+    // The prompt is not an argument here — pi reads its turn from stdin (see
+    // the StandardInput write in ExecuteAsync).
     internal static ProcessStartInfo BuildRunProcessStartInfo(
         PiAdapterSettings settings,
         string worktreePath,
-        string renderedPrompt,
         string sessionDirectory,
         string? sessionId,
         string? sessionPath)

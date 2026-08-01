@@ -285,7 +285,7 @@ public class ClaudeCodeAdapterMcpInjectionTests : IDisposable
         var psi = ClaudeCodeAdapter.BuildRunProcessStartInfo(
             binaryPath: "claude",
             worktreePath: "/tmp/wt",
-            renderedPrompt: "fix it",
+            prompt: "fix it",
             sessionId: null,
             mcpConfigPath: "/tmp/mcp.json");
 
@@ -304,7 +304,7 @@ public class ClaudeCodeAdapterMcpInjectionTests : IDisposable
         var psi = ClaudeCodeAdapter.BuildRunProcessStartInfo(
             binaryPath: "claude",
             worktreePath: "/tmp/wt",
-            renderedPrompt: "fix it",
+            prompt: "fix it",
             sessionId: null,
             mcpConfigPath: "/tmp/mcp.json");
 

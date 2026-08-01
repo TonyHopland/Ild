@@ -39,7 +39,6 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         string? mcpConfigPath = null;
         try
         {
-            var rendered = await RenderPromptAsync(ctx.Prompt, ctx.RunContext);
             var binaryPath = AiProviderConfig.Parse(ctx.Provider.Config)
                 .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.ClaudeCode));
 
@@ -72,7 +71,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             try
             {
                 proc = StartAgentProcess(
-                    BuildRunProcessStartInfo(binaryPath, worktreePath, rendered, ctx.SessionId, mcpConfigPath, ctx.AdditionalAllowedDirectories));
+                    BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.SessionId, mcpConfigPath, ctx.AdditionalAllowedDirectories));
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
@@ -136,7 +135,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
                 await TryPersistSessionJsonlAsync(ctx, effectiveSessionId!, worktreePath);
 
             return process.ExitCode == 0
-                ? NodeExecutionResult.Ok(response, rendered, effectiveSessionId, ctx.IncomingSessionId, AdapterUsageParser.Parse(stdout.RawStdout))
+                ? NodeExecutionResult.Ok(response, ctx.Prompt, effectiveSessionId, ctx.IncomingSessionId, AdapterUsageParser.Parse(stdout.RawStdout))
                 : NodeExecutionResult.Fail($"exit={process.ExitCode} stderr={stderr}", response);
         }
         catch (Exception ex)
@@ -155,7 +154,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     public static ProcessStartInfo BuildRunProcessStartInfo(
         string binaryPath,
         string worktreePath,
-        string renderedPrompt,
+        string prompt,
         string? sessionId,
         string? mcpConfigPath = null,
         IReadOnlyList<string>? additionalAllowedDirectories = null)
@@ -215,7 +214,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         // is treated as the positional prompt argument regardless of whether a
         // `--resume <id>` precedes it.
         psi.ArgumentList.Add("--");
-        psi.ArgumentList.Add(renderedPrompt);
+        psi.ArgumentList.Add(prompt);
         return psi;
     }
 
