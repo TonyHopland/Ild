@@ -1,4 +1,4 @@
-import { NavLink } from "react-router-dom";
+import { NavLink } from "react-router";
 import { useAuth } from "../hooks/useAuth";
 import { NAV_ITEMS, APP_NAME } from "../utils/constants";
 

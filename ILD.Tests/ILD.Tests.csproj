@@ -22,6 +22,13 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="Serilog.Sinks.InMemory" Version="2.0.0" />
+    <!--
+      Microsoft.Data.Sqlite.Core drags in SQLitePCLRaw 2.1.11, whose bundled
+      e_sqlite3 build carries GHSA-2m69-gcr7-jv3q and has no patched 2.x. The
+      3.x bundle ships SQLite 3.53.4 instead, so name it directly here and let
+      nearest-wins lift the whole SQLitePCLRaw graph out of the advisory.
+    -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
   </ItemGroup>
 
   <ItemGroup>

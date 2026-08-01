@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, cleanup, waitFor, fireEvent } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 import LoopRunMonitor from "./index";
 import { LoopRunStatus, LoopRun } from "../../types";
 import * as authServices from "../../services/auth";

@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router";
 import { AuthContext, useProvideAuth, useAuth } from "./hooks/useAuth";
 import Header from "./components/Header";
 import Footer from "./components/Footer";

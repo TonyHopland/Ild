@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, waitFor, cleanup, fireEvent } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter } from "react-router";
 import { AuthContext } from "../../hooks/useAuth";
 import { RunAnalyticsOverview } from "../../types";
 import Analytics from "./index";
