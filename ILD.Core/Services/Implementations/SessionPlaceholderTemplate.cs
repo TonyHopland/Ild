@@ -4,10 +4,13 @@ using System.Text.RegularExpressions;
 namespace ILD.Core.Services.Implementations;
 
 /// <summary>
-/// The outcome of resolving one session field. <see cref="Value"/> is the
-/// session name to bind against — null when the field was left unset — and
-/// <see cref="Error"/> is the operator-facing reason the field could not be
-/// used. Exactly one of the two is meaningful.
+/// The outcome of resolving one session field, in one of three shapes:
+/// a <see cref="Value"/> to bind against; an <see cref="Error"/>, the
+/// operator-facing reason the field could not be used; or both null, which is
+/// an unset field — no session here, which is a legitimate configuration
+/// rather than a failure. The two are never both set, so a caller checks
+/// <see cref="Error"/> first and then treats a null <see cref="Value"/> as
+/// "this node names no session".
 /// </summary>
 internal readonly record struct SessionPlaceholderResolution(string? Value, string? Error);
 
