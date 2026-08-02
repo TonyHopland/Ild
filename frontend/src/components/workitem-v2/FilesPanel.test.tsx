@@ -86,6 +86,8 @@ describe("FilesPanel", () => {
       content: "line1\nline2",
       diff: "@@ -1 +1 @@\n-old\n+line1",
       isBinary: false,
+      imageMimeType: null,
+      imageBase64: null,
     });
 
     await renderPanel(makeWorkItem());
@@ -105,6 +107,65 @@ describe("FilesPanel", () => {
 
     expect(screen.getByText("+line1")).toBeTruthy();
     expect(screen.getByText("-old")).toBeTruthy();
+  });
+
+  test("draws an inlined image, and keeps the diff view winning over it", async () => {
+    vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: [{ path: "logo.png", changeStatus: "added" }],
+    });
+    vi.spyOn(authServices.workItemService, "getFileContent").mockResolvedValue({
+      path: "logo.png",
+      changeStatus: "added",
+      content: null,
+      diff: "Binary files differ",
+      isBinary: true,
+      imageMimeType: "image/png",
+      imageBase64: "AAAB",
+    });
+
+    await renderPanel(makeWorkItem());
+    await act(async () => {
+      fireEvent.click(screen.getByText("logo.png"));
+      await Promise.resolve();
+    });
+
+    const img = screen.getByAltText(/logo\.png/) as HTMLImageElement;
+    expect(img.getAttribute("src")).toBe("data:image/png;base64,AAAB");
+    expect(screen.queryByText(/Binary file/)).toBeNull();
+
+    // Diff is still the ranking branch — the image doesn't intercept it.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Diff" }));
+      await Promise.resolve();
+    });
+    expect(screen.queryByAltText(/logo\.png/)).toBeNull();
+    expect(screen.getByText("Binary files differ")).toBeTruthy();
+  });
+
+  test("still shows the fallback message for a binary the viewer can't draw", async () => {
+    vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: [{ path: "blob.bin", changeStatus: "added" }],
+    });
+    vi.spyOn(authServices.workItemService, "getFileContent").mockResolvedValue({
+      path: "blob.bin",
+      changeStatus: "added",
+      content: null,
+      diff: null,
+      isBinary: true,
+      imageMimeType: null,
+      imageBase64: null,
+    });
+
+    await renderPanel(makeWorkItem());
+    await act(async () => {
+      fireEvent.click(screen.getByText("blob.bin"));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText(/Binary file/)).toBeTruthy();
+    expect(document.querySelector(".wiv2-file-image")).toBeNull();
   });
 
   test("renders an empty state when there is no worktree", async () => {
@@ -179,6 +240,8 @@ describe("FilesPanel", () => {
         content: "before",
         diff: null,
         isBinary: false,
+        imageMimeType: null,
+        imageBase64: null,
       });
 
     const workItem = makeWorkItem();
@@ -208,6 +271,8 @@ describe("FilesPanel", () => {
       content: "after",
       diff: null,
       isBinary: false,
+      imageMimeType: null,
+      imageBase64: null,
     });
 
     // The parent refetches the work item and hands down a fresh object (same id).
@@ -281,6 +346,8 @@ describe("FilesPanel diff rendering", () => {
       content: "",
       diff,
       isBinary: false,
+      imageMimeType: null,
+      imageBase64: null,
     });
 
     await renderPanel(makeWorkItem());

@@ -35,6 +35,46 @@ cd frontend && vp check                # format + lint + type-check
 
 .NET tests: `dotnet test ILD.Tests/ILD.Tests.csproj`.
 
+## Changelog Entries
+
+`CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). An entry is for someone
+skimming to find out what changed. It is not a review artifact, a post-mortem, or a record of the work you
+just did.
+
+**Budget: one bold sentence naming the user-visible change, then at most two sentences. Roughly 60 words
+total.** If it needs more than that, the depth belongs in an ADR under `docs/adr/` or in `docs/`, and the
+entry links to it — `See [ADR-0017](docs/adr/0017-shutdown-halts-the-in-flight-ai-node.md).`
+
+- Lead with what is different now, in the present tense.
+- Then, only if it is not obvious, one sentence of why or what it replaces.
+- Omit changes that are not user-visible. Refactors, test scaffolding and internal renames get no entry.
+- No file paths, no symbol names, no narration of the debugging that led there, no listing of the cases
+  that did _not_ change.
+- Resist the urge to justify. Every clause you want to add about the alternative you rejected is a clause
+  the reader has to skip.
+
+Good:
+
+```markdown
+- **Stop a chat reply mid-flight.** A red stop square sits beside **Send** while a turn is running and
+  cancels it. The cancel primitive already existed, but was only reachable by sending another message
+  or deleting the chat.
+```
+
+Bad — the same change, written as a post-mortem:
+
+```markdown
+- **Stop a chat reply mid-flight.** The chat bubble shows a red stop square to the left of **Send** for
+  exactly as long as a turn is in progress, cancelling it over the new `POST /api/v1/chat/{id}/interrupt`.
+  The endpoint checks ownership before cancelling, exactly as the per-chat delete does, and the button does
+  not clear the busy state itself: the server persists the partial reply and announces it, so an
+  interrupted turn ends through the same hub events as one that finished on its own and the transcript
+  keeps what the agent had produced (flagged `interrupted`). A stop that loses the race to the turn
+  finishing is a no-op rather than an error.
+```
+
+Every clause in the bad version is true. None of it belongs in a changelog.
+
 ## Database Migrations
 
 NEVER manually write or edit EF Core migration files. Always use the EF Core CLI tools to scaffold migrations from model changes:

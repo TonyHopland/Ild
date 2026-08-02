@@ -303,6 +303,15 @@ function FileViewer({
     return <DiffView diff={content.diff} />;
   }
 
+  if (content.imageMimeType && content.imageBase64) {
+    return (
+      <ImageView
+        mimeType={content.imageMimeType}
+        base64={content.imageBase64}
+        path={content.path}
+      />
+    );
+  }
   if (content.isBinary) {
     return <div className="wiv2-empty">Binary file — preview not available.</div>;
   }
@@ -310,6 +319,19 @@ function FileViewer({
     return <div className="wiv2-empty">This file has no content to display.</div>;
   }
   return <CodeView code={content.content} />;
+}
+
+/**
+ * An image file drawn from the bytes the content response already carried, as a
+ * data URL — the file endpoint is bearer-authenticated, so a `src` pointing back
+ * at it would be fetched by the browser without the token.
+ */
+function ImageView({ mimeType, base64, path }: { mimeType: string; base64: string; path: string }) {
+  return (
+    <div className="wiv2-file-image">
+      <img src={`data:${mimeType};base64,${base64}`} alt={`Contents of image file ${path}`} />
+    </div>
+  );
 }
 
 function CodeView({ code }: { code: string }) {

@@ -807,6 +807,28 @@
   overflow: auto;
 }
 
+/* An image is contained by the panel rather than sizing it: the wrapper takes
+   the panel's own box, and the image scales down inside it, so a large asset
+   scrolls nothing and stretches nothing. */
+.wiv2-file-image {
+  box-sizing: border-box;
+  height: 100%;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wiv2-file-image img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  /* Transparent images would otherwise dissolve into the dark panel. */
+  background: repeating-conic-gradient(#2a2a3a 0% 25%, #1f1f2c 0% 50%) 50% / 16px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+}
+
 .wiv2-code,
 .wiv2-diff {
   margin: 0;

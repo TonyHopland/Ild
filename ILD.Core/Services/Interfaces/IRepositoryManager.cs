@@ -94,7 +94,9 @@ public interface IRepositoryManager
     /// <summary>
     /// Read a single worktree file's full content together with its unified
     /// diff against the default branch's fork point. Content is null for binary
-    /// or missing files; the diff is null when the file is unchanged. Returns
+    /// or missing files, except that a binary image small enough to inline also
+    /// carries its bytes as base64 plus a media type so the file viewer can
+    /// render it; the diff is null when the file is unchanged. Returns
     /// null if the path escapes the worktree. The diff is anchored on
     /// <paramref name="defaultBranch"/> (the repository's stored default branch)
     /// when supplied, falling back to <c>origin/HEAD</c>.

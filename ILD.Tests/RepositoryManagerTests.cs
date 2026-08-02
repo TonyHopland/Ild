@@ -462,17 +462,81 @@ public class RepositoryManagerTests : IDisposable
         var (work, mgr) = CloneWithOrigin();
         var wt = await mgr.CreateWorktreeAsync(work, "feature-binary");
 
-        // A NUL byte makes the file binary — content is withheld.
+        // A NUL byte makes the file binary — content is withheld, and nothing
+        // the viewer could draw comes back for an extension it can't render.
         File.WriteAllBytes(Path.Combine(wt, "blob.bin"), new byte[] { 1, 2, 0, 3, 4 });
 
         var binary = await mgr.ReadWorktreeFileAsync(wt, "blob.bin");
         Assert.NotNull(binary);
         Assert.True(binary!.IsBinary);
         Assert.Null(binary.Content);
+        Assert.Null(binary.ImageMimeType);
+        Assert.Null(binary.ImageBase64);
 
         Assert.Null(await mgr.ReadWorktreeFileAsync(wt, "../README.md"));
         Assert.Null(await mgr.ReadWorktreeFileAsync(wt, "does-not-exist.txt"));
     }
+
+    [Fact]
+    public async Task ReadWorktreeFile_inlines_a_renderable_image_as_base64()
+    {
+        var (work, mgr) = CloneWithOrigin();
+        var wt = await mgr.CreateWorktreeAsync(work, "feature-image");
+
+        var bytes = PngBytes();
+        File.WriteAllBytes(Path.Combine(wt, "logo.PNG"), bytes);
+
+        var image = await mgr.ReadWorktreeFileAsync(wt, "logo.PNG");
+        Assert.NotNull(image);
+        // Still binary with no text content — the bytes ride alongside.
+        Assert.True(image!.IsBinary);
+        Assert.Null(image.Content);
+        Assert.Equal("image/png", image.ImageMimeType);
+        Assert.Equal(Convert.ToBase64String(bytes), image.ImageBase64);
+    }
+
+    [Fact]
+    public async Task ReadWorktreeFile_falls_back_to_the_binary_shape_for_an_oversized_image()
+    {
+        var (work, mgr) = CloneWithOrigin();
+        var wt = await mgr.CreateWorktreeAsync(work, "feature-huge-image");
+
+        // Past the inlining cap the read must degrade to the plain binary
+        // response rather than either erroring or shipping the payload.
+        var huge = new byte[(4 * 1024 * 1024) + 1];
+        huge[0] = 0; // NUL — binary
+        File.WriteAllBytes(Path.Combine(wt, "huge.png"), huge);
+
+        var image = await mgr.ReadWorktreeFileAsync(wt, "huge.png");
+        Assert.NotNull(image);
+        Assert.True(image!.IsBinary);
+        Assert.Null(image.Content);
+        Assert.Null(image.ImageMimeType);
+        Assert.Null(image.ImageBase64);
+    }
+
+    [Fact]
+    public async Task ReadWorktreeFile_serves_svg_as_text_rather_than_as_an_image()
+    {
+        var (work, mgr) = CloneWithOrigin();
+        var wt = await mgr.CreateWorktreeAsync(work, "feature-svg");
+
+        // An SVG from a worktree is untrusted markup, so it is read as source
+        // and never handed to the viewer as something to draw.
+        const string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>";
+        File.WriteAllText(Path.Combine(wt, "icon.svg"), svg);
+
+        var file = await mgr.ReadWorktreeFileAsync(wt, "icon.svg");
+        Assert.NotNull(file);
+        Assert.False(file!.IsBinary);
+        Assert.Equal(svg, file.Content);
+        Assert.Null(file.ImageMimeType);
+        Assert.Null(file.ImageBase64);
+    }
+
+    /// <summary>A real 1x1 PNG — has the NUL bytes that make it read as binary.</summary>
+    private static byte[] PngBytes() => Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
 
     // Builds a repo with a real "origin" remote so origin/HEAD (the diff base)
     // resolves the way it does for a cloned-on-demand base repo in production.
