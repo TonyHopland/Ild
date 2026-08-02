@@ -7,13 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-02
+
 ### Added
 
 - **ILD has a favicon.** The tab, the bookmark and the pinned window now carry its flame mark, where before they carried the browser's blank default — the page pointed at an icon file that was never shipped.
 
 - **The Files tab draws image files instead of dead-ending on "Binary file — preview not available."** PNG, JPEG, GIF, WebP, BMP, ICO and AVIF render in the viewer, scaled to fit; anything larger than 4 MiB still shows the binary message. SVG keeps rendering as source, because drawing untrusted markup would bring any script in it along.
 
-- **An AI node's session name can now interpolate a loop variable, giving one session per iteration instead of one per loop.** A literal `sessionPlaceholder` makes the session loop-scoped, so a node inside a cycle that needs memory _within_ an item is forced to carry it _across_ items, where it is stale — the only mitigation was a prompt guard paid for on every turn. `sessionPlaceholder` and `forkFromPlaceholder` are now templated, on a deliberately narrower grammar than a prompt: `{{Var.<name>}}` only, with every other placeholder family rejected at save time (`{{PreviousNode.Output}}` as a session name would mint an unbounded new session each turn). `"ticket_{{Var.current_ticket}}"` binds one session per distinct value and resumes whenever a value recurs. Resolution is strict where the prompt pipeline is lenient: an unset variable, an empty result, or one past the binding store's 128-character key limit **fails the node**, because resolving anyway would silently drop every iteration back into one shared conversation — the bug this exists to fix. Set the variable on a node guaranteed to run first. A literal name behaves exactly as before.
+- **An AI node's session name can now interpolate a loop variable, giving one session per iteration instead of one per loop.** Write `{{Var.current_ticket}}` into the name and each distinct value gets its own session, resumed whenever that value recurs. Only `{{Var.*}}` is accepted; an unset or empty variable fails the node rather than silently collapsing every iteration into one conversation.
 
 ## [0.7.0] - 2026-08-01
 
