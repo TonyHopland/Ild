@@ -353,9 +353,21 @@ public class RepositoryManager : IRepositoryManager
         {
             var bytes = await File.ReadAllBytesAsync(full);
             if (IsBinary(bytes))
+            {
                 response.IsBinary = true;
+                // A binary the viewer can draw ships its bytes inline; every
+                // other one stays content-less, as does an image past the cap.
+                var mime = InlineImageMimeType(relativePath);
+                if (mime != null && bytes.Length <= MaxInlineImageBytes)
+                {
+                    response.ImageMimeType = mime;
+                    response.ImageBase64 = Convert.ToBase64String(bytes);
+                }
+            }
             else
+            {
                 response.Content = System.Text.Encoding.UTF8.GetString(bytes);
+            }
         }
 
         return response;
@@ -462,6 +474,40 @@ public class RepositoryManager : IRepositoryManager
         var rootWithSep = root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar;
         return full.StartsWith(rootWithSep, StringComparison.Ordinal) ? full : null;
     }
+
+    /// <summary>
+    /// Ceiling on the bytes of one image inlined into a file-content response.
+    /// The payload rides in the JSON body, so an unbounded asset would be paid
+    /// for base64-inflated by a third on top of its own size; past this the file
+    /// falls back to the plain binary shape rather than failing the read.
+    /// </summary>
+    private const int MaxInlineImageBytes = 4 * 1024 * 1024;
+
+    /// <summary>
+    /// The media type to render <paramref name="relativePath"/> as an image
+    /// under, or null if the viewer has no business drawing it. Keyed on the
+    /// extension rather than sniffed content: the value ends up in a data URL
+    /// the browser trusts, so a mislabelled file should fail to draw rather than
+    /// be re-typed into something the extension never claimed.
+    /// <para>
+    /// SVG is deliberately absent. It is text, so it never reaches this branch
+    /// in the first place and renders as source in the code view — which is also
+    /// the outcome we want: an SVG from a worktree is untrusted input, and
+    /// drawing one carries its scripts along with it.
+    /// </para>
+    /// </summary>
+    private static string? InlineImageMimeType(string relativePath) =>
+        Path.GetExtension(relativePath).ToLowerInvariant() switch
+        {
+            ".png" => "image/png",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".gif" => "image/gif",
+            ".webp" => "image/webp",
+            ".bmp" => "image/bmp",
+            ".ico" => "image/x-icon",
+            ".avif" => "image/avif",
+            _ => null,
+        };
 
     private static bool IsBinary(byte[] bytes)
     {

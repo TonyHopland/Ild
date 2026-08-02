@@ -223,6 +223,15 @@ export interface WorktreeFileContent {
   content: string | null;
   diff: string | null;
   isBinary: boolean;
+  /**
+   * Set together with {@link imageBase64} when the file is a binary image small
+   * enough for the server to inline — the media type its bytes render under
+   * (e.g. `image/png`). Null for every other file, including an oversized image
+   * and an SVG (which is text and arrives as `content`).
+   */
+  imageMimeType: string | null;
+  /** The image's raw bytes, base64-encoded; see {@link imageMimeType}. */
+  imageBase64: string | null;
 }
 
 export enum NodeType {
