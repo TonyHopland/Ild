@@ -17,7 +17,7 @@ public class TemplateSeederTests
 
         var templates = (await db.LoopTemplates.GetAllAsync()).ToList();
         var names = templates.Select(t => t.Name).OrderBy(n => n).ToArray();
-        Assert.Equal(new[] { "Development", "Plan", "Q&A" }, names);
+        Assert.Equal(new[] { "Development", "DevTeam", "Plan", "Q&A" }, names);
 
         // The pre-example seed loops must no longer be created.
         Assert.DoesNotContain("Simple Code Change", names);
