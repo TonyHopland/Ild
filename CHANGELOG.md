@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Updated templates.** Updated the Q&A template and added the DevTeam template to the example templates.
+- **Update example loop templates.** Refreshes the Q&A example and adds the DevTeam template to the example templates.
 
 - **ILD has a favicon.** The tab, the bookmark and the pinned window now carry its flame mark, where before they carried the browser's blank default — the page pointed at an icon file that was never shipped.
 
