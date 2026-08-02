@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { SessionPlaceholderUsage } from "../types";
+import { isTemplatedSessionName, sessionPlaceholderError } from "../utils/sessionPlaceholder";
 
 interface AiSessionControlsProps {
   aiUseSession: boolean;
@@ -31,9 +32,19 @@ const MODES: { value: SessionMode; label: string; hint: string }[] = [
 const BINDING_HELP =
   "This is a design-time name. ILD binds it to the real adapter-generated session id for each run.";
 
+const TEMPLATE_HELP =
+  "Interpolate a loop variable — e.g. ticket_{{Var.current_ticket}} — to get one session per value instead of one per loop. The variable must be set before this node runs, or the node fails.";
+
 function deriveMode(useSession: boolean, forkFrom: string): SessionMode {
   if (!useSession) return "none";
   return forkFrom.trim() ? "fork" : "continue";
+}
+
+/** Lane label: a templated name is shown verbatim, annotated so it does not read as one shared conversation. */
+function laneLabel(entry: SessionPlaceholderUsage): string {
+  if (entry.count === 0) return `${entry.name} (no node names this session)`;
+  const nodes = `${entry.count} node${entry.count === 1 ? "" : "s"}`;
+  return entry.templated ? `${entry.name} (${nodes}, one per value)` : `${entry.name} (${nodes})`;
 }
 
 export function AiSessionControls({
@@ -69,6 +80,20 @@ export function AiSessionControls({
   const sessionName = aiSessionPlaceholder.trim();
   const forkSource = aiForkFromPlaceholder.trim();
   const hasLanes = sessionPlaceholderUsages.length > 0;
+  const sessionNameError = sessionPlaceholderError("Session name", aiSessionPlaceholder);
+  const forkSourceError = sessionPlaceholderError("Fork from", aiForkFromPlaceholder);
+
+  // A fork source that names no known lane — a template, or a lane since
+  // renamed — must still show as the selected value. A <select> with no
+  // matching option renders blank, which reads as "nothing set" and invites
+  // the author to overwrite a value they never meant to change.
+  const forkOptions =
+    forkSource && !sessionPlaceholderUsages.some((entry) => entry.name === forkSource)
+      ? [
+          ...sessionPlaceholderUsages,
+          { name: forkSource, count: 0, templated: isTemplatedSessionName(forkSource) },
+        ]
+      : sessionPlaceholderUsages;
 
   return (
     <div className="config-field session-controls">
@@ -112,6 +137,15 @@ export function AiSessionControls({
           <small className="config-help-text">
             Type a new name to start a session, or pick an existing one to join it. {BINDING_HELP}
           </small>
+          <small className="config-help-text">{TEMPLATE_HELP}</small>
+          {sessionNameError && (
+            <small className="config-help-text config-help-text-strong">{sessionNameError}</small>
+          )}
+          {!sessionNameError && isTemplatedSessionName(aiSessionPlaceholder) && (
+            <small className="config-help-text config-help-text-strong">
+              This name expands per run — one session per distinct value.
+            </small>
+          )}
           {selectedPlaceholderUsage && (
             <small className="config-help-text config-help-text-strong">
               Shared with {selectedPlaceholderUsage.count - 1} other AI node
@@ -130,12 +164,12 @@ export function AiSessionControls({
                 id="ai-fork-from-placeholder"
                 value={forkSource}
                 onChange={(event) => onAiForkFromPlaceholderChange(event.target.value)}
-                disabled={!hasLanes}
+                disabled={forkOptions.length === 0}
               >
                 <option value="">Select a session…</option>
-                {sessionPlaceholderUsages.map((entry) => (
+                {forkOptions.map((entry) => (
                   <option key={entry.name} value={entry.name}>
-                    {entry.name} ({entry.count} node{entry.count === 1 ? "" : "s"})
+                    {laneLabel(entry)}
                   </option>
                 ))}
               </select>
@@ -156,9 +190,16 @@ export function AiSessionControls({
             </div>
           </div>
 
-          {!hasLanes && (
+          {forkOptions.length === 0 && (
             <small className="config-help-text">
               No sessions to fork from yet. Add an AI node that continues a session first.
+            </small>
+          )}
+
+          <small className="config-help-text">{TEMPLATE_HELP}</small>
+          {(sessionNameError || forkSourceError) && (
+            <small className="config-help-text config-help-text-strong">
+              {sessionNameError ?? forkSourceError}
             </small>
           )}
 

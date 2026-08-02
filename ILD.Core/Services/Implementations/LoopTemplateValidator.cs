@@ -213,6 +213,21 @@ public static class LoopTemplateValidator
                 if (cfg.UseSession == true && string.IsNullOrWhiteSpace(cfg.SessionPlaceholder))
                     errors.Add($"AI node {node.Id} with useSession=true must set sessionPlaceholder.");
 
+                // Session fields are templated, but on a narrower grammar than a
+                // prompt: {{Var.<name>}} only. They are checked here rather than
+                // in the general placeholder scan below, which accepts every
+                // known name — {{PreviousNode.Output}} as a session name would
+                // mint a new, unbounded session on every turn.
+                foreach (var (field, value) in new[]
+                         {
+                             ("sessionPlaceholder", cfg.SessionPlaceholder),
+                             ("forkFromPlaceholder", cfg.ForkFromPlaceholder),
+                         })
+                {
+                    foreach (var bad in SessionPlaceholderTemplate.DisallowedPlaceholders(value))
+                        errors.Add($"AI node {node.Id} {field} may only use {{{{Var.<name>}}}} placeholders; '{{{{{bad}}}}}' is not one.");
+                }
+
                 // AI custom edges and match rules must stay in sync: every named
                 // custom edge must be routed to by a match rule, and every rule
                 // must point at an existing custom edge. Comparison is ordinal to

@@ -112,6 +112,57 @@ public class LoopTemplateValidatorTests
         Assert.Contains(errs, e => e.Contains("sessionPlaceholder"));
     }
 
+    /// <summary>Minimal Start → AI → Cleanup graph whose AI node uses a session.</summary>
+    private static LoopTemplateGraph SessionGraph(string sessionPlaceholder, string? forkFromPlaceholder = null)
+    {
+        var ai = Node("a", "AI", "{{PreviousNode.Output}}");
+        ai.Config["useSession"] = true;
+        ai.Config["sessionPlaceholder"] = sessionPlaceholder;
+        if (forkFromPlaceholder is not null) ai.Config["forkFromPlaceholder"] = forkFromPlaceholder;
+
+        return new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Node("s", "Start"), ai, Node("c", "Cleanup") },
+            new() { Edge("s", "a"), Edge("a", "c") });
+    }
+
+    [Fact]
+    public void Literal_session_placeholder_is_valid()
+    {
+        Assert.Empty(LoopTemplateValidator.Validate(SessionGraph("research")));
+    }
+
+    [Fact]
+    public void Session_placeholder_may_interpolate_a_loop_variable()
+    {
+        Assert.Empty(LoopTemplateValidator.Validate(SessionGraph("ticket_{{Var.current_ticket}}")));
+    }
+
+    [Fact]
+    public void Fork_from_placeholder_may_interpolate_a_loop_variable()
+    {
+        Assert.Empty(LoopTemplateValidator.Validate(
+            SessionGraph("fork_{{Var.n}}", "base_{{Var.n}}")));
+    }
+
+    [Theory]
+    [InlineData("{{PreviousNode.Output}}")]      // known, but unbounded and different every turn
+    [InlineData("t_{{WorkItem.Title}}")]         // known, but not a loop variable
+    [InlineData("t_{{Node.Input}}")]
+    [InlineData("t_{{Bogus.Thing}}")]            // not known at all
+    [InlineData("t_{{Var.9bad}}")]               // Var. prefix, illegal variable name
+    public void Session_placeholder_rejects_placeholders_other_than_loop_variables(string placeholder)
+    {
+        var errs = LoopTemplateValidator.Validate(SessionGraph(placeholder));
+        Assert.Contains(errs, e => e.Contains("sessionPlaceholder") && e.Contains("Var."));
+    }
+
+    [Fact]
+    public void Fork_from_placeholder_rejects_placeholders_other_than_loop_variables()
+    {
+        var errs = LoopTemplateValidator.Validate(SessionGraph("dest", "{{PreviousNode.Output}}"));
+        Assert.Contains(errs, e => e.Contains("forkFromPlaceholder") && e.Contains("Var."));
+    }
+
     [Fact]
     public void Valid_minimal_graph_passes()
     {

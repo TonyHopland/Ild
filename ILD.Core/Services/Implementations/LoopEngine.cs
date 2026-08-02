@@ -926,7 +926,17 @@ public sealed class LoopEngine : ILoopEngine
                     }
                     case NodeOutcome.SessionBound sb:
                     {
-                        try { await loopRunStore.UpsertSessionBindingAsync(run.Id, node.NodeType.ToString(), sb.SessionPlaceholder, sb.SessionId); } catch { }
+                        // Still best-effort — a transient write failure must not
+                        // fail an AI node that already did its work — but no
+                        // longer silent: a lost binding means the next visit
+                        // starts a fresh session instead of resuming.
+                        try { await loopRunStore.UpsertSessionBindingAsync(run.Id, node.NodeType.ToString(), sb.SessionPlaceholder, sb.SessionId); }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex,
+                                "Run {RunId}: failed to persist session binding '{Placeholder}' for node {NodeId}; the next visit will start a fresh session",
+                                run.Id, sb.SessionPlaceholder, node.Id);
+                        }
                         break;
                     }
                 }

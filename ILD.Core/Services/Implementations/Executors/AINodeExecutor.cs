@@ -90,6 +90,40 @@ public sealed class AINodeExecutor : INodeExecutor
             yield break;
         }
 
+        // The session fields are template fields like the prompt, but with a
+        // narrower grammar ({{Var.<name>}} only) and no tolerance for an unset
+        // variable — see SessionPlaceholderTemplate. They are resolved once,
+        // here, and the single resolved value is threaded through both the
+        // binding lookup and the bind below: resolving at each site could let
+        // them diverge, and the run would resume one session while recording
+        // another. Resolved before the concurrency slot is claimed so a failure
+        // cannot leak it.
+        var manageSession = cfg.UseSession ?? false;
+        string? sessionPlaceholder = null;
+        string? forkFromPlaceholder = null;
+        if (manageSession)
+        {
+            string? sessionError;
+            try
+            {
+                var variables = await LoadSessionVariablesAsync(sp, ctx.Run.Id, cfg);
+                var session = SessionPlaceholderTemplate.Resolve("sessionPlaceholder", cfg.SessionPlaceholder, variables);
+                var forkFrom = SessionPlaceholderTemplate.Resolve("forkFromPlaceholder", cfg.ForkFromPlaceholder, variables);
+                sessionError = session.Error ?? forkFrom.Error;
+                sessionPlaceholder = session.Value;
+                forkFromPlaceholder = forkFrom.Value;
+            }
+            catch (Exception ex)
+            {
+                sessionError = $"Could not read this run's loop variables to resolve the session placeholder: {ex.Message}";
+            }
+            if (sessionError is not null)
+            {
+                yield return new NodeOutcome.Fail(EdgeType.OnFailure, sessionError);
+                yield break;
+            }
+        }
+
         var providerId = provider.Id;
         if (concurrency is not null && !concurrency.TryEnter(providerId, provider.Parallelism))
         {
@@ -133,17 +167,16 @@ public sealed class AINodeExecutor : INodeExecutor
         NodeExecutionResult result;
         try
         {
-            var manageSession = cfg.UseSession ?? false;
             string? incomingSessionId = null;
             string? forkFromSessionId = null;
-            if (manageSession && !isSteering && !string.IsNullOrWhiteSpace(cfg.ForkFromPlaceholder))
+            if (manageSession && !isSteering && !string.IsNullOrWhiteSpace(forkFromPlaceholder))
             {
                 // Fork: re-seed from the source session on every execution, so a
                 // node in a loop restarts from the (frozen) base each time. The
                 // destination's own prior binding is intentionally ignored — a
                 // fresh copy is materialized under a new id and continued on.
                 var sessions = sp.GetRequiredService<ILoopRunStore>();
-                var sourceBinding = await sessions.GetSessionBindingAsync(ctx.Run.Id, ctx.Node.NodeType.ToString(), cfg.ForkFromPlaceholder!);
+                var sourceBinding = await sessions.GetSessionBindingAsync(ctx.Run.Id, ctx.Node.NodeType.ToString(), forkFromPlaceholder!);
                 if (!string.IsNullOrWhiteSpace(sourceBinding?.SessionId))
                 {
                     forkFromSessionId = sourceBinding!.SessionId;
@@ -152,10 +185,10 @@ public sealed class AINodeExecutor : INodeExecutor
                 // No bound source session: fall through as a normal new AI node
                 // (fresh session, no fork) — no fail-fast, no validation gate.
             }
-            else if (manageSession && !string.IsNullOrWhiteSpace(cfg.SessionPlaceholder))
+            else if (manageSession && !string.IsNullOrWhiteSpace(sessionPlaceholder))
             {
                 var sessions = sp.GetRequiredService<ILoopRunStore>();
-                var sessionBinding = await sessions.GetSessionBindingAsync(ctx.Run.Id, ctx.Node.NodeType.ToString(), cfg.SessionPlaceholder!);
+                var sessionBinding = await sessions.GetSessionBindingAsync(ctx.Run.Id, ctx.Node.NodeType.ToString(), sessionPlaceholder!);
                 incomingSessionId = sessionBinding?.SessionId;
             }
             // Steering forces continuation of the live session captured before
@@ -192,11 +225,14 @@ public sealed class AINodeExecutor : INodeExecutor
             // provider ran it — even when the CLI reported no tokens. Adapters
             // leave AiProvider null; the executor owns the provider identity.
             var usage = (result.Usage ?? new ILD.Data.DTOs.TokenUsage(0, 0, null)) with { AiProvider = provider.Name };
-            if (cfg.UseSession ?? false
-                && !string.IsNullOrWhiteSpace(cfg.SessionPlaceholder)
+            // Parenthesised deliberately: `??` binds looser than `&&`, so the
+            // unbracketed form collapsed to `cfg.UseSession` alone and could
+            // bind a null placeholder or a null session id.
+            if (manageSession
+                && !string.IsNullOrWhiteSpace(sessionPlaceholder)
                 && !string.IsNullOrWhiteSpace(result.SessionId))
             {
-                yield return new NodeOutcome.SessionBound(cfg.SessionPlaceholder!, result.SessionId!);
+                yield return new NodeOutcome.SessionBound(sessionPlaceholder!, result.SessionId!);
             }
             if (!string.IsNullOrEmpty(result.Output) && cfg.MatchRules is { Count: > 0 })
             {
@@ -218,6 +254,28 @@ public sealed class AINodeExecutor : INodeExecutor
         {
             yield return new NodeOutcome.Fail(EdgeType.OnFailure, result.Error ?? "AI adapter failed", result.Output);
         }
+    }
+
+    /// <summary>
+    /// The run's loop variables, keyed case-insensitively like the prompt
+    /// pipeline's — or null when neither session field is templated, in which
+    /// case a literal session name never touches the store. Unlike
+    /// <see cref="PromptRenderingService"/> this load is <em>not</em>
+    /// best-effort: a failure here would make every variable look unset, and
+    /// the caller turns that into a node failure rather than a wrong session.
+    /// </summary>
+    private static async Task<IReadOnlyDictionary<string, string>?> LoadSessionVariablesAsync(
+        IServiceProvider sp, Guid runId, NodeConfig.Ai cfg)
+    {
+        if (!SessionPlaceholderTemplate.IsTemplated(cfg.SessionPlaceholder)
+            && !SessionPlaceholderTemplate.IsTemplated(cfg.ForkFromPlaceholder))
+            return null;
+
+        var variables = await sp.GetRequiredService<ILoopRunStore>().GetVariablesAsync(runId);
+        var byName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var v in variables)
+            byName[v.Name] = v.Value;   // indexer, not ToDictionary: names differing only in case must not throw
+        return byName;
     }
 
     /// <summary>
