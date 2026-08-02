@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Update example loop templates.** Refreshes the Q&A example and adds the DevTeam template to the example templates.
+
 - **ILD has a favicon.** The tab, the bookmark and the pinned window now carry its flame mark, where before they carried the browser's blank default — the page pointed at an icon file that was never shipped.
 
 - **The Files tab draws image files instead of dead-ending on "Binary file — preview not available."** PNG, JPEG, GIF, WebP, BMP, ICO and AVIF render in the viewer, scaled to fit; anything larger than 4 MiB still shows the binary message. SVG keeps rendering as source, because drawing untrusted markup would bring any script in it along.

@@ -1,0 +1,760 @@
+{
+  "$schema": "ild-loop-template/v1",
+  "name": "DevTeam",
+  "description": "A complete dev-team loop: the Orchestrator evaluates the work item and may optionally launch an Explorer to produce a targeted repo summary if it can't route without more context. Otherwise it routes to spec-clarification (human-in-the-loop — ambiguous or undeliverable requirements), QA, or development. Developer briefs carry architecture guidance up front so code is built deep the first time; the reviewer runs a correctness pass plus an architecture pass scoped to the touched code and sends fixable friction back to the developer rather than into the PR. The developer can hand off to QA or straight to review, and — when blocked on a product decision or an undeliverable change — escalate to a human via a standalone Dev Blocker gate that answers and returns straight to the dev session. The reviewer can reject or approve. An HIL-tag gate optionally inserts human approval before the PR is opened. PR feedback loops back to the developer.",
+  "recoveryPolicy": "AutoResume",
+  "nodes": [
+    {
+      "id": "552edeca-c0c1-457e-9b8e-1406fe37f77e",
+      "type": "Prompt",
+      "label": "Dev Decision Return",
+      "config": {
+        "__pos": {
+          "x": 18,
+          "y": 495
+        },
+        "prompt": "The human answered your escalated decision:\n\n{{Node.Input}}\n\nFirst append this decision verbatim to the `Decisions` loop variable with set_loop_variable — the reviewer treats `Decisions` as settled and will not relitigate it. Then continue implementation accordingly, commit, update `DevHandoff` with set_loop_variable, and end your final message with exactly TO_QA or TO_REVIEW.\n\nIf the decision drops or descopes part of the item, implement only what remains — no substitute for the dropped part — and note the drop in `DevHandoff` so the reviewer doesn't read it as missing work."
+      }
+    },
+    {
+      "id": "5b6648d0-c654-491b-acc7-dea4ca683214",
+      "type": "AI",
+      "label": "Developer",
+      "config": {
+        "__pos": {
+          "x": -380,
+          "y": 300
+        },
+        "matchRules": [
+          {
+            "edgeName": "to_qa",
+            "pattern": "TO_QA"
+          },
+          {
+            "edgeName": "to_review",
+            "pattern": "TO_REVIEW"
+          },
+          {
+            "edgeName": "needs_decision",
+            "pattern": "NEEDS_DECISION"
+          }
+        ],
+        "prompt": "{{Node.Input}}",
+        "sessionPlaceholder": "dev",
+        "useSession": true
+      }
+    },
+    {
+      "id": "00d1bc88-a160-44c9-a948-dc73999ad43c",
+      "type": "Prompt",
+      "label": "Spec Brief",
+      "config": {
+        "__pos": {
+          "x": -700,
+          "y": 0
+        },
+        "prompt": "You are the spec analyst. The orchestrator determined this work item needs resolving with the human before development begins — it's ambiguous or inconsistent, or the change it asks for can't be delivered in this repo as written.\n\n# Work item (full context — no need to fetch it again)\n\n**Title:** {{WorkItem.Title}}\n\n**Description:**\n{{WorkItem.Description}}\n\n\nOrchestrator briefing:\n{{Var.OrchestratorNotes}}\n\n## If the change can't be delivered as written\n\nThat constraint is your first question, and often your only one — don't route around it or hunt for a workaround to present as settled. State it plainly, then offer: drop the item; descope to what IS deliverable here and move the rest to its own work item or runbook; or accept a named substitute with its reduced value stated out loud. Recommend one. A substitute only counts if the human chooses it knowingly.\n\n## Your process — resolve questions one by one with the human\n\nThe orchestrator sent you here precisely because this spec needs human input. **Asking the human is your default path** — use your best judgment for anything you can genuinely resolve with reasonable assumptions on your own, but err on the side of asking.\n\n1. **Read the work item** and identify every ambiguity, contradiction, or missing decision that could make implementation risky.\n2. **Pick the most critical unresolved question** and present it with:\n   - 2–3 suggested solutions/approaches\n   - Your **recommended** solution (the one you'd pick if left to your own devices)\n3. **Set `SpecQuestions`** (via set_loop_variable) to a focused message containing only that **one** question and its options, then end your final message with exactly: **ASK_HUMAN**\n4. **After the human replies**, you'll receive their answer as input. Evaluate whether this truly resolves the question:\n   - If the answer is clear and the question is settled, move on to step 2 for the next unresolved issue.\n   - If the answer is vague, raises a sub-concern, or the human wants to discuss trade-offs, **stay on the same topic** — ask a focused follow-up (with new options and a recommendation if helpful), set `SpecQuestions`, and end with: **ASK_HUMAN**\n   - A single question may take several rounds to fully resolve. Don't rush to the next topic until you're confident the current one is truly settled.\n5. **Keep iterating** — one question at a time, as many rounds per question as needed — until all ambiguous or inconsistent issues are resolved.\n6. **When everything is settled**, set `SpecResolution` to a concise summary of every decision, assumption, and clarification from the whole conversation, then end your final message with exactly: **SPEC_RESOLVED**\n\nYou drive this conversation loop. Go question by question with the human until the spec is fully resolved. Only hand off with SPEC_RESOLVED when there's nothing left to clarify."
+      }
+    },
+    {
+      "id": "01100c1a-9951-4356-8753-f6d7defef1f5",
+      "type": "Prompt",
+      "label": "Re-route Brief",
+      "config": {
+        "__pos": {
+          "x": -1460,
+          "y": 60
+        },
+        "prompt": "The spec analyst has finished clarifying the work item with the human. Resolution summary:\n\n{{Var.SpecResolution}}\n\nRe-read the work item (it may have been updated), fold this resolution into your understanding, then re-route: update `Route` with set_loop_variable (QA or DEV — only SPEC again if something is still genuinely blocking) and refresh `OrchestratorNotes` so the resolved decisions reach the downstream agents."
+      }
+    },
+    {
+      "id": "0788d4d8-8741-4c4f-95b9-4d3fc9d62722",
+      "type": "Prompt",
+      "label": "QA Repro Brief",
+      "config": {
+        "__pos": {
+          "x": -700,
+          "y": 640
+        },
+        "prompt": "You are the QA engineer. Development has not started yet — the work item likely describes a bug or behavior that must be captured in tests first.\n\nOrchestrator briefing:\n{{Var.OrchestratorNotes}}\n\n(A repo summary may be available as \"RepoSummary\" — reference it using 'get_loop_variable' for context if helpful.)\n\nReproduce the bug and/or author failing tests that capture the expected behavior, and commit them. Using set_loop_variable, set `QAReport` to a summary of the reproduction and the tests you added — under ~200 words, naming the test files and what they assert rather than pasting the tests themselves. End your final message with exactly: REPRO_READY"
+      }
+    },
+    {
+      "id": "08f04a99-5370-40a6-95f6-4f3519615c26",
+      "type": "Prompt",
+      "label": "Dev Brief",
+      "config": {
+        "__pos": {
+          "x": -700,
+          "y": 300
+        },
+        "prompt": "You are the developer. Implement this work item in the worktree.\n\nOrchestrator briefing:\n{{Var.OrchestratorNotes}}\n\n(A repo summary may be available as \"RepoSummary\" — reference it using 'get_loop_variable' for context if helpful.)\n\n## Build it deep — architecture guidance\nWrite the touched code so it's architecturally clean the first time. The reviewer will require these to be fixed before a PR is opened, so getting them right now saves a round-trip:\n- Prefer **deep modules**: a simple interface over meaningful implementation. Avoid shallow wrappers whose interface is nearly as complex as their body — apply the **deletion test**: if removing an abstraction would just relocate complexity rather than concentrate it, don't add it.\n- Don't extract pure functions **solely** for testability if that hides how they're really used; add a genuine seam so behavior is testable through a sensible interface instead.\n- Keep coupling from leaking across the module boundaries you touch.\n- If a `CONTEXT.md` or `docs/adr/` already exists, follow its vocabulary and honor its decisions. Do not create them if they're absent.\n\nWrite the code, keep changes focused, make the test suite pass, and commit your work with clear messages. When done, use set_loop_variable to set `DevHandoff` to a concise summary of what you changed and why (files touched, approach, anything reviewers should look at). Keep it under ~200 words, cite `file:line` rather than pasting code, and never put diffs or command output in it — QA, the reviewer, the approval gate and the PR body all re-read this variable, so every extra line is paid for four times over. Then end your final message with exactly one of:\n- TO_QA — the change is risky, touches tricky behavior, or deserves independent verification.\n- TO_REVIEW — the change is well covered by tests you ran yourself and can go straight to code review.\n\n## Blocked? (escalate sparingly)\nYou own technical and stylistic choices — assume, document, keep going; never ask a human for those. Escalate only for:\n\n1. **A product/requirements decision** you can't responsibly make on the human's behalf.\n2. **A change you can't deliver as briefed** — impossible here, already true, or only enforceable outside this repo. Swapping in a proxy (probe, warning, doc, TODO) is the human's call, not yours — even if the briefing above told you to build it. Never pad a proxy with tests or seams to make it look like the requested change.\n\nSet `DevBlocker` with set_loop_variable to that one decision — what's blocked, 2–3 options, your recommendation — and end your final message with exactly NEEDS_DECISION instead of TO_QA/TO_REVIEW. Interruptions are costly, so escalate rarely."
+      }
+    },
+    {
+      "id": "1a585a7b-d484-4a66-b0d0-c6d99f5d1bb0",
+      "type": "Prompt",
+      "label": "Dev From HIL",
+      "config": {
+        "__pos": {
+          "x": 142.79864636209814,
+          "y": 133.86463620981385
+        },
+        "prompt": "A human rejected the change at the pre-PR approval gate. Their feedback:\n\n{{Node.Input}}\n\nIf their feedback settles a product or design question, append that decision verbatim to the `Decisions` loop variable with set_loop_variable — the reviewer treats `Decisions` as settled and will not relitigate it. Then address the feedback, commit, update `DevHandoff` with set_loop_variable, and end your final message with exactly TO_QA or TO_REVIEW.\n\nBlocked instead — on a product decision, or on something you can't deliver as briefed? Same rule as your original brief: set `DevBlocker` (what's blocked, 2–3 options, your recommendation) and end with exactly NEEDS_DECISION."
+      }
+    },
+    {
+      "id": "1b2327b4-5449-40ef-b319-82acf789ba68",
+      "type": "AI",
+      "label": "Spec Analyst",
+      "config": {
+        "__pos": {
+          "x": -429.38880126182966,
+          "y": 5.895110410094638
+        },
+        "matchRules": [
+          {
+            "edgeName": "ask_human",
+            "pattern": "ASK_HUMAN"
+          },
+          {
+            "edgeName": "spec_resolved",
+            "pattern": "SPEC_RESOLVED"
+          }
+        ],
+        "prompt": "{{Node.Input}}",
+        "sessionPlaceholder": "spec",
+        "useSession": true
+      }
+    },
+    {
+      "id": "2a6ad4c6-c5c1-458f-b4ac-88f1226c16fc",
+      "type": "Human",
+      "label": "Spec Clarification",
+      "config": {
+        "__pos": {
+          "x": -89.21529968454259,
+          "y": -15.32728706624606
+        },
+        "customEdges": ["answered"],
+        "inputLabel": "Answers / clarifications",
+        "prompt": "{{Var.SpecQuestions}}"
+      }
+    },
+    {
+      "id": "2ec18b37-bb73-4a94-b424-34491ca7500a",
+      "type": "AI",
+      "label": "Orchestrator",
+      "config": {
+        "__pos": {
+          "x": -1200,
+          "y": 300
+        },
+        "prompt": "{{Node.Input}}",
+        "sessionPlaceholder": "orchestrator",
+        "useSession": true,
+        "toolAllowlist": ["ild"]
+      }
+    },
+    {
+      "id": "3c0d91b0-d5db-4228-9667-6e9b18a03f27",
+      "type": "Prompt",
+      "label": "QA Verify Brief",
+      "config": {
+        "__pos": {
+          "x": -601.2657728706624,
+          "y": 501.2223974763407
+        },
+        "prompt": "The developer handed off an implementation for verification.\n\nDeveloper handoff:\n{{Var.DevHandoff}}\n\n(A repo summary may be available as \"RepoSummary\" — reference it using 'get_loop_variable' for context if helpful.)\n\nRun the test suite and exercise the change against the work item's acceptance criteria. Using set_loop_variable, set `QAReport` to your findings — if something fails, describe the failures precisely. Keep it under ~200 words: quote only the failing assertion and the few stack lines that identify the cause, never whole test logs. The developer, the reviewer and the PR body all re-read this variable, so pasted output is paid for several times. End your final message with exactly QA_PASSED if everything passes, or QA_FAILED otherwise."
+      }
+    },
+    {
+      "id": "52fec1af-0472-4cee-b713-e0cbb4fb909e",
+      "type": "PR",
+      "label": "Pull Request",
+      "config": {
+        "__pos": {
+          "x": 880,
+          "y": 300
+        },
+        "customEdges": [
+          "on_rejected",
+          "on_merge_conflict",
+          "on_ci_failed",
+          "on_merged",
+          "on_abandoned"
+        ],
+        "prCommentTemplate": "DevTeam loop update:\n\n{{Var.DevHandoff}}",
+        "prDescriptionTemplate": "## Summary\n\n{{Var.DevHandoff}}\n\n## QA\n\n{{Var.QAReport}}\n\n## Review\n\n{{Var.ReviewFeedback}}\n\n---\n_Automated by the DevTeam loop."
+      }
+    },
+    {
+      "id": "740bd77c-882c-435d-84ef-2f33c598d076",
+      "type": "Human",
+      "label": "HIL Approval",
+      "config": {
+        "__pos": {
+          "x": 620,
+          "y": 120
+        },
+        "customEdges": ["approve", "reject"],
+        "inputLabel": "Approval decision / feedback",
+        "prompt": "This work item is tagged HIL, so it needs your sign-off before a pull request is opened.\n\nDeveloper handoff:\n{{Var.DevHandoff}}\n\nReview verdict:\n{{Var.ReviewFeedback}}\n\nInspect the worktree if needed. Choose 'approve' to open the PR, or 'reject' with your feedback in the input — it will be handed to the developer verbatim."
+      }
+    },
+    {
+      "id": "7b66633f-ce27-4239-b208-151358cfd5f7",
+      "type": "Prompt",
+      "label": "Repo Summary",
+      "config": {
+        "prompt": "#Repo summary: \n{{Var.RepoSummary}}",
+        "__pos": {
+          "x": -1345.7429816579456,
+          "y": 487.7867623828329
+        }
+      }
+    },
+    {
+      "id": "894f50f9-9edd-4a03-8eff-27357370c117",
+      "type": "Condition",
+      "label": "HIL Gate",
+      "config": {
+        "__pos": {
+          "x": 380,
+          "y": 300
+        },
+        "cases": [
+          {
+            "edgeName": "hil",
+            "tag": "HIL",
+            "variant": "HasTag"
+          }
+        ],
+        "defaultEdge": "auto"
+      }
+    },
+    {
+      "id": "8e8fca8a-c488-47ca-addd-7b1bc6257e15",
+      "type": "Prompt",
+      "label": "Dev From Review",
+      "config": {
+        "__pos": {
+          "x": -130,
+          "y": 160
+        },
+        "prompt": "The reviewer rejected your change. Feedback (required fixes may include both correctness and architecture items — address them all in the touched code, don't defer them to the PR):\n\n{{Var.ReviewFeedback}}\n\nAddress every required fix, commit, update `DevHandoff` with set_loop_variable, and end your final message with exactly TO_QA or TO_REVIEW.\n\nBlocked instead — on a product decision, or on something you can't deliver as briefed? Same rule as your original brief: set `DevBlocker` (what's blocked, 2–3 options, your recommendation) and end with exactly NEEDS_DECISION."
+      }
+    },
+    {
+      "id": "94ff8005-a8bd-43cf-9735-65303b060edf",
+      "type": "Human",
+      "label": "Dev Blocker",
+      "config": {
+        "__pos": {
+          "x": 10.165044930334545,
+          "y": 610.8544159056468
+        },
+        "inputLabel": "Decision (product call or undeliverable item)",
+        "prompt": "The developer paused for your call. This gate is only reached when they're truly blocked — it is not a routine checkpoint. Either:\n\n1. A product / requirements decision they can't responsibly make alone, or\n2. The change can't be delivered as briefed — impossible here, already true, or only enforceable outside this repo — so any substitute delivers less than the item promised. Usual answers: descope to what IS deliverable, move the rest out (separate work item, runbook, host provisioning), or accept a named substitute knowing what it does and doesn't buy you.\n\n{{Var.DevBlocker}}\n\nReply with your decision (and any reasoning). Your answer is handed to the developer verbatim to continue implementation in the same session."
+      }
+    },
+    {
+      "id": "a2107e33-495d-487f-a977-37350480a126",
+      "type": "Prompt",
+      "label": "Dev From PR",
+      "config": {
+        "__pos": {
+          "x": 500,
+          "y": 560
+        },
+        "prompt": "The pull request needs work — it was rejected, CI failed, or there is a merge conflict. Details:\n\n{{Node.Input}}\n\nInspect the PR (review comments, CI logs, conflict state), fix the problems, and commit. If human PR feedback settled a product or design question, append that decision verbatim to the `Decisions` loop variable with set_loop_variable — the reviewer treats `Decisions` as settled and will not relitigate it. Update `DevHandoff` with set_loop_variable and end your final message with exactly TO_QA or TO_REVIEW.\n\nBlocked instead — on a product decision, or on something you can't deliver as briefed? Same rule as your original brief: set `DevBlocker` (what's blocked, 2–3 options, your recommendation) and end with exactly NEEDS_DECISION."
+      }
+    },
+    {
+      "id": "b33a05ec-2cee-4e3f-86c4-3b1c0abb293d",
+      "type": "Prompt",
+      "label": "Review fallback",
+      "config": {
+        "prompt": "The reviewer did not respond with APPROVE or REJECTED so the loop is stopped for human review.\nReviewer output:\n{{Node.Input}}\n\nReviewer feedback:\n{{Var.ReviewFeedback}}\n",
+        "__pos": {
+          "x": 418.80203045685283,
+          "y": -25.877687526354894
+        }
+      }
+    },
+    {
+      "id": "bb4b95d3-d81e-4a49-a320-cba2341eb075",
+      "type": "Start",
+      "label": "Start",
+      "config": {
+        "__pos": {
+          "x": -1700,
+          "y": 300
+        },
+        "createWorktree": true,
+        "runInstall": true
+      }
+    },
+    {
+      "id": "c52e5c62-6f3d-43c5-8988-58b71718a978",
+      "type": "AI",
+      "label": "QA Engineer",
+      "config": {
+        "__pos": {
+          "x": -440,
+          "y": 700
+        },
+        "matchRules": [
+          {
+            "edgeName": "qa_passed",
+            "pattern": "QA_PASSED"
+          },
+          {
+            "edgeName": "qa_failed",
+            "pattern": "QA_FAILED"
+          },
+          {
+            "edgeName": "repro_ready",
+            "pattern": "REPRO_READY"
+          }
+        ],
+        "prompt": "{{Node.Input}}",
+        "sessionPlaceholder": "qa",
+        "useSession": true
+      }
+    },
+    {
+      "id": "c95faba4-21a1-4035-baa7-6270234f89f2",
+      "type": "AI",
+      "label": "Reviewer",
+      "config": {
+        "__pos": {
+          "x": 145.93848580441642,
+          "y": 294.1048895899054
+        },
+        "adapterConfig": {},
+        "aiProviderId": "",
+        "matchRules": [
+          {
+            "edgeName": "rejected",
+            "pattern": "REJECTED"
+          },
+          {
+            "edgeName": "approved",
+            "pattern": "APPROVED"
+          }
+        ],
+        "prompt": "Review the current diff of this worktree against the work item. Do not modify the code yourself.\n\n**If you already reviewed an earlier version of this change in this session:** do not start over. Read only the commits added since your last review, confirm each required fix you listed was actually addressed, and check the new work didn't break anything you already approved. Do not re-read files you have already read, and do not reopen points you already accepted — but do reject again if a required fix was not genuinely made.\n\n**First review:** work from the diff. Open a full file only when the diff alone can't tell you whether something is correct. If the QA report below shows the test suite was already run, trust it rather than re-running it.\n\nDeveloper handoff:\n{{Var.DevHandoff}}\n\nQA report (if any):\n{{Var.QAReport}}\n\nSettled decisions (if any) — choices a human made during spec clarification, PR review, or a developer escalation. Treat these like ADRs: do not relitigate them, and do not require fixes that contradict them:\n{{Var.SpecResolution}}\n{{Var.Decisions}}\n\n(A repo summary may be available as \"RepoSummary\" — reference it using 'get_loop_variable' for context if helpful.)\n\nReview in two passes.\n\n## Pass 1 — Correctness (must-fix)\nCorrectness, edge cases, test coverage, and fit with the surrounding codebase. Anything wrong, unsafe, or untested here is a must-fix.\n\n**Ripple — the one place to look outside the diff.** Correct changed lines are not a correct change. For every value, path, default, permission, interface, or assumption the diff alters, grep for the code that READS it and is NOT in the diff, and confirm that code still holds. This is a targeted grep for the readers, not a wider audit — it stays inside the \"work from the diff\" budget. Anything the change relocates or re-points deserves it explicitly: enumerate every consumer of what moved, not just the consumers the diff happened to update. A consumer left behind on the old assumption is a must-fix.\n\n## Pass 2 — Architecture (scoped strictly to the code this diff touches)\nSurface architectural friction ONLY in the modules/files this change adds or edits — do not audit the wider codebase or open new fronts. You are not looking for new problems elsewhere; you are surfacing friction the change introduces or worsens in the touched code. Look for:\n- **Shallow modules** — the interface is nearly as complex as the implementation, or understanding one concept means bouncing between many tiny modules. Apply the **deletion test**: if you removed this abstraction, would complexity meaningfully concentrate, or just relocate? If it would just relocate, flag it.\n- **Testability seams** — pure functions extracted solely for testability that hide real bugs in how they're actually used; or new code that lacks tests or resists testing through existing interfaces (name the seam worth adding).\n- **Leaky coupling** — tight coupling this change introduces or widens across a module boundary.\nFor each, describe the friction concretely and propose a **deepening opportunity** (the refactor that would resolve it). Prefer the domain's own vocabulary over generic terms like 'component' or 'service'.\n\n**Optional architecture context — use only if it already exists, never create or require it:**\n- If a `CONTEXT.md` exists, read it and use its vocabulary and the seams it names.\n- If `docs/adr/` ADRs exist, respect them: do not relitigate a settled decision. If this change contradicts an ADR, say so explicitly and only push back if real friction justifies reopening it. This deference applies to prose that PREDATES the change. Prose the diff itself adds or edits — ADRs, comments, docstrings, commit messages — is the implementer's claim, not a settled decision, and carries no more authority than the handoff above. Where such text argues something is safe, intentional, or an accepted trade-off, check that the argument covers every case it implies: a justification that holds for most of the touched surface is the easiest way for a real problem to survive review.\nDo NOT ask the developer to add a CONTEXT.md or an ADR.\n\n## Verdict\nThe point of Pass 2 is to get friction FIXED in this change, not to pass it downstream into a PR that may merge automatically. So:\n- **REJECT** if there are any Pass 1 must-fixes, OR if Pass 2 surfaced architectural friction that is **fixable now** — concrete, localized to the code this diff touches, and a clear improvement (it passes the deletion test). List these as required fixes for the developer to resolve before a PR opens.\n- **APPROVE** only when both passes are clean. If an architectural observation is genuinely **out of scope** for this change — it would need a broader refactor beyond the touched code, or would relitigate a settled ADR — do NOT block on it; record it under a 'Follow-up (non-blocking)' heading so it's captured without holding up the change.\n\nUsing set_loop_variable, set `ReviewFeedback` to your verdict — required fixes first (correctness, then architecture; each precise and actionable), then any 'Follow-up (non-blocking)' notes. Keep each fix to one to three sentences anchored at `file:line`; do not quote the code back or restate the diff, and aim for under ~300 words total. The developer, the approval gate and the PR body all re-read this variable. End your final message with exactly one token on its own line: REJECTED or APPROVED.",
+        "toolAllowlist": ["read", "execute", "ild"],
+        "useSession": true,
+        "sessionPlaceholder": "review"
+      }
+    },
+    {
+      "id": "d7f32ef3-3f12-4412-9fa9-e3c0f8e80424",
+      "type": "AI",
+      "label": "Explorer",
+      "config": {
+        "__pos": {
+          "x": -1124.5,
+          "y": 645.98
+        },
+        "matchRules": [
+          {
+            "edgeName": "scanned",
+            "pattern": "REPO_SCANNED"
+          }
+        ],
+        "prompt": "You are the explorer. Produce a concise, targeted summary of the parts of this repository that are relevant to the work item below. Set the loop variable `RepoSummary` using set_loop_variable, then end your final message with exactly: REPO_SCANNED.\n\n# Work item context\n\nTitle: {{WorkItem.Title}}\n\nDescription:\n{{WorkItem.Description}}\n\n# What to scan\n\nFocus your exploration on:\n1. **Relevant areas** — only directories/files that touch the scope described in the work item.\n2. **Tech stack** — briefly note languages, frameworks, and key dependencies.\n3. **Relevant structure** — only the directories and entry points involved in this task.\n4. **Build/test commands** — how to build, test, lint.\n5. **Key modules** — the source files most likely to be modified, and what they do.\n6. **Architecture context (if present)** — note whether a `CONTEXT.md` and/or `docs/adr/` exist, and if so capture the domain vocabulary and any decisions relevant to this work item so downstream agents can honor them. Do not create these files if they are absent.\n7. **Deliverability blockers** — if the change can't be made in this repo as written (enforced outside this codebase, rejected by the platform, or already true), lead with that. Name the blocker; do NOT design the workaround — the orchestrator routes that to a human.\n\nKeep the summary under ~600 words. Be specific about file paths so downstream agents can navigate quickly.\n\n# How to scan\n\nSearch, don't read. Use grep/glob to locate things and skim only the regions that matter — do not read whole files when the relevant region answers the question, and never open the same file twice. Stop as soon as you can answer the seven points above: this is a targeted scan for one work item, not a tour of the repo. If you find yourself past a few dozen tool calls, write up what you have.",
+        "toolAllowlist": ["read", "execute", "ild"],
+        "useSession": false
+      }
+    },
+    {
+      "id": "dd228216-e91a-4b16-95b5-cf193f753489",
+      "type": "Prompt",
+      "label": "Orchestrator Brief",
+      "config": {
+        "__pos": {
+          "x": -1467.082910321489,
+          "y": 307.082910321489
+        },
+        "prompt": "You are the orchestrator of an autonomous dev team.\n\n# Work item\n\nTitle: {{WorkItem.Title}}\n\nDescription:\n{{WorkItem.Description}}\n\n# Your task\n\nDecide the single next step and route to it. **You do NOT explore the repository yourself — that is the Explorer's job.** Do not read, grep, list, or open source files. If routing correctly requires knowing how the repo is laid out or where the relevant code lives, that is exactly the signal to route EXPLORE and let the Explorer produce a targeted summary for you.\n\nChoose exactly one:\n- EXPLORE — the DEFAULT whenever no `RepoSummary` exists yet and you cannot confidently place the work item from its title/description alone. Routing here produces a concise, targeted summary of the parts of the repo relevant to this work item, which comes back to you so you can then route for real.\n- SPEC — the work item can't go to a developer as written: it's ambiguous, contradictory, or missing a product decision, OR the change it asks for **can't be delivered here** (impossible in this repo, already true, or only enforceable outside it — host config, infrastructure, a third party). Never brief a developer to build a proxy — a probe, warning, doc or TODO — in place of an undeliverable change; that swap is the human's call. Use sparingly. (SPEC is about the requirements, not an unfamiliar codebase — for that, use EXPLORE.)\n- QA — the work item is a bug report (or otherwise needs reproduction / a failing test) and QA should reproduce it and author tests BEFORE development starts.\n- DEV — the work item is unambiguous, deliverable in this repo, AND you already have enough context — from the description or an existing `RepoSummary` — to brief the developer without any further exploration.\n\nUsing the set_loop_variable tool, set the loop variable `Route` to exactly one of: SPEC, QA, DEV, EXPLORE. Also set `OrchestratorNotes` with a short briefing for the next agent (scope, assumptions, and files likely involved — naming only what you can derive from the work item or an existing `RepoSummary`, never from your own exploration)."
+      }
+    },
+    {
+      "id": "f2a67ca3-6007-46f2-91f0-b64a92552af0",
+      "type": "Condition",
+      "label": "Route",
+      "config": {
+        "__pos": {
+          "x": -916.3227731029059,
+          "y": 303.608274310403
+        },
+        "cases": [
+          {
+            "edgeName": "spec",
+            "pattern": "SPEC",
+            "subject": "{{Var.Route}}",
+            "variant": "TextMatches"
+          },
+          {
+            "edgeName": "qa",
+            "pattern": "QA",
+            "subject": "{{Var.Route}}",
+            "variant": "TextMatches"
+          },
+          {
+            "edgeName": "explore",
+            "pattern": "EXPLORE",
+            "subject": "{{Var.Route}}",
+            "variant": "TextMatches"
+          }
+        ],
+        "defaultEdge": "dev",
+        "output": "{{Var.Route}}"
+      }
+    },
+    {
+      "id": "fbc21317-2e1d-445d-b6d1-47e093a773ec",
+      "type": "Prompt",
+      "label": "Dev From QA",
+      "config": {
+        "__pos": {
+          "x": -240,
+          "y": 560
+        },
+        "prompt": "You are the developer on this work item. QA has posted a report — either a bug reproduction with failing tests for you to make pass, or failures they found in the current implementation for you to fix.\n\nQA report:\n{{Var.QAReport}}\n\nOrchestrator briefing:\n{{Var.OrchestratorNotes}}\n\n(A repo summary may be available as \"RepoSummary\" — reference it using 'get_loop_variable' for context if helpful.)\n\n## Build it deep — architecture guidance\nWrite the touched code so it's architecturally clean the first time. The reviewer will require these to be fixed before a PR is opened, so getting them right now saves a round-trip:\n- Prefer **deep modules**: a simple interface over meaningful implementation. Avoid shallow wrappers whose interface is nearly as complex as their body — apply the **deletion test**: if removing an abstraction would just relocate complexity rather than concentrate it, don't add it.\n- Don't extract pure functions **solely** for testability if that hides how they're really used; add a genuine seam so behavior is testable through a sensible interface instead.\n- Keep coupling from leaking across the module boundaries you touch.\n- If a `CONTEXT.md` or `docs/adr/` already exists, follow its vocabulary and honor its decisions. Do not create them if they're absent.\n\nImplement or fix accordingly, keep changes focused, and commit. Then update `DevHandoff` with set_loop_variable — under ~200 words, citing `file:line` rather than pasting code or command output, since QA, the reviewer, the approval gate and the PR body all re-read it — and end your final message with exactly TO_QA or TO_REVIEW.\n\n## Blocked? (escalate sparingly)\nYou own technical and stylistic choices — assume, document, keep going; never ask a human for those. Escalate only for:\n\n1. **A product/requirements decision** you can't responsibly make on the human's behalf.\n2. **A change you can't deliver as briefed** — impossible here, already true, or only enforceable outside this repo. Swapping in a proxy (probe, warning, doc, TODO) is the human's call, not yours — even if the briefing above told you to build it. Never pad a proxy with tests or seams to make it look like the requested change.\n\nSet `DevBlocker` with set_loop_variable to that one decision — what's blocked, 2–3 options, your recommendation — and end your final message with exactly NEEDS_DECISION instead of TO_QA/TO_REVIEW. Interruptions are costly, so escalate rarely."
+      }
+    },
+    {
+      "id": "ff6de051-05c5-4e1a-a22d-d0ea3e46a95b",
+      "type": "Cleanup",
+      "label": "Cleanup",
+      "config": {
+        "__pos": {
+          "x": 1150,
+          "y": 300
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "0adb75bf-794c-463f-b95c-75a34988aa56",
+      "sourceNodeId": "52fec1af-0472-4cee-b713-e0cbb4fb909e",
+      "targetNodeId": "ff6de051-05c5-4e1a-a22d-d0ea3e46a95b",
+      "edgeType": "Custom",
+      "name": "on_merged"
+    },
+    {
+      "id": "0c0e64c7-796f-4637-b3ee-7bd5bb2514d4",
+      "sourceNodeId": "b33a05ec-2cee-4e3f-86c4-3b1c0abb293d",
+      "targetNodeId": "740bd77c-882c-435d-84ef-2f33c598d076",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "0c8473cc-7a46-45b7-a5b7-1eedf7c3779d",
+      "sourceNodeId": "552edeca-c0c1-457e-9b8e-1406fe37f77e",
+      "targetNodeId": "5b6648d0-c654-491b-acc7-dea4ca683214",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "0de47606-fe41-4294-89d4-e0c1ea88f4e4",
+      "sourceNodeId": "3c0d91b0-d5db-4228-9667-6e9b18a03f27",
+      "targetNodeId": "c52e5c62-6f3d-43c5-8988-58b71718a978",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "0ee51542-7383-473a-9a52-8dee91999797",
+      "sourceNodeId": "bb4b95d3-d81e-4a49-a320-cba2341eb075",
+      "targetNodeId": "dd228216-e91a-4b16-95b5-cf193f753489",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "0fd38d0d-f141-4144-baec-61ec9777bbc5",
+      "sourceNodeId": "1a585a7b-d484-4a66-b0d0-c6d99f5d1bb0",
+      "targetNodeId": "5b6648d0-c654-491b-acc7-dea4ca683214",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "2a175912-531c-4a37-acb6-a3d103218002",
+      "sourceNodeId": "fbc21317-2e1d-445d-b6d1-47e093a773ec",
+      "targetNodeId": "5b6648d0-c654-491b-acc7-dea4ca683214",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "2bb8944f-77d3-4395-8c01-42b4a86e11b3",
+      "sourceNodeId": "00d1bc88-a160-44c9-a948-dc73999ad43c",
+      "targetNodeId": "1b2327b4-5449-40ef-b319-82acf789ba68",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "33a795fc-ebad-417d-8965-6178974a31db",
+      "sourceNodeId": "5b6648d0-c654-491b-acc7-dea4ca683214",
+      "targetNodeId": "c95faba4-21a1-4035-baa7-6270234f89f2",
+      "edgeType": "Custom",
+      "name": "to_review"
+    },
+    {
+      "id": "35930157-e47f-423b-adf8-47a04d09bd6c",
+      "sourceNodeId": "01100c1a-9951-4356-8753-f6d7defef1f5",
+      "targetNodeId": "2ec18b37-bb73-4a94-b424-34491ca7500a",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "439b9629-272a-4ddb-864a-c889799d4fec",
+      "sourceNodeId": "c52e5c62-6f3d-43c5-8988-58b71718a978",
+      "targetNodeId": "c95faba4-21a1-4035-baa7-6270234f89f2",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "4ae5aa91-f2d4-4558-92a3-3a60b54bc152",
+      "sourceNodeId": "5b6648d0-c654-491b-acc7-dea4ca683214",
+      "targetNodeId": "3c0d91b0-d5db-4228-9667-6e9b18a03f27",
+      "edgeType": "Custom",
+      "name": "to_qa"
+    },
+    {
+      "id": "4c046bea-7f78-42f9-8fd4-0dd6284b307a",
+      "sourceNodeId": "c52e5c62-6f3d-43c5-8988-58b71718a978",
+      "targetNodeId": "fbc21317-2e1d-445d-b6d1-47e093a773ec",
+      "edgeType": "Custom",
+      "name": "qa_failed"
+    },
+    {
+      "id": "4fa3398c-9e61-4507-9caf-f6d673e35021",
+      "sourceNodeId": "d7f32ef3-3f12-4412-9fa9-e3c0f8e80424",
+      "targetNodeId": "7b66633f-ce27-4239-b208-151358cfd5f7",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "5173b054-5007-4b7d-8c7e-0eadabc1a434",
+      "sourceNodeId": "c95faba4-21a1-4035-baa7-6270234f89f2",
+      "targetNodeId": "894f50f9-9edd-4a03-8eff-27357370c117",
+      "edgeType": "Custom",
+      "name": "approved"
+    },
+    {
+      "id": "59e7f575-0a71-459b-ab1f-0a9c14546f45",
+      "sourceNodeId": "c95faba4-21a1-4035-baa7-6270234f89f2",
+      "targetNodeId": "b33a05ec-2cee-4e3f-86c4-3b1c0abb293d",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "6123e7b2-eefd-4c14-9c2e-e2ada3ab6e5d",
+      "sourceNodeId": "c52e5c62-6f3d-43c5-8988-58b71718a978",
+      "targetNodeId": "fbc21317-2e1d-445d-b6d1-47e093a773ec",
+      "edgeType": "Custom",
+      "name": "repro_ready"
+    },
+    {
+      "id": "62a9100f-f791-4256-b475-de6be3989de7",
+      "sourceNodeId": "52fec1af-0472-4cee-b713-e0cbb4fb909e",
+      "targetNodeId": "a2107e33-495d-487f-a977-37350480a126",
+      "edgeType": "Custom",
+      "name": "on_merge_conflict"
+    },
+    {
+      "id": "63d38921-f336-4721-8752-76e09c0afd95",
+      "sourceNodeId": "f2a67ca3-6007-46f2-91f0-b64a92552af0",
+      "targetNodeId": "00d1bc88-a160-44c9-a948-dc73999ad43c",
+      "edgeType": "Custom",
+      "name": "spec"
+    },
+    {
+      "id": "6e20b2d8-2e2c-4bea-bdaa-c9c0c261a222",
+      "sourceNodeId": "894f50f9-9edd-4a03-8eff-27357370c117",
+      "targetNodeId": "740bd77c-882c-435d-84ef-2f33c598d076",
+      "edgeType": "Custom",
+      "name": "hil"
+    },
+    {
+      "id": "6fa84bbb-5db3-40df-b04e-a059b523594f",
+      "sourceNodeId": "740bd77c-882c-435d-84ef-2f33c598d076",
+      "targetNodeId": "52fec1af-0472-4cee-b713-e0cbb4fb909e",
+      "edgeType": "Custom",
+      "name": "approve"
+    },
+    {
+      "id": "75782bf5-8941-46ec-9765-337a8fdf4479",
+      "sourceNodeId": "1b2327b4-5449-40ef-b319-82acf789ba68",
+      "targetNodeId": "01100c1a-9951-4356-8753-f6d7defef1f5",
+      "edgeType": "Custom",
+      "name": "spec_resolved"
+    },
+    {
+      "id": "789df65c-5d91-45c3-87d0-3c5616d04745",
+      "sourceNodeId": "f2a67ca3-6007-46f2-91f0-b64a92552af0",
+      "targetNodeId": "0788d4d8-8741-4c4f-95b9-4d3fc9d62722",
+      "edgeType": "Custom",
+      "name": "qa"
+    },
+    {
+      "id": "7ee9ba30-34d4-49b2-9614-62817cb2ca4d",
+      "sourceNodeId": "1b2327b4-5449-40ef-b319-82acf789ba68",
+      "targetNodeId": "2a6ad4c6-c5c1-458f-b4ac-88f1226c16fc",
+      "edgeType": "Custom",
+      "name": "ask_human"
+    },
+    {
+      "id": "80c04ac5-1571-4b05-a9cf-89ae906e6906",
+      "sourceNodeId": "894f50f9-9edd-4a03-8eff-27357370c117",
+      "targetNodeId": "52fec1af-0472-4cee-b713-e0cbb4fb909e",
+      "edgeType": "Custom",
+      "name": "auto"
+    },
+    {
+      "id": "8dbbf30c-5bd2-4003-8216-75c404c8d017",
+      "sourceNodeId": "08f04a99-5370-40a6-95f6-4f3519615c26",
+      "targetNodeId": "5b6648d0-c654-491b-acc7-dea4ca683214",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "8e3a76b3-f8d4-43fb-9948-73df3f00edc0",
+      "sourceNodeId": "5b6648d0-c654-491b-acc7-dea4ca683214",
+      "targetNodeId": "94ff8005-a8bd-43cf-9735-65303b060edf",
+      "edgeType": "Custom",
+      "name": "needs_decision"
+    },
+    {
+      "id": "94647d95-2305-408b-9931-bcc5d1464420",
+      "sourceNodeId": "52fec1af-0472-4cee-b713-e0cbb4fb909e",
+      "targetNodeId": "ff6de051-05c5-4e1a-a22d-d0ea3e46a95b",
+      "edgeType": "Custom",
+      "name": "on_abandoned"
+    },
+    {
+      "id": "9764c5fc-daaa-47e3-9888-d747dbe709bd",
+      "sourceNodeId": "8e8fca8a-c488-47ca-addd-7b1bc6257e15",
+      "targetNodeId": "5b6648d0-c654-491b-acc7-dea4ca683214",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "996daf6f-d12c-4955-aacb-46b937fa2998",
+      "sourceNodeId": "7b66633f-ce27-4239-b208-151358cfd5f7",
+      "targetNodeId": "2ec18b37-bb73-4a94-b424-34491ca7500a",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "9df9c16e-39ca-4250-af12-082b5be2a90f",
+      "sourceNodeId": "740bd77c-882c-435d-84ef-2f33c598d076",
+      "targetNodeId": "1a585a7b-d484-4a66-b0d0-c6d99f5d1bb0",
+      "edgeType": "Custom",
+      "name": "reject"
+    },
+    {
+      "id": "a0300612-ae65-426a-8cf6-81f051e35bd1",
+      "sourceNodeId": "f2a67ca3-6007-46f2-91f0-b64a92552af0",
+      "targetNodeId": "08f04a99-5370-40a6-95f6-4f3519615c26",
+      "edgeType": "Custom",
+      "name": "dev"
+    },
+    {
+      "id": "a0de42f9-9ad7-4899-ad50-19caad0d80da",
+      "sourceNodeId": "52fec1af-0472-4cee-b713-e0cbb4fb909e",
+      "targetNodeId": "a2107e33-495d-487f-a977-37350480a126",
+      "edgeType": "Custom",
+      "name": "on_rejected"
+    },
+    {
+      "id": "a2372143-f45d-4341-865c-98568cfb5db3",
+      "sourceNodeId": "a2107e33-495d-487f-a977-37350480a126",
+      "targetNodeId": "5b6648d0-c654-491b-acc7-dea4ca683214",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "b31fd508-61f1-4c1e-91d1-5eb158983649",
+      "sourceNodeId": "5b6648d0-c654-491b-acc7-dea4ca683214",
+      "targetNodeId": "c95faba4-21a1-4035-baa7-6270234f89f2",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "bae57145-d85d-4ec2-aaa3-9d1889cbbd00",
+      "sourceNodeId": "c52e5c62-6f3d-43c5-8988-58b71718a978",
+      "targetNodeId": "c95faba4-21a1-4035-baa7-6270234f89f2",
+      "edgeType": "Custom",
+      "name": "qa_passed"
+    },
+    {
+      "id": "bf9eb84c-8c69-421d-9935-918e1546f8e0",
+      "sourceNodeId": "2ec18b37-bb73-4a94-b424-34491ca7500a",
+      "targetNodeId": "f2a67ca3-6007-46f2-91f0-b64a92552af0",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "c21f6f99-1429-461e-a24c-c9476fe84f69",
+      "sourceNodeId": "f2a67ca3-6007-46f2-91f0-b64a92552af0",
+      "targetNodeId": "d7f32ef3-3f12-4412-9fa9-e3c0f8e80424",
+      "edgeType": "Custom",
+      "name": "explore"
+    },
+    {
+      "id": "cffbe376-7696-478a-a371-c438ee9d7f59",
+      "sourceNodeId": "c95faba4-21a1-4035-baa7-6270234f89f2",
+      "targetNodeId": "8e8fca8a-c488-47ca-addd-7b1bc6257e15",
+      "edgeType": "Custom",
+      "name": "rejected"
+    },
+    {
+      "id": "d2c70554-f6c9-4b5a-8c64-f5242f319b00",
+      "sourceNodeId": "0788d4d8-8741-4c4f-95b9-4d3fc9d62722",
+      "targetNodeId": "c52e5c62-6f3d-43c5-8988-58b71718a978",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "e627a443-6b53-4a2f-90c0-85c18d90f179",
+      "sourceNodeId": "52fec1af-0472-4cee-b713-e0cbb4fb909e",
+      "targetNodeId": "a2107e33-495d-487f-a977-37350480a126",
+      "edgeType": "Custom",
+      "name": "on_ci_failed"
+    },
+    {
+      "id": "eb61712e-5f9e-49ea-b58d-8d2d9faf0014",
+      "sourceNodeId": "d7f32ef3-3f12-4412-9fa9-e3c0f8e80424",
+      "targetNodeId": "7b66633f-ce27-4239-b208-151358cfd5f7",
+      "edgeType": "Custom",
+      "name": "scanned"
+    },
+    {
+      "id": "f90644d2-d4e3-45ab-9e3d-01a4164e5a14",
+      "sourceNodeId": "94ff8005-a8bd-43cf-9735-65303b060edf",
+      "targetNodeId": "552edeca-c0c1-457e-9b8e-1406fe37f77e",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "fbbdf0b3-da96-4da5-a139-338a27cf5790",
+      "sourceNodeId": "2a6ad4c6-c5c1-458f-b4ac-88f1226c16fc",
+      "targetNodeId": "1b2327b4-5449-40ef-b319-82acf789ba68",
+      "edgeType": "Custom",
+      "name": "answered"
+    },
+    {
+      "id": "fc6ba5c7-3792-4d22-8d5f-be2d2b42e800",
+      "sourceNodeId": "dd228216-e91a-4b16-95b5-cf193f753489",
+      "targetNodeId": "2ec18b37-bb73-4a94-b424-34491ca7500a",
+      "edgeType": "OnSuccess",
+      "name": null
+    }
+  ]
+}
