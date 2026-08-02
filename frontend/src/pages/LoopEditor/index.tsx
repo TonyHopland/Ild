@@ -73,6 +73,7 @@ import type {
   SessionPlaceholderUsage,
 } from "./types";
 import { validateLoopGraphLocally } from "./utils/loopGraphValidation";
+import { isTemplatedSessionName, sessionPlaceholderError } from "./utils/sessionPlaceholder";
 
 function loadErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message) return error.message;
@@ -128,8 +129,13 @@ function collectSessionPlaceholderUsages(nodes: Node[]): SessionPlaceholderUsage
     counts.set(placeholder, (counts.get(placeholder) ?? 0) + 1);
   }
 
+  // Lanes are keyed by the authored string, template and all. That is the right
+  // key: two nodes naming "ticket_{{Var.n}}" do share a session at run time (one
+  // per value of n), and two different templates never do. A templated lane is
+  // flagged rather than rewritten, so the picker can say it expands per run
+  // instead of pretending it is one conversation.
   return Array.from(counts.entries())
-    .map(([name, count]) => ({ name, count }))
+    .map(([name, count]) => ({ name, count, templated: isTemplatedSessionName(name) }))
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
@@ -1218,6 +1224,19 @@ export default function LoopEditor() {
     if (selectedNodeType === NodeType.AI && aiUseSession && !aiSessionPlaceholder.trim()) {
       setErrorText("AI nodes with Use Session enabled must set a session placeholder.");
       return;
+    }
+
+    // Session names are templated on a narrower grammar than prompts. The
+    // server rejects the same shapes; catching them here saves a save round
+    // trip, and — unlike a silent rewrite — leaves the author's text intact.
+    if (selectedNodeType === NodeType.AI && aiUseSession) {
+      const placeholderError =
+        sessionPlaceholderError("Session name", aiSessionPlaceholder) ??
+        sessionPlaceholderError("Fork from", aiForkFromPlaceholder);
+      if (placeholderError) {
+        setErrorText(placeholderError);
+        return;
+      }
     }
 
     const config: Record<string, unknown> = {};

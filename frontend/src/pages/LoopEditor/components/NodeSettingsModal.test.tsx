@@ -169,6 +169,57 @@ describe("NodeSettingsModal session memory mode", () => {
 
     expect(props.onAiForkFromPlaceholderChange).toHaveBeenCalledWith("other");
   });
+
+  test("shows a templated session name verbatim and says it expands per run", () => {
+    renderModal({
+      selectedNode: makeNode(NodeType.AI),
+      aiUseSession: true,
+      aiSessionPlaceholder: "ticket_{{Var.current_ticket}}",
+    });
+
+    // Never rewritten — the author's template is the stored value.
+    expect((screen.getByLabelText("Session name") as HTMLInputElement).value).toBe(
+      "ticket_{{Var.current_ticket}}",
+    );
+    expect(screen.getByText(/one session per distinct value/)).toBeTruthy();
+  });
+
+  test("flags a session name using a placeholder other than a loop variable", () => {
+    renderModal({
+      selectedNode: makeNode(NodeType.AI),
+      aiUseSession: true,
+      aiSessionPlaceholder: "s_{{PreviousNode.Output}}",
+    });
+
+    expect(screen.getByText(/may only use \{\{Var\.<name>\}\} placeholders/)).toBeTruthy();
+  });
+
+  test("a templated lane is offered as a fork source, annotated as per-value", () => {
+    renderModal({
+      selectedNode: makeNode(NodeType.AI),
+      aiUseSession: true,
+      aiForkFromPlaceholder: "base_{{Var.n}}",
+      aiSessionPlaceholder: "fork_{{Var.n}}",
+      sessionPlaceholderUsages: [{ name: "base_{{Var.n}}", count: 1, templated: true }],
+    });
+
+    expect((screen.getByLabelText("Fork from") as HTMLSelectElement).value).toBe("base_{{Var.n}}");
+    expect(screen.getByText("base_{{Var.n}} (1 node, one per value)")).toBeTruthy();
+  });
+
+  test("keeps a fork source that matches no lane selected instead of blanking it", () => {
+    renderModal({
+      selectedNode: makeNode(NodeType.AI),
+      aiUseSession: true,
+      aiForkFromPlaceholder: "since-renamed",
+      aiSessionPlaceholder: "variant-a",
+      sessionPlaceholderUsages: [{ name: "base", count: 1 }],
+    });
+
+    // A <select> with no matching option renders blank, which reads as unset
+    // and invites the author to overwrite a value they never meant to change.
+    expect((screen.getByLabelText("Fork from") as HTMLSelectElement).value).toBe("since-renamed");
+  });
 });
 
 describe("NodeSettingsModal condition node", () => {

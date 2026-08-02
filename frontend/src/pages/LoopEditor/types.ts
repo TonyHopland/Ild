@@ -12,6 +12,8 @@ export interface ImportFeedbackItem {
 export interface SessionPlaceholderUsage {
   name: string;
   count: number;
+  /** The name interpolates a loop variable, so it is one session per value at run time — not one session. */
+  templated?: boolean;
 }
 
 export interface NodeSettingsSnapshot {
