@@ -5,30 +5,7 @@
   "recoveryPolicy": "AutoResume",
   "nodes": [
     {
-      "id": "4ba2ec6f-2c94-409f-9bad-8c83420026a4",
-      "type": "Prompt",
-      "label": "Workitem summary",
-      "config": {
-        "prompt": "{{WorkItem.Title}}\n\n{{WorkItem.Description}}",
-        "__pos": {
-          "x": -468.5,
-          "y": 127
-        }
-      }
-    },
-    {
-      "id": "6a21b6e4-05cd-4e9e-95d6-7fbd978b98d6",
-      "type": "Start",
-      "label": "Start",
-      "config": {
-        "__pos": {
-          "x": -649.5,
-          "y": 127.5
-        }
-      }
-    },
-    {
-      "id": "7e83b932-7119-4ea4-b2f6-da20fa275439",
+      "id": "26ec4335-5960-4128-b254-f91d26db3b3c",
       "type": "Human",
       "label": "Human",
       "config": {
@@ -42,7 +19,7 @@
       }
     },
     {
-      "id": "9400eaff-b1ea-4008-ba76-80fa98acc0ef",
+      "id": "78e8be35-352d-48ce-a983-17fd5c24629b",
       "type": "Cleanup",
       "label": "Cleanup",
       "config": {
@@ -53,7 +30,20 @@
       }
     },
     {
-      "id": "fa400233-bcbc-4502-b334-12b93abc4dcd",
+      "id": "b085cf3a-a31c-49f5-adc5-64c32e012601",
+      "type": "Start",
+      "label": "Start",
+      "config": {
+        "__pos": {
+          "x": -649.5,
+          "y": 127.5
+        },
+        "createWorktree": true,
+        "runInstall": true
+      }
+    },
+    {
+      "id": "bb95c36a-4733-4dbf-a11c-96009cff95d4",
       "type": "AI",
       "label": "AI",
       "config": {
@@ -68,48 +58,53 @@
           "y": 128.5
         }
       }
+    },
+    {
+      "id": "cfdbce01-41d1-4cef-86a4-1e2cccedce96",
+      "type": "Prompt",
+      "label": "Workitem summary",
+      "config": {
+        "prompt": "{{WorkItem.Title}}\n\n{{WorkItem.Description}}",
+        "__pos": {
+          "x": -468.5,
+          "y": 127
+        }
+      }
     }
   ],
   "edges": [
     {
-      "id": "4b2ba1b9-f682-4b22-a11a-88dd0aa4da8f",
-      "sourceNodeId": "4ba2ec6f-2c94-409f-9bad-8c83420026a4",
-      "targetNodeId": "fa400233-bcbc-4502-b334-12b93abc4dcd",
+      "id": "68c086db-8434-4ed7-9bdb-4c10c180fd68",
+      "sourceNodeId": "b085cf3a-a31c-49f5-adc5-64c32e012601",
+      "targetNodeId": "cfdbce01-41d1-4cef-86a4-1e2cccedce96",
       "edgeType": "OnSuccess",
       "name": null
     },
     {
-      "id": "6dc9771d-5936-41b8-94ca-22f5b21f7bf4",
-      "sourceNodeId": "7e83b932-7119-4ea4-b2f6-da20fa275439",
-      "targetNodeId": "9400eaff-b1ea-4008-ba76-80fa98acc0ef",
-      "edgeType": "OnSuccess",
-      "name": null
-    },
-    {
-      "id": "8c5723c1-724e-4648-ac7d-05383f843a1a",
-      "sourceNodeId": "6a21b6e4-05cd-4e9e-95d6-7fbd978b98d6",
-      "targetNodeId": "4ba2ec6f-2c94-409f-9bad-8c83420026a4",
-      "edgeType": "OnSuccess",
-      "name": null
-    },
-    {
-      "id": "8e336aae-0c7f-4897-be7c-2bba7050cf85",
-      "sourceNodeId": "fa400233-bcbc-4502-b334-12b93abc4dcd",
-      "targetNodeId": "7e83b932-7119-4ea4-b2f6-da20fa275439",
-      "edgeType": "OnSuccess",
-      "name": null
-    },
-    {
-      "id": "90ef5302-ac55-4be7-96e9-943760c162b3",
-      "sourceNodeId": "7e83b932-7119-4ea4-b2f6-da20fa275439",
-      "targetNodeId": "9400eaff-b1ea-4008-ba76-80fa98acc0ef",
+      "id": "78c6329b-0baa-486f-ac9f-d16d57317ca3",
+      "sourceNodeId": "26ec4335-5960-4128-b254-f91d26db3b3c",
+      "targetNodeId": "78e8be35-352d-48ce-a983-17fd5c24629b",
       "edgeType": "Custom",
       "name": "Complete"
     },
     {
-      "id": "b5c956c7-d403-4080-8b0e-28221fdd0e93",
-      "sourceNodeId": "7e83b932-7119-4ea4-b2f6-da20fa275439",
-      "targetNodeId": "fa400233-bcbc-4502-b334-12b93abc4dcd",
+      "id": "8be72584-6835-4464-9e1d-193db7c25c04",
+      "sourceNodeId": "bb95c36a-4733-4dbf-a11c-96009cff95d4",
+      "targetNodeId": "26ec4335-5960-4128-b254-f91d26db3b3c",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "b8f3cc2f-94a2-4f4c-aff7-0c7a95416300",
+      "sourceNodeId": "cfdbce01-41d1-4cef-86a4-1e2cccedce96",
+      "targetNodeId": "bb95c36a-4733-4dbf-a11c-96009cff95d4",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "e0a37ca6-a0fd-4c2e-8fd8-3ecba303ddff",
+      "sourceNodeId": "26ec4335-5960-4128-b254-f91d26db3b3c",
+      "targetNodeId": "bb95c36a-4733-4dbf-a11c-96009cff95d4",
       "edgeType": "Custom",
       "name": "Respond"
     }
