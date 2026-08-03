@@ -112,6 +112,18 @@ public interface IRepositoryManager
     Task<RemoteRepositoryInfo?> InspectRemoteAsync(string cloneUrl, CancellationToken cancellationToken = default, GitAuthOptions? auth = null);
 
     /// <summary>
+    /// Ask the remote at <paramref name="cloneUrl"/> directly whether it already
+    /// publishes <paramref name="branchName"/>. Unlike
+    /// <see cref="RemoteBranchExistsAsync"/> this needs no local clone and no
+    /// prior fetch, so it can be asked before a run — and its worktree — exists.
+    /// </summary>
+    /// <returns>
+    /// Null when the remote could not be reached. Callers must not read that as
+    /// "absent": it means the question went unanswered.
+    /// </returns>
+    Task<bool?> RemoteHasBranchAsync(string cloneUrl, string branchName, CancellationToken cancellationToken = default, GitAuthOptions? auth = null);
+
+    /// <summary>
     /// Delete a local branch from the repository at <paramref name="repoPath"/>.
     /// </summary>
     Task<bool> DeleteLocalBranchAsync(string repoPath, string branchName);

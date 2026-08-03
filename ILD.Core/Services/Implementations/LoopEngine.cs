@@ -127,6 +127,25 @@ public sealed class LoopEngine : ILoopEngine
             return;
         }
 
+        // A work item with a custom branch name opts out of per-run naming, so
+        // its branch is not unique per run and could already be taken — by an
+        // earlier run of this item, by another item, or on origin. Settle that
+        // before the run exists: an override needs no run id, so the answer is
+        // known early enough to park the item without leaving a LoopRun row, a
+        // worktree, or a held concurrency slot behind. See ADR-0008.
+        var branchOverride = BranchNameRules.Normalize(wi.BranchNameOverride);
+        if (branchOverride is not null)
+        {
+            var branchNames = sp.GetRequiredService<IBranchNameOverrideService>();
+            var verdict = await branchNames.InspectAsync(
+                branchOverride, wi.RepositoryId, workItemId, cancellationToken);
+            if (!verdict.IsUsable)
+            {
+                await workItems.TransitionAsync(workItemId, RemoteWorkItemStatus.HumanFeedback, verdict.Problem);
+                return;
+            }
+        }
+
         var run = new LoopRun
         {
             Id = Guid.NewGuid(),
@@ -136,6 +155,9 @@ public sealed class LoopEngine : ILoopEngine
             StartedAt = DateTime.UtcNow,
             CurrentNodeId = startNode.Id,
             RepositoryId = wi.RepositoryId,
+            // Pinned on the run, so a later edit to the work item's override
+            // never renames the branch this run is already on.
+            BranchName = branchOverride,
             // The per-template setting controls crash recovery; pin it on the
             // run the same way the template version is pinned.
             RecoveryPolicy = template?.RecoveryPolicy ?? RecoveryPolicy.AutoResume,

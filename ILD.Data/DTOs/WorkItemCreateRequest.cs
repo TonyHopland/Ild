@@ -33,4 +33,12 @@ public class WorkItemCreateRequest
     /// applied when <see cref="AiProviderOverride"/> is supplied.
     /// </summary>
     public string? AiProviderOverrideId { get; set; }
+
+    /// <summary>
+    /// Custom branch name for every run of this work item, used verbatim with no
+    /// per-run suffix. Null leaves it unchanged on update; an empty string
+    /// clears it back to the generated per-run name.
+    /// </summary>
+    [StringLength(256)]
+    public string? BranchNameOverride { get; set; }
 }

@@ -27,7 +27,9 @@ public sealed class WorkItemTools
         [Description("Optional originating LoopRun GUID. Defaults to the ILD_LOOP_RUN_ID env var.")]
         string? createdByLoopRunId = null,
         [Description("Optional list of tags. Each tag determines which loop template executes the work item — a tag must match a loop template name on the ILD instance.")]
-        string[]? tags = null)
+        string[]? tags = null,
+        [Description("Optional custom branch name used verbatim by every run of the item, instead of the generated ild/wi-<id>-run-<n> name. Must be a valid git branch name. Omit for the default.")]
+        string? branchNameOverride = null)
     {
         var body = new
         {
@@ -37,6 +39,7 @@ public sealed class WorkItemTools
             dependencies,
             createdByLoopRunId = createdByLoopRunId ?? _ild.LoopRunId,
             tags,
+            branchNameOverride,
         };
         return _ild.PostJsonAsync("api/v1/agent/workitems", body);
     }
@@ -48,9 +51,11 @@ public sealed class WorkItemTools
         [Description("New title (1..512 chars).")] string title,
         [Description("New description (markdown).")] string description = "",
         [Description("Optional replacement list of tags. Omit to leave tags unchanged.")]
-        string[]? tags = null)
+        string[]? tags = null,
+        [Description("Optional replacement custom branch name. Omit to leave it unchanged; pass an empty string to go back to the generated per-run branch name. Only the item's next run is affected.")]
+        string? branchNameOverride = null)
     {
-        var body = new { title, description, tags };
+        var body = new { title, description, tags, branchNameOverride };
         return _ild.PutJsonAsync($"api/v1/agent/workitems/{Uri.EscapeDataString(id)}", body);
     }
 

@@ -17,6 +17,15 @@ public interface ILoopRunStore
     /// </summary>
     Task<LoopRun?> GetByWorktreePathAsync(string worktreePath);
 
+    /// <summary>
+    /// The most recent run holding <paramref name="branchName"/>, whatever its
+    /// status and whatever work item it belongs to. A run's branch lives as long
+    /// as its row (ADR-0008), so a terminal-but-unreclaimed run still owns its
+    /// branch — which is exactly what makes this the check a custom branch name
+    /// has to pass before a new run can claim the same name. Null when free.
+    /// </summary>
+    Task<LoopRun?> GetByBranchNameAsync(string branchName);
+
     Task<LoopRun?> GetByWorkItemAsync(string workItemId);
     Task<IReadOnlyList<LoopRun>> GetAllByWorkItemAsync(string workItemId);
     Task<IReadOnlyList<LoopRun>> GetByWorkItemPagedAsync(string workItemId, int skip, int take);

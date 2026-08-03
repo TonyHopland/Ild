@@ -69,6 +69,7 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<WorktreeRetentionSweeper>();
         services.AddHostedService<StuckRunWatchdog>();
         services.AddScoped<IRunReclaimer, RunReclaimer>();
+        services.AddScoped<IBranchNameOverrideService, BranchNameOverrideService>();
         services.AddScoped<IRecoveryManager, RecoveryManager>();
         services.AddScoped<IPrSyncService, PrSyncService>();
         services.AddScoped<IAdapterSessionSnapshotStore, AdapterSessionSnapshotStore>();

@@ -97,5 +97,14 @@ internal static class WorkItemMapper
         RepositoryId = w.RepositoryId,
         AiProviderOverride = w.AiProviderOverride,
         AiProviderOverrideId = w.AiProviderOverrideId,
+        BranchNameOverride = w.BranchNameOverride,
     };
+
+    /// <summary>
+    /// A custom branch name as it is stored: trimmed, with blank collapsed to
+    /// null so "no override" has exactly one representation and readers never
+    /// have to ask whether an empty string means "use the empty branch name".
+    /// </summary>
+    public static string? NormalizeBranchNameOverride(string? raw)
+        => string.IsNullOrWhiteSpace(raw) ? null : raw.Trim();
 }

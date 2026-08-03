@@ -18,6 +18,7 @@ import {
   LoopNodeEdge,
   PrComment,
   PullBranchResult,
+  BranchNameCheck,
   LoopRunSessionPreview,
   WorktreePreview,
   WorktreePreviewLog,
@@ -146,6 +147,22 @@ export const workItemService = {
 
   delete: async (id: string): Promise<void> => {
     return api.delete<void>(`/workitems/${id}`);
+  },
+
+  /**
+   * Advice on a custom branch name while it is being typed: `error` is a name
+   * that cannot be saved, `warning` a name that is already taken. The warning is
+   * advisory only — the world moves between here and the run, so the binding
+   * check happens when the run starts.
+   */
+  checkBranchName: async (
+    name: string,
+    opts?: { repositoryId?: string; workItemId?: string },
+  ): Promise<BranchNameCheck> => {
+    const params = new URLSearchParams({ name });
+    if (opts?.repositoryId) params.set("repositoryId", opts.repositoryId);
+    if (opts?.workItemId) params.set("workItemId", opts.workItemId);
+    return api.get<BranchNameCheck>(`/workitems/branch-name-check?${params}`);
   },
 
   getRuns: async (id: string, opts?: { skip?: number; take?: number }): Promise<LoopRun[]> => {

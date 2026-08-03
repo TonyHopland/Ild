@@ -419,6 +419,27 @@ public class RepositoryManager : IRepositoryManager
         return new RemoteRepositoryInfo(ParseSymrefDefaultBranch(stdout), ParseRepoNameFromUrl(cloneUrl));
     }
 
+    public async Task<bool?> RemoteHasBranchAsync(string cloneUrl, string branchName, CancellationToken cancellationToken = default, GitAuthOptions? auth = null)
+    {
+        if (string.IsNullOrWhiteSpace(cloneUrl) || string.IsNullOrWhiteSpace(branchName))
+            return null;
+
+        var (code, stdout, _) = await RunAsync(
+            Path.GetTempPath(),
+            new[] { "ls-remote", "--heads", "--exit-code", cloneUrl, $"refs/heads/{branchName}" },
+            cancellationToken, auth);
+
+        // git ls-remote --exit-code separates the three answers we need to tell
+        // apart: 0 = the ref is there, 2 = the remote answered and does not have
+        // it, anything else = we never got an answer.
+        return code switch
+        {
+            0 => !string.IsNullOrWhiteSpace(stdout),
+            2 => false,
+            _ => null,
+        };
+    }
+
     // `git ls-remote --symref <url> HEAD` advertises the default branch as a
     // line like "ref: refs/heads/main\tHEAD"; pull the branch name out of it.
     private static string? ParseSymrefDefaultBranch(string lsRemoteOutput)

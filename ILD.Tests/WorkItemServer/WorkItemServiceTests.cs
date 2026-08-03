@@ -160,6 +160,37 @@ public class WorkItemServiceTests : IAsyncLifetime
         Assert.Equal(target, afterTitleEdit.AiProviderOverrideId);
     }
 
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("", null)]
+    [InlineData("   ", null)]
+    [InlineData("  feature/foo  ", "feature/foo")]
+    public async Task Create_stores_the_custom_branch_name_trimmed_with_blank_meaning_none(string? sent, string? expected)
+    {
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x", BranchNameOverride = sent });
+
+        Assert.Equal(expected, dto.BranchNameOverride);
+        Assert.Equal(expected, (await _svc.GetAsync(dto.Id))!.BranchNameOverride);
+    }
+
+    [Fact]
+    public async Task Update_sets_clears_and_leaves_the_custom_branch_name_alone()
+    {
+        var created = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
+
+        var set = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { BranchNameOverride = "feature/foo" });
+        Assert.Equal("feature/foo", set!.BranchNameOverride);
+
+        // Null means "not part of this edit" — a title-only save must not drop it.
+        var titleOnly = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { Title = "renamed" });
+        Assert.Equal("feature/foo", titleOnly!.BranchNameOverride);
+
+        // Blank is a deliberate "go back to generated per-run naming".
+        var cleared = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { BranchNameOverride = "" });
+        Assert.Null(cleared!.BranchNameOverride);
+        Assert.Null((await _svc.GetAsync(created.Id))!.BranchNameOverride);
+    }
+
     [Fact]
     public async Task Create_honours_forceStatus_when_provided()
     {

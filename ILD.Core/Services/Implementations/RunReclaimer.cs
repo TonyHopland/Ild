@@ -91,16 +91,6 @@ public sealed class RunReclaimer : IRunReclaimer
         try { repo = await _providers.GetRepositoryByIdAsync(repositoryId.Value); }
         catch { return null; }
         if (repo is null) return null;
-
-        if (!string.IsNullOrWhiteSpace(repo.WorktreesPath)
-            && Directory.Exists(Path.Combine(repo.WorktreesPath, ".git")))
-            return repo.WorktreesPath;
-
-        // Same fallback location StartNodeExecutor clones into.
-        var dataPath = _config?["App:DataPath"];
-        var fallback = Path.GetFullPath(Path.Combine(
-            string.IsNullOrWhiteSpace(dataPath) ? "data" : dataPath,
-            "repos", repositoryId.Value.ToString("N")));
-        return Directory.Exists(Path.Combine(fallback, ".git")) ? fallback : null;
+        return BaseRepoPath.Existing(repo, _config);
     }
 }

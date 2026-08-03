@@ -47,6 +47,12 @@ public class LoopRunStore : ILoopRunStore
             .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
             .FirstOrDefaultAsync();
 
+    public async Task<LoopRun?> GetByBranchNameAsync(string branchName)
+        => await _db.LoopRuns
+            .Where(r => r.BranchName == branchName)
+            .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
+            .FirstOrDefaultAsync();
+
     public async Task<LoopRun?> GetByWorkItemAsync(string workItemId)
         => await _db.LoopRuns.FirstOrDefaultAsync(r => r.WorkItemId == workItemId);
 

@@ -86,6 +86,30 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Custom_branch_name_round_trips_through_create_get_and_update()
+    {
+        var created = await _client.CreateAsync(_opts, new RemoteCreateWorkItemRequest
+        {
+            Title = "custom-branch",
+            BranchNameOverride = "feature/foo",
+        });
+        Assert.Equal("feature/foo", created.BranchNameOverride);
+        Assert.Equal("feature/foo", (await _client.GetAsync(_opts, created.Id))!.BranchNameOverride);
+
+        var renamed = await _client.UpdateAsync(_opts, created.Id, new RemoteUpdateWorkItemRequest
+        {
+            BranchNameOverride = "feature/bar",
+        });
+        Assert.Equal("feature/bar", renamed!.BranchNameOverride);
+
+        var cleared = await _client.UpdateAsync(_opts, created.Id, new RemoteUpdateWorkItemRequest
+        {
+            BranchNameOverride = "",
+        });
+        Assert.Null(cleared!.BranchNameOverride);
+    }
+
+    [Fact]
     public async Task Get_returns_null_on_not_found()
     {
         var item = await _client.GetAsync(_opts, Guid.NewGuid().ToString());

@@ -101,6 +101,7 @@ public static class ToolDescriptors
             new() { Name = "dependencies", Description = "Work item GUIDs this item depends on.", TsType = "string-array", IsOptional = true, IsBodyParam = true },
             new() { Name = "createdByLoopRunId", Description = "Originating LoopRun GUID. Defaults to current run.", TsType = "string", IsOptional = true, IsBodyParam = true },
             new() { Name = "tags", Description = "Tags matching loop template names.", TsType = "string-array", IsOptional = true, IsBodyParam = true },
+            new() { Name = "branchNameOverride", Description = "Custom branch name used verbatim by every run of the item, instead of the generated per-run name. Must be a valid git branch name.", TsType = "string", IsOptional = true, IsBodyParam = true },
         },
     };
 

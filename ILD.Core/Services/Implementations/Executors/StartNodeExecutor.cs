@@ -122,11 +122,7 @@ public sealed class StartNodeExecutor : INodeExecutor
         var cloned = false;
         if (string.IsNullOrWhiteSpace(basePath) || !Directory.Exists(Path.Combine(basePath, ".git")))
         {
-            var config = sp.GetService<IConfiguration>();
-            var dataPath = config?["App:DataPath"];
-            basePath = Path.GetFullPath(Path.Combine(
-                string.IsNullOrWhiteSpace(dataPath) ? "data" : dataPath,
-                "repos", repo.Id.ToString("N")));
+            basePath = BaseRepoPath.Fallback(repo.Id, sp.GetService<IConfiguration>());
             Directory.CreateDirectory(Path.GetDirectoryName(basePath)!);
             if (!Directory.Exists(Path.Combine(basePath, ".git")))
             {

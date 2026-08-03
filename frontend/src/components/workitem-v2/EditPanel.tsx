@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { WorkItem, WorkItemStatus, WorkItemPriority, AiProviderOverrideMode } from "../../types";
+import {
+  WorkItem,
+  WorkItemStatus,
+  WorkItemPriority,
+  AiProviderOverrideMode,
+  BranchNameCheck,
+} from "../../types";
 import { workItemService } from "../../services/auth";
 import { parseTags } from "../../utils/workItemJson";
 import TagAutocomplete from "../TagAutocomplete";
@@ -42,6 +48,7 @@ export default function EditPanel({
   const baseRepositoryId = workItem?.repositoryId ?? "";
   const baseAiProviderOverride = workItem?.aiProviderOverride ?? AiProviderOverrideMode.None;
   const baseAiProviderOverrideId = workItem?.aiProviderOverrideId ?? "";
+  const baseBranchNameOverride = workItem?.branchNameOverride ?? "";
 
   const [title, setTitle] = useState(baseTitle);
   const [description, setDescription] = useState(baseDescription);
@@ -52,10 +59,41 @@ export default function EditPanel({
   const [aiProviderOverride, setAiProviderOverride] =
     useState<AiProviderOverrideMode>(baseAiProviderOverride);
   const [aiProviderOverrideId, setAiProviderOverrideId] = useState(baseAiProviderOverrideId);
+  const [branchNameOverride, setBranchNameOverride] = useState(baseBranchNameOverride);
+  const [branchNameCheck, setBranchNameCheck] = useState<BranchNameCheck | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const overridesProvider = aiProviderOverride !== AiProviderOverrideMode.None;
+
+  // Advice on the branch name, debounced while typing. Deliberately never gates
+  // the submit button: a warning means the name is taken *right now*, and the
+  // binding check is the one the engine takes when the run starts.
+  useEffect(() => {
+    const name = branchNameOverride.trim();
+    if (!name) {
+      setBranchNameCheck(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      workItemService
+        .checkBranchName(name, { repositoryId, workItemId: workItem?.id })
+        .then((result) => {
+          if (!cancelled) setBranchNameCheck(result);
+        })
+        .catch(() => {
+          // Advice only — a failed lookup must not surface as a form error.
+          if (!cancelled) setBranchNameCheck(null);
+        });
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [branchNameOverride, repositoryId, workItem?.id]);
+
+  const branchNameProblem = branchNameCheck?.error ?? branchNameCheck?.warning ?? null;
 
   const dirty =
     title !== baseTitle ||
@@ -65,7 +103,8 @@ export default function EditPanel({
     tags !== baseTags ||
     repositoryId !== baseRepositoryId ||
     aiProviderOverride !== baseAiProviderOverride ||
-    aiProviderOverrideId !== baseAiProviderOverrideId;
+    aiProviderOverrideId !== baseAiProviderOverrideId ||
+    branchNameOverride !== baseBranchNameOverride;
 
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -93,6 +132,9 @@ export default function EditPanel({
       // Only carry a target when actually overriding, so switching back to
       // "no override" clears the stored provider.
       aiProviderOverrideId: overridesProvider ? aiProviderOverrideId : "",
+      // Empty means "back to the generated per-run name", which the server
+      // reads as a deliberate clear rather than "leave it alone".
+      branchNameOverride: branchNameOverride.trim(),
     };
 
     try {
@@ -236,6 +278,24 @@ export default function EditPanel({
             </select>
           </div>
         )}
+      </div>
+      <div className="form-group">
+        <label htmlFor="wiv2-branch-name">Branch name (optional)</label>
+        <input
+          id="wiv2-branch-name"
+          type="text"
+          value={branchNameOverride}
+          onChange={(e) => setBranchNameOverride(e.target.value)}
+          placeholder="Leave empty for a generated branch per run"
+          aria-describedby="wiv2-branch-name-hint"
+        />
+        <small
+          id="wiv2-branch-name-hint"
+          className={branchNameProblem ? "form-hint is-problem" : "form-hint"}
+        >
+          {branchNameProblem ??
+            "Used verbatim by every run of this item. Only the next run is affected."}
+        </small>
       </div>
       {submitError && (
         <div role="alert" className="form-error">

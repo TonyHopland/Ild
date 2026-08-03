@@ -42,4 +42,12 @@ public class AgentWorkItemCreateRequest
     /// work item — a tag must match a loop template name on the ILD instance.
     /// </summary>
     public List<string>? Tags { get; set; }
+
+    /// <summary>
+    /// Optional custom branch name. When set it is the branch every run of this
+    /// work item checks out, verbatim and with no per-run suffix; blank/null
+    /// leaves the item on the generated per-run name.
+    /// </summary>
+    [StringLength(256)]
+    public string? BranchNameOverride { get; set; }
 }
