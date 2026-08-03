@@ -44,6 +44,13 @@ public sealed class BranchNameOverrideService : IBranchNameOverrideService
 
         // A run row is the strongest local claim and the most useful one to
         // report: it names who is holding the branch and how to let go of it.
+        //
+        // Deliberately global rather than scoped to the repository: every run's
+        // worktree lands under one shared root keyed by branch name alone
+        // (RepositoryManager.CreateWorktreeAsync), so two repositories cannot
+        // both hold `feature/foo`. Should the worktree root ever become
+        // per-repository, this must be narrowed to the repository or it starts
+        // reporting conflicts that are not there.
         var holder = await _runs.GetByBranchNameAsync(name);
         if (holder is not null)
         {

@@ -254,6 +254,10 @@ public class AgentController : ControllerBase
                 loopTemplateVersionId = (Guid?)null,
             createdByLoopRunId = wi.CreatedByLoopRunId,
             createdByChatSessionId = wi.CreatedByChatSessionId,
+            // An agent that may set the custom branch name has to be able to
+            // read back what stuck — the API normalises it and the value it
+            // holds is what the item's next run will check out.
+            branchNameOverride = wi.BranchNameOverride,
             createdAt = wi.CreatedAt,
             updatedAt = wi.UpdatedAt,
             dependencies = deps.Select(d => new { id = d.Id, title = d.Title, status = d.Status.ToString() }),
@@ -941,6 +945,7 @@ public class AgentController : ControllerBase
             title = updated?.Title,
             description = updated?.Description,
             status = updated?.Status.ToString(),
+            branchNameOverride = updated?.BranchNameOverride,
         });
     }
 

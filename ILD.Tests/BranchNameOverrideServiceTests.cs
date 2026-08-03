@@ -12,8 +12,24 @@ namespace ILD.Tests;
 /// origin — because either one would put the run on a branch that already has
 /// history on it.
 /// </summary>
-public class BranchNameOverrideServiceTests
+public class BranchNameOverrideServiceTests : IDisposable
 {
+    /// <summary>
+    /// Temp base-clone directories stood up by <see cref="Setup"/>, removed when
+    /// the test class is torn down — otherwise every run leaves one behind.
+    /// </summary>
+    private readonly List<string> _tempDirs = new();
+
+    public void Dispose()
+    {
+        foreach (var dir in _tempDirs)
+        {
+            try { Directory.Delete(dir, recursive: true); }
+            catch (IOException) { /* best effort — a leftover temp dir must not fail a test */ }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
     [Fact]
     public async Task An_illegal_name_is_a_validation_error_not_a_conflict()
     {
@@ -134,7 +150,7 @@ public class BranchNameOverrideServiceTests
     /// <c>.git</c>, so the local-branch lookup is reached at all. Without it the
     /// base clone simply isn't there yet, which is not a conflict.
     /// </param>
-    private static (BranchNameOverrideService svc, TestDb db, Guid repoId, Mock<IRepositoryManager> git) Setup(
+    private (BranchNameOverrideService svc, TestDb db, Guid repoId, Mock<IRepositoryManager> git) Setup(
         bool baseRepoOnDisk = false)
     {
         var db = new TestDb();
@@ -144,6 +160,7 @@ public class BranchNameOverrideServiceTests
         {
             worktreesPath = Path.Combine(Path.GetTempPath(), $"ild-branch-test-{Guid.NewGuid():N}");
             Directory.CreateDirectory(Path.Combine(worktreesPath, ".git"));
+            _tempDirs.Add(worktreesPath);
         }
         var repo = new Repository
         {
