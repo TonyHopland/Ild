@@ -692,6 +692,50 @@ public class RepositoryManagerTests : IDisposable
         Assert.False(await mgr.RemoteBranchExistsAsync(wt, "ild/wi-5-run-2"));
     }
 
+    [Fact]
+    public async Task RemoteHasBranchAsync_asks_a_real_remote_without_a_local_clone()
+    {
+        // The branch-conflict check runs before any run — and therefore before
+        // the base repo is necessarily cloned — so this has to answer from the
+        // URL alone, with no worktree and no prior fetch.
+        var (work, mgr) = CloneWithOrigin();
+        Git(work, "checkout", "-b", "feature/published");
+        File.WriteAllText(Path.Combine(work, "f.txt"), "x\n");
+        Git(work, "add", "-A");
+        Git(work, "commit", "-m", "c");
+        // origin has main checked out, so pushing a different branch is fine.
+        Git(work, "push", "-u", "origin", "feature/published");
+
+        var remoteUrl = GitOut(work, "remote", "get-url", "origin");
+
+        Assert.True(await mgr.RemoteHasBranchAsync(remoteUrl, "feature/published"));
+        Assert.False(await mgr.RemoteHasBranchAsync(remoteUrl, "feature/never-pushed"));
+        // A remote we cannot reach is unanswered, not "absent" — the caller must
+        // be able to tell those apart.
+        Assert.Null(await mgr.RemoteHasBranchAsync(Path.Combine(_tmp, "no-such-remote"), "feature/published"));
+    }
+
+    /// <summary>
+    /// Answers every git call with success and no output — the shape that used to
+    /// make <c>RemoteHasBranchAsync</c> report an existing branch as absent.
+    /// </summary>
+    private sealed class SilentSuccessRunner : IProcessRunner
+    {
+        public Task<ProcessResult> RunAsync(string fileName, IReadOnlyList<string> args, string? workingDirectory = null, CancellationToken ct = default, IReadOnlyDictionary<string, string?>? environmentVariables = null)
+            => Task.FromResult(new ProcessResult(0, string.Empty, string.Empty));
+    }
+
+    [Fact]
+    public async Task RemoteHasBranchAsync_trusts_the_exit_code_even_when_stdout_is_empty()
+    {
+        // `--exit-code` puts the answer in the exit code; corroborating it against
+        // stdout only adds a way to mistake an existing branch for a free one, and
+        // that is the direction the conflict check must never fail in.
+        var mgr = new RepositoryManager(new SilentSuccessRunner(), worktreesRoot: Path.Combine(_tmp, "wt"));
+
+        Assert.True(await mgr.RemoteHasBranchAsync("https://example.invalid/repo.git", "feature/foo"));
+    }
+
     private (string Work, RepositoryManager Mgr) CloneWithOrigin()
     {
         var origin = Path.Combine(_tmp, "origin-" + Guid.NewGuid().ToString("N"));
@@ -723,12 +767,17 @@ public class RepositoryManagerTests : IDisposable
         return p.StandardOutput.ReadToEnd();
     }
 
-    private static void Git(string cwd, params string[] args)
+    private static void Git(string cwd, params string[] args) => GitOut(cwd, args);
+
+    /// <summary>Runs git and returns its trimmed stdout, throwing on a non-zero exit.</summary>
+    private static string GitOut(string cwd, params string[] args)
     {
         var psi = new ProcessStartInfo("git") { WorkingDirectory = cwd, UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true };
         foreach (var a in args) psi.ArgumentList.Add(a);
         using var p = Process.Start(psi)!;
+        var stdout = p.StandardOutput.ReadToEnd();
         p.WaitForExit();
         if (p.ExitCode != 0) throw new InvalidOperationException($"git {string.Join(' ', args)}: {p.StandardError.ReadToEnd()}");
+        return stdout.Trim();
     }
 }

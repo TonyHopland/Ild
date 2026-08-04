@@ -101,8 +101,10 @@ public sealed class BranchNameOverrideService : IBranchNameOverrideService
         }
         catch (Exception ex)
         {
-            // Without credentials a private remote simply does not answer, which
-            // the caller already handles as "unknown" rather than "free".
+            // Without credentials a private remote does not answer, so the
+            // upstream half of the check goes unanswered and — like any
+            // unreachable origin — is not counted as a conflict, letting the run
+            // proceed to the Start node, which fails it on the same fetch.
             _log?.LogDebug(ex, "Could not resolve git credentials for repository {RepositoryId}", repo.Id);
             return null;
         }
