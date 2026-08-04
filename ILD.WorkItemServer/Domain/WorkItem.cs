@@ -93,4 +93,15 @@ public class WorkItem
     /// <see cref="RepositoryId"/> so it round-trips to the ILD instance.
     /// </summary>
     public Guid? AiProviderOverrideId { get; set; }
+
+    /// <summary>
+    /// The branch every run of this work item checks out, replacing the
+    /// generated per-run name. Null or blank means the ILD instance generates
+    /// <c>ild/wi-&lt;id&gt;-run-&lt;run&gt;</c> as before. Stored verbatim — no run
+    /// suffix is appended — and capped at the length of the ILD instance's
+    /// <c>LoopRun.BranchName</c> column so a name that round-trips here can
+    /// always be persisted on the run. See ADR-0008.
+    /// </summary>
+    [MaxLength(256)]
+    public string? BranchNameOverride { get; set; }
 }

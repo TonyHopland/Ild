@@ -70,6 +70,13 @@ public sealed class RemoteWorkItem
     public Guid? RepositoryId { get; set; }
     public RemoteAiProviderOverrideMode AiProviderOverride { get; set; }
     public Guid? AiProviderOverrideId { get; set; }
+
+    /// <summary>
+    /// The branch every run of this work item checks out, used verbatim with no
+    /// <c>-run-&lt;n&gt;</c> suffix. Null/blank means the generated per-run name.
+    /// See ADR-0008.
+    /// </summary>
+    public string? BranchNameOverride { get; set; }
 }
 
 public sealed class RemoteCreateWorkItemRequest
@@ -84,6 +91,9 @@ public sealed class RemoteCreateWorkItemRequest
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? CreatedByChatSessionId { get; set; }
     public Guid? RepositoryId { get; set; }
+
+    /// <summary>Custom branch name for every run of the new item; blank/null = generated.</summary>
+    public string? BranchNameOverride { get; set; }
 }
 
 public sealed class RemoteUpdateWorkItemRequest
@@ -91,6 +101,12 @@ public sealed class RemoteUpdateWorkItemRequest
     public string? Title { get; set; }
     public string? Description { get; set; }
     public IReadOnlyList<string>? Tags { get; set; }
+
+    /// <summary>
+    /// Replaces the item's custom branch name. Null leaves it untouched; blank
+    /// clears it — see the server's UpdateWorkItemRequest.
+    /// </summary>
+    public string? BranchNameOverride { get; set; }
 
     /// <summary>
     /// When supplied, replaces the work item's AI provider override. Mode and

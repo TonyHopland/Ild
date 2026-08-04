@@ -77,6 +77,13 @@ export interface WorkItem {
    */
   aiProviderOverride?: AiProviderOverrideMode;
   aiProviderOverrideId?: string | null;
+  /**
+   * Custom branch name used verbatim by every run of this item, with no
+   * `-run-<n>` suffix. Blank/null keeps the generated per-run name. Unlike
+   * {@link branchName} — the branch the current run actually landed on — this is
+   * the item's own setting and only takes effect on its next run.
+   */
+  branchNameOverride?: string | null;
   prUrl: string | null;
   pullRequestBranch: string | null;
   humanFeedbackReason: string | null;
@@ -215,6 +222,16 @@ export interface PullBranchResult {
   message: string;
   /** Conflicted paths for `Conflict`, uncommitted ones for `DirtyWorktree`. */
   files: string[];
+}
+
+/**
+ * What the server makes of a custom branch name. `error` means it cannot be
+ * saved at all; `warning` means it is legal but already taken, which is advice
+ * rather than a refusal — the binding check happens when the run starts.
+ */
+export interface BranchNameCheck {
+  error: string | null;
+  warning: string | null;
 }
 
 export interface WorktreeFileContent {

@@ -39,5 +39,6 @@ Each AI node has a single `prompt` field. When first-turn and follow-up prompts 
 - Ready items can be claimed automatically by the poller or started manually from the UI.
 - Human feedback moves remote items through `HumanFeedback` and `WaitingForIld` before resuming execution.
 - Each run gets its own worktree and branch (`ild/wi-<workItemId>-run-<runId>`), kept after the run finishes for inspection. They are destroyed only when the run itself is deleted — by the `WorktreeRetentionSweeper` after `run.retentionDays`, or a manual run delete (runs pinned with `Retain` are never auto-deleted).
+- A work item may carry a `BranchNameOverride`, which then **is** the branch name for every run of that item — verbatim, with no per-run suffix. Because the branch is no longer unique per run, the engine refuses to start a run on a name that any run row, local branch, or `origin` already holds: the item parks in `HumanFeedback` before any run row or worktree exists. A re-run of a custom-named item therefore parks until its predecessor's branch is released, and deleting that run releases the local branch only — ILD never deletes remote branches. See [ADR-0008](./adr/0008-worktree-and-branch-per-run.md).
 
 For the full glossary, relationships, lifecycle states, and execution/recovery semantics, see [CONTEXT.md](../CONTEXT.md).

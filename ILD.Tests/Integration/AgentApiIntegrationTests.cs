@@ -167,6 +167,114 @@ public class AgentApiIntegrationTests
         Assert.Equal(HttpStatusCode.Forbidden, resp.StatusCode);
     }
 
+    // -- Custom branch name (ADR-0008) ---------------------------------------
+    //
+    // The name reaches git verbatim, as both a ref and a worktree directory, so
+    // the agent surface refuses an illegal one rather than sanitising it. These
+    // drive the real endpoints because the validation on this path is its own
+    // copy, independent of the human controller's.
+
+    [Theory]
+    [InlineData("feature foo")]
+    [InlineData("../escape")]
+    [InlineData("feature/foo.lock")]
+    public async Task CreateWorkItem_rejects_an_illegal_branch_name(string branchName)
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+
+        var resp = await client.PostAsJsonAsync("/api/v1/agent/workitems", new
+        {
+            title = "bad branch",
+            description = "",
+            repositoryId = repoId.ToString(),
+            branchNameOverride = branchName,
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task CreateWorkItem_persists_a_legal_branch_name_trimmed()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+
+        var resp = await client.PostAsJsonAsync("/api/v1/agent/workitems", new
+        {
+            title = "custom branch",
+            description = "",
+            repositoryId = repoId.ToString(),
+            branchNameOverride = "  feature/foo  ",
+        });
+        Assert.Equal(HttpStatusCode.Created, resp.StatusCode);
+        var itemId = JsonDocument.Parse(await resp.Content.ReadAsStringAsync())
+            .RootElement.GetProperty("id").GetString();
+
+        var detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{itemId}");
+        Assert.Equal("feature/foo", detail.GetProperty("branchNameOverride").GetString());
+    }
+
+    [Fact]
+    public async Task UpdateWorkItem_rejects_an_illegal_branch_name_and_leaves_the_existing_one()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+        var runId = Guid.NewGuid();
+        var itemId = await CreateAsync(client, "owned", runId, repoId, branchNameOverride: "feature/foo");
+
+        var put = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/agent/workitems/{itemId}")
+        {
+            Content = JsonContent.Create(new { title = "edited", description = "", branchNameOverride = "feature foo" }),
+        };
+        put.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        var resp = await client.SendAsync(put);
+
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+        var detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{itemId}");
+        Assert.Equal("feature/foo", detail.GetProperty("branchNameOverride").GetString());
+        Assert.Equal("owned", detail.GetProperty("title").GetString());
+    }
+
+    [Fact]
+    public async Task UpdateWorkItem_replaces_clears_and_leaves_the_branch_name_alone()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+        var runId = Guid.NewGuid();
+        var itemId = await CreateAsync(client, "owned", runId, repoId, branchNameOverride: "feature/foo");
+
+        var replaced = await PutAsync(client, itemId, runId, new { title = "owned", description = "", branchNameOverride = "feature/bar" });
+        Assert.Equal("feature/bar", replaced.GetProperty("branchNameOverride").GetString());
+
+        // Omitted means "not part of this edit" — a title-only save keeps it.
+        var titleOnly = await PutAsync(client, itemId, runId, new { title = "renamed", description = "" });
+        Assert.Equal("feature/bar", titleOnly.GetProperty("branchNameOverride").GetString());
+
+        // Blank is a deliberate "go back to the generated per-run name".
+        var cleared = await PutAsync(client, itemId, runId, new { title = "renamed", description = "", branchNameOverride = "" });
+        Assert.Equal(JsonValueKind.Null, cleared.GetProperty("branchNameOverride").ValueKind);
+
+        var detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{itemId}");
+        Assert.Equal(JsonValueKind.Null, detail.GetProperty("branchNameOverride").ValueKind);
+    }
+
+    private static async Task<JsonElement> PutAsync(HttpClient client, string itemId, Guid runId, object body)
+    {
+        var put = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/agent/workitems/{itemId}")
+        {
+            Content = JsonContent.Create(body),
+        };
+        put.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        var resp = await client.SendAsync(put);
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        return JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+    }
+
     [Fact]
     public async Task UpdateWorkItem_for_unknown_item_returns_not_found()
     {
@@ -1052,11 +1160,12 @@ public class AgentApiIntegrationTests
         return run.Id;
     }
 
-    private static async Task<string> CreateAsync(HttpClient client, string title, Guid? runId, Guid repositoryId)
+    private static async Task<string> CreateAsync(
+        HttpClient client, string title, Guid? runId, Guid repositoryId, string? branchNameOverride = null)
     {
         var req = new HttpRequestMessage(HttpMethod.Post, "/api/v1/agent/workitems")
         {
-            Content = JsonContent.Create(new { title, description = "", repositoryId = repositoryId.ToString() })
+            Content = JsonContent.Create(new { title, description = "", repositoryId = repositoryId.ToString(), branchNameOverride })
         };
         if (runId.HasValue)
             req.Headers.Add("X-ILD-Run-Id", runId.Value.ToString());

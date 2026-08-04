@@ -114,6 +114,19 @@
   border-color: #6366f1;
 }
 
+.form-hint {
+  display: block;
+  font-size: 0.7rem;
+  color: #a0a0b0;
+  margin-top: 0.25rem;
+}
+
+/* A hint that is telling the user something is wrong with what they typed,
+   rather than explaining the field. */
+.form-hint.is-problem {
+  color: #fbbf24;
+}
+
 .form-row {
   display: grid;
   grid-template-columns: repeat(2, 1fr);

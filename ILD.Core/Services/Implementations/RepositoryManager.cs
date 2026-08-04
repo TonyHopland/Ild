@@ -419,6 +419,30 @@ public class RepositoryManager : IRepositoryManager
         return new RemoteRepositoryInfo(ParseSymrefDefaultBranch(stdout), ParseRepoNameFromUrl(cloneUrl));
     }
 
+    public async Task<bool?> RemoteHasBranchAsync(string cloneUrl, string branchName, CancellationToken cancellationToken = default, GitAuthOptions? auth = null)
+    {
+        if (string.IsNullOrWhiteSpace(cloneUrl) || string.IsNullOrWhiteSpace(branchName))
+            return null;
+
+        var (code, _, _) = await RunAsync(
+            Path.GetTempPath(),
+            new[] { "ls-remote", "--heads", "--exit-code", cloneUrl, $"refs/heads/{branchName}" },
+            cancellationToken, auth);
+
+        // `--exit-code` is what makes the three answers we need distinguishable,
+        // and it encodes them in the exit code alone: 0 = the ref is there,
+        // 2 = the remote answered and does not have it, anything else = we never
+        // got an answer. Deliberately not corroborated against stdout — a
+        // swallowed line would turn an existing branch into "free", which is the
+        // one direction this check must never err in.
+        return code switch
+        {
+            0 => true,
+            2 => false,
+            _ => null,
+        };
+    }
+
     // `git ls-remote --symref <url> HEAD` advertises the default branch as a
     // line like "ref: refs/heads/main\tHEAD"; pull the branch name out of it.
     private static string? ParseSymrefDefaultBranch(string lsRemoteOutput)

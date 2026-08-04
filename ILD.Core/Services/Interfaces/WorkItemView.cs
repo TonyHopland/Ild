@@ -28,6 +28,14 @@ public sealed class WorkItemView
     public RemoteAiProviderOverrideMode AiProviderOverride { get; set; }
     public Guid? AiProviderOverrideId { get; set; }
 
+    /// <summary>
+    /// The branch every run of this item checks out, used verbatim with no
+    /// per-run suffix. Null/blank means the generated <c>ild/wi-&lt;id&gt;-run-&lt;n&gt;</c>
+    /// name. Distinct from <see cref="BranchName"/>, which is the branch the
+    /// current run actually landed on. See ADR-0008.
+    /// </summary>
+    public string? BranchNameOverride { get; set; }
+
     // Engine-only fields (from LoopRun)
     public Guid? RepositoryId { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }

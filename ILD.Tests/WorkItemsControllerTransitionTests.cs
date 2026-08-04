@@ -69,6 +69,7 @@ public class WorkItemsControllerTransitionTests
             new Mock<IRepositoryManager>().Object,
             db.LoopRuns,
             db.Providers,
+            new Mock<IBranchNameOverrideService>().Object,
             NullLogger<WorkItemsController>.Instance);
 
         return (controller, mgr, db, repo.Id);

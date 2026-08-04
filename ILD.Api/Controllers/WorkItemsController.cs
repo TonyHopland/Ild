@@ -1,4 +1,5 @@
 using ILD.Api.Contracts;
+using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
@@ -23,8 +24,9 @@ public class WorkItemsController : ControllerBase
     private readonly IWorkItemNotifier _notifier;
     private readonly IRemoteProvider? _remoteProvider;
     private readonly IProviderStore _providerStore;
+    private readonly IBranchNameOverrideService _branchNames;
 
-    public WorkItemsController(IWorkItemManager workItemManager, ILoopEngine engine, IWorktreePreviewService worktreePreviewService, IRepositoryManager repositoryManager, ILoopRunStore loopRunStore, IProviderStore providerStore, ILogger<WorkItemsController> logger, IWorkItemNotifier? notifier = null, IRemoteProvider? remoteProvider = null)
+    public WorkItemsController(IWorkItemManager workItemManager, ILoopEngine engine, IWorktreePreviewService worktreePreviewService, IRepositoryManager repositoryManager, ILoopRunStore loopRunStore, IProviderStore providerStore, IBranchNameOverrideService branchNames, ILogger<WorkItemsController> logger, IWorkItemNotifier? notifier = null, IRemoteProvider? remoteProvider = null)
     {
         _workItemManager = workItemManager;
         _engine = engine;
@@ -35,6 +37,7 @@ public class WorkItemsController : ControllerBase
         _logger = logger;
         _notifier = notifier ?? new NoopWorkItemNotifier();
         _remoteProvider = remoteProvider;
+        _branchNames = branchNames;
     }
 
     // The diff view anchors on the repository's stored default branch; resolve
@@ -133,12 +136,20 @@ public class WorkItemsController : ControllerBase
         if (!Guid.TryParse(request.RepositoryId, out var rGuid))
             return BadRequest(new { error = "repositoryId is required." });
         var repositoryId = (Guid?)rGuid;
+
+        // A custom branch name is used verbatim as a branch and a worktree
+        // directory, so an illegal one is refused rather than mangled.
+        var branchNameOverride = BranchNameRules.Normalize(request.BranchNameOverride);
+        if (branchNameOverride is not null && BranchNameRules.Validate(branchNameOverride) is { } branchError)
+            return BadRequest(new { error = branchError });
+
         var id = await _workItemManager.CreateWorkItemAsync(
             request.Title, request.Description,
             repositoryId,
             createdByLoopRunId: null,
             forceBacklog: false,
-            tags: request.Tags);
+            tags: request.Tags,
+            branchNameOverride: branchNameOverride);
 
         // Creation broadcasts over SignalR from WorkItemManager.CreateWorkItemAsync,
         // so connected clients pick up the new item live without a duplicate here.
@@ -162,10 +173,42 @@ public class WorkItemsController : ControllerBase
                 overrideProviderId = parsedProviderId;
         }
 
-        var ok = await _workItemManager.UpdateAsync(id, request.Title, request.Description, request.Tags, overrideMode, overrideProviderId);
+        // Same rule as create, and the same reason it must be enforced here:
+        // editing the branch name is how a human clears a conflict, so the edit
+        // path is a first-class way to introduce an illegal one. A blank value
+        // is a deliberate "go back to generated naming" and passes through.
+        if (BranchNameRules.Normalize(request.BranchNameOverride) is { } branchName
+            && BranchNameRules.Validate(branchName) is { } branchError)
+            return BadRequest(new { error = branchError });
+
+        var ok = await _workItemManager.UpdateAsync(
+            id, request.Title, request.Description, request.Tags, overrideMode, overrideProviderId,
+            request.BranchNameOverride);
         if (!ok) return NotFound();
         var wi = await _workItemManager.GetWorkItemAsync(id);
         return Ok(wi);
+    }
+
+    /// <summary>
+    /// Advice on a custom branch name while it is being typed: whether it is
+    /// legal, and whether anything already holds it. Deliberately advisory —
+    /// the world moves between here and the run, so the binding conflict check
+    /// is the one the engine takes at run start (ADR-0008). A caller that gets
+    /// a warning here is still free to save.
+    /// </summary>
+    [HttpGet("branch-name-check")]
+    public async Task<IActionResult> CheckBranchName(
+        [FromQuery] string? name,
+        [FromQuery] string? repositoryId,
+        [FromQuery] string? workItemId,
+        CancellationToken cancellationToken)
+    {
+        if (BranchNameRules.Normalize(name) is null)
+            return Ok(new { error = (string?)null, warning = (string?)null });
+
+        Guid? repoId = Guid.TryParse(repositoryId, out var parsed) ? parsed : null;
+        var verdict = await _branchNames.InspectAsync(name, repoId, workItemId, cancellationToken);
+        return Ok(new { error = verdict.ValidationError, warning = verdict.Conflict });
     }
 
     [HttpGet("{id}/preview")]

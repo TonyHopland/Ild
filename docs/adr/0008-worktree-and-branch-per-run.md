@@ -11,3 +11,15 @@ Each run gets its own git branch (`ild/wi-<workItemId>-run-<runId>`) and therefo
 - **Pinning.** A run marked `Retain` is never reclaimed until the mark is cleared — an escape hatch for runs worth keeping indefinitely.
 - **Safety rails.** The sweeper never reclaims the run a still-active work item points at (kept until the work item is `Done` or a newer run supersedes it), and never touches remote branches or PRs — only local state is reclaimed.
 - **Worktrees must live on persistent storage** (`App:WorktreesPath`, under the data root) rather than `/tmp`, or "inspect an old run" breaks across reboots.
+
+## Amendment: a work item may opt out of per-run branch naming
+
+A work item can carry a `BranchNameOverride`. When set, it **is** the branch name — used verbatim, with no `-run-<n>` suffix — for every run of that item. Everything above still holds for items without one, which is all of them by default.
+
+Opting out means giving up the property this ADR is built on: the branch is no longer unique per run. Rather than let that reintroduce the leak this decision exists to prevent, the engine refuses to start a run on a branch that already exists. Before the `LoopRun` row is created, `StartRunAsync` checks both sides — no run row, local branch or worktree holding the name, and nothing published under it on `origin` — and on any hit transitions the work item to `HumanFeedback` with a message naming the holder. No run row, no worktree, and no concurrency slot is created for a parked item.
+
+- **ADR-0006's clean-base invariant is preserved.** A run never starts on a pre-existing branch, so there is never prior history underneath it to replay. The invariant is upheld by refusal rather than by unique naming.
+- **A re-run of a custom-named item parks. This is expected, not a fault.** Run 1's local branch and worktree are retained for `run.retentionDays` (above), so the second run hits the local conflict. Re-runs of custom-named items are rare and the trade is deliberate.
+- **Deleting the old run frees the local branch only.** `IRunReclaimer` never touches remote branches or PRs, so if run 1 pushed, the next run parks again — this time naming `origin`. Removing the remote branch is the human's call; ILD does not force-push and does not delete remote branches.
+- **The check is authoritative only at run start.** The API also warns at create/edit time when a name is already taken, but that is advice: the world moves between the save and the run. An _illegal_ name is a different matter and is refused outright at the API, on create and on edit, because the name reaches git verbatim as both a ref and a worktree directory.
+- **An edit is never retroactive.** The name is pinned on the `LoopRun` when the run is created, so editing the work item affects only its next run; nothing renames an existing branch or worktree.

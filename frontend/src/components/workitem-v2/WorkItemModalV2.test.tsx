@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, fireEvent, cleanup, act, within } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, act, within, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import WorkItemModalV2 from "./WorkItemModalV2";
 import { pressEscapeUntil } from "../../test-support";
@@ -860,6 +860,44 @@ describe("WorkItemModalV2", () => {
       aiProviderOverride: "OverrideAll",
       aiProviderOverrideId: "ai-2",
     });
+  });
+
+  test("editing the branch name saves it and warns — without blocking — when it is taken", async () => {
+    mockServices();
+    const updateSpy = vi
+      .spyOn(authServices.workItemService, "update")
+      .mockImplementation(async (_id, data) => makeWorkItem(data as Partial<WorkItem>));
+    const checkSpy = vi.spyOn(authServices.workItemService, "checkBranchName").mockResolvedValue({
+      error: null,
+      warning: "Branch `feature/foo` already exists on origin.",
+    });
+
+    await renderDialog(makeWorkItem());
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Branch name (optional)"), {
+        target: { value: "feature/foo" },
+      });
+      await Promise.resolve();
+    });
+
+    // The advice is debounced, so it lands a moment after typing stops.
+    await waitFor(() => expect(checkSpy).toHaveBeenCalled());
+    await screen.findByText(/already exists on origin/);
+
+    // A taken name is advice, not a refusal: Update still goes through.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Update" }));
+      await Promise.resolve();
+    });
+
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+    expect(updateSpy.mock.calls[0][1]).toMatchObject({ branchNameOverride: "feature/foo" });
   });
 
   test("Delete stays out of the footer even when cleanup buttons are present", async () => {

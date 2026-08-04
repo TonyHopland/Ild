@@ -23,4 +23,12 @@ public class AgentWorkItemUpdateRequest
     /// match a loop template name on the ILD instance.
     /// </summary>
     public List<string>? Tags { get; set; }
+
+    /// <summary>
+    /// Optional replacement custom branch name. Omit (null) to leave it
+    /// unchanged; send an empty string to clear it back to the generated
+    /// per-run name. Only the item's next run sees the change.
+    /// </summary>
+    [StringLength(256)]
+    public string? BranchNameOverride { get; set; }
 }

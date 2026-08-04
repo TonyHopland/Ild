@@ -85,6 +85,7 @@ public sealed class WorkItemService : IWorkItemService
             CreatedByLoopRunId = req.CreatedByLoopRunId,
             CreatedByChatSessionId = req.CreatedByChatSessionId,
             RepositoryId = req.RepositoryId,
+            BranchNameOverride = WorkItemMapper.NormalizeBranchNameOverride(req.BranchNameOverride),
         };
         WorkItemMapper.WriteTags(w, req.Tags ?? Array.Empty<string>());
         WorkItemMapper.WriteDependencies(w, req.Dependencies ?? Array.Empty<string>());
@@ -139,6 +140,11 @@ public sealed class WorkItemService : IWorkItemService
             w.AiProviderOverride = req.AiProviderOverride.Value;
             w.AiProviderOverrideId = req.AiProviderOverrideId;
         }
+        // Null leaves the custom branch name alone; a blank string clears it.
+        // Editing it is how a human resolves a branch conflict, and it only ever
+        // affects the item's next run — no run's branch is retroactively renamed.
+        if (req.BranchNameOverride != null)
+            w.BranchNameOverride = WorkItemMapper.NormalizeBranchNameOverride(req.BranchNameOverride);
         w.UpdatedAt = _clock.GetUtcNow().UtcDateTime;
         await _db.SaveChangesAsync(ct);
         return WorkItemMapper.ToDto(w);

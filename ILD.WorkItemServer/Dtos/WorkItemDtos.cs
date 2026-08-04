@@ -24,6 +24,9 @@ public sealed class WorkItemDto
     public Guid? RepositoryId { get; set; }
     public AiProviderOverrideMode AiProviderOverride { get; set; }
     public Guid? AiProviderOverrideId { get; set; }
+
+    /// <summary>The branch every run of this item uses, verbatim. Null = generated per-run name.</summary>
+    public string? BranchNameOverride { get; set; }
 }
 
 public sealed class CreateWorkItemRequest
@@ -38,6 +41,12 @@ public sealed class CreateWorkItemRequest
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? CreatedByChatSessionId { get; set; }
     public Guid? RepositoryId { get; set; }
+
+    /// <summary>
+    /// Custom branch name for every run of the new item. Blank/null leaves the
+    /// item on the generated per-run naming.
+    /// </summary>
+    public string? BranchNameOverride { get; set; }
 }
 
 public sealed class UpdateWorkItemRequest
@@ -45,6 +54,16 @@ public sealed class UpdateWorkItemRequest
     public string? Title { get; set; }
     public string? Description { get; set; }
     public IReadOnlyList<string>? Tags { get; set; }
+
+    /// <summary>
+    /// Replaces the item's custom branch name. Null leaves it untouched; an
+    /// empty/blank string clears it back to generated per-run naming — the same
+    /// null-means-unchanged convention <see cref="Title"/> follows. Only the
+    /// item's <em>next</em> run sees the change: a run already started keeps the
+    /// branch it was created with, and nothing renames an existing branch or
+    /// worktree.
+    /// </summary>
+    public string? BranchNameOverride { get; set; }
 
     /// <summary>
     /// When supplied, replaces the work item's AI provider override. The mode

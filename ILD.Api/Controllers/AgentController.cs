@@ -254,6 +254,10 @@ public class AgentController : ControllerBase
                 loopTemplateVersionId = (Guid?)null,
             createdByLoopRunId = wi.CreatedByLoopRunId,
             createdByChatSessionId = wi.CreatedByChatSessionId,
+            // An agent that may set the custom branch name has to be able to
+            // read back what stuck — the API normalises it and the value it
+            // holds is what the item's next run will check out.
+            branchNameOverride = wi.BranchNameOverride,
             createdAt = wi.CreatedAt,
             updatedAt = wi.UpdatedAt,
             dependencies = deps.Select(d => new { id = d.Id, title = d.Title, status = d.Status.ToString() }),
@@ -839,6 +843,12 @@ public class AgentController : ControllerBase
         if (!repoExists)
             return BadRequest(new { error = $"Repository not found: {repositoryId}" });
 
+        // A custom branch name is used verbatim as a branch and a worktree
+        // directory, so an illegal one is refused rather than mangled.
+        var branchNameOverride = BranchNameRules.Normalize(request.BranchNameOverride);
+        if (branchNameOverride is not null && BranchNameRules.Validate(branchNameOverride) is { } branchError)
+            return BadRequest(new { error = branchError });
+
         // Legacy `loopTemplateId` (if any) is ignored — template is now
         // resolved from tags at run start (PRD §3.7).
 
@@ -883,7 +893,8 @@ public class AgentController : ControllerBase
                 createdByLoopRunId,
                 forceBacklog: true,
                 tags: request.Tags,
-                createdByChatSessionId: createdByChatSessionId);
+                createdByChatSessionId: createdByChatSessionId,
+                branchNameOverride: branchNameOverride);
         }
         catch (InvalidOperationException ex)
         {
@@ -917,7 +928,13 @@ public class AgentController : ControllerBase
         if (!CallerOwns(wi))
             return StatusCode(403, new { error = "You can only edit work items your own session created." });
 
-        var ok = await _workItems.UpdateAsync(id, request.Title, request.Description ?? string.Empty, request.Tags);
+        if (BranchNameRules.Normalize(request.BranchNameOverride) is { } branchName
+            && BranchNameRules.Validate(branchName) is { } branchError)
+            return BadRequest(new { error = branchError });
+
+        var ok = await _workItems.UpdateAsync(
+            id, request.Title, request.Description ?? string.Empty, request.Tags,
+            branchNameOverride: request.BranchNameOverride);
         if (!ok)
             return StatusCode(503, new { error = "Work item update failed." });
 
@@ -928,6 +945,7 @@ public class AgentController : ControllerBase
             title = updated?.Title,
             description = updated?.Description,
             status = updated?.Status.ToString(),
+            branchNameOverride = updated?.BranchNameOverride,
         });
     }
 
