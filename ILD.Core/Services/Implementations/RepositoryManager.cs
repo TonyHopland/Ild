@@ -424,17 +424,20 @@ public class RepositoryManager : IRepositoryManager
         if (string.IsNullOrWhiteSpace(cloneUrl) || string.IsNullOrWhiteSpace(branchName))
             return null;
 
-        var (code, stdout, _) = await RunAsync(
+        var (code, _, _) = await RunAsync(
             Path.GetTempPath(),
             new[] { "ls-remote", "--heads", "--exit-code", cloneUrl, $"refs/heads/{branchName}" },
             cancellationToken, auth);
 
-        // git ls-remote --exit-code separates the three answers we need to tell
-        // apart: 0 = the ref is there, 2 = the remote answered and does not have
-        // it, anything else = we never got an answer.
+        // `--exit-code` is what makes the three answers we need distinguishable,
+        // and it encodes them in the exit code alone: 0 = the ref is there,
+        // 2 = the remote answered and does not have it, anything else = we never
+        // got an answer. Deliberately not corroborated against stdout — a
+        // swallowed line would turn an existing branch into "free", which is the
+        // one direction this check must never err in.
         return code switch
         {
-            0 => !string.IsNullOrWhiteSpace(stdout),
+            0 => true,
             2 => false,
             _ => null,
         };
