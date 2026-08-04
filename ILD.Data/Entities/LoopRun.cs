@@ -117,6 +117,14 @@ public class LoopRun : IHasUpdatedAt
     [MaxLength(256)]
     public string? BranchName { get; set; }
 
+    // The work item's base-branch override as it stood when this run was
+    // created. Null means "the repository's default branch" — the base every
+    // run had before overrides existed — so old rows need no backfill. Pinned
+    // rather than re-read so that editing the work item mid-run cannot move the
+    // ref the Start node built from out from under the PR node. See ADR-0008.
+    [MaxLength(256)]
+    public string? BaseBranchOverride { get; set; }
+
     [MaxLength(2048)]
     public string? PrUrl { get; set; }
 

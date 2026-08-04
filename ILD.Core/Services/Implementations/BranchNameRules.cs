@@ -35,49 +35,65 @@ public static class BranchNameRules
     /// null when it can. The message is shown to a human as-is, so it names the
     /// offending construct rather than quoting git.
     /// </summary>
-    public static string? Validate(string? branchName)
+    /// <param name="subject">
+    /// What the message calls the field, so the same rules can report against
+    /// the field the human actually typed into — a work item's custom branch
+    /// name or its base branch. Sentence-leading, so it is capitalised.
+    /// </param>
+    public static string? Validate(string? branchName, string subject = "Branch name")
     {
         var name = Normalize(branchName);
         if (name is null)
-            return "Branch name cannot be empty.";
+            return $"{subject} cannot be empty.";
         if (name.Length > MaxLength)
-            return $"Branch name cannot be longer than {MaxLength} characters.";
+            return $"{subject} cannot be longer than {MaxLength} characters.";
 
         foreach (var c in name)
         {
             if (char.IsControl(c))
-                return "Branch name cannot contain control characters.";
+                return $"{subject} cannot contain control characters.";
             if (c == ' ')
-                return "Branch name cannot contain spaces.";
+                return $"{subject} cannot contain spaces.";
             if (c is '~' or '^' or ':' or '?' or '*' or '[' or '\\')
-                return $"Branch name cannot contain '{c}'.";
+                return $"{subject} cannot contain '{c}'.";
         }
 
         if (name.Contains(".."))
-            return "Branch name cannot contain '..'.";
+            return $"{subject} cannot contain '..'.";
         if (name.Contains("@{"))
-            return "Branch name cannot contain '@{'.";
+            return $"{subject} cannot contain '@{{'.";
         if (name == "@")
-            return "Branch name cannot be '@'.";
+            return $"{subject} cannot be '@'.";
         if (name.StartsWith('-'))
-            return "Branch name cannot start with '-'.";
+            return $"{subject} cannot start with '-'.";
         if (name.StartsWith('/') || name.EndsWith('/'))
-            return "Branch name cannot start or end with '/'.";
+            return $"{subject} cannot start or end with '/'.";
         if (name.Contains("//"))
-            return "Branch name cannot contain '//'.";
+            return $"{subject} cannot contain '//'.";
         if (name.EndsWith('.'))
-            return "Branch name cannot end with '.'.";
+            return $"{subject} cannot end with '.'.";
 
         // Per-segment rules: git refuses a path component that begins with a
         // dot or ends with .lock, whatever depth it sits at.
         foreach (var segment in name.Split('/'))
         {
             if (segment.StartsWith('.'))
-                return "No part of a branch name can start with '.'.";
+                return $"No part of {LowerSubject(subject)} can start with '.'.";
             if (segment.EndsWith(".lock", StringComparison.Ordinal))
-                return "No part of a branch name can end with '.lock'.";
+                return $"No part of {LowerSubject(subject)} can end with '.lock'.";
         }
 
         return null;
     }
+
+    /// <summary>The subject mid-sentence, e.g. "a branch name".</summary>
+    private static string LowerSubject(string subject)
+        => "a " + char.ToLowerInvariant(subject[0]) + subject[1..];
+
+    /// <summary>
+    /// What a work item's base branch — the ref its runs are built from — is
+    /// called in validation messages. It is a ref name only, never a directory,
+    /// but git's ref-format rules are the same either way.
+    /// </summary>
+    public const string BaseBranchSubject = "Base branch";
 }

@@ -900,6 +900,38 @@ describe("WorkItemModalV2", () => {
     expect(updateSpy.mock.calls[0][1]).toMatchObject({ branchNameOverride: "feature/foo" });
   });
 
+  test("editing the base branch saves it, and clearing it sends the empty string", async () => {
+    mockServices();
+    const updateSpy = vi
+      .spyOn(authServices.workItemService, "update")
+      .mockImplementation(async (_id, data) => makeWorkItem(data as Partial<WorkItem>));
+
+    await renderDialog(makeWorkItem({ baseBranchOverride: "release/1.0" }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+      await Promise.resolve();
+    });
+
+    const field = screen.getByLabelText("Base branch (optional)") as HTMLInputElement;
+    expect(field.value).toBe("release/1.0");
+
+    // Emptying the field is a deliberate "back to the repository default", which
+    // the server only reads as a clear when the empty string actually arrives.
+    await act(async () => {
+      fireEvent.change(field, { target: { value: "" } });
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Update" }));
+      await Promise.resolve();
+    });
+
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+    expect(updateSpy.mock.calls[0][1]).toMatchObject({ baseBranchOverride: "" });
+  });
+
   test("Delete stays out of the footer even when cleanup buttons are present", async () => {
     mockServices();
     await renderDialog(

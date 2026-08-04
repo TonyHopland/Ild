@@ -27,6 +27,9 @@ public sealed class WorkItemDto
 
     /// <summary>The branch every run of this item uses, verbatim. Null = generated per-run name.</summary>
     public string? BranchNameOverride { get; set; }
+
+    /// <summary>The ref every run of this item branches from. Null = the repository's default branch.</summary>
+    public string? BaseBranchOverride { get; set; }
 }
 
 public sealed class CreateWorkItemRequest
@@ -47,6 +50,12 @@ public sealed class CreateWorkItemRequest
     /// item on the generated per-run naming.
     /// </summary>
     public string? BranchNameOverride { get; set; }
+
+    /// <summary>
+    /// Ref the new item's runs branch from. Blank/null leaves them branching
+    /// from the repository's default branch.
+    /// </summary>
+    public string? BaseBranchOverride { get; set; }
 }
 
 public sealed class UpdateWorkItemRequest
@@ -64,6 +73,14 @@ public sealed class UpdateWorkItemRequest
     /// worktree.
     /// </summary>
     public string? BranchNameOverride { get; set; }
+
+    /// <summary>
+    /// Replaces the ref the item's runs branch from, under the same
+    /// null-means-unchanged / blank-means-clear convention as
+    /// <see cref="BranchNameOverride"/>, and likewise only from the item's next
+    /// run: a run already under way keeps the base it was created with.
+    /// </summary>
+    public string? BaseBranchOverride { get; set; }
 
     /// <summary>
     /// When supplied, replaces the work item's AI provider override. The mode

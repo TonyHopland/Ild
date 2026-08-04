@@ -31,4 +31,12 @@ public class AgentWorkItemUpdateRequest
     /// </summary>
     [StringLength(256)]
     public string? BranchNameOverride { get; set; }
+
+    /// <summary>
+    /// Optional replacement base branch. Omit (null) to leave it unchanged; send
+    /// an empty string to clear it back to the repository's default branch. Only
+    /// the item's next run sees the change.
+    /// </summary>
+    [StringLength(256)]
+    public string? BaseBranchOverride { get; set; }
 }

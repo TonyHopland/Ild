@@ -191,6 +191,55 @@ public class WorkItemServiceTests : IAsyncLifetime
         Assert.Null((await _svc.GetAsync(created.Id))!.BranchNameOverride);
     }
 
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("", null)]
+    [InlineData("   ", null)]
+    [InlineData("  release/1.0  ", "release/1.0")]
+    public async Task Create_stores_the_base_branch_trimmed_with_blank_meaning_none(string? sent, string? expected)
+    {
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x", BaseBranchOverride = sent });
+
+        Assert.Equal(expected, dto.BaseBranchOverride);
+        Assert.Equal(expected, (await _svc.GetAsync(dto.Id))!.BaseBranchOverride);
+    }
+
+    [Fact]
+    public async Task Update_sets_clears_and_leaves_the_base_branch_alone()
+    {
+        var created = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
+
+        var set = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { BaseBranchOverride = "release/1.0" });
+        Assert.Equal("release/1.0", set!.BaseBranchOverride);
+
+        // Null means "not part of this edit" — a title-only save must not drop it.
+        var titleOnly = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { Title = "renamed" });
+        Assert.Equal("release/1.0", titleOnly!.BaseBranchOverride);
+
+        // Blank is a deliberate "go back to the repository's default branch".
+        var cleared = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { BaseBranchOverride = "" });
+        Assert.Null(cleared!.BaseBranchOverride);
+        Assert.Null((await _svc.GetAsync(created.Id))!.BaseBranchOverride);
+    }
+
+    [Fact]
+    public async Task The_two_branch_overrides_are_stored_independently()
+    {
+        // They travel the same plumbing and normalise the same way; clearing one
+        // must not touch the other.
+        var created = await _svc.CreateAsync(new CreateWorkItemRequest
+        {
+            Title = "x",
+            BranchNameOverride = "feature/foo",
+            BaseBranchOverride = "release/1.0",
+        });
+
+        var cleared = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { BranchNameOverride = "" });
+
+        Assert.Null(cleared!.BranchNameOverride);
+        Assert.Equal("release/1.0", cleared.BaseBranchOverride);
+    }
+
     [Fact]
     public async Task Create_honours_forceStatus_when_provided()
     {

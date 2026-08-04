@@ -143,13 +143,22 @@ public class WorkItemsController : ControllerBase
         if (branchNameOverride is not null && BranchNameRules.Validate(branchNameOverride) is { } branchError)
             return BadRequest(new { error = branchError });
 
+        // The base branch reaches git as a ref too, so the same rules apply.
+        // Whether it actually exists is not settled here — it is checked against
+        // origin when the run starts, which is the only moment that binds.
+        var baseBranchOverride = BranchNameRules.Normalize(request.BaseBranchOverride);
+        if (baseBranchOverride is not null
+            && BranchNameRules.Validate(baseBranchOverride, BranchNameRules.BaseBranchSubject) is { } baseError)
+            return BadRequest(new { error = baseError });
+
         var id = await _workItemManager.CreateWorkItemAsync(
             request.Title, request.Description,
             repositoryId,
             createdByLoopRunId: null,
             forceBacklog: false,
             tags: request.Tags,
-            branchNameOverride: branchNameOverride);
+            branchNameOverride: branchNameOverride,
+            baseBranchOverride: baseBranchOverride);
 
         // Creation broadcasts over SignalR from WorkItemManager.CreateWorkItemAsync,
         // so connected clients pick up the new item live without a duplicate here.
@@ -181,9 +190,15 @@ public class WorkItemsController : ControllerBase
             && BranchNameRules.Validate(branchName) is { } branchError)
             return BadRequest(new { error = branchError });
 
+        // Likewise for the base branch: a blank value is a deliberate "go back
+        // to the repository default" and passes through untouched.
+        if (BranchNameRules.Normalize(request.BaseBranchOverride) is { } baseBranch
+            && BranchNameRules.Validate(baseBranch, BranchNameRules.BaseBranchSubject) is { } baseError)
+            return BadRequest(new { error = baseError });
+
         var ok = await _workItemManager.UpdateAsync(
             id, request.Title, request.Description, request.Tags, overrideMode, overrideProviderId,
-            request.BranchNameOverride);
+            request.BranchNameOverride, request.BaseBranchOverride);
         if (!ok) return NotFound();
         var wi = await _workItemManager.GetWorkItemAsync(id);
         return Ok(wi);

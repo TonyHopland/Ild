@@ -131,27 +131,43 @@ public sealed class StartNodeExecutor : INodeExecutor
                 cloned = true;
             }
         }
-        var defaultBranch = repo.DefaultBranch ?? "main";
+        var baseBranch = RunBaseBranch.Resolve(run, repo);
         if (!cloned)
         {
             var fetchOk = await repoManager.FetchAsync(basePath, ctx.CancellationToken, gitAuth);
             if (!fetchOk)
-                return (false, null, null, $"failed to fetch origin for base repo — refusing to start run from a stale origin/{defaultBranch}");
-            var resetOk = await repoManager.ResetHardAsync(basePath, $"origin/{defaultBranch}", ctx.CancellationToken);
+                return (false, null, null, $"failed to fetch origin for base repo — refusing to start run from a stale origin/{baseBranch}");
+        }
+        // A base the human typed can simply not be there. Say so once, plainly,
+        // instead of letting it surface as a reset or rebase failure — and never
+        // fall back to the default branch, which would silently build the run on
+        // top of the wrong history. The repository's own default branch is
+        // discovered from the remote rather than typed, so only an override is
+        // worth the round trip.
+        if (run.BaseBranchOverride is not null
+            && !await repoManager.RemoteBranchExistsAsync(basePath, baseBranch))
+        {
+            return (false, null, null,
+                $"base branch 'origin/{baseBranch}' does not exist on the remote — "
+                + "fix the work item's base branch or push it, then re-run");
+        }
+        if (!cloned)
+        {
+            var resetOk = await repoManager.ResetHardAsync(basePath, $"origin/{baseBranch}", ctx.CancellationToken);
             if (!resetOk)
-                return (false, null, null, $"failed to reset base repo to origin/{defaultBranch}");
+                return (false, null, null, $"failed to reset base repo to origin/{baseBranch}");
         }
         var path = await repoManager.CreateWorktreeAsync(basePath, branch);
         await repoManager.FetchAsync(path, ctx.CancellationToken, gitAuth);
         try
         {
-            var rebase = await repoManager.RebaseAsync(path, $"origin/{defaultBranch}", ctx.CancellationToken);
+            var rebase = await repoManager.RebaseAsync(path, $"origin/{baseBranch}", ctx.CancellationToken);
             if (!rebase.Success)
-                return (false, null, null, $"rebase onto origin/{defaultBranch} failed — worktree may be stale: {rebase.Error ?? "unknown error"}");
+                return (false, null, null, $"rebase onto origin/{baseBranch} failed — worktree may be stale: {rebase.Error ?? "unknown error"}");
         }
         catch (Exception ex)
         {
-            return (false, null, null, $"rebase onto origin/{defaultBranch} failed: {ex.Message}");
+            return (false, null, null, $"rebase onto origin/{baseBranch} failed: {ex.Message}");
         }
         return (true, path, branch, null);
     }

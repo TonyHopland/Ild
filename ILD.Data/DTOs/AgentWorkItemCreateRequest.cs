@@ -50,4 +50,12 @@ public class AgentWorkItemCreateRequest
     /// </summary>
     [StringLength(256)]
     public string? BranchNameOverride { get; set; }
+
+    /// <summary>
+    /// Optional base branch. When set, every run of this work item branches from
+    /// it and opens its PR against it; blank/null leaves runs branching from the
+    /// repository's default branch.
+    /// </summary>
+    [StringLength(256)]
+    public string? BaseBranchOverride { get; set; }
 }

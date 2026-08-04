@@ -110,6 +110,30 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Base_branch_round_trips_through_create_get_and_update()
+    {
+        var created = await _client.CreateAsync(_opts, new RemoteCreateWorkItemRequest
+        {
+            Title = "base-branch",
+            BaseBranchOverride = "release/1.0",
+        });
+        Assert.Equal("release/1.0", created.BaseBranchOverride);
+        Assert.Equal("release/1.0", (await _client.GetAsync(_opts, created.Id))!.BaseBranchOverride);
+
+        var moved = await _client.UpdateAsync(_opts, created.Id, new RemoteUpdateWorkItemRequest
+        {
+            BaseBranchOverride = "release/2.0",
+        });
+        Assert.Equal("release/2.0", moved!.BaseBranchOverride);
+
+        var cleared = await _client.UpdateAsync(_opts, created.Id, new RemoteUpdateWorkItemRequest
+        {
+            BaseBranchOverride = "",
+        });
+        Assert.Null(cleared!.BaseBranchOverride);
+    }
+
+    [Fact]
     public async Task Get_returns_null_on_not_found()
     {
         var item = await _client.GetAsync(_opts, Guid.NewGuid().ToString());

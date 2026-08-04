@@ -3,6 +3,7 @@ using System;
 using ILD.WorkItemServer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace ILD.WorkItemServer.Migrations
 {
     [DbContext(typeof(WorkItemServerDbContext))]
-    partial class WorkItemServerDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260804115535_AddWorkItemBaseBranchOverride")]
+    partial class AddWorkItemBaseBranchOverride
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

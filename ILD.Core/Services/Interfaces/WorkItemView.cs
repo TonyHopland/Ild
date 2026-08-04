@@ -36,6 +36,15 @@ public sealed class WorkItemView
     /// </summary>
     public string? BranchNameOverride { get; set; }
 
+    /// <summary>
+    /// The ref every run of this item branches from: fetched, reset to, and
+    /// rebased onto by the Start node, and the branch the PR node targets.
+    /// Null/blank means the repository's default branch. Pinned onto the
+    /// <c>LoopRun</c> at creation, so editing it never redirects a run already
+    /// under way. See ADR-0008.
+    /// </summary>
+    public string? BaseBranchOverride { get; set; }
+
     // Engine-only fields (from LoopRun)
     public Guid? RepositoryId { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }

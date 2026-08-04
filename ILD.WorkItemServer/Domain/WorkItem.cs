@@ -104,4 +104,15 @@ public class WorkItem
     /// </summary>
     [MaxLength(256)]
     public string? BranchNameOverride { get; set; }
+
+    /// <summary>
+    /// The ref every run of this work item branches from — fetched, reset to,
+    /// and rebased onto. Null or blank means the repository's default branch,
+    /// which is the only base runs had before. Lets an item continue, review or
+    /// hotfix a branch instead of always starting from the default. See
+    /// ADR-0008; the clean-base invariant of ADR-0006 is unchanged, only which
+    /// clean ref is used. Capped to match <see cref="BranchNameOverride"/>.
+    /// </summary>
+    [MaxLength(256)]
+    public string? BaseBranchOverride { get; set; }
 }

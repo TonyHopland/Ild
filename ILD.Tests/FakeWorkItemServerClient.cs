@@ -45,6 +45,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         CreatedByChatSessionId = dto.CreatedByChatSessionId,
         RepositoryId = dto.RepositoryId,
         BranchNameOverride = dto.BranchNameOverride,
+        BaseBranchOverride = dto.BaseBranchOverride,
     };
 
     public async Task<RemoteWorkItem> CreateAsync(WorkItemServerOptions opts, RemoteCreateWorkItemRequest req, CancellationToken ct = default)
@@ -62,6 +63,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             CreatedByChatSessionId = req.CreatedByChatSessionId,
             RepositoryId = req.RepositoryId,
             BranchNameOverride = req.BranchNameOverride,
+            BaseBranchOverride = req.BaseBranchOverride,
         }, ct);
         return ToRemote(dto);
     }
@@ -86,6 +88,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             Description = req.Description,
             Tags = req.Tags?.ToList(),
             BranchNameOverride = req.BranchNameOverride,
+            BaseBranchOverride = req.BaseBranchOverride,
         }, ct);
         return dto == null ? null : ToRemote(dto);
     }

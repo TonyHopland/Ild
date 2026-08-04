@@ -49,6 +49,9 @@ export default function EditPanel({
   const baseAiProviderOverride = workItem?.aiProviderOverride ?? AiProviderOverrideMode.None;
   const baseAiProviderOverrideId = workItem?.aiProviderOverrideId ?? "";
   const baseBranchNameOverride = workItem?.branchNameOverride ?? "";
+  // "base" here is the baseline-value prefix every field above uses, applied to
+  // the field named baseBranchOverride — not a doubling of the branch's base.
+  const baseBaseBranchOverride = workItem?.baseBranchOverride ?? "";
 
   const [title, setTitle] = useState(baseTitle);
   const [description, setDescription] = useState(baseDescription);
@@ -61,6 +64,7 @@ export default function EditPanel({
   const [aiProviderOverrideId, setAiProviderOverrideId] = useState(baseAiProviderOverrideId);
   const [branchNameOverride, setBranchNameOverride] = useState(baseBranchNameOverride);
   const [branchNameCheck, setBranchNameCheck] = useState<BranchNameCheck | null>(null);
+  const [baseBranchOverride, setBaseBranchOverride] = useState(baseBaseBranchOverride);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -104,7 +108,8 @@ export default function EditPanel({
     repositoryId !== baseRepositoryId ||
     aiProviderOverride !== baseAiProviderOverride ||
     aiProviderOverrideId !== baseAiProviderOverrideId ||
-    branchNameOverride !== baseBranchNameOverride;
+    branchNameOverride !== baseBranchNameOverride ||
+    baseBranchOverride !== baseBaseBranchOverride;
 
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -135,6 +140,9 @@ export default function EditPanel({
       // Empty means "back to the generated per-run name", which the server
       // reads as a deliberate clear rather than "leave it alone".
       branchNameOverride: branchNameOverride.trim(),
+      // Same convention: empty is a deliberate "back to the repository's
+      // default branch", not "leave it alone".
+      baseBranchOverride: baseBranchOverride.trim(),
     };
 
     try {
@@ -295,6 +303,21 @@ export default function EditPanel({
         >
           {branchNameProblem ??
             "Used verbatim by every run of this item. Only the next run is affected."}
+        </small>
+      </div>
+      <div className="form-group">
+        <label htmlFor="wiv2-base-branch">Base branch (optional)</label>
+        <input
+          id="wiv2-base-branch"
+          type="text"
+          value={baseBranchOverride}
+          onChange={(e) => setBaseBranchOverride(e.target.value)}
+          placeholder="Leave empty for the repository's default branch"
+          aria-describedby="wiv2-base-branch-hint"
+        />
+        <small id="wiv2-base-branch-hint" className="form-hint">
+          Runs start from this branch and open their PR against it. It must exist on the remote when
+          the run starts, or the run fails. Only the next run is affected.
         </small>
       </div>
       {submitError && (

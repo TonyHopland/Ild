@@ -84,6 +84,13 @@ export interface WorkItem {
    * the item's own setting and only takes effect on its next run.
    */
   branchNameOverride?: string | null;
+  /**
+   * Branch every run of this item starts from — what its worktree is reset to
+   * and rebased onto, and what its PR targets. Blank/null uses the repository's
+   * default branch. Only takes effect on the item's next run, and the branch
+   * must exist on the remote when that run starts.
+   */
+  baseBranchOverride?: string | null;
   prUrl: string | null;
   pullRequestBranch: string | null;
   humanFeedbackReason: string | null;

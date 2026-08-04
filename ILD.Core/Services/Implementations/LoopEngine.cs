@@ -158,6 +158,12 @@ public sealed class LoopEngine : ILoopEngine
             // Pinned on the run, so a later edit to the work item's override
             // never renames the branch this run is already on.
             BranchName = branchOverride,
+            // Pinned for the same reason, and because two nodes read it at very
+            // different times: the Start node builds the worktree from this ref
+            // and the PR node targets it, possibly hours later. Re-reading the
+            // work item there would let an edit in between open a PR against a
+            // branch the run was never rebased onto.
+            BaseBranchOverride = BranchNameRules.Normalize(wi.BaseBranchOverride),
             // The per-template setting controls crash recovery; pin it on the
             // run the same way the template version is pinned.
             RecoveryPolicy = template?.RecoveryPolicy ?? RecoveryPolicy.AutoResume,
