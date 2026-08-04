@@ -118,46 +118,13 @@ public sealed class StartNodeExecutor : INodeExecutor
         LoopRun run, Repository repo, WorkItemView wi, GitAuthOptions? gitAuth)
     {
         var branch = run.BranchName ?? RunWorktreeNaming.BranchFor(wi.Id, run.Id);
-        var basePath = repo.WorktreesPath;
-        var cloned = false;
-        if (string.IsNullOrWhiteSpace(basePath) || !Directory.Exists(Path.Combine(basePath, ".git")))
-        {
-            basePath = BaseRepoPath.Fallback(repo.Id, sp.GetService<IConfiguration>());
-            Directory.CreateDirectory(Path.GetDirectoryName(basePath)!);
-            if (!Directory.Exists(Path.Combine(basePath, ".git")))
-            {
-                var result = await repoManager.CloneAsync(repo.CloneUrl, basePath, ctx.CancellationToken, gitAuth);
-                if (!result.Success) return (false, null, null, $"git clone failed: {result.Error}");
-                cloned = true;
-            }
-        }
         var baseBranch = RunBaseBranch.Resolve(run, repo);
-        if (!cloned)
-        {
-            var fetchOk = await repoManager.FetchAsync(basePath, ctx.CancellationToken, gitAuth);
-            if (!fetchOk)
-                return (false, null, null, $"failed to fetch origin for base repo — refusing to start run from a stale origin/{baseBranch}");
-        }
-        // A base the human typed can simply not be there. Say so once, plainly,
-        // instead of letting it surface as a reset or rebase failure — and never
-        // fall back to the default branch, which would silently build the run on
-        // top of the wrong history. The repository's own default branch is
-        // discovered from the remote rather than typed, so only an override is
-        // worth the round trip.
-        if (run.BaseBranchOverride is not null
-            && !await repoManager.RemoteBranchExistsAsync(basePath, baseBranch))
-        {
-            return (false, null, null,
-                $"base branch 'origin/{baseBranch}' does not exist on the remote — "
-                + "fix the work item's base branch or push it, then re-run");
-        }
-        if (!cloned)
-        {
-            var resetOk = await repoManager.ResetHardAsync(basePath, $"origin/{baseBranch}", ctx.CancellationToken);
-            if (!resetOk)
-                return (false, null, null, $"failed to reset base repo to origin/{baseBranch}");
-        }
-        var path = await repoManager.CreateWorktreeAsync(basePath, branch);
+
+        var (baseOk, basePath, baseError) = await PrepareBaseRepoAsync(
+            ctx, sp, repoManager, run, repo, baseBranch, gitAuth);
+        if (!baseOk) return (false, null, null, baseError);
+
+        var path = await repoManager.CreateWorktreeAsync(basePath!, branch);
         await repoManager.FetchAsync(path, ctx.CancellationToken, gitAuth);
         try
         {
@@ -170,5 +137,69 @@ public sealed class StartNodeExecutor : INodeExecutor
             return (false, null, null, $"rebase onto origin/{baseBranch} failed: {ex.Message}");
         }
         return (true, path, branch, null);
+    }
+
+    /// <summary>
+    /// Leaves the base repository present and checked out at
+    /// <c>origin/&lt;baseBranch&gt;</c>, or says why it could not be.
+    /// </summary>
+    /// <remarks>
+    /// One step rather than four, because the worktree is created from whatever
+    /// this leaves at HEAD: <c>git worktree add -b</c> takes no start point, so
+    /// any path out of here that does not land on the base hands the run — and
+    /// the PR it opens against that base — history nobody asked for. Cloning is
+    /// the path that used to get this wrong: a fresh clone checks out the
+    /// remote's default branch, which is the right answer only when the run has
+    /// no base override.
+    /// </remarks>
+    private static async Task<(bool Ok, string? Path, string? Error)> PrepareBaseRepoAsync(
+        NodeExecutionContext ctx, IServiceProvider sp, IRepositoryManager repoManager,
+        LoopRun run, Repository repo, string baseBranch, GitAuthOptions? gitAuth)
+    {
+        var basePath = repo.WorktreesPath;
+        var cloned = false;
+        if (string.IsNullOrWhiteSpace(basePath) || !Directory.Exists(Path.Combine(basePath, ".git")))
+        {
+            basePath = BaseRepoPath.Fallback(repo.Id, sp.GetService<IConfiguration>());
+            Directory.CreateDirectory(Path.GetDirectoryName(basePath)!);
+            if (!Directory.Exists(Path.Combine(basePath, ".git")))
+            {
+                var result = await repoManager.CloneAsync(repo.CloneUrl, basePath, ctx.CancellationToken, gitAuth);
+                if (!result.Success) return (false, null, $"git clone failed: {result.Error}");
+                cloned = true;
+            }
+        }
+
+        // A clone we have just made already carries every remote ref; only a
+        // reused one can have gone stale behind us.
+        if (!cloned)
+        {
+            var fetchOk = await repoManager.FetchAsync(basePath, ctx.CancellationToken, gitAuth);
+            if (!fetchOk)
+                return (false, null, $"failed to fetch origin for base repo — refusing to start run from a stale origin/{baseBranch}");
+        }
+
+        // A base the human typed can simply not be there. Say so once, plainly,
+        // instead of letting it surface as a reset or rebase failure — and never
+        // fall back to the default branch, which would silently build the run on
+        // top of the wrong history. The repository's own default branch is
+        // discovered from the remote rather than typed, so only an override is
+        // worth the round trip.
+        if (run.BaseBranchOverride is not null
+            && !await repoManager.RemoteBranchExistsAsync(basePath, baseBranch))
+        {
+            return (false, null,
+                $"base branch 'origin/{baseBranch}' does not exist on the remote — "
+                + "fix the work item's base branch or push it, then re-run");
+        }
+
+        // Unconditional: a fresh clone sits on the remote's default branch, so
+        // skipping this for a just-cloned repo is exactly the case that starts
+        // an overridden run from the wrong ref.
+        var resetOk = await repoManager.ResetHardAsync(basePath, $"origin/{baseBranch}", ctx.CancellationToken);
+        if (!resetOk)
+            return (false, null, $"failed to reset base repo to origin/{baseBranch}");
+
+        return (true, basePath, null);
     }
 }

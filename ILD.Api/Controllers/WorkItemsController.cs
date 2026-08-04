@@ -40,11 +40,24 @@ public class WorkItemsController : ControllerBase
         _branchNames = branchNames;
     }
 
-    // The diff view anchors on the repository's stored default branch; resolve
-    // it from the work item's repository so the worktree diff doesn't collapse
-    // when origin/HEAD isn't set in the worktree.
-    private async Task<string?> ResolveDefaultBranchAsync(WorkItemView workItem)
+    // The branch the worktree diff forks from — resolved here rather than left
+    // to the worktree's own origin/HEAD, which isn't always set and would
+    // collapse the diff.
+    //
+    // It has to be the base that worktree was actually built on, or the Files
+    // tab reports every commit the base has diverged by as this item's work.
+    // The run pinned that base at creation, so read it from the run holding
+    // this worktree rather than from the work item, whose override may have
+    // been edited since (that edit only reaches the item's next run) — see
+    // ADR-0008.
+    private async Task<string?> ResolveDiffBaseBranchAsync(WorkItemView workItem)
     {
+        if (!string.IsNullOrWhiteSpace(workItem.WorktreePath))
+        {
+            var run = await _loopRunStore.GetByWorktreePathAsync(workItem.WorktreePath);
+            if (!string.IsNullOrWhiteSpace(run?.BaseBranchOverride))
+                return run!.BaseBranchOverride;
+        }
         if (workItem.RepositoryId is null) return null;
         var repo = await _providerStore.GetRepositoryByIdAsync(workItem.RepositoryId.Value);
         return repo?.DefaultBranch;
@@ -400,8 +413,8 @@ public class WorkItemsController : ControllerBase
         var (workItem, error) = await GetPreviewableWorkItemAsync(id);
         if (error != null) return error;
 
-        var defaultBranch = await ResolveDefaultBranchAsync(workItem!);
-        var files = await _repositoryManager.ListWorktreeFilesAsync(workItem!.WorktreePath!, defaultBranch);
+        var diffBase = await ResolveDiffBaseBranchAsync(workItem!);
+        var files = await _repositoryManager.ListWorktreeFilesAsync(workItem!.WorktreePath!, diffBase);
         return Ok(new WorktreeFilesResponse
         {
             WorktreePath = workItem.WorktreePath!,
@@ -418,8 +431,8 @@ public class WorkItemsController : ControllerBase
         var (workItem, error) = await GetPreviewableWorkItemAsync(id);
         if (error != null) return error;
 
-        var defaultBranch = await ResolveDefaultBranchAsync(workItem!);
-        var content = await _repositoryManager.ReadWorktreeFileAsync(workItem!.WorktreePath!, path, defaultBranch);
+        var diffBase = await ResolveDiffBaseBranchAsync(workItem!);
+        var content = await _repositoryManager.ReadWorktreeFileAsync(workItem!.WorktreePath!, path, diffBase);
         if (content == null)
             return NotFound(new { error = "File not found in worktree." });
         return Ok(content);
