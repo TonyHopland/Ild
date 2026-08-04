@@ -41,4 +41,12 @@ public class WorkItemCreateRequest
     /// </summary>
     [StringLength(256)]
     public string? BranchNameOverride { get; set; }
+
+    /// <summary>
+    /// Ref every run of this work item branches from — fetched, reset to, and
+    /// rebased onto, and the branch its PR targets. Null leaves it unchanged on
+    /// update; an empty string clears it back to the repository's default branch.
+    /// </summary>
+    [StringLength(256)]
+    public string? BaseBranchOverride { get; set; }
 }

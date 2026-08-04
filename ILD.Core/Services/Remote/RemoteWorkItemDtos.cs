@@ -77,6 +77,13 @@ public sealed class RemoteWorkItem
     /// See ADR-0008.
     /// </summary>
     public string? BranchNameOverride { get; set; }
+
+    /// <summary>
+    /// The ref every run of this work item branches from — the base it is reset
+    /// to and rebased onto, and the branch its PR targets. Null/blank means the
+    /// repository's default branch. See ADR-0008.
+    /// </summary>
+    public string? BaseBranchOverride { get; set; }
 }
 
 public sealed class RemoteCreateWorkItemRequest
@@ -94,6 +101,9 @@ public sealed class RemoteCreateWorkItemRequest
 
     /// <summary>Custom branch name for every run of the new item; blank/null = generated.</summary>
     public string? BranchNameOverride { get; set; }
+
+    /// <summary>Ref the new item's runs branch from; blank/null = the repository's default branch.</summary>
+    public string? BaseBranchOverride { get; set; }
 }
 
 public sealed class RemoteUpdateWorkItemRequest
@@ -107,6 +117,12 @@ public sealed class RemoteUpdateWorkItemRequest
     /// clears it — see the server's UpdateWorkItemRequest.
     /// </summary>
     public string? BranchNameOverride { get; set; }
+
+    /// <summary>
+    /// Replaces the ref the item's runs branch from, under the same
+    /// null-unchanged / blank-clears convention as <see cref="BranchNameOverride"/>.
+    /// </summary>
+    public string? BaseBranchOverride { get; set; }
 
     /// <summary>
     /// When supplied, replaces the work item's AI provider override. Mode and

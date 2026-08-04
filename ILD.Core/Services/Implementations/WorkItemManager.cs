@@ -137,7 +137,8 @@ public class WorkItemManager : IWorkItemManager
         bool forceBacklog,
         IEnumerable<string>? tags = null,
         Guid? createdByChatSessionId = null,
-        string? branchNameOverride = null)
+        string? branchNameOverride = null,
+        string? baseBranchOverride = null)
     {
         var opts = await _options.ResolveForRepositoryAsync(repositoryId);
 
@@ -164,6 +165,7 @@ public class WorkItemManager : IWorkItemManager
             CreatedByChatSessionId = createdByChatSessionId,
             RepositoryId = repositoryId,
             BranchNameOverride = branchNameOverride,
+            BaseBranchOverride = baseBranchOverride,
         });
 
         // Broadcast the creation so connected clients (e.g. the Taskboard) add
@@ -379,6 +381,7 @@ public class WorkItemManager : IWorkItemManager
             AiProviderOverride = remote.AiProviderOverride,
             AiProviderOverrideId = remote.AiProviderOverrideId,
             BranchNameOverride = remote.BranchNameOverride,
+            BaseBranchOverride = remote.BaseBranchOverride,
             RepositoryId = run?.RepositoryId ?? remote.RepositoryId,
             CreatedByLoopRunId = run?.CreatedByLoopRunId ?? remote.CreatedByLoopRunId,
             CreatedByChatSessionId = remote.CreatedByChatSessionId,
@@ -569,7 +572,8 @@ public class WorkItemManager : IWorkItemManager
         IEnumerable<string>? tags = null,
         RemoteAiProviderOverrideMode? aiProviderOverride = null,
         Guid? aiProviderOverrideId = null,
-        string? branchNameOverride = null)
+        string? branchNameOverride = null,
+        string? baseBranchOverride = null)
     {
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
         var updated = await _server.UpdateAsync(opts, workItemId, new RemoteUpdateWorkItemRequest
@@ -580,6 +584,7 @@ public class WorkItemManager : IWorkItemManager
             AiProviderOverride = aiProviderOverride,
             AiProviderOverrideId = aiProviderOverrideId,
             BranchNameOverride = branchNameOverride,
+            BaseBranchOverride = baseBranchOverride,
         });
         if (updated == null) return false;
 

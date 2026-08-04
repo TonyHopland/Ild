@@ -172,6 +172,61 @@ public class LoopEngineStartRunTests
         Assert.Equal("feature/foo", run.BranchName);
     }
 
+    [Fact]
+    public async Task StartRun_pins_the_base_branch_override_on_the_run()
+    {
+        using var db = new TestDb();
+        var workItemId = $"WI-{Guid.NewGuid():N}";
+        var wi = new WorkItemView { Id = workItemId, Tags = new[] { "tag" }, BaseBranchOverride = " release/1.0 " };
+        var (engine, _) = BuildEngine(db, workItemId, RecoveryPolicy.AutoResume, seedVersionAndStartNode: true,
+            workItemView: wi);
+
+        await engine.StartRunAsync(workItemId);
+        await DrainAsync(engine);
+
+        var run = db.Fresh().LoopRuns.Single(r => r.WorkItemId == workItemId);
+        Assert.Equal("release/1.0", run.BaseBranchOverride);
+    }
+
+    [Fact]
+    public async Task StartRun_leaves_the_base_branch_null_when_the_item_has_no_override()
+    {
+        // Null means "the repository's default branch" — the base every run had
+        // before overrides existed — so nothing needs backfilling.
+        using var db = new TestDb();
+        var workItemId = $"WI-{Guid.NewGuid():N}";
+        var wi = new WorkItemView { Id = workItemId, Tags = new[] { "tag" }, BaseBranchOverride = "   " };
+        var (engine, _) = BuildEngine(db, workItemId, RecoveryPolicy.AutoResume, seedVersionAndStartNode: true,
+            workItemView: wi);
+
+        await engine.StartRunAsync(workItemId);
+        await DrainAsync(engine);
+
+        var run = db.Fresh().LoopRuns.Single(r => r.WorkItemId == workItemId);
+        Assert.Null(run.BaseBranchOverride);
+    }
+
+    [Fact]
+    public async Task Editing_the_base_branch_after_a_run_started_does_not_move_that_runs_base()
+    {
+        // The Start node builds from this ref and the PR node targets it, hours
+        // apart. An edit in between must not open the PR against a branch the
+        // worktree was never rebased onto.
+        using var db = new TestDb();
+        var workItemId = $"WI-{Guid.NewGuid():N}";
+        var wi = new WorkItemView { Id = workItemId, Tags = new[] { "tag" }, BaseBranchOverride = "release/1.0" };
+        var (engine, _) = BuildEngine(db, workItemId, RecoveryPolicy.AutoResume, seedVersionAndStartNode: true,
+            workItemView: wi);
+
+        await engine.StartRunAsync(workItemId);
+        await DrainAsync(engine);
+
+        wi.BaseBranchOverride = "release/2.0";
+
+        var run = db.Fresh().LoopRuns.Single(r => r.WorkItemId == workItemId);
+        Assert.Equal("release/1.0", run.BaseBranchOverride);
+    }
+
     private static LoopRun SeedRun(TestDb db, string workItemId, LoopRunStatus status)
     {
         var versionId = db.Context.LoopTemplateVersions.Select(v => v.Id).First();

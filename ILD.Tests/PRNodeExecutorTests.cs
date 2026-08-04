@@ -195,6 +195,109 @@ public class PRNodeExecutorTests
     }
 
     [Fact]
+    public async Task PR_targets_the_base_branch_the_run_was_built_from_not_the_repository_default()
+    {
+        // "Continue on a branch" and "hotfix a branch" only make sense if the
+        // work goes back to that branch. The Start node rebased the worktree
+        // onto it; opening the PR against main would ask for a diff nobody
+        // wanted.
+        var repoId = Guid.NewGuid();
+        var workItem = new WorkItemView { Id = "WI-1", Title = "T", Description = "D", RepositoryId = repoId };
+        var repo = new Repository { Id = repoId, Name = "r", CloneUrl = "https://example.com/o/r.git", DefaultBranch = "main", RemoteProviderId = Guid.NewGuid() };
+
+        var workItems = new Mock<IWorkItemManager>();
+        workItems.Setup(m => m.GetWorkItemAsync(It.IsAny<string>())).ReturnsAsync(workItem);
+        var providerStore = new Mock<IProviderStore>();
+        providerStore.Setup(s => s.GetRepositoryByIdAsync(repoId)).ReturnsAsync(repo);
+        providerStore.Setup(s => s.GetRemoteProviderByIdAsync(It.IsAny<Guid>())).ReturnsAsync((RemoteProvider?)null);
+
+        var remote = new Mock<IRemoteProvider>();
+        remote.Setup(r => r.CreatePullRequestAsync(repo.CloneUrl, It.IsAny<string>(), "release/1.0", "T", It.IsAny<string>()))
+            .ReturnsAsync(new RemotePrResult(null, "https://example.com/o/r/pull/42", RemotePrStatus.Open, null));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(workItems.Object);
+        services.AddSingleton(providerStore.Object);
+        services.AddSingleton(remote.Object);
+        services.AddSingleton(Mock.Of<IRepositoryManager>());
+        var sp = services.BuildServiceProvider();
+
+        var node = new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.PR, Config = "{}" };
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = "WI-1", BaseBranchOverride = "release/1.0" };
+
+        var executor = new PRNodeExecutor();
+        var outcomes = new List<NodeOutcome>();
+        await foreach (var o in executor.ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+            outcomes.Add(o);
+
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+        Assert.Contains(outcomes, o => o is NodeOutcome.PrCreated);
+        remote.Verify(r => r.CreatePullRequestAsync(
+            repo.CloneUrl, It.IsAny<string>(), "release/1.0", "T", It.IsAny<string>()), Times.Once);
+        remote.Verify(r => r.CreatePullRequestAsync(
+            It.IsAny<string>(), It.IsAny<string>(), "main", It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task The_commits_ahead_guard_measures_against_the_run_base_branch()
+    {
+        // The guard exists to stop an empty PR. Measured against origin/main it
+        // would count every commit on release/1.0 as "ahead" and wave through a
+        // branch that has nothing of its own.
+        var repoId = Guid.NewGuid();
+        var workItem = new WorkItemView { Id = "WI-1", Title = "T", Description = "D", RepositoryId = repoId };
+        var repo = new Repository { Id = repoId, Name = "r", CloneUrl = "https://example.com/o/r.git", DefaultBranch = "main", RemoteProviderId = Guid.NewGuid() };
+
+        var workItems = new Mock<IWorkItemManager>();
+        workItems.Setup(m => m.GetWorkItemAsync(It.IsAny<string>())).ReturnsAsync(workItem);
+        var providerStore = new Mock<IProviderStore>();
+        providerStore.Setup(s => s.GetRepositoryByIdAsync(repoId)).ReturnsAsync(repo);
+        providerStore.Setup(s => s.GetRemoteProviderByIdAsync(It.IsAny<Guid>())).ReturnsAsync((RemoteProvider?)null);
+
+        var worktree = Path.Combine(Path.GetTempPath(), "ild-pr-base-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(worktree);
+        try
+        {
+            var repoManager = new Mock<IRepositoryManager>();
+            repoManager.Setup(m => m.GetDiffAsync(worktree)).ReturnsAsync(string.Empty);
+            repoManager.Setup(m => m.PushAsync(worktree, It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+                .ReturnsAsync((true, (string?)null));
+            repoManager.Setup(m => m.GetCommitsAheadCountAsync(worktree, "origin/release/1.0")).ReturnsAsync(0);
+            // Against the repository default the branch would look non-empty.
+            repoManager.Setup(m => m.GetCommitsAheadCountAsync(worktree, "origin/main")).ReturnsAsync(9);
+
+            var services = new ServiceCollection();
+            services.AddSingleton(workItems.Object);
+            services.AddSingleton(providerStore.Object);
+            services.AddSingleton(Mock.Of<IRemoteProvider>());
+            services.AddSingleton(repoManager.Object);
+            var sp = services.BuildServiceProvider();
+
+            var node = new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.PR, Config = "{}" };
+            var run = new LoopRun
+            {
+                Id = Guid.NewGuid(),
+                WorkItemId = "WI-1",
+                WorktreePath = worktree,
+                BaseBranchOverride = "release/1.0",
+            };
+
+            var executor = new PRNodeExecutor();
+            var outcomes = new List<NodeOutcome>();
+            await foreach (var o in executor.ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+                outcomes.Add(o);
+
+            var fail = outcomes.OfType<NodeOutcome.Fail>().Single();
+            Assert.Contains("origin/release/1.0", fail.Reason);
+            Assert.DoesNotContain(outcomes, o => o is NodeOutcome.PrCreated);
+        }
+        finally
+        {
+            try { Directory.Delete(worktree, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
     public async Task When_creating_PR_and_AutoMerge_tag_present_enables_auto_merge()
     {
         var repoId = Guid.NewGuid();

@@ -3,6 +3,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
@@ -11,6 +12,7 @@ namespace ILD.Tests;
 public class StartNodeExecutorTests : IDisposable
 {
     private readonly string _baseRepo;
+    private readonly string _dataPath;
 
     public StartNodeExecutorTests()
     {
@@ -18,18 +20,24 @@ public class StartNodeExecutorTests : IDisposable
         // as an existing base repo (skips the clone path and runs fetch + reset).
         _baseRepo = Path.Combine(Path.GetTempPath(), "ild-start-tests-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(_baseRepo, ".git"));
+        // Where the clone-on-demand path lands when a repository has no
+        // WorktreesPath. Owned here so those tests don't write into the test
+        // runner's working directory.
+        _dataPath = Path.Combine(Path.GetTempPath(), "ild-start-data-" + Guid.NewGuid().ToString("N"));
     }
 
     public void Dispose()
     {
         try { Directory.Delete(_baseRepo, recursive: true); } catch { /* best effort */ }
+        try { Directory.Delete(_dataPath, recursive: true); } catch { /* best effort */ }
         GC.SuppressFinalize(this);
     }
 
     private (Mock<IRepositoryManager> RepoManager, IServiceProvider Services, LoopRun Run, LoopNode Node) BuildContext(
         Mock<IRepositoryManager> repoManager,
         Mock<IWorktreePreviewService>? preview = null,
-        string? previewEnv = null)
+        string? previewEnv = null,
+        string? worktreesPath = null)
     {
         var repoId = Guid.NewGuid();
         var workItem = new WorkItemView { Id = "WI-1", Title = "T", Description = "D", RepositoryId = repoId };
@@ -39,7 +47,8 @@ public class StartNodeExecutorTests : IDisposable
             Name = "r",
             CloneUrl = "https://example.com/o/r.git",
             DefaultBranch = "main",
-            WorktreesPath = _baseRepo,
+            // Blank sends the executor down the clone-on-demand path.
+            WorktreesPath = worktreesPath ?? _baseRepo,
             RemoteProviderId = Guid.NewGuid(),
             PreviewEnv = previewEnv,
         };
@@ -54,6 +63,9 @@ public class StartNodeExecutorTests : IDisposable
         services.AddSingleton(workItems.Object);
         services.AddSingleton(providerStore.Object);
         services.AddSingleton(repoManager.Object);
+        services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["App:DataPath"] = _dataPath })
+            .Build());
         if (preview is not null)
             services.AddSingleton(preview.Object);
         var sp = services.BuildServiceProvider();
@@ -127,6 +139,145 @@ public class StartNodeExecutorTests : IDisposable
         repoManager.Setup(m => m.RebaseAsync("/tmp/worktree", "origin/main", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RebaseResult(true, Array.Empty<string>(), null));
         return repoManager;
+    }
+
+    [Fact]
+    public async Task A_pinned_base_branch_is_used_for_reset_worktree_and_rebase_alike()
+    {
+        // The base has to reach every step that touches it. Resetting the base
+        // repo to origin/release/1.0 but rebasing onto origin/main would hand the
+        // run a worktree nobody asked for.
+        var repoManager = new Mock<IRepositoryManager>();
+        repoManager.Setup(m => m.FetchAsync(It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+            .ReturnsAsync(true);
+        repoManager.Setup(m => m.RemoteBranchExistsAsync(_baseRepo, "release/1.0")).ReturnsAsync(true);
+        repoManager.Setup(m => m.ResetHardAsync(_baseRepo, "origin/release/1.0", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        repoManager.Setup(m => m.CreateWorktreeAsync(_baseRepo, It.IsAny<string>()))
+            .ReturnsAsync("/tmp/worktree");
+        repoManager.Setup(m => m.RebaseAsync("/tmp/worktree", "origin/release/1.0", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RebaseResult(true, Array.Empty<string>(), null));
+
+        var (mgr, sp, run, node) = BuildContext(repoManager);
+        run.BaseBranchOverride = "release/1.0";
+
+        var executor = new StartNodeExecutor();
+        var outcomes = new List<NodeOutcome>();
+        await foreach (var o in executor.ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+            outcomes.Add(o);
+
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+        Assert.Contains(outcomes, o => o is NodeOutcome.WorktreeReady);
+        mgr.Verify(m => m.ResetHardAsync(_baseRepo, "origin/release/1.0", It.IsAny<CancellationToken>()), Times.Once);
+        mgr.Verify(m => m.RebaseAsync("/tmp/worktree", "origin/release/1.0", It.IsAny<CancellationToken>()), Times.Once);
+        // The repository default must not leak into any of the three.
+        mgr.Verify(m => m.ResetHardAsync(It.IsAny<string>(), "origin/main", It.IsAny<CancellationToken>()), Times.Never);
+        mgr.Verify(m => m.RebaseAsync(It.IsAny<string>(), "origin/main", It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task A_base_branch_missing_from_origin_fails_the_node_instead_of_falling_back()
+    {
+        // Silently starting from main would build the run on history the human
+        // did not ask for, and the PR would target the wrong branch too.
+        var repoManager = new Mock<IRepositoryManager>();
+        repoManager.Setup(m => m.FetchAsync(It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+            .ReturnsAsync(true);
+        repoManager.Setup(m => m.RemoteBranchExistsAsync(_baseRepo, "no/such/branch")).ReturnsAsync(false);
+
+        var (mgr, sp, run, node) = BuildContext(repoManager);
+        run.BaseBranchOverride = "no/such/branch";
+
+        var executor = new StartNodeExecutor();
+        var outcomes = new List<NodeOutcome>();
+        await foreach (var o in executor.ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+            outcomes.Add(o);
+
+        var fail = outcomes.OfType<NodeOutcome.Fail>().Single();
+        Assert.Equal(EdgeType.OnFailure, fail.Edge);
+        Assert.Contains("no/such/branch", fail.Reason);
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.WorktreeReady);
+        // Nothing is reset, built, or rebased on a base we could not find.
+        mgr.Verify(m => m.ResetHardAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        mgr.Verify(m => m.CreateWorktreeAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task A_freshly_cloned_base_repo_is_still_moved_onto_the_override_before_the_worktree()
+    {
+        // A clone lands on the remote's default branch. Skipping the reset
+        // because "we just cloned it, it must be current" leaves HEAD on that
+        // default, and `git worktree add -b` takes no start point — so the run
+        // would branch from the default and the following rebase would replay
+        // its commits onto the base. Currency was never the point of the reset;
+        // landing on the right ref is.
+        var repoManager = new Mock<IRepositoryManager>();
+        repoManager.Setup(m => m.CloneAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+            .ReturnsAsync((true, (string?)null));
+        repoManager.Setup(m => m.FetchAsync(It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+            .ReturnsAsync(true);
+        repoManager.Setup(m => m.RemoteBranchExistsAsync(It.IsAny<string>(), "release/1.0")).ReturnsAsync(true);
+        repoManager.Setup(m => m.ResetHardAsync(It.IsAny<string>(), "origin/release/1.0", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        repoManager.Setup(m => m.CreateWorktreeAsync(It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync("/tmp/worktree");
+        repoManager.Setup(m => m.RebaseAsync("/tmp/worktree", "origin/release/1.0", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RebaseResult(true, Array.Empty<string>(), null));
+
+        // No WorktreesPath and no .git anywhere → the clone-on-demand path.
+        var (mgr, sp, run, node) = BuildContext(repoManager, worktreesPath: string.Empty);
+        run.BaseBranchOverride = "release/1.0";
+
+        var executor = new StartNodeExecutor();
+        var outcomes = new List<NodeOutcome>();
+        await foreach (var o in executor.ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+            outcomes.Add(o);
+
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+        Assert.Contains(outcomes, o => o is NodeOutcome.WorktreeReady);
+        mgr.Verify(m => m.CloneAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Once);
+        // The reset is the whole point: it must happen on the cloned path too,
+        // and it must happen before the worktree is cut from HEAD.
+        mgr.Verify(m => m.ResetHardAsync(It.IsAny<string>(), "origin/release/1.0", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task A_freshly_cloned_base_repo_with_a_missing_override_fails_before_anything_is_built()
+    {
+        var repoManager = new Mock<IRepositoryManager>();
+        repoManager.Setup(m => m.CloneAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+            .ReturnsAsync((true, (string?)null));
+        repoManager.Setup(m => m.RemoteBranchExistsAsync(It.IsAny<string>(), "no/such/branch")).ReturnsAsync(false);
+
+        var (mgr, sp, run, node) = BuildContext(repoManager, worktreesPath: string.Empty);
+        run.BaseBranchOverride = "no/such/branch";
+
+        var executor = new StartNodeExecutor();
+        var outcomes = new List<NodeOutcome>();
+        await foreach (var o in executor.ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+            outcomes.Add(o);
+
+        var fail = outcomes.OfType<NodeOutcome.Fail>().Single();
+        Assert.Contains("no/such/branch", fail.Reason);
+        mgr.Verify(m => m.ResetHardAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        mgr.Verify(m => m.CreateWorktreeAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Without_an_override_the_base_is_the_repository_default_and_is_not_probed()
+    {
+        // The repository's own default branch is discovered from the remote
+        // rather than typed, so it costs a git call nobody needs to re-check.
+        var (mgr, sp, run, node) = BuildContext(HappyRepoManager());
+
+        var executor = new StartNodeExecutor();
+        var outcomes = new List<NodeOutcome>();
+        await foreach (var o in executor.ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+            outcomes.Add(o);
+
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+        mgr.Verify(m => m.ResetHardAsync(_baseRepo, "origin/main", It.IsAny<CancellationToken>()), Times.Once);
+        mgr.Verify(m => m.RemoteBranchExistsAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
     }
 
     [Fact]

@@ -85,7 +85,8 @@ public sealed class WorkItemService : IWorkItemService
             CreatedByLoopRunId = req.CreatedByLoopRunId,
             CreatedByChatSessionId = req.CreatedByChatSessionId,
             RepositoryId = req.RepositoryId,
-            BranchNameOverride = WorkItemMapper.NormalizeBranchNameOverride(req.BranchNameOverride),
+            BranchNameOverride = WorkItemMapper.NormalizeBranchRef(req.BranchNameOverride),
+            BaseBranchOverride = WorkItemMapper.NormalizeBranchRef(req.BaseBranchOverride),
         };
         WorkItemMapper.WriteTags(w, req.Tags ?? Array.Empty<string>());
         WorkItemMapper.WriteDependencies(w, req.Dependencies ?? Array.Empty<string>());
@@ -144,7 +145,12 @@ public sealed class WorkItemService : IWorkItemService
         // Editing it is how a human resolves a branch conflict, and it only ever
         // affects the item's next run — no run's branch is retroactively renamed.
         if (req.BranchNameOverride != null)
-            w.BranchNameOverride = WorkItemMapper.NormalizeBranchNameOverride(req.BranchNameOverride);
+            w.BranchNameOverride = WorkItemMapper.NormalizeBranchRef(req.BranchNameOverride);
+        // Same convention for the base ref, and the same reason it is not
+        // retroactive: a run pins the base it started from, so an edit only
+        // redirects the item's next run.
+        if (req.BaseBranchOverride != null)
+            w.BaseBranchOverride = WorkItemMapper.NormalizeBranchRef(req.BaseBranchOverride);
         w.UpdatedAt = _clock.GetUtcNow().UtcDateTime;
         await _db.SaveChangesAsync(ct);
         return WorkItemMapper.ToDto(w);

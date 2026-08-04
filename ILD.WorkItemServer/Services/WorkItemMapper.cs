@@ -98,13 +98,16 @@ internal static class WorkItemMapper
         AiProviderOverride = w.AiProviderOverride,
         AiProviderOverrideId = w.AiProviderOverrideId,
         BranchNameOverride = w.BranchNameOverride,
+        BaseBranchOverride = w.BaseBranchOverride,
     };
 
     /// <summary>
-    /// A custom branch name as it is stored: trimmed, with blank collapsed to
-    /// null so "no override" has exactly one representation and readers never
-    /// have to ask whether an empty string means "use the empty branch name".
+    /// A branch ref as it is stored: trimmed, with blank collapsed to null so
+    /// "no override" has exactly one representation and readers never have to
+    /// ask whether an empty string means "use the empty branch name". Shared by
+    /// <see cref="Domain.WorkItem.BranchNameOverride"/> and
+    /// <see cref="Domain.WorkItem.BaseBranchOverride"/> so the two cannot drift.
     /// </summary>
-    public static string? NormalizeBranchNameOverride(string? raw)
+    public static string? NormalizeBranchRef(string? raw)
         => string.IsNullOrWhiteSpace(raw) ? null : raw.Trim();
 }

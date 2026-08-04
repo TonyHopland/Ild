@@ -29,7 +29,9 @@ public sealed class WorkItemTools
         [Description("Optional list of tags. Each tag determines which loop template executes the work item — a tag must match a loop template name on the ILD instance.")]
         string[]? tags = null,
         [Description("Optional custom branch name used verbatim by every run of the item, instead of the generated ild/wi-<id>-run-<n> name. Must be a valid git branch name. Omit for the default.")]
-        string? branchNameOverride = null)
+        string? branchNameOverride = null,
+        [Description("Optional branch every run of the item starts from and opens its PR against, instead of the repository's default branch. Must exist on the remote when the run starts. Omit for the default.")]
+        string? baseBranchOverride = null)
     {
         var body = new
         {
@@ -40,6 +42,7 @@ public sealed class WorkItemTools
             createdByLoopRunId = createdByLoopRunId ?? _ild.LoopRunId,
             tags,
             branchNameOverride,
+            baseBranchOverride,
         };
         return _ild.PostJsonAsync("api/v1/agent/workitems", body);
     }
@@ -53,9 +56,11 @@ public sealed class WorkItemTools
         [Description("Optional replacement list of tags. Omit to leave tags unchanged.")]
         string[]? tags = null,
         [Description("Optional replacement custom branch name. Omit to leave it unchanged; pass an empty string to go back to the generated per-run branch name. Only the item's next run is affected.")]
-        string? branchNameOverride = null)
+        string? branchNameOverride = null,
+        [Description("Optional replacement base branch the item's runs start from and open PRs against. Omit to leave it unchanged; pass an empty string to go back to the repository's default branch. Only the item's next run is affected.")]
+        string? baseBranchOverride = null)
     {
-        var body = new { title, description, tags, branchNameOverride };
+        var body = new { title, description, tags, branchNameOverride, baseBranchOverride };
         return _ild.PutJsonAsync($"api/v1/agent/workitems/{Uri.EscapeDataString(id)}", body);
     }
 

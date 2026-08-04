@@ -263,6 +263,65 @@ public class AgentApiIntegrationTests
         Assert.Equal(JsonValueKind.Null, detail.GetProperty("branchNameOverride").ValueKind);
     }
 
+    [Theory]
+    [InlineData("release 1.0")]
+    [InlineData("../escape")]
+    public async Task CreateWorkItem_rejects_an_illegal_base_branch(string baseBranch)
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+
+        var resp = await client.PostAsJsonAsync("/api/v1/agent/workitems", new
+        {
+            title = "bad base",
+            description = "",
+            repositoryId = repoId.ToString(),
+            baseBranchOverride = baseBranch,
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task UpdateWorkItem_replaces_clears_and_leaves_the_base_branch_alone()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+        var runId = Guid.NewGuid();
+
+        var createResp = await client.SendAsync(new HttpRequestMessage(HttpMethod.Post, "/api/v1/agent/workitems")
+        {
+            Content = JsonContent.Create(new
+            {
+                title = "owned",
+                description = "",
+                repositoryId = repoId.ToString(),
+                baseBranchOverride = "  release/1.0  ",
+            }),
+            Headers = { { "X-ILD-Run-Id", runId.ToString() } },
+        });
+        Assert.Equal(HttpStatusCode.Created, createResp.StatusCode);
+        var itemId = JsonDocument.Parse(await createResp.Content.ReadAsStringAsync())
+            .RootElement.GetProperty("id").GetString();
+
+        // An agent that may set the base has to be able to read back what stuck.
+        var detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{itemId}");
+        Assert.Equal("release/1.0", detail.GetProperty("baseBranchOverride").GetString());
+
+        var moved = await PutAsync(client, itemId!, runId, new { title = "owned", description = "", baseBranchOverride = "release/2.0" });
+        Assert.Equal("release/2.0", moved.GetProperty("baseBranchOverride").GetString());
+
+        // Omitted means "not part of this edit" — a title-only save keeps it.
+        var titleOnly = await PutAsync(client, itemId!, runId, new { title = "renamed", description = "" });
+        Assert.Equal("release/2.0", titleOnly.GetProperty("baseBranchOverride").GetString());
+
+        // Blank is a deliberate "go back to the repository's default branch".
+        var cleared = await PutAsync(client, itemId!, runId, new { title = "renamed", description = "", baseBranchOverride = "" });
+        Assert.Equal(JsonValueKind.Null, cleared.GetProperty("baseBranchOverride").ValueKind);
+    }
+
     private static async Task<JsonElement> PutAsync(HttpClient client, string itemId, Guid runId, object body)
     {
         var put = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/agent/workitems/{itemId}")

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Start a work item from a branch other than the default.** A **Base branch** field sets the branch an item's runs start from and open their pull requests against, so an item can continue, review, or hotfix a branch. One that is missing from `origin` fails the run instead of falling back. See [ADR-0008](docs/adr/0008-worktree-and-branch-per-run.md).
 - **Name a work item's branch yourself.** A **Branch name** field on the work item takes a git branch name and every run of that item uses it verbatim, instead of the generated `ild/wi-<id>-run-<n>`. Because that branch is no longer unique per run, a run whose name is already taken locally or on `origin` parks in Human Feedback naming the holder rather than starting on top of existing work. See [ADR-0008](docs/adr/0008-worktree-and-branch-per-run.md).
 
 ## [0.8.0] - 2026-08-02

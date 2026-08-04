@@ -5,15 +5,16 @@ namespace ILD.Core.Services.Interfaces;
 public interface IWorkItemManager
 {
     Task<string> CreateWorkItemAsync(string title, string description, Guid? repositoryId);
-    Task<string> CreateWorkItemAsync(string title, string description, Guid? repositoryId, Guid? createdByLoopRunId, bool forceBacklog, IEnumerable<string>? tags = null, Guid? createdByChatSessionId = null, string? branchNameOverride = null);
+    Task<string> CreateWorkItemAsync(string title, string description, Guid? repositoryId, Guid? createdByLoopRunId, bool forceBacklog, IEnumerable<string>? tags = null, Guid? createdByChatSessionId = null, string? branchNameOverride = null, string? baseBranchOverride = null);
 
     /// <summary>
     /// Edit the server-held fields of a work item. <paramref name="branchNameOverride"/>
-    /// follows the server's convention: null leaves the custom branch name
-    /// alone, blank clears it back to generated per-run naming. Either way it
-    /// only affects the item's next run.
+    /// and <paramref name="baseBranchOverride"/> follow the server's convention:
+    /// null leaves the stored value alone, blank clears it back to the default
+    /// (generated per-run naming, and the repository's default branch
+    /// respectively). Either way they only affect the item's next run.
     /// </summary>
-    Task<bool> UpdateAsync(string workItemId, string title, string description, IEnumerable<string>? tags = null, RemoteAiProviderOverrideMode? aiProviderOverride = null, Guid? aiProviderOverrideId = null, string? branchNameOverride = null);
+    Task<bool> UpdateAsync(string workItemId, string title, string description, IEnumerable<string>? tags = null, RemoteAiProviderOverrideMode? aiProviderOverride = null, Guid? aiProviderOverrideId = null, string? branchNameOverride = null, string? baseBranchOverride = null);
     Task<WorkItemView?> GetWorkItemAsync(string workItemId);
 
     /// <summary>

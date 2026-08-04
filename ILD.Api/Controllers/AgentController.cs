@@ -258,6 +258,7 @@ public class AgentController : ControllerBase
             // read back what stuck — the API normalises it and the value it
             // holds is what the item's next run will check out.
             branchNameOverride = wi.BranchNameOverride,
+            baseBranchOverride = wi.BaseBranchOverride,
             createdAt = wi.CreatedAt,
             updatedAt = wi.UpdatedAt,
             dependencies = deps.Select(d => new { id = d.Id, title = d.Title, status = d.Status.ToString() }),
@@ -849,6 +850,13 @@ public class AgentController : ControllerBase
         if (branchNameOverride is not null && BranchNameRules.Validate(branchNameOverride) is { } branchError)
             return BadRequest(new { error = branchError });
 
+        // The base branch is a ref too. Whether it exists on origin is settled
+        // at run start, not here.
+        var baseBranchOverride = BranchNameRules.Normalize(request.BaseBranchOverride);
+        if (baseBranchOverride is not null
+            && BranchNameRules.Validate(baseBranchOverride, BranchNameRules.BaseBranchSubject) is { } baseError)
+            return BadRequest(new { error = baseError });
+
         // Legacy `loopTemplateId` (if any) is ignored — template is now
         // resolved from tags at run start (PRD §3.7).
 
@@ -894,7 +902,8 @@ public class AgentController : ControllerBase
                 forceBacklog: true,
                 tags: request.Tags,
                 createdByChatSessionId: createdByChatSessionId,
-                branchNameOverride: branchNameOverride);
+                branchNameOverride: branchNameOverride,
+                baseBranchOverride: baseBranchOverride);
         }
         catch (InvalidOperationException ex)
         {
@@ -932,9 +941,14 @@ public class AgentController : ControllerBase
             && BranchNameRules.Validate(branchName) is { } branchError)
             return BadRequest(new { error = branchError });
 
+        if (BranchNameRules.Normalize(request.BaseBranchOverride) is { } baseBranch
+            && BranchNameRules.Validate(baseBranch, BranchNameRules.BaseBranchSubject) is { } baseError)
+            return BadRequest(new { error = baseError });
+
         var ok = await _workItems.UpdateAsync(
             id, request.Title, request.Description ?? string.Empty, request.Tags,
-            branchNameOverride: request.BranchNameOverride);
+            branchNameOverride: request.BranchNameOverride,
+            baseBranchOverride: request.BaseBranchOverride);
         if (!ok)
             return StatusCode(503, new { error = "Work item update failed." });
 
@@ -946,6 +960,7 @@ public class AgentController : ControllerBase
             description = updated?.Description,
             status = updated?.Status.ToString(),
             branchNameOverride = updated?.BranchNameOverride,
+            baseBranchOverride = updated?.BaseBranchOverride,
         });
     }
 

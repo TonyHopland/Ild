@@ -66,7 +66,11 @@ public sealed class PRNodeExecutor : INodeExecutor
             ? null
             : new GitAuthOptions(repo.CloneUrl, remoteProvider.ApiKey, remoteProvider.Type);
         var branch = ctx.Run.BranchName ?? RunWorktreeNaming.BranchFor(wi.Id, ctx.Run.Id);
-        var target = repo.DefaultBranch ?? "main";
+        // The PR targets the branch the run was built from, not the repository
+        // default: an item that continues or hotfixes a branch is asking for its
+        // work to go back to that branch, and the "no commits ahead" guard below
+        // is only meaningful against the ref the worktree was rebased onto.
+        var target = RunBaseBranch.Resolve(ctx.Run, repo);
         var repoManager = sp.GetRequiredService<IRepositoryManager>();
 
         if (!string.IsNullOrEmpty(ctx.Run.WorktreePath) && Directory.Exists(ctx.Run.WorktreePath))
