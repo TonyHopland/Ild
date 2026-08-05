@@ -273,7 +273,9 @@ public sealed class AINodeExecutor : INodeExecutor
             // shared text classifier reads the failure — output first, because
             // every adapter renders a non-zero exit as "exit=N stderr=..." and the
             // provider's notice ("You've hit your session limit · resets 9:40am")
-            // arrives as the agent's output.
+            // arrives as the agent's output. The two texts are matched against
+            // different rule sets, since this output is also where an agent's own
+            // narration lands — see AiFailureClassifier.
             var failure = result.Failure != FailureKind.Unknown
                 ? result.Failure
                 : AiFailureClassifier.Classify(result.Output, result.Error);

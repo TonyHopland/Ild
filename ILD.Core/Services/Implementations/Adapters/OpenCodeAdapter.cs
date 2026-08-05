@@ -178,7 +178,8 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                 // agent narration. Unknown is passed through deliberately: the
                 // executor's fallback still gets its turn.
                 return NodeExecutionResult.Fail(
-                    $"opencode session error: {jsonError}", response, AiFailureClassifier.Classify(jsonError));
+                    $"opencode session error: {jsonError}", response,
+                    AiFailureClassifier.ClassifyProviderMessage(jsonError));
 
             // Model produced no text despite a clean exit — treat as retryable
             // failure so the on_failure edge can recover instead of propagating

@@ -125,7 +125,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
                 // isolated — classify from it (same rationale as OpenCodeAdapter).
                 return NodeExecutionResult.Fail(
                     $"claude-code session error: {stdout.ErrorMessage}", response,
-                    AiFailureClassifier.Classify(stdout.ErrorMessage));
+                    AiFailureClassifier.ClassifyProviderMessage(stdout.ErrorMessage));
 
             if (process.ExitCode == 0 && stdout.SawJsonEvents && string.IsNullOrWhiteSpace(stdout.Content))
                 return NodeExecutionResult.Fail(response);

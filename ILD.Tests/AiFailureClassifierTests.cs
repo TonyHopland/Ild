@@ -23,21 +23,47 @@ public class AiFailureClassifierTests
     /// </summary>
     private const string SessionLimitNotice = "You've hit your session limit · resets 9:40am (UTC)";
 
+    /// <summary>The error every adapter writes for a non-zero exit with empty stderr.</summary>
+    private const string BareExit = "exit=1 stderr=";
+
     [Theory]
+    // A provider cutting a turn off in-band writes the notice into the agent's
+    // output, so these must be recognised there.
     [InlineData(SessionLimitNotice)]
     [InlineData("Claude usage limit reached. Your limit will reset at 3pm.")]
     [InlineData("You have exceeded your weekly limit for this model")]
     [InlineData("API Error: 429 {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\"}}")]
-    [InlineData("Too Many Requests")]
+    [InlineData("API Error: 500 {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}")]
+    public void Provider_notices_in_the_output_classify_as_interrupted(string output)
+        => Assert.Equal(FailureKind.Interrupted, AiFailureClassifier.Classify(output, BareExit));
+
+    [Theory]
+    // Transport and capacity failures reach the adapter as stderr or as a
+    // structured provider message — machine text, never the agent's own prose.
+    [InlineData("429 Too Many Requests")]
     [InlineData("rate limit exceeded, please retry later")]
-    [InlineData("{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}")]
     [InlineData("upstream returned HTTP 529 - service unavailable")]
     [InlineData("Provider error: status code 503")]
     [InlineData("read ECONNRESET")]
     [InlineData("stream disconnected before completion")]
     [InlineData("socket hang up")]
-    public void Provider_interruptions_classify_as_interrupted(string text)
-        => Assert.Equal(FailureKind.Interrupted, AiFailureClassifier.Classify(text));
+    public void Provider_interruptions_in_the_error_classify_as_interrupted(string error)
+        => Assert.Equal(FailureKind.Interrupted, AiFailureClassifier.Classify(null, error));
+
+    [Theory]
+    // The precision half, and the reason the output is not matched against the
+    // ambiguous vocabulary: on the non-zero-exit path the output IS the agent's
+    // narration, and a coding agent narrates about status codes, dropped
+    // connections and file:line citations constantly. Parking any of these would
+    // break the loop's on_failure handling for a node that genuinely failed.
+    [InlineData("Fixed the null deref at LoopEngine.cs:429 and re-ran; 3 tests still fail.")]
+    [InlineData("The endpoint returns 500 Internal Server Error for a malformed body; I added a guard but the assertion still fails.")]
+    [InlineData("Reproduced the connection reset by killing the upstream mid-request. Could not get the retry path to pass.")]
+    [InlineData("Added a handler for HTTP 503 responses, then ran the suite: 2 failures remain in RetryPolicyTests.")]
+    [InlineData("Wrapped the fetch so a fetch failed error surfaces as a typed result. The build is still red.")]
+    [InlineData("Renamed ECONNRESET handling to reconnect(); tests fail on the new name.")]
+    public void Agent_narration_is_not_mistaken_for_an_interruption(string output)
+        => Assert.NotEqual(FailureKind.Interrupted, AiFailureClassifier.Classify(output, BareExit));
 
     [Theory]
     // Auth / credentials, misconfiguration, validation, a crashed process and an
@@ -50,7 +76,12 @@ public class AiFailureClassifierTests
     [InlineData("exit=127 stderr=opencode: command not found")]
     [InlineData("Tests failed: 3 of 41 assertions did not pass")]
     public void Genuine_failures_are_not_classified_as_interruptions(string text)
-        => Assert.NotEqual(FailureKind.Interrupted, AiFailureClassifier.Classify(text));
+    {
+        // Neither slot may park them — the error text gets the full rule set, so
+        // it is the stricter of the two places to assert this.
+        Assert.NotEqual(FailureKind.Interrupted, AiFailureClassifier.Classify(text, BareExit));
+        Assert.NotEqual(FailureKind.Interrupted, AiFailureClassifier.Classify(null, text));
+    }
 
     [Theory]
     // Context exhaustion speaks the language of a limit but must NOT park:
@@ -61,7 +92,10 @@ public class AiFailureClassifierTests
     [InlineData("context_length_exceeded")]
     [InlineData("Error: context window exceeded — compact the conversation")]
     public void Context_window_exhaustion_is_a_genuine_failure(string text)
-        => Assert.Equal(FailureKind.Failed, AiFailureClassifier.Classify(text));
+    {
+        Assert.Equal(FailureKind.Failed, AiFailureClassifier.Classify(text, BareExit));
+        Assert.Equal(FailureKind.Failed, AiFailureClassifier.Classify(null, text));
+    }
 
     [Fact]
     public void Output_is_classified_before_error()
@@ -70,7 +104,7 @@ public class AiFailureClassifierTests
         // the error. A classifier reading only Error would ship a dead feature.
         Assert.Equal(
             FailureKind.Interrupted,
-            AiFailureClassifier.Classify(SessionLimitNotice, "exit=1 stderr="));
+            AiFailureClassifier.Classify(SessionLimitNotice, BareExit));
     }
 
     [Fact]
@@ -82,12 +116,32 @@ public class AiFailureClassifierTests
     }
 
     [Fact]
+    public void A_context_window_failure_in_the_output_beats_an_interruption_in_the_error()
+    {
+        // Order matters both ways: the genuine-failure rules run first within
+        // each text, and the output is read before the error.
+        Assert.Equal(
+            FailureKind.Failed,
+            AiFailureClassifier.Classify("prompt is too long: 210000 tokens > 200000 maximum", "exit=1 stderr=socket hang up"));
+    }
+
+    [Fact]
+    public void A_structured_provider_message_gets_the_full_rule_set()
+    {
+        // What an adapter lifts out of its own error event is the provider's
+        // text, not the agent's, so the ambiguous vocabulary is trusted there.
+        Assert.Equal(
+            FailureKind.Interrupted,
+            AiFailureClassifier.ClassifyProviderMessage("upstream connect error or disconnect/reset before headers"));
+    }
+
+    [Fact]
     public void Nothing_recognised_stays_unknown()
-        => Assert.Equal(FailureKind.Unknown, AiFailureClassifier.Classify("exit=1 stderr=", null));
+        => Assert.Equal(FailureKind.Unknown, AiFailureClassifier.Classify(BareExit, null));
 
     [Fact]
     public void No_text_at_all_stays_unknown()
-        => Assert.Equal(FailureKind.Unknown, AiFailureClassifier.Classify(null, "", "   "));
+        => Assert.Equal(FailureKind.Unknown, AiFailureClassifier.Classify(null, "   "));
 
     // ---- adapter parity: the shape the classifier is fed in production ----
 
