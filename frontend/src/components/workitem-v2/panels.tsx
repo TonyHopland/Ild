@@ -9,6 +9,7 @@ import {
   WorktreePreviewService,
 } from "../../types";
 import { repositoryService } from "../../services/auth";
+import { useStoredPreviewEnv } from "../../hooks/useStoredPreviewEnv";
 import { makeLoopTagMatcher, parseConversation, parseTags } from "../../utils/workItemJson";
 import { prStatusBadges } from "../../utils/prStatusBadges";
 import MarkdownRenderer from "../MarkdownRenderer";
@@ -512,10 +513,14 @@ function PreviewServiceTable({
  * Repository-wide preview environment editor embedded in the Preview tab. Despite
  * the ".env" label it is NOT a file: the text is stored encrypted in ILD and
  * injected as environment variables when a preview starts — never written into the
- * worktree (so it can't be committed) and never returned in plaintext (only whether
- * one is set). It is a property of the *repository*, not this work item, so the
- * warning makes the repo-wide, persisted scope explicit. The field starts blank and
- * a save replaces the stored value; a blank save is a no-op.
+ * worktree, so it can't be committed. It is a property of the *repository*, not this
+ * work item, so the warning makes the repo-wide, persisted scope explicit.
+ *
+ * The stored text is fetched only when the user expands the editor — it is the one
+ * plaintext read of a secret in the UI, so it does not ride along on every Preview
+ * tab render — and the field is then prefilled with it, so an edit is an edit rather
+ * than a retype. {@link useStoredPreviewEnv} owns that text, which repository it
+ * belongs to, and what saving an emptied field means.
  */
 function RepoEnvEditor({
   repository,
@@ -524,32 +529,42 @@ function RepoEnvEditor({
   repository: Repository | undefined;
   onSaved: () => void;
 }) {
-  const [value, setValue] = useState("");
+  const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Only fetched while the editor is expanded, and re-fetched if the dialog swings
+  // to a work item in another repository — this component is not remounted then.
+  const env = useStoredPreviewEnv(repository?.id ?? null, open);
 
   if (!repository) return null;
 
   const save = async () => {
-    if (!value.trim() || saving) return;
+    if (saving || !env.dirty) return;
     setSaving(true);
     setMessage(null);
     setError(null);
     try {
       // The PUT replaces the whole repository row, so carry its current fields
-      // through unchanged and only set the new custom .env.
-      await repositoryService.update(repository.id, {
-        name: repository.name,
-        cloneUrl: repository.cloneUrl,
-        remoteProviderId: repository.remoteProviderId,
-        defaultBranch: repository.defaultBranch,
-        worktreesPath: repository.worktreesPath,
-        defaultIntakeStatus: repository.defaultIntakeStatus,
-        previewEnv: value,
-      });
-      setValue("");
-      setMessage("Saved. Applied on the next preview start.");
+      // through unchanged and only set the new custom .env. A removal has nothing
+      // to write into the row — it is all in the commit below.
+      if (env.pendingWrite) {
+        await repositoryService.update(repository.id, {
+          name: repository.name,
+          cloneUrl: repository.cloneUrl,
+          remoteProviderId: repository.remoteProviderId,
+          defaultBranch: repository.defaultBranch,
+          worktreesPath: repository.worktreesPath,
+          defaultIntakeStatus: repository.defaultIntakeStatus,
+          ...env.pendingWrite,
+        });
+      }
+      await env.commit();
+      setMessage(
+        env.removing
+          ? "Removed. Applied on the next preview start."
+          : "Saved. Applied on the next preview start.",
+      );
       onSaved();
     } catch {
       setError("Failed to save the custom .env.");
@@ -559,7 +574,7 @@ function RepoEnvEditor({
   };
 
   return (
-    <details className="preview-env">
+    <details className="preview-env" onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary className="preview-env-summary">
         Custom .env{" "}
         <span className="preview-env-state">{repository.hasPreviewEnv ? "(set)" : "(none)"}</span>
@@ -574,12 +589,13 @@ function RepoEnvEditor({
       <textarea
         className="preview-config-editor preview-env-editor"
         rows={5}
-        value={value}
+        value={env.value}
         spellCheck={false}
-        onChange={(e) => setValue(e.target.value)}
+        disabled={env.loading}
+        onChange={(e) => env.setValue(e.target.value)}
         placeholder={
-          repository.hasPreviewEnv
-            ? "•••••• (set — type to replace it)"
+          env.loading
+            ? "Loading…"
             : "KEY=value\n# injected into preview processes as environment variables"
         }
       />
@@ -593,12 +609,13 @@ function RepoEnvEditor({
             type="button"
             className="btn btn-sm btn-primary"
             onClick={() => void save()}
-            disabled={!value.trim() || saving}
+            disabled={!env.dirty || saving}
           >
-            {saving ? "Saving…" : "Save .env"}
+            {saving ? "Saving…" : env.removing ? "Remove .env" : "Save .env"}
           </button>
         </div>
       </div>
+      {env.loadError && <div className="preview-message preview-error">{env.loadError}</div>}
       {error && <div className="preview-message preview-error">{error}</div>}
     </details>
   );

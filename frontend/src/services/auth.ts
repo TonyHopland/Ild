@@ -444,6 +444,21 @@ export const repositoryService = {
     return api.put<Repository>(`/repositories/${id}`, data);
   },
 
+  // The custom .env is masked out of every other repository payload; this is the
+  // one endpoint that hands back the plaintext, so the signed-in user can edit
+  // what is stored rather than retyping it. It is refused to coding agents, and
+  // fetching it at all is worth doing only when an editor is actually open.
+  getPreviewEnv: async (id: string): Promise<string> => {
+    const body = await api.get<{ previewEnv: string | null }>(`/repositories/${id}/preview-env`);
+    return body.previewEnv ?? "";
+  },
+
+  // Removing the .env needs its own call: the update endpoint reads an empty
+  // previewEnv as "keep the stored value".
+  clearPreviewEnv: async (id: string): Promise<Repository> => {
+    return api.delete<Repository>(`/repositories/${id}/preview-env`);
+  },
+
   delete: async (id: string): Promise<void> => {
     return api.delete<void>(`/repositories/${id}`);
   },

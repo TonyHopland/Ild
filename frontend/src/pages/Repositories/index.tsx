@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Repository, RemoteProvider, WorkItemStatus } from "../../types";
 import { repositoryService, remoteProviderService } from "../../services/auth";
+import { useStoredPreviewEnv } from "../../hooks/useStoredPreviewEnv";
 
 export default function Repositories() {
   const [repositories, setRepositories] = useState<Repository[]>([]);
@@ -13,13 +14,15 @@ export default function Repositories() {
   const [remoteProviderId, setRemoteProviderId] = useState("");
   const [defaultBranch, setDefaultBranch] = useState("main");
   const [worktreesPath, setWorktreesPath] = useState("");
-  const [previewEnv, setPreviewEnv] = useState("");
-  const [hasPreviewEnv, setHasPreviewEnv] = useState(false);
   const [defaultIntakeStatus, setDefaultIntakeStatus] = useState<WorkItemStatus>(
     WorkItemStatus.Backlog,
   );
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [isInspecting, setIsInspecting] = useState(false);
+  // The .env is masked out of the repository list, so the plaintext is fetched only
+  // once an edit is open — never behind the page load — and only for the repository
+  // being edited: a response for a previously-edited one is dropped.
+  const previewEnv = useStoredPreviewEnv(editingRepo?.id ?? null);
 
   useEffect(() => {
     void loadData();
@@ -48,11 +51,10 @@ export default function Repositories() {
     setRemoteProviderId(repo.remoteProviderId);
     setDefaultBranch(repo.defaultBranch || "main");
     setWorktreesPath(repo.worktreesPath || "");
-    // The .env is never sent back in plaintext; start blank and only overwrite the
-    // stored value when the user types a new one (mirrors the API-key field).
-    setPreviewEnv("");
-    setHasPreviewEnv(repo.hasPreviewEnv ?? false);
     setDefaultIntakeStatus(repo.defaultIntakeStatus);
+    // Every form field starts from this repository, the .env included: a session
+    // that was abandoned rather than saved must not carry into the new one.
+    previewEnv.reset();
   };
 
   const openCreate = () => {
@@ -63,9 +65,8 @@ export default function Repositories() {
     setRemoteProviderId(providers[0]?.id || "");
     setDefaultBranch("main");
     setWorktreesPath("");
-    setPreviewEnv("");
-    setHasPreviewEnv(false);
     setDefaultIntakeStatus(WorkItemStatus.Backlog);
+    previewEnv.reset();
   };
 
   // When adding a repo, pull the name and default branch from the remote so the
@@ -96,10 +97,11 @@ export default function Repositories() {
       defaultBranch,
       worktreesPath: worktreesPath || null,
       defaultIntakeStatus,
+      // The .env rides along only when the user changed the prefilled text; emptying
+      // it removes the stored value instead, which this write cannot express and the
+      // commit below does.
+      ...previewEnv.pendingWrite,
     };
-    // Only send the .env when the user entered one — a blank field keeps the
-    // stored secret unchanged on update (and sends nothing on create).
-    if (previewEnv) data.previewEnv = previewEnv;
 
     try {
       if (editingRepo) {
@@ -107,6 +109,7 @@ export default function Repositories() {
       } else {
         await repositoryService.create(data);
       }
+      await previewEnv.commit();
       await loadData();
       setShowModal(false);
       setEditingRepo(null);
@@ -282,20 +285,28 @@ export default function Repositories() {
                   id="repoPreviewEnv"
                   className="repo-env-textarea"
                   rows={5}
-                  value={previewEnv}
-                  onChange={(e) => setPreviewEnv(e.target.value)}
+                  value={previewEnv.value}
+                  disabled={previewEnv.loading}
+                  onChange={(e) => previewEnv.setValue(e.target.value)}
                   placeholder={
-                    hasPreviewEnv
-                      ? "•••••• (a custom .env is set — type to replace it)"
+                    previewEnv.loading
+                      ? "Loading…"
                       : "KEY=value\n# injected into preview processes; uncommitted secrets go here"
                   }
                   spellCheck={false}
                 />
+                {previewEnv.loadError && (
+                  // An unreadable value must not look like an absent one: without
+                  // this the field is blank and enabled, exactly like "none stored".
+                  <span className="repo-hint repo-hint-error" role="alert">
+                    {previewEnv.loadError}
+                  </span>
+                )}
                 <span className="repo-hint">
                   Stored encrypted in ILD and injected as environment variables into preview install
                   steps and services on start — never written to a file in the worktree, so it can't
-                  be committed. The per-service ild.config.json env still overrides these. Leave
-                  blank to keep the current value.
+                  be committed. The per-service ild.config.json env still overrides these. Clearing
+                  the field removes the stored .env.
                 </span>
               </div>
               <div className="form-group">
@@ -512,6 +523,10 @@ export default function Repositories() {
         .repo-hint {
           font-size: 0.7rem;
           color: #707090;
+        }
+
+        .repo-hint-error {
+          color: #f87171;
         }
 
         .modal-body input,

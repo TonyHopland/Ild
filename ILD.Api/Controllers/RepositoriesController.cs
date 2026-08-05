@@ -19,9 +19,12 @@ public class RepositoriesController : ControllerBase
         _db = db;
     }
 
-    // The custom .env holds secrets, so it is never echoed back in plaintext —
-    // only whether one is set (mirrors the provider API-key masking). The client
-    // re-sends the full text to change it and sends null/empty to keep it.
+    // The custom .env holds secrets, so it is never echoed back in plaintext by
+    // this or any other collection payload — only whether one is set (mirrors the
+    // provider API-key masking). The client re-sends the full text to change it and
+    // sends null/empty to keep it. The one place the plaintext is readable is the
+    // dedicated GET {id}/preview-env below, which a signed-in human can call to
+    // prefill the editor.
     private static object ToResponse(Repository r) => new
     {
         id = r.Id,
@@ -118,6 +121,46 @@ public class RepositoriesController : ControllerBase
         await _db.SaveChangesAsync();
         return Ok(ToResponse(repo));
     }
+
+    // Reading and clearing the custom .env sit on their own sub-resource rather than
+    // widening the repository payload: one narrow, auditable surface that a coding
+    // agent is barred from. The bar has to be explicit — the agent service token
+    // authenticates on *every* /api path (AuthMiddleware), not just /api/v1/agent,
+    // so route placement alone would not keep the agent out.
+
+    [HttpGet("{id}/preview-env")]
+    public async Task<IActionResult> GetPreviewEnv(string id)
+    {
+        if (DenyAgent() is { } denied) return denied;
+        if (!Guid.TryParse(id, out var guid)) return BadRequest();
+        var repo = await _db.Repositories.AsNoTracking().FirstOrDefaultAsync(r => r.Id == guid);
+        // Decrypted transparently on read by the EF value converter.
+        return repo == null ? NotFound() : Ok(new { previewEnv = repo.PreviewEnv });
+    }
+
+    // The PUT above treats an empty PreviewEnv as "keep what is stored", so removing
+    // the .env needs its own verb; the editor prefills the real text and calls this
+    // when the user empties it.
+    [HttpDelete("{id}/preview-env")]
+    public async Task<IActionResult> ClearPreviewEnv(string id)
+    {
+        if (DenyAgent() is { } denied) return denied;
+        if (!Guid.TryParse(id, out var guid)) return BadRequest();
+        var repo = await _db.Repositories.FindAsync(guid);
+        if (repo == null) return NotFound();
+        repo.PreviewEnv = null;
+        repo.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return Ok(ToResponse(repo));
+    }
+
+    // Deliberately not MVC's Forbid(): the app authenticates in AuthMiddleware and
+    // registers no authentication scheme, so executing a ForbidResult throws and the
+    // caller sees a 500 instead of a refusal (verified against this pipeline).
+    private IActionResult? DenyAgent()
+        => HttpContext.Items.TryGetValue("IsAgent", out var isAgent) && isAgent is true
+            ? StatusCode(StatusCodes.Status403Forbidden, new { error = "Forbidden", message = "The custom .env is not readable by agents" })
+            : null;
 
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(string id)
