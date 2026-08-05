@@ -339,6 +339,26 @@ public class RecoveryManagerTests
     }
 
     [Fact]
+    public async Task RecoverRunAsync_leaves_a_throttle_parked_run_alone()
+    {
+        // A throttle park behaves like a human halt, NOT like a shutdown park:
+        // auto-resuming it on startup is exactly the blanket auto-resume that was
+        // considered and declined, and it would fire the run straight back into a
+        // limit that has not reset yet.
+        var (mgr, wiMgr, runStore, _, _, _, engine) = Build();
+        var runId = Guid.NewGuid();
+        runStore.Setup(s => s.GetByIdAsync(runId))
+            .ReturnsAsync(HaltedRun(runId, "wi-1", HaltReason.Throttled));
+
+        Assert.False(await mgr.RecoverRunAsync(runId));
+
+        engine.Verify(e => e.ResumeFromHaltAsync(It.IsAny<Guid>(), It.IsAny<string?>()), Times.Never);
+        engine.Verify(e => e.ResumeRecoveredRunAsync(It.IsAny<Guid>()), Times.Never);
+        engine.Verify(e => e.CancelRunAsync(It.IsAny<Guid>()), Times.Never);
+        wiMgr.VerifyNoOtherCalls();
+    }
+
+    [Fact]
     public async Task RecoverRunAsync_honours_the_Cancel_policy_for_a_shutdown_halt()
     {
         // "The restart was a tidy one" is not grounds to overrule an operator's
@@ -377,14 +397,16 @@ public class RecoveryManagerTests
     {
         // One query over the alive set, filtered to the two shapes startup can do
         // something about: a Running run left by a crash, and a run the drain
-        // parked. A human halt — and a genuine Human/PR-node park — stay out.
+        // parked. A human halt, a throttle park, and a genuine Human/PR-node park
+        // all stay out — each of those is waiting on a person, not on a restart.
         var (mgr, _, runStore, _, _, _, _) = Build();
         var crashed = new LoopRun { Id = Guid.NewGuid(), Status = LoopRunStatus.Running };
         var drained = HaltedRun(Guid.NewGuid(), "wi-2", HaltReason.Shutdown);
         var humanHalted = HaltedRun(Guid.NewGuid(), "wi-3", haltReason: null);
+        var throttled = HaltedRun(Guid.NewGuid(), "wi-4", HaltReason.Throttled);
         var parked = new LoopRun { Id = Guid.NewGuid(), Status = LoopRunStatus.WaitingHuman };
         runStore.Setup(s => s.GetActiveRunsAsync())
-            .ReturnsAsync(new List<LoopRun> { crashed, drained, humanHalted, parked });
+            .ReturnsAsync(new List<LoopRun> { crashed, drained, humanHalted, throttled, parked });
 
         var ids = (await mgr.GetRecoverableRunIdsAsync()).ToList();
 

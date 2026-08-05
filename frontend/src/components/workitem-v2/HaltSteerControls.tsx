@@ -1,5 +1,12 @@
 import { useState } from "react";
-import { LoopRun, LoopRunStatus, LoopRunNodeStatus, WorkItemStatus } from "../../types";
+import {
+  HaltReason,
+  LoopRun,
+  LoopRunNode,
+  LoopRunStatus,
+  LoopRunNodeStatus,
+  WorkItemStatus,
+} from "../../types";
 
 interface HaltSteerControlsProps {
   /** The work item's current run (detail with nodes + nodeType), or null. */
@@ -41,6 +48,32 @@ function isNodeRunning(value: unknown): boolean {
   return value === LoopRunNodeStatus.Running || value === 1;
 }
 
+function isNodeInterrupted(value: unknown): boolean {
+  return value === LoopRunNodeStatus.Interrupted || value === 6;
+}
+
+/**
+ * Whether an AI provider parked this run rather than a person. Read off the
+ * run's own `haltReason`, which both run endpoints project as the enum's name —
+ * the engine records who parked it, so there is nothing to infer. A human's Halt
+ * also ends its node `Interrupted` with an error ("Run cancelled"), so the node
+ * rows cannot tell the two apart.
+ */
+function isThrottleParked(run: LoopRun): boolean {
+  return run.haltReason === HaltReason.Throttled;
+}
+
+/**
+ * The node the provider interrupted. It carries the explanation of which Resume
+ * the human is about to get (same agent session, or a cold restart of the node)
+ * and the provider's own words, which is where the reset time is stated: ILD
+ * parses no timestamps and schedules nothing.
+ */
+function interruptedNode(run: LoopRun): LoopRunNode | null {
+  const interrupted = run.nodes?.filter((n) => isNodeInterrupted(n.status)) ?? [];
+  return interrupted[interrupted.length - 1] ?? null;
+}
+
 /**
  * Halt-and-steer control surfaced wherever the live view of a running work item
  * is shown. While an AI node is in flight it renders a Halt button; once the run
@@ -77,6 +110,8 @@ export default function HaltSteerControls({
   const canHalt =
     !!onHalt && workItemStatus === WorkItemStatus.Running && isRunningStatus && !!runningAiNode;
   const isHalted = !!onResumeSteer && isWaitingHuman && !!run.isHalted;
+  const throttled = isHalted && isThrottleParked(run);
+  const interruption = throttled ? interruptedNode(run) : null;
   // Abandon applies to any non-terminal run — actively running OR parked for
   // human feedback — so a run heading the wrong way can be dropped without
   // first halting it, even when the AI is not currently running. A halted run
@@ -187,7 +222,17 @@ export default function HaltSteerControls({
       )}
       {isHalted && (
         <div className="wiv2-feedback">
-          <div className="wiv2-feedback-title">Halted — steer &amp; resume</div>
+          <div className="wiv2-feedback-title">
+            {throttled ? "Provider interrupted — resume when ready" : "Halted — steer & resume"}
+          </div>
+          {throttled && (
+            <div className="feedback-reason">
+              <div>{interruption?.error ?? "An AI provider interrupted this run."}</div>
+              {interruption?.output && (
+                <pre className="wiv2-interruption-output">{interruption.output}</pre>
+              )}
+            </div>
+          )}
           <textarea
             className="feedback-textarea"
             value={steerNote}

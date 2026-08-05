@@ -865,6 +865,41 @@ public sealed class LoopEngine : ILoopEngine
                             await TrySafe(() => eventLog.AppendAsync(run.Id, "EdgeTraversed", EdgeDisplayName(failEdge), node.Id, runNodeId: failFromId));
                         return ParkResult.Continue;
                     }
+                    case NodeOutcome.Interrupted intr:
+                    {
+                        // The AI provider stopped the node; the agent process has
+                        // already exited. Park it exactly where a halt parks
+                        // (ADR-0017) so the existing Resume path can pick it up
+                        // against the same session — but stamped Throttled, which
+                        // startup leaves alone the way it leaves a human's halt
+                        // alone. Deliberately NOT HaltRunAsync: that cancels the
+                        // run's CTS to kill a live agent, and there is none here.
+                        var stillCurrent = await ReloadRunStillCurrentAsync(loopRunStore, run, entryStatus);
+                        await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.Interrupted, intr.Output, intr.Reason);
+                        await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Interrupted);
+                        if (eventLog is not null && runNodeId is Guid interruptedId)
+                            await TrySafe(() => eventLog.AppendAsync(run.Id, "NodeInterrupted", intr.Reason, node.Id, runNodeId: interruptedId));
+                        if (!stillCurrent)
+                            return ParkResult.Stop;
+                        var oldRunStatus = run.Status;
+                        run.Status = LoopRunStatus.WaitingHuman;
+                        run.IsHalted = true;
+                        run.HaltReason = HaltReason.Throttled;
+                        run.HumanFeedbackReason = HumanFeedbackReasons.AiProviderThrottled;
+                        await loopRunStore.UpdateRunAsync(run);
+                        _logger.LogInformation(
+                            "Run {RunId}: AI provider interrupted node {NodeLabel}; parked for a human Resume ({Reason})",
+                            run.Id, node.Label, intr.Reason);
+                        await _notifier.RunStateChangedAsync(run.Id, oldRunStatus, LoopRunStatus.WaitingHuman);
+                        await _notifier.HaltedAsync(run.Id);
+                        // HumanFeedback, not WaitingForIld: the scheduler
+                        // auto-resumes what it finds waiting on ILD, and this park
+                        // is waiting on a person deciding the limit has reset.
+                        await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+                            reason: intr.Reason, humanFeedbackReason: HumanFeedbackReasons.AiProviderThrottled,
+                            currentLoopRunId: run.Id, name: node.Label);
+                        return ParkResult.Stop;
+                    }
                     case NodeOutcome.WaitingAction wa:
                     {
                         var stillCurrent = await ReloadRunStillCurrentAsync(loopRunStore, run, entryStatus);

@@ -86,6 +86,21 @@
   color: #f59e0b;
 }
 
+/* The provider's own words on a throttle park — where the reset time is
+   stated. Kept verbatim and scrollable rather than parsed or summarised. */
+.wiv2-interruption-output {
+  margin: 0.375rem 0 0;
+  padding: 0.375rem 0.5rem;
+  max-height: 8rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.75rem;
+  color: #e5e7eb;
+  background-color: #14141f;
+  border-radius: 0.25rem;
+}
+
 /* ---------- full PR view ---------- */
 
 .pr-view {

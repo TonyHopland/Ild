@@ -55,6 +55,9 @@ public class LoopRunsController : ControllerBase
                 currentNodeId = r.CurrentNodeId,
                 isPaused = r.IsPaused,
                 isHalted = r.IsHalted,
+                // Who parked it, so the UI can say so instead of inferring it
+                // from a node's prose. Null means a human pressed Halt.
+                haltReason = r.HaltReason?.ToString(),
                 retain = r.Retain,
                 nodeExecutionCount = r.NodeExecutionCount,
                 startedAt = r.StartedAt,
@@ -100,6 +103,7 @@ public class LoopRunsController : ControllerBase
             currentNodeId = run.CurrentNodeId,
             isPaused = run.IsPaused,
             isHalted = run.IsHalted,
+            haltReason = run.HaltReason?.ToString(),
             retain = run.Retain,
             worktreePath = run.WorktreePath,
             branchName = run.BranchName,

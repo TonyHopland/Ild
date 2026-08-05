@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import HaltSteerControls from "./HaltSteerControls";
 import {
+  HaltReason,
   WorkItemStatus,
   LoopRun,
   LoopRunNode,
@@ -87,6 +88,75 @@ describe("HaltSteerControls", () => {
     fireEvent.change(textarea, { target: { value: "focus on the bug" } });
     fireEvent.click(screen.getByRole("button", { name: /resume/i }));
     expect(onResumeSteer).toHaveBeenCalledWith("focus on the bug");
+  });
+
+  test("states which Resume the human gets when a provider interrupted the node", () => {
+    render(
+      <HaltSteerControls
+        run={run({
+          status: LoopRunStatus.WaitingHuman,
+          isHalted: true,
+          haltReason: HaltReason.Throttled,
+          nodes: [
+            node({
+              status: LoopRunNodeStatus.Interrupted,
+              error:
+                "Provider throttled this AI node — Resume will continue the same agent session where it left off.",
+              output: "You've hit your session limit · resets 9:40am (UTC)",
+            }),
+          ],
+        })}
+        workItemStatus={WorkItemStatus.HumanFeedback}
+        onResumeSteer={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/continue the same agent session/i)).toBeTruthy();
+    // The provider's own words carry the reset time; ILD parses no timestamps.
+    expect(screen.getByText(/resets 9:40am/i)).toBeTruthy();
+  });
+
+  test("keeps the plain steer window for a human halt", () => {
+    render(
+      <HaltSteerControls
+        run={run({
+          status: LoopRunStatus.WaitingHuman,
+          isHalted: true,
+          // The row a human's Halt really leaves behind: no halt reason, and an
+          // Interrupted node that DOES carry an error, because the halt cancels
+          // the run's token and the engine records the cancellation on the node.
+          // Reading the node instead of the run's own reason would show this as
+          // a provider interruption.
+          nodes: [
+            node({
+              status: LoopRunNodeStatus.Interrupted,
+              error: "Run cancelled",
+              output: "I was partway through refactoring the store when",
+            }),
+          ],
+        })}
+        workItemStatus={WorkItemStatus.HumanFeedback}
+        onResumeSteer={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/halted — steer & resume/i)).toBeTruthy();
+    expect(screen.queryByText(/provider interrupted/i)).toBeNull();
+    expect(screen.queryByText(/run cancelled/i)).toBeNull();
+  });
+
+  test("labels a shutdown park as a plain halt, not a provider interruption", () => {
+    render(
+      <HaltSteerControls
+        run={run({
+          status: LoopRunStatus.WaitingHuman,
+          isHalted: true,
+          haltReason: HaltReason.Shutdown,
+          nodes: [node({ status: LoopRunNodeStatus.Interrupted, error: "Run cancelled" })],
+        })}
+        workItemStatus={WorkItemStatus.HumanFeedback}
+        onResumeSteer={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/halted — steer & resume/i)).toBeTruthy();
   });
 
   test("abandons a running run after confirming, even on a non-AI node", () => {

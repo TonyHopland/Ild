@@ -63,4 +63,37 @@ ILD has.
 - The frontend gates its steer dialog on `IsHalted` alone, so a shutdown-parked
   run briefly offers a steer box between startup and auto-resume. Harmless —
   steering it just resumes with the note — but exposing `HaltReason` in the run
-  DTO and labelling it is the honest follow-up.
+  DTO and labelling it is the honest follow-up. **Done** with the throttle park
+  below: both run endpoints now project `haltReason`, and the steer window reads
+  it rather than guessing from a node's prose.
+
+## Addendum: a throttled AI node parks here too
+
+An AI provider interrupting the node — a usage or session limit, HTTP 429, an
+overloaded provider, a dropped stream — now parks the run through this same halt
+rather than routing it onto the `on_failure` edge. It is the same row shape
+(`WaitingHuman` + `IsHalted`, resumed by `ResumeFromHaltAsync` against
+`CurrentAiSessionId`), stamped `HaltReason.Throttled` and carrying the
+`AI Provider Throttled` feedback reason, and it reuses the engine's existing
+outcome switch rather than building a second park beside it. It is deliberately
+**not** routed through `HaltRunAsync`: that cancels the run's CTS to kill a live
+agent, and a throttled adapter has already exited. Genuine failures — auth, a
+missing model, a validation error, a crashed process, an exhausted context
+window — still take `on_failure`, unchanged. Context exhaustion is a genuine
+failure on purpose: resuming the same session walks back into the same wall, so
+parking would only relocate the dead end.
+
+The steer window labels the park and offers the provider's own words, keyed off
+the run's `haltReason` rather than off its node rows: a human's Halt also ends
+its node `Interrupted` **with** an error ("Run cancelled"), so the rows cannot
+tell the two parks apart, while the field that records who parked the run can.
+
+`Throttled` behaves like `Human`, not like `Shutdown`. Blanket auto-resume was
+reconsidered here — bounded retries on a backoff schedule, swept by a background
+service — and declined again, for the reason above and one more: the reset time
+is stated in the provider's own words ("resets 9:40am (UTC)"), and a schedule
+built by parsing that would be ILD guessing at a contract no provider offers. So
+the park shows the adapter's raw output and a person decides when to click
+Resume. That is the accepted cost: a throttled run needs one human Resume per
+interruption. Nothing here needs a migration — `HaltReason` is an existing int
+column.

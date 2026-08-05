@@ -4,14 +4,45 @@ using ILD.Data.Entities;
 namespace ILD.Core.Services.Interfaces;
 
 /// <summary>
+/// Why an adapter's unit of work ended unsuccessfully — the difference between
+/// "the agent could not do the work" and "the provider would not let it try".
+/// An adapter that has a structured signal (e.g. opencode's
+/// <c>{"type":"error"}</c> event) classifies from it; everything else is left
+/// <see cref="Unknown"/> and classified from the failure text by
+/// <c>AiFailureClassifier</c> in the AI node executor. The shared fallback is
+/// what keeps ADR-0009 parity from rotting silently: forgetting an adapter
+/// costs precision, not the feature.
+/// </summary>
+public enum FailureKind
+{
+    /// <summary>Not classified at the adapter; the executor's text classifier decides.</summary>
+    Unknown = 0,
+
+    /// <summary>
+    /// The provider stopped the work rather than the work failing — usage or
+    /// session limit reached, HTTP 429, an overloaded provider, a mid-stream
+    /// connection drop. The engine parks the run for a human to resume once the
+    /// limit resets instead of following the <c>on_failure</c> edge.
+    /// </summary>
+    Interrupted,
+
+    /// <summary>
+    /// A genuine failure: auth, a missing model, a validation error, a crashed
+    /// adapter process, an exhausted context window, or an agent that reported
+    /// failing work. Follows the <c>on_failure</c> edge, unchanged.
+    /// </summary>
+    Failed,
+}
+
+/// <summary>
 /// Adapter-level result type shared with <c>IAgentAdapter</c>. Represents the
 /// outcome of an inner unit of work (e.g. an LLM call, a process). Executors
 /// translate this into the higher-level <see cref="NodeOutcome"/>.
 /// </summary>
-public sealed record NodeExecutionResult(bool Success, string? Output = null, string? Error = null, string? ResolvedPrompt = null, string? SessionId = null, string? IncomingSessionId = null, ILD.Data.DTOs.TokenUsage? Usage = null)
+public sealed record NodeExecutionResult(bool Success, string? Output = null, string? Error = null, string? ResolvedPrompt = null, string? SessionId = null, string? IncomingSessionId = null, ILD.Data.DTOs.TokenUsage? Usage = null, FailureKind Failure = FailureKind.Unknown)
 {
     public static NodeExecutionResult Ok(string? output = null, string? resolvedPrompt = null, string? sessionId = null, string? incomingSessionId = null, ILD.Data.DTOs.TokenUsage? usage = null) => new(true, output, null, resolvedPrompt, sessionId, incomingSessionId, usage);
-    public static NodeExecutionResult Fail(string error, string? output = null) => new(false, output, error);
+    public static NodeExecutionResult Fail(string error, string? output = null, FailureKind failure = FailureKind.Unknown) => new(false, output, error, Failure: failure);
 }
 
 /// <summary>
@@ -38,6 +69,20 @@ public abstract record NodeOutcome
 
     /// <summary>Node failed; engine follows the fallback (<see cref="EdgeType.OnFailure"/>) edge.</summary>
     public sealed record Fail(EdgeType Edge, string Reason, string? Output = null) : NodeOutcome;
+
+    /// <summary>
+    /// The AI provider interrupted the node instead of the work failing (see
+    /// <see cref="FailureKind.Interrupted"/>). The engine parks the run exactly
+    /// as a halt does (ADR-0017) — <c>WaitingHuman</c> + <c>IsHalted</c>,
+    /// stamped <c>HaltReason.Throttled</c> — so the existing Resume path picks
+    /// it up when the human decides the limit has reset. No edge is followed and
+    /// the node row is recorded <c>Interrupted</c>, not <c>Failed</c>.
+    /// <paramref name="Reason"/> says which kind of Resume the human is getting
+    /// (same session, or a cold restart of the node); <paramref name="Output"/>
+    /// is the adapter's raw text, which is where the provider states when the
+    /// limit resets.
+    /// </summary>
+    public sealed record Interrupted(string Reason, string? Output = null) : NodeOutcome;
 
     /// <summary>
     /// Node is awaiting an external action (human response, webhook). The
