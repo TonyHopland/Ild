@@ -512,10 +512,14 @@ function PreviewServiceTable({
  * Repository-wide preview environment editor embedded in the Preview tab. Despite
  * the ".env" label it is NOT a file: the text is stored encrypted in ILD and
  * injected as environment variables when a preview starts — never written into the
- * worktree (so it can't be committed) and never returned in plaintext (only whether
- * one is set). It is a property of the *repository*, not this work item, so the
- * warning makes the repo-wide, persisted scope explicit. The field starts blank and
- * a save replaces the stored value; a blank save is a no-op.
+ * worktree, so it can't be committed. It is a property of the *repository*, not this
+ * work item, so the warning makes the repo-wide, persisted scope explicit.
+ *
+ * The stored text is fetched only when the user expands the editor — it is the one
+ * plaintext read of a secret in the UI, so it does not ride along on every Preview
+ * tab render — and the field is then prefilled with it, so an edit is an edit rather
+ * than a retype. Saving an emptied field means "remove it" and takes the dedicated
+ * clear path, since the repository PUT reads a blank .env as "keep what is stored".
  */
 function RepoEnvEditor({
   repository,
@@ -525,31 +529,61 @@ function RepoEnvEditor({
   onSaved: () => void;
 }) {
   const [value, setValue] = useState("");
+  // The text as stored, once fetched: null until then, and the baseline that says
+  // whether the field is dirty.
+  const [stored, setStored] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   if (!repository) return null;
 
+  const load = async () => {
+    if (stored !== null || loading) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const text = await repositoryService.getPreviewEnv(repository.id);
+      setStored(text);
+      setValue(text);
+    } catch {
+      setError("Failed to load the custom .env.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // An unknown baseline — a fetch that failed — still lets the user write a new
+  // .env, but never lets a blank field be read as a removal.
+  const dirty = value !== (stored ?? "");
+
   const save = async () => {
-    if (!value.trim() || saving) return;
+    if (saving || !dirty) return;
     setSaving(true);
     setMessage(null);
     setError(null);
     try {
-      // The PUT replaces the whole repository row, so carry its current fields
-      // through unchanged and only set the new custom .env.
-      await repositoryService.update(repository.id, {
-        name: repository.name,
-        cloneUrl: repository.cloneUrl,
-        remoteProviderId: repository.remoteProviderId,
-        defaultBranch: repository.defaultBranch,
-        worktreesPath: repository.worktreesPath,
-        defaultIntakeStatus: repository.defaultIntakeStatus,
-        previewEnv: value,
-      });
-      setValue("");
-      setMessage("Saved. Applied on the next preview start.");
+      if (value.trim() === "" && stored !== null) {
+        await repositoryService.clearPreviewEnv(repository.id);
+        setStored("");
+        setValue("");
+        setMessage("Removed. Applied on the next preview start.");
+      } else {
+        // The PUT replaces the whole repository row, so carry its current fields
+        // through unchanged and only set the new custom .env.
+        await repositoryService.update(repository.id, {
+          name: repository.name,
+          cloneUrl: repository.cloneUrl,
+          remoteProviderId: repository.remoteProviderId,
+          defaultBranch: repository.defaultBranch,
+          worktreesPath: repository.worktreesPath,
+          defaultIntakeStatus: repository.defaultIntakeStatus,
+          previewEnv: value,
+        });
+        setStored(value);
+        setMessage("Saved. Applied on the next preview start.");
+      }
       onSaved();
     } catch {
       setError("Failed to save the custom .env.");
@@ -559,7 +593,12 @@ function RepoEnvEditor({
   };
 
   return (
-    <details className="preview-env">
+    <details
+      className="preview-env"
+      onToggle={(e) => {
+        if (e.currentTarget.open) void load();
+      }}
+    >
       <summary className="preview-env-summary">
         Custom .env{" "}
         <span className="preview-env-state">{repository.hasPreviewEnv ? "(set)" : "(none)"}</span>
@@ -576,10 +615,11 @@ function RepoEnvEditor({
         rows={5}
         value={value}
         spellCheck={false}
+        disabled={loading}
         onChange={(e) => setValue(e.target.value)}
         placeholder={
-          repository.hasPreviewEnv
-            ? "•••••• (set — type to replace it)"
+          loading
+            ? "Loading…"
             : "KEY=value\n# injected into preview processes as environment variables"
         }
       />
@@ -593,9 +633,9 @@ function RepoEnvEditor({
             type="button"
             className="btn btn-sm btn-primary"
             onClick={() => void save()}
-            disabled={!value.trim() || saving}
+            disabled={!dirty || saving}
           >
-            {saving ? "Saving…" : "Save .env"}
+            {saving ? "Saving…" : value.trim() === "" && stored ? "Remove .env" : "Save .env"}
           </button>
         </div>
       </div>

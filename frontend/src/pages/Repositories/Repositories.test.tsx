@@ -318,7 +318,7 @@ describe("Repositories page", () => {
     expect(body.previewEnv).toBe("API_TOKEN=secret\nFOO=bar");
   });
 
-  test("edit form leaves the Custom .env blank and omits it when unchanged", async () => {
+  test("edit form prefills the stored Custom .env and omits it when unchanged", async () => {
     const repos = [
       {
         id: "repo-1",
@@ -368,14 +368,32 @@ describe("Repositories page", () => {
       expect(screen.getByText("my-repo")).toBeTruthy();
     });
 
+    // The list load must not have reached for the plaintext .env.
+    expect(
+      fetchMock.mock.calls.some(
+        (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("/preview-env"),
+      ),
+    ).toBe(false);
+
+    fetchMock.mockReturnValueOnce(
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify({ previewEnv: "API_TOKEN=stored" })),
+      }),
+    );
+
     fireEvent.click(screen.getByText("Edit"));
     await waitFor(() => {
       expect(screen.getByText("Edit Repository")).toBeTruthy();
     });
 
-    // Never pre-filled with the secret — starts blank even when one is stored.
+    // Opening the editor fetches the stored text and prefills it, so an edit is an
+    // edit rather than a retype.
     const envField = screen.getByLabelText("Custom .env") as HTMLTextAreaElement;
-    expect(envField.value).toBe("");
+    await waitFor(() => {
+      expect(envField.value).toBe("API_TOKEN=stored");
+    });
 
     fetchMock
       .mockReturnValueOnce(
@@ -411,8 +429,83 @@ describe("Repositories page", () => {
     );
     expect(putCall).toBeTruthy();
     const body = JSON.parse((putCall![1] as { body: string }).body);
-    // A blank field must not send previewEnv, so the stored secret is kept.
+    // An untouched field must not send previewEnv, so the stored secret is kept.
     expect("previewEnv" in body).toBe(false);
+  });
+
+  test("emptying the prefilled Custom .env removes the stored value", async () => {
+    const repos = [
+      {
+        id: "repo-1",
+        name: "my-repo",
+        cloneUrl: "https://git.example.com/my-repo.git",
+        remoteProviderId: "prov-1",
+        defaultBranch: "main",
+        worktreesPath: null,
+        defaultIntakeStatus: "Backlog",
+        hasPreviewEnv: true,
+        createdAt: "2025-01-01T00:00:00Z",
+      },
+    ];
+
+    const providers = [
+      {
+        id: "prov-1",
+        name: "Forgejo",
+        type: "gitea",
+        baseUrl: "https://git.example.com",
+        apiKey: "",
+        webhookSecret: "",
+        createdAt: "2025-01-01T00:00:00Z",
+      },
+    ];
+
+    const ok = (json: unknown) =>
+      Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify(json)) });
+
+    const fetchMock = mockFetch(null);
+    fetchMock.mockReturnValueOnce(ok(repos)).mockReturnValueOnce(ok(providers));
+
+    renderPage(fetchMock);
+    await waitFor(() => {
+      expect(screen.getByText("my-repo")).toBeTruthy();
+    });
+
+    fetchMock.mockReturnValueOnce(ok({ previewEnv: "API_TOKEN=stored" }));
+    fireEvent.click(screen.getByText("Edit"));
+
+    const envField = screen.getByLabelText("Custom .env") as HTMLTextAreaElement;
+    await waitFor(() => {
+      expect(envField.value).toBe("API_TOKEN=stored");
+    });
+
+    fireEvent.change(envField, { target: { value: "" } });
+
+    fetchMock
+      .mockReturnValueOnce(ok(repos[0]))
+      .mockReturnValueOnce(ok({ ...repos[0], hasPreviewEnv: false }))
+      .mockReturnValueOnce(ok(repos))
+      .mockReturnValueOnce(ok(providers));
+
+    fireEvent.click(screen.getByText("Update"));
+    await waitFor(() => {
+      expect(screen.queryByText("Edit Repository")).toBeFalsy();
+    });
+
+    // The PUT reads a blank .env as "keep it", so removing takes the explicit
+    // clear call instead.
+    const putCall = fetchMock.mock.calls.find(
+      (c: unknown[]) => (c[1] as { method?: string })?.method === "PUT",
+    );
+    expect("previewEnv" in JSON.parse((putCall![1] as { body: string }).body)).toBe(false);
+    expect(
+      fetchMock.mock.calls.some(
+        (c: unknown[]) =>
+          typeof c[0] === "string" &&
+          (c[0] as string).endsWith("/repositories/repo-1/preview-env") &&
+          (c[1] as { method?: string })?.method === "DELETE",
+      ),
+    ).toBe(true);
   });
 
   test("auto-fills name and default branch from the remote on clone-URL blur", async () => {

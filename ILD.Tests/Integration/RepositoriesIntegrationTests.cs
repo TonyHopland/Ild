@@ -104,6 +104,70 @@ public class RepositoriesIntegrationTests
         Assert.Equal(env, await ReadStoredPreviewEnvAsync(factory, id));
     }
 
+    // The agent service token authenticates on every /api path, so it reaches this
+    // controller as readily as a browser does. These tests pin the explicit refusal.
+    private static HttpClient CreateAgentClient(ApiFactory factory)
+    {
+        var client = factory.CreateClient();
+        var token = factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token;
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        return client;
+    }
+
+    [Fact]
+    public async Task PreviewEnv_endpoint_returns_the_decrypted_text_to_a_signed_in_user()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var providerId = await SeedProviderAsync(factory);
+
+        const string env = "API_TOKEN=secret-abc\nFOO=bar";
+        var createResponse = await client.PostAsJsonAsync("/api/v1/repositories", NewRepoPayload(providerId, env));
+        var id = (await createResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+
+        var response = await client.GetAsync($"/api/v1/repositories/{id}/preview-env");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(env, body.GetProperty("previewEnv").GetString());
+    }
+
+    [Fact]
+    public async Task PreviewEnv_endpoint_is_forbidden_to_the_agent_token()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var providerId = await SeedProviderAsync(factory);
+
+        var createResponse = await client.PostAsJsonAsync("/api/v1/repositories", NewRepoPayload(providerId, "API_TOKEN=secret-abc"));
+        var id = (await createResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+
+        var agent = CreateAgentClient(factory);
+        var read = await agent.GetAsync($"/api/v1/repositories/{id}/preview-env");
+        Assert.Equal(HttpStatusCode.Forbidden, read.StatusCode);
+        Assert.DoesNotContain("secret-abc", await read.Content.ReadAsStringAsync());
+
+        // The agent must not be able to destroy it either.
+        var cleared = await agent.DeleteAsync($"/api/v1/repositories/{id}/preview-env");
+        Assert.Equal(HttpStatusCode.Forbidden, cleared.StatusCode);
+        Assert.Equal("API_TOKEN=secret-abc", await ReadStoredPreviewEnvAsync(factory, id));
+    }
+
+    [Fact]
+    public async Task Delete_preview_env_clears_the_stored_value()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var providerId = await SeedProviderAsync(factory);
+
+        var createResponse = await client.PostAsJsonAsync("/api/v1/repositories", NewRepoPayload(providerId, "GOING=away"));
+        var id = (await createResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+
+        var response = await client.DeleteAsync($"/api/v1/repositories/{id}/preview-env");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.False((await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("hasPreviewEnv").GetBoolean());
+        Assert.Null(await ReadStoredPreviewEnvAsync(factory, id));
+    }
+
     [Fact]
     public async Task Update_with_a_new_preview_env_replaces_the_stored_value()
     {

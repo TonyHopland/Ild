@@ -13,8 +13,11 @@ namespace ILD.Core.Services.Interfaces;
 /// service/install <see cref="System.Diagnostics.ProcessStartInfo"/> — it is never
 /// written to a file in the worktree, so it cannot be staged by a run's
 /// <c>git add -A</c> and pushed into a PR. It also never enters the coding-agent's
-/// own process environment, and the agent-facing API does not return it, so an agent
-/// can't read it back. This env-var-only injection is deliberately preferred over
+/// own process environment. The plaintext is readable over the API at exactly one
+/// place — <c>GET api/v1/repositories/{id}/preview-env</c>, so the human who owns the
+/// repository can edit what is already stored — and that endpoint refuses the agent
+/// service token outright; no agent-facing payload or MCP tool carries it. This
+/// env-var-only injection is deliberately preferred over
 /// materialising a <c>.env</c> file, which would be both committable and directly
 /// readable.
 /// </para>

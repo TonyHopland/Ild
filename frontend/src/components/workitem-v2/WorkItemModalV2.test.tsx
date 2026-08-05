@@ -1169,6 +1169,17 @@ describe("WorkItemModalV2 creation", () => {
     });
   }
 
+  // jsdom renders a collapsed <details> body but does not toggle it from a summary
+  // click, so drive the open state (and the toggle event the editor loads on) by hand.
+  async function openEnvEditor() {
+    const details = document.querySelector("details.preview-env") as HTMLDetailsElement;
+    await act(async () => {
+      details.open = true;
+      fireEvent(details, new Event("toggle"));
+      await Promise.resolve();
+    });
+  }
+
   test("preview tab renders one table row per service with state, name, port and link", async () => {
     mockServices();
     vi.spyOn(authServices.workItemService, "getPreview").mockResolvedValue({
@@ -1252,6 +1263,10 @@ describe("WorkItemModalV2 creation", () => {
       createdAt: "2025-01-01T00:00:00Z",
     });
 
+    const envSpy = vi
+      .spyOn(authServices.repositoryService, "getPreviewEnv")
+      .mockResolvedValue("STORED=1");
+
     await renderDialog(makeWorkItem({ worktreePath: "/wt" }));
     await openPreviewTab();
 
@@ -1260,9 +1275,19 @@ describe("WorkItemModalV2 creation", () => {
     expect(warning.textContent).toMatch(/Repository-wide/);
     expect(warning.textContent).toMatch(/every.*work item that uses it, not just this one/);
 
+    // The plaintext is only fetched once the user expands the editor.
+    expect(envSpy).not.toHaveBeenCalled();
+    const textarea = screen.getByPlaceholderText(
+      /injected into preview processes/i,
+    ) as HTMLTextAreaElement;
+    await openEnvEditor();
+    expect(envSpy).toHaveBeenCalledWith("repo-1");
+    await waitFor(() => {
+      expect(textarea.value).toBe("STORED=1");
+    });
+
     // Editing and saving persists via the repository update endpoint (repo-wide),
     // not a per-work-item call.
-    const textarea = screen.getByPlaceholderText(/injected into preview processes/i);
     await act(async () => {
       fireEvent.change(textarea, { target: { value: "API_TOKEN=x" } });
       await Promise.resolve();
@@ -1276,6 +1301,51 @@ describe("WorkItemModalV2 creation", () => {
       "repo-1",
       expect.objectContaining({ previewEnv: "API_TOKEN=x" }),
     );
+  });
+
+  test("emptying the custom .env editor removes the stored value", async () => {
+    mockServices();
+    vi.spyOn(authServices.workItemService, "getPreview").mockResolvedValue({
+      configured: true,
+      state: "stopped",
+      worktreePath: "/wt",
+      configPath: null,
+      profileName: null,
+      publicHost: null,
+      stateDirectory: null,
+      message: null,
+      services: [],
+    });
+    const updateSpy = vi.spyOn(authServices.repositoryService, "update");
+    vi.spyOn(authServices.repositoryService, "getPreviewEnv").mockResolvedValue("STORED=1");
+    const clearSpy = vi
+      .spyOn(authServices.repositoryService, "clearPreviewEnv")
+      .mockResolvedValue({} as never);
+
+    await renderDialog(makeWorkItem({ worktreePath: "/wt" }));
+    await openPreviewTab();
+
+    const textarea = (await screen.findByPlaceholderText(
+      /injected into preview processes/i,
+    )) as HTMLTextAreaElement;
+    await openEnvEditor();
+    await waitFor(() => {
+      expect(textarea.value).toBe("STORED=1");
+    });
+
+    await act(async () => {
+      fireEvent.change(textarea, { target: { value: "" } });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Remove \.env/i }));
+      await Promise.resolve();
+    });
+
+    // The repository update endpoint reads a blank .env as "keep it", so removing
+    // has to go through the dedicated clear call.
+    expect(clearSpy).toHaveBeenCalledWith("repo-1");
+    expect(updateSpy).not.toHaveBeenCalled();
   });
 
   test("editing a service port sends it as an override when starting the preview", async () => {
