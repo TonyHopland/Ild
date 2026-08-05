@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Repository, RemoteProvider, WorkItemStatus } from "../../types";
 import { repositoryService, remoteProviderService } from "../../services/auth";
+import { useStoredPreviewEnv } from "../../hooks/useStoredPreviewEnv";
 
 export default function Repositories() {
   const [repositories, setRepositories] = useState<Repository[]>([]);
@@ -13,16 +14,15 @@ export default function Repositories() {
   const [remoteProviderId, setRemoteProviderId] = useState("");
   const [defaultBranch, setDefaultBranch] = useState("main");
   const [worktreesPath, setWorktreesPath] = useState("");
-  const [previewEnv, setPreviewEnv] = useState("");
-  // The stored .env text, fetched when an edit opens: null until it arrives, and
-  // the baseline that tells a real edit from an untouched field.
-  const [storedPreviewEnv, setStoredPreviewEnv] = useState<string | null>(null);
-  const [previewEnvLoading, setPreviewEnvLoading] = useState(false);
   const [defaultIntakeStatus, setDefaultIntakeStatus] = useState<WorkItemStatus>(
     WorkItemStatus.Backlog,
   );
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [isInspecting, setIsInspecting] = useState(false);
+  // The .env is masked out of the repository list, so the plaintext is fetched only
+  // once an edit is open — never behind the page load — and only for the repository
+  // being edited: a response for a previously-edited one is dropped.
+  const previewEnv = useStoredPreviewEnv(editingRepo?.id ?? null);
 
   useEffect(() => {
     void loadData();
@@ -51,27 +51,7 @@ export default function Repositories() {
     setRemoteProviderId(repo.remoteProviderId);
     setDefaultBranch(repo.defaultBranch || "main");
     setWorktreesPath(repo.worktreesPath || "");
-    // The .env is masked out of the repository list, so fetch the plaintext now the
-    // user has actually opened the editor — never on the page load behind it.
-    setPreviewEnv("");
-    setStoredPreviewEnv(null);
     setDefaultIntakeStatus(repo.defaultIntakeStatus);
-    void loadPreviewEnv(repo.id);
-  };
-
-  const loadPreviewEnv = async (id: string) => {
-    setPreviewEnvLoading(true);
-    try {
-      const text = await repositoryService.getPreviewEnv(id);
-      setStoredPreviewEnv(text);
-      setPreviewEnv(text);
-    } catch (error) {
-      // A failed fetch leaves the baseline null, which keeps the save from reading
-      // the blank field as "the user removed the .env".
-      console.error("Failed to load the custom .env:", error);
-    } finally {
-      setPreviewEnvLoading(false);
-    }
   };
 
   const openCreate = () => {
@@ -82,8 +62,6 @@ export default function Repositories() {
     setRemoteProviderId(providers[0]?.id || "");
     setDefaultBranch("main");
     setWorktreesPath("");
-    setPreviewEnv("");
-    setStoredPreviewEnv(null);
     setDefaultIntakeStatus(WorkItemStatus.Backlog);
   };
 
@@ -115,24 +93,19 @@ export default function Repositories() {
       defaultBranch,
       worktreesPath: worktreesPath || null,
       defaultIntakeStatus,
+      // The .env rides along only when the user changed the prefilled text; emptying
+      // it removes the stored value instead, which this write cannot express and the
+      // commit below does.
+      ...previewEnv.pendingWrite,
     };
-    // The .env only rides along when the user actually changed the prefilled text.
-    // Emptying a prefilled field means "remove it", which the update endpoint cannot
-    // express — it reads a blank .env as "keep what is stored" — so that takes the
-    // clear call instead. An unknown baseline (a new repo, or a fetch that failed)
-    // still sends whatever was typed, but never removes anything.
-    const envChanged = previewEnv !== (storedPreviewEnv ?? "");
-    const removeEnv =
-      !!editingRepo && storedPreviewEnv !== null && envChanged && previewEnv.trim() === "";
-    if (envChanged && !removeEnv) data.previewEnv = previewEnv;
 
     try {
       if (editingRepo) {
         await repositoryService.update(editingRepo.id, data);
-        if (removeEnv) await repositoryService.clearPreviewEnv(editingRepo.id);
       } else {
         await repositoryService.create(data);
       }
+      await previewEnv.commit();
       await loadData();
       setShowModal(false);
       setEditingRepo(null);
@@ -308,16 +281,23 @@ export default function Repositories() {
                   id="repoPreviewEnv"
                   className="repo-env-textarea"
                   rows={5}
-                  value={previewEnv}
-                  disabled={previewEnvLoading}
-                  onChange={(e) => setPreviewEnv(e.target.value)}
+                  value={previewEnv.value}
+                  disabled={previewEnv.loading}
+                  onChange={(e) => previewEnv.setValue(e.target.value)}
                   placeholder={
-                    previewEnvLoading
+                    previewEnv.loading
                       ? "Loading…"
                       : "KEY=value\n# injected into preview processes; uncommitted secrets go here"
                   }
                   spellCheck={false}
                 />
+                {previewEnv.loadError && (
+                  // An unreadable value must not look like an absent one: without
+                  // this the field is blank and enabled, exactly like "none stored".
+                  <span className="repo-hint repo-hint-error" role="alert">
+                    {previewEnv.loadError}
+                  </span>
+                )}
                 <span className="repo-hint">
                   Stored encrypted in ILD and injected as environment variables into preview install
                   steps and services on start — never written to a file in the worktree, so it can't
@@ -539,6 +519,10 @@ export default function Repositories() {
         .repo-hint {
           font-size: 0.7rem;
           color: #707090;
+        }
+
+        .repo-hint-error {
+          color: #f87171;
         }
 
         .modal-body input,

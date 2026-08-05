@@ -508,6 +508,80 @@ describe("Repositories page", () => {
     ).toBe(true);
   });
 
+  test("a Custom .env that cannot be read says so instead of looking unset", async () => {
+    const repos = [
+      {
+        id: "repo-1",
+        name: "my-repo",
+        cloneUrl: "https://git.example.com/my-repo.git",
+        remoteProviderId: "prov-1",
+        defaultBranch: "main",
+        worktreesPath: null,
+        defaultIntakeStatus: "Backlog",
+        hasPreviewEnv: true,
+        createdAt: "2025-01-01T00:00:00Z",
+      },
+    ];
+
+    const providers = [
+      {
+        id: "prov-1",
+        name: "Forgejo",
+        type: "gitea",
+        baseUrl: "https://git.example.com",
+        apiKey: "",
+        webhookSecret: "",
+        createdAt: "2025-01-01T00:00:00Z",
+      },
+    ];
+
+    const ok = (json: unknown) =>
+      Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify(json)) });
+
+    const fetchMock = mockFetch(null);
+    fetchMock.mockReturnValueOnce(ok(repos)).mockReturnValueOnce(ok(providers));
+
+    renderPage(fetchMock);
+    await waitFor(() => {
+      expect(screen.getByText("my-repo")).toBeTruthy();
+    });
+
+    fetchMock.mockReturnValueOnce(
+      Promise.resolve({
+        ok: false,
+        status: 500,
+        statusText: "Server Error",
+        text: () => Promise.resolve(""),
+      }),
+    );
+    fireEvent.click(screen.getByText("Edit"));
+
+    // An empty field would otherwise be indistinguishable from "no .env stored".
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/Couldn't load the stored custom \.env/);
+
+    fetchMock
+      .mockReturnValueOnce(ok(repos[0]))
+      .mockReturnValueOnce(ok(repos))
+      .mockReturnValueOnce(ok(providers));
+
+    fireEvent.click(screen.getByText("Update"));
+    await waitFor(() => {
+      expect(screen.queryByText("Edit Repository")).toBeFalsy();
+    });
+
+    // The blank field is not read as a removal: nothing about the .env is sent.
+    const putCall = fetchMock.mock.calls.find(
+      (c: unknown[]) => (c[1] as { method?: string })?.method === "PUT",
+    );
+    expect("previewEnv" in JSON.parse((putCall![1] as { body: string }).body)).toBe(false);
+    expect(
+      fetchMock.mock.calls.some(
+        (c: unknown[]) => (c[1] as { method?: string })?.method === "DELETE",
+      ),
+    ).toBe(false);
+  });
+
   test("auto-fills name and default branch from the remote on clone-URL blur", async () => {
     const repos: unknown[] = [];
     const providers = [
