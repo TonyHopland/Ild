@@ -73,6 +73,15 @@ public static class AiFailureClassifier
     /// vocabulary an agent narrating its own work does not reach for. Trusted in
     /// the agent's output as well as in the error text, because this is the shape
     /// an in-band cut-off arrives in.
+    ///
+    /// <para>
+    /// The residual: an agent that <em>quotes</em> this vocabulary — writing
+    /// "usage limit reached" into its own answer — parks a node that failed for
+    /// its own reasons. That is inherent to reading the output at all, which the
+    /// only real throttle we have leaves no alternative to, and it fails toward a
+    /// visible park a human clears in one click rather than toward a run that
+    /// keeps firing into an unreset limit.
+    /// </para>
     /// </summary>
     private static readonly Regex[] NoticeRules =
     {

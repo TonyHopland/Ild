@@ -63,7 +63,9 @@ ILD has.
 - The frontend gates its steer dialog on `IsHalted` alone, so a shutdown-parked
   run briefly offers a steer box between startup and auto-resume. Harmless —
   steering it just resumes with the note — but exposing `HaltReason` in the run
-  DTO and labelling it is the honest follow-up.
+  DTO and labelling it is the honest follow-up. **Done** with the throttle park
+  below: both run endpoints now project `haltReason`, and the steer window reads
+  it rather than guessing from a node's prose.
 
 ## Addendum: a throttled AI node parks here too
 
@@ -80,6 +82,11 @@ missing model, a validation error, a crashed process, an exhausted context
 window — still take `on_failure`, unchanged. Context exhaustion is a genuine
 failure on purpose: resuming the same session walks back into the same wall, so
 parking would only relocate the dead end.
+
+The steer window labels the park and offers the provider's own words, keyed off
+the run's `haltReason` rather than off its node rows: a human's Halt also ends
+its node `Interrupted` **with** an error ("Run cancelled"), so the rows cannot
+tell the two parks apart, while the field that records who parked the run can.
 
 `Throttled` behaves like `Human`, not like `Shutdown`. Blanket auto-resume was
 reconsidered here — bounded retries on a backoff schedule, swept by a background

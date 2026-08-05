@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import HaltSteerControls from "./HaltSteerControls";
 import {
+  HaltReason,
   WorkItemStatus,
   LoopRun,
   LoopRunNode,
@@ -95,6 +96,7 @@ describe("HaltSteerControls", () => {
         run={run({
           status: LoopRunStatus.WaitingHuman,
           isHalted: true,
+          haltReason: HaltReason.Throttled,
           nodes: [
             node({
               status: LoopRunNodeStatus.Interrupted,
@@ -119,7 +121,36 @@ describe("HaltSteerControls", () => {
         run={run({
           status: LoopRunStatus.WaitingHuman,
           isHalted: true,
-          nodes: [node({ status: LoopRunNodeStatus.Interrupted, error: null })],
+          // The row a human's Halt really leaves behind: no halt reason, and an
+          // Interrupted node that DOES carry an error, because the halt cancels
+          // the run's token and the engine records the cancellation on the node.
+          // Reading the node instead of the run's own reason would show this as
+          // a provider interruption.
+          nodes: [
+            node({
+              status: LoopRunNodeStatus.Interrupted,
+              error: "Run cancelled",
+              output: "I was partway through refactoring the store when",
+            }),
+          ],
+        })}
+        workItemStatus={WorkItemStatus.HumanFeedback}
+        onResumeSteer={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/halted — steer & resume/i)).toBeTruthy();
+    expect(screen.queryByText(/provider interrupted/i)).toBeNull();
+    expect(screen.queryByText(/run cancelled/i)).toBeNull();
+  });
+
+  test("labels a shutdown park as a plain halt, not a provider interruption", () => {
+    render(
+      <HaltSteerControls
+        run={run({
+          status: LoopRunStatus.WaitingHuman,
+          isHalted: true,
+          haltReason: HaltReason.Shutdown,
+          nodes: [node({ status: LoopRunNodeStatus.Interrupted, error: "Run cancelled" })],
         })}
         workItemStatus={WorkItemStatus.HumanFeedback}
         onResumeSteer={vi.fn()}

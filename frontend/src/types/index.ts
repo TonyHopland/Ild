@@ -338,6 +338,17 @@ export enum LoopRunStatus {
   WaitingHuman = "WaitingHuman",
 }
 
+/**
+ * Who parked a halted run. Null/absent means a human pressed Halt — which is
+ * also what every row written before the field existed says.
+ */
+export enum HaltReason {
+  Human = "Human",
+  Shutdown = "Shutdown",
+  /** An AI provider interrupted the node: usage/session limit, 429, overload. */
+  Throttled = "Throttled",
+}
+
 export enum LoopRunNodeStatus {
   Pending = "Pending",
   Running = "Running",
@@ -402,6 +413,8 @@ export interface LoopRun {
   currentNodeId: string | null;
   isPaused: boolean;
   isHalted?: boolean;
+  /** Who parked the run, when `isHalted`; absent/null for a human's Halt. */
+  haltReason?: HaltReason | string | null;
   retain?: boolean;
   worktreePath?: string | null;
   branchName?: string | null;

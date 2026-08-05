@@ -285,6 +285,61 @@ public class LoopRunsControllerTests
         Assert.Equal("# Summary\n\nall done", item.GetType().GetProperty("value")!.GetValue(item));
     }
 
+    [Theory]
+    // The UI has to say WHY a run is parked — a provider interruption offers a
+    // different Resume than a human's Halt — and the only place that is recorded
+    // is the run's own halt reason. Inferring it from the node rows cannot work:
+    // a human's Halt also ends its node Interrupted with an error.
+    [InlineData(HaltReason.Throttled, "Throttled")]
+    [InlineData(HaltReason.Shutdown, "Shutdown")]
+    [InlineData(null, null)]
+    public async Task GetById_projects_the_halt_reason(HaltReason? haltReason, string? expected)
+    {
+        var runId = Guid.NewGuid();
+        var run = new LoopRun
+        {
+            Id = runId,
+            WorkItemId = "wi-1",
+            Status = LoopRunStatus.WaitingHuman,
+            IsHalted = true,
+            HaltReason = haltReason,
+        };
+
+        var store = new Mock<ILoopRunStore>();
+        store.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(run);
+        store.Setup(s => s.GetRunNodesWithNodeAsync(runId)).ReturnsAsync(Array.Empty<LoopRunNode>());
+        store.Setup(s => s.GetSessionSnapshotsAsync(runId)).ReturnsAsync(Array.Empty<AdapterSessionSnapshot>());
+        store.Setup(s => s.GetSessionBindingsAsync(runId)).ReturnsAsync(Array.Empty<LoopRunSessionBinding>());
+        store.Setup(s => s.GetVariablesAsync(runId)).ReturnsAsync(Array.Empty<LoopRunVariable>());
+
+        var result = await BuildController(store, new Mock<IRunReclaimer>()).GetById(runId.ToString());
+
+        var payload = Assert.IsType<OkObjectResult>(result).Value!;
+        Assert.Equal(expected, payload.GetType().GetProperty("haltReason")!.GetValue(payload));
+    }
+
+    [Fact]
+    public async Task GetAll_projects_the_halt_reason()
+    {
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = "wi-1",
+            Status = LoopRunStatus.WaitingHuman,
+            IsHalted = true,
+            HaltReason = HaltReason.Throttled,
+            RunNodes = new List<LoopRunNode>(),
+        };
+        var store = new Mock<ILoopRunStore>();
+        store.Setup(s => s.GetAllAsync(0, 100)).ReturnsAsync(new[] { run });
+
+        var result = await BuildController(store, new Mock<IRunReclaimer>()).GetAll();
+
+        var payload = (System.Collections.IEnumerable)Assert.IsType<OkObjectResult>(result).Value!;
+        var item = Assert.Single(payload.Cast<object>());
+        Assert.Equal("Throttled", item.GetType().GetProperty("haltReason")!.GetValue(item));
+    }
+
     [Fact]
     public async Task GetSessionPreview_returns_snapshot_json_for_session()
     {
