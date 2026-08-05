@@ -5,6 +5,7 @@ using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -143,8 +144,18 @@ public sealed class AINodeExecutor : INodeExecutor
         // (ignore UseSession) with the human's note — or a neutral continue when
         // they gave none — as the next message. The note is cleared as it is
         // consumed so a later visit to this node runs normally.
+        //
+        // Continuing needs a session to continue. A run halted or throttle-parked
+        // before the adapter ever reported one resumes COLD instead: the node's
+        // own prompt, rendered as normal, with the human's note appended. Sending
+        // "Continue where you left off." into a brand-new session would hand the
+        // agent the follow-up to a conversation it never had.
         var steeringNote = ctx.Run.SteeringNote;
-        var isSteering = steeringNote is not null;
+        var isResuming = steeringNote is not null;
+        var isSteering = isResuming && !string.IsNullOrWhiteSpace(ctx.Run.CurrentAiSessionId);
+        var coldRestartNote = isResuming && !isSteering && !string.IsNullOrWhiteSpace(steeringNote)
+            ? steeringNote
+            : null;
 
         var prompt = isSteering
             ? (string.IsNullOrWhiteSpace(steeringNote) ? "Continue where you left off." : steeringNote!)
@@ -154,12 +165,17 @@ public sealed class AINodeExecutor : INodeExecutor
         // exactly once, and what substitution pulls in is never re-scanned. A
         // steering note is not a template field — it is the human's own words,
         // typed at halt→resume — so it reaches the agent verbatim, for the same
-        // reason a chat turn is not rendered (ADR-0011).
+        // reason a chat turn is not rendered (ADR-0011). That holds for the note
+        // appended to a cold restart too: it is appended after rendering.
         string rendered = prompt;
         if (!isSteering && rendering is not null)
             rendered = await rendering.RenderAsync(prompt, ctx.Run.Id, wi, ctx.Run.PreviousNodeOutput);
+        if (coldRestartNote is not null)
+            rendered = string.IsNullOrWhiteSpace(rendered) ? coldRestartNote : $"{rendered}\n\n{coldRestartNote}";
 
-        if (isSteering && scopeFactory is not null)
+        // Consumed either way — a note left behind would re-apply on every later
+        // visit to this node.
+        if (isResuming && scopeFactory is not null)
             await ClearSteeringNoteAsync(scopeFactory, ctx.Run.Id);
 
         yield return new NodeOutcome.NodeStarting(rendered);
@@ -252,8 +268,61 @@ public sealed class AINodeExecutor : INodeExecutor
         }
         else
         {
+            // A throttle is not a failing node: the work never got to happen. The
+            // adapter classifies when it has a structured signal; otherwise the
+            // shared text classifier reads the failure — output first, because
+            // every adapter renders a non-zero exit as "exit=N stderr=..." and the
+            // provider's notice ("You've hit your session limit · resets 9:40am")
+            // arrives as the agent's output.
+            var failure = result.Failure != FailureKind.Unknown
+                ? result.Failure
+                : AiFailureClassifier.Classify(result.Output, result.Error);
+            if (failure == FailureKind.Interrupted)
+            {
+                // Which Resume the human is about to get depends on whether the
+                // session id reached the DB, because that column is the exact
+                // value the resumed node continues from (see the steering branch
+                // above). Reload rather than trust the in-memory run: the capture
+                // is written from the adapter's stream task in its own scope, so
+                // this instance has not seen it. A failed reload leaves the
+                // pre-node value, which promises the less of the two Resumes.
+                await ReloadRunAsync(sp, ctx.Run);
+                yield return new NodeOutcome.Interrupted(
+                    InterruptedReason(ctx.Run.CurrentAiSessionId, result.Error), result.Output);
+                yield break;
+            }
             yield return new NodeOutcome.Fail(EdgeType.OnFailure, result.Error ?? "AI adapter failed", result.Output);
         }
+    }
+
+    /// <summary>
+    /// What the parked run tells the human, which is really one thing: what
+    /// pressing Resume will do. With a captured session it continues the same
+    /// agent conversation; without one (throttled before the session started, or
+    /// the capture write was lost) it re-runs the node from scratch. A throttle
+    /// parks either way — the value the park buys is control over <em>when</em>
+    /// the next attempt fires, and that survives losing the session.
+    /// </summary>
+    private static string InterruptedReason(string? sessionId, string? adapterError)
+    {
+        var message = string.IsNullOrWhiteSpace(sessionId)
+            ? "Provider throttled before the session started — Resume will restart this node from the beginning."
+            : "Provider throttled this AI node — Resume will continue the same agent session where it left off.";
+        return string.IsNullOrWhiteSpace(adapterError)
+            ? message
+            : $"{message} (adapter: {adapterError.Trim()})";
+    }
+
+    /// <summary>
+    /// Refresh the run instance with the row's current column values, so a
+    /// column another scope wrote while the node ran (here: the mid-stream
+    /// session-id capture) is visible. Best-effort — the caller only reads, and
+    /// the stale value it falls back to understates what Resume offers.
+    /// </summary>
+    private static async Task ReloadRunAsync(IServiceProvider sp, LoopRun run)
+    {
+        try { await sp.GetRequiredService<ILoopRunStore>().ReloadAsync(run); }
+        catch { /* best-effort */ }
     }
 
     /// <summary>
@@ -339,16 +408,35 @@ public sealed class AINodeExecutor : INodeExecutor
     /// the adapter's stream task in a fresh DI scope (fires once per run);
     /// best-effort — capturing the session is observational and must never take
     /// down the stream read.
+    ///
+    /// <para>
+    /// Still best-effort, but no longer silent. Halt→resume and the throttle park
+    /// both continue from this column, so a lost write is the difference between
+    /// Resume continuing the agent's conversation and Resume re-running the node
+    /// cold. Killing a live AI node over a bookkeeping write would be worse, so
+    /// the failure is logged rather than raised — a degraded park has to be
+    /// explainable after the fact.
+    /// </para>
     /// </summary>
     private static void PersistSessionId(IServiceScopeFactory factory, Guid runId, string sessionId)
     {
         try
         {
             using var scope = factory.CreateScope();
-            var store = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
-            store.SetCurrentAiSessionIdAsync(runId, sessionId).GetAwaiter().GetResult();
+            var sp = scope.ServiceProvider;
+            try
+            {
+                sp.GetRequiredService<ILoopRunStore>()
+                    .SetCurrentAiSessionIdAsync(runId, sessionId).GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                sp.GetService<ILogger<AINodeExecutor>>()?.LogWarning(ex,
+                    "Run {RunId}: failed to persist AI session id; a halt or throttle park will resume this node from the beginning instead of the live session",
+                    runId);
+            }
         }
-        catch { /* best-effort */ }
+        catch { /* the scope itself is gone — nothing left to log through */ }
     }
 
     private static async Task ClearSteeringNoteAsync(IServiceScopeFactory factory, Guid runId)

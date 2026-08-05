@@ -200,6 +200,34 @@ public class ClaudeCodeAdapterTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_classifies_a_usage_limit_result_error_as_an_interruption()
+    {
+        // The result event's own error text is the provider's message, isolated,
+        // so this adapter classifies from it (parity with OpenCodeAdapter — a
+        // capability one adapter has and another lacks is a parity bug, ADR-0009).
+        var worktreeDir = CreateWorktree();
+        var scriptPath = Path.Combine(worktreeDir, "fake-claude.sh");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "echo '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"sess-x\"}'\n" +
+            "echo '{\"type\":\"result\",\"session_id\":\"sess-x\",\"is_error\":true,\"result\":\"Claude usage limit reached. Your limit will reset at 9:40am (UTC).\"}'\n");
+        Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var result = await new ClaudeCodeAdapter().ExecuteAsync(
+                BuildContext(binaryPath: scriptPath, worktreePath: worktreeDir));
+
+            Assert.False(result.Success);
+            Assert.Equal(ILD.Core.Services.Interfaces.FailureKind.Interrupted, result.Failure);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_passes_resume_flag_when_session_id_is_set()
     {
         var worktreeDir = CreateWorktree();

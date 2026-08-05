@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ILD.Core.Services.Implementations.Adapters;
+using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -1323,6 +1324,63 @@ public class OpenCodeAdapterTests
 
             Assert.False(result.Success);
             Assert.Contains("invalid api key", result.Error);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_classifies_a_rate_limited_session_error_as_an_interruption()
+    {
+        // The `{"type":"error"}` event isolates the provider's own message, so
+        // this adapter classifies from it directly instead of leaving the node
+        // executor to find it in a prefixed error string. An interruption parks
+        // the run for a human Resume rather than taking the on_failure edge.
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-429-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "echo '{\"type\":\"error\",\"timestamp\":1,\"sessionID\":\"ses_x\",\"error\":{\"name\":\"ProviderRateLimitError\",\"data\":{\"message\":\"429 rate limit exceeded, retry after 60s\"}}}'\n");
+        MakeExecutable(scriptPath);
+
+        try
+        {
+            var result = await new OpenCodeAdapter().ExecuteAsync(BuildContext(
+                binaryPath: scriptPath, prompt: "ignored", worktreePath: worktreeDir, executionCount: 1));
+
+            Assert.False(result.Success);
+            Assert.Equal(FailureKind.Interrupted, result.Failure);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_leaves_an_auth_session_error_for_the_on_failure_edge()
+    {
+        // Same structured path, opposite verdict: an auth failure is genuine, and
+        // classifying it as an interruption would park a run that will never
+        // recover without a human changing the credentials.
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-auth-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "echo '{\"type\":\"error\",\"timestamp\":1,\"sessionID\":\"ses_x\",\"error\":{\"name\":\"ProviderAuthError\",\"data\":{\"message\":\"invalid api key\"}}}'\n");
+        MakeExecutable(scriptPath);
+
+        try
+        {
+            var result = await new OpenCodeAdapter().ExecuteAsync(BuildContext(
+                binaryPath: scriptPath, prompt: "ignored", worktreePath: worktreeDir, executionCount: 1));
+
+            Assert.False(result.Success);
+            Assert.NotEqual(FailureKind.Interrupted, result.Failure);
         }
         finally
         {

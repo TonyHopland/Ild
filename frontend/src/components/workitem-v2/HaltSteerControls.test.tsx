@@ -89,6 +89,45 @@ describe("HaltSteerControls", () => {
     expect(onResumeSteer).toHaveBeenCalledWith("focus on the bug");
   });
 
+  test("states which Resume the human gets when a provider interrupted the node", () => {
+    render(
+      <HaltSteerControls
+        run={run({
+          status: LoopRunStatus.WaitingHuman,
+          isHalted: true,
+          nodes: [
+            node({
+              status: LoopRunNodeStatus.Interrupted,
+              error:
+                "Provider throttled this AI node — Resume will continue the same agent session where it left off.",
+              output: "You've hit your session limit · resets 9:40am (UTC)",
+            }),
+          ],
+        })}
+        workItemStatus={WorkItemStatus.HumanFeedback}
+        onResumeSteer={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/continue the same agent session/i)).toBeTruthy();
+    // The provider's own words carry the reset time; ILD parses no timestamps.
+    expect(screen.getByText(/resets 9:40am/i)).toBeTruthy();
+  });
+
+  test("keeps the plain steer window for a human halt", () => {
+    render(
+      <HaltSteerControls
+        run={run({
+          status: LoopRunStatus.WaitingHuman,
+          isHalted: true,
+          nodes: [node({ status: LoopRunNodeStatus.Interrupted, error: null })],
+        })}
+        workItemStatus={WorkItemStatus.HumanFeedback}
+        onResumeSteer={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/halted — steer & resume/i)).toBeTruthy();
+  });
+
   test("abandons a running run after confirming, even on a non-AI node", () => {
     const onCleanupBacklog = vi.fn();
     render(

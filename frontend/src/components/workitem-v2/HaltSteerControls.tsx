@@ -1,5 +1,11 @@
 import { useState } from "react";
-import { LoopRun, LoopRunStatus, LoopRunNodeStatus, WorkItemStatus } from "../../types";
+import {
+  LoopRun,
+  LoopRunNode,
+  LoopRunStatus,
+  LoopRunNodeStatus,
+  WorkItemStatus,
+} from "../../types";
 
 interface HaltSteerControlsProps {
   /** The work item's current run (detail with nodes + nodeType), or null. */
@@ -41,6 +47,24 @@ function isNodeRunning(value: unknown): boolean {
   return value === LoopRunNodeStatus.Running || value === 1;
 }
 
+function isNodeInterrupted(value: unknown): boolean {
+  return value === LoopRunNodeStatus.Interrupted || value === 6;
+}
+
+/**
+ * Why the run is parked, when the engine parked it itself rather than a human
+ * pressing Halt — an AI provider interrupting the node (a usage/session limit, a
+ * 429, an overloaded provider). The interrupted node carries the explanation of
+ * which Resume the human is about to get (same agent session, or a cold restart
+ * of the node) and the provider's own words, which is where the reset time is
+ * stated: ILD parses no timestamps and schedules nothing.
+ */
+function parkedInterruption(run: LoopRun): LoopRunNode | null {
+  const interrupted = run.nodes?.filter((n) => isNodeInterrupted(n.status)) ?? [];
+  const last = interrupted[interrupted.length - 1];
+  return last?.error ? last : null;
+}
+
 /**
  * Halt-and-steer control surfaced wherever the live view of a running work item
  * is shown. While an AI node is in flight it renders a Halt button; once the run
@@ -77,6 +101,7 @@ export default function HaltSteerControls({
   const canHalt =
     !!onHalt && workItemStatus === WorkItemStatus.Running && isRunningStatus && !!runningAiNode;
   const isHalted = !!onResumeSteer && isWaitingHuman && !!run.isHalted;
+  const interruption = isHalted ? parkedInterruption(run) : null;
   // Abandon applies to any non-terminal run — actively running OR parked for
   // human feedback — so a run heading the wrong way can be dropped without
   // first halting it, even when the AI is not currently running. A halted run
@@ -187,7 +212,17 @@ export default function HaltSteerControls({
       )}
       {isHalted && (
         <div className="wiv2-feedback">
-          <div className="wiv2-feedback-title">Halted — steer &amp; resume</div>
+          <div className="wiv2-feedback-title">
+            {interruption ? "Provider interrupted — resume when ready" : "Halted — steer & resume"}
+          </div>
+          {interruption && (
+            <div className="feedback-reason">
+              <div>{interruption.error}</div>
+              {interruption.output && (
+                <pre className="wiv2-interruption-output">{interruption.output}</pre>
+              )}
+            </div>
+          )}
           <textarea
             className="feedback-textarea"
             value={steerNote}

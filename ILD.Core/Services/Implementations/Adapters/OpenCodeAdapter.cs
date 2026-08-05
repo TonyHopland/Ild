@@ -172,7 +172,13 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             }
 
             if (p.ExitCode == 0 && !string.IsNullOrEmpty(jsonError))
-                return NodeExecutionResult.Fail($"opencode session error: {jsonError}", response);
+                // opencode's `{"type":"error"}` event isolates the provider's own
+                // message, so classify from that rather than leaving the executor
+                // to read it back out of a prefixed error string next to a page of
+                // agent narration. Unknown is passed through deliberately: the
+                // executor's fallback still gets its turn.
+                return NodeExecutionResult.Fail(
+                    $"opencode session error: {jsonError}", response, AiFailureClassifier.Classify(jsonError));
 
             // Model produced no text despite a clean exit — treat as retryable
             // failure so the on_failure edge can recover instead of propagating
