@@ -316,6 +316,14 @@ describe("Repositories page", () => {
     expect(postCall).toBeTruthy();
     const body = JSON.parse((postCall![1] as { body: string }).body);
     expect(body.previewEnv).toBe("API_TOKEN=secret\nFOO=bar");
+
+    // A second New Repository form starts blank — the previous repository's .env
+    // must not be sitting in it, silently unsent because it looks unchanged.
+    fireEvent.click(screen.getByText("+ New Repository"));
+    await waitFor(() => {
+      expect(screen.getByText("New Repository")).toBeTruthy();
+    });
+    expect((screen.getByLabelText("Custom .env") as HTMLTextAreaElement).value).toBe("");
   });
 
   test("edit form prefills the stored Custom .env and omits it when unchanged", async () => {

@@ -120,6 +120,65 @@ describe("useStoredPreviewEnv", () => {
     expect(result.current.dirty).toBe(false);
   });
 
+  test("reset starts a fresh session, even when the repository has not changed", async () => {
+    const read = mockRead(() => Promise.resolve("STORED=1"));
+
+    const { result } = renderHook(() => useStoredPreviewEnv("repo-1"));
+    await waitFor(() => {
+      expect(result.current.value).toBe("STORED=1");
+    });
+
+    act(() => result.current.setValue("ABANDONED=1"));
+    act(() => result.current.reset());
+
+    // Blank with an unknown baseline again, then re-read from the store.
+    expect(result.current.value).toBe("");
+    expect(result.current.dirty).toBe(false);
+    await waitFor(() => {
+      expect(result.current.value).toBe("STORED=1");
+    });
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  test("reset gives consecutive create forms — no repository at all — a blank field", async () => {
+    const read = mockRead(() => Promise.resolve("unused"));
+
+    // A create form has no repository yet, so nothing is fetched and anything typed
+    // is new text to write.
+    const { result } = renderHook(() => useStoredPreviewEnv(null));
+    act(() => result.current.setValue("FIRST=1"));
+    expect(result.current.pendingWrite).toEqual({ previewEnv: "FIRST=1" });
+    await act(async () => {
+      await result.current.commit();
+    });
+
+    act(() => result.current.reset());
+    expect(result.current.value).toBe("");
+    expect(result.current.dirty).toBe(false);
+    expect(result.current.pendingWrite).toBeNull();
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  test("a read that lands after the user typed keeps their text and still saves it", async () => {
+    let release: (text: string) => void = () => {};
+    mockRead(
+      () =>
+        new Promise<string>((resolve) => {
+          release = resolve;
+        }),
+    );
+
+    const { result } = renderHook(() => useStoredPreviewEnv("repo-1"));
+    act(() => result.current.setValue("TYPED=1"));
+
+    await act(async () => {
+      release("STORED=1");
+      await Promise.resolve();
+    });
+    expect(result.current.value).toBe("TYPED=1");
+    expect(result.current.pendingWrite).toEqual({ previewEnv: "TYPED=1" });
+  });
+
   test("committing a written value re-baselines it, so a second save sends nothing", async () => {
     mockRead(() => Promise.resolve("STORED=1"));
     const clear = vi.spyOn(repositoryService, "clearPreviewEnv");

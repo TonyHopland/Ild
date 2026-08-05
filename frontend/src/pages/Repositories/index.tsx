@@ -52,6 +52,9 @@ export default function Repositories() {
     setDefaultBranch(repo.defaultBranch || "main");
     setWorktreesPath(repo.worktreesPath || "");
     setDefaultIntakeStatus(repo.defaultIntakeStatus);
+    // Every form field starts from this repository, the .env included: a session
+    // that was abandoned rather than saved must not carry into the new one.
+    previewEnv.reset();
   };
 
   const openCreate = () => {
@@ -63,6 +66,7 @@ export default function Repositories() {
     setDefaultBranch("main");
     setWorktreesPath("");
     setDefaultIntakeStatus(WorkItemStatus.Backlog);
+    previewEnv.reset();
   };
 
   // When adding a repo, pull the name and default branch from the remote so the

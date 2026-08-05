@@ -34,6 +34,13 @@ export interface StoredPreviewEnv {
   /** The patch to merge into a repository create/update payload, or null when the payload must not carry the .env. */
   pendingWrite: { previewEnv: string } | null;
   commit: () => Promise<void>;
+  /**
+   * Start a fresh editing session: blank field, unknown baseline, and a re-read of
+   * whatever repository is current. Call this when an editor opens, since the same
+   * repository — including *no* repository, as two consecutive create forms are —
+   * would otherwise still hold the last session's text.
+   */
+  reset: () => void;
 }
 
 export function useStoredPreviewEnv(
@@ -46,17 +53,20 @@ export function useStoredPreviewEnv(
   const [baseline, setBaseline] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Bumped by reset(), so an editor that reopens on the same repository (or on
+  // none) starts over rather than inheriting the previous session.
+  const [session, setSession] = useState(0);
   const loadedFor = useRef<string | null>(null);
 
-  // Everything held here belongs to one repository. Drop it the moment that
-  // changes, before the new value has arrived.
+  // Everything held here belongs to one repository and one editing session. Drop it
+  // the moment either changes, before any new value has arrived.
   useEffect(() => {
     loadedFor.current = null;
     setValue("");
     setBaseline(null);
     setLoadError(null);
     setLoading(false);
-  }, [repositoryId]);
+  }, [repositoryId, session]);
 
   useEffect(() => {
     if (!enabled || !repositoryId || loadedFor.current === repositoryId) return;
@@ -70,22 +80,28 @@ export function useStoredPreviewEnv(
         const text = await repositoryService.getPreviewEnv(repositoryId);
         if (!cancelled) {
           setBaseline(text);
-          setValue(text);
+          // Prefill, but never over text the user wrote while the read was in the
+          // air — the baseline alone is enough to make that a save.
+          setValue((current) => (current === "" ? text : current));
         }
       } catch {
-        if (!cancelled) setLoadError(PREVIEW_ENV_LOAD_ERROR);
+        if (!cancelled) {
+          // Nothing was loaded, so let a reopened editor try again.
+          loadedFor.current = null;
+          setLoadError(PREVIEW_ENV_LOAD_ERROR);
+        }
       } finally {
         settled = true;
         if (!cancelled) setLoading(false);
       }
     })();
-    // A request that never settled leaves nothing loaded, so let the next run
-    // (a reopened editor, or React's remount in StrictMode) ask again.
+    // A request that never settled leaves nothing loaded either, so the next run
+    // (a reopened editor, or React's remount in StrictMode) asks again.
     return () => {
       cancelled = true;
       if (!settled) loadedFor.current = null;
     };
-  }, [repositoryId, enabled]);
+  }, [repositoryId, enabled, session]);
 
   const dirty = value !== (baseline ?? "");
   const removing = dirty && baseline !== null && value.trim() === "";
@@ -112,5 +128,6 @@ export function useStoredPreviewEnv(
     removing,
     pendingWrite: dirty && !removing ? { previewEnv: value } : null,
     commit,
+    reset: () => setSession((n) => n + 1),
   };
 }
