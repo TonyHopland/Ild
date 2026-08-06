@@ -6,7 +6,7 @@ Both deployable images (`ghcr.io/tonyhopland/ild` and `ghcr.io/tonyhopland/ild-w
 
 **The canonical release tag is `vX.Y.Z`; the stray bare `0.2.0` git tag is ignored.** The CI trigger filters tags to `v*`, and `compute-version.sh` rejects any tag that is not `vX.Y.Z`, so the legacy bare tag can never trigger a publish. The image tag strips the leading `v`.
 
-**arm64 is built via QEMU emulation.** Emulated arm64 builds are slow, but publishing only happens on infrequent release tags, so the cost is acceptable.
+**Each architecture is built natively, then joined into one manifest.** `publish.yml` fans out over `{image} × {arch}`: amd64 on `ubuntu-latest`, arm64 on `ubuntu-24.04-arm`. Each of the four jobs pushes _by digest only_ — no tags — and a per-image `merge` job binds its two digests together under `X.Y.Z` / `X.Y` / `latest` with `docker buildx imagetools create`. So the release tags only ever appear once every arch is green; a failed arch leaves untagged blobs and publishes nothing. This replaces building arm64 under QEMU emulation, which was slow enough to dominate the release build. The per-arch builds must use per-arch buildx cache scopes: two `mode=max` writers sharing one scope overwrite each other's manifest and silently leave both arches cacheless.
 
 **Version stamping overrides only the informational `Version`.** Releases publish with `dotnet publish -p:Version=X.Y.Z` (from the tag); the numeric `AssemblyVersion`/`FileVersion` keep the `Directory.Build.props` values, so assembly identity stays clean and only the human-facing version carries the release version. The override flows in as the `VERSION` Docker build arg, which is empty for local/compose builds so they keep the props version unchanged.
 

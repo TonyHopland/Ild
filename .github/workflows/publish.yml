@@ -4,6 +4,12 @@ name: Publish
 # final, build-gated job on release tags so a failing build never publishes.
 # Tagging/arch rules are recorded in docs/adr/0012-ghcr-image-tagging-strategy.md:
 #   tag vX.Y.Z    -> tags X.Y.Z / X.Y / latest, amd64 + arm64
+#
+# Each {image, arch} pair builds natively on a runner of its own architecture
+# and is pushed *by digest only* -- no tags. A per-image `merge` job then binds
+# the two digests together under the release tags with `imagetools create`. The
+# tags therefore only ever appear once all four builds are green: a failed arch
+# leaves untagged blobs in the registry and publishes nothing.
 on:
   workflow_call:
 
@@ -11,12 +17,18 @@ permissions:
   contents: read
   packages: write
 
+env:
+  REGISTRY_PREFIX: ghcr.io/tonyhopland
+
 jobs:
-  publish:
-    runs-on: ubuntu-latest
+  build:
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
+        image: [ild, ild-workitem-server]
+        arch: [amd64, arm64]
+        # Per-image and per-arch attributes, folded into all four combinations.
         include:
           - image: ild
             dockerfile: Dockerfile
@@ -31,6 +43,10 @@ jobs:
           - image: ild-workitem-server
             dockerfile: Dockerfile.WorkItemServer
             extra_build_args: ""
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
@@ -41,21 +57,18 @@ jobs:
             "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME")"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      # Labels only: the registry tags are applied by the merge job, on the
+      # manifest. The semver pattern still has to be spelled out, because it is
+      # also what sets org.opencontainers.image.version. Left to its default
+      # (type=ref,event=tag) that label reads `v1.2.3` while the registry tags
+      # and the VERSION baked into the very same image read `1.2.3`, and
+      # `imagetools create` adds no index annotation that could correct it.
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/tonyhopland/${{ matrix.image }}
-          # `latest` tracks the newest release.
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-          flavor: |
-            latest=auto
-
-      # arm64 is built via QEMU emulation (slow, but releases are infrequent).
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+          images: ${{ env.REGISTRY_PREFIX }}/${{ matrix.image }}
+          tags: type=semver,pattern={{version}}
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
@@ -67,19 +80,94 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          platforms: linux/${{ matrix.arch }}
           labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.REGISTRY_PREFIX }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
           build-args: |
             VERSION=${{ steps.vars.outputs.version }}
             ${{ matrix.extra_build_args }}
-          # Scope the cache per image so the two matrix builds don't clobber
-          # each other's gha cache entries.
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          # Scope the cache per image *and* per arch. Two mode=max writers
+          # sharing one scope overwrite each other's manifest, so an
+          # image-wide scope would silently leave both arches cacheless.
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ matrix.arch }}
+
+      # The digest is all the merge job needs; the filename carries it, so the
+      # files themselves are empty. Arch first in the artifact name: `ild` is a
+      # prefix of `ild-workitem-server`, so an image-first name could not be
+      # globbed back apart per image.
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}-${{ matrix.image }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [ild, ild-workitem-server]
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*-${{ matrix.image }}
+          merge-multiple: true
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY_PREFIX }}/${{ matrix.image }}
+          # `latest` tracks the newest release.
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+          flavor: |
+            latest=auto
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # One manifest list per image, tagged from the metadata above, with the
+      # per-arch children named by the digest each build job left behind (the
+      # downloaded files are empty; their names are the payload).
+      - name: Create and push manifest list
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf "${IMAGE}@sha256:%s " *)
+        env:
+          IMAGE: ${{ env.REGISTRY_PREFIX }}/${{ matrix.image }}
+
+      - name: Inspect manifest list
+        run: docker buildx imagetools inspect "$IMAGE:$VERSION"
+        env:
+          IMAGE: ${{ env.REGISTRY_PREFIX }}/${{ matrix.image }}
+          VERSION: ${{ steps.meta.outputs.version }}
