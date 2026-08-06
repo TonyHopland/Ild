@@ -10,9 +10,9 @@ name: Image (extra targets)
 #                       ever selects it -- the batteries-included build in
 #                       ci.yml always resolves to final-base-1.
 #   ild-workitem-server the second Dockerfile.
-#   ild-arm64           arm64 under QEMU emulation, which is slow. publish.yml
-#                       builds arm64 for real at release; this surfaces a break
-#                       on the PR instead of on the release tag.
+#   ild-arm64           arm64 on a native arm64 runner. publish.yml builds arm64
+#                       for real at release; this surfaces a break on the PR
+#                       instead of on the release tag.
 #
 # The paths list covers more than the Dockerfiles because the images embed the
 # project and dependency graph: Dockerfile COPYs each .csproj by name, and the
@@ -39,7 +39,8 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Each entry builds on a runner of its own architecture -- no emulation.
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
@@ -47,6 +48,8 @@ jobs:
           - name: ild-runtime-base
             dockerfile: Dockerfile
             platform: linux/amd64
+            runner: ubuntu-latest
+            shared_scope: ci-ild
             build_args: |
               WITH_NODE=1
               WITH_DOTNET_SDK=0
@@ -54,20 +57,20 @@ jobs:
           - name: ild-workitem-server
             dockerfile: Dockerfile.WorkItemServer
             platform: linux/amd64
+            runner: ubuntu-latest
+            shared_scope: ci-ild
             build_args: ""
           - name: ild-arm64
             dockerfile: Dockerfile
             platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            shared_scope: ild-arm64
             build_args: |
               WITH_NODE=1
               WITH_DOTNET_SDK=1
               WITH_CHROME=1
     steps:
       - uses: actions/checkout@v4
-
-      # Only the arm64 entry needs emulation; the action is a no-op for the
-      # amd64 entries and cheap enough not to bother gating.
-      - uses: docker/setup-qemu-action@v3
 
       - uses: docker/setup-buildx-action@v3
 
@@ -79,11 +82,13 @@ jobs:
           platforms: ${{ matrix.platform }}
           push: false
           build-args: ${{ matrix.build_args }}
-          # Read ci.yml's scope as well: ild-runtime-base shares this
-          # Dockerfile's frontend-build and build stages with the main image and
-          # differs only in the final stage's base, so those stages come from
-          # cache rather than being rebuilt.
+          # Read a second, foreign scope as well. For the amd64 entries that is
+          # ci.yml's: ild-runtime-base shares this Dockerfile's frontend-build
+          # and build stages with the main image and differs only in the final
+          # stage's base, so those stages come from cache rather than being
+          # rebuilt. ci.yml only builds amd64, so arm64 reads publish.yml's
+          # arm64 scope instead -- the same image, same build args, same arch.
           cache-from: |
             type=gha,scope=extra-${{ matrix.name }}
-            type=gha,scope=ci-ild
+            type=gha,scope=${{ matrix.shared_scope }}
           cache-to: type=gha,mode=max,scope=extra-${{ matrix.name }}

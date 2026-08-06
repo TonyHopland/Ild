@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The repository's custom .env is now shown to you when you open the editor, instead of a row of dots.** Editing it is an edit rather than a retype, and clearing the field removes the stored value. Coding agents are refused the plaintext outright.
 - **Name a work item's branch yourself.** A **Branch name** field on the work item takes a git branch name and every run of that item uses it verbatim, instead of the generated `ild/wi-<id>-run-<n>`. Because that branch is no longer unique per run, a run whose name is already taken locally or on `origin` parks in Human Feedback naming the holder rather than starting on top of existing work. See [ADR-0008](docs/adr/0008-worktree-and-branch-per-run.md).
 
+### Changed
+
+- **arm64 images are built on arm64 runners instead of under QEMU emulation.** `publish.yml` now fans out over `{image} × {arch}` — four native builds that push by digest — and a per-image merge job joins each pair into one multi-arch manifest carrying the release tags, so the tags still appear only once every arch is green. The PR-time `ild-arm64` check moves to a native runner too. What a `vX.Y.Z` tag publishes is unchanged: `X.Y.Z`, `X.Y` and `latest`, amd64 + arm64. See [ADR-0012](docs/adr/0012-ghcr-image-tagging-strategy.md).
+
 ## [0.8.0] - 2026-08-02
 
 ### Added
