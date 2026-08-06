@@ -51,7 +51,7 @@ sentence is worded badly rather than pitched too short.
   it. This is the most tempting material because it is the freshest in your mind, and the least useful to
   a reader who cannot act on any of it.
 - No links — not to ADRs, docs, or issues. Anyone who wants more has the commit history and the PR.
-- No justification: not what it replaces, not what you rejected, not why it was hard.
+- No justification: not what you rejected, not why it was hard.
 - The size of the change is not the size of the entry. A large change usually earns a _shorter_ one,
   because there is more mechanism to leave out.
 
