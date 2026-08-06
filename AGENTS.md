@@ -42,14 +42,21 @@ skimming to find out what changed. It is not a review artifact, a post-mortem, o
 just did.
 
 **Budget: one bold sentence naming the user-visible change, then at most two sentences. Roughly 60 words
-total.** If it needs more than that, the depth belongs in an ADR under `docs/adr/` or in `docs/`, and the
-entry links to it — `See [ADR-0017](docs/adr/0017-shutdown-halts-the-in-flight-ai-node.md).`
+total — the Good example below sits at the limit.** If it needs more than that, the depth belongs in an ADR
+under `docs/adr/` or in `docs/`, and the entry links to it — `See [ADR-0017](docs/adr/0017-shutdown-halts-the-in-flight-ai-node.md).`
+
+Count the words before you commit, and treat the budget as a limit rather than a target to argue with. The
+size of the change does not license a longer entry: a big change usually earns a _shorter_ one that points
+at an ADR, because there is more mechanism to leave out, not less.
 
 - Lead with what is different now, in the present tense.
 - Then, only if it is not obvious, one sentence of why or what it replaces.
 - Omit changes that are not user-visible. Refactors, test scaffolding and internal renames get no entry.
 - No file paths, no symbol names, no narration of the debugging that led there, no listing of the cases
   that did _not_ change.
+- Do not explain the mechanism you just built — the jobs, matrices, endpoints, schemas or file layout. It
+  is the most tempting material precisely because it is freshest, and it is the least useful to a reader
+  who cannot act on any of it. It belongs in the ADR or the commit message.
 - Resist the urge to justify. Every clause you want to add about the alternative you rejected is a clause
   the reader has to skip.
 

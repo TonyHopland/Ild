@@ -60,7 +60,8 @@ change.
 - Update the relevant docs under `docs/` when you change behaviour or configuration.
 - Add an entry under the `[Unreleased]` section of [CHANGELOG.md](CHANGELOG.md)
   (the project follows [Keep a Changelog](https://keepachangelog.com) and
-  [Semantic Versioning](https://semver.org)).
+  [Semantic Versioning](https://semver.org)). Keep it to roughly 60 words and link an
+  ADR for the detail — see [Changelog Entries](AGENTS.md#changelog-entries).
 - Match the style and idioms of the surrounding code.
 
 ## Reporting bugs and proposing features
