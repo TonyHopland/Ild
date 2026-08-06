@@ -57,12 +57,18 @@ jobs:
             "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME")"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      # Labels only: the tags are applied by the merge job, on the manifest.
+      # Labels only: the registry tags are applied by the merge job, on the
+      # manifest. The semver pattern still has to be spelled out, because it is
+      # also what sets org.opencontainers.image.version. Left to its default
+      # (type=ref,event=tag) that label reads `v1.2.3` while the registry tags
+      # and the VERSION baked into the very same image read `1.2.3`, and
+      # `imagetools create` adds no index annotation that could correct it.
       - name: Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY_PREFIX }}/${{ matrix.image }}
+          tags: type=semver,pattern={{version}}
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3

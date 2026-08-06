@@ -49,7 +49,7 @@ jobs:
             dockerfile: Dockerfile
             platform: linux/amd64
             runner: ubuntu-latest
-            shared_scope: ci-ild
+            extra_cache_from: type=gha,scope=ci-ild
             build_args: |
               WITH_NODE=1
               WITH_DOTNET_SDK=0
@@ -58,13 +58,12 @@ jobs:
             dockerfile: Dockerfile.WorkItemServer
             platform: linux/amd64
             runner: ubuntu-latest
-            shared_scope: ci-ild
+            extra_cache_from: type=gha,scope=ci-ild
             build_args: ""
           - name: ild-arm64
             dockerfile: Dockerfile
             platform: linux/arm64
             runner: ubuntu-24.04-arm
-            shared_scope: ild-arm64
             build_args: |
               WITH_NODE=1
               WITH_DOTNET_SDK=1
@@ -82,13 +81,14 @@ jobs:
           platforms: ${{ matrix.platform }}
           push: false
           build-args: ${{ matrix.build_args }}
-          # Read a second, foreign scope as well. For the amd64 entries that is
-          # ci.yml's: ild-runtime-base shares this Dockerfile's frontend-build
-          # and build stages with the main image and differs only in the final
-          # stage's base, so those stages come from cache rather than being
-          # rebuilt. ci.yml only builds amd64, so arm64 reads publish.yml's
-          # arm64 scope instead -- the same image, same build args, same arch.
+          # The amd64 entries read ci.yml's scope as well: ild-runtime-base
+          # shares this Dockerfile's frontend-build and build stages with the
+          # main image and differs only in the final stage's base, so those
+          # stages come from cache rather than being rebuilt. The arm64 entry
+          # has no such donor and reads only its own scope -- ci.yml builds
+          # amd64 only, and publish.yml's arm64 scope is unreachable from here
+          # because it is written on tag refs, which a PR run cannot restore.
           cache-from: |
             type=gha,scope=extra-${{ matrix.name }}
-            type=gha,scope=${{ matrix.shared_scope }}
+            ${{ matrix.extra_cache_from }}
           cache-to: type=gha,mode=max,scope=extra-${{ matrix.name }}
