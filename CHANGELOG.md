@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **arm64 images are built on native arm64 runners instead of under QEMU emulation.** What a `vX.Y.Z` tag publishes is unchanged: `X.Y.Z`, `X.Y` and `latest`, amd64 + arm64. See [ADR-0012](docs/adr/0012-ghcr-image-tagging-strategy.md).
+- **arm64 images are built on native arm64 runners instead of under QEMU emulation.**
 
 ## [0.8.0] - 2026-08-02
 
