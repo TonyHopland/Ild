@@ -47,23 +47,33 @@ public sealed class IldClient
     private async Task<string> SendAsync(
         string method, string path, Func<Task<HttpResponseMessage>> send, CancellationToken ct)
     {
+        // Absolute, not the relative path the callers pass: which ILD instance
+        // answered is half the diagnosis. A preview's MCP server calling the host
+        // API instead of its own is a 401 that looks identical to an expired token
+        // until you can see the address it went to.
+        var url = $"{_http.BaseAddress}{path}";
+
         HttpResponseMessage resp;
         try
         {
             resp = await send();
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // The caller gave up; nothing failed and there is nothing to report.
+            throw;
+        }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
             throw new McpException(
-                $"{method} {_http.BaseAddress}{path} could not reach the ILD API " +
-                $"(ILD_API_URL={_opts.ApiUrl}): {ex.Message}");
+                $"{method} {url} could not reach the ILD API (ILD_API_URL={_opts.ApiUrl}): {ex.Message}");
         }
 
         using (resp)
         {
             var body = await resp.Content.ReadAsStringAsync(ct);
             if (!resp.IsSuccessStatusCode)
-                throw new McpException($"{method} {path} failed: {(int)resp.StatusCode} {resp.ReasonPhrase} — {body}");
+                throw new McpException($"{method} {url} failed: {(int)resp.StatusCode} {resp.ReasonPhrase} — {body}");
             return body;
         }
     }
