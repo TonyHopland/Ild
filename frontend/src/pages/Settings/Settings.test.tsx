@@ -155,6 +155,28 @@ describe("Settings signed-in devices", () => {
     });
   });
 
+  test("saves the absolute expiry setting independently of the idle one", async () => {
+    vi.spyOn(authServices.authService, "getSessions").mockResolvedValue([thisDevice]);
+    const put = vi
+      .spyOn(authServices.settingsService, "put")
+      .mockResolvedValue({ key: authServices.SessionSettingKeys.MaxDays, value: "180" });
+
+    render(
+      <MemoryRouter>
+        <Settings />
+      </MemoryRouter>,
+    );
+
+    const input = (await screen.findByLabelText(/however active/i)) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "180" } });
+    fireEvent.click(input.parentElement!.querySelector("button")!);
+
+    await waitFor(() => {
+      expect(put).toHaveBeenCalledWith(authServices.SessionSettingKeys.MaxDays, "180");
+    });
+    expect(put).toHaveBeenCalledTimes(1);
+  });
+
   test("rejects an out-of-range expiry without calling the API", async () => {
     vi.spyOn(authServices.authService, "getSessions").mockResolvedValue([thisDevice]);
     const put = vi.spyOn(authServices.settingsService, "put");
@@ -171,6 +193,32 @@ describe("Settings signed-in devices", () => {
 
     await screen.findByText(/must be an integer between 0/i);
     expect(put).not.toHaveBeenCalled();
+  });
+});
+
+describe("Settings numeric fields", () => {
+  test("each field validates against its own range", async () => {
+    const put = vi.spyOn(authServices.settingsService, "put");
+
+    render(
+      <MemoryRouter>
+        <Settings />
+      </MemoryRouter>,
+    );
+
+    // 0 is the floor for run retention but below the scheduler's minimum of 1.
+    const concurrent = (await screen.findByLabelText(/max concurrent/i)) as HTMLInputElement;
+    fireEvent.change(concurrent, { target: { value: "0" } });
+    fireEvent.click(concurrent.parentElement!.querySelector("button")!);
+    await screen.findByText("Must be an integer between 1 and 1000.");
+
+    const retention = screen.getByLabelText(/delete finished runs after/i) as HTMLInputElement;
+    fireEvent.change(retention, { target: { value: "0" } });
+    fireEvent.click(retention.parentElement!.querySelector("button")!);
+
+    await waitFor(() => {
+      expect(put).toHaveBeenCalledWith(authServices.SchedulerSettingKeys.RunRetentionDays, "0");
+    });
   });
 });
 
