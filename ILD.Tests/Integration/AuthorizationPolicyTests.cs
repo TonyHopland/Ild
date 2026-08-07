@@ -46,8 +46,32 @@ public class AuthorizationPolicyTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
-    [Fact]
-    public async Task An_unknown_API_path_is_not_answered_with_the_SPA()
+    [Theory]
+    [InlineData("/api/v1/loopruns/00000000-0000-0000-0000-000000000001/terminal")]
+    [InlineData("/api/v1/aiproviders/00000000-0000-0000-0000-000000000001/interactive")]
+    public async Task A_raw_WebSocket_endpoint_authenticates_from_the_access_token_query(string path)
+    {
+        // The worktree terminal and the interactive provider session are plain
+        // controller actions the browser upgrades to a WebSocket, so the token
+        // can only travel in the query string. Sent as an ordinary GET here: each
+        // action's first act is to reject a non-upgrade request, so a 400 means
+        // authorization let it through — which is the whole of what this pins.
+        await using var factory = new ApiFactory();
+        var client = factory.CreateClient();
+        var token = await factory.GetAdminTokenAsync();
+
+        var anonymous = await client.GetAsync(path);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+
+        var authenticated = await client.GetAsync($"{path}?access_token={token}");
+        Assert.Equal(HttpStatusCode.BadRequest, authenticated.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("/api/v1/looprins")]
+    [InlineData("/hubs/loop-runs")]
+    [InlineData("/metrics/summary")]
+    public async Task An_unknown_path_under_a_non_SPA_prefix_is_not_answered_with_the_SPA(string path)
     {
         // The SPA fallback is a catch-all over every extensionless path, so
         // without a narrower fallback ahead of it a mistyped API route would come
@@ -55,10 +79,10 @@ public class AuthorizationPolicyTests
         await using var factory = new ApiFactory();
         var client = factory.CreateClient();
 
-        var anonymous = await client.GetAsync("/api/v1/looprins");
+        var anonymous = await client.GetAsync(path);
         Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
 
-        var authenticated = await (await factory.CreateAuthenticatedClientAsync()).GetAsync("/api/v1/looprins");
+        var authenticated = await (await factory.CreateAuthenticatedClientAsync()).GetAsync(path);
         Assert.Equal(HttpStatusCode.NotFound, authenticated.StatusCode);
         Assert.DoesNotContain("ILD-UI-SPA-MARKER", await authenticated.Content.ReadAsStringAsync());
     }

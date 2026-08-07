@@ -232,12 +232,15 @@ try
 
     if (Directory.Exists(wwwroot))
     {
-        // An unknown API or hub path is a 404 for a client that expects JSON, not
-        // ILD's index.html: the SPA fallback below is a catch-all and would
-        // otherwise answer them with a 200 and a page. Left under the fallback
-        // policy, so an unknown path still tells an anonymous caller nothing.
-        app.MapFallback("/api/{**rest}", () => Results.NotFound());
-        app.MapFallback("/hubs/{**rest}", () => Results.NotFound());
+        // An unknown path under a non-SPA prefix is a 404 for a client that
+        // expects JSON, not ILD's index.html: the SPA fallback below is a
+        // catch-all and would otherwise answer them with a 200 and a page. Left
+        // under the fallback policy, so an unknown path still tells an anonymous
+        // caller nothing.
+        foreach (var prefix in new[] { "/api", "/hubs", "/metrics" })
+        {
+            app.MapFallback($"{prefix}/{{**rest}}", () => Results.NotFound());
+        }
 
         // The SPA shell itself is anonymous — it is what renders the login screen.
         app.MapFallbackToFile("index.html").AllowAnonymous();
