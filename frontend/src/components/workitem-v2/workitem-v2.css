@@ -183,6 +183,14 @@
   white-space: nowrap;
 }
 
+/* Drawn inside the tab: the strip clips ink overflow at its padding box, whose
+   bottom edge is the tab's own bottom edge, so a ring drawn outward would lose
+   its bottom. This is the arrow-key indicator on a keyboard-driven strip. */
+.wiv2-tab:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: -2px;
+}
+
 .wiv2-tab:hover {
   color: #e0e0e0;
 }

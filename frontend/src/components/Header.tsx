@@ -95,6 +95,14 @@ export default function Header() {
           transition: all 0.15s ease;
         }
 
+        /* Drawn inside the link: a scroll container clips ink overflow at its
+           padding box, and the nav has no padding, so a ring drawn outward
+           would lose its top and bottom edges. */
+        .nav-link:focus-visible {
+          outline: 2px solid #6366f1;
+          outline-offset: -2px;
+        }
+
         .nav-link:hover {
           color: #e0e0e0;
           background-color: #2d2d44;

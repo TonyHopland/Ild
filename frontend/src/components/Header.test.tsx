@@ -53,6 +53,11 @@ describe("Header nav overflow", () => {
     }
   });
 
+  // The inward focus ring (`.nav-link:focus-visible`, which keeps the scroll
+  // container from clipping it) is deliberately not asserted here: jsdom does
+  // not match :focus-visible for programmatic focus on a link, so any assertion
+  // would be testing the stub rather than the rule.
+
   test("username and logout button are not squeezed by the nav", () => {
     renderHeader();
 
