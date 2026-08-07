@@ -1,5 +1,6 @@
 using ILD.Data;
 using ILD.Data.Entities;
+using ILD.Api.Authentication;
 using ILD.Api.Configuration;
 using ILD.Api.Middleware;
 using ILD.Api.Hubs;
@@ -80,6 +81,8 @@ try
             o.JsonSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase;
             o.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter());
         });
+
+    builder.Services.AddIldAuthentication();
 
     builder.Services.AddSignalR();
 
@@ -191,7 +194,7 @@ try
     // ILD_PREVIEW_PROXY_BASE, and this sits ahead of everything that would claim
     // or rewrite their responses: the SPA's static files and fallback (which in a
     // built image would answer a preview request with ILD's own index.html),
-    // AuthMiddleware (a preview is a foreign app and cannot carry an ILD session
+    // authentication (a preview is a foreign app and cannot carry an ILD session
     // token), CORS (which terminates preflights and would answer on the preview's
     // behalf), and the security headers, whose deliberately strict
     // `default-src 'self'` CSP is right for the ILD UI and wrong for somebody
@@ -214,8 +217,13 @@ try
         app.UseStaticFiles();
     }
 
-    app.UseMiddleware<AuthMiddleware>();
+    // Authorization is per-endpoint from here on, under a user-only fallback
+    // policy (see ILD.Api/Authentication/IldAuthentication.cs): every endpoint
+    // below is user-only unless it says otherwise. Static files are served above
+    // this point and so stay anonymous, as they must for the SPA shell to load.
     app.UseRouting();
+    app.UseAuthentication();
+    app.UseAuthorization();
 
     app.MapControllers();
     app.MapHub<LoopRunHub>("/hubs/loop-run");
@@ -224,7 +232,18 @@ try
 
     if (Directory.Exists(wwwroot))
     {
-        app.MapFallbackToFile("index.html");
+        // An unknown path under a non-SPA prefix is a 404 for a client that
+        // expects JSON, not ILD's index.html: the SPA fallback below is a
+        // catch-all and would otherwise answer them with a 200 and a page. Left
+        // under the fallback policy, so an unknown path still tells an anonymous
+        // caller nothing.
+        foreach (var prefix in new[] { "/api", "/hubs", "/metrics" })
+        {
+            app.MapFallback($"{prefix}/{{**rest}}", () => Results.NotFound());
+        }
+
+        // The SPA shell itself is anonymous — it is what renders the login screen.
+        app.MapFallbackToFile("index.html").AllowAnonymous();
     }
 
     await app.RunAsync();

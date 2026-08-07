@@ -1,6 +1,7 @@
 using System.Reflection;
 using ILD.Data.Entities;
 using ILD.Data.DTOs;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -8,6 +9,9 @@ namespace ILD.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/[controller]")]
+// Liveness has to answer before anyone can log in: container orchestrators and
+// uptime probes carry no ILD token.
+[AllowAnonymous]
 public class HealthController : ControllerBase
 {
     private readonly AppDbContext _dbContext;

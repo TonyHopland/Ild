@@ -62,21 +62,44 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
         return msg;
     }
 
+    /// <summary>
+    /// Same contract as <see cref="HttpResponseMessage.EnsureSuccessStatusCode"/>
+    /// — an <see cref="HttpRequestException"/>, which every caller already treats
+    /// as "server unreachable" — but naming the server that answered. Which
+    /// WorkItem Server a refusal came from is the whole diagnosis when more than
+    /// one is running (a worktree preview of ILD runs its own alongside the host's),
+    /// and the framework message says only "401 (Unauthorized)".
+    /// </summary>
+    private static void EnsureSuccess(HttpResponseMessage resp, HttpRequestMessage msg)
+    {
+        if (resp.IsSuccessStatusCode)
+            return;
+
+        var detail = resp.StatusCode == HttpStatusCode.Unauthorized
+            ? " The configured API key is not one of that server's WORKITEM_API_KEYS."
+            : string.Empty;
+
+        throw new HttpRequestException(
+            $"{msg.Method} {msg.RequestUri} was refused: {(int)resp.StatusCode} {resp.ReasonPhrase}.{detail}",
+            inner: null,
+            statusCode: resp.StatusCode);
+    }
+
     public async Task<RemoteWorkItem> CreateAsync(WorkItemServerOptions opts, RemoteCreateWorkItemRequest req, CancellationToken ct = default)
     {
         var msg = Build(opts, HttpMethod.Post, "/workitems");
         msg.Content = JsonContent.Create(req, options: JsonOpts);
-        var resp = await _http.SendAsync(msg, ct);
-        resp.EnsureSuccessStatusCode();
+        using var resp = await _http.SendAsync(msg, ct);
+        EnsureSuccess(resp, msg);
         return (await resp.Content.ReadFromJsonAsync<RemoteWorkItem>(JsonOpts, ct))!;
     }
 
     public async Task<RemoteWorkItem?> GetAsync(WorkItemServerOptions opts, string id, CancellationToken ct = default)
     {
         var msg = Build(opts, HttpMethod.Get, $"/workitems/{id}");
-        var resp = await _http.SendAsync(msg, ct);
+        using var resp = await _http.SendAsync(msg, ct);
         if (resp.StatusCode == HttpStatusCode.NotFound) return null;
-        resp.EnsureSuccessStatusCode();
+        EnsureSuccess(resp, msg);
         return await resp.Content.ReadFromJsonAsync<RemoteWorkItem>(JsonOpts, ct);
     }
 
@@ -88,8 +111,8 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
         var query = qs.Count == 0 ? string.Empty : "?" + string.Join('&', qs);
 
         var msg = Build(opts, HttpMethod.Get, $"/workitems{query}");
-        var resp = await _http.SendAsync(msg, ct);
-        resp.EnsureSuccessStatusCode();
+        using var resp = await _http.SendAsync(msg, ct);
+        EnsureSuccess(resp, msg);
         return (await resp.Content.ReadFromJsonAsync<List<RemoteWorkItem>>(JsonOpts, ct))!;
     }
 
@@ -97,16 +120,16 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
     {
         var msg = Build(opts, HttpMethod.Put, $"/workitems/{id}");
         msg.Content = JsonContent.Create(req, options: JsonOpts);
-        var resp = await _http.SendAsync(msg, ct);
+        using var resp = await _http.SendAsync(msg, ct);
         if (resp.StatusCode == HttpStatusCode.NotFound) return null;
-        resp.EnsureSuccessStatusCode();
+        EnsureSuccess(resp, msg);
         return await resp.Content.ReadFromJsonAsync<RemoteWorkItem>(JsonOpts, ct);
     }
 
     public async Task<bool> DeleteAsync(WorkItemServerOptions opts, string id, CancellationToken ct = default)
     {
         var msg = Build(opts, HttpMethod.Delete, $"/workitems/{id}");
-        var resp = await _http.SendAsync(msg, ct);
+        using var resp = await _http.SendAsync(msg, ct);
         return resp.IsSuccessStatusCode;
     }
 
@@ -114,10 +137,10 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
     {
         var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/transition");
         msg.Content = JsonContent.Create(req, options: JsonOpts);
-        var resp = await _http.SendAsync(msg, ct);
+        using var resp = await _http.SendAsync(msg, ct);
         if (resp.StatusCode == HttpStatusCode.NotFound)
             return new RemoteTransitionResponse { Success = false, ActualStatus = RemoteWorkItemStatus.Backlog, Reason = "Not found" };
-        resp.EnsureSuccessStatusCode();
+        EnsureSuccess(resp, msg);
         return (await resp.Content.ReadFromJsonAsync<RemoteTransitionResponse>(JsonOpts, ct))!;
     }
 
@@ -125,14 +148,14 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
     {
         var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/dependencies");
         msg.Content = JsonContent.Create(new { dependencyId }, options: JsonOpts);
-        var resp = await _http.SendAsync(msg, ct);
+        using var resp = await _http.SendAsync(msg, ct);
         return resp.IsSuccessStatusCode;
     }
 
     public async Task<bool> RemoveDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, CancellationToken ct = default)
     {
         var msg = Build(opts, HttpMethod.Delete, $"/workitems/{id}/dependencies/{dependencyId}");
-        var resp = await _http.SendAsync(msg, ct);
+        using var resp = await _http.SendAsync(msg, ct);
         return resp.IsSuccessStatusCode;
     }
 
@@ -140,7 +163,7 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
     {
         var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/feedback");
         msg.Content = JsonContent.Create(new { content }, options: JsonOpts);
-        var resp = await _http.SendAsync(msg, ct);
+        using var resp = await _http.SendAsync(msg, ct);
         return resp.IsSuccessStatusCode;
     }
 
@@ -148,7 +171,7 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
     {
         var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/conversation");
         msg.Content = JsonContent.Create(new { role, content, name }, options: JsonOpts);
-        var resp = await _http.SendAsync(msg, ct);
+        using var resp = await _http.SendAsync(msg, ct);
         return resp.IsSuccessStatusCode;
     }
 
@@ -156,7 +179,7 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
     {
         var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/pull-requests");
         msg.Content = JsonContent.Create(new { url, loopRunId, merged, createdAt }, options: JsonOpts);
-        var resp = await _http.SendAsync(msg, ct);
+        using var resp = await _http.SendAsync(msg, ct);
         return resp.IsSuccessStatusCode;
     }
 
@@ -166,8 +189,8 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
             ? string.Empty
             : "?activeIds=" + Uri.EscapeDataString(string.Join(',', activeIds));
         var msg = Build(opts, HttpMethod.Get, $"/workitems/poll{query}");
-        var resp = await _http.SendAsync(msg, ct);
-        resp.EnsureSuccessStatusCode();
+        using var resp = await _http.SendAsync(msg, ct);
+        EnsureSuccess(resp, msg);
         return (await resp.Content.ReadFromJsonAsync<RemotePollResponse>(JsonOpts, ct))!;
     }
 }

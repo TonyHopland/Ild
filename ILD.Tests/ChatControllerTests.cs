@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using ILD.Api.Controllers;
 using ILD.Core.Services.Interfaces;
 using Microsoft.AspNetCore.Http;
@@ -16,11 +17,21 @@ public class ChatControllerTests
     private readonly Mock<IChatService> _chat = new();
     private readonly Mock<IChatTurnRunner> _runner = new();
 
-    private ChatController CreateController(string? username = "tony", bool isAgent = false)
+    private ChatController CreateController(string? username = "tony")
     {
         var http = new DefaultHttpContext();
-        if (username is not null) http.Items["Username"] = username;
-        if (isAgent) http.Items["IsAgent"] = true;
+        // What the authentication handler puts on the request for a signed-in
+        // operator. Agents cannot reach this controller at all — the user-only
+        // fallback policy stops them before MVC, covered in
+        // ILD.Tests/Integration/RepositoriesIntegrationTests.cs.
+        if (username is not null)
+        {
+            http.User = new ClaimsPrincipal(new ClaimsIdentity(
+                [new Claim(ClaimTypes.Name, username), new Claim(ClaimTypes.Role, "user")],
+                "ILD",
+                ClaimTypes.Name,
+                ClaimTypes.Role));
+        }
 
         return new ChatController(_chat.Object, _runner.Object)
         {
@@ -58,15 +69,6 @@ public class ChatControllerTests
         var result = await CreateController(username: null).Interrupt(Guid.NewGuid(), CancellationToken.None);
 
         Assert.IsType<UnauthorizedResult>(result);
-        _runner.Verify(r => r.InterruptAsync(It.IsAny<Guid>()), Times.Never);
-    }
-
-    [Fact]
-    public async Task Interrupt_from_an_agent_token_is_Forbidden()
-    {
-        var result = await CreateController(isAgent: true).Interrupt(Guid.NewGuid(), CancellationToken.None);
-
-        Assert.IsType<ForbidResult>(result);
         _runner.Verify(r => r.InterruptAsync(It.IsAny<Guid>()), Times.Never);
     }
 }

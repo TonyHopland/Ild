@@ -1,3 +1,4 @@
+using System.Net;
 using ILD.Core.Services.Remote;
 using ILD.WorkItemServer;
 
@@ -182,5 +183,22 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
 
         var ready = await _client.ListAsync(_opts, RemoteWorkItemStatus.Ready, null);
         Assert.All(ready, w => Assert.Equal(RemoteWorkItemStatus.Ready, w.Status));
+    }
+
+    [Fact]
+    public async Task A_refused_key_names_the_server_that_refused_it_and_the_setting_to_look_at()
+    {
+        // Callers turn this exception into "WorkItemServer unreachable", so the
+        // message is the only thing distinguishing a key mismatch from a server
+        // that is down — and, where two are running (a preview of ILD runs its
+        // own next to the host's), which of them answered.
+        var wrongKey = new WorkItemServerOptions { BaseUrl = _opts.BaseUrl, ApiKey = "not-the-configured-key" };
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(
+            () => _client.ListAsync(wrongKey, null, null));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, ex.StatusCode);
+        Assert.Contains($"{_opts.BaseUrl}/workitems", ex.Message);
+        Assert.Contains("WORKITEM_API_KEYS", ex.Message);
     }
 }

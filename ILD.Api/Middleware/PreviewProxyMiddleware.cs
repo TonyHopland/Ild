@@ -18,7 +18,7 @@ namespace ILD.Api.Middleware;
 /// nothing. See <c>docs/adr/0015-wildcard-subdomain-preview-routing.md</c>.
 ///
 /// <para>
-/// It is registered ahead of <see cref="AuthMiddleware"/> deliberately: a preview
+/// It is registered ahead of authentication deliberately: a preview
 /// is a foreign app that knows nothing of ILD sessions, so it cannot be asked to
 /// carry an ILD token. <strong>Proxied previews are therefore unauthenticated</strong>
 /// — anyone who can resolve the hostname can reach the running service and
