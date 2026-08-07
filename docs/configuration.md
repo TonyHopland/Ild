@@ -162,8 +162,9 @@ Place an `ild.config.json` file in the root of a repository to enable QA preview
 
 ### Token syntax
 
-String values in `command`, `env`, and `healthUrl` may contain tokens that ILD expands at runtime. Values
-coming from the repository's preview `.env` are not templates and are never expanded — see
+String values in `command`, `cwd`, `env`, `healthUrl`, and `publicUrl` may contain tokens that ILD expands
+at runtime. Everything expanded comes from `ild.config.json`: values supplied through the repository's
+preview `.env` are secrets rather than templates and are never expanded — see
 [Giving a preview its own configuration](#giving-a-preview-its-own-configuration).
 
 | Token          | Expands to                                                                        |
@@ -335,9 +336,9 @@ Two consequences of that order are worth knowing:
   deliberate override is exactly what it looks like. When a service reaches the
   wrong port, read the `.env` first.
 - **`.env` values are never expanded.** They are secrets, not templates, so they
-  arrive at the process byte-for-byte: a `${` in a password stays a `${`, and the
-  tokens above do nothing there. Token syntax only works in `command`, `env` and
-  `healthUrl`.
+  arrive at the process byte-for-byte: a `${` in a password stays a `${`. [Token
+  syntax](#token-syntax) applies to what `ild.config.json` declares, not to what
+  you type here.
 
 **It is not a vault, though, and the difference matters.** ILD injects the `.env`
 into every preview process, which is the whole point of it — and the commands
