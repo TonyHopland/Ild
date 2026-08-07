@@ -104,8 +104,8 @@ public class RepositoriesIntegrationTests
         Assert.Equal(env, await ReadStoredPreviewEnvAsync(factory, id));
     }
 
-    // The agent service token authenticates on every /api path, so it reaches this
-    // controller as readily as a browser does. These tests pin the explicit refusal.
+    // The agent service token authenticates fine — it just is not a user, and every
+    // endpoint outside /api/v1/agent demands the user role. These tests pin that.
     private static HttpClient CreateAgentClient(ApiFactory factory)
     {
         var client = factory.CreateClient();
@@ -182,5 +182,30 @@ public class RepositoriesIntegrationTests
         var updateResponse = await client.PutAsJsonAsync($"/api/v1/repositories/{id}", NewRepoPayload(providerId, newEnv));
         Assert.Equal(HttpStatusCode.OK, updateResponse.StatusCode);
         Assert.Equal(newEnv, await ReadStoredPreviewEnvAsync(factory, id));
+    }
+
+    /// <summary>
+    /// The regression this whole scheme exists to prevent: user-facing endpoints
+    /// that say nothing about authorization are refused to the agent token by
+    /// default, so forgetting to think about an endpoint is safe. None of these
+    /// carries an explicit agent check — the fallback policy is doing all the work.
+    /// A 200 would mean the agent got in; a 500 would mean the refusal itself
+    /// crashed, which is how the hand-rolled <c>Forbid()</c> calls used to fail.
+    /// </summary>
+    [Theory]
+    [InlineData("/api/v1/repositories")]
+    [InlineData("/api/v1/workitems")]
+    [InlineData("/api/v1/chat/history")]
+    [InlineData("/api/v1/settings")]
+    [InlineData("/api/v1/loopruns")]
+    [InlineData("/api/v1/auth/me")]
+    public async Task A_user_facing_endpoint_with_no_authorization_of_its_own_refuses_the_agent_token(string path)
+    {
+        await using var factory = new ApiFactory();
+        var agent = CreateAgentClient(factory);
+
+        var response = await agent.GetAsync(path);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 }

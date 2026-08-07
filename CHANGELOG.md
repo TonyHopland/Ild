@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A coding agent reaching for something meant for you is refused rather than crashing the request.**
+
 - **arm64 images are built on native arm64 runners instead of under QEMU emulation.**
 
 ## [0.8.0] - 2026-08-02

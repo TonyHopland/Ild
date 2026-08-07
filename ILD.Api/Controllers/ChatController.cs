@@ -124,13 +124,9 @@ public class ChatController : ControllerBase
         userId = string.Empty;
         error = Unauthorized();
 
-        if (HttpContext.Items.TryGetValue("IsAgent", out var isAgent) && isAgent is true)
-        {
-            error = Forbid();
-            return false;
-        }
-
-        var username = HttpContext.Items["Username"] as string;
+        // Agents never reach here: chats belong to the user-only surface, so the
+        // fallback policy has already turned an agent token away with a 403.
+        var username = User.Identity?.Name;
         if (string.IsNullOrEmpty(username))
             return false;
 

@@ -1,3 +1,4 @@
+using ILD.Api.Authentication;
 using ILD.Api.Contracts;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
@@ -8,6 +9,7 @@ using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -39,6 +41,9 @@ namespace ILD.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/v1/agent")]
+// The one opt-out from the user-only fallback policy: this is the whole surface
+// the agent service token may reach. The UI calls it too, hence agent *or* user.
+[Authorize(Policy = IldAuthentication.AgentOrUserPolicy)]
 public class AgentController : ControllerBase
 {
     private const string RunIdHeader = "X-ILD-Run-Id";

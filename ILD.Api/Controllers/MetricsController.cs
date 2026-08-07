@@ -1,10 +1,13 @@
 using ILD.Core.Services.Interfaces;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ILD.Api.Controllers;
 
 [ApiController]
 [Route("metrics")]
+// The Prometheus scrape endpoint: a scraper has no ILD session.
+[AllowAnonymous]
 public class MetricsController : ControllerBase
 {
     private readonly IMetricsCollector _collector;

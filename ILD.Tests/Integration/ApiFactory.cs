@@ -118,12 +118,25 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     public async Task<HttpClient> CreateAuthenticatedClientAsync()
     {
         var client = CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", await LoginAsync(client));
+        return client;
+    }
+
+    /// <summary>
+    /// A session token for the seeded admin, for callers that must place it
+    /// somewhere other than the Authorization header — WebSocket and SignalR
+    /// handshakes carry it as an <c>access_token</c> query parameter.
+    /// </summary>
+    public async Task<string> GetAdminTokenAsync() => await LoginAsync(CreateClient());
+
+    private async Task<string> LoginAsync(HttpClient client)
+    {
         var login = await client.PostAsJsonAsync("/api/v1/auth/login", new { username = "admin", password = AdminPassword });
         login.EnsureSuccessStatusCode();
         var jsonOptions = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
         var body = await login.Content.ReadFromJsonAsync<LoginBody>(jsonOptions);
-        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", body!.Token);
-        return client;
+        return body!.Token;
     }
 
     private sealed record LoginBody(string Token, string Username);
