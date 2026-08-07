@@ -220,9 +220,12 @@ export default function ChatBubble() {
   useEffect(() => {
     if (connectionState !== "connected" || !session?.id) return;
     const id = session.id;
-    void invoke("SubscribeToChat", id);
+    // The server refuses a chat the caller does not own, so the invocation can
+    // reject: log it rather than leaving an unhandled rejection. Nothing to show
+    // the user — a chat that is not ours has no turns to stream here.
+    void invoke("SubscribeToChat", id)?.catch((err) => console.error(err));
     return () => {
-      void invoke("UnsubscribeFromChat", id);
+      void invoke("UnsubscribeFromChat", id)?.catch((err) => console.error(err));
     };
   }, [connectionState, session?.id, invoke]);
 
