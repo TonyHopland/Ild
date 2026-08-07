@@ -1309,21 +1309,28 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         var workingDirectory = ResolveWorkingDirectory(step.Cwd, runtime, currentPortAlias);
         var environment = BuildDefaultEnvironment(runtime.StateDirectory);
 
-        // Precedence: base defaults < repo custom .env < per-service ild.config env.
-        // The repo .env is a repo-wide baseline; committed per-service config wins.
-        // Custom values are injected verbatim — they are user-authored secrets, not
-        // ${PORT:...} templates, so they must not go through ResolveTemplate.
-        foreach (var entry in runtime.CustomEnv)
-        {
-            environment[entry.Key] = entry.Value;
-        }
-
+        // Precedence: base defaults < per-service ild.config env < repo custom .env.
+        // The committed config is the profile's default; the repo's .env is what the
+        // human who owns the repository typed for this deployment, so it wins — every
+        // key in it was set deliberately, and a value it cannot override is a value
+        // they cannot correct without editing the agent-writable worktree.
+        // The cost of that is worth knowing: a stale .env line shadows a computed
+        // ${PORT:...} value just as readily as an intended one (docs/configuration.md).
         if (step.Env != null)
         {
             foreach (var entry in step.Env)
             {
                 environment[entry.Key] = ResolveTemplate(entry.Value, runtime, currentPortAlias);
             }
+        }
+
+        // Custom values are injected verbatim — they are user-authored secrets, not
+        // ${PORT:...} templates, so they must not go through ResolveTemplate: a
+        // password containing ${...} would otherwise be rewritten, or rejected
+        // outright as an unsupported token, for looking like something it isn't.
+        foreach (var entry in runtime.CustomEnv)
+        {
+            environment[entry.Key] = entry.Value;
         }
 
         return new ResolvedStep(
@@ -1333,8 +1340,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     }
 
     /// <summary>
-    /// The base environment every preview step starts from, before the repository's
-    /// <c>.env</c> and the service's own <c>env</c> are layered over it. Takes the
+    /// The base environment every preview step starts from, before the service's own
+    /// <c>env</c> and then the repository's <c>.env</c> are layered over it. Takes the
     /// state directory rather than the whole runtime because that is the only part
     /// it needs — which also makes what a preview child's <c>HOME</c> and npm prefix
     /// resolve to assertable without standing up a runtime.

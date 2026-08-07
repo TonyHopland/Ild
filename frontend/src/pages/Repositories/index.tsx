@@ -305,8 +305,8 @@ export default function Repositories() {
                 <span className="repo-hint">
                   Stored encrypted in ILD and injected as environment variables into preview install
                   steps and services on start — never written to a file in the worktree, so it can't
-                  be committed. The per-service ild.config.json env still overrides these. Clearing
-                  the field removes the stored .env.
+                  be committed. These override the per-service ild.config.json env, so a name left
+                  here wins over the committed config. Clearing the field removes the stored .env.
                 </span>
               </div>
               <div className="form-group">
