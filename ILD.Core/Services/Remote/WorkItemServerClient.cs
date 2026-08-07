@@ -89,7 +89,7 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
     {
         var msg = Build(opts, HttpMethod.Post, "/workitems");
         msg.Content = JsonContent.Create(req, options: JsonOpts);
-        var resp = await _http.SendAsync(msg, ct);
+        using var resp = await _http.SendAsync(msg, ct);
         EnsureSuccess(resp, msg);
         return (await resp.Content.ReadFromJsonAsync<RemoteWorkItem>(JsonOpts, ct))!;
     }
@@ -97,7 +97,7 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
     public async Task<RemoteWorkItem?> GetAsync(WorkItemServerOptions opts, string id, CancellationToken ct = default)
     {
         var msg = Build(opts, HttpMethod.Get, $"/workitems/{id}");
-        var resp = await _http.SendAsync(msg, ct);
+        using var resp = await _http.SendAsync(msg, ct);
         if (resp.StatusCode == HttpStatusCode.NotFound) return null;
         EnsureSuccess(resp, msg);
         return await resp.Content.ReadFromJsonAsync<RemoteWorkItem>(JsonOpts, ct);
@@ -111,7 +111,7 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
         var query = qs.Count == 0 ? string.Empty : "?" + string.Join('&', qs);
 
         var msg = Build(opts, HttpMethod.Get, $"/workitems{query}");
-        var resp = await _http.SendAsync(msg, ct);
+        using var resp = await _http.SendAsync(msg, ct);
         EnsureSuccess(resp, msg);
         return (await resp.Content.ReadFromJsonAsync<List<RemoteWorkItem>>(JsonOpts, ct))!;
     }
@@ -120,7 +120,7 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
     {
         var msg = Build(opts, HttpMethod.Put, $"/workitems/{id}");
         msg.Content = JsonContent.Create(req, options: JsonOpts);
-        var resp = await _http.SendAsync(msg, ct);
+        using var resp = await _http.SendAsync(msg, ct);
         if (resp.StatusCode == HttpStatusCode.NotFound) return null;
         EnsureSuccess(resp, msg);
         return await resp.Content.ReadFromJsonAsync<RemoteWorkItem>(JsonOpts, ct);
@@ -129,7 +129,7 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
     public async Task<bool> DeleteAsync(WorkItemServerOptions opts, string id, CancellationToken ct = default)
     {
         var msg = Build(opts, HttpMethod.Delete, $"/workitems/{id}");
-        var resp = await _http.SendAsync(msg, ct);
+        using var resp = await _http.SendAsync(msg, ct);
         return resp.IsSuccessStatusCode;
     }
 
@@ -137,7 +137,7 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
     {
         var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/transition");
         msg.Content = JsonContent.Create(req, options: JsonOpts);
-        var resp = await _http.SendAsync(msg, ct);
+        using var resp = await _http.SendAsync(msg, ct);
         if (resp.StatusCode == HttpStatusCode.NotFound)
             return new RemoteTransitionResponse { Success = false, ActualStatus = RemoteWorkItemStatus.Backlog, Reason = "Not found" };
         EnsureSuccess(resp, msg);
@@ -148,14 +148,14 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
     {
         var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/dependencies");
         msg.Content = JsonContent.Create(new { dependencyId }, options: JsonOpts);
-        var resp = await _http.SendAsync(msg, ct);
+        using var resp = await _http.SendAsync(msg, ct);
         return resp.IsSuccessStatusCode;
     }
 
     public async Task<bool> RemoveDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, CancellationToken ct = default)
     {
         var msg = Build(opts, HttpMethod.Delete, $"/workitems/{id}/dependencies/{dependencyId}");
-        var resp = await _http.SendAsync(msg, ct);
+        using var resp = await _http.SendAsync(msg, ct);
         return resp.IsSuccessStatusCode;
     }
 
@@ -163,7 +163,7 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
     {
         var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/feedback");
         msg.Content = JsonContent.Create(new { content }, options: JsonOpts);
-        var resp = await _http.SendAsync(msg, ct);
+        using var resp = await _http.SendAsync(msg, ct);
         return resp.IsSuccessStatusCode;
     }
 
@@ -171,7 +171,7 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
     {
         var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/conversation");
         msg.Content = JsonContent.Create(new { role, content, name }, options: JsonOpts);
-        var resp = await _http.SendAsync(msg, ct);
+        using var resp = await _http.SendAsync(msg, ct);
         return resp.IsSuccessStatusCode;
     }
 
@@ -179,7 +179,7 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
     {
         var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/pull-requests");
         msg.Content = JsonContent.Create(new { url, loopRunId, merged, createdAt }, options: JsonOpts);
-        var resp = await _http.SendAsync(msg, ct);
+        using var resp = await _http.SendAsync(msg, ct);
         return resp.IsSuccessStatusCode;
     }
 
@@ -189,7 +189,7 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
             ? string.Empty
             : "?activeIds=" + Uri.EscapeDataString(string.Join(',', activeIds));
         var msg = Build(opts, HttpMethod.Get, $"/workitems/poll{query}");
-        var resp = await _http.SendAsync(msg, ct);
+        using var resp = await _http.SendAsync(msg, ct);
         EnsureSuccess(resp, msg);
         return (await resp.Content.ReadFromJsonAsync<RemotePollResponse>(JsonOpts, ct))!;
     }
