@@ -602,7 +602,7 @@ function RepoEnvEditor({
       <div className="preview-config-toolbar">
         <span className="preview-message">
           {message ??
-            "Injected as env vars on preview start; per-service ild.config env still wins."}
+            "Injected as env vars on preview start; these override the per-service ild.config env."}
         </span>
         <div className="preview-config-buttons">
           <button

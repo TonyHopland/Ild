@@ -154,7 +154,7 @@ Place an `ild.config.json` file in the root of a repository to enable QA preview
 | `command`       | string  | Shell command to start the service                                                                                                                                                                                                                                                                                                                                                                       |
 | `port`          | string  | Logical port name assigned to this service (resolved to a free port at runtime)                                                                                                                                                                                                                                                                                                                          |
 | `suggestedPort` | integer | Preferred port number; ILD uses it if free, otherwise picks another                                                                                                                                                                                                                                                                                                                                      |
-| `env`           | object  | Environment variables injected into the service process (values may use token syntax — see below)                                                                                                                                                                                                                                                                                                        |
+| `env`           | object  | Environment variables injected into the service process (values may use token syntax — see below; the repository's preview `.env` overrides any name set here)                                                                                                                                                                                                                                           |
 | `healthUrl`     | string  | URL polled after startup; the service is considered ready once it returns HTTP 2xx                                                                                                                                                                                                                                                                                                                       |
 | `public`        | boolean | When `true`, this service's port is exposed as the primary preview URL in the UI                                                                                                                                                                                                                                                                                                                         |
 | `publicUrl`     | string  | Overrides the advertised URL outright; may use `${PUBLIC_HOST}` and `${PORT}`                                                                                                                                                                                                                                                                                                                            |
@@ -162,7 +162,10 @@ Place an `ild.config.json` file in the root of a repository to enable QA preview
 
 ### Token syntax
 
-String values in `command`, `env`, and `healthUrl` may contain tokens that ILD expands at runtime:
+String values in `command`, `cwd`, `env`, `healthUrl`, and `publicUrl` may contain tokens that ILD expands
+at runtime. Everything expanded comes from `ild.config.json`: values supplied through the repository's
+preview `.env` are secrets rather than templates and are never expanded — see
+[Giving a preview its own configuration](#giving-a-preview-its-own-configuration).
 
 | Token          | Expands to                                                                        |
 | -------------- | --------------------------------------------------------------------------------- |
@@ -315,6 +318,27 @@ an API key, a bucket name — you supply, in the repository's encrypted preview
 encrypted, never written into the worktree, and never returned through the agent
 API, so it does not end up committed to your repository or readable straight out
 of ILD.
+
+**When both set the same name, the `.env` wins.** The order a preview process's
+environment is built in is: ILD's base defaults, then the service's `env` block,
+then the `.env` last. `ild.config.json` lives in the worktree and is what the
+profile's author committed; the `.env` is what you typed for this ILD, so it is
+the one that gets the final say — otherwise a value you can see in the UI would
+be silently losing to a file only a commit can change.
+
+Two consequences of that order are worth knowing:
+
+- **A leftover `.env` line overrides a computed value.** A service `env` entry
+  built from `${PORT:name}` or `${STATE_DIR}` is only used if the `.env` does not
+  also set that name. If you once pinned `ILD_API_PROXY_TARGET` to a fixed port
+  and left the line in, every later run gets the stale port rather than the one
+  the referenced service is actually listening on — with no warning, because a
+  deliberate override is exactly what it looks like. When a service reaches the
+  wrong port, read the `.env` first.
+- **`.env` values are never expanded.** They are secrets, not templates, so they
+  arrive at the process byte-for-byte: a `${` in a password stays a `${`. [Token
+  syntax](#token-syntax) applies to what `ild.config.json` declares, not to what
+  you type here.
 
 **It is not a vault, though, and the difference matters.** ILD injects the `.env`
 into every preview process, which is the whole point of it — and the commands

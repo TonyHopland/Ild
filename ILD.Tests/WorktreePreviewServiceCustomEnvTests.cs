@@ -9,8 +9,9 @@ namespace ILD.Tests;
 /// <summary>
 /// Proves the repository's custom <c>.env</c> (see <c>Repository.PreviewEnv</c>)
 /// reaches preview processes and that the documented precedence holds:
-/// base defaults &lt; repo custom <c>.env</c> &lt; per-service <c>ild.config.json</c>
-/// env. Exercised through the install path because install and service start both
+/// base defaults &lt; per-service <c>ild.config.json</c> env &lt; repo custom
+/// <c>.env</c>, with the custom values injected verbatim rather than expanded as
+/// templates. Exercised through the install path because install and service start both
 /// resolve their environment through the same <c>BuildResolvedStep</c> merge — the
 /// install step is a real preview process that writes what it actually saw to a
 /// marker file, so the assertions observe the injected environment end-to-end.
@@ -43,7 +44,7 @@ public class WorktreePreviewServiceCustomEnvTests : IDisposable
     // An install step that writes the value of an environment variable to a marker
     // file, so a test can read back exactly what the process saw. When
     // <paramref name="stepEnvJson"/> is supplied it becomes the step's own env block
-    // (the per-service ild.config env that must win over the repo .env).
+    // (the per-service ild.config env the repo .env must win over).
     private void WriteConfig(string varName, string? stepEnvJson = null)
     {
         var envClause = stepEnvJson is null ? string.Empty : $", \"env\": {stepEnvJson}";
@@ -91,15 +92,31 @@ public class WorktreePreviewServiceCustomEnvTests : IDisposable
     }
 
     [Fact]
-    public async Task Per_service_config_env_overrides_custom_env()
+    public async Task Custom_env_overrides_per_service_config_env()
     {
-        // The committed ild.config per-step env is the highest-precedence source.
+        // The repo .env is the highest-precedence source: it is what the human who
+        // owns the repository typed, and ild.config.json is worktree-editable.
         WriteConfig("FOO", stepEnvJson: "{ \"FOO\": \"from-config\" }");
         var service = BuildService();
 
         await service.InstallAsync(_worktree, customEnv: "FOO=from-dotenv");
 
-        Assert.Equal("from-config", ReadMarker());
+        Assert.Equal("from-dotenv", ReadMarker());
+    }
+
+    [Fact]
+    public async Task Custom_env_values_are_injected_verbatim_not_expanded_as_templates()
+    {
+        // They are secrets, not ${PORT:...} templates. A password that happens to
+        // contain a `$` or a `${...}` must arrive byte-for-byte — expanding it would
+        // corrupt it, and an unknown token would fail the whole install.
+        const string password = "p$ss${STATE_DIR}w${PORT:nope}rd$";
+        WriteConfig("DB_PASSWORD", stepEnvJson: "{ \"DB_PASSWORD\": \"from-config\" }");
+        var service = BuildService();
+
+        await service.InstallAsync(_worktree, customEnv: $"DB_PASSWORD={password}");
+
+        Assert.Equal(password, ReadMarker());
     }
 
     [Fact]

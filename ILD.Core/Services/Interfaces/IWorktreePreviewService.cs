@@ -5,8 +5,13 @@ namespace ILD.Core.Services.Interfaces;
 /// <param name="CustomEnv">
 /// Raw text of the repository's custom <c>.env</c> (see <c>Repository.PreviewEnv</c>),
 /// or null. Parsed at injection time and merged into every preview process's
-/// environment as a repo-wide baseline: base defaults lose to it, and the per-service
-/// <c>ild.config.json</c> env still overrides it.
+/// environment last of all, so it beats both the base defaults and the per-service
+/// <c>ild.config.json</c> env: every name in it was typed by the human who owns the
+/// repository, and one they cannot override is one they cannot correct without
+/// editing the worktree the coding agent writes. The values are injected verbatim —
+/// they are secrets, not <c>${PORT:...}</c> templates, so a <c>$</c> in them survives
+/// intact. The corollary is that a stale line here silently shadows a computed
+/// <c>${PORT:...}</c> value in a service's <c>env</c>.
 /// <para>
 /// Security model: this text is stored encrypted at rest (via <c>SecretProtector</c>)
 /// and is injected only as <em>process environment variables</em> on the preview
@@ -206,8 +211,9 @@ public interface IWorktreePreviewService
     /// non-zero. Used by the Start node to provision a worktree on run start.
     /// <paramref name="customEnv"/> is the repository's custom <c>.env</c> text
     /// (see <c>Repository.PreviewEnv</c>); when set it is parsed and injected into
-    /// each install step's environment, the same baseline the service-start path
-    /// applies, so install scripts see the same secrets the services will.
+    /// each install step's environment with the same precedence the service-start
+    /// path gives it — last, over the step's own <c>env</c> — so install scripts see
+    /// the same secrets, and the same overrides, the services will.
     /// </summary>
     Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, string? customEnv = null, CancellationToken cancellationToken = default);
 

@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **When an ILD tool fails, the agent is told why — which call, against which address, and what came back — instead of "an error occurred".**
 
+- **The repository's preview `.env` now overrides a service's own `env`, instead of losing to it.**
+
 ### Fixed
 
 - **The ILD tools work inside a worktree preview of ILD itself, where they were calling the wrong instance.**
