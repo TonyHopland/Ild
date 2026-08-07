@@ -243,7 +243,11 @@ export default function WorkItemModalV2({
     e.preventDefault();
     const next = tabs[nextIndex];
     setActiveTab(next.id);
-    document.getElementById(`wiv2-tab-${next.id}`)?.focus();
+    const nextTab = document.getElementById(`wiv2-tab-${next.id}`);
+    nextTab?.focus();
+    // The tab strip scrolls sideways when the tabs outgrow the dialog, so
+    // arrowing onto a tab that is off to the side has to bring it into view.
+    nextTab?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
   };
 
   // All panels stay mounted; visibility is toggled so selected run, expanded
