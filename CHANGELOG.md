@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Start a work item from a branch other than the default.** A **Base branch** field sets the branch an item's runs start from and open their pull requests against; a branch that is missing fails the run rather than quietly falling back.
 
-- **The repository's custom .env is shown to you when you open it, instead of a row of dots.** Editing it is an edit rather than a retype, clearing the field removes the stored value, and coding agents are still refused the plaintext.
+- **The repository's custom `.env` is shown to you when you open it, instead of a row of dots.** Editing it is an edit rather than a retype, clearing the field removes the stored value, and coding agents are still refused the plaintext.
 
 - **Name a work item's branch yourself.** A **Branch name** field makes every run of that item use the name you give it instead of a generated one, and a run whose branch is already in use parks for you rather than starting on top of existing work.
 
