@@ -1,9 +1,43 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "../../hooks/useAuth";
 import { useChatEnabled, setChatEnabled } from "../../hooks/useChatEnabled";
-import { loggingService, settingsService, SchedulerSettingKeys } from "../../services/auth";
+import {
+  authService,
+  loggingService,
+  settingsService,
+  SchedulerSettingKeys,
+  SessionSettingKeys,
+} from "../../services/auth";
+import { UserSession } from "../../types";
 
 const LOG_LEVELS = ["Debug", "Information", "Warning", "Error"] as const;
+
+/**
+ * A user agent is unreadable; the browser name is what tells one of your own
+ * devices from another. The full string stays available as a tooltip for when
+ * the guess is not enough.
+ */
+function describeDevice(userAgent: string | null | undefined): string {
+  if (!userAgent) return "Unknown device";
+  const browser = [
+    ["Edg/", "Edge"],
+    ["OPR/", "Opera"],
+    ["Firefox/", "Firefox"],
+    ["Chrome/", "Chrome"],
+    ["Safari/", "Safari"],
+  ].find(([token]) => userAgent.includes(token))?.[1];
+  const platform = [
+    ["Android", "Android"],
+    ["iPhone", "iPhone"],
+    ["iPad", "iPad"],
+    ["Mac OS X", "macOS"],
+    ["Windows", "Windows"],
+    ["Linux", "Linux"],
+  ].find(([token]) => userAgent.includes(token))?.[1];
+
+  if (browser && platform) return `${browser} on ${platform}`;
+  return browser ?? platform ?? userAgent.slice(0, 40);
+}
 
 export default function Settings() {
   const { user } = useAuth();
@@ -22,6 +56,29 @@ export default function Settings() {
   const [prHeartbeatInput, setPrHeartbeatInput] = useState<string>("60");
   const [prHeartbeatError, setPrHeartbeatError] = useState<string | null>(null);
   const [savingPrHeartbeat, setSavingPrHeartbeat] = useState(false);
+  const [sessions, setSessions] = useState<UserSession[]>([]);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const [idleDays, setIdleDays] = useState<number>(30);
+  const [idleDaysInput, setIdleDaysInput] = useState<string>("30");
+  const [idleDaysError, setIdleDaysError] = useState<string | null>(null);
+  const [savingIdleDays, setSavingIdleDays] = useState(false);
+  const [maxDays, setMaxDays] = useState<number>(90);
+  const [maxDaysInput, setMaxDaysInput] = useState<string>("90");
+  const [maxDaysError, setMaxDaysError] = useState<string | null>(null);
+  const [savingMaxDays, setSavingMaxDays] = useState(false);
+
+  const refreshSessions = useCallback(async () => {
+    try {
+      setSessions(await authService.getSessions());
+      setSessionsError(null);
+    } catch (err) {
+      setSessionsError(err instanceof Error ? err.message : "Failed to load sessions.");
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshSessions();
+  }, [refreshSessions]);
 
   useEffect(() => {
     const stored = localStorage.getItem("ild_notifications_enabled");
@@ -58,7 +115,71 @@ export default function Settings() {
         }
       })
       .catch(() => {});
+    void settingsService
+      .get(SessionSettingKeys.IdleDays)
+      .then((s) => {
+        const n = parseInt(s.value, 10);
+        if (!Number.isNaN(n)) {
+          setIdleDays(n);
+          setIdleDaysInput(String(n));
+        }
+      })
+      .catch(() => {});
+    void settingsService
+      .get(SessionSettingKeys.MaxDays)
+      .then((s) => {
+        const n = parseInt(s.value, 10);
+        if (!Number.isNaN(n)) {
+          setMaxDays(n);
+          setMaxDaysInput(String(n));
+        }
+      })
+      .catch(() => {});
   }, []);
+
+  const revokeSession = async (id: string) => {
+    try {
+      await authService.revokeSession(id);
+      await refreshSessions();
+    } catch (err) {
+      setSessionsError(err instanceof Error ? err.message : "Failed to sign that device out.");
+    }
+  };
+
+  const revokeOtherSessions = async () => {
+    try {
+      await authService.revokeOtherSessions();
+      await refreshSessions();
+    } catch (err) {
+      setSessionsError(
+        err instanceof Error ? err.message : "Failed to sign the other devices out.",
+      );
+    }
+  };
+
+  const saveSessionDays = async (
+    key: string,
+    input: string,
+    apply: (n: number) => void,
+    setError: (message: string | null) => void,
+    setSaving: (saving: boolean) => void,
+  ) => {
+    const n = parseInt(input, 10);
+    if (Number.isNaN(n) || n < 0 || n > 3650) {
+      setError("Must be an integer between 0 (never) and 3650.");
+      return;
+    }
+    setError(null);
+    setSaving(true);
+    try {
+      await settingsService.put(key, String(n));
+      apply(n);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const saveMaxConcurrent = async () => {
     const n = parseInt(maxConcurrentInput, 10);
@@ -139,6 +260,125 @@ export default function Settings() {
               <span className="settings-label">Username</span>
               <span className="settings-value">{user?.username}</span>
             </div>
+          </div>
+        </div>
+
+        <div className="settings-section">
+          <h2 className="settings-section-title">Signed-in devices</h2>
+          {sessionsError && (
+            <div className="form-error" style={{ color: "#f87171", marginBottom: "0.5rem" }}>
+              {sessionsError}
+            </div>
+          )}
+          <ul className="settings-sessions">
+            {sessions.map((session) => (
+              <li key={session.id} className="settings-session">
+                <div>
+                  <span className="settings-value" title={session.userAgent ?? undefined}>
+                    {describeDevice(session.userAgent)}
+                  </span>
+                  {session.isCurrent && (
+                    <span className="settings-session-current">This device</span>
+                  )}
+                  <div className="settings-label">
+                    Last active {new Date(session.lastSeenAt).toLocaleString()}
+                    {session.createdFromIp ? ` · ${session.createdFromIp}` : ""}
+                  </div>
+                </div>
+                {!session.isCurrent && (
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => void revokeSession(session.id)}
+                    aria-label={`Sign out ${describeDevice(session.userAgent)}`}
+                  >
+                    Sign out
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => void revokeOtherSessions()}
+            disabled={sessions.filter((s) => !s.isCurrent).length === 0}
+          >
+            Sign out everywhere else
+          </button>
+          <div className="form-group" style={{ marginTop: "1rem" }}>
+            <label htmlFor="sessionIdleDays">Sign out after inactivity (days)</label>
+            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+              <input
+                id="sessionIdleDays"
+                type="number"
+                min={0}
+                max={3650}
+                value={idleDaysInput}
+                onChange={(e) => setIdleDaysInput(e.target.value)}
+                style={{ width: "6rem" }}
+              />
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() =>
+                  void saveSessionDays(
+                    SessionSettingKeys.IdleDays,
+                    idleDaysInput,
+                    setIdleDays,
+                    setIdleDaysError,
+                    setSavingIdleDays,
+                  )
+                }
+                disabled={savingIdleDays || idleDaysInput === String(idleDays)}
+              >
+                Save
+              </button>
+            </div>
+            {idleDaysError && (
+              <div className="form-error" style={{ color: "#f87171", marginTop: "0.25rem" }}>
+                {idleDaysError}
+              </div>
+            )}
+          </div>
+          <div className="form-group">
+            <label htmlFor="sessionMaxDays">Sign out after (days), however active</label>
+            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+              <input
+                id="sessionMaxDays"
+                type="number"
+                min={0}
+                max={3650}
+                value={maxDaysInput}
+                onChange={(e) => setMaxDaysInput(e.target.value)}
+                style={{ width: "6rem" }}
+              />
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() =>
+                  void saveSessionDays(
+                    SessionSettingKeys.MaxDays,
+                    maxDaysInput,
+                    setMaxDays,
+                    setMaxDaysError,
+                    setSavingMaxDays,
+                  )
+                }
+                disabled={savingMaxDays || maxDaysInput === String(maxDays)}
+              >
+                Save
+              </button>
+            </div>
+            {maxDaysError && (
+              <div className="form-error" style={{ color: "#f87171", marginTop: "0.25rem" }}>
+                {maxDaysError}
+              </div>
+            )}
+            <p className="settings-about-desc" style={{ marginTop: "0.5rem" }}>
+              Set either to <strong>0</strong> to disable that limit. The inactivity window applies
+              to devices already signed in; the second only to sign-ins made after you change it.
+            </p>
           </div>
         </div>
 
@@ -361,6 +601,30 @@ export default function Settings() {
         .settings-value {
           font-size: 0.8rem;
           color: #e0e0e0;
+        }
+
+        .settings-sessions {
+          list-style: none;
+          margin: 0 0 0.75rem 0;
+          padding: 0;
+        }
+
+        .settings-session {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 0.5rem;
+          padding: 0.5rem 0;
+          border-bottom: 1px solid #2d2d44;
+        }
+
+        .settings-session-current {
+          margin-left: 0.5rem;
+          padding: 0.05rem 0.35rem;
+          border-radius: 0.25rem;
+          background-color: #2d2d44;
+          font-size: 0.7rem;
+          color: #a0a0b0;
         }
 
         .settings-section .form-group {

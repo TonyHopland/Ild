@@ -16,9 +16,6 @@ public class User : IHasUpdatedAt
     [MaxLength(512)]
     public string PasswordHash { get; set; } = string.Empty;
 
-    [MaxLength(512)]
-    public string? SessionToken { get; set; }
-
     public DateTime CreatedAt { get; set; }
 
     public DateTime? UpdatedAt { get; set; }

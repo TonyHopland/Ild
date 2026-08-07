@@ -34,6 +34,22 @@ public static class AppSettingKeys
     /// </summary>
     public const string PrHeartbeatSeconds = "pr.heartbeatSeconds";
     public const int DefaultPrHeartbeatSeconds = 60;
+
+    /// <summary>
+    /// Days a sign-in survives without being used. Re-evaluated on every
+    /// request, so lowering it signs idle devices out immediately. <c>0</c>
+    /// disables idle expiry.
+    /// </summary>
+    public const string SessionIdleDays = "session.idleDays";
+    public const int DefaultSessionIdleDays = 30;
+
+    /// <summary>
+    /// Days a sign-in survives however active it is. Fixed when the session is
+    /// created, so a change applies to sign-ins made after it. <c>0</c> disables
+    /// the absolute cap.
+    /// </summary>
+    public const string SessionMaxDays = "session.maxDays";
+    public const int DefaultSessionMaxDays = 90;
 }
 
 /// <summary>

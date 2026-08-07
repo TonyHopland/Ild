@@ -118,6 +118,12 @@ try
         var dbContext = scope.ServiceProvider.GetService<AppDbContext>();
         if (dbContext != null)
         {
+            // Read the retired Users.SessionToken column before the schema
+            // migration drops it — the sign-ins it holds are carried into
+            // UserSession rows below so this deploy logs nobody out. Empty on
+            // any database that never had the column.
+            var carriedSessions = await ILD.Data.Migrations.UserSessionCarryOverMigrator.CaptureAsync(dbContext);
+
             if (connectionString != null && connectionString.Length > 0)
             {
                 dbContext.Database.Migrate();
@@ -127,6 +133,16 @@ try
                 dbContext.Database.EnsureCreated();
             }
             Log.Information("Database ready");
+
+            // The absolute-expiry setting ships with this change, so on the one
+            // boot that carries sessions across it cannot yet have been edited:
+            // the default is the only value it can have.
+            var sessionsCarried = await ILD.Data.Migrations.UserSessionCarryOverMigrator.ApplyAsync(
+                dbContext,
+                carriedSessions,
+                DateTime.UtcNow.AddDays(ILD.Core.Services.Interfaces.AppSettingKeys.DefaultSessionMaxDays));
+            if (sessionsCarried > 0)
+                Log.Information("Carried {Count} existing sign-in(s) into the sessions table", sessionsCarried);
 
             // Retire the obsolete AI rejectPattern config on already-seeded
             // databases (the seeder is insert-only, so existing rows are never

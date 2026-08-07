@@ -26,6 +26,7 @@ import {
   WorktreeFiles,
   WorktreeFileContent,
   AppSetting,
+  UserSession,
   WorkItemServerConfig,
   RunAnalyticsOverview,
   AnalyticsFilters,
@@ -34,7 +35,8 @@ import {
 interface BackendLoginResponse {
   token: string;
   username: string;
-  expiresAt: string;
+  /** Absent when the absolute-expiry setting is disabled. */
+  expiresAt?: string | null;
 }
 
 function pageQuery(opts?: { skip?: number; take?: number }): string {
@@ -125,6 +127,22 @@ export const authService = {
     return () => {
       tokenListeners.delete(cb);
     };
+  },
+
+  /** Every device currently signed in as this user, most recently active first. */
+  getSessions: async (): Promise<UserSession[]> => {
+    return api.get<UserSession[]>("/auth/sessions");
+  },
+
+  /** Signs one other device out. */
+  revokeSession: async (id: string): Promise<void> => {
+    await api.delete<void>(`/auth/sessions/${id}`);
+  },
+
+  /** Signs out every device except this one; resolves to how many were revoked. */
+  revokeOtherSessions: async (): Promise<number> => {
+    const result = await api.post<{ revoked: number }>("/auth/sessions/revoke-others", {});
+    return result?.revoked ?? 0;
   },
 };
 
@@ -611,6 +629,12 @@ export const SchedulerSettingKeys = {
   IsPaused: "scheduler.isPaused",
   RunRetentionDays: "run.retentionDays",
   PrHeartbeatSeconds: "pr.heartbeatSeconds",
+} as const;
+
+/** How long a sign-in survives. `0` disables that limit. */
+export const SessionSettingKeys = {
+  IdleDays: "session.idleDays",
+  MaxDays: "session.maxDays",
 } as const;
 
 export const settingsService = {

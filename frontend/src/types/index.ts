@@ -735,6 +735,22 @@ export interface AppSetting {
   value: string;
 }
 
+/**
+ * One signed-in device. Never carries the session token or its hash — `id` is
+ * the session's own key, which is all the revoke calls need.
+ *
+ * Not a `ChatSession`: this is a login, not a chat transcript.
+ */
+export interface UserSession {
+  id: string;
+  createdAt: string;
+  lastSeenAt: string;
+  expiresAt?: string | null;
+  userAgent?: string | null;
+  createdFromIp?: string | null;
+  isCurrent: boolean;
+}
+
 export interface LoopTemplateVersion {
   id: string;
   loopTemplateId: string;

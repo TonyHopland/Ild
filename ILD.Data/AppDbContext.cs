@@ -27,6 +27,7 @@ public class AppDbContext : DbContext
     public DbSet<EventLog> EventLogs => Set<EventLog>();
     public DbSet<AiProvider> AiProviders => Set<AiProvider>();
     public DbSet<User> Users => Set<User>();
+    public DbSet<UserSession> UserSessions => Set<UserSession>();
     public DbSet<AppSetting> AppSettings => Set<AppSetting>();
     public DbSet<ChatSession> ChatSessions => Set<ChatSession>();
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
@@ -200,7 +201,16 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<User>(e =>
         {
             e.HasIndex(u => u.Username).IsUnique();
-            e.HasIndex(u => u.SessionToken);
+        });
+
+        modelBuilder.Entity<UserSession>(e =>
+        {
+            // Every authenticated request looks a session up by hash, so this is
+            // the hot index; unique because two tokens hashing the same would be
+            // a collision we want the database to refuse rather than resolve.
+            e.HasIndex(s => s.TokenHash).IsUnique();
+            // Non-unique: a user has one of these per signed-in device.
+            e.HasIndex(s => s.UserId);
         });
 
         modelBuilder.Entity<AppSetting>(e =>
@@ -271,6 +281,12 @@ public class AppDbContext : DbContext
             e.Property(u => u.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
         });
 
+        modelBuilder.Entity<UserSession>(e =>
+        {
+            e.Property(s => s.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
+            e.Property(s => s.LastSeenAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
+        });
+
         modelBuilder.Entity<ChatSession>(e =>
         {
             e.Property(c => c.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
@@ -330,6 +346,12 @@ public class AppDbContext : DbContext
             .HasOne(v => v.LoopRun)
             .WithMany(lr => lr.Variables)
             .HasForeignKey(v => v.LoopRunId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<UserSession>()
+            .HasOne(s => s.User)
+            .WithMany()
+            .HasForeignKey(s => s.UserId)
             .OnDelete(DeleteBehavior.Cascade);
     }
 

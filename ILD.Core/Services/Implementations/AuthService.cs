@@ -6,6 +6,19 @@ using ILD.Core.Services.Interfaces;
 
 namespace ILD.Core.Services.Implementations;
 
+/// <summary>
+/// Password check plus the lifecycle of a <see cref="UserSession"/>.
+///
+/// Sessions are plural and independent: a sign-in inserts a row, a sign-out
+/// revokes that row, and neither touches the user's other devices. The bearer
+/// token is minted here and immediately forgotten — only its SHA-256 is stored,
+/// and every lookup hashes the presented token to find its row.
+///
+/// A session dies three ways: revoked (<see cref="UserSession.RevokedAt"/>),
+/// idle past <see cref="AppSettingKeys.SessionIdleDays"/>, or older than the
+/// <see cref="AppSettingKeys.SessionMaxDays"/> cap stamped into
+/// <see cref="UserSession.ExpiresAt"/> when it was created.
+/// </summary>
 public class AuthService : IAuthService
 {
     private const int Pbkdf2Iterations = 100_000;
@@ -13,13 +26,32 @@ public class AuthService : IAuthService
     private const int HashBytes = 32;
     private const string DefaultUsername = "admin";
 
+    /// <summary>
+    /// How stale <see cref="UserSession.LastSeenAt"/> has to be before a request
+    /// writes it back. Every authenticated request would otherwise be a write.
+    /// </summary>
+    private static readonly TimeSpan LastSeenWriteInterval = TimeSpan.FromMinutes(1);
+
     private readonly IAuthStore _authStore;
+    private readonly IAppSettingStore _settings;
+
+    /// <summary>
+    /// Memoized for the lifetime of this (scoped, per-request) instance: the
+    /// authentication handler validates the session and then resolves its
+    /// username, and neither call should re-read the same setting row.
+    /// </summary>
+    private int? _idleDays;
+
     private readonly string? _configuredPassword;
     private readonly string _bootstrapUsername;
 
-    public AuthService(IAuthStore authStore)
+    public AuthService(IAuthStore authStore, IAppSettingStore settings)
     {
         _authStore = authStore;
+        _settings = settings;
+        // Credentials stay env vars — they are secrets. Expiry lives in
+        // AppSettings because it is a preference an operator changes from the
+        // Settings page without restarting.
         _configuredPassword = Environment.GetEnvironmentVariable("ILD_PASSWORD");
         var configuredUsername = Environment.GetEnvironmentVariable("ILD_USERNAME");
         _bootstrapUsername = string.IsNullOrWhiteSpace(configuredUsername)
@@ -27,7 +59,11 @@ public class AuthService : IAuthService
             : configuredUsername.Trim();
     }
 
-    public async Task<AuthResult> LoginAsync(string username, string password)
+    public async Task<AuthResult> LoginAsync(
+        string username,
+        string password,
+        string? userAgent = null,
+        string? createdFromIp = null)
     {
         var user = await _authStore.GetByUsernameAsync(username);
 
@@ -46,42 +82,120 @@ public class AuthService : IAuthService
         if (user == null || !VerifyPassword(password, user.PasswordHash))
             return new AuthResult(false, null, null, "Invalid credentials");
 
-        user.SessionToken = GenerateToken();
-        user.UpdatedAt = DateTime.UtcNow;
-        await _authStore.UpdateUserAsync(user);
+        var now = DateTime.UtcNow;
+        var maxDays = await ReadDaysAsync(AppSettingKeys.SessionMaxDays, AppSettingKeys.DefaultSessionMaxDays);
+        var token = GenerateToken();
 
-        return new AuthResult(true, user.SessionToken, user.Username, null);
+        var session = new UserSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = user.Id,
+            TokenHash = UserSession.HashToken(token),
+            CreatedAt = now,
+            LastSeenAt = now,
+            ExpiresAt = maxDays > 0 ? now.AddDays(maxDays) : null,
+            UserAgent = Truncate(userAgent, 512),
+            CreatedFromIp = Truncate(createdFromIp, 64),
+        };
+        await _authStore.CreateSessionAsync(session);
+
+        return new AuthResult(true, token, user.Username, null, session.ExpiresAt);
     }
 
-    public async Task LogoutAsync(string sessionId)
+    public async Task LogoutAsync(string sessionToken)
     {
-        var user = await _authStore.GetBySessionTokenAsync(sessionId);
-        if (user == null) return;
-        user.SessionToken = null;
-        user.UpdatedAt = DateTime.UtcNow;
-        await _authStore.UpdateUserAsync(user);
+        var session = await GetLiveSessionAsync(sessionToken);
+        if (session == null) return;
+        await _authStore.RevokeSessionAsync(session.UserId, session.Id, DateTime.UtcNow);
     }
 
-    public async Task<bool> ValidateSessionAsync(string sessionId)
+    public async Task<bool> ValidateSessionAsync(string sessionToken)
     {
-        if (string.IsNullOrEmpty(sessionId)) return false;
-        return await _authStore.ExistsBySessionTokenAsync(sessionId);
+        var session = await GetLiveSessionAsync(sessionToken);
+        if (session == null) return false;
+
+        var now = DateTime.UtcNow;
+        if (now - session.LastSeenAt >= LastSeenWriteInterval)
+            await _authStore.TouchSessionAsync(session.Id, now);
+
+        return true;
     }
 
-    public async Task<string?> GetUsernameAsync(string sessionId)
+    public async Task<string?> GetUsernameAsync(string sessionToken)
+        => (await GetLiveSessionAsync(sessionToken))?.User?.Username;
+
+    public async Task<IReadOnlyList<UserSessionInfo>> GetSessionsAsync(string sessionToken)
     {
-        if (string.IsNullOrEmpty(sessionId)) return null;
-        var user = await _authStore.GetBySessionTokenAsync(sessionId);
-        return user?.Username;
+        var current = await GetLiveSessionAsync(sessionToken);
+        if (current == null) return Array.Empty<UserSessionInfo>();
+
+        var now = DateTime.UtcNow;
+        var idleDays = await IdleDaysAsync();
+
+        // Un-revoked but timed-out sessions are already dead; showing them would
+        // invite the operator to revoke something that cannot be used anyway.
+        return (await _authStore.GetUnrevokedSessionsAsync(current.UserId))
+            .Where(s => IsLive(s, now, idleDays))
+            .Select(s => new UserSessionInfo(
+                s.Id,
+                s.CreatedAt,
+                s.LastSeenAt,
+                s.ExpiresAt,
+                s.UserAgent,
+                s.CreatedFromIp,
+                s.Id == current.Id))
+            .ToList();
     }
 
-    public Task<string> GenerateApiKeyAsync(string description)
-        => Task.FromResult(GenerateToken());
+    public async Task<bool> RevokeSessionAsync(string sessionToken, Guid sessionId)
+    {
+        var current = await GetLiveSessionAsync(sessionToken);
+        if (current == null) return false;
+        return await _authStore.RevokeSessionAsync(current.UserId, sessionId, DateTime.UtcNow);
+    }
 
-    public Task RevokeApiKeyAsync(string apiKey) => Task.CompletedTask;
+    public async Task<int> RevokeOtherSessionsAsync(string sessionToken)
+    {
+        var current = await GetLiveSessionAsync(sessionToken);
+        if (current == null) return 0;
+        return await _authStore.RevokeOtherSessionsAsync(current.UserId, current.Id, DateTime.UtcNow);
+    }
 
-    public Task<IEnumerable<ApiKeyRecord>> GetApiKeysAsync()
-        => Task.FromResult<IEnumerable<ApiKeyRecord>>(Array.Empty<ApiKeyRecord>());
+    /// <summary>
+    /// The session a token names, or null when there is none, it was revoked, or
+    /// it has timed out. The single gate every public method above goes through.
+    /// </summary>
+    private async Task<UserSession?> GetLiveSessionAsync(string sessionToken)
+    {
+        if (string.IsNullOrEmpty(sessionToken)) return null;
+
+        var session = await _authStore.GetSessionByTokenHashAsync(UserSession.HashToken(sessionToken));
+        if (session == null) return null;
+
+        return IsLive(session, DateTime.UtcNow, await IdleDaysAsync()) ? session : null;
+    }
+
+    private static bool IsLive(UserSession session, DateTime now, int idleDays)
+    {
+        if (session.RevokedAt != null) return false;
+        if (session.ExpiresAt != null && session.ExpiresAt <= now) return false;
+        if (idleDays > 0 && session.LastSeenAt.AddDays(idleDays) <= now) return false;
+        return true;
+    }
+
+    private async Task<int> IdleDaysAsync()
+        => _idleDays ??= await ReadDaysAsync(AppSettingKeys.SessionIdleDays, AppSettingKeys.DefaultSessionIdleDays);
+
+    private async Task<int> ReadDaysAsync(string key, int fallback)
+    {
+        var setting = await _settings.GetByKeyAsync(key);
+        return setting != null && int.TryParse(setting.Value, out var days) && days >= 0 ? days : fallback;
+    }
+
+    private static string? Truncate(string? value, int max)
+        => string.IsNullOrWhiteSpace(value) ? null
+            : value.Length <= max ? value
+            : value[..max];
 
     private static string HashPassword(string password)
     {
