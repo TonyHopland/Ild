@@ -33,6 +33,21 @@ The ILD API log level is also changeable at runtime through `PUT /api/v1/logging
 
 The ILD container additionally uses an `ILD_AGENT_TOKEN` for agent/MCP calls back into the local API. It is auto-generated at startup if unset, so you normally don't need to provide one.
 
+## Session expiry
+
+How long a sign-in lasts is a preference, not a secret, so it lives in the database and is edited under **Settings → Signed-in devices** — no restart, and it takes effect on the next request.
+
+| Setting            | Default | Meaning                                      |
+| ------------------ | ------- | -------------------------------------------- |
+| `session.idleDays` | `30`    | Days a sign-in survives without being used   |
+| `session.maxDays`  | `90`    | Days a sign-in survives however active it is |
+
+Either accepts `0` to disable that limit, and both are capped at 3650. The defaults are deliberately generous: a single operator on their own machine should not be re-authenticating.
+
+The two behave differently when changed. `session.idleDays` is re-evaluated on every request, so lowering it signs idle devices out at once. `session.maxDays` is stamped onto a session when it is created, so a change applies only to sign-ins made afterwards — existing devices keep the deadline they were given.
+
+The credentials themselves stay environment variables (`ILD_PASSWORD`, `ILD_USERNAME`) because they are secrets.
+
 ## Graceful shutdown
 
 When ILD is asked to stop — `docker compose stop`, a Kubernetes rollout, a

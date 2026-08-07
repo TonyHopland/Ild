@@ -35,6 +35,7 @@ public sealed class TestDb : IDisposable
     public IEventLogStore EventLogs { get; }
     public IAuthStore Auth { get; }
     public IProviderStore Providers { get; }
+    public IAppSettingStore Settings { get; }
 
     /// <summary>
     /// Fake WorkItemServer harness backing the remote-backed
@@ -72,6 +73,7 @@ public sealed class TestDb : IDisposable
         EventLogs = new EventLogStore(Context);
         Auth = new AuthStore(Context);
         Providers = new ProviderStore(Context);
+        Settings = new AppSettingStore(Context);
         _ownsServer = server is null;
         Server = server ?? new FakeWorkItemServerHarness();
     }

@@ -27,6 +27,8 @@ public class SettingsController : ControllerBase
         AppSettingKeys.SchedulerIsPaused,
         AppSettingKeys.RunRetentionDays,
         AppSettingKeys.PrHeartbeatSeconds,
+        AppSettingKeys.SessionIdleDays,
+        AppSettingKeys.SessionMaxDays,
     };
 
     public SettingsController(
@@ -64,6 +66,10 @@ public class SettingsController : ControllerBase
             map[AppSettingKeys.RunRetentionDays] = AppSettingKeys.DefaultRunRetentionDays.ToString();
         if (!map.ContainsKey(AppSettingKeys.PrHeartbeatSeconds))
             map[AppSettingKeys.PrHeartbeatSeconds] = AppSettingKeys.DefaultPrHeartbeatSeconds.ToString();
+        if (!map.ContainsKey(AppSettingKeys.SessionIdleDays))
+            map[AppSettingKeys.SessionIdleDays] = AppSettingKeys.DefaultSessionIdleDays.ToString();
+        if (!map.ContainsKey(AppSettingKeys.SessionMaxDays))
+            map[AppSettingKeys.SessionMaxDays] = AppSettingKeys.DefaultSessionMaxDays.ToString();
         return Ok(map.Select(kv => new { key = kv.Key, value = kv.Value }));
     }
 
@@ -109,6 +115,8 @@ public class SettingsController : ControllerBase
         AppSettingKeys.SchedulerIsPaused => AppSettingKeys.DefaultIsPaused.ToString().ToLowerInvariant(),
         AppSettingKeys.RunRetentionDays => AppSettingKeys.DefaultRunRetentionDays.ToString(),
         AppSettingKeys.PrHeartbeatSeconds => AppSettingKeys.DefaultPrHeartbeatSeconds.ToString(),
+        AppSettingKeys.SessionIdleDays => AppSettingKeys.DefaultSessionIdleDays.ToString(),
+        AppSettingKeys.SessionMaxDays => AppSettingKeys.DefaultSessionMaxDays.ToString(),
         _ => string.Empty,
     };
 
@@ -141,6 +149,20 @@ public class SettingsController : ControllerBase
                 if (!int.TryParse(value, out var secs) || secs < 5 || secs > 3600)
                 {
                     error = "pr.heartbeatSeconds must be an integer between 5 and 3600";
+                    return false;
+                }
+                break;
+            case AppSettingKeys.SessionIdleDays:
+                if (!int.TryParse(value, out var idle) || idle < 0 || idle > 3650)
+                {
+                    error = "session.idleDays must be an integer between 0 (never) and 3650";
+                    return false;
+                }
+                break;
+            case AppSettingKeys.SessionMaxDays:
+                if (!int.TryParse(value, out var maxDays) || maxDays < 0 || maxDays > 3650)
+                {
+                    error = "session.maxDays must be an integer between 0 (never) and 3650";
                     return false;
                 }
                 break;

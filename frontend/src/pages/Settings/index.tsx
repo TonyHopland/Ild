@@ -1,116 +1,191 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "../../hooks/useAuth";
 import { useChatEnabled, setChatEnabled } from "../../hooks/useChatEnabled";
-import { loggingService, settingsService, SchedulerSettingKeys } from "../../services/auth";
+import {
+  authService,
+  loggingService,
+  settingsService,
+  SchedulerSettingKeys,
+  SessionSettingKeys,
+} from "../../services/auth";
+import { UserSession } from "../../types";
 
 const LOG_LEVELS = ["Debug", "Information", "Warning", "Error"] as const;
+
+/**
+ * A user agent is unreadable; the browser name is what tells one of your own
+ * devices from another. The full string stays available as a tooltip for when
+ * the guess is not enough.
+ */
+function describeDevice(userAgent: string | null | undefined): string {
+  if (!userAgent) return "Unknown device";
+  const browser = [
+    ["Edg/", "Edge"],
+    ["OPR/", "Opera"],
+    ["Firefox/", "Firefox"],
+    ["Chrome/", "Chrome"],
+    ["Safari/", "Safari"],
+  ].find(([token]) => userAgent.includes(token))?.[1];
+  const platform = [
+    ["Android", "Android"],
+    ["iPhone", "iPhone"],
+    ["iPad", "iPad"],
+    ["Mac OS X", "macOS"],
+    ["Windows", "Windows"],
+    ["Linux", "Linux"],
+  ].find(([token]) => userAgent.includes(token))?.[1];
+
+  if (browser && platform) return `${browser} on ${platform}`;
+  return browser ?? platform ?? userAgent.slice(0, 40);
+}
+
+interface NumericSettingFieldProps {
+  /** The app-setting key this field reads and writes. Also the input's id. */
+  settingKey: string;
+  label: string;
+  min: number;
+  max: number;
+  /** Shown while the current value is still being fetched, or if it cannot be. */
+  fallback: number;
+  /** Replaces `min` in the range message, e.g. `"0 (disabled)"`. */
+  minLabel?: string;
+  /** Help text under the field. */
+  children?: React.ReactNode;
+}
+
+/**
+ * One integer app setting: shows its current value, refuses one outside the
+ * allowed range before going near the server, and reports whatever the save
+ * said. The draft, the error and the in-flight flag are its own because nothing
+ * outside the field reads them — the page renders several of these and holds no
+ * state for any of them.
+ */
+function NumericSettingField({
+  settingKey,
+  label,
+  min,
+  max,
+  fallback,
+  minLabel,
+  children,
+}: NumericSettingFieldProps) {
+  const [saved, setSaved] = useState<number>(fallback);
+  const [draft, setDraft] = useState<string>(String(fallback));
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    void settingsService
+      .get(settingKey)
+      .then((s) => {
+        const n = parseInt(s.value, 10);
+        if (Number.isNaN(n)) return;
+        setSaved(n);
+        setDraft(String(n));
+      })
+      // Unreachable API: leave the default showing rather than an empty box.
+      .catch(() => {});
+  }, [settingKey]);
+
+  const save = async () => {
+    const n = parseInt(draft, 10);
+    if (Number.isNaN(n) || n < min || n > max) {
+      setError(`Must be an integer between ${minLabel ?? min} and ${max}.`);
+      return;
+    }
+    setError(null);
+    setSaving(true);
+    try {
+      await settingsService.put(settingKey, String(n));
+      setSaved(n);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="form-group">
+      <label htmlFor={settingKey}>{label}</label>
+      <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+        <input
+          id={settingKey}
+          type="number"
+          min={min}
+          max={max}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          style={{ width: "6rem" }}
+        />
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => void save()}
+          disabled={saving || draft === String(saved)}
+        >
+          Save
+        </button>
+      </div>
+      {error && (
+        <div className="form-error" style={{ color: "#f87171", marginTop: "0.25rem" }}>
+          {error}
+        </div>
+      )}
+      {children && (
+        <p className="settings-about-desc" style={{ marginTop: "0.5rem" }}>
+          {children}
+        </p>
+      )}
+    </div>
+  );
+}
 
 export default function Settings() {
   const { user } = useAuth();
   const chatEnabled = useChatEnabled();
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [logLevel, setLogLevel] = useState("Information");
-  const [maxConcurrent, setMaxConcurrent] = useState<number>(5);
-  const [maxConcurrentInput, setMaxConcurrentInput] = useState<string>("5");
-  const [maxConcurrentError, setMaxConcurrentError] = useState<string | null>(null);
-  const [savingMaxConcurrent, setSavingMaxConcurrent] = useState(false);
-  const [retentionDays, setRetentionDays] = useState<number>(30);
-  const [retentionInput, setRetentionInput] = useState<string>("30");
-  const [retentionError, setRetentionError] = useState<string | null>(null);
-  const [savingRetention, setSavingRetention] = useState(false);
-  const [prHeartbeat, setPrHeartbeat] = useState<number>(60);
-  const [prHeartbeatInput, setPrHeartbeatInput] = useState<string>("60");
-  const [prHeartbeatError, setPrHeartbeatError] = useState<string | null>(null);
-  const [savingPrHeartbeat, setSavingPrHeartbeat] = useState(false);
+  const [sessions, setSessions] = useState<UserSession[]>([]);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
+
+  const refreshSessions = useCallback(async () => {
+    try {
+      setSessions(await authService.getSessions());
+      setSessionsError(null);
+    } catch (err) {
+      setSessionsError(err instanceof Error ? err.message : "Failed to load sessions.");
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshSessions();
+  }, [refreshSessions]);
 
   useEffect(() => {
     const stored = localStorage.getItem("ild_notifications_enabled");
     if (stored !== null) {
       setNotificationsEnabled(stored !== "false");
     }
-    void settingsService
-      .get(SchedulerSettingKeys.MaxConcurrent)
-      .then((s) => {
-        const n = parseInt(s.value, 10);
-        if (!Number.isNaN(n)) {
-          setMaxConcurrent(n);
-          setMaxConcurrentInput(String(n));
-        }
-      })
-      .catch(() => {});
-    void settingsService
-      .get(SchedulerSettingKeys.RunRetentionDays)
-      .then((s) => {
-        const n = parseInt(s.value, 10);
-        if (!Number.isNaN(n)) {
-          setRetentionDays(n);
-          setRetentionInput(String(n));
-        }
-      })
-      .catch(() => {});
-    void settingsService
-      .get(SchedulerSettingKeys.PrHeartbeatSeconds)
-      .then((s) => {
-        const n = parseInt(s.value, 10);
-        if (!Number.isNaN(n)) {
-          setPrHeartbeat(n);
-          setPrHeartbeatInput(String(n));
-        }
-      })
-      .catch(() => {});
   }, []);
 
-  const saveMaxConcurrent = async () => {
-    const n = parseInt(maxConcurrentInput, 10);
-    if (Number.isNaN(n) || n < 1 || n > 1000) {
-      setMaxConcurrentError("Must be an integer between 1 and 1000.");
-      return;
-    }
-    setMaxConcurrentError(null);
-    setSavingMaxConcurrent(true);
+  const revokeSession = async (id: string) => {
     try {
-      await settingsService.put(SchedulerSettingKeys.MaxConcurrent, String(n));
-      setMaxConcurrent(n);
+      await authService.revokeSession(id);
+      await refreshSessions();
     } catch (err) {
-      setMaxConcurrentError(err instanceof Error ? err.message : "Failed to save.");
-    } finally {
-      setSavingMaxConcurrent(false);
+      setSessionsError(err instanceof Error ? err.message : "Failed to sign that device out.");
     }
   };
 
-  const saveRetention = async () => {
-    const n = parseInt(retentionInput, 10);
-    if (Number.isNaN(n) || n < 0 || n > 3650) {
-      setRetentionError("Must be an integer between 0 (disabled) and 3650.");
-      return;
-    }
-    setRetentionError(null);
-    setSavingRetention(true);
+  const revokeOtherSessions = async () => {
     try {
-      await settingsService.put(SchedulerSettingKeys.RunRetentionDays, String(n));
-      setRetentionDays(n);
+      await authService.revokeOtherSessions();
+      await refreshSessions();
     } catch (err) {
-      setRetentionError(err instanceof Error ? err.message : "Failed to save.");
-    } finally {
-      setSavingRetention(false);
-    }
-  };
-
-  const savePrHeartbeat = async () => {
-    const n = parseInt(prHeartbeatInput, 10);
-    if (Number.isNaN(n) || n < 5 || n > 3600) {
-      setPrHeartbeatError("Must be an integer between 5 and 3600.");
-      return;
-    }
-    setPrHeartbeatError(null);
-    setSavingPrHeartbeat(true);
-    try {
-      await settingsService.put(SchedulerSettingKeys.PrHeartbeatSeconds, String(n));
-      setPrHeartbeat(n);
-    } catch (err) {
-      setPrHeartbeatError(err instanceof Error ? err.message : "Failed to save.");
-    } finally {
-      setSavingPrHeartbeat(false);
+      setSessionsError(
+        err instanceof Error ? err.message : "Failed to sign the other devices out.",
+      );
     }
   };
 
@@ -139,6 +214,72 @@ export default function Settings() {
               <span className="settings-label">Username</span>
               <span className="settings-value">{user?.username}</span>
             </div>
+          </div>
+        </div>
+
+        <div className="settings-section">
+          <h2 className="settings-section-title">Signed-in devices</h2>
+          {sessionsError && (
+            <div className="form-error" style={{ color: "#f87171", marginBottom: "0.5rem" }}>
+              {sessionsError}
+            </div>
+          )}
+          <ul className="settings-sessions">
+            {sessions.map((session) => (
+              <li key={session.id} className="settings-session">
+                <div>
+                  <span className="settings-value" title={session.userAgent ?? undefined}>
+                    {describeDevice(session.userAgent)}
+                  </span>
+                  {session.isCurrent && (
+                    <span className="settings-session-current">This device</span>
+                  )}
+                  <div className="settings-label">
+                    Last active {new Date(session.lastSeenAt).toLocaleString()}
+                    {session.createdFromIp ? ` · ${session.createdFromIp}` : ""}
+                  </div>
+                </div>
+                {!session.isCurrent && (
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => void revokeSession(session.id)}
+                    aria-label={`Sign out ${describeDevice(session.userAgent)}`}
+                  >
+                    Sign out
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => void revokeOtherSessions()}
+            disabled={sessions.filter((s) => !s.isCurrent).length === 0}
+          >
+            Sign out everywhere else
+          </button>
+          <div style={{ marginTop: "1rem" }}>
+            <NumericSettingField
+              settingKey={SessionSettingKeys.IdleDays}
+              label="Sign out after inactivity (days)"
+              min={0}
+              max={3650}
+              fallback={30}
+              minLabel="0 (never)"
+            />
+            <NumericSettingField
+              settingKey={SessionSettingKeys.MaxDays}
+              label="Sign out after (days), however active"
+              min={0}
+              max={3650}
+              fallback={90}
+              minLabel="0 (never)"
+            >
+              Set either to <strong>0</strong> to disable that limit. The inactivity window applies
+              to devices already signed in; the second only to sign-ins made after you change it.
+            </NumericSettingField>
           </div>
         </div>
 
@@ -187,109 +328,47 @@ export default function Settings() {
 
         <div className="settings-section">
           <h2 className="settings-section-title">Scheduler</h2>
-          <div className="form-group">
-            <label htmlFor="maxConcurrent">Max concurrent running work items</label>
-            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-              <input
-                id="maxConcurrent"
-                type="number"
-                min={1}
-                max={1000}
-                value={maxConcurrentInput}
-                onChange={(e) => setMaxConcurrentInput(e.target.value)}
-                style={{ width: "6rem" }}
-              />
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={saveMaxConcurrent}
-                disabled={savingMaxConcurrent || maxConcurrentInput === String(maxConcurrent)}
-              >
-                Save
-              </button>
-            </div>
-            {maxConcurrentError && (
-              <div className="form-error" style={{ color: "#f87171", marginTop: "0.25rem" }}>
-                {maxConcurrentError}
-              </div>
-            )}
-            <p className="settings-about-desc" style={{ marginTop: "0.5rem" }}>
-              Caps how many work items the scheduler will run at once. Per-provider parallelism is
-              configured on each AI provider.
-            </p>
-          </div>
+          <NumericSettingField
+            settingKey={SchedulerSettingKeys.MaxConcurrent}
+            label="Max concurrent running work items"
+            min={1}
+            max={1000}
+            fallback={5}
+          >
+            Caps how many work items the scheduler will run at once. Per-provider parallelism is
+            configured on each AI provider.
+          </NumericSettingField>
         </div>
 
         <div className="settings-section">
           <h2 className="settings-section-title">Run retention</h2>
-          <div className="form-group">
-            <label htmlFor="retentionDays">Delete finished runs after (days)</label>
-            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-              <input
-                id="retentionDays"
-                type="number"
-                min={0}
-                max={3650}
-                value={retentionInput}
-                onChange={(e) => setRetentionInput(e.target.value)}
-                style={{ width: "6rem" }}
-              />
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={saveRetention}
-                disabled={savingRetention || retentionInput === String(retentionDays)}
-              >
-                Save
-              </button>
-            </div>
-            {retentionError && (
-              <div className="form-error" style={{ color: "#f87171", marginTop: "0.25rem" }}>
-                {retentionError}
-              </div>
-            )}
-            <p className="settings-about-desc" style={{ marginTop: "0.5rem" }}>
-              How long a finished run's worktree, branch, and history are kept before being
-              reclaimed. Set to <strong>0</strong> to keep runs forever. Runs pinned with “Retain”
-              are never deleted.
-            </p>
-          </div>
+          <NumericSettingField
+            settingKey={SchedulerSettingKeys.RunRetentionDays}
+            label="Delete finished runs after (days)"
+            min={0}
+            max={3650}
+            fallback={30}
+            minLabel="0 (disabled)"
+          >
+            How long a finished run's worktree, branch, and history are kept before being reclaimed.
+            Set to <strong>0</strong> to keep runs forever. Runs pinned with “Retain” are never
+            deleted.
+          </NumericSettingField>
         </div>
 
         <div className="settings-section">
           <h2 className="settings-section-title">PR heartbeat</h2>
-          <div className="form-group">
-            <label htmlFor="prHeartbeat">Poll PR state every (seconds)</label>
-            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-              <input
-                id="prHeartbeat"
-                type="number"
-                min={5}
-                max={3600}
-                value={prHeartbeatInput}
-                onChange={(e) => setPrHeartbeatInput(e.target.value)}
-                style={{ width: "6rem" }}
-              />
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={savePrHeartbeat}
-                disabled={savingPrHeartbeat || prHeartbeatInput === String(prHeartbeat)}
-              >
-                Save
-              </button>
-            </div>
-            {prHeartbeatError && (
-              <div className="form-error" style={{ color: "#f87171", marginTop: "0.25rem" }}>
-                {prHeartbeatError}
-              </div>
-            )}
-            <p className="settings-about-desc" style={{ marginTop: "0.5rem" }}>
-              How often the background poller fetches PR state (CI, reviews, merge status) for runs
-              parked at a PR node awaiting merge. Lower values react faster but use more provider
-              API calls.
-            </p>
-          </div>
+          <NumericSettingField
+            settingKey={SchedulerSettingKeys.PrHeartbeatSeconds}
+            label="Poll PR state every (seconds)"
+            min={5}
+            max={3600}
+            fallback={60}
+          >
+            How often the background poller fetches PR state (CI, reviews, merge status) for runs
+            parked at a PR node awaiting merge. Lower values react faster but use more provider API
+            calls.
+          </NumericSettingField>
         </div>
 
         <div className="settings-section">
@@ -361,6 +440,30 @@ export default function Settings() {
         .settings-value {
           font-size: 0.8rem;
           color: #e0e0e0;
+        }
+
+        .settings-sessions {
+          list-style: none;
+          margin: 0 0 0.75rem 0;
+          padding: 0;
+        }
+
+        .settings-session {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 0.5rem;
+          padding: 0.5rem 0;
+          border-bottom: 1px solid #2d2d44;
+        }
+
+        .settings-session-current {
+          margin-left: 0.5rem;
+          padding: 0.05rem 0.35rem;
+          border-radius: 0.25rem;
+          background-color: #2d2d44;
+          font-size: 0.7rem;
+          color: #a0a0b0;
         }
 
         .settings-section .form-group {

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Stay signed in on every device at once.** Logging in on your phone no longer signs your desktop out, **Settings** lists the devices you are signed in on and signs any of them out, and a sign-in you stop using eventually lapses on its own.
+
 - **A throttled AI node parks the run instead of failing it.** When the provider stops the agent — a usage or session limit, a 429, an overloaded provider — the run waits in Human Feedback showing the provider's own message, and **Resume** continues the same agent session once the limit resets. Genuine failures still take the `on_failure` edge. See [ADR-0017](docs/adr/0017-shutdown-halts-the-in-flight-ai-node.md).
 
 - **Start a work item from a branch other than the default.** A **Base branch** field sets the branch an item's runs start from and open their pull requests against, so an item can continue, review, or hotfix a branch. One that is missing from `origin` fails the run instead of falling back. See [ADR-0008](docs/adr/0008-worktree-and-branch-per-run.md).
