@@ -1,5 +1,6 @@
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ILD.Api.Controllers;
@@ -15,6 +16,8 @@ public class AuthController : ControllerBase
         _authService = authService;
     }
 
+    // The one endpoint that mints the token everything else demands.
+    [AllowAnonymous]
     [HttpPost("login")]
     public async Task<IActionResult> Login([FromBody] LoginRequest request)
     {
@@ -53,7 +56,7 @@ public class AuthController : ControllerBase
     [HttpGet("me")]
     public IActionResult Me()
     {
-        var username = HttpContext.Items["Username"] as string;
+        var username = User.Identity?.Name;
         if (string.IsNullOrEmpty(username))
             return Unauthorized();
 

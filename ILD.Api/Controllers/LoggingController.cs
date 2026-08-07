@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Serilog.Core;
 using Serilog.Events;
@@ -6,6 +7,9 @@ namespace ILD.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/[controller]")]
+// Turning the log level up is an operator's first move when the app is too
+// broken to log in; it has never required a session and still does not.
+[AllowAnonymous]
 public class LoggingController : ControllerBase
 {
     private readonly LoggingLevelSwitch _levelSwitch;

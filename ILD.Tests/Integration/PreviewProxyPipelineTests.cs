@@ -43,7 +43,7 @@ public class PreviewProxyPipelineTests
         using var factory = FactoryWithProxyBase();
         using var client = factory.CreateClient();
 
-        // No bearer token: were the proxy behind AuthMiddleware this would be a 401,
+        // No bearer token: were the proxy behind authentication this would be a 401,
         // and were it behind the static files it would be ILD's own SPA.
         using var response = await client.SendAsync(Request(path, PreviewHost));
         var body = await response.Content.ReadAsStringAsync();

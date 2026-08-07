@@ -1,6 +1,8 @@
 using System.Text;
+using ILD.Api.Authentication;
 using ILD.Data.Entities;
 using ILD.Core.Services.Interfaces;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -8,6 +10,11 @@ namespace ILD.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/webhooks")]
+// The caller is a git host replaying an operator-configured Authorization header,
+// which may hold either principal's token — so this asks only for an authenticated
+// caller, exactly as before. HMAC below is the real gate; the token is the outer
+// one, and dropping it to anonymous would remove a check that exists today.
+[Authorize(Policy = IldAuthentication.AgentOrUserPolicy)]
 public class WebhooksController : ControllerBase
 {
     private readonly IPrSyncService _prSync;

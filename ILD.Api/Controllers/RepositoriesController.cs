@@ -123,15 +123,13 @@ public class RepositoriesController : ControllerBase
     }
 
     // Reading and clearing the custom .env sit on their own sub-resource rather than
-    // widening the repository payload: one narrow, auditable surface that a coding
-    // agent is barred from. The bar has to be explicit — the agent service token
-    // authenticates on *every* /api path (AuthMiddleware), not just /api/v1/agent,
-    // so route placement alone would not keep the agent out.
+    // widening the repository payload: one narrow, auditable surface. Like every
+    // endpoint outside AgentController it is user-only under the fallback policy,
+    // so an agent presenting the service token gets a 403 here.
 
     [HttpGet("{id}/preview-env")]
     public async Task<IActionResult> GetPreviewEnv(string id)
     {
-        if (DenyAgent() is { } denied) return denied;
         if (!Guid.TryParse(id, out var guid)) return BadRequest();
         var repo = await _db.Repositories.AsNoTracking().FirstOrDefaultAsync(r => r.Id == guid);
         // Decrypted transparently on read by the EF value converter.
@@ -144,7 +142,6 @@ public class RepositoriesController : ControllerBase
     [HttpDelete("{id}/preview-env")]
     public async Task<IActionResult> ClearPreviewEnv(string id)
     {
-        if (DenyAgent() is { } denied) return denied;
         if (!Guid.TryParse(id, out var guid)) return BadRequest();
         var repo = await _db.Repositories.FindAsync(guid);
         if (repo == null) return NotFound();
@@ -153,14 +150,6 @@ public class RepositoriesController : ControllerBase
         await _db.SaveChangesAsync();
         return Ok(ToResponse(repo));
     }
-
-    // Deliberately not MVC's Forbid(): the app authenticates in AuthMiddleware and
-    // registers no authentication scheme, so executing a ForbidResult throws and the
-    // caller sees a 500 instead of a refusal (verified against this pipeline).
-    private IActionResult? DenyAgent()
-        => HttpContext.Items.TryGetValue("IsAgent", out var isAgent) && isAgent is true
-            ? StatusCode(StatusCodes.Status403Forbidden, new { error = "Forbidden", message = "The custom .env is not readable by agents" })
-            : null;
 
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(string id)

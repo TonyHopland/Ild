@@ -32,8 +32,9 @@ anything works, and neither can be provisioned from this repository.
   gate. Unset — the default — no request is proxied and preview URLs keep their
   historical direct form.
 - **A running proxied preview is unauthenticated.** The proxy must run ahead of
-  `AuthMiddleware`, since a foreign app cannot carry an ILD session token. That
-  is the price of the feature, not an oversight; see `docs/deployment.md`.
+  `UseAuthentication()`/`UseAuthorization()`, since a foreign app cannot carry an
+  ILD session token. That is the price of the feature, not an oversight; see
+  `docs/deployment.md`.
 - Everything the proxy will not forward answers with one indistinguishable 404,
   and the reason goes to the log. A page per failure mode would have told an
   unauthenticated caller which work items exist, which have worktrees, and what

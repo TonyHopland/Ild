@@ -42,6 +42,12 @@ worktrees/
 ## Build artifacts
 *.log
 
+## Core dumps — a crashed .NET process drops one next to the project, and it is a
+## verbatim image of that process's memory: environment (tokens, passwords),
+## connection strings, and whatever it had just read out of the database.
+core
+core.*
+
 ## Vite+ cache and hooks
 .pnpm-store/
 .vite-hooks/
