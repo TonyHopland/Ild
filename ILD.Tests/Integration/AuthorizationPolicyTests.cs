@@ -137,17 +137,28 @@ public class AuthorizationPolicyTests
             () => sockets.ConnectAsync(unauthenticatedHub, CancellationToken.None));
     }
 
-    [Fact]
-    public async Task The_agent_token_reaches_the_agent_surface()
+    /// <summary>
+    /// The other side of the fallback policy: the opt-out on AgentController has
+    /// to actually admit the agent, or ILD's MCP server is locked out of every
+    /// tool at once. These are the paths behind the read-only tools, requested
+    /// exactly as <c>ILD.McpServer</c>'s <c>IldClient</c> sends them — the agent
+    /// service token as a bearer header, plus the run-id header it always sets.
+    /// </summary>
+    [Theory]
+    [InlineData("/api/v1/agent/repositories?skip=0&take=100")]
+    [InlineData("/api/v1/agent/workitems?skip=0&take=100")]
+    [InlineData("/api/v1/agent/workitems/summary")]
+    [InlineData("/api/v1/agent/loop-templates?skip=0&take=100")]
+    [InlineData("/api/v1/agent/loop-runs")]
+    public async Task The_agent_token_reaches_the_agent_surface(string path)
     {
-        // The other side of the fallback policy: the opt-out on AgentController
-        // has to actually admit the agent, or the MCP server is locked out.
         await using var factory = new ApiFactory();
         var client = factory.CreateClient();
         var token = factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token;
         client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        client.DefaultRequestHeaders.Add("X-ILD-Run-Id", Guid.NewGuid().ToString());
 
-        var response = await client.GetAsync("/api/v1/agent/repositories");
+        var response = await client.GetAsync(path);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }

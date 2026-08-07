@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A coding agent reaching for something meant for you is refused rather than crashing the request.**
 
+- **When an ILD tool fails, the agent is told why — which call, against which address, and what came back — instead of "an error occurred".**
+
+### Fixed
+
+- **The ILD tools work inside a worktree preview of ILD itself, where they were calling the wrong instance.**
+
 - **arm64 images are built on native arm64 runners instead of under QEMU emulation.**
 
 ## [0.8.0] - 2026-08-02
