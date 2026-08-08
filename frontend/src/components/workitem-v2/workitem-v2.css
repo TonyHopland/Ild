@@ -150,12 +150,25 @@
   padding: 1rem;
 }
 
+/* The tab strip scrolls sideways once the tabs outgrow the dialog rather than
+   compressing them past the point of being readable or reachable. The scrollbar
+   is hidden: it would otherwise be laid out inside the strip, shortening the
+   content box and clipping the bottom-border indicator of the active tab. The
+   strip still scrolls by touch, wheel and keyboard (arrow keys scroll the newly
+   focused tab into view). */
 .wiv2-tabbar {
   display: flex;
   gap: 0.25rem;
   padding: 0.5rem 1rem 0;
   border-bottom: 1px solid #2d2d44;
   flex-shrink: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.wiv2-tabbar::-webkit-scrollbar {
+  display: none;
 }
 
 .wiv2-tab {
@@ -166,6 +179,16 @@
   font-size: 0.85rem;
   padding: 0.5rem 0.75rem;
   cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Drawn inside the tab: the strip clips ink overflow at its padding box, whose
+   bottom edge is the tab's own bottom edge, so a ring drawn outward would lose
+   its bottom. This is the arrow-key indicator on a keyboard-driven strip. */
+.wiv2-tab:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: -2px;
 }
 
 .wiv2-tab:hover {

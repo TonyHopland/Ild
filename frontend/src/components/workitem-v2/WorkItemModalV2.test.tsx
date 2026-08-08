@@ -189,6 +189,52 @@ describe("WorkItemModalV2", () => {
     expect(screen.getByRole("tab", { name: /Runs/ }).getAttribute("aria-selected")).toBe("false");
   });
 
+  test("arrow keys move selection and focus along the tab strip", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem());
+
+    const overview = screen.getByRole("tab", { name: "Overview" });
+    overview.focus();
+
+    await act(async () => {
+      fireEvent.keyDown(overview, { key: "End" });
+      await Promise.resolve();
+    });
+    const preview = screen.getByRole("tab", { name: /Preview/ });
+    expect(preview.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(preview);
+
+    await act(async () => {
+      fireEvent.keyDown(preview, { key: "Home" });
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe(
+      "true",
+    );
+  });
+
+  // The tab strip scrolls sideways once the tabs outgrow the dialog, so a tab
+  // reached by keyboard can be off to the side. jsdom does no layout and has no
+  // scrollIntoView, so stub it to observe that the strip follows focus.
+  test("keyboard navigation scrolls the newly focused tab into view", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem());
+
+    const scrollIntoView = vi.fn();
+    for (const tab of screen.getAllByRole("tab")) {
+      tab.scrollIntoView = scrollIntoView;
+    }
+
+    const overview = screen.getByRole("tab", { name: "Overview" });
+    overview.focus();
+    await act(async () => {
+      fireEvent.keyDown(overview, { key: "End" });
+      await Promise.resolve();
+    });
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest", inline: "nearest" });
+  });
+
   test("runs tab shows run list and inline node timeline", async () => {
     mockServices();
     await renderDialog(makeWorkItem());

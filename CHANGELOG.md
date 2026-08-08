@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The main menu and the work item dialog's tabs scroll sideways on a narrow screen, so the last of them are reachable.**
+
 ## [0.9.0] - 2026-08-07
 
 ### Added
