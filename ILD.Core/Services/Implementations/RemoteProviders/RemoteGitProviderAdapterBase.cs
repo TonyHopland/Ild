@@ -346,22 +346,62 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
             $"No logs available for {ProviderType} — its checks are published by an external CI system this server has no credentials for."));
 
     /// <summary>
-    /// The requested window of a fetched log: <paramref name="tailLines"/> lines
-    /// ending <paramref name="offset"/> lines from the end, capped at
+    /// The requested window of a log being streamed: <paramref name="tailLines"/>
+    /// lines ending <paramref name="offset"/> lines from the end, capped at
     /// <see cref="MaxLogChars"/> characters. The cap drops from the front of the
     /// window — the error is at the end — and is reported as
     /// <see cref="RemoteCiLog.Truncated"/> so a caller pages rather than assumes
     /// it saw everything.
+    ///
+    /// Reads line by line and holds only the lines the window could still need,
+    /// never the whole log: a CI log runs to tens of megabytes, and buffering
+    /// one to hand back 16k of it costs several times its size in strings. The
+    /// whole body is still read — the tail is the point, so there is no stopping
+    /// early — but memory stays bounded by
+    /// <see cref="MaxRetainedChars"/> however large the log is.
     /// </summary>
-    protected static RemoteCiLog Window(string log, int tailLines, int offset)
+    protected static async Task<RemoteCiLog> WindowAsync(Stream log, int tailLines, int offset)
     {
-        var lines = log.Replace("\r\n", "\n").Split('\n');
-        // A trailing newline yields a final empty element that is not a line.
-        var total = lines.Length > 0 && lines[^1].Length == 0 ? lines.Length - 1 : lines.Length;
+        tailLines = Math.Max(1, tailLines);
+        offset = Math.Max(0, offset);
 
-        var end = Math.Max(0, total - Math.Max(0, offset));
-        var start = Math.Max(0, end - Math.Max(1, tailLines));
-        var window = lines[start..end];
+        // The last (tailLines + offset) lines are all the window can be drawn
+        // from; anything older is counted and dropped as it goes past.
+        var keep = (long)tailLines + offset;
+        var retained = new Queue<string>();
+        var retainedChars = 0L;
+        var total = 0;
+        var dropped = false;
+
+        using var reader = new StreamReader(log);
+        while (await reader.ReadLineAsync() is { } line)
+        {
+            total++;
+            if (line.Length > MaxLineChars)
+                line = line[..MaxLineChars] + "…";
+
+            retained.Enqueue(line);
+            retainedChars += line.Length + 1;
+            while (retained.Count > keep || retainedChars > MaxRetainedChars)
+            {
+                retainedChars -= retained.Dequeue().Length + 1;
+                dropped = true;
+            }
+        }
+
+        // Retained holds the last N lines. Drop the offset region off the end,
+        // then the window is what remains (its most recent tailLines).
+        var window = retained.ToArray();
+        var end = Math.Max(0, window.Length - offset);
+        var start = Math.Max(0, end - tailLines);
+        window = window[start..end];
+
+        if (window.Length == 0)
+            return new RemoteCiLog(true, string.Empty, 0, offset, total,
+                Truncated: dropped || offset > 0,
+                Message: offset >= total
+                    ? $"The log has {total} lines; an offset of {offset} is past its start."
+                    : "That far back is beyond what one call can hold — lower the offset.");
 
         var text = string.Join("\n", window);
         var truncated = text.Length > MaxLogChars;
@@ -377,9 +417,12 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
             Available: true,
             Text: text,
             Lines: truncated ? text.Count(c => c == '\n') + 1 : window.Length,
-            Offset: Math.Max(0, offset),
+            Offset: offset,
             TotalLines: total,
-            Truncated: truncated,
+            // Dropping older lines to stay inside the retention budget means the
+            // window starts higher than asked for — the same "there is more, ask
+            // again" the character cap reports.
+            Truncated: truncated || (dropped && start == 0 && window.Length < tailLines),
             Message: null);
     }
 
@@ -389,6 +432,20 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     /// backwards with <c>offset</c> is how it gets the rest.
     /// </summary>
     protected const int MaxLogChars = 16_000;
+
+    /// <summary>
+    /// Ceiling on what one read holds in memory while looking for the tail.
+    /// Generous enough to page a long way back, small enough that a pathological
+    /// log cannot be turned into a memory spike by asking for it.
+    /// </summary>
+    private const int MaxRetainedChars = 1_000_000;
+
+    /// <summary>
+    /// Longest single retained line. Build logs embed minified bundles and
+    /// base64 blobs on one line, which would otherwise fill the retention
+    /// budget by themselves.
+    /// </summary>
+    private const int MaxLineChars = 4_000;
 
     /// <summary>A check run's own report: its output summary, then its longer text.</summary>
     private static string? ReadCheckOutput(JsonElement run)
