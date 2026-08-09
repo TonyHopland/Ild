@@ -1,4 +1,3 @@
-using System.Text.Json;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
@@ -203,11 +202,10 @@ public class PrSyncServiceTests
             WorkItemId = "wi-1",
             PrUrl = "https://github.com/team/repo/pull/7",
             CurrentNodeId = Guid.NewGuid(),
-            PrSnapshot = JsonSerializer.Serialize(
+            PrSnapshot = PrSnapshotJson.Serialize(
                 new RemotePrSnapshot("t", "b", "open", false, null, null, RemotePrCiStatus.Failed,
                     new[] { new RemotePrCheck("build", "failure", "https://ci/build", "tsc: 3 errors") },
-                    false, true, Array.Empty<RemotePrConversationEntry>(), DateTime.UtcNow),
-                JsonSerializerOptions.Web),
+                    false, true, Array.Empty<RemotePrConversationEntry>(), DateTime.UtcNow)),
         };
         var runNode = new LoopRunNode
         {

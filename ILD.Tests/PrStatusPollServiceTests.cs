@@ -114,6 +114,24 @@ public class PrStatusPollServiceTests
     }
 
     [Fact]
+    public async Task Persisted_snapshot_reads_back_through_the_same_contract_that_wrote_it()
+    {
+        // The poller writes the blob and the taskboard projection, the webhook
+        // resume and the PR node all read it. One owner (PrSnapshotJson) keeps
+        // the two sides from drifting — this pins the round-trip.
+        var h = new Harness(Snapshot(
+            ci: RemotePrCiStatus.Failed,
+            failedChecks: new[] { new RemotePrCheck("build", "failure", "https://ci/build", "tsc: 3 errors") }),
+            baseline: null);
+
+        await h.Build().PollOnceAsync();
+
+        var parsed = PrSnapshotJson.TryParse(h.Run.PrSnapshot);
+        Assert.Equal(RemotePrCiStatus.Failed, parsed!.Ci);
+        Assert.Equal("build", Assert.Single(parsed.FailedChecks).Name);
+    }
+
+    [Fact]
     public async Task Ci_failed_signal_carries_the_failing_checks_as_the_node_output()
     {
         // The signal's output becomes the resumed PR node's output — i.e. the

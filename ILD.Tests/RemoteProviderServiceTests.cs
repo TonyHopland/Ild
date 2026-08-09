@@ -241,6 +241,46 @@ public class RemoteProviderServiceTests
     }
 
     [Fact]
+    public async Task GetPullRequestSnapshotAsync_captures_forgejo_commit_status_detail()
+    {
+        // Forgejo/Gitea has no check-runs endpoint, so commit statuses are its
+        // only CI signal — and it names an individual context's verdict
+        // "status", keeping "state" for the combined rollup. Reading only
+        // GitHub's spelling left this provider with the verdict and no detail
+        // behind it (ADR-0009: the two must behave alike).
+        using var db = new TestDb();
+        db.Context.RemoteProviders.Add(new RemoteProvider
+        {
+            Id = Guid.NewGuid(),
+            Name = "forgejo",
+            Type = "Forgejo",
+            Url = "https://forge.example",
+            ApiKey = "k",
+        });
+        db.Context.SaveChanges();
+
+        var handler = new RoutingHandler()
+            .Map(u => u.Contains("/reviews") || u.Contains("/comments") || u.Contains("/check-runs"), () => "[]")
+            .Map(u => u.Contains("/commits/abc/status"), () =>
+                "{\"state\":\"failure\",\"statuses\":["
+                + "{\"context\":\"ci/woodpecker\",\"status\":\"failure\",\"description\":\"pipeline failed\","
+                + "\"target_url\":\"https://forge.example/ci/9\"},"
+                + "{\"context\":\"ci/lint\",\"status\":\"success\"}]}")
+            .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () =>
+                "{\"state\":\"open\",\"merged\":false,\"mergeable\":true,\"head\":{\"sha\":\"abc\"}}");
+
+        var snapshot = await CreateService(db, handler)
+            .GetPullRequestSnapshotAsync("https://forge.example/team/repo", "7");
+
+        Assert.Equal(RemotePrCiStatus.Failed, snapshot!.Ci);
+        var check = Assert.Single(snapshot.FailedChecks);
+        Assert.Equal("ci/woodpecker", check.Name);
+        Assert.Equal("failure", check.Conclusion);
+        Assert.Equal("https://forge.example/ci/9", check.Url);
+        Assert.Equal("pipeline failed", check.Summary);
+    }
+
+    [Fact]
     public async Task GetPullRequestSnapshotAsync_reports_a_red_rollup_with_no_failing_context()
     {
         // A provider that publishes only the aggregate state still has to route

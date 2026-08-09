@@ -88,9 +88,21 @@ public static class PrNodeEdges
     {
         var body = string.IsNullOrWhiteSpace(detail) ? DetailFor(edge, snapshot) : detail.Trim();
         var text = body.Length == 0 ? Headline(edge) : $"{Headline(edge)}\n\n{body}";
-        return text.Length <= MaxReasonLength
-            ? text
-            : text[..MaxReasonLength] + "\n… (truncated)";
+        return text.Length <= MaxReasonLength ? text : Truncate(text);
+    }
+
+    private const string TruncationMarker = "\n… (truncated)";
+
+    /// <summary>
+    /// Cut to <see cref="MaxReasonLength"/> counting the marker, so the cap is
+    /// the length a caller can rely on, and never between the halves of a
+    /// surrogate pair — CI output carries emoji and box-drawing characters.
+    /// </summary>
+    private static string Truncate(string text)
+    {
+        var cut = MaxReasonLength - TruncationMarker.Length;
+        if (char.IsHighSurrogate(text[cut - 1])) cut--;
+        return text[..cut] + TruncationMarker;
     }
 
     private static string Headline(string? edge) => edge switch

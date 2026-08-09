@@ -136,8 +136,27 @@ public class PrNodeEdgesTests
                 .Select(i => new RemotePrCheck($"check-{i}", "failure", null, new string('x', 900)))
                 .ToArray()));
 
-        Assert.True(reason.Length <= PrNodeEdges.MaxReasonLength + 20, $"reason was {reason.Length} chars");
+        // The cap counts the marker, so it is the length a caller can rely on.
+        Assert.True(reason.Length <= PrNodeEdges.MaxReasonLength, $"reason was {reason.Length} chars");
         Assert.Contains("truncated", reason);
         Assert.StartsWith("CI failed", reason);
+    }
+
+    [Fact]
+    public void Describe_never_cuts_a_surrogate_pair_in_half()
+    {
+        // CI output carries emoji; half a pair is an unpaired surrogate that
+        // survives to the agent's prompt as a replacement character.
+        var reason = PrNodeEdges.Describe(PrNodeEdges.OnCiFailed, Snapshot(
+            ci: RemotePrCiStatus.Failed,
+            failedChecks: new[]
+            {
+                new RemotePrCheck("build", "failure", null, string.Concat(Enumerable.Repeat("🔥", 6000))),
+            }));
+
+        Assert.True(reason.Length <= PrNodeEdges.MaxReasonLength);
+        foreach (var (c, i) in reason.Select((c, i) => (c, i)))
+            Assert.False(char.IsHighSurrogate(c) && (i + 1 == reason.Length || !char.IsLowSurrogate(reason[i + 1])),
+                $"unpaired high surrogate at index {i}");
     }
 }

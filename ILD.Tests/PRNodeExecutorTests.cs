@@ -466,14 +466,19 @@ public class PRNodeExecutorTests
     public async Task Re_entry_on_a_pr_edge_hands_the_next_node_a_reason(string? signalOutput)
     {
         // Whatever the signal carried is what the next node reads as
-        // {{PreviousNode.Output}} — and a signal that carried nothing still
-        // resolves to the edge's own wording rather than an empty string.
+        // {{PreviousNode.Output}} — and a signal that carried nothing (a human
+        // firing the edge from the feedback UI) falls back to the last polled
+        // snapshot, so it says as much as the heartbeat would have.
         var (sp, node) = ReEntryContext();
         var run = new LoopRun
         {
             Id = Guid.NewGuid(),
             WorkItemId = "WI-1",
             PrUrl = "https://example.com/o/r/pull/7",
+            PrSnapshot = PrSnapshotJson.Serialize(new RemotePrSnapshot(
+                "t", "b", "open", false, null, null, RemotePrCiStatus.Failed,
+                new[] { new RemotePrCheck("build", "failure", "https://ci/build", "tsc: 3 errors") },
+                false, false, Array.Empty<RemotePrConversationEntry>(), DateTime.UtcNow)),
             ExternalActionResult = signalOutput ?? string.Empty,
             ExternalActionResultType = ExternalActionResultType.Success,
             ExternalActionEdgeName = PrNodeEdges.OnCiFailed,
@@ -487,9 +492,34 @@ public class PRNodeExecutorTests
         Assert.Equal(EdgeType.Custom, success.Edge);
         Assert.Equal(PrNodeEdges.OnCiFailed, success.EdgeName);
         Assert.False(string.IsNullOrWhiteSpace(success.Output));
-        Assert.Equal(signalOutput ?? PrNodeEdges.Describe(PrNodeEdges.OnCiFailed), success.Output);
+        if (signalOutput is null)
+            Assert.Contains("build", success.Output);
+        else
+            Assert.Equal(signalOutput, success.Output);
         // Re-entry must not re-announce the node or re-park it.
         Assert.DoesNotContain(outcomes, o => o is NodeOutcome.NodeStarting or NodeOutcome.WaitingAction);
+    }
+
+    [Fact]
+    public async Task Re_entry_with_no_signal_text_and_no_snapshot_still_says_what_happened()
+    {
+        var (sp, node) = ReEntryContext();
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = "WI-1",
+            PrUrl = "https://example.com/o/r/pull/7",
+            ExternalActionResult = string.Empty,
+            ExternalActionResultType = ExternalActionResultType.Success,
+            ExternalActionEdgeName = PrNodeEdges.OnCiFailed,
+        };
+
+        var outcomes = new List<NodeOutcome>();
+        await foreach (var o in new PRNodeExecutor().ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+            outcomes.Add(o);
+
+        Assert.Equal(PrNodeEdges.Describe(PrNodeEdges.OnCiFailed),
+            outcomes.OfType<NodeOutcome.Success>().Single().Output);
     }
 
     /// <summary>A PR node whose PR already exists, with the remote left strict — re-entry touches neither.</summary>

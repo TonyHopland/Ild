@@ -1766,8 +1766,10 @@ public class WorkItemManagerTests
         notifier.Verify(n => n.WorkItemStateChangedAsync(id, RemoteWorkItemStatus.Backlog, RemoteWorkItemStatus.Backlog), Times.Once);
     }
 
+    // Through the same contract the poller writes with, so a test cannot pass
+    // on a blob the production reader would reject.
     private static string SerializePrSnapshot(RemotePrSnapshot snapshot)
-        => JsonSerializer.Serialize(snapshot, JsonSerializerOptions.Web);
+        => PrSnapshotJson.Serialize(snapshot);
 
     [Fact]
     public async Task GetWorkItemAsync_leaves_PrStatus_null_when_run_has_no_snapshot()

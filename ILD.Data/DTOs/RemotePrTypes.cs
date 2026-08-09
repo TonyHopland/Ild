@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace ILD.Data.DTOs;
@@ -95,3 +96,32 @@ public record RemotePrSnapshot(
     IReadOnlyList<RemotePrConversationEntry> Conversation,
     DateTime FetchedAt
 );
+
+/// <summary>
+/// The wire form of a <see cref="RemotePrSnapshot"/> persisted on
+/// <c>LoopRun.PrSnapshot</c>. One owner for both directions: the heartbeat
+/// poller writes through <see cref="Serialize"/>, and the taskboard projection,
+/// the webhook resume path and the PR node read back through
+/// <see cref="TryParse"/>. Camel-cased because the API hands the stored blob to
+/// the frontend verbatim, which is also why the writer's options and the
+/// readers' cannot be allowed to drift apart in separate copies.
+/// </summary>
+public static class PrSnapshotJson
+{
+    private static readonly JsonSerializerOptions Options = JsonSerializerOptions.Web;
+
+    public static string Serialize(RemotePrSnapshot snapshot)
+        => JsonSerializer.Serialize(snapshot, Options);
+
+    /// <summary>
+    /// The snapshot stored in <paramref name="json"/>, or null when there is
+    /// none yet or the blob is unreadable — a corrupt snapshot degrades the
+    /// caller (a badge, a reason string) rather than failing it.
+    /// </summary>
+    public static RemotePrSnapshot? TryParse(string? json)
+    {
+        if (string.IsNullOrEmpty(json)) return null;
+        try { return JsonSerializer.Deserialize<RemotePrSnapshot>(json, Options); }
+        catch (JsonException) { return null; }
+    }
+}

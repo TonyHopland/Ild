@@ -1,6 +1,6 @@
-using System.Text.Json;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
+using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
@@ -25,9 +25,6 @@ public interface IPrStatusPollService
 /// </summary>
 public sealed class PrStatusPollService : IPrStatusPollService
 {
-    // Snapshot is serialised camelCase so the feedback UI consumes it directly.
-    private static readonly JsonSerializerOptions SnapshotJson = JsonSerializerOptions.Web;
-
     private readonly ILoopRunStore _runs;
     private readonly IRemoteProvider _remote;
     private readonly ILoopEngine _engine;
@@ -87,7 +84,7 @@ public sealed class PrStatusPollService : IPrStatusPollService
 
         // Persist snapshot + new baseline and push the GUI update regardless of
         // whether any edge fires.
-        run.PrSnapshot = JsonSerializer.Serialize(snapshot, SnapshotJson);
+        run.PrSnapshot = PrSnapshotJson.Serialize(snapshot);
         run.PrPolledEdgeStates = string.Join(",", newStates);
         run.UpdatedAt = DateTime.UtcNow;
         await _runs.UpdateRunAsync(run);

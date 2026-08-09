@@ -47,12 +47,14 @@ public sealed class PRNodeExecutor : INodeExecutor
         // a second LoopRunNode — the existing WaitingHuman node covers this visit.
         if (ctx.Run.ExternalActionResult is not null)
         {
-            // A signal with no text of its own (a manual resume, a state the
-            // sender had no detail for) would hand the next node an empty
+            // A signal with no text of its own (a human firing the edge from the
+            // feedback UI) would hand the next node an empty
             // {{PreviousNode.Output}} — an agent wired to on_ci_failed would be
-            // told nothing at all. Fall back to the edge's own wording.
+            // told nothing at all. Describe the edge from the last polled
+            // snapshot instead, which is the same detail the heartbeat would
+            // have sent had it got there first.
             var result = string.IsNullOrWhiteSpace(ctx.Run.ExternalActionResult)
-                ? PrNodeEdges.Describe(ctx.Run.ExternalActionEdgeName)
+                ? PrNodeEdges.Describe(ctx.Run.ExternalActionEdgeName, PrSnapshotJson.TryParse(ctx.Run.PrSnapshot))
                 : ctx.Run.ExternalActionResult;
             yield return NodeOutcome.FromExternalAction(
                 result, ctx.Run.ExternalActionResultType, ctx.Run.ExternalActionEdgeName, "PR rejected");

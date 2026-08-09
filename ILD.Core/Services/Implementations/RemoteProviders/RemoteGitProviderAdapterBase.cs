@@ -263,7 +263,13 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
             {
                 foreach (var status in statuses.EnumerateArray())
                 {
-                    var state = (ReadString(status, "state") ?? string.Empty).ToLowerInvariant();
+                    // GitHub names an individual context's verdict "state";
+                    // Gitea/Forgejo name it "status" and keep "state" for the
+                    // combined rollup only. Forgejo has no check-runs endpoint,
+                    // so reading just one of the two would leave that provider
+                    // with no attributable CI detail at all.
+                    var state = (ReadString(status, "state") ?? ReadString(status, "status") ?? string.Empty)
+                        .ToLowerInvariant();
                     if (state is "failure" or "error")
                         failed.Add(new RemotePrCheck(
                             ReadString(status, "context") ?? "status",
