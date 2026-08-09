@@ -241,6 +241,146 @@ public class RemoteProviderServiceTests
     }
 
     [Fact]
+    public async Task GetPullRequestSnapshotAsync_takes_the_job_id_from_details_url_as_the_log_handle()
+    {
+        // get_ci_log keys on the Actions *job* id, which is not the check-run id
+        // and appears only in details_url. Capturing the wrong number would give
+        // the agent a handle that always answers "no log".
+        using var db = new TestDb();
+        AddGitHub(db);
+
+        var handler = new RoutingHandler()
+            .Map(u => u.Contains("/reviews") || u.Contains("/comments") || u.Contains("/status"), () => "[]")
+            .Map(u => u.Contains("/check-runs"), () =>
+                "{\"check_runs\":["
+                + "{\"id\":111,\"name\":\"build\",\"status\":\"completed\",\"conclusion\":\"failure\","
+                + "\"details_url\":\"https://github.com/team/repo/actions/runs/500/job/67890\"},"
+                + "{\"id\":222,\"name\":\"scan\",\"status\":\"completed\",\"conclusion\":\"failure\","
+                + "\"details_url\":\"https://scanner.example/report/9\"}]}")
+            .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () =>
+                "{\"state\":\"open\",\"merged\":false,\"mergeable\":true,\"head\":{\"sha\":\"abc\"}}");
+
+        var snapshot = await CreateService(db, handler)
+            .GetPullRequestSnapshotAsync("https://github.com/team/repo", "7");
+
+        Assert.Equal("67890", snapshot!.FailedChecks[0].CheckId);
+        // A third-party check run has no job: its own id is the only handle to
+        // offer, and the log fetch will say there is nothing behind it.
+        Assert.Equal("222", snapshot.FailedChecks[1].CheckId);
+    }
+
+    [Fact]
+    public async Task GetCheckLogAsync_returns_the_tail_of_a_github_job_log()
+    {
+        using var db = new TestDb();
+        AddGitHub(db);
+
+        var log = string.Join("\n", Enumerable.Range(1, 500).Select(i => $"line {i}"));
+        var handler = new RoutingHandler()
+            .Map(u => u.Contains("/actions/jobs/67890/logs"), () => log);
+
+        var window = await CreateService(db, handler)
+            .GetCheckLogAsync("https://github.com/team/repo", "67890", tailLines: 3, offset: 0);
+
+        Assert.True(window.Available);
+        Assert.Equal("line 498\nline 499\nline 500", window.Text);
+        Assert.Equal(3, window.Lines);
+        Assert.Equal(500, window.TotalLines);
+        Assert.False(window.Truncated);
+    }
+
+    [Fact]
+    public async Task GetCheckLogAsync_walks_backwards_with_offset()
+    {
+        using var db = new TestDb();
+        AddGitHub(db);
+
+        var log = string.Join("\n", Enumerable.Range(1, 500).Select(i => $"line {i}"));
+        var handler = new RoutingHandler()
+            .Map(u => u.Contains("/actions/jobs/67890/logs"), () => log);
+
+        var window = await CreateService(db, handler)
+            .GetCheckLogAsync("https://github.com/team/repo", "67890", tailLines: 2, offset: 3);
+
+        Assert.Equal("line 496\nline 497", window.Text);
+        Assert.Equal(3, window.Offset);
+    }
+
+    [Fact]
+    public async Task GetCheckLogAsync_caps_one_response_and_says_it_truncated()
+    {
+        // A CI log runs to megabytes; one call returns a readable window and
+        // tells the agent there is more, so it pages instead of assuming it saw
+        // the whole thing.
+        using var db = new TestDb();
+        AddGitHub(db);
+
+        var log = string.Join("\n", Enumerable.Range(1, 5000).Select(i => $"line {i} {new string('x', 200)}"));
+        var handler = new RoutingHandler()
+            .Map(u => u.Contains("/actions/jobs/67890/logs"), () => log);
+
+        var window = await CreateService(db, handler)
+            .GetCheckLogAsync("https://github.com/team/repo", "67890", tailLines: 2000, offset: 0);
+
+        Assert.True(window.Truncated);
+        Assert.True(window.Text!.Length <= 16_000, $"response was {window.Text.Length} chars");
+        // The cap keeps the END of the window — that is where the error is.
+        Assert.EndsWith("line 5000 " + new string('x', 200), window.Text);
+        Assert.Equal(5000, window.TotalLines);
+    }
+
+    [Fact]
+    public async Task GetCheckLogAsync_reports_an_expired_or_foreign_check_as_unavailable_not_an_error()
+    {
+        using var db = new TestDb();
+        AddGitHub(db);
+
+        // RoutingHandler 404s anything unmapped — GitHub's answer for a job whose
+        // logs have aged out, or a check run that never was an Actions job.
+        var window = await CreateService(db, new RoutingHandler())
+            .GetCheckLogAsync("https://github.com/team/repo", "222", tailLines: 100, offset: 0);
+
+        Assert.False(window.Available);
+        Assert.Null(window.Text);
+        Assert.NotNull(window.Message);
+    }
+
+    [Fact]
+    public async Task GetCheckLogAsync_on_forgejo_says_its_ci_lives_elsewhere()
+    {
+        // Decided with the human: Forgejo commit statuses come from an external
+        // CI this server may hold no credentials for, so the tool answers rather
+        // than errors, and the caller falls back to the URL.
+        using var db = new TestDb();
+        db.Context.RemoteProviders.Add(new RemoteProvider
+        {
+            Id = Guid.NewGuid(),
+            Name = "forgejo",
+            Type = "Forgejo",
+            Url = "https://forge.example",
+            ApiKey = "k",
+        });
+        db.Context.SaveChanges();
+
+        var window = await CreateService(db, new RoutingHandler())
+            .GetCheckLogAsync("https://forge.example/team/repo", "44", tailLines: 100, offset: 0);
+
+        Assert.False(window.Available);
+        Assert.Contains("Forgejo", window.Message);
+    }
+
+    [Fact]
+    public async Task GetCheckLogAsync_without_a_configured_provider_is_an_answer_not_a_throw()
+    {
+        using var db = new TestDb();
+        var window = await CreateService(db, new RoutingHandler())
+            .GetCheckLogAsync("https://unknown.example/team/repo", "1", tailLines: 100, offset: 0);
+
+        Assert.False(window.Available);
+        Assert.NotNull(window.Message);
+    }
+
+    [Fact]
     public async Task GetPullRequestSnapshotAsync_captures_forgejo_commit_status_detail()
     {
         // Forgejo/Gitea has no check-runs endpoint, so commit statuses are its

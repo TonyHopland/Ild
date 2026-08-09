@@ -92,6 +92,15 @@ public class RemoteProviderService : IRemoteProvider
         catch { return null; }
     }
 
+    public async Task<RemoteCiLog> GetCheckLogAsync(string repoUrl, string checkId, int tailLines, int offset)
+    {
+        var resolved = await ResolveAsync(repoUrl);
+        if (resolved == null)
+            return RemoteCiLog.Unavailable("No remote provider is configured for this repository.");
+        try { return await resolved.Adapter.GetCheckLogAsync(_http, resolved, checkId, tailLines, offset); }
+        catch (Exception ex) { return RemoteCiLog.Unavailable($"Could not read the log for this check: {ex.Message}"); }
+    }
+
     public async Task<bool> DeleteBranchAsync(string repoUrl, string branchName)
     {
         var resolved = await ResolveAsync(repoUrl);

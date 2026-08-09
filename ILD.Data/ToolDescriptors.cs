@@ -245,6 +245,22 @@ public static class ToolDescriptors
         },
     };
 
+    public static readonly ToolDescriptor GetCiLog = new()
+    {
+        Name = "ild_get_ci_log",
+        Label = "Get CI Log",
+        Description = "Read the tail of a failing CI check's log for a work item's pull request. Use when a CI failure reason names a check and its summary is not enough to fix it — the check id comes from that reason. The log is fetched server-side with the forge credentials. Returns {available, text, lines, offset, totalLines, truncated, message}: the newest lines come first to hand, so page backwards by raising offset when the error is above the window, and treat truncated=true as 'there is more, ask again' rather than 'that was all'. available=false with a message means the provider has no log to fetch (its CI lives outside the forge) — read the message and use the URL in it.",
+        EndpointPath = "api/v1/agent/workitems/{workItemId}/ci-log",
+        HttpMethod = HttpMethod.Get,
+        Parameters = new ToolParameterDescriptor[]
+        {
+            new() { Name = "workItemId", Description = "Work item GUID (from the Chat Context, or the CI failure reason).", TsType = "string" },
+            new() { Name = "checkId", Description = "Id of the failing check, as named in the CI failure reason.", TsType = "string" },
+            new() { Name = "tailLines", Description = "How many lines to return, counting back from the end (default 200, max 2000).", TsType = "number", IsOptional = true },
+            new() { Name = "offset", Description = "Lines to skip from the end before taking the window — raise it to walk backwards through the log (default 0).", TsType = "number", IsOptional = true },
+        },
+    };
+
     // -- Loop Editor context (ADR-0011) --
     //
     // Mirror the MCP LoopTools and the agent-API current-loop endpoints. Scoped to
@@ -411,6 +427,7 @@ public static class ToolDescriptors
         GetPreviewServiceConfig,
         UpdatePreviewServiceConfig,
         GetPreviewLogs,
+        GetCiLog,
         GetLoopAuthoringGuide,
         GetCurrentLoop,
         GetLoopNode,

@@ -477,7 +477,7 @@ public class PRNodeExecutorTests
             PrUrl = "https://example.com/o/r/pull/7",
             PrSnapshot = PrSnapshotJson.Serialize(new RemotePrSnapshot(
                 "t", "b", "open", false, null, null, RemotePrCiStatus.Failed,
-                new[] { new RemotePrCheck("build", "failure", "https://ci/build", "tsc: 3 errors") },
+                new[] { new RemotePrCheck("build", "failure", "https://ci/build", "tsc: 3 errors", "991") },
                 false, false, Array.Empty<RemotePrConversationEntry>(), DateTime.UtcNow)),
             ExternalActionResult = signalOutput ?? string.Empty,
             ExternalActionResultType = ExternalActionResultType.Success,

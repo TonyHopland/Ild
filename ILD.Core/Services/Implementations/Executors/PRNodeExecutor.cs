@@ -54,7 +54,8 @@ public sealed class PRNodeExecutor : INodeExecutor
             // snapshot instead, which is the same detail the heartbeat would
             // have sent had it got there first.
             var result = string.IsNullOrWhiteSpace(ctx.Run.ExternalActionResult)
-                ? PrNodeEdges.Describe(ctx.Run.ExternalActionEdgeName, PrSnapshotJson.TryParse(ctx.Run.PrSnapshot))
+                ? PrNodeEdges.Describe(ctx.Run.ExternalActionEdgeName, PrSnapshotJson.TryParse(ctx.Run.PrSnapshot),
+                    workItemId: ctx.Run.WorkItemId)
                 : ctx.Run.ExternalActionResult;
             yield return NodeOutcome.FromExternalAction(
                 result, ctx.Run.ExternalActionResultType, ctx.Run.ExternalActionEdgeName, "PR rejected");

@@ -110,7 +110,7 @@ public sealed class PrStatusPollService : IPrStatusPollService
         // node wired to on_ci_failed reads the failing checks out of
         // {{PreviousNode.Output}} instead of guessing at red CI.
         await _engine.SignalNodeResultAsync(run.Id, runNode.Id,
-            NodeSignal.Custom(edge, PrNodeEdges.Describe(edge, snapshot)));
+            NodeSignal.Custom(edge, PrNodeEdges.Describe(edge, snapshot, workItemId: run.WorkItemId)));
     }
 
     private async Task<LoopRunNode?> ResolveRunNodeAsync(LoopRun run)

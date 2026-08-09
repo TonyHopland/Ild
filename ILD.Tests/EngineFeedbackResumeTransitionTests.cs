@@ -20,7 +20,7 @@ public class EngineFeedbackResumeTransitionTests
 
     private static RemotePrSnapshot CiFailedSnapshot()
         => new("t", "b", "open", false, null, null, RemotePrCiStatus.Failed,
-            new[] { new RemotePrCheck("build", "failure", "https://ci/1", "tsc: 3 errors") },
+            new[] { new RemotePrCheck("build", "failure", "https://ci/1", "tsc: 3 errors", "991") },
             false, false, Array.Empty<RemotePrConversationEntry>(), DateTime.UtcNow);
 
     [Fact]

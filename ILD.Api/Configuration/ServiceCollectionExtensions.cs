@@ -150,6 +150,10 @@ public static class ServiceCollectionExtensions
         // PR-node custom edges on state transitions while a run is parked at a
         // PR node awaiting merge.
         services.AddScoped<IPrStatusPollService, PrStatusPollService>();
+
+        // The read side of a CI failure: the agent tool that pulls a failing
+        // check's log with the forge credentials it does not itself hold.
+        services.AddScoped<IPrCiLogService, PrCiLogService>();
         services.AddSingleton<PrStatusPoller>();
         services.AddSingleton<IPrStatusPoller>(sp => sp.GetRequiredService<PrStatusPoller>());
         services.AddHostedService(sp => sp.GetRequiredService<PrStatusPoller>());

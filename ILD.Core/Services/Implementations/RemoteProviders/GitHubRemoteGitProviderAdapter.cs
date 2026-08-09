@@ -80,6 +80,34 @@ public sealed class GitHubRemoteGitProviderAdapter : RemoteGitProviderAdapterBas
         return resp.IsSuccessStatusCode;
     }
 
+    /// <summary>
+    /// The plain-text log of one Actions job, fetched with the provider's token
+    /// — the credential the agent asking for it does not hold. GitHub answers
+    /// the logs endpoint with a redirect to a short-lived signed blob URL, which
+    /// the handler follows; a job whose logs have expired or which never ran
+    /// under Actions (a third-party check run) is reported as unavailable rather
+    /// than as a failure, since there is nothing the caller can do differently.
+    /// </summary>
+    public override async Task<RemoteCiLog> GetCheckLogAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string checkId, int tailLines, int offset)
+    {
+        ApplyHeaders(http, repo.Provider);
+
+        var jobId = Uri.EscapeDataString(checkId);
+        using var resp = await http.GetAsync(
+            $"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/actions/jobs/{jobId}/logs");
+
+        if (!resp.IsSuccessStatusCode)
+            return RemoteCiLog.Unavailable(resp.StatusCode == System.Net.HttpStatusCode.NotFound
+                ? "No log for this check — GitHub keeps job logs for a limited time, and checks published by apps other than Actions have none to fetch."
+                : $"Could not read the log for this check (HTTP {(int)resp.StatusCode}).");
+
+        var log = await resp.Content.ReadAsStringAsync();
+        return string.IsNullOrWhiteSpace(log)
+            ? RemoteCiLog.Unavailable("The log for this check is empty.")
+            : Window(log, tailLines, offset);
+    }
+
     public override WebhookPayload? ParseWebhookPayload(string body, IReadOnlyDictionary<string, string> headers)
     {
         using var doc = JsonDocument.Parse(body);

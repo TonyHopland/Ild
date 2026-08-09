@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **A pull request hands the next node the reason it moved on — which checks failed and what they said, or the review that asked for changes — instead of nothing at all.**
+- **A pull request hands the next node the reason it moved on — which checks failed and what they said, or the review that asked for changes — instead of nothing at all.** An agent sent to fix red CI can also pull the failing check's log itself, so it works from the error rather than the summary.
 
 - **The main menu and the work item dialog's tabs scroll sideways on a narrow screen, so the last of them are reachable.**
 

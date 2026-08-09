@@ -204,7 +204,7 @@ public class PrSyncServiceTests
             CurrentNodeId = Guid.NewGuid(),
             PrSnapshot = PrSnapshotJson.Serialize(
                 new RemotePrSnapshot("t", "b", "open", false, null, null, RemotePrCiStatus.Failed,
-                    new[] { new RemotePrCheck("build", "failure", "https://ci/build", "tsc: 3 errors") },
+                    new[] { new RemotePrCheck("build", "failure", "https://ci/build", "tsc: 3 errors", "991") },
                     false, true, Array.Empty<RemotePrConversationEntry>(), DateTime.UtcNow)),
         };
         var runNode = new LoopRunNode

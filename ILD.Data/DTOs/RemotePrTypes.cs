@@ -57,8 +57,32 @@ public record RemotePrCheck(
     string Name,
     string Conclusion,
     string? Url,
-    string? Summary
+    string? Summary,
+    string? CheckId
 );
+
+/// <summary>
+/// A window onto one failing check's log, as the <c>get_ci_log</c> agent tool
+/// returns it. The whole log is never inlined anywhere: an agent that finds
+/// <see cref="RemotePrCheck.Summary"/> insufficient asks for a tail, and pages
+/// backwards with <see cref="Offset"/> from what it learns here.
+/// <see cref="Available"/> is false — with <see cref="Message"/> saying why and
+/// where a human can look instead — when the provider has no fetchable log,
+/// which is an answer rather than an error.
+/// </summary>
+public record RemoteCiLog(
+    bool Available,
+    string? Text,
+    int Lines,
+    int Offset,
+    int TotalLines,
+    bool Truncated,
+    string? Message
+)
+{
+    public static RemoteCiLog Unavailable(string message)
+        => new(false, null, 0, 0, 0, false, message);
+}
 
 /// <summary>
 /// One entry in a PR's conversation. <see cref="Kind"/> is

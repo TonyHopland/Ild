@@ -93,7 +93,8 @@ public class PrSyncService : IPrSyncService
         // whichever resume path reached it first. The webhook's own comment is
         // the better rejection detail when it has one; the persisted snapshot
         // (last heartbeat tick) supplies the rest.
-        var reason = PrNodeEdges.Describe(edgeName, PrSnapshotJson.TryParse(run.PrSnapshot), payload.Comment);
+        var reason = PrNodeEdges.Describe(
+            edgeName, PrSnapshotJson.TryParse(run.PrSnapshot), payload.Comment, run.WorkItemId);
         await _loopEngine.SignalNodeResultAsync(run.Id, runNode.Id, NodeSignal.Custom(edgeName, reason));
     }
 

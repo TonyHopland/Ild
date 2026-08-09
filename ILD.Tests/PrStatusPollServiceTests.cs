@@ -121,7 +121,7 @@ public class PrStatusPollServiceTests
         // the two sides from drifting — this pins the round-trip.
         var h = new Harness(Snapshot(
             ci: RemotePrCiStatus.Failed,
-            failedChecks: new[] { new RemotePrCheck("build", "failure", "https://ci/build", "tsc: 3 errors") }),
+            failedChecks: new[] { new RemotePrCheck("build", "failure", "https://ci/build", "tsc: 3 errors", "991") }),
             baseline: null);
 
         await h.Build().PollOnceAsync();
@@ -139,7 +139,7 @@ public class PrStatusPollServiceTests
         // guess why CI went red.
         var h = new Harness(Snapshot(
             ci: RemotePrCiStatus.Failed,
-            failedChecks: new[] { new RemotePrCheck("build", "failure", "https://ci/build", "tsc: 3 errors") }),
+            failedChecks: new[] { new RemotePrCheck("build", "failure", "https://ci/build", "tsc: 3 errors", "991") }),
             baseline: null);
         h.Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
             .ReturnsAsync(new[] { CustomEdge(h.RunNode.LoopNodeId, PrNodeEdges.OnCiFailed) });
@@ -151,7 +151,11 @@ public class PrStatusPollServiceTests
                 && sig.Output != null
                 && sig.Output.Contains("build")
                 && sig.Output.Contains("https://ci/build")
-                && sig.Output.Contains("tsc: 3 errors"))), Times.Once);
+                && sig.Output.Contains("tsc: 3 errors")
+                // …and the way to the log behind the summary, addressed to this run's work item.
+                && sig.Output.Contains("check id: 991")
+                && sig.Output.Contains("get_ci_log")
+                && sig.Output.Contains("wi-1"))), Times.Once);
     }
 
     [Fact]

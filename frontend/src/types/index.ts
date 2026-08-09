@@ -447,6 +447,8 @@ export interface RemotePrCheck {
   conclusion: string;
   url: string | null;
   summary: string | null;
+  /** Handle the agent's get_ci_log tool takes; null when the check has no fetchable log. */
+  checkId: string | null;
 }
 
 /** One entry in a PR's conversation (issue comment, review comment, or review). */

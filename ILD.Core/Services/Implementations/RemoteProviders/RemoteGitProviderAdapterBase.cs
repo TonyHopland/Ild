@@ -239,11 +239,15 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
             if (status != "completed")
                 anyPending = true;
             else if (conclusion is "failure" or "timed_out" or "cancelled")
+            {
+                var detailsUrl = ReadString(run, "details_url") ?? ReadString(run, "html_url");
                 failed.Add(new RemotePrCheck(
                     ReadString(run, "name") ?? "check",
                     conclusion,
-                    ReadString(run, "details_url") ?? ReadString(run, "html_url"),
-                    ReadCheckOutput(run)));
+                    detailsUrl,
+                    ReadCheckOutput(run),
+                    ReadCheckLogId(run, detailsUrl)));
+            }
             else if (conclusion is not ("success" or "neutral" or "skipped"))
                 anyPending = true;
         }
@@ -275,14 +279,15 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
                             ReadString(status, "context") ?? "status",
                             state,
                             ReadString(status, "target_url"),
-                            Truncate(ReadString(status, "description"), MaxCheckSummaryLength)));
+                            Truncate(ReadString(status, "description"), MaxCheckSummaryLength),
+                            ReadId(status)));
                 }
 
                 // The rollup is red but no single context claims it (a provider
                 // that reports only the aggregate): still a failure, just an
                 // unattributed one.
                 if (failed.Count == 0)
-                    failed.Add(new RemotePrCheck("commit status", rollup, null, null));
+                    failed.Add(new RemotePrCheck("commit status", rollup, null, null, null));
             }
             else if (rollup == "pending")
                 anyPending = true;
@@ -292,6 +297,98 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         if (!anyPresent) return (RemotePrCiStatus.None, Array.Empty<RemotePrCheck>());
         return (anyPending ? RemotePrCiStatus.Pending : RemotePrCiStatus.Passed, Array.Empty<RemotePrCheck>());
     }
+
+    /// <summary>
+    /// The handle <c>get_ci_log</c> takes for this check. For a GitHub Actions
+    /// check run that is the <b>job</b> id, which the logs endpoint keys on and
+    /// which is not the check-run id — it is only in the <c>details_url</c>
+    /// (<c>…/actions/runs/{run}/job/{job}</c>). Anything else falls back to the
+    /// resource's own id, which either works or comes back as "no log here";
+    /// null when there is no id at all to offer.
+    /// </summary>
+    private static string? ReadCheckLogId(JsonElement run, string? detailsUrl)
+    {
+        if (detailsUrl is not null)
+        {
+            var marker = detailsUrl.LastIndexOf("/job/", StringComparison.OrdinalIgnoreCase);
+            if (marker >= 0)
+            {
+                var jobId = detailsUrl[(marker + "/job/".Length)..].TrimEnd('/');
+                if (jobId.Length > 0 && jobId.All(char.IsAsciiDigit))
+                    return jobId;
+            }
+        }
+        return ReadId(run);
+    }
+
+    /// <summary>An <c>id</c> field as a string, whether the provider sends it as a number or a string.</summary>
+    private static string? ReadId(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty("id", out var id))
+            return null;
+        return id.ValueKind switch
+        {
+            JsonValueKind.Number => id.GetRawText(),
+            JsonValueKind.String => id.GetString(),
+            _ => null,
+        };
+    }
+
+    /// <summary>
+    /// No log to fetch by default: a provider whose checks are commit statuses
+    /// published by an external CI (Woodpecker, Drone, Jenkins) holds neither
+    /// the logs nor credentials for the system that does. Saying so plainly is
+    /// the answer; GitHub overrides with a real fetch.
+    /// </summary>
+    public virtual Task<RemoteCiLog> GetCheckLogAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string checkId, int tailLines, int offset)
+        => Task.FromResult(RemoteCiLog.Unavailable(
+            $"No logs available for {ProviderType} — its checks are published by an external CI system this server has no credentials for."));
+
+    /// <summary>
+    /// The requested window of a fetched log: <paramref name="tailLines"/> lines
+    /// ending <paramref name="offset"/> lines from the end, capped at
+    /// <see cref="MaxLogChars"/> characters. The cap drops from the front of the
+    /// window — the error is at the end — and is reported as
+    /// <see cref="RemoteCiLog.Truncated"/> so a caller pages rather than assumes
+    /// it saw everything.
+    /// </summary>
+    protected static RemoteCiLog Window(string log, int tailLines, int offset)
+    {
+        var lines = log.Replace("\r\n", "\n").Split('\n');
+        // A trailing newline yields a final empty element that is not a line.
+        var total = lines.Length > 0 && lines[^1].Length == 0 ? lines.Length - 1 : lines.Length;
+
+        var end = Math.Max(0, total - Math.Max(0, offset));
+        var start = Math.Max(0, end - Math.Max(1, tailLines));
+        var window = lines[start..end];
+
+        var text = string.Join("\n", window);
+        var truncated = text.Length > MaxLogChars;
+        if (truncated)
+        {
+            text = text[^MaxLogChars..];
+            // Drop the partial first line so the window starts on a line boundary.
+            var firstBreak = text.IndexOf('\n');
+            if (firstBreak >= 0) text = text[(firstBreak + 1)..];
+        }
+
+        return new RemoteCiLog(
+            Available: true,
+            Text: text,
+            Lines: truncated ? text.Count(c => c == '\n') + 1 : window.Length,
+            Offset: Math.Max(0, offset),
+            TotalLines: total,
+            Truncated: truncated,
+            Message: null);
+    }
+
+    /// <summary>
+    /// Upper bound on one <c>get_ci_log</c> response. A CI log runs to
+    /// megabytes; this is a window an agent can read in one turn, and paging
+    /// backwards with <c>offset</c> is how it gets the rest.
+    /// </summary>
+    protected const int MaxLogChars = 16_000;
 
     /// <summary>A check run's own report: its output summary, then its longer text.</summary>
     private static string? ReadCheckOutput(JsonElement run)

@@ -69,8 +69,8 @@ public class PrNodeEdgesTests
             ci: RemotePrCiStatus.Failed,
             failedChecks: new[]
             {
-                new RemotePrCheck("build", "failure", "https://ci/build", "tsc: 3 errors"),
-                new RemotePrCheck("e2e", "timed_out", null, null),
+                new RemotePrCheck("build", "failure", "https://ci/build", "tsc: 3 errors", "991"),
+                new RemotePrCheck("e2e", "timed_out", null, null, null),
             }));
 
         Assert.Contains("CI failed", reason);
@@ -79,6 +79,38 @@ public class PrNodeEdgesTests
         Assert.Contains("tsc: 3 errors", reason);
         Assert.Contains("e2e", reason);
         Assert.Contains("timed_out", reason);
+    }
+
+    [Fact]
+    public void Describe_ci_failed_hands_the_agent_a_callable_handle_not_just_a_link()
+    {
+        // details_url is for a human. What makes the log reachable from a loop is
+        // the check id plus the tool call spelled out with the work item id —
+        // which the agent has no placeholder to look up.
+        var reason = PrNodeEdges.Describe(PrNodeEdges.OnCiFailed, Snapshot(
+            ci: RemotePrCiStatus.Failed,
+            failedChecks: new[] { new RemotePrCheck("build", "failure", "https://ci/build", "tsc: 3 errors", "67890") }),
+            workItemId: "WI-42");
+
+        Assert.Contains("check id: 67890", reason);
+        Assert.Contains("get_ci_log", reason);
+        Assert.Contains("WI-42", reason);
+        // The summary must not read as the whole story.
+        Assert.Contains("not the full log", reason);
+    }
+
+    [Fact]
+    public void Describe_does_not_advertise_the_tool_when_no_check_can_be_read()
+    {
+        // An unattributed rollup has no handle; promising a tool call that cannot
+        // be made costs the agent a wasted turn.
+        var reason = PrNodeEdges.Describe(PrNodeEdges.OnCiFailed, Snapshot(
+            ci: RemotePrCiStatus.Failed,
+            failedChecks: new[] { new RemotePrCheck("commit status", "failure", null, null, null) }),
+            workItemId: "WI-42");
+
+        Assert.DoesNotContain("get_ci_log", reason);
+        Assert.Contains("commit status", reason);
     }
 
     [Fact]
@@ -133,7 +165,7 @@ public class PrNodeEdgesTests
         var reason = PrNodeEdges.Describe(PrNodeEdges.OnCiFailed, Snapshot(
             ci: RemotePrCiStatus.Failed,
             failedChecks: Enumerable.Range(0, 200)
-                .Select(i => new RemotePrCheck($"check-{i}", "failure", null, new string('x', 900)))
+                .Select(i => new RemotePrCheck($"check-{i}", "failure", null, new string('x', 900), null))
                 .ToArray()));
 
         // The cap counts the marker, so it is the length a caller can rely on.
@@ -151,7 +183,7 @@ public class PrNodeEdgesTests
             ci: RemotePrCiStatus.Failed,
             failedChecks: new[]
             {
-                new RemotePrCheck("build", "failure", null, string.Concat(Enumerable.Repeat("🔥", 6000))),
+                new RemotePrCheck("build", "failure", null, string.Concat(Enumerable.Repeat("🔥", 6000)), null),
             }));
 
         Assert.True(reason.Length <= PrNodeEdges.MaxReasonLength);
