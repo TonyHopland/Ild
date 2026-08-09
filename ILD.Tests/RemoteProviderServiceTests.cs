@@ -198,6 +198,94 @@ public class RemoteProviderServiceTests
     }
 
     [Fact]
+    public async Task GetPullRequestSnapshotAsync_keeps_the_failing_checks_behind_a_red_verdict()
+    {
+        // The Failed enum alone leaves a fix-it loop guessing. Everything kept
+        // here comes out of the two CI responses already fetched — no extra
+        // round-trip, and no job-log fetch: details_url is the link to the rest.
+        using var db = new TestDb();
+        AddGitHub(db);
+
+        var handler = new RoutingHandler()
+            .Map(u => u.Contains("/reviews") || u.Contains("/comments"), () => "[]")
+            .Map(u => u.Contains("/check-runs"), () =>
+                "{\"check_runs\":["
+                + "{\"name\":\"build\",\"status\":\"completed\",\"conclusion\":\"failure\",\"details_url\":\"https://ci/build\","
+                + "\"output\":{\"title\":\"Build failed\",\"summary\":\"tsc: 3 errors\",\"text\":\"src/a.ts(4,1): TS2345\"}},"
+                + "{\"name\":\"lint\",\"status\":\"completed\",\"conclusion\":\"success\"}]}")
+            .Map(u => u.Contains("/commits/abc/status"), () =>
+                "{\"state\":\"failure\",\"statuses\":[{\"context\":\"coverage\",\"state\":\"failure\","
+                + "\"description\":\"dropped 4%\",\"target_url\":\"https://ci/coverage\"}]}")
+            .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () =>
+                "{\"state\":\"open\",\"merged\":false,\"mergeable\":true,\"head\":{\"sha\":\"abc\"}}");
+
+        var snapshot = await CreateService(db, handler)
+            .GetPullRequestSnapshotAsync("https://github.com/team/repo", "7");
+
+        Assert.NotNull(snapshot);
+        Assert.Equal(RemotePrCiStatus.Failed, snapshot!.Ci);
+
+        // Only the failing ones — the green check run is not detail about a failure.
+        Assert.Equal(2, snapshot.FailedChecks.Count);
+        var build = snapshot.FailedChecks[0];
+        Assert.Equal("build", build.Name);
+        Assert.Equal("failure", build.Conclusion);
+        Assert.Equal("https://ci/build", build.Url);
+        Assert.Contains("tsc: 3 errors", build.Summary);
+        Assert.Contains("TS2345", build.Summary);
+
+        var coverage = snapshot.FailedChecks[1];
+        Assert.Equal("coverage", coverage.Name);
+        Assert.Equal("https://ci/coverage", coverage.Url);
+        Assert.Equal("dropped 4%", coverage.Summary);
+    }
+
+    [Fact]
+    public async Task GetPullRequestSnapshotAsync_reports_a_red_rollup_with_no_failing_context()
+    {
+        // A provider that publishes only the aggregate state still has to route
+        // on_ci_failed, and still has to say something rather than nothing.
+        using var db = new TestDb();
+        AddGitHub(db);
+
+        var handler = new RoutingHandler()
+            .Map(u => u.Contains("/reviews") || u.Contains("/comments") || u.Contains("/check-runs"), () => "[]")
+            .Map(u => u.Contains("/commits/abc/status"), () =>
+                "{\"state\":\"error\",\"statuses\":[{\"context\":\"ci\",\"state\":\"pending\"}]}")
+            .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () =>
+                "{\"state\":\"open\",\"merged\":false,\"mergeable\":true,\"head\":{\"sha\":\"abc\"}}");
+
+        var snapshot = await CreateService(db, handler)
+            .GetPullRequestSnapshotAsync("https://github.com/team/repo", "7");
+
+        Assert.Equal(RemotePrCiStatus.Failed, snapshot!.Ci);
+        Assert.Equal("error", Assert.Single(snapshot.FailedChecks).Conclusion);
+    }
+
+    [Fact]
+    public async Task GetPullRequestSnapshotAsync_truncates_a_huge_check_output()
+    {
+        // CI output has no upper bound and the snapshot is persisted on every
+        // heartbeat tick, so one check cannot contribute unbounded text.
+        using var db = new TestDb();
+        AddGitHub(db);
+
+        var handler = new RoutingHandler()
+            .Map(u => u.Contains("/reviews") || u.Contains("/comments") || u.Contains("/status"), () => "[]")
+            .Map(u => u.Contains("/check-runs"), () =>
+                "{\"check_runs\":[{\"name\":\"build\",\"status\":\"completed\",\"conclusion\":\"failure\","
+                + "\"output\":{\"summary\":\"" + new string('x', 50_000) + "\"}}]}")
+            .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () =>
+                "{\"state\":\"open\",\"merged\":false,\"mergeable\":true,\"head\":{\"sha\":\"abc\"}}");
+
+        var snapshot = await CreateService(db, handler)
+            .GetPullRequestSnapshotAsync("https://github.com/team/repo", "7");
+
+        var summary = Assert.Single(snapshot!.FailedChecks).Summary;
+        Assert.True(summary!.Length < 1100, $"check output kept unbounded ({summary.Length} chars)");
+    }
+
+    [Fact]
     public async Task CreatePullRequestAsync_sends_provider_api_key_in_auth_header()
     {
         using var db = new TestDb();

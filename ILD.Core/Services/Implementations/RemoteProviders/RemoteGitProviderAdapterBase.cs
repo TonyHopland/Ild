@@ -157,7 +157,9 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         var headSha = pr.TryGetProperty("head", out var head) ? ReadString(head, "sha") : null;
 
         var (approved, changesRequested, reviewEntries) = await ReadReviewsAsync(http, apiRepo, prNumber);
-        var ci = headSha is null ? RemotePrCiStatus.None : await ReadCiStatusAsync(http, apiRepo, headSha);
+        var (ci, failedChecks) = headSha is null
+            ? (RemotePrCiStatus.None, (IReadOnlyList<RemotePrCheck>)Array.Empty<RemotePrCheck>())
+            : await ReadCiStatusAsync(http, apiRepo, headSha);
         var conversation = await ReadConversationAsync(http, apiRepo, prNumber, reviewEntries);
 
         return new RemotePrSnapshot(
@@ -168,6 +170,7 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
             mergeable,
             mergeableState,
             ci,
+            failedChecks,
             approved,
             changesRequested,
             conversation,
@@ -205,12 +208,28 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         return (approved, changesRequested, entries);
     }
 
-    private async Task<RemotePrCiStatus> ReadCiStatusAsync(HttpClient http, string apiRepo, string headSha)
+    /// <summary>
+    /// How much of one check's own output is kept on the snapshot. CI output is
+    /// unbounded (a full job log can be megabytes) and every heartbeat tick
+    /// persists the snapshot, so each check contributes at most this much; the
+    /// <c>details_url</c> is what takes a reader to the rest.
+    /// </summary>
+    private const int MaxCheckSummaryLength = 1000;
+
+    /// <summary>
+    /// The head commit's CI verdict together with the detail behind a red one:
+    /// every failing check run and commit status, flattened into
+    /// <see cref="RemotePrCheck"/>. Both are read from the two responses this
+    /// already fetches — no extra round-trip, and deliberately no fetch of full
+    /// job logs, which the <c>details_url</c> links to instead.
+    /// </summary>
+    private async Task<(RemotePrCiStatus Status, IReadOnlyList<RemotePrCheck> FailedChecks)> ReadCiStatusAsync(
+        HttpClient http, string apiRepo, string headSha)
     {
         var sha = Uri.EscapeDataString(headSha);
         var anyPresent = false;
-        var anyFailed = false;
         var anyPending = false;
+        var failed = new List<RemotePrCheck>();
 
         foreach (var run in await GetArrayAsync(http, $"{apiRepo}/commits/{sha}/check-runs", "check_runs"))
         {
@@ -220,13 +239,18 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
             if (status != "completed")
                 anyPending = true;
             else if (conclusion is "failure" or "timed_out" or "cancelled")
-                anyFailed = true;
+                failed.Add(new RemotePrCheck(
+                    ReadString(run, "name") ?? "check",
+                    conclusion,
+                    ReadString(run, "details_url") ?? ReadString(run, "html_url"),
+                    ReadCheckOutput(run)));
             else if (conclusion is not ("success" or "neutral" or "skipped"))
                 anyPending = true;
         }
 
         // Combined commit status (the legacy statuses API): state is the rollup
-        // of all contexts (success | pending | failure | error).
+        // of all contexts (success | pending | failure | error), and the
+        // individual contexts carry the detail for the failing ones.
         var combined = await GetObjectAsync(http, $"{apiRepo}/commits/{sha}/status");
         if (combined.HasValue
             && combined.Value.TryGetProperty("statuses", out var statuses)
@@ -236,14 +260,49 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
             anyPresent = true;
             var rollup = (ReadString(combined.Value, "state") ?? string.Empty).ToLowerInvariant();
             if (rollup is "failure" or "error")
-                anyFailed = true;
+            {
+                foreach (var status in statuses.EnumerateArray())
+                {
+                    var state = (ReadString(status, "state") ?? string.Empty).ToLowerInvariant();
+                    if (state is "failure" or "error")
+                        failed.Add(new RemotePrCheck(
+                            ReadString(status, "context") ?? "status",
+                            state,
+                            ReadString(status, "target_url"),
+                            Truncate(ReadString(status, "description"), MaxCheckSummaryLength)));
+                }
+
+                // The rollup is red but no single context claims it (a provider
+                // that reports only the aggregate): still a failure, just an
+                // unattributed one.
+                if (failed.Count == 0)
+                    failed.Add(new RemotePrCheck("commit status", rollup, null, null));
+            }
             else if (rollup == "pending")
                 anyPending = true;
         }
 
-        if (anyFailed) return RemotePrCiStatus.Failed;
-        if (!anyPresent) return RemotePrCiStatus.None;
-        return anyPending ? RemotePrCiStatus.Pending : RemotePrCiStatus.Passed;
+        if (failed.Count > 0) return (RemotePrCiStatus.Failed, failed);
+        if (!anyPresent) return (RemotePrCiStatus.None, Array.Empty<RemotePrCheck>());
+        return (anyPending ? RemotePrCiStatus.Pending : RemotePrCiStatus.Passed, Array.Empty<RemotePrCheck>());
+    }
+
+    /// <summary>A check run's own report: its output summary, then its longer text.</summary>
+    private static string? ReadCheckOutput(JsonElement run)
+    {
+        if (!run.TryGetProperty("output", out var output) || output.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var parts = new[] { ReadString(output, "summary"), ReadString(output, "text") }
+            .Where(p => !string.IsNullOrWhiteSpace(p));
+        return Truncate(string.Join("\n\n", parts), MaxCheckSummaryLength);
+    }
+
+    private static string? Truncate(string? value, int max)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var trimmed = value.Trim();
+        return trimmed.Length <= max ? trimmed : trimmed[..max] + "…";
     }
 
     private async Task<IReadOnlyList<RemotePrConversationEntry>> ReadConversationAsync(

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
@@ -188,5 +189,86 @@ public class PrSyncServiceTests
         events.Verify(s => s.AppendAsync(It.Is<EventLog>(e => e.Data == "needs work")), Times.Once);
         engine.Verify(s => s.SignalNodeResultAsync(run.Id, runNode.Id,
             It.Is<NodeSignal>(signal => signal.EdgeName == PrNodeEdges.OnRejected)), Times.Once);
+    }
+
+    [Fact]
+    public async Task HandleWebhookAsync_carries_the_reason_on_the_signal_like_the_heartbeat_does()
+    {
+        // The webhook and heartbeat resume paths must leave the node in the same
+        // state, including what {{PreviousNode.Output}} says: the review comment
+        // the webhook brought, plus the failing checks the last poll recorded.
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = "wi-1",
+            PrUrl = "https://github.com/team/repo/pull/7",
+            CurrentNodeId = Guid.NewGuid(),
+            PrSnapshot = JsonSerializer.Serialize(
+                new RemotePrSnapshot("t", "b", "open", false, null, null, RemotePrCiStatus.Failed,
+                    new[] { new RemotePrCheck("build", "failure", "https://ci/build", "tsc: 3 errors") },
+                    false, true, Array.Empty<RemotePrConversationEntry>(), DateTime.UtcNow),
+                JsonSerializerOptions.Web),
+        };
+        var runNode = new LoopRunNode
+        {
+            Id = Guid.NewGuid(),
+            LoopRunId = run.Id,
+            LoopNodeId = run.CurrentNodeId!.Value,
+            Status = LoopRunNodeStatus.WaitingHuman,
+        };
+
+        var loopRuns = new Mock<ILoopRunStore>();
+        loopRuns.Setup(s => s.GetByPrUrlAsync(run.PrUrl!)).ReturnsAsync(run);
+        loopRuns.Setup(s => s.GetRunNodeAsync(run.Id, run.CurrentNodeId.Value)).ReturnsAsync(runNode);
+        loopRuns.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
+            .ReturnsAsync(new[] { CustomEdge(runNode.LoopNodeId, PrNodeEdges.OnRejected) });
+
+        var engine = new Mock<ILoopEngine>();
+        var service = new PrSyncService(loopRuns.Object, new Mock<IEventLogStore>().Object,
+            new Mock<IWorkItemManager>().Object, engine.Object);
+
+        await service.HandleWebhookAsync(new WebhookPayload(
+            "pull_request.rejected", "repo-1", "7", run.PrUrl, "rename the flag", "changes_requested"));
+
+        engine.Verify(s => s.SignalNodeResultAsync(run.Id, runNode.Id,
+            It.Is<NodeSignal>(signal => signal.Output != null
+                && signal.Output.Contains("requested changes")
+                && signal.Output.Contains("rename the flag"))), Times.Once);
+    }
+
+    [Fact]
+    public async Task HandleWebhookAsync_still_carries_a_reason_when_no_snapshot_was_ever_polled()
+    {
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = "wi-1",
+            PrUrl = "https://github.com/team/repo/pull/7",
+            CurrentNodeId = Guid.NewGuid(),
+            PrSnapshot = "{ not json",
+        };
+        var runNode = new LoopRunNode
+        {
+            Id = Guid.NewGuid(),
+            LoopRunId = run.Id,
+            LoopNodeId = run.CurrentNodeId!.Value,
+            Status = LoopRunNodeStatus.WaitingHuman,
+        };
+
+        var loopRuns = new Mock<ILoopRunStore>();
+        loopRuns.Setup(s => s.GetByPrUrlAsync(run.PrUrl!)).ReturnsAsync(run);
+        loopRuns.Setup(s => s.GetRunNodeAsync(run.Id, run.CurrentNodeId.Value)).ReturnsAsync(runNode);
+        loopRuns.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
+            .ReturnsAsync(new[] { CustomEdge(runNode.LoopNodeId, PrNodeEdges.OnAbandoned) });
+
+        var engine = new Mock<ILoopEngine>();
+        var service = new PrSyncService(loopRuns.Object, new Mock<IEventLogStore>().Object,
+            new Mock<IWorkItemManager>().Object, engine.Object);
+
+        await service.HandleWebhookAsync(new WebhookPayload(
+            "pull_request.closed", "repo-1", "7", run.PrUrl, null, "closed"));
+
+        engine.Verify(s => s.SignalNodeResultAsync(run.Id, runNode.Id,
+            It.Is<NodeSignal>(signal => !string.IsNullOrWhiteSpace(signal.Output))), Times.Once);
     }
 }

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -9,6 +10,9 @@ namespace ILD.Core.Services.Implementations;
 
 public class PrSyncService : IPrSyncService
 {
+    // The heartbeat poller writes the snapshot camelCase; read it back the same way.
+    private static readonly JsonSerializerOptions SnapshotJson = JsonSerializerOptions.Web;
+
     private readonly ILoopRunStore _loopRunStore;
     private readonly IEventLogStore _eventLogStore;
     private readonly IWorkItemManager _workItems;
@@ -89,7 +93,19 @@ public class PrSyncService : IPrSyncService
         if (!connected)
             return;
 
-        await _loopEngine.SignalNodeResultAsync(run.Id, runNode.Id, NodeSignal.Custom(edgeName));
+        // Same reason text as the heartbeat path, so a node behaves identically
+        // whichever resume path reached it first. The webhook's own comment is
+        // the better rejection detail when it has one; the persisted snapshot
+        // (last heartbeat tick) supplies the rest.
+        var reason = PrNodeEdges.Describe(edgeName, ParseSnapshot(run.PrSnapshot), payload.Comment);
+        await _loopEngine.SignalNodeResultAsync(run.Id, runNode.Id, NodeSignal.Custom(edgeName, reason));
+    }
+
+    private static RemotePrSnapshot? ParseSnapshot(string? json)
+    {
+        if (string.IsNullOrEmpty(json)) return null;
+        try { return JsonSerializer.Deserialize<RemotePrSnapshot>(json, SnapshotJson); }
+        catch (JsonException) { return null; }
     }
 
     public Task<bool> IsPullRequestMergedAsync(string prUrl) => Task.FromResult(false);

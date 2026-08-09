@@ -3,6 +3,7 @@ using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Remote;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Core.Services.Implementations.Executors;
@@ -46,8 +47,15 @@ public sealed class PRNodeExecutor : INodeExecutor
         // a second LoopRunNode — the existing WaitingHuman node covers this visit.
         if (ctx.Run.ExternalActionResult is not null)
         {
+            // A signal with no text of its own (a manual resume, a state the
+            // sender had no detail for) would hand the next node an empty
+            // {{PreviousNode.Output}} — an agent wired to on_ci_failed would be
+            // told nothing at all. Fall back to the edge's own wording.
+            var result = string.IsNullOrWhiteSpace(ctx.Run.ExternalActionResult)
+                ? PrNodeEdges.Describe(ctx.Run.ExternalActionEdgeName)
+                : ctx.Run.ExternalActionResult;
             yield return NodeOutcome.FromExternalAction(
-                ctx.Run.ExternalActionResult, ctx.Run.ExternalActionResultType, ctx.Run.ExternalActionEdgeName, "PR rejected");
+                result, ctx.Run.ExternalActionResultType, ctx.Run.ExternalActionEdgeName, "PR rejected");
             yield break;
         }
 
