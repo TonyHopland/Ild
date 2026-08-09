@@ -5,7 +5,6 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
-using System.Text.Json;
 
 namespace ILD.Core.Services.Implementations;
 
@@ -515,11 +514,6 @@ public class WorkItemManager : IWorkItemManager
         }
     }
 
-    // The poller persists the snapshot with the web (camelCase) options, so
-    // deserialize with the same to round-trip the property names and the
-    // string-named CI enum.
-    private static readonly JsonSerializerOptions PrSnapshotJson = JsonSerializerOptions.Web;
-
     /// <summary>
     /// Projects a persisted PR snapshot onto the badge-relevant subset the
     /// taskboard card renders. Returns null when there is no snapshot yet;
@@ -527,16 +521,7 @@ public class WorkItemManager : IWorkItemManager
     /// </summary>
     private static WorkItemPrStatus? ResolvePrStatus(string? prSnapshot)
     {
-        if (string.IsNullOrEmpty(prSnapshot)) return null;
-        RemotePrSnapshot? snapshot;
-        try
-        {
-            snapshot = JsonSerializer.Deserialize<RemotePrSnapshot>(prSnapshot, PrSnapshotJson);
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
+        var snapshot = PrSnapshotJson.TryParse(prSnapshot);
         if (snapshot is null) return null;
         return new WorkItemPrStatus(
             snapshot.State,

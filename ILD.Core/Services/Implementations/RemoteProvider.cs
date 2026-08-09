@@ -1,6 +1,7 @@
 using ILD.Data.DTOs;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
+using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations;
 
@@ -13,12 +14,18 @@ public class RemoteProviderService : IRemoteProvider
     private readonly IProviderStore _providerStore;
     private readonly IReadOnlyList<IRemoteGitProviderAdapter> _adapters;
     private readonly HttpClient _http;
+    private readonly ILogger<RemoteProviderService>? _log;
 
-    public RemoteProviderService(IProviderStore providerStore, IEnumerable<IRemoteGitProviderAdapter> adapters, HttpClient http)
+    public RemoteProviderService(
+        IProviderStore providerStore,
+        IEnumerable<IRemoteGitProviderAdapter> adapters,
+        HttpClient http,
+        ILogger<RemoteProviderService>? log = null)
     {
         _providerStore = providerStore;
         _adapters = adapters.ToArray();
         _http = http;
+        _log = log;
     }
 
     public async Task<RemotePrResult> CreatePullRequestAsync(string repoUrl, string sourceBranch, string targetBranch, string title, string body)
@@ -90,6 +97,23 @@ public class RemoteProviderService : IRemoteProvider
         if (resolved == null) return null;
         try { return await resolved.Adapter.GetPullRequestSnapshotAsync(_http, resolved, prNumber); }
         catch { return null; }
+    }
+
+    public async Task<RemoteCiLog> GetCheckLogAsync(string repoUrl, string checkId, int tailLines, int offset)
+    {
+        var resolved = await ResolveAsync(repoUrl);
+        if (resolved == null)
+            return RemoteCiLog.Unavailable("No remote provider is configured for this repository.");
+        try { return await resolved.Adapter.GetCheckLogAsync(_http, resolved, checkId, tailLines, offset); }
+        catch (Exception ex)
+        {
+            // The message goes to an agent, so it says only what the agent can
+            // act on. A transport failure's detail (hosts, URLs, tokens in a
+            // message) belongs in the server log, which is also the only place
+            // it would otherwise be lost — every other method here swallows.
+            _log?.LogWarning(ex, "CI log fetch failed for check {CheckId} on {RepoUrl}", checkId, repoUrl);
+            return RemoteCiLog.Unavailable("Could not read the log for this check — the provider request failed.");
+        }
     }
 
     public async Task<bool> DeleteBranchAsync(string repoUrl, string branchName)

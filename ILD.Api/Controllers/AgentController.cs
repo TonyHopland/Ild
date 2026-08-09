@@ -472,6 +472,42 @@ public class AgentController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// The tail of one failing CI check's log for the work item's current run.
+    /// The check id comes from the failure reason the PR node handed the agent;
+    /// the fetch itself runs here, with the provider credentials the agent does
+    /// not hold. A provider with no fetchable log answers 200 with
+    /// <c>available:false</c> and a message — it is an answer, not an error.
+    /// </summary>
+    [HttpGet("workitems/{id}/ci-log")]
+    public async Task<IActionResult> GetCiLog(
+        string id,
+        [FromServices] IPrCiLogService ciLogs,
+        [FromQuery] string checkId,
+        [FromQuery] int tailLines = PrCiLogService.DefaultTailLines,
+        [FromQuery] int offset = 0)
+    {
+        if (string.IsNullOrWhiteSpace(checkId))
+            return BadRequest(new { error = "checkId is required." });
+
+        var workItem = await _workItems.GetWorkItemAsync(id);
+        if (workItem == null)
+            return NotFound();
+
+        var log = await ciLogs.ReadAsync(id, checkId, tailLines, offset);
+        return Ok(new
+        {
+            checkId,
+            available = log.Available,
+            text = log.Text,
+            lines = log.Lines,
+            offset = log.Offset,
+            totalLines = log.TotalLines,
+            truncated = log.Truncated,
+            message = log.Message,
+        });
+    }
+
     [HttpGet("repositories")]
     public async Task<IActionResult> ListRepositories([FromQuery] int skip = 0, [FromQuery] int take = 100)
     {

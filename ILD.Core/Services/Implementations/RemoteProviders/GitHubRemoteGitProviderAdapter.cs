@@ -80,6 +80,38 @@ public sealed class GitHubRemoteGitProviderAdapter : RemoteGitProviderAdapterBas
         return resp.IsSuccessStatusCode;
     }
 
+    /// <summary>
+    /// The plain-text log of one Actions job, fetched with the provider's token
+    /// — the credential the agent asking for it does not hold. GitHub answers
+    /// the logs endpoint with a redirect to a short-lived signed blob URL, which
+    /// the handler follows; a job whose logs have expired or which never ran
+    /// under Actions (a third-party check run) is reported as unavailable rather
+    /// than as a failure, since there is nothing the caller can do differently.
+    /// </summary>
+    public override async Task<RemoteCiLog> GetCheckLogAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string checkId, int tailLines, int offset)
+    {
+        ApplyHeaders(http, repo.Provider);
+
+        var jobId = Uri.EscapeDataString(checkId);
+        // Headers-first: the body is a job log, read as a stream and reduced to
+        // the requested window line by line rather than buffered whole.
+        using var resp = await http.GetAsync(
+            $"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/actions/jobs/{jobId}/logs",
+            HttpCompletionOption.ResponseHeadersRead);
+
+        if (!resp.IsSuccessStatusCode)
+            return RemoteCiLog.Unavailable(resp.StatusCode == System.Net.HttpStatusCode.NotFound
+                ? "No log for this check — GitHub keeps job logs for a limited time, and checks published by apps other than Actions have none to fetch."
+                : $"Could not read the log for this check (HTTP {(int)resp.StatusCode}).");
+
+        await using var stream = await resp.Content.ReadAsStreamAsync();
+        var window = await WindowAsync(stream, tailLines, offset);
+        return window.TotalLines == 0
+            ? RemoteCiLog.Unavailable("The log for this check is empty.")
+            : window;
+    }
+
     public override WebhookPayload? ParseWebhookPayload(string body, IReadOnlyDictionary<string, string> headers)
     {
         using var doc = JsonDocument.Parse(body);

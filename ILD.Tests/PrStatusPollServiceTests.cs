@@ -18,8 +18,10 @@ public class PrStatusPollServiceTests
         bool merged = false,
         RemotePrCiStatus ci = RemotePrCiStatus.None,
         bool approved = false,
-        bool changesRequested = false)
-        => new("t", "b", state, merged, null, null, ci, approved, changesRequested,
+        bool changesRequested = false,
+        IReadOnlyList<RemotePrCheck>? failedChecks = null)
+        => new("t", "b", state, merged, null, null, ci,
+            failedChecks ?? Array.Empty<RemotePrCheck>(), approved, changesRequested,
             Array.Empty<RemotePrConversationEntry>(), DateTime.UtcNow);
 
     private static LoopNodeEdge CustomEdge(Guid sourceNodeId, string name) => new()
@@ -109,6 +111,64 @@ public class PrStatusPollServiceTests
 
         h.Engine.Verify(e => e.SignalNodeResultAsync(h.Run.Id, h.RunNode.Id,
             It.Is<NodeSignal>(sig => sig.EdgeName == PrNodeEdges.OnCiFailed)), Times.Once);
+    }
+
+    [Fact]
+    public async Task Persisted_snapshot_reads_back_through_the_same_contract_that_wrote_it()
+    {
+        // The poller writes the blob and the taskboard projection, the webhook
+        // resume and the PR node all read it. One owner (PrSnapshotJson) keeps
+        // the two sides from drifting — this pins the round-trip.
+        var h = new Harness(Snapshot(
+            ci: RemotePrCiStatus.Failed,
+            failedChecks: new[] { new RemotePrCheck("build", "failure", "https://ci/build", "tsc: 3 errors", "991") }),
+            baseline: null);
+
+        await h.Build().PollOnceAsync();
+
+        var parsed = PrSnapshotJson.TryParse(h.Run.PrSnapshot);
+        Assert.Equal(RemotePrCiStatus.Failed, parsed!.Ci);
+        Assert.Equal("build", Assert.Single(parsed.FailedChecks).Name);
+    }
+
+    [Fact]
+    public async Task Ci_failed_signal_carries_the_failing_checks_as_the_node_output()
+    {
+        // The signal's output becomes the resumed PR node's output — i.e. the
+        // next node's {{PreviousNode.Output}}. Empty, the fix-it agent can only
+        // guess why CI went red.
+        var h = new Harness(Snapshot(
+            ci: RemotePrCiStatus.Failed,
+            failedChecks: new[] { new RemotePrCheck("build", "failure", "https://ci/build", "tsc: 3 errors", "991") }),
+            baseline: null);
+        h.Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
+            .ReturnsAsync(new[] { CustomEdge(h.RunNode.LoopNodeId, PrNodeEdges.OnCiFailed) });
+
+        await h.Build().PollOnceAsync();
+
+        h.Engine.Verify(e => e.SignalNodeResultAsync(h.Run.Id, h.RunNode.Id,
+            It.Is<NodeSignal>(sig => sig.EdgeName == PrNodeEdges.OnCiFailed
+                && sig.Output != null
+                && sig.Output.Contains("build")
+                && sig.Output.Contains("https://ci/build")
+                && sig.Output.Contains("tsc: 3 errors")
+                // …and the way to the log behind the summary, addressed to this run's work item.
+                && sig.Output.Contains("check id: 991")
+                && sig.Output.Contains("get_ci_log")
+                && sig.Output.Contains("wi-1"))), Times.Once);
+    }
+
+    [Fact]
+    public async Task Every_fired_edge_carries_a_reason_not_an_empty_output()
+    {
+        var h = new Harness(Snapshot(state: "closed", merged: true), baseline: null);
+        h.Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
+            .ReturnsAsync(new[] { CustomEdge(h.RunNode.LoopNodeId, PrNodeEdges.OnMerged) });
+
+        await h.Build().PollOnceAsync();
+
+        h.Engine.Verify(e => e.SignalNodeResultAsync(h.Run.Id, h.RunNode.Id,
+            It.Is<NodeSignal>(sig => !string.IsNullOrWhiteSpace(sig.Output))), Times.Once);
     }
 
     [Fact]

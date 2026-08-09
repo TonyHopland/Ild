@@ -437,6 +437,20 @@ export interface LoopRun {
 /** Aggregate CI verdict for a PR's head commit (mirrors RemotePrCiStatus). */
 export type RemotePrCiStatus = "None" | "Pending" | "Passed" | "Failed";
 
+/**
+ * One failing check on a PR's head commit — a check run, or a commit status
+ * flattened into the same shape. `summary` is the provider's own check output,
+ * truncated server-side; `url` links to the full run.
+ */
+export interface RemotePrCheck {
+  name: string;
+  conclusion: string;
+  url: string | null;
+  summary: string | null;
+  /** Handle the agent's get_ci_log tool takes; null when the check has no fetchable log. */
+  checkId: string | null;
+}
+
 /** One entry in a PR's conversation (issue comment, review comment, or review). */
 export interface RemotePrConversationEntry {
   kind: "comment" | "review_comment" | "review";
@@ -456,6 +470,8 @@ export interface RemotePrSnapshot {
   mergeable: boolean | null;
   mergeableState: string | null;
   ci: RemotePrCiStatus;
+  /** The checks behind a `Failed` verdict; absent on snapshots polled before they were captured. */
+  failedChecks?: RemotePrCheck[] | null;
   approved: boolean;
   changesRequested: boolean;
   conversation: RemotePrConversationEntry[];

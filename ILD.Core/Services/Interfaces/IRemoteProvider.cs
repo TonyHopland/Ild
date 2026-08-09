@@ -27,6 +27,14 @@ public interface IRemoteProvider
     /// </summary>
     Task<RemotePrSnapshot?> GetPullRequestSnapshotAsync(string repoUrl, string prNumber);
 
+    /// <summary>
+    /// A window onto one failing check's log (see
+    /// <see cref="IRemoteGitProviderAdapter.GetCheckLogAsync"/>). Never throws:
+    /// an unresolvable repository or a provider without fetchable logs comes
+    /// back as <see cref="RemoteCiLog.Unavailable"/>.
+    /// </summary>
+    Task<RemoteCiLog> GetCheckLogAsync(string repoUrl, string checkId, int tailLines, int offset);
+
     Task<bool> DeleteBranchAsync(string repoUrl, string branchName);
     Task<bool> CreatePullRequestCommentAsync(string repoUrl, string prNumber, string body);
 }

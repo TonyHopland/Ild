@@ -140,6 +140,9 @@ internal static class TestHostServiceCollectionExtensions
         public Task<RemotePrSnapshot?> GetPullRequestSnapshotAsync(string repoUrl, string prNumber)
             => throw Unexpected(nameof(IRemoteProvider));
 
+        public Task<RemoteCiLog> GetCheckLogAsync(string repoUrl, string checkId, int tailLines, int offset)
+            => throw Unexpected(nameof(IRemoteProvider));
+
         public Task<bool> DeleteBranchAsync(string repoUrl, string branchName)
             => throw Unexpected(nameof(IRemoteProvider));
 

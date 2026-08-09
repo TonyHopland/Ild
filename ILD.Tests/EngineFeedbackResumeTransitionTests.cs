@@ -19,8 +19,9 @@ public class EngineFeedbackResumeTransitionTests
     private const string PrUrl = "https://github.com/team/repo/pull/7";
 
     private static RemotePrSnapshot CiFailedSnapshot()
-        => new("t", "b", "open", false, null, null, RemotePrCiStatus.Failed, false, false,
-            Array.Empty<RemotePrConversationEntry>(), DateTime.UtcNow);
+        => new("t", "b", "open", false, null, null, RemotePrCiStatus.Failed,
+            new[] { new RemotePrCheck("build", "failure", "https://ci/1", "tsc: 3 errors", "991") },
+            false, false, Array.Empty<RemotePrConversationEntry>(), DateTime.UtcNow);
 
     [Fact]
     public async Task PrStatusPoll_firing_on_ci_failed_moves_work_item_back_to_Running()

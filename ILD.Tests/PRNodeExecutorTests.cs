@@ -1,5 +1,6 @@
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -457,5 +458,93 @@ public class PRNodeExecutorTests
         var fail = outcomes.OfType<NodeOutcome.Fail>().Single();
         Assert.Contains("PR comment failed", fail.Reason);
         Assert.DoesNotContain(outcomes, o => o is NodeOutcome.WaitingAction);
+    }
+
+    [Theory]
+    [InlineData("CI failed on this build, twice")]
+    [InlineData(null)]
+    public async Task Re_entry_on_a_pr_edge_hands_the_next_node_a_reason(string? signalOutput)
+    {
+        // Whatever the signal carried is what the next node reads as
+        // {{PreviousNode.Output}} — and a signal that carried nothing (a human
+        // firing the edge from the feedback UI) falls back to the last polled
+        // snapshot, so it says as much as the heartbeat would have.
+        var (sp, node) = ReEntryContext();
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = "WI-1",
+            PrUrl = "https://example.com/o/r/pull/7",
+            PrSnapshot = PrSnapshotJson.Serialize(new RemotePrSnapshot(
+                "t", "b", "open", false, null, null, RemotePrCiStatus.Failed,
+                new[] { new RemotePrCheck("build", "failure", "https://ci/build", "tsc: 3 errors", "991") },
+                false, false, Array.Empty<RemotePrConversationEntry>(), DateTime.UtcNow)),
+            ExternalActionResult = signalOutput ?? string.Empty,
+            ExternalActionResultType = ExternalActionResultType.Success,
+            ExternalActionEdgeName = PrNodeEdges.OnCiFailed,
+        };
+
+        var outcomes = new List<NodeOutcome>();
+        await foreach (var o in new PRNodeExecutor().ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+            outcomes.Add(o);
+
+        var success = outcomes.OfType<NodeOutcome.Success>().Single();
+        Assert.Equal(EdgeType.Custom, success.Edge);
+        Assert.Equal(PrNodeEdges.OnCiFailed, success.EdgeName);
+        Assert.False(string.IsNullOrWhiteSpace(success.Output));
+        if (signalOutput is null)
+            Assert.Contains("build", success.Output);
+        else
+            Assert.Equal(signalOutput, success.Output);
+        // Re-entry must not re-announce the node or re-park it.
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.NodeStarting or NodeOutcome.WaitingAction);
+    }
+
+    [Fact]
+    public async Task Re_entry_with_no_signal_text_and_no_snapshot_still_says_what_happened()
+    {
+        var (sp, node) = ReEntryContext();
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = "WI-1",
+            PrUrl = "https://example.com/o/r/pull/7",
+            ExternalActionResult = string.Empty,
+            ExternalActionResultType = ExternalActionResultType.Success,
+            ExternalActionEdgeName = PrNodeEdges.OnCiFailed,
+        };
+
+        var outcomes = new List<NodeOutcome>();
+        await foreach (var o in new PRNodeExecutor().ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+            outcomes.Add(o);
+
+        Assert.Equal(PrNodeEdges.Describe(PrNodeEdges.OnCiFailed),
+            outcomes.OfType<NodeOutcome.Success>().Single().Output);
+    }
+
+    /// <summary>A PR node whose PR already exists, with the remote left strict — re-entry touches neither.</summary>
+    private static (IServiceProvider Services, LoopNode Node) ReEntryContext()
+    {
+        var repoId = Guid.NewGuid();
+        var workItems = new Mock<IWorkItemManager>();
+        workItems.Setup(m => m.GetWorkItemAsync(It.IsAny<string>()))
+            .ReturnsAsync(new WorkItemView { Id = "WI-1", Title = "T", Description = "D", RepositoryId = repoId });
+        var providerStore = new Mock<IProviderStore>();
+        providerStore.Setup(s => s.GetRepositoryByIdAsync(repoId)).ReturnsAsync(new Repository
+        {
+            Id = repoId,
+            Name = "r",
+            CloneUrl = "https://example.com/o/r.git",
+            DefaultBranch = "main",
+            RemoteProviderId = Guid.NewGuid(),
+        });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(workItems.Object);
+        services.AddSingleton(providerStore.Object);
+        services.AddSingleton(new Mock<IRemoteProvider>(MockBehavior.Strict).Object);
+        services.AddSingleton(Mock.Of<IRepositoryManager>());
+        return (services.BuildServiceProvider(),
+            new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.PR, Config = "{}" });
     }
 }

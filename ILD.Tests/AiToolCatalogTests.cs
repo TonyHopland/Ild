@@ -161,6 +161,22 @@ public class AiToolCatalogTests
     }
 
     [Fact]
+    public void ToolDescriptors_ci_log_tool_matches_the_mcp_and_api_surface()
+    {
+        // The MCP tool (CiTools.get_ci_log), this descriptor and the agent-API
+        // route are three spellings of one tool; a drift here is a tool that
+        // works on one CLI and 404s on the other.
+        var ciLog = ToolDescriptors.All.First(t => t.Name == "ild_get_ci_log");
+
+        Assert.Equal("api/v1/agent/workitems/{workItemId}/ci-log", ciLog.EndpointPath);
+        Assert.Equal(HttpMethod.Get, ciLog.HttpMethod);
+        Assert.Contains(ciLog.Parameters, p => p.Name == "workItemId" && !p.IsOptional);
+        Assert.Contains(ciLog.Parameters, p => p.Name == "checkId" && !p.IsOptional);
+        Assert.Contains(ciLog.Parameters, p => p.Name == "tailLines" && p.IsOptional);
+        Assert.Contains(ciLog.Parameters, p => p.Name == "offset" && p.IsOptional);
+    }
+
+    [Fact]
     public void ToolDescriptors_variable_tools_have_correct_endpoints()
     {
         var all = ToolDescriptors.All;

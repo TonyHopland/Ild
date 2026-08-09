@@ -157,7 +157,9 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         var headSha = pr.TryGetProperty("head", out var head) ? ReadString(head, "sha") : null;
 
         var (approved, changesRequested, reviewEntries) = await ReadReviewsAsync(http, apiRepo, prNumber);
-        var ci = headSha is null ? RemotePrCiStatus.None : await ReadCiStatusAsync(http, apiRepo, headSha);
+        var (ci, failedChecks) = headSha is null
+            ? (RemotePrCiStatus.None, (IReadOnlyList<RemotePrCheck>)Array.Empty<RemotePrCheck>())
+            : await ReadCiStatusAsync(http, apiRepo, headSha);
         var conversation = await ReadConversationAsync(http, apiRepo, prNumber, reviewEntries);
 
         return new RemotePrSnapshot(
@@ -168,6 +170,7 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
             mergeable,
             mergeableState,
             ci,
+            failedChecks,
             approved,
             changesRequested,
             conversation,
@@ -205,12 +208,28 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         return (approved, changesRequested, entries);
     }
 
-    private async Task<RemotePrCiStatus> ReadCiStatusAsync(HttpClient http, string apiRepo, string headSha)
+    /// <summary>
+    /// How much of one check's own output is kept on the snapshot. CI output is
+    /// unbounded (a full job log can be megabytes) and every heartbeat tick
+    /// persists the snapshot, so each check contributes at most this much; the
+    /// <c>details_url</c> is what takes a reader to the rest.
+    /// </summary>
+    private const int MaxCheckSummaryLength = 1000;
+
+    /// <summary>
+    /// The head commit's CI verdict together with the detail behind a red one:
+    /// every failing check run and commit status, flattened into
+    /// <see cref="RemotePrCheck"/>. Both are read from the two responses this
+    /// already fetches — no extra round-trip, and deliberately no fetch of full
+    /// job logs, which the <c>details_url</c> links to instead.
+    /// </summary>
+    private async Task<(RemotePrCiStatus Status, IReadOnlyList<RemotePrCheck> FailedChecks)> ReadCiStatusAsync(
+        HttpClient http, string apiRepo, string headSha)
     {
         var sha = Uri.EscapeDataString(headSha);
         var anyPresent = false;
-        var anyFailed = false;
         var anyPending = false;
+        var failed = new List<RemotePrCheck>();
 
         foreach (var run in await GetArrayAsync(http, $"{apiRepo}/commits/{sha}/check-runs", "check_runs"))
         {
@@ -220,13 +239,22 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
             if (status != "completed")
                 anyPending = true;
             else if (conclusion is "failure" or "timed_out" or "cancelled")
-                anyFailed = true;
+            {
+                var detailsUrl = ReadString(run, "details_url") ?? ReadString(run, "html_url");
+                failed.Add(new RemotePrCheck(
+                    ReadString(run, "name") ?? "check",
+                    conclusion,
+                    detailsUrl,
+                    ReadCheckOutput(run),
+                    ReadCheckLogId(run, detailsUrl)));
+            }
             else if (conclusion is not ("success" or "neutral" or "skipped"))
                 anyPending = true;
         }
 
         // Combined commit status (the legacy statuses API): state is the rollup
-        // of all contexts (success | pending | failure | error).
+        // of all contexts (success | pending | failure | error), and the
+        // individual contexts carry the detail for the failing ones.
         var combined = await GetObjectAsync(http, $"{apiRepo}/commits/{sha}/status");
         if (combined.HasValue
             && combined.Value.TryGetProperty("statuses", out var statuses)
@@ -236,14 +264,205 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
             anyPresent = true;
             var rollup = (ReadString(combined.Value, "state") ?? string.Empty).ToLowerInvariant();
             if (rollup is "failure" or "error")
-                anyFailed = true;
+            {
+                foreach (var status in statuses.EnumerateArray())
+                {
+                    // GitHub names an individual context's verdict "state";
+                    // Gitea/Forgejo name it "status" and keep "state" for the
+                    // combined rollup only. Forgejo has no check-runs endpoint,
+                    // so reading just one of the two would leave that provider
+                    // with no attributable CI detail at all.
+                    var state = (ReadString(status, "state") ?? ReadString(status, "status") ?? string.Empty)
+                        .ToLowerInvariant();
+                    if (state is "failure" or "error")
+                        failed.Add(new RemotePrCheck(
+                            ReadString(status, "context") ?? "status",
+                            state,
+                            ReadString(status, "target_url"),
+                            Truncate(ReadString(status, "description"), MaxCheckSummaryLength),
+                            ReadId(status)));
+                }
+
+                // The rollup is red but no single context claims it (a provider
+                // that reports only the aggregate): still a failure, just an
+                // unattributed one.
+                if (failed.Count == 0)
+                    failed.Add(new RemotePrCheck("commit status", rollup, null, null, null));
+            }
             else if (rollup == "pending")
                 anyPending = true;
         }
 
-        if (anyFailed) return RemotePrCiStatus.Failed;
-        if (!anyPresent) return RemotePrCiStatus.None;
-        return anyPending ? RemotePrCiStatus.Pending : RemotePrCiStatus.Passed;
+        if (failed.Count > 0) return (RemotePrCiStatus.Failed, failed);
+        if (!anyPresent) return (RemotePrCiStatus.None, Array.Empty<RemotePrCheck>());
+        return (anyPending ? RemotePrCiStatus.Pending : RemotePrCiStatus.Passed, Array.Empty<RemotePrCheck>());
+    }
+
+    /// <summary>
+    /// The handle <c>get_ci_log</c> takes for this check. For a GitHub Actions
+    /// check run that is the <b>job</b> id, which the logs endpoint keys on and
+    /// which is not the check-run id — it is only in the <c>details_url</c>
+    /// (<c>…/actions/runs/{run}/job/{job}</c>). Anything else falls back to the
+    /// resource's own id, which either works or comes back as "no log here";
+    /// null when there is no id at all to offer.
+    /// </summary>
+    private static string? ReadCheckLogId(JsonElement run, string? detailsUrl)
+    {
+        if (detailsUrl is not null)
+        {
+            var marker = detailsUrl.LastIndexOf("/job/", StringComparison.OrdinalIgnoreCase);
+            if (marker >= 0)
+            {
+                var jobId = detailsUrl[(marker + "/job/".Length)..].TrimEnd('/');
+                if (jobId.Length > 0 && jobId.All(char.IsAsciiDigit))
+                    return jobId;
+            }
+        }
+        return ReadId(run);
+    }
+
+    /// <summary>An <c>id</c> field as a string, whether the provider sends it as a number or a string.</summary>
+    private static string? ReadId(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty("id", out var id))
+            return null;
+        return id.ValueKind switch
+        {
+            JsonValueKind.Number => id.GetRawText(),
+            JsonValueKind.String => id.GetString(),
+            _ => null,
+        };
+    }
+
+    /// <summary>
+    /// No log to fetch by default: a provider whose checks are commit statuses
+    /// published by an external CI (Woodpecker, Drone, Jenkins) holds neither
+    /// the logs nor credentials for the system that does. Saying so plainly is
+    /// the answer; GitHub overrides with a real fetch.
+    /// </summary>
+    public virtual Task<RemoteCiLog> GetCheckLogAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string checkId, int tailLines, int offset)
+        => Task.FromResult(RemoteCiLog.Unavailable(
+            $"No logs available for {ProviderType} — its checks are published by an external CI system this server has no credentials for."));
+
+    /// <summary>
+    /// The requested window of a log being streamed: <paramref name="tailLines"/>
+    /// lines ending <paramref name="offset"/> lines from the end, capped at
+    /// <see cref="MaxLogChars"/> characters. The cap drops from the front of the
+    /// window — the error is at the end — and is reported as
+    /// <see cref="RemoteCiLog.Truncated"/> so a caller pages rather than assumes
+    /// it saw everything.
+    ///
+    /// Reads line by line and holds only the lines the window could still need,
+    /// never the whole log: a CI log runs to tens of megabytes, and buffering
+    /// one to hand back 16k of it costs several times its size in strings. The
+    /// whole body is still read — the tail is the point, so there is no stopping
+    /// early — but memory stays bounded by
+    /// <see cref="MaxRetainedChars"/> however large the log is.
+    /// </summary>
+    protected static async Task<RemoteCiLog> WindowAsync(Stream log, int tailLines, int offset)
+    {
+        tailLines = Math.Max(1, tailLines);
+        offset = Math.Max(0, offset);
+
+        // The last (tailLines + offset) lines are all the window can be drawn
+        // from; anything older is counted and dropped as it goes past.
+        var keep = (long)tailLines + offset;
+        var retained = new Queue<string>();
+        var retainedChars = 0L;
+        var total = 0;
+        var dropped = false;
+
+        using var reader = new StreamReader(log);
+        while (await reader.ReadLineAsync() is { } line)
+        {
+            total++;
+            if (line.Length > MaxLineChars)
+                line = line[..MaxLineChars] + "…";
+
+            retained.Enqueue(line);
+            retainedChars += line.Length + 1;
+            while (retained.Count > keep || retainedChars > MaxRetainedChars)
+            {
+                retainedChars -= retained.Dequeue().Length + 1;
+                dropped = true;
+            }
+        }
+
+        // Retained holds the last N lines. Drop the offset region off the end,
+        // then the window is what remains (its most recent tailLines).
+        var window = retained.ToArray();
+        var end = Math.Max(0, window.Length - offset);
+        var start = Math.Max(0, end - tailLines);
+        window = window[start..end];
+
+        if (window.Length == 0)
+            return new RemoteCiLog(true, string.Empty, 0, offset, total,
+                Truncated: dropped || offset > 0,
+                Message: offset >= total
+                    ? $"The log has {total} lines; an offset of {offset} is past its start."
+                    : "That far back is beyond what one call can hold — lower the offset.");
+
+        var text = string.Join("\n", window);
+        var truncated = text.Length > MaxLogChars;
+        if (truncated)
+        {
+            text = text[^MaxLogChars..];
+            // Drop the partial first line so the window starts on a line boundary.
+            var firstBreak = text.IndexOf('\n');
+            if (firstBreak >= 0) text = text[(firstBreak + 1)..];
+        }
+
+        return new RemoteCiLog(
+            Available: true,
+            Text: text,
+            Lines: truncated ? text.Count(c => c == '\n') + 1 : window.Length,
+            Offset: offset,
+            TotalLines: total,
+            // Dropping older lines to stay inside the retention budget means the
+            // window starts higher than asked for — the same "there is more, ask
+            // again" the character cap reports.
+            Truncated: truncated || (dropped && start == 0 && window.Length < tailLines),
+            Message: null);
+    }
+
+    /// <summary>
+    /// Upper bound on one <c>get_ci_log</c> response. A CI log runs to
+    /// megabytes; this is a window an agent can read in one turn, and paging
+    /// backwards with <c>offset</c> is how it gets the rest.
+    /// </summary>
+    protected const int MaxLogChars = 16_000;
+
+    /// <summary>
+    /// Ceiling on what one read holds in memory while looking for the tail.
+    /// Generous enough to page a long way back, small enough that a pathological
+    /// log cannot be turned into a memory spike by asking for it.
+    /// </summary>
+    private const int MaxRetainedChars = 1_000_000;
+
+    /// <summary>
+    /// Longest single retained line. Build logs embed minified bundles and
+    /// base64 blobs on one line, which would otherwise fill the retention
+    /// budget by themselves.
+    /// </summary>
+    private const int MaxLineChars = 4_000;
+
+    /// <summary>A check run's own report: its output summary, then its longer text.</summary>
+    private static string? ReadCheckOutput(JsonElement run)
+    {
+        if (!run.TryGetProperty("output", out var output) || output.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var parts = new[] { ReadString(output, "summary"), ReadString(output, "text") }
+            .Where(p => !string.IsNullOrWhiteSpace(p));
+        return Truncate(string.Join("\n\n", parts), MaxCheckSummaryLength);
+    }
+
+    private static string? Truncate(string? value, int max)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var trimmed = value.Trim();
+        return trimmed.Length <= max ? trimmed : trimmed[..max] + "…";
     }
 
     private async Task<IReadOnlyList<RemotePrConversationEntry>> ReadConversationAsync(
