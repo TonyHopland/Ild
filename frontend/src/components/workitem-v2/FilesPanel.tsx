@@ -8,6 +8,8 @@ import {
 import { workItemService } from "../../services/auth";
 import { buildFileTree, FileTreeNode } from "../../utils/fileTree";
 import { parseUnifiedDiff } from "../../utils/unifiedDiff";
+import { highlightLines } from "../../utils/syntaxHighlight";
+import MarkdownRenderer from "../MarkdownRenderer";
 
 const STATUS_BADGE: Record<Exclude<WorktreeFileChangeStatus, "none">, string> = {
   added: "A",
@@ -16,10 +18,45 @@ const STATUS_BADGE: Record<Exclude<WorktreeFileChangeStatus, "none">, string> = 
 };
 
 /**
+ * What the viewer draws. "Preview" is offered for markdown only, so the mode is
+ * not free to be anything at any time — see {@link resolveViewMode}.
+ */
+type ViewMode = "code" | "diff" | "preview";
+
+const VIEW_MODE_LABEL: Record<ViewMode, string> = {
+  code: "Code",
+  diff: "Diff",
+  preview: "Preview",
+};
+
+function isMarkdownPath(path: string): boolean {
+  const lower = path.toLowerCase();
+  return lower.endsWith(".md") || lower.endsWith(".markdown");
+}
+
+/** The modes the toolbar offers for a file: Preview joins them for markdown. */
+function offeredViewModes(path: string): ViewMode[] {
+  return isMarkdownPath(path) ? ["code", "diff", "preview"] : ["code", "diff"];
+}
+
+/**
+ * The mode the viewer actually renders in. The chosen mode is kept as the user
+ * clicks through files — a reviewer reading diffs wants the next file's diff
+ * too — but "Preview" only exists for markdown, so selecting a non-markdown file
+ * falls back to Code without discarding the choice: the next markdown file
+ * previews again.
+ */
+function resolveViewMode(mode: ViewMode, path: string | null): ViewMode {
+  if (mode === "preview" && !(path && isMarkdownPath(path))) return "code";
+  return mode;
+}
+
+/**
  * Files tab: a Visual-Studio-style explorer with a file tree on the left and a
  * read-only viewer on the right. The tree toggles between every file ("All")
  * and only files that differ from the base branch ("Changes", PR style); the
- * viewer toggles between the full file ("Code") and its unified diff ("Diff").
+ * viewer toggles between the full file ("Code"), its unified diff ("Diff") and,
+ * for markdown, the rendered document ("Preview").
  */
 export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   const [files, setFiles] = useState<WorktreeFileEntry[]>([]);
@@ -40,7 +77,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   const [content, setContent] = useState<WorktreeFileContent | null>(null);
   const [contentLoading, setContentLoading] = useState(false);
   const [contentError, setContentError] = useState<string | null>(null);
-  const [showDiff, setShowDiff] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>("code");
 
   const refresh = useCallback(
     async (showLoading: boolean) => {
@@ -147,6 +184,8 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
     [changesOnly, toggledFolders],
   );
 
+  const mode = resolveViewMode(viewMode, selectedPath);
+
   if (!workItem.worktreePath) {
     return (
       <div className="wiv2-empty">
@@ -237,22 +276,17 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
           <span className="wiv2-files-viewer-path">{selectedPath ?? "No file selected"}</span>
           {selectedPath && (
             <div className="wiv2-toggle-group" role="group" aria-label="Viewer mode">
-              <button
-                type="button"
-                className={`wiv2-toggle${!showDiff ? " wiv2-toggle-active" : ""}`}
-                onClick={() => setShowDiff(false)}
-                aria-pressed={!showDiff}
-              >
-                Code
-              </button>
-              <button
-                type="button"
-                className={`wiv2-toggle${showDiff ? " wiv2-toggle-active" : ""}`}
-                onClick={() => setShowDiff(true)}
-                aria-pressed={showDiff}
-              >
-                Diff
-              </button>
+              {offeredViewModes(selectedPath).map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  className={`wiv2-toggle${mode === option ? " wiv2-toggle-active" : ""}`}
+                  onClick={() => setViewMode(option)}
+                  aria-pressed={mode === option}
+                >
+                  {VIEW_MODE_LABEL[option]}
+                </button>
+              ))}
             </div>
           )}
         </div>
@@ -262,7 +296,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
             content={content}
             loading={contentLoading}
             error={contentError}
-            showDiff={showDiff}
+            mode={mode}
           />
         </div>
       </div>
@@ -275,13 +309,13 @@ function FileViewer({
   content,
   loading,
   error,
-  showDiff,
+  mode,
 }: {
   selectedPath: string | null;
   content: WorktreeFileContent | null;
   loading: boolean;
   error: string | null;
-  showDiff: boolean;
+  mode: ViewMode;
 }) {
   if (!selectedPath) {
     return <div className="wiv2-empty">Select a file to view its contents.</div>;
@@ -296,11 +330,19 @@ function FileViewer({
     return <div className="wiv2-empty">No content.</div>;
   }
 
-  if (showDiff) {
+  if (mode === "diff") {
     if (!content.diff) {
       return <div className="wiv2-empty">No changes in this file.</div>;
     }
     return <DiffView diff={content.diff} />;
+  }
+
+  if (mode === "preview" && content.content) {
+    return (
+      <div className="wiv2-file-markdown">
+        <MarkdownRenderer content={content.content} />
+      </div>
+    );
   }
 
   if (content.imageMimeType && content.imageBase64) {
@@ -318,7 +360,7 @@ function FileViewer({
   if (content.content === null) {
     return <div className="wiv2-empty">This file has no content to display.</div>;
   }
-  return <CodeView code={content.content} />;
+  return <CodeView code={content.content} path={content.path} />;
 }
 
 /**
@@ -334,16 +376,30 @@ function ImageView({ mimeType, base64, path }: { mimeType: string; base64: strin
   );
 }
 
-function CodeView({ code }: { code: string }) {
-  // Drop a single trailing newline so a file's final blank line doesn't render
-  // as a spurious empty numbered row.
-  const lines = code.replace(/\n$/, "").split("\n");
+/**
+ * The file itself, numbered and syntax-coloured. {@link highlightLines} decides
+ * the language from the path and hands back one token list per line — a single
+ * unclassified token for a file it has no grammar for, so an unknown extension
+ * renders exactly as it always has, as bare text inside the line box.
+ */
+function CodeView({ code, path }: { code: string; path: string }) {
+  const lines = useMemo(() => highlightLines(code, path), [code, path]);
   return (
     <pre className="wiv2-code">
-      {lines.map((line, i) => (
+      {lines.map((tokens, i) => (
         <div key={i} className="wiv2-code-line">
           <span className="wiv2-code-gutter">{i + 1}</span>
-          <span className="wiv2-code-text">{line}</span>
+          <span className="wiv2-code-text">
+            {tokens.map((token, j) =>
+              token.className ? (
+                <span key={j} className={token.className}>
+                  {token.text}
+                </span>
+              ) : (
+                token.text
+              ),
+            )}
+          </span>
         </div>
       ))}
     </pre>

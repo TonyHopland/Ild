@@ -327,6 +327,194 @@ describe("FilesPanel", () => {
   });
 });
 
+describe("FilesPanel markdown preview", () => {
+  function mockFiles(paths: string[], content: string) {
+    vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: paths.map((path) => ({ path, changeStatus: "modified" as const })),
+    });
+    vi.spyOn(authServices.workItemService, "getFileContent").mockImplementation(
+      async (_id: string, path: string) => ({
+        path,
+        changeStatus: "modified" as const,
+        content,
+        diff: null,
+        isBinary: false,
+        imageMimeType: null,
+        imageBase64: null,
+      }),
+    );
+  }
+
+  async function open(name: string) {
+    await act(async () => {
+      fireEvent.click(screen.getByText(name));
+      await Promise.resolve();
+    });
+  }
+
+  async function click(name: string) {
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name }));
+      await Promise.resolve();
+    });
+  }
+
+  test("offers Preview for markdown only, and renders the document when chosen", async () => {
+    mockFiles(["notes.md", "a.ts"], "# Title\n\nbody text");
+    await renderPanel(makeWorkItem());
+
+    await open("notes.md");
+    expect(screen.getByRole("button", { name: "Preview" })).toBeTruthy();
+    // Code stays the default — a reviewer opening a file is reading changes,
+    // not a rendered document.
+    expect(document.querySelector(".wiv2-code")).toBeTruthy();
+    expect(document.querySelector(".markdown-body")).toBeNull();
+
+    await click("Preview");
+    const heading = screen.getByRole("heading", { name: "Title" });
+    expect(heading.tagName).toBe("H1");
+    expect(document.querySelector(".wiv2-code")).toBeNull();
+
+    // A non-markdown file has no Preview to offer.
+    await open("a.ts");
+    expect(screen.queryByRole("button", { name: "Preview" })).toBeNull();
+  });
+
+  test("falls back to Code when a preview-mode selection lands on a non-markdown file", async () => {
+    mockFiles(["notes.md", "a.ts"], "# Title");
+    await renderPanel(makeWorkItem());
+
+    await open("notes.md");
+    await click("Preview");
+    expect(document.querySelector(".markdown-body")).toBeTruthy();
+
+    // Selecting a file with no preview must not strand the viewer: it shows the
+    // code and marks Code as the active toggle.
+    await open("a.ts");
+    expect(document.querySelector(".markdown-body")).toBeNull();
+    expect(document.querySelector(".wiv2-code")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Code" }).getAttribute("aria-pressed")).toBe("true");
+
+    // Going back to markdown restores the preview the user asked for.
+    await open("notes.md");
+    expect(document.querySelector(".markdown-body")).toBeTruthy();
+  });
+
+  test("keeps the Diff mode as the user clicks through files", async () => {
+    vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: [
+        { path: "a.ts", changeStatus: "modified" },
+        { path: "b.ts", changeStatus: "modified" },
+      ],
+    });
+    vi.spyOn(authServices.workItemService, "getFileContent").mockImplementation(
+      async (_id: string, path: string) => ({
+        path,
+        changeStatus: "modified" as const,
+        content: "unused",
+        diff: `@@ -1 +1 @@\n+from ${path}`,
+        isBinary: false,
+        imageMimeType: null,
+        imageBase64: null,
+      }),
+    );
+
+    await renderPanel(makeWorkItem());
+    await open("a.ts");
+    await click("Diff");
+    expect(screen.getByText("+from a.ts")).toBeTruthy();
+
+    await open("b.ts");
+    expect(screen.getByText("+from b.ts")).toBeTruthy();
+  });
+});
+
+describe("FilesPanel syntax highlighting", () => {
+  async function showCode(path: string, content: string) {
+    vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: [{ path, changeStatus: "modified" }],
+    });
+    vi.spyOn(authServices.workItemService, "getFileContent").mockResolvedValue({
+      path,
+      changeStatus: "modified",
+      content,
+      diff: null,
+      isBinary: false,
+      imageMimeType: null,
+      imageBase64: null,
+    });
+
+    await renderPanel(makeWorkItem());
+    // Folders start collapsed, so walk down to the file one segment at a time.
+    for (const segment of path.split("/")) {
+      await act(async () => {
+        fireEvent.click(screen.getByText(segment));
+        await Promise.resolve();
+      });
+    }
+    return Array.from(document.querySelectorAll(".wiv2-code-line"));
+  }
+
+  test("colours a file by the language its path implies", async () => {
+    const [line] = await showCode("src/a.ts", "const answer = 42;");
+
+    const classes = Array.from(line.querySelectorAll("span[class^='hljs']")).map((span) => [
+      span.className,
+      span.textContent,
+    ]);
+    expect(classes).toContainEqual(["hljs-keyword", "const"]);
+    expect(classes).toContainEqual(["hljs-number", "42"]);
+    // Splitting a line into spans must not change what it reads or copies as.
+    expect(line.textContent).toBe("1const answer = 42;");
+  });
+
+  test("keeps a multi-line token coloured on every line it spans", async () => {
+    // The whole file is highlighted once and the tokens are then cut at
+    // newlines; tokenizing line by line would end the comment at the first
+    // newline and leave the rest of it plain.
+    const lines = await showCode("src/a.ts", "/* one\n   two */\nlet x;");
+
+    const comment = (row: Element) =>
+      Array.from(row.querySelectorAll(".hljs-comment")).map((span) => span.textContent);
+    expect(comment(lines[0])).toEqual(["/* one"]);
+    expect(comment(lines[1])).toEqual(["   two */"]);
+    expect(comment(lines[2])).toEqual([]);
+  });
+
+  test("renders an unmapped extension as plain numbered lines", async () => {
+    const lines = await showCode("notes.wat", "some prose\nmore prose");
+
+    expect(document.querySelectorAll("[class^='hljs']")).toHaveLength(0);
+    expect(lines.map((line) => line.querySelector(".wiv2-code-text")?.textContent)).toEqual([
+      "some prose",
+      "more prose",
+    ]);
+    expect(lines.map((line) => line.querySelector(".wiv2-code-gutter")?.textContent)).toEqual([
+      "1",
+      "2",
+    ]);
+  });
+
+  test("leaves a file too large to highlight as plain numbered lines", async () => {
+    // Highlighting is one synchronous pass over the whole file, so past the size
+    // cap it is skipped rather than stalling the dialog on a generated blob.
+    const code = `const a = ${"1".repeat(300_001)};`;
+    const [line] = await showCode("big.ts", code);
+
+    expect(line.querySelectorAll("[class^='hljs']")).toHaveLength(0);
+    // The file is still shown in full, just uncoloured.
+    expect(line.querySelector(".wiv2-code-text")?.textContent).toHaveLength(code.length);
+  });
+
+  test("numbers every line of a file that ends in a newline without adding one", async () => {
+    const lines = await showCode("src/a.ts", "let a;\nlet b;\n");
+    expect(lines).toHaveLength(2);
+  });
+});
+
 /**
  * The rendering contract only — which rows the parse produces, and why, is
  * pinned directly in `utils/__tests__/unifiedDiff.test.ts`. What matters here is
