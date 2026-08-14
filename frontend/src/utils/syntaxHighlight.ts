@@ -6,6 +6,7 @@ import dockerfile from "highlight.js/lib/languages/dockerfile";
 import ini from "highlight.js/lib/languages/ini";
 import javascript from "highlight.js/lib/languages/javascript";
 import json from "highlight.js/lib/languages/json";
+import makefile from "highlight.js/lib/languages/makefile";
 import markdown from "highlight.js/lib/languages/markdown";
 import python from "highlight.js/lib/languages/python";
 import sql from "highlight.js/lib/languages/sql";
@@ -27,6 +28,7 @@ const lowlight = createLowlight({
   ini,
   javascript,
   json,
+  makefile,
   markdown,
   python,
   sql,
@@ -58,6 +60,7 @@ const LANGUAGE_BY_EXTENSION: Record<string, string> = {
   markdown: "markdown",
   md: "markdown",
   mjs: "javascript",
+  mk: "makefile",
   mts: "typescript",
   props: "xml",
   py: "python",
@@ -85,7 +88,7 @@ const MAX_HIGHLIGHT_CHARS = 300_000;
 /** Files whose whole name, not extension, names the language. */
 const LANGUAGE_BY_FILENAME: Record<string, string> = {
   dockerfile: "dockerfile",
-  makefile: "bash",
+  makefile: "makefile",
 };
 
 /**

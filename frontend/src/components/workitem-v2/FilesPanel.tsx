@@ -337,7 +337,10 @@ function FileViewer({
     return <DiffView diff={content.diff} />;
   }
 
-  if (mode === "preview" && content.content) {
+  // An empty markdown file previews as an empty document. Falling through to the
+  // code view instead would leave the toolbar claiming Preview over a pane
+  // showing something else.
+  if (mode === "preview" && content.content !== null) {
     return (
       <div className="wiv2-file-markdown">
         <MarkdownRenderer content={content.content} />

@@ -401,6 +401,21 @@ describe("FilesPanel markdown preview", () => {
     expect(document.querySelector(".markdown-body")).toBeTruthy();
   });
 
+  test("previews an empty markdown file as an empty document, not as code", async () => {
+    mockFiles(["empty.md"], "");
+    await renderPanel(makeWorkItem());
+
+    await open("empty.md");
+    await click("Preview");
+
+    // The toolbar says Preview, so the pane must not quietly show the code view.
+    expect(screen.getByRole("button", { name: "Preview" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(document.querySelector(".wiv2-file-markdown")).toBeTruthy();
+    expect(document.querySelector(".wiv2-code")).toBeNull();
+  });
+
   test("keeps the Diff mode as the user clicks through files", async () => {
     vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
       worktreePath: "/tmp/wt",
