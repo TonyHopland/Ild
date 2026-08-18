@@ -337,17 +337,6 @@ function FileViewer({
     return <DiffView diff={content.diff} />;
   }
 
-  // An empty markdown file previews as an empty document. Falling through to the
-  // code view instead would leave the toolbar claiming Preview over a pane
-  // showing something else.
-  if (mode === "preview" && content.content !== null) {
-    return (
-      <div className="wiv2-file-markdown">
-        <MarkdownRenderer content={content.content} />
-      </div>
-    );
-  }
-
   if (content.imageMimeType && content.imageBase64) {
     return (
       <ImageView
@@ -360,6 +349,20 @@ function FileViewer({
   if (content.isBinary) {
     return <div className="wiv2-empty">Binary file — preview not available.</div>;
   }
+
+  // Preview ranks below the guards above rather than over them: a file the
+  // server could not hand over as text has nothing to render as a document,
+  // whatever its name ends in. An empty markdown file does — it previews as an
+  // empty document rather than falling through to the code view, which would
+  // leave the toolbar claiming Preview over a pane showing something else.
+  if (mode === "preview" && content.content !== null) {
+    return (
+      <div className="wiv2-file-markdown">
+        <MarkdownRenderer content={content.content} />
+      </div>
+    );
+  }
+
   if (content.content === null) {
     return <div className="wiv2-empty">This file has no content to display.</div>;
   }

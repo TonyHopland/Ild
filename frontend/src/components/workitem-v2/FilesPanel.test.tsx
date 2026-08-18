@@ -416,6 +416,30 @@ describe("FilesPanel markdown preview", () => {
     expect(document.querySelector(".wiv2-code")).toBeNull();
   });
 
+  test("shows the binary notice for a markdown-suffixed binary rather than previewing it", async () => {
+    vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: [{ path: "odd.md", changeStatus: "added" }],
+    });
+    vi.spyOn(authServices.workItemService, "getFileContent").mockResolvedValue({
+      path: "odd.md",
+      changeStatus: "added",
+      // A markdown suffix over bytes the server could not hand back as text.
+      content: "\u0000# not really markdown",
+      diff: null,
+      isBinary: true,
+      imageMimeType: null,
+      imageBase64: null,
+    });
+
+    await renderPanel(makeWorkItem());
+    await open("odd.md");
+    await click("Preview");
+
+    expect(screen.getByText(/Binary file/)).toBeTruthy();
+    expect(document.querySelector(".wiv2-file-markdown")).toBeNull();
+  });
+
   test("keeps the Diff mode as the user clicks through files", async () => {
     vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
       worktreePath: "/tmp/wt",
