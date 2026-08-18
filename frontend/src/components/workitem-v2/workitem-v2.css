@@ -904,6 +904,92 @@
   white-space: pre;
 }
 
+/* ---------- syntax highlighting ---------- */
+
+/* Token colours for the highlight.js class vocabulary, scoped to the code view
+   so nothing else on the page inherits a theme. The tokens are inline spans
+   inside a `white-space: pre` line box and carry no box of their own, so they
+   cannot change a line's width or let it wrap — the horizontal scroll the rules
+   above set up is untouched.
+
+   Dark theme only, like the rest of the dialog: every colour below is at least
+   5.4:1 against the panel's #1e1e30, the dimmest being the deliberately
+   receding comment grey. */
+.wiv2-code .hljs-comment,
+.wiv2-code .hljs-quote {
+  color: #8b93b8;
+  font-style: italic;
+}
+
+.wiv2-code .hljs-keyword,
+.wiv2-code .hljs-literal,
+.wiv2-code .hljs-selector-tag,
+.wiv2-code .hljs-doctag {
+  color: #c792ea;
+}
+
+.wiv2-code .hljs-string,
+.wiv2-code .hljs-regexp,
+.wiv2-code .hljs-char,
+.wiv2-code .hljs-addition {
+  color: #9ee493;
+}
+
+.wiv2-code .hljs-number,
+.wiv2-code .hljs-symbol,
+.wiv2-code .hljs-bullet,
+.wiv2-code .hljs-link {
+  color: #f5a97f;
+}
+
+.wiv2-code .hljs-title,
+.wiv2-code .hljs-section,
+.wiv2-code .hljs-name,
+.wiv2-code .hljs-selector-id,
+.wiv2-code .hljs-selector-class {
+  color: #82aaff;
+}
+
+.wiv2-code .hljs-attr,
+.wiv2-code .hljs-attribute,
+.wiv2-code .hljs-property,
+.wiv2-code .hljs-variable,
+.wiv2-code .hljs-template-variable {
+  color: #ffcb6b;
+}
+
+/* Types and built-ins, including the class-name form highlight.js marks with a
+   second class (`hljs-title class_`) rather than nesting. */
+.wiv2-code .hljs-type,
+.wiv2-code .hljs-built_in,
+.wiv2-code .hljs-title.class_ {
+  color: #7fdbca;
+}
+
+.wiv2-code .hljs-meta {
+  color: #b3c3ff;
+}
+
+.wiv2-code .hljs-deletion {
+  color: #f07178;
+}
+
+.wiv2-code .hljs-emphasis {
+  font-style: italic;
+}
+
+.wiv2-code .hljs-strong {
+  font-weight: 600;
+}
+
+/* The rendered document behind the Preview toggle. The renderer brings its own
+   typography (.markdown-body); all this adds is the reading margin a full-width
+   code viewer doesn't want. */
+.wiv2-file-markdown {
+  padding: 0.75rem 1rem;
+  max-width: 52rem;
+}
+
 .wiv2-diff-line {
   white-space: pre;
   padding: 0 0.75rem;
