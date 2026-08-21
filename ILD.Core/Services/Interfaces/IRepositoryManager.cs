@@ -36,10 +36,8 @@ public interface IRepositoryManager
 
     /// <summary>
     /// Bring <c>refs/remotes/origin/*</c> in line with the remote: every branch,
-    /// not just the checked-out one, and stale refs pruned. The agent uid cannot
-    /// authenticate to the remote itself (ADR-0014), so this is what lets it read
-    /// the state of any branch — the base it would merge, a colleague's branch —
-    /// from local refs afterwards. Local branches are untouched.
+    /// not just the checked-out one, and refs the remote no longer has pruned.
+    /// Local branches are untouched.
     /// </summary>
     Task<bool> FetchAsync(string worktreePath, CancellationToken cancellationToken = default, GitAuthOptions? auth = null);
 

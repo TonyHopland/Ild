@@ -777,10 +777,6 @@ public class WorkItemManagerTests
         return (id, worktree);
     }
 
-    /// <summary>
-    /// A base branch that exists on origin and has moved on: <paramref name="behind"/>
-    /// commits this branch does not have, <paramref name="ahead"/> the other way.
-    /// </summary>
     private static void SetupBase(
         Mock<IRepositoryManager> repoMgr, string worktree, string baseBranch, int behind, int ahead)
     {
@@ -908,8 +904,6 @@ public class WorkItemManagerTests
             // stashing would swallow the agent's in-flight work.
             repoMgr.Verify(r => r.FetchAsync(It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Never);
             repoMgr.Verify(r => r.RebaseAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
-            // And nothing is claimed about the base: without the fetch, any count
-            // would be measured against a remote-tracking ref of unknown age.
             Assert.Null(result.BaseBranch);
             Assert.Null(result.BehindBase);
         }
@@ -1017,14 +1011,9 @@ public class WorkItemManagerTests
     }
 
     // ── PullBranchAsync: the base-branch axis ──────────────────────────────
-    //
-    // The fetch above refreshes every remote-tracking ref, base branch included,
-    // so the same call can answer the question the pull leaves open: does this
-    // branch need the base merged in? It only ever answers it — merging onto the
-    // base stays the Start node's job (ADR-0006).
 
     [Fact]
-    public async Task PullBranch_reports_how_far_the_branch_has_fallen_behind_its_base()
+    public async Task PullBranch_reports_how_far_the_branch_has_fallen_behind_its_base_while_level_with_its_own_remote()
     {
         var (mgr, db, repoId, repoMgr, _) = Setup();
         using var _ = db;
@@ -1038,14 +1027,11 @@ public class WorkItemManagerTests
 
             Assert.Equal(PullBranchOutcome.AlreadyUpToDate, result.Outcome);
             Assert.True(result.Success);
-            // The two axes are independent: up to date with its own remote, and
-            // still three commits behind the branch it will merge into.
             Assert.Equal("develop", result.BaseBranch);
             Assert.Equal(3, result.BehindBase);
             Assert.Equal(2, result.AheadOfBase);
             Assert.Contains("3 commits behind origin/develop", result.Message);
             Assert.Contains("2 commits ahead", result.Message);
-            // Reporting only — the base is never rebased onto.
             repoMgr.Verify(r => r.RebaseAsync(It.IsAny<string>(), "origin/develop", It.IsAny<CancellationToken>()), Times.Never);
         }
         finally
@@ -1059,8 +1045,6 @@ public class WorkItemManagerTests
     {
         var (mgr, db, repoId, repoMgr, _) = Setup();
         using var _ = db;
-        // The run was started from a release branch; the repository's default is
-        // irrelevant to it, and per ADR-0008 the pin is what counts.
         var (id, worktree) = await SeedWorktreeWorkItemAsync(
             mgr, db, repoId, defaultBranch: "main", baseBranchOverride: "release/2.0");
         try
@@ -1094,8 +1078,6 @@ public class WorkItemManagerTests
 
             var result = await mgr.PullBranchAsync(id);
 
-            // Measured — the count says so — but not worth a sentence: a caller
-            // told "0 behind" on every pull learns to skip the one that matters.
             Assert.Equal(0, result.BehindBase);
             Assert.Equal("main", result.BaseBranch);
             Assert.DoesNotContain("behind origin/main", result.Message);
@@ -1118,8 +1100,6 @@ public class WorkItemManagerTests
 
             var result = await mgr.PullBranchAsync(id);
 
-            // A branch is neither ahead of nor behind itself. The name still comes
-            // back, so the caller can tell "nothing to compare" from "never looked".
             Assert.Equal(PullBranchName, result.BaseBranch);
             Assert.Null(result.BehindBase);
             Assert.Null(result.AheadOfBase);
@@ -1147,7 +1127,6 @@ public class WorkItemManagerTests
             Assert.Equal(PullBranchOutcome.AlreadyUpToDate, result.Outcome);
             Assert.Equal("main", result.BaseBranch);
             Assert.Null(result.BehindBase);
-            // Counting against a ref that is not there would report a confident 0.
             repoMgr.Verify(r => r.GetCommitsBehindCountAsync(worktree, "origin/main"), Times.Never);
         }
         finally
@@ -1157,7 +1136,7 @@ public class WorkItemManagerTests
     }
 
     [Fact]
-    public async Task PullBranch_measures_the_base_after_the_rebase_has_moved_HEAD()
+    public async Task PullBranch_compares_with_the_base_only_after_the_rebase_has_moved_HEAD()
     {
         var (mgr, db, repoId, repoMgr, _) = Setup();
         using var _ = db;
@@ -1168,21 +1147,18 @@ public class WorkItemManagerTests
             SetupBase(repoMgr, worktree, "main", behind: 5, ahead: 1);
 
             var rebased = false;
-            bool? rebasedWhenMeasured = null;
+            bool? rebasedWhenCompared = null;
             repoMgr.Setup(r => r.RebaseAsync(worktree, PullUpstream, It.IsAny<CancellationToken>()))
                 .Callback(() => rebased = true)
                 .ReturnsAsync(new RebaseResult(true, Array.Empty<string>(), null));
             repoMgr.Setup(r => r.GetCommitsBehindCountAsync(worktree, "origin/main"))
-                .Callback(() => rebasedWhenMeasured = rebased)
+                .Callback(() => rebasedWhenCompared = rebased)
                 .ReturnsAsync(5);
 
             var result = await mgr.PullBranchAsync(id);
 
             Assert.Equal(PullBranchOutcome.Updated, result.Outcome);
-            // The rebase moves HEAD, and the commits it picked up may themselves
-            // contain the base — measuring before it would report a divergence the
-            // pull has already changed.
-            Assert.True(rebasedWhenMeasured);
+            Assert.True(rebasedWhenCompared);
             Assert.Equal(5, result.BehindBase);
             Assert.Contains("picking up 2 new commits", result.Message);
             Assert.Contains("5 commits behind origin/main", result.Message);

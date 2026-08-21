@@ -108,13 +108,6 @@ public class RepositoryManager : IRepositoryManager
 
     public async Task<bool> FetchAsync(string worktreePath, CancellationToken cancellationToken = default, GitAuthOptions? auth = null)
     {
-        // Every branch, spelled out, rather than whatever refspec the clone happens
-        // to carry: this is the only authenticated look at the remote an agent gets
-        // (ADR-0014), so it has to leave refs/remotes/origin/* a faithful copy of
-        // the remote — a branch nobody has fetched before included. --prune is the
-        // other half of faithful: a branch deleted on the remote (a merged PR, say)
-        // must not linger as a remote-tracking ref that later reads mistake for a
-        // live branch.
         var (code, _, _) = await RunAsync(
             worktreePath,
             new[] { "fetch", "origin", "--prune", "+refs/heads/*:refs/remotes/origin/*" },

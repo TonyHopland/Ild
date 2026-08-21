@@ -473,8 +473,6 @@ describe("WorkItemModalV2", () => {
 
   test("overview pull branch reports the branch falling behind its base", async () => {
     mockServices();
-    // The server words the divergence into the message, so every surface — this
-    // panel, the MCP tool, the agent API — says it the same way.
     vi.spyOn(authServices.workItemService, "pullBranch").mockResolvedValue({
       outcome: "AlreadyUpToDate",
       success: true,
@@ -497,8 +495,6 @@ describe("WorkItemModalV2", () => {
       await Promise.resolve();
     });
 
-    // A pull that succeeded, so it reads as a message and not an error — being
-    // behind the base is information, not a failure.
     expect(screen.getByText(/3 commits behind origin\/main/)).toBeTruthy();
   });
 
@@ -512,7 +508,6 @@ describe("WorkItemModalV2", () => {
       branch: "ild/wi-1-run-1",
       message: "Cannot pull 'ild/wi-1-run-1': the worktree has uncommitted changes to src/App.tsx.",
       files: ["src/App.tsx"],
-      // Nothing was fetched, so nothing is claimed about the base.
       baseBranch: null,
       behindBase: null,
       aheadOfBase: null,

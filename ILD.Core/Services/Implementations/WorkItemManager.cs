@@ -1030,13 +1030,6 @@ public class WorkItemManager : IWorkItemManager
         // The rebase below only ever touches local refs, so this fetch is the one
         // step that needs the repository's credentials — which is exactly what the
         // agent uid cannot supply for itself (ADR-0014).
-        //
-        // It is also what refreshes the base branch, and every other one: the fetch
-        // syncs all of refs/remotes/origin/* (see IRepositoryManager.FetchAsync), so
-        // origin/<base> moves here too, MeasureBaseDivergenceAsync below compares
-        // against the remote's current base rather than a stale one, and an agent
-        // that cannot reach the remote itself can read any branch from local refs
-        // afterwards. Nothing extra to fetch.
         if (!await _repoManager.FetchAsync(ctx.WorktreePath, cancellationToken, ctx.Auth))
             return new PullBranchResult(
                 PullBranchOutcome.Failed,
@@ -1044,10 +1037,6 @@ public class WorkItemManager : IWorkItemManager
                 "Failed to fetch origin — check the repository's credentials and connectivity.",
                 []);
 
-        // Every outcome from here on carries the base comparison, and takes it at
-        // the end rather than here: on the Updated path the rebase below has moved
-        // HEAD by then, so an earlier reading would report a divergence the pull
-        // itself has already changed.
         if (!await _repoManager.RemoteBranchExistsAsync(ctx.WorktreePath, ctx.Branch))
             return await ReportAsync(
                 ctx,
@@ -1103,78 +1092,52 @@ public class WorkItemManager : IWorkItemManager
             []);
     }
 
-    /// <summary>
-    /// Finish a pull: take the base comparison and fold it into the result, both
-    /// as fields and — when the base has moved ahead — as a clause on the message,
-    /// so no surface has to word the divergence for itself.
-    /// </summary>
+    // Called once the branch has settled, never before: the comparison reads HEAD,
+    // which the rebase above moves.
     private async Task<PullBranchResult> ReportAsync(
         BranchContext ctx, PullBranchOutcome outcome, string message, IReadOnlyList<string> files)
     {
-        var divergence = await MeasureBaseDivergenceAsync(ctx);
+        var comparison = await CompareWithBaseBranchAsync(ctx);
         return new PullBranchResult(
             outcome,
             ctx.Branch,
-            divergence.Notice is { } notice ? $"{message} {notice}" : message,
+            comparison.BehindBaseNotice is { } notice ? $"{message} {notice}" : message,
             files,
-            divergence.BaseBranch,
-            divergence.Behind,
-            divergence.Ahead);
+            comparison.BaseBranch,
+            comparison.Behind,
+            comparison.Ahead);
     }
 
-    /// <summary>
-    /// Where the run branch stands against the freshly fetched
-    /// <c>origin/&lt;base&gt;</c>, so the caller can decide whether a merge is
-    /// needed. Counts are null when the question has no answer — the run branch
-    /// IS the base, or the base has no remote counterpart — and everything is
-    /// null when no run holds this worktree to pin a base.
-    /// </summary>
-    private readonly record struct BaseDivergence(string? BaseBranch, int? Behind, int? Ahead)
+    private readonly record struct BaseComparison(string? BaseBranch, int? Behind, int? Ahead)
     {
-        public static BaseDivergence Unknown => default;
+        public static BaseComparison NotMade => default;
 
-        /// <summary>
-        /// The clause appended to the pull's own message, or null when there is
-        /// nothing to act on. Only a base that has moved ahead earns words: a
-        /// caller told "0 behind" on every pull learns to skip the sentence that
-        /// matters, and the structured fields still report the in-sync case.
-        /// </summary>
-        public string? Notice => Behind is > 0
-            ? $"The base branch has moved on: this branch is {Plural(Behind.Value, "commit")} behind origin/{BaseBranch}"
-              + (Ahead is > 0 ? $" and {Plural(Ahead.Value, "commit")} ahead" : string.Empty)
+        public static BaseComparison NoAnswerFor(string baseBranch) => new(baseBranch, null, null);
+
+        public string? BehindBaseNotice => Behind is > 0
+            ? $"The base branch has moved on: this branch is {Commits(Behind.Value)} behind origin/{BaseBranch}"
+              + (Ahead is > 0 ? $" and {Commits(Ahead.Value)} ahead" : string.Empty)
               + ". Merge or rebase onto it yourself if you need those changes — pulling does not."
             : null;
 
-        private static string Plural(int count, string noun) => $"{count} {noun}{(count == 1 ? "" : "s")}";
+        private static string Commits(int count) => $"{count} commit{(count == 1 ? "" : "s")}";
     }
 
-    /// <summary>
-    /// Compare the run branch with its base branch's remote-tracking ref. Only
-    /// remote-tracking refs are read: the local base ref lives in the shared base
-    /// clone, may be checked out there, and is not this call's to move.
-    /// </summary>
-    private async Task<BaseDivergence> MeasureBaseDivergenceAsync(BranchContext ctx)
+    private async Task<BaseComparison> CompareWithBaseBranchAsync(BranchContext ctx)
     {
-        // The base a run was built on is pinned onto the run at creation
-        // (ADR-0006/ADR-0008), so it is read from the run holding this worktree
-        // and never from the work item, whose override may have been edited since
-        // — that edit only reaches the item's next run. No run, no pinned base:
-        // the pull itself still stands, there is simply nothing to compare to.
+        // ADR-0008: the base is pinned on the run, so an override edited mid-run
+        // must not redirect a run already under way.
         var run = await _loopRunStore.GetByWorktreePathAsync(ctx.WorktreePath);
         if (run is null)
-            return BaseDivergence.Unknown;
+            return BaseComparison.NotMade;
 
         var baseBranch = RunBaseBranch.Resolve(run, ctx.Repository);
-
-        // A branch is neither ahead of nor behind itself, and a base that was
-        // never pushed has no ref to count against. Both still name the base, so
-        // the caller can tell "nothing to compare" from "never looked".
-        if (string.Equals(baseBranch, ctx.Branch, StringComparison.Ordinal)
-            || !await _repoManager.RemoteBranchExistsAsync(ctx.WorktreePath, baseBranch))
-            return new BaseDivergence(baseBranch, null, null);
+        var branchIsTheBase = string.Equals(baseBranch, ctx.Branch, StringComparison.Ordinal);
+        if (branchIsTheBase || !await _repoManager.RemoteBranchExistsAsync(ctx.WorktreePath, baseBranch))
+            return BaseComparison.NoAnswerFor(baseBranch);
 
         var baseUpstream = $"origin/{baseBranch}";
-        return new BaseDivergence(
+        return new BaseComparison(
             baseBranch,
             await _repoManager.GetCommitsBehindCountAsync(ctx.WorktreePath, baseUpstream),
             await _repoManager.GetCommitsAheadCountAsync(ctx.WorktreePath, baseUpstream));

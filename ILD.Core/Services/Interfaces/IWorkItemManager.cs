@@ -120,11 +120,10 @@ public interface IWorkItemManager
     /// rebasing the worktree's branch onto <c>origin/&lt;branch&gt;</c>.
     ///
     /// <para>
-    /// The same fetch refreshes the run's base branch, and the result reports how
-    /// the run branch stands against <c>origin/&lt;base&gt;</c> so the caller can
-    /// decide whether a merge is needed. Deciding is all it does: nothing is merged
-    /// or rebased onto the base here — syncing onto it is the Start node's job
-    /// (ADR-0006).
+    /// The same fetch refreshes every other branch, the run's base included, and the
+    /// result reports how the run branch stands against <c>origin/&lt;base&gt;</c>.
+    /// Nothing is merged or rebased onto the base here — that is the Start node's
+    /// job (ADR-0006).
     /// </para>
     ///
     /// <para>
@@ -217,15 +216,11 @@ public enum PullBranchOutcome
 /// <see cref="PullBranchOutcome.DirtyWorktree"/> — and is empty otherwise.
 ///
 /// <para>
-/// <paramref name="BaseBranch"/>, <paramref name="BehindBase"/> and
-/// <paramref name="AheadOfBase"/> answer the separate question the pull leaves
-/// open: whether the run branch needs the base branch merged in. They sit
-/// alongside <paramref name="Outcome"/> rather than inside it because the two
-/// axes are independent — a pull can be up to date with its own remote and still
-/// be ten commits behind the base. All three are null when the comparison was
-/// not made (the pull never reached the fetch, or no run pins a base); the
-/// counts alone are null when the question has no answer (the run branch IS the
-/// base, or the base has no remote counterpart).
+/// <paramref name="BehindBase"/> and <paramref name="AheadOfBase"/> count against
+/// <c>origin/&lt;<paramref name="BaseBranch"/>&gt;</c>. All three are null when no
+/// comparison was made (the pull never reached the fetch, or no run pins a base);
+/// the counts alone are null when there is no answer to give (the run branch IS
+/// the base, or the base has no remote counterpart).
 /// </para>
 /// </summary>
 public sealed record PullBranchResult(

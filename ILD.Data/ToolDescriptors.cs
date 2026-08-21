@@ -110,8 +110,7 @@ public static class ToolDescriptors
     //
     // Mirrors the MCP BranchTools and the agent-API pull-branch endpoint. The
     // agent uid cannot authenticate to the remote itself, so it asks the
-    // orchestrator to fetch and rebase on its behalf, and to report how the
-    // branch stands against the base it would be merged into.
+    // orchestrator to fetch and rebase on its behalf.
 
     public static readonly ToolDescriptor PullBranch = new()
     {
