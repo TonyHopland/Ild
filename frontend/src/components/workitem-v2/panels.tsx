@@ -969,7 +969,7 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
                 className="btn btn-sm btn-secondary wiv2-meta-btn"
                 onClick={() => void detail.handlePullBranch()}
                 disabled={detail.pullBranchLoading}
-                title="Fetch origin and rebase this branch onto its remote counterpart"
+                title="Fetch origin, rebase this branch onto its remote counterpart, and report how far it has fallen behind its base branch"
               >
                 {detail.pullBranchLoading ? "Pulling..." : "Pull branch"}
               </button>

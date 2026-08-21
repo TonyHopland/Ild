@@ -759,7 +759,8 @@ public class WorkItemManagerTests
     /// directory is returned so the test can delete it.
     /// </summary>
     private static async Task<(string Id, string Worktree)> SeedWorktreeWorkItemAsync(
-        WorkItemManager mgr, TestDb db, Guid repoId)
+        WorkItemManager mgr, TestDb db, Guid repoId,
+        string? defaultBranch = null, string? baseBranchOverride = null)
     {
         var worktree = Path.Combine(Path.GetTempPath(), "ild-pull-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(worktree);
@@ -769,8 +770,24 @@ public class WorkItemManagerTests
         run!.WorktreePath = worktree;
         run.BranchName = PullBranchName;
         run.RepositoryId = repoId;
+        run.BaseBranchOverride = baseBranchOverride;
+        var repo = await db.Context.Repositories.FindAsync(repoId);
+        repo!.DefaultBranch = defaultBranch;
         await db.Context.SaveChangesAsync();
         return (id, worktree);
+    }
+
+    /// <summary>
+    /// A base branch that exists on origin and has moved on: <paramref name="behind"/>
+    /// commits this branch does not have, <paramref name="ahead"/> the other way.
+    /// </summary>
+    private static void SetupBase(
+        Mock<IRepositoryManager> repoMgr, string worktree, string baseBranch, int behind, int ahead)
+    {
+        var upstream = $"origin/{baseBranch}";
+        repoMgr.Setup(r => r.RemoteBranchExistsAsync(worktree, baseBranch)).ReturnsAsync(true);
+        repoMgr.Setup(r => r.GetCommitsBehindCountAsync(worktree, upstream)).ReturnsAsync(behind);
+        repoMgr.Setup(r => r.GetCommitsAheadCountAsync(worktree, upstream)).ReturnsAsync(ahead);
     }
 
     /// <summary>Clean worktree, reachable origin, remote counterpart present.</summary>
@@ -891,6 +908,10 @@ public class WorkItemManagerTests
             // stashing would swallow the agent's in-flight work.
             repoMgr.Verify(r => r.FetchAsync(It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Never);
             repoMgr.Verify(r => r.RebaseAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+            // And nothing is claimed about the base: without the fetch, any count
+            // would be measured against a remote-tracking ref of unknown age.
+            Assert.Null(result.BaseBranch);
+            Assert.Null(result.BehindBase);
         }
         finally
         {
@@ -993,6 +1014,183 @@ public class WorkItemManagerTests
         Assert.Null(result.Branch);
         Assert.Empty(result.Files);
         repoMgr.Verify(r => r.FetchAsync(It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Never);
+    }
+
+    // ── PullBranchAsync: the base-branch axis ──────────────────────────────
+    //
+    // The fetch above refreshes every remote-tracking ref, base branch included,
+    // so the same call can answer the question the pull leaves open: does this
+    // branch need the base merged in? It only ever answers it — merging onto the
+    // base stays the Start node's job (ADR-0006).
+
+    [Fact]
+    public async Task PullBranch_reports_how_far_the_branch_has_fallen_behind_its_base()
+    {
+        var (mgr, db, repoId, repoMgr, _) = Setup();
+        using var _ = db;
+        var (id, worktree) = await SeedWorktreeWorkItemAsync(mgr, db, repoId, defaultBranch: "develop");
+        try
+        {
+            SetupPullable(repoMgr, worktree, behind: 0);
+            SetupBase(repoMgr, worktree, "develop", behind: 3, ahead: 2);
+
+            var result = await mgr.PullBranchAsync(id);
+
+            Assert.Equal(PullBranchOutcome.AlreadyUpToDate, result.Outcome);
+            Assert.True(result.Success);
+            // The two axes are independent: up to date with its own remote, and
+            // still three commits behind the branch it will merge into.
+            Assert.Equal("develop", result.BaseBranch);
+            Assert.Equal(3, result.BehindBase);
+            Assert.Equal(2, result.AheadOfBase);
+            Assert.Contains("3 commits behind origin/develop", result.Message);
+            Assert.Contains("2 commits ahead", result.Message);
+            // Reporting only — the base is never rebased onto.
+            repoMgr.Verify(r => r.RebaseAsync(It.IsAny<string>(), "origin/develop", It.IsAny<CancellationToken>()), Times.Never);
+        }
+        finally
+        {
+            Directory.Delete(worktree, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task PullBranch_measures_against_the_base_branch_pinned_on_the_run()
+    {
+        var (mgr, db, repoId, repoMgr, _) = Setup();
+        using var _ = db;
+        // The run was started from a release branch; the repository's default is
+        // irrelevant to it, and per ADR-0008 the pin is what counts.
+        var (id, worktree) = await SeedWorktreeWorkItemAsync(
+            mgr, db, repoId, defaultBranch: "main", baseBranchOverride: "release/2.0");
+        try
+        {
+            SetupPullable(repoMgr, worktree, behind: 0);
+            SetupBase(repoMgr, worktree, "release/2.0", behind: 1, ahead: 0);
+
+            var result = await mgr.PullBranchAsync(id);
+
+            Assert.Equal("release/2.0", result.BaseBranch);
+            Assert.Equal(1, result.BehindBase);
+            Assert.Contains("1 commit behind origin/release/2.0", result.Message);
+            repoMgr.Verify(r => r.GetCommitsBehindCountAsync(worktree, "origin/main"), Times.Never);
+        }
+        finally
+        {
+            Directory.Delete(worktree, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task PullBranch_says_nothing_about_a_base_the_branch_is_level_with()
+    {
+        var (mgr, db, repoId, repoMgr, _) = Setup();
+        using var _ = db;
+        var (id, worktree) = await SeedWorktreeWorkItemAsync(mgr, db, repoId, defaultBranch: "main");
+        try
+        {
+            SetupPullable(repoMgr, worktree, behind: 0);
+            SetupBase(repoMgr, worktree, "main", behind: 0, ahead: 4);
+
+            var result = await mgr.PullBranchAsync(id);
+
+            // Measured — the count says so — but not worth a sentence: a caller
+            // told "0 behind" on every pull learns to skip the one that matters.
+            Assert.Equal(0, result.BehindBase);
+            Assert.Equal("main", result.BaseBranch);
+            Assert.DoesNotContain("behind origin/main", result.Message);
+        }
+        finally
+        {
+            Directory.Delete(worktree, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task PullBranch_skips_the_base_comparison_when_the_run_branch_is_the_base()
+    {
+        var (mgr, db, repoId, repoMgr, _) = Setup();
+        using var _ = db;
+        var (id, worktree) = await SeedWorktreeWorkItemAsync(mgr, db, repoId, defaultBranch: PullBranchName);
+        try
+        {
+            SetupPullable(repoMgr, worktree, behind: 0);
+
+            var result = await mgr.PullBranchAsync(id);
+
+            // A branch is neither ahead of nor behind itself. The name still comes
+            // back, so the caller can tell "nothing to compare" from "never looked".
+            Assert.Equal(PullBranchName, result.BaseBranch);
+            Assert.Null(result.BehindBase);
+            Assert.Null(result.AheadOfBase);
+            repoMgr.Verify(r => r.GetCommitsAheadCountAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        }
+        finally
+        {
+            Directory.Delete(worktree, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task PullBranch_skips_the_base_comparison_when_the_base_has_no_remote_counterpart()
+    {
+        var (mgr, db, repoId, repoMgr, _) = Setup();
+        using var _ = db;
+        var (id, worktree) = await SeedWorktreeWorkItemAsync(mgr, db, repoId, defaultBranch: "main");
+        try
+        {
+            SetupPullable(repoMgr, worktree, behind: 0);
+            repoMgr.Setup(r => r.RemoteBranchExistsAsync(worktree, "main")).ReturnsAsync(false);
+
+            var result = await mgr.PullBranchAsync(id);
+
+            Assert.Equal(PullBranchOutcome.AlreadyUpToDate, result.Outcome);
+            Assert.Equal("main", result.BaseBranch);
+            Assert.Null(result.BehindBase);
+            // Counting against a ref that is not there would report a confident 0.
+            repoMgr.Verify(r => r.GetCommitsBehindCountAsync(worktree, "origin/main"), Times.Never);
+        }
+        finally
+        {
+            Directory.Delete(worktree, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task PullBranch_measures_the_base_after_the_rebase_has_moved_HEAD()
+    {
+        var (mgr, db, repoId, repoMgr, _) = Setup();
+        using var _ = db;
+        var (id, worktree) = await SeedWorktreeWorkItemAsync(mgr, db, repoId, defaultBranch: "main");
+        try
+        {
+            SetupPullable(repoMgr, worktree, behind: 2);
+            SetupBase(repoMgr, worktree, "main", behind: 5, ahead: 1);
+
+            var rebased = false;
+            bool? rebasedWhenMeasured = null;
+            repoMgr.Setup(r => r.RebaseAsync(worktree, PullUpstream, It.IsAny<CancellationToken>()))
+                .Callback(() => rebased = true)
+                .ReturnsAsync(new RebaseResult(true, Array.Empty<string>(), null));
+            repoMgr.Setup(r => r.GetCommitsBehindCountAsync(worktree, "origin/main"))
+                .Callback(() => rebasedWhenMeasured = rebased)
+                .ReturnsAsync(5);
+
+            var result = await mgr.PullBranchAsync(id);
+
+            Assert.Equal(PullBranchOutcome.Updated, result.Outcome);
+            // The rebase moves HEAD, and the commits it picked up may themselves
+            // contain the base — measuring before it would report a divergence the
+            // pull has already changed.
+            Assert.True(rebasedWhenMeasured);
+            Assert.Equal(5, result.BehindBase);
+            Assert.Contains("picking up 2 new commits", result.Message);
+            Assert.Contains("5 commits behind origin/main", result.Message);
+        }
+        finally
+        {
+            Directory.Delete(worktree, recursive: true);
+        }
     }
 
     [Fact]

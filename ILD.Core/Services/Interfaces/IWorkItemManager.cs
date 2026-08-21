@@ -117,9 +117,15 @@ public interface IWorkItemManager
     /// The inverse of <see cref="CommitAndPushBranchAsync"/>: pick up commits that
     /// landed on the run branch's own remote counterpart after the run started — a
     /// human fix, a review commit, another ILD instance — by fetching origin and
-    /// rebasing the worktree's branch onto <c>origin/&lt;branch&gt;</c>. Syncing onto
-    /// the repository's default branch is the Start node's job (ADR-0006) and is
-    /// deliberately not done here.
+    /// rebasing the worktree's branch onto <c>origin/&lt;branch&gt;</c>.
+    ///
+    /// <para>
+    /// The same fetch refreshes the run's base branch, and the result reports how
+    /// the run branch stands against <c>origin/&lt;base&gt;</c> so the caller can
+    /// decide whether a merge is needed. Deciding is all it does: nothing is merged
+    /// or rebased onto the base here — syncing onto it is the Start node's job
+    /// (ADR-0006).
+    /// </para>
     ///
     /// <para>
     /// Runs with the orchestrator's repository credentials, which is the whole point:
@@ -209,12 +215,27 @@ public enum PullBranchOutcome
 /// <paramref name="Files"/> holds the paths standing in the way — the conflicted
 /// ones for <see cref="PullBranchOutcome.Conflict"/>, the uncommitted ones for
 /// <see cref="PullBranchOutcome.DirtyWorktree"/> — and is empty otherwise.
+///
+/// <para>
+/// <paramref name="BaseBranch"/>, <paramref name="BehindBase"/> and
+/// <paramref name="AheadOfBase"/> answer the separate question the pull leaves
+/// open: whether the run branch needs the base branch merged in. They sit
+/// alongside <paramref name="Outcome"/> rather than inside it because the two
+/// axes are independent — a pull can be up to date with its own remote and still
+/// be ten commits behind the base. All three are null when the comparison was
+/// not made (the pull never reached the fetch, or no run pins a base); the
+/// counts alone are null when the question has no answer (the run branch IS the
+/// base, or the base has no remote counterpart).
+/// </para>
 /// </summary>
 public sealed record PullBranchResult(
     PullBranchOutcome Outcome,
     string? Branch,
     string Message,
-    IReadOnlyList<string> Files)
+    IReadOnlyList<string> Files,
+    string? BaseBranch = null,
+    int? BehindBase = null,
+    int? AheadOfBase = null)
 {
     /// <summary>
     /// True when the branch is in sync with its remote counterpart afterwards.

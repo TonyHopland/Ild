@@ -28,6 +28,11 @@ public static class PullBranchHttpResult
             branch = result.Branch,
             message = result.Message,
             files = result.Files,
+            // The divergence-vs-base axis: null throughout when the comparison was
+            // not made, so a client can tell "in sync" (0) from "not measured".
+            baseBranch = result.BaseBranch,
+            behindBase = result.BehindBase,
+            aheadOfBase = result.AheadOfBase,
         };
 
         return result.Outcome == PullBranchOutcome.Failed

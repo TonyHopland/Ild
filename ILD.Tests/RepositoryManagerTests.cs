@@ -584,6 +584,43 @@ public class RepositoryManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task FetchAsync_syncs_every_remote_branch_even_one_the_clone_never_tracked()
+    {
+        var (origin, wt, mgr) = await PushedRunBranchAsync("ild/wi-3-run-1");
+
+        // A branch that appeared on the remote after the clone, and a refspec
+        // narrowed to a single branch — the shape a --single-branch clone leaves
+        // behind. The agent uid cannot fetch for itself (ADR-0014), so if this
+        // call does not bring the branch down, nothing will.
+        Git(wt, "config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main");
+        Git(origin, "checkout", "-b", "feature/late");
+        Git(origin, "commit", "--allow-empty", "-m", "landed after the clone");
+        Git(origin, "checkout", "main");
+
+        Assert.True(await mgr.FetchAsync(wt));
+
+        Assert.True(await mgr.RemoteBranchExistsAsync(wt, "feature/late"));
+        Assert.True(await mgr.RemoteBranchExistsAsync(wt, "main"));
+    }
+
+    [Fact]
+    public async Task FetchAsync_prunes_a_remote_branch_that_is_gone()
+    {
+        var (origin, wt, mgr) = await PushedRunBranchAsync("ild/wi-4-run-1");
+        Git(origin, "branch", "doomed");
+        Assert.True(await mgr.FetchAsync(wt));
+        Assert.True(await mgr.RemoteBranchExistsAsync(wt, "doomed"));
+
+        // Deleted on the remote — a merged PR's branch, say. Left unpruned, the
+        // stale ref reads as a live branch to everything downstream.
+        Git(origin, "branch", "-D", "doomed");
+
+        Assert.True(await mgr.FetchAsync(wt));
+
+        Assert.False(await mgr.RemoteBranchExistsAsync(wt, "doomed"));
+    }
+
+    [Fact]
     public async Task RebaseAsync_aborts_a_conflicting_rebase_and_reports_the_conflicted_files()
     {
         var (origin, wt, mgr) = await PushedRunBranchAsync("ild/wi-2-run-1");

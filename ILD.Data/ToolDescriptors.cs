@@ -110,13 +110,14 @@ public static class ToolDescriptors
     //
     // Mirrors the MCP BranchTools and the agent-API pull-branch endpoint. The
     // agent uid cannot authenticate to the remote itself, so it asks the
-    // orchestrator to fetch and rebase on its behalf.
+    // orchestrator to fetch and rebase on its behalf, and to report how the
+    // branch stands against the base it would be merged into.
 
     public static readonly ToolDescriptor PullBranch = new()
     {
         Name = "ild_pull_branch",
         Label = "Pull Branch",
-        Description = "Pull the latest changes from origin into this work item's run branch — fetches with ILD's repository credentials and rebases the branch onto origin/<branch>. Use it to pick up commits pushed after the run started; git in the worktree has no credentials. Does NOT sync with the default branch. Returns an outcome of Updated, AlreadyUpToDate, NoRemoteBranch, DirtyWorktree (commit first; 'files' lists them), Conflict (rebase aborted, branch untouched; 'files' lists the conflicts to resolve) or RebaseRefused (git would not rebase at all — nothing to resolve, read 'message').",
+        Description = "Pull the latest changes from origin into this work item's run branch — fetches with ILD's repository credentials and rebases the branch onto origin/<branch>. Use it to pick up commits pushed after the run started; git in the worktree has no credentials. The fetch syncs every remote branch (all of origin/*, stale ones pruned), so afterwards you can read any branch locally with plain git — including the run's base branch, which the result also reports this branch's standing against in 'baseBranch', 'behindBase' and 'aheadOfBase' (null when not measured), so you can decide whether the base needs merging in. It does NOT merge or rebase onto the base for you. Returns an outcome of Updated, AlreadyUpToDate, NoRemoteBranch, DirtyWorktree (commit first; 'files' lists them), Conflict (rebase aborted, branch untouched; 'files' lists the conflicts to resolve) or RebaseRefused (git would not rebase at all — nothing to resolve, read 'message').",
         EndpointPath = "api/v1/agent/workitems/{workItemId}/pull-branch",
         HttpMethod = HttpMethod.Post,
         Parameters = new ToolParameterDescriptor[]
