@@ -18,8 +18,8 @@ const STATUS_BADGE: Record<Exclude<WorktreeFileChangeStatus, "none">, string> = 
 };
 
 /**
- * What the viewer draws. "Preview" is offered for markdown only, so the mode is
- * not free to be anything at any time — see {@link resolveViewMode}.
+ * What the viewer draws. "Preview" is offered only for files that have one, so
+ * the mode is not free to be anything at any time — see {@link resolveViewMode}.
  */
 type ViewMode = "code" | "diff" | "preview";
 
@@ -29,25 +29,36 @@ const VIEW_MODE_LABEL: Record<ViewMode, string> = {
   preview: "Preview",
 };
 
-function isMarkdownPath(path: string): boolean {
+/** What "Preview" draws for a file — one renderer per kind. */
+type PreviewKind = "markdown" | "svg";
+
+/**
+ * How a file previews, or null when it has nothing to preview as. The one
+ * answer all three of its users share — the toolbar's offer, the fallback when
+ * the selection moves off a previewable file, and the viewer's choice of
+ * renderer — so a newly previewable suffix is added here and nowhere else.
+ */
+function previewKindOf(path: string): PreviewKind | null {
   const lower = path.toLowerCase();
-  return lower.endsWith(".md") || lower.endsWith(".markdown");
+  if (lower.endsWith(".md") || lower.endsWith(".markdown")) return "markdown";
+  if (lower.endsWith(".svg")) return "svg";
+  return null;
 }
 
-/** The modes the toolbar offers for a file: Preview joins them for markdown. */
+/** The modes the toolbar offers for a file: Preview joins them where one exists. */
 function offeredViewModes(path: string): ViewMode[] {
-  return isMarkdownPath(path) ? ["code", "diff", "preview"] : ["code", "diff"];
+  return previewKindOf(path) ? ["code", "diff", "preview"] : ["code", "diff"];
 }
 
 /**
  * The mode the viewer actually renders in. The chosen mode is kept as the user
  * clicks through files — a reviewer reading diffs wants the next file's diff
- * too — but "Preview" only exists for markdown, so selecting a non-markdown file
- * falls back to Code without discarding the choice: the next markdown file
- * previews again.
+ * too — but "Preview" only exists for some of them, so selecting a file without
+ * one falls back to Code without discarding the choice: the next previewable
+ * file previews again.
  */
 function resolveViewMode(mode: ViewMode, path: string | null): ViewMode {
-  if (mode === "preview" && !(path && isMarkdownPath(path))) return "code";
+  if (mode === "preview" && !(path && previewKindOf(path))) return "code";
   return mode;
 }
 
@@ -56,7 +67,7 @@ function resolveViewMode(mode: ViewMode, path: string | null): ViewMode {
  * read-only viewer on the right. The tree toggles between every file ("All")
  * and only files that differ from the base branch ("Changes", PR style); the
  * viewer toggles between the full file ("Code"), its unified diff ("Diff") and,
- * for markdown, the rendered document ("Preview").
+ * for markdown and SVG, the rendered result ("Preview").
  */
 export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   const [files, setFiles] = useState<WorktreeFileEntry[]>([]);
@@ -356,6 +367,9 @@ function FileViewer({
   // empty document rather than falling through to the code view, which would
   // leave the toolbar claiming Preview over a pane showing something else.
   if (mode === "preview" && content.content !== null) {
+    if (previewKindOf(content.path) === "svg") {
+      return <SvgView svg={content.content} path={content.path} />;
+    }
     return (
       <div className="wiv2-file-markdown">
         <MarkdownRenderer content={content.content} />
@@ -378,6 +392,46 @@ function ImageView({ mimeType, base64, path }: { mimeType: string; base64: strin
   return (
     <div className="wiv2-file-image">
       <img src={`data:${mimeType};base64,${base64}`} alt={`Contents of image file ${path}`} />
+    </div>
+  );
+}
+
+/**
+ * An SVG drawn as a picture rather than as markup. Worktree SVG is untrusted —
+ * the server hands it back as text and never as an inline image, so the markup
+ * arrives here unexecuted — and an `<img>` keeps it that way: a document loaded
+ * through one is script-inert, where an inline `<svg>` element or
+ * `dangerouslySetInnerHTML` would run whatever the file happened to carry. The
+ * text is percent-encoded into the data URL rather than base64'd, so non-ASCII
+ * markup survives (`btoa` throws on it), with a charset saying what bytes those
+ * escapes stand for.
+ *
+ * Neither way this can end up drawing nothing is left silent: an empty file
+ * says so instead of showing a broken image, and markup the browser will not
+ * parse says so instead of leaving a blank pane under a toolbar claiming
+ * Preview.
+ */
+function SvgView({ svg, path }: { svg: string; path: string }) {
+  const src = useMemo(() => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`, [svg]);
+  const [undrawable, setUndrawable] = useState(false);
+  // The viewer keeps this component mounted as the selection moves between SVGs
+  // and as a background refresh brings new bytes, so a past failure has to clear
+  // with the markup that caused it.
+  useEffect(() => setUndrawable(false), [src]);
+
+  if (svg.trim() === "") {
+    return <div className="wiv2-empty">This file is empty — there is nothing to draw.</div>;
+  }
+  if (undrawable) {
+    return <div className="wiv2-empty">This file could not be drawn as an image.</div>;
+  }
+  return (
+    <div className="wiv2-file-image wiv2-file-svg">
+      <img
+        src={src}
+        alt={`Rendered contents of SVG file ${path}`}
+        onError={() => setUndrawable(true)}
+      />
     </div>
   );
 }
