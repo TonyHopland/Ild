@@ -769,6 +769,51 @@ describe("FilesPanel SVG preview", () => {
     expect(screen.getByRole("img")).toBeTruthy();
   });
 
+  test("redraws in place when a refresh corrects markup the browser refused", async () => {
+    let markup = "<svg><not closed";
+    vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: [{ path: "fixing.svg", changeStatus: "modified" as const }],
+    });
+    vi.spyOn(authServices.workItemService, "getFileContent").mockImplementation(
+      async (_id: string, path: string) => ({
+        path,
+        changeStatus: "modified" as const,
+        content: markup,
+        diff: null,
+        isBinary: false,
+        imageMimeType: null,
+        imageBase64: null,
+      }),
+    );
+
+    const workItem = makeWorkItem();
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(<FilesPanel workItem={workItem} />);
+      await Promise.resolve();
+    });
+    await open("fixing.svg");
+    await click("Preview");
+    await act(async () => {
+      fireEvent.error(screen.getByRole("img"));
+      await Promise.resolve();
+    });
+    expect(screen.getByText(/could not be drawn/)).toBeTruthy();
+
+    // The run fixes the file. The background refresh is silent — it brings the
+    // new bytes in without unmounting the viewer — so recovering here is the
+    // component's own doing, where the case above recovers by being remounted.
+    markup = CIRCLE;
+    await act(async () => {
+      view.rerender(<FilesPanel workItem={{ ...workItem }} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(/could not be drawn/)).toBeNull();
+    expect(screen.getByRole("img")).toBeTruthy();
+  });
+
   test("falls back to Code when a preview-mode selection lands on a plain file", async () => {
     mockFiles(["logo.svg", "a.ts"], CIRCLE);
     await renderPanel(makeWorkItem());

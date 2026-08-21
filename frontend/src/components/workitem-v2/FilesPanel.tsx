@@ -413,16 +413,16 @@ function ImageView({ mimeType, base64, path }: { mimeType: string; base64: strin
  */
 function SvgView({ svg, path }: { svg: string; path: string }) {
   const src = useMemo(() => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`, [svg]);
-  const [undrawable, setUndrawable] = useState(false);
-  // The viewer keeps this component mounted as the selection moves between SVGs
-  // and as a background refresh brings new bytes, so a past failure has to clear
-  // with the markup that caused it.
-  useEffect(() => setUndrawable(false), [src]);
+  // What the browser refused, rather than that it refused: a background refresh
+  // swaps corrected bytes in under a viewer that stays mounted, and comparing
+  // against the current markup draws the replacement on that same render — a
+  // flag cleared after the fact would show the stale failure for a frame first.
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
 
   if (svg.trim() === "") {
     return <div className="wiv2-empty">This file is empty — there is nothing to draw.</div>;
   }
-  if (undrawable) {
+  if (failedSrc === src) {
     return <div className="wiv2-empty">This file could not be drawn as an image.</div>;
   }
   return (
@@ -430,7 +430,7 @@ function SvgView({ svg, path }: { svg: string; path: string }) {
       <img
         src={src}
         alt={`Rendered contents of SVG file ${path}`}
-        onError={() => setUndrawable(true)}
+        onError={() => setFailedSrc(src)}
       />
     </div>
   );
