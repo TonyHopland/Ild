@@ -28,9 +28,6 @@ public static class PullBranchHttpResult
             branch = result.Branch,
             message = result.Message,
             files = result.Files,
-            baseBranch = result.BaseBranch,
-            behindBase = result.BehindBase,
-            aheadOfBase = result.AheadOfBase,
         };
 
         return result.Outcome == PullBranchOutcome.Failed

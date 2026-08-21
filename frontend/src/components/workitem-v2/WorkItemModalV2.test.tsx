@@ -450,9 +450,6 @@ describe("WorkItemModalV2", () => {
       branch: "ild/wi-1-run-1",
       message: "Rebased 'ild/wi-1-run-1' onto origin/ild/wi-1-run-1, picking up 2 new commits.",
       files: [],
-      baseBranch: "main",
-      behindBase: 0,
-      aheadOfBase: 3,
     });
     await renderDialog(
       makeWorkItem({ branchName: "ild/wi-1-run-1", worktreePath: "/tmp/wt/wi-1" }),
@@ -471,33 +468,6 @@ describe("WorkItemModalV2", () => {
     ).toBeTruthy();
   });
 
-  test("overview pull branch reports the branch falling behind its base", async () => {
-    mockServices();
-    vi.spyOn(authServices.workItemService, "pullBranch").mockResolvedValue({
-      outcome: "AlreadyUpToDate",
-      success: true,
-      branch: "ild/wi-1-run-1",
-      message:
-        "Already up to date with origin/ild/wi-1-run-1. The base branch has moved on: " +
-        "this branch is 3 commits behind origin/main. Merge or rebase onto it yourself " +
-        "if you need those changes — pulling does not.",
-      files: [],
-      baseBranch: "main",
-      behindBase: 3,
-      aheadOfBase: 1,
-    });
-    await renderDialog(
-      makeWorkItem({ branchName: "ild/wi-1-run-1", worktreePath: "/tmp/wt/wi-1" }),
-    );
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Pull branch" }));
-      await Promise.resolve();
-    });
-
-    expect(screen.getByText(/3 commits behind origin\/main/)).toBeTruthy();
-  });
-
   test("overview pull branch button surfaces a blocked pull as an error", async () => {
     mockServices();
     // A dirty worktree resolves (HTTP 200) with success: false — the outcome,
@@ -508,9 +478,6 @@ describe("WorkItemModalV2", () => {
       branch: "ild/wi-1-run-1",
       message: "Cannot pull 'ild/wi-1-run-1': the worktree has uncommitted changes to src/App.tsx.",
       files: ["src/App.tsx"],
-      baseBranch: null,
-      behindBase: null,
-      aheadOfBase: null,
     });
     await renderDialog(
       makeWorkItem({ branchName: "ild/wi-1-run-1", worktreePath: "/tmp/wt/wi-1" }),

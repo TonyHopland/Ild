@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Files in a work item are syntax coloured, and a Markdown file can be read as a rendered document.**
 
-- **Pulling a work item's branch also says how far behind its base branch it has fallen, and brings every other branch on the remote up to date so an agent can read them.**
+- **Pulling a work item's branch brings every other branch on the remote down with it, so an agent can read the default branch — or any other — without credentials of its own.**
 
 ### Fixed
 

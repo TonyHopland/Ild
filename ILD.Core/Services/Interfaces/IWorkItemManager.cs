@@ -117,14 +117,9 @@ public interface IWorkItemManager
     /// The inverse of <see cref="CommitAndPushBranchAsync"/>: pick up commits that
     /// landed on the run branch's own remote counterpart after the run started — a
     /// human fix, a review commit, another ILD instance — by fetching origin and
-    /// rebasing the worktree's branch onto <c>origin/&lt;branch&gt;</c>.
-    ///
-    /// <para>
-    /// The same fetch refreshes every other branch, the run's base included, and the
-    /// result reports how the run branch stands against <c>origin/&lt;base&gt;</c>.
-    /// Nothing is merged or rebased onto the base here — that is the Start node's
-    /// job (ADR-0006).
-    /// </para>
+    /// rebasing the worktree's branch onto <c>origin/&lt;branch&gt;</c>. Syncing onto
+    /// the repository's default branch is the Start node's job (ADR-0006) and is
+    /// deliberately not done here.
     ///
     /// <para>
     /// Runs with the orchestrator's repository credentials, which is the whole point:
@@ -214,23 +209,12 @@ public enum PullBranchOutcome
 /// <paramref name="Files"/> holds the paths standing in the way — the conflicted
 /// ones for <see cref="PullBranchOutcome.Conflict"/>, the uncommitted ones for
 /// <see cref="PullBranchOutcome.DirtyWorktree"/> — and is empty otherwise.
-///
-/// <para>
-/// <paramref name="BehindBase"/> and <paramref name="AheadOfBase"/> count against
-/// <c>origin/&lt;<paramref name="BaseBranch"/>&gt;</c>. All three are null when no
-/// comparison was made (the pull never reached the fetch, or no run pins a base);
-/// the counts alone are null when there is no answer to give (the run branch IS
-/// the base, or the base has no remote counterpart).
-/// </para>
 /// </summary>
 public sealed record PullBranchResult(
     PullBranchOutcome Outcome,
     string? Branch,
     string Message,
-    IReadOnlyList<string> Files,
-    string? BaseBranch = null,
-    int? BehindBase = null,
-    int? AheadOfBase = null)
+    IReadOnlyList<string> Files)
 {
     /// <summary>
     /// True when the branch is in sync with its remote counterpart afterwards.

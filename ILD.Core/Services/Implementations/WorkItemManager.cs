@@ -954,7 +954,7 @@ public class WorkItemManager : IWorkItemManager
     /// operation on a work item's run branch needs. Resolved together because a
     /// caller holding only some of them cannot do anything useful.
     /// </summary>
-    private sealed record BranchContext(WorkItemView WorkItem, Repository Repository, string WorktreePath, string Branch, GitAuthOptions? Auth);
+    private sealed record BranchContext(WorkItemView WorkItem, string WorktreePath, string Branch, GitAuthOptions? Auth);
 
     /// <summary>
     /// Resolve a work item's <see cref="BranchContext"/>, or the reason it has none.
@@ -984,7 +984,7 @@ public class WorkItemManager : IWorkItemManager
             ? null
             : new GitAuthOptions(repo.CloneUrl, remoteProvider.ApiKey, remoteProvider.Type);
 
-        return (new BranchContext(wi, repo, wi.WorktreePath, branch, gitAuth), null);
+        return (new BranchContext(wi, wi.WorktreePath, branch, gitAuth), null);
     }
 
     public async Task<(bool Success, string? Branch, string? Error)> CommitAndPushBranchAsync(string workItemId)
@@ -1038,17 +1038,17 @@ public class WorkItemManager : IWorkItemManager
                 []);
 
         if (!await _repoManager.RemoteBranchExistsAsync(ctx.WorktreePath, ctx.Branch))
-            return await ReportAsync(
-                ctx,
+            return new PullBranchResult(
                 PullBranchOutcome.NoRemoteBranch,
+                ctx.Branch,
                 $"Nothing to pull: '{ctx.Branch}' has not been pushed to origin yet.",
                 []);
 
         var behind = await _repoManager.GetCommitsBehindCountAsync(ctx.WorktreePath, upstream);
         if (behind == 0)
-            return await ReportAsync(
-                ctx,
+            return new PullBranchResult(
                 PullBranchOutcome.AlreadyUpToDate,
+                ctx.Branch,
                 $"Already up to date with {upstream}.",
                 []);
 
@@ -1071,76 +1071,25 @@ public class WorkItemManager : IWorkItemManager
             // refusal (untracked files in the way, a hook, an unusable upstream) has
             // no files to resolve and only the message to act on.
             return rebase.ConflictedFiles.Count > 0
-                ? await ReportAsync(
-                    ctx,
+                ? new PullBranchResult(
                     PullBranchOutcome.Conflict,
+                    ctx.Branch,
                     $"Rebase onto {upstream} hit conflicts in {DescribeFiles(rebase.ConflictedFiles)} and was aborted; "
                     + "the branch is unchanged. Resolve them by hand, or push this branch and reconcile on the remote.",
                     rebase.ConflictedFiles)
-                : await ReportAsync(
-                    ctx,
+                : new PullBranchResult(
                     PullBranchOutcome.RebaseRefused,
+                    ctx.Branch,
                     $"Git refused to rebase onto {upstream} — no conflicts to resolve, and the branch is unchanged: "
                     + (rebase.Error ?? "unknown error"),
                     []);
         }
 
-        return await ReportAsync(
-            ctx,
+        return new PullBranchResult(
             PullBranchOutcome.Updated,
+            ctx.Branch,
             $"Rebased '{ctx.Branch}' onto {upstream}, picking up {behind} new commit{(behind == 1 ? "" : "s")}.",
             []);
-    }
-
-    // Called once the branch has settled, never before: the comparison reads HEAD,
-    // which the rebase above moves.
-    private async Task<PullBranchResult> ReportAsync(
-        BranchContext ctx, PullBranchOutcome outcome, string message, IReadOnlyList<string> files)
-    {
-        var comparison = await CompareWithBaseBranchAsync(ctx);
-        return new PullBranchResult(
-            outcome,
-            ctx.Branch,
-            comparison.BehindBaseNotice is { } notice ? $"{message} {notice}" : message,
-            files,
-            comparison.BaseBranch,
-            comparison.Behind,
-            comparison.Ahead);
-    }
-
-    private readonly record struct BaseComparison(string? BaseBranch, int? Behind, int? Ahead)
-    {
-        public static BaseComparison NotMade => default;
-
-        public static BaseComparison NoAnswerFor(string baseBranch) => new(baseBranch, null, null);
-
-        public string? BehindBaseNotice => Behind is > 0
-            ? $"The base branch has moved on: this branch is {Commits(Behind.Value)} behind origin/{BaseBranch}"
-              + (Ahead is > 0 ? $" and {Commits(Ahead.Value)} ahead" : string.Empty)
-              + ". Merge or rebase onto it yourself if you need those changes — pulling does not."
-            : null;
-
-        private static string Commits(int count) => $"{count} commit{(count == 1 ? "" : "s")}";
-    }
-
-    private async Task<BaseComparison> CompareWithBaseBranchAsync(BranchContext ctx)
-    {
-        // ADR-0008: the base is pinned on the run, so an override edited mid-run
-        // must not redirect a run already under way.
-        var run = await _loopRunStore.GetByWorktreePathAsync(ctx.WorktreePath);
-        if (run is null)
-            return BaseComparison.NotMade;
-
-        var baseBranch = RunBaseBranch.Resolve(run, ctx.Repository);
-        var branchIsTheBase = string.Equals(baseBranch, ctx.Branch, StringComparison.Ordinal);
-        if (branchIsTheBase || !await _repoManager.RemoteBranchExistsAsync(ctx.WorktreePath, baseBranch))
-            return BaseComparison.NoAnswerFor(baseBranch);
-
-        var baseUpstream = $"origin/{baseBranch}";
-        return new BaseComparison(
-            baseBranch,
-            await _repoManager.GetCommitsBehindCountAsync(ctx.WorktreePath, baseUpstream),
-            await _repoManager.GetCommitsAheadCountAsync(ctx.WorktreePath, baseUpstream));
     }
 
     // Names the files inline up to a point, then counts the rest: the message is

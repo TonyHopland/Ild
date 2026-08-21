@@ -229,14 +229,6 @@ export interface PullBranchResult {
   message: string;
   /** Conflicted paths for `Conflict`, uncommitted ones for `DirtyWorktree`. */
   files: string[];
-  /**
-   * How the run branch stands against `origin/<baseBranch>`. All null when no
-   * comparison was made; the counts alone are null when there is no answer to
-   * give (the run branch IS the base, or the base was never pushed).
-   */
-  baseBranch: string | null;
-  behindBase: number | null;
-  aheadOfBase: number | null;
 }
 
 /**
