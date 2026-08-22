@@ -584,37 +584,6 @@ public class RepositoryManagerTests : IDisposable
     }
 
     [Fact]
-    public async Task FetchAsync_syncs_every_remote_branch_even_one_the_clone_never_tracked()
-    {
-        var (origin, wt, mgr) = await PushedRunBranchAsync("ild/wi-3-run-1");
-
-        Git(wt, "config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main");
-        Git(origin, "checkout", "-b", "feature/late");
-        Git(origin, "commit", "--allow-empty", "-m", "landed after the clone");
-        Git(origin, "checkout", "main");
-
-        Assert.True(await mgr.FetchAsync(wt));
-
-        Assert.True(await mgr.RemoteBranchExistsAsync(wt, "feature/late"));
-        Assert.True(await mgr.RemoteBranchExistsAsync(wt, "main"));
-    }
-
-    [Fact]
-    public async Task FetchAsync_prunes_a_remote_branch_that_is_gone()
-    {
-        var (origin, wt, mgr) = await PushedRunBranchAsync("ild/wi-4-run-1");
-        Git(origin, "branch", "doomed");
-        Assert.True(await mgr.FetchAsync(wt));
-        Assert.True(await mgr.RemoteBranchExistsAsync(wt, "doomed"));
-
-        Git(origin, "branch", "-D", "doomed");
-
-        Assert.True(await mgr.FetchAsync(wt));
-
-        Assert.False(await mgr.RemoteBranchExistsAsync(wt, "doomed"));
-    }
-
-    [Fact]
     public async Task RebaseAsync_aborts_a_conflicting_rebase_and_reports_the_conflicted_files()
     {
         var (origin, wt, mgr) = await PushedRunBranchAsync("ild/wi-2-run-1");

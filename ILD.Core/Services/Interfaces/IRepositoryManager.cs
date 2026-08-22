@@ -33,12 +33,6 @@ public interface IRepositoryManager
     Task DestroyWorktreeAsync(string worktreePath);
     Task<bool> ValidateWorktreeHealthAsync(string worktreePath);
     Task<bool> CheckoutBranchAsync(string worktreePath, string branchName);
-
-    /// <summary>
-    /// Bring <c>refs/remotes/origin/*</c> in line with the remote: every branch,
-    /// not just the checked-out one, and refs the remote no longer has pruned.
-    /// Local branches are untouched.
-    /// </summary>
     Task<bool> FetchAsync(string worktreePath, CancellationToken cancellationToken = default, GitAuthOptions? auth = null);
 
     /// <summary>

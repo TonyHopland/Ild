@@ -108,11 +108,7 @@ public class RepositoryManager : IRepositoryManager
 
     public async Task<bool> FetchAsync(string worktreePath, CancellationToken cancellationToken = default, GitAuthOptions? auth = null)
     {
-        var (code, _, _) = await RunAsync(
-            worktreePath,
-            new[] { "fetch", "origin", "--prune", "+refs/heads/*:refs/remotes/origin/*" },
-            cancellationToken,
-            auth);
+        var (code, _, _) = await RunAsync(worktreePath, new[] { "fetch", "origin" }, cancellationToken, auth);
         return code == 0;
     }
 
