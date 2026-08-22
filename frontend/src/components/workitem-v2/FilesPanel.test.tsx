@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
 import FilesPanel from "./FilesPanel";
-import { WorkItem, WorkItemStatus, WorkItemPriority } from "../../types";
+import { WorkItem, WorkItemStatus, WorkItemPriority, WorktreeFileContent } from "../../types";
 import * as authServices from "../../services/auth";
 
 afterEach(() => {
@@ -829,5 +829,433 @@ describe("FilesPanel SVG preview", () => {
     // Going back restores the preview the user asked for.
     await open("logo.svg");
     expect(screen.getByRole("img")).toBeTruthy();
+  });
+});
+
+describe("FilesPanel editing", () => {
+  /** A work item parked on a human — the only state a file is editable in. */
+  function parked(overrides: Partial<WorkItem> = {}): WorkItem {
+    return makeWorkItem({ status: WorkItemStatus.HumanFeedback, ...overrides });
+  }
+
+  const TEXT_FILE: WorktreeFileContent = {
+    path: "a.ts",
+    changeStatus: "none",
+    content: "before",
+    diff: null,
+    isBinary: false,
+    imageMimeType: null,
+    imageBase64: null,
+  };
+
+  function mockOneFile(content: Partial<WorktreeFileContent> = {}) {
+    const getFiles = vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: [{ path: "a.ts", changeStatus: "none" }],
+    });
+    const getFileContent = vi
+      .spyOn(authServices.workItemService, "getFileContent")
+      .mockResolvedValue({ ...TEXT_FILE, ...content });
+    return { getFiles, getFileContent };
+  }
+
+  async function open(name: string) {
+    await act(async () => {
+      fireEvent.click(screen.getByText(name));
+      await Promise.resolve();
+    });
+  }
+
+  async function click(name: string | RegExp) {
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name }));
+      await Promise.resolve();
+    });
+  }
+
+  async function type(text: string, path = "a.ts") {
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText(`Contents of ${path}`), { target: { value: text } });
+      await Promise.resolve();
+    });
+  }
+
+  /** Two files and a save that only resolves when the test says so. */
+  function mockTwoFilesWithHeldSave() {
+    const getFiles = vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: [
+        { path: "a.ts", changeStatus: "none" },
+        { path: "b.ts", changeStatus: "none" },
+      ],
+    });
+    vi.spyOn(authServices.workItemService, "getFileContent").mockImplementation(
+      async (_id: string, path: string) => ({
+        ...TEXT_FILE,
+        path,
+        content: path === "a.ts" ? "before" : "the other file",
+      }),
+    );
+    let finishSave!: (saved: WorktreeFileContent) => void;
+    vi.spyOn(authServices.workItemService, "saveFileContent").mockReturnValue(
+      new Promise<WorktreeFileContent>((resolve) => {
+        finishSave = resolve;
+      }),
+    );
+    return { getFiles, finishSave: (saved: WorktreeFileContent) => finishSave(saved) };
+  }
+
+  test("writes the edited file back and redraws from what was saved", async () => {
+    const { getFiles } = mockOneFile();
+    const save = vi.spyOn(authServices.workItemService, "saveFileContent").mockResolvedValue({
+      ...TEXT_FILE,
+      changeStatus: "modified",
+      content: "after",
+      diff: "@@ -1 +1 @@\n-before\n+after",
+    });
+
+    await renderPanel(parked());
+    await open("a.ts");
+    await click("Edit");
+    await type("after");
+    await click("Save");
+
+    expect(save).toHaveBeenCalledWith("wi-1", "a.ts", "after");
+    // The editor closes onto the saved file, and the answer the save gave —
+    // not the content the editor started from — is what the viewer now shows.
+    expect(screen.queryByLabelText("Contents of a.ts")).toBeNull();
+    expect(screen.getByText("after")).toBeTruthy();
+    await click("Diff");
+    expect(screen.getByText("+after")).toBeTruthy();
+    // The tree is re-pulled too: this file's badge just went none → M.
+    expect(getFiles).toHaveBeenCalledTimes(2);
+  });
+
+  test("cancel discards the edit and restores the loaded file", async () => {
+    mockOneFile();
+    const save = vi.spyOn(authServices.workItemService, "saveFileContent");
+
+    await renderPanel(parked());
+    await open("a.ts");
+    await click("Edit");
+    await type("scribbled over");
+    await click("Cancel");
+
+    expect(save).not.toHaveBeenCalled();
+    expect(screen.queryByText("scribbled over")).toBeNull();
+    expect(screen.getByText("before")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Edit" })).toBeTruthy();
+  });
+
+  test("a refused save keeps the draft rather than losing the user's text", async () => {
+    mockOneFile();
+    // The file was deleted, made binary, or the worktree went away under the
+    // editor — every one of these comes back as a refusal, and the text the
+    // user typed exists nowhere but this textarea.
+    vi.spyOn(authServices.workItemService, "saveFileContent").mockRejectedValue({
+      message: "File is not an editable text file in this worktree.",
+    });
+
+    await renderPanel(parked());
+    await open("a.ts");
+    await click("Edit");
+    await type("still mine");
+    await click("Save");
+
+    expect(screen.getByText(/not an editable text file/)).toBeTruthy();
+    expect((screen.getByLabelText("Contents of a.ts") as HTMLTextAreaElement).value).toBe(
+      "still mine",
+    );
+    // The editor stays open on a write that never happened, so Save can be
+    // tried again — it does not close as though it had gone through.
+    expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+  });
+
+  test("a save that lands after the user moved on leaves the new file alone", async () => {
+    const { finishSave } = mockTwoFilesWithHeldSave();
+
+    await renderPanel(parked());
+    await open("a.ts");
+    await click("Edit");
+    await type("saved text");
+    await click("Save");
+
+    // The tree is not disabled while the save is in flight, and the file the
+    // user clicks loads its own content straight away.
+    await open("b.ts");
+    expect(screen.getByText("the other file")).toBeTruthy();
+
+    await act(async () => {
+      finishSave({ ...TEXT_FILE, path: "a.ts", changeStatus: "modified", content: "saved text" });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The answer describes a.ts, so it must not land on b.ts — drawn there it
+    // would show one file's text under another's path, and the next save would
+    // write it into that file.
+    expect(screen.getByText("the other file")).toBeTruthy();
+    expect(screen.queryByText("saved text")).toBeNull();
+  });
+
+  test("a save in flight on one file leaves the next file's editor writable", async () => {
+    mockTwoFilesWithHeldSave();
+
+    await renderPanel(parked());
+    await open("a.ts");
+    await click("Edit");
+    await type("saved text");
+    await click("Save");
+
+    // The save for a.ts is still out. Editing b.ts is a different file's edit,
+    // so it must not be held read-only waiting on it.
+    await open("b.ts");
+    await click("Edit");
+    const box = screen.getByLabelText("Contents of b.ts") as HTMLTextAreaElement;
+    expect(box.readOnly).toBe(false);
+
+    await type("typed while a.ts saves", "b.ts");
+    expect((screen.getByLabelText("Contents of b.ts") as HTMLTextAreaElement).value).toBe(
+      "typed while a.ts saves",
+    );
+    expect(screen.getByRole("button", { name: "Save" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  test("a save that lands after the work item changed reaches none of the new one", async () => {
+    const { getFiles, finishSave } = mockTwoFilesWithHeldSave();
+
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(<FilesPanel workItem={parked()} />);
+      await Promise.resolve();
+    });
+    await open("a.ts");
+    await click("Edit");
+    await type("saved text");
+    await click("Save");
+
+    // The dialog is handed a different work item — a different worktree, a
+    // different set of files — while the save is still out.
+    await act(async () => {
+      view.rerender(<FilesPanel workItem={parked({ id: "wi-2", worktreePath: "/tmp/wt-2" })} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // Nothing of the previous item is left on screen to be written back.
+    expect(screen.getByText(/Select a file to view its contents/)).toBeTruthy();
+
+    const refreshesBefore = getFiles.mock.calls.length;
+    await act(async () => {
+      finishSave({ ...TEXT_FILE, path: "a.ts", changeStatus: "modified", content: "saved text" });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The answer describes a file in the worktree the panel has left. Drawing
+    // it here would put one item's file under another item's tree, and the next
+    // save would write it into that item.
+    expect(screen.queryByText("saved text")).toBeNull();
+    expect(screen.getByText(/Select a file to view its contents/)).toBeTruthy();
+    // Its list refresh is the previous item's too, and would have replaced this
+    // item's tree with that one's files.
+    expect(getFiles.mock.calls.length).toBe(refreshesBefore);
+  });
+
+  test("moving to another work item empties the viewer rather than keeping its file", async () => {
+    mockOneFile();
+
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(<FilesPanel workItem={parked()} />);
+      await Promise.resolve();
+    });
+    await open("a.ts");
+    expect(screen.getByText("before")).toBeTruthy();
+
+    await act(async () => {
+      view.rerender(<FilesPanel workItem={parked({ id: "wi-2", worktreePath: "/tmp/wt-2" })} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The path belonged to the item before it, and may not exist in this one.
+    expect(screen.queryByText("before")).toBeNull();
+    expect(screen.getByText("No file selected")).toBeTruthy();
+  });
+
+  test("offers no edit while the run still owns the worktree", async () => {
+    mockOneFile();
+
+    // Running, not parked: the agent is the one writing in there.
+    await renderPanel(makeWorkItem({ status: WorkItemStatus.Running }));
+    await open("a.ts");
+
+    expect(screen.getByText("before")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+  });
+
+  test("a run that starts again mid-edit withdraws Save but keeps the text", async () => {
+    mockOneFile();
+
+    const workItem = parked();
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(<FilesPanel workItem={workItem} />);
+      await Promise.resolve();
+    });
+    await open("a.ts");
+    await click("Edit");
+    await type("half-finished");
+
+    // The item leaves human feedback while the editor is open.
+    await act(async () => {
+      view.rerender(<FilesPanel workItem={{ ...workItem, status: WorkItemStatus.Running }} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The draft is the only copy of this text, so it is not thrown away — but
+    // it can no longer be written into a worktree the agent has taken back.
+    expect((screen.getByLabelText("Contents of a.ts") as HTMLTextAreaElement).value).toBe(
+      "half-finished",
+    );
+    expect(screen.getByText(/can no longer be saved/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save" }).hasAttribute("disabled")).toBe(true);
+    // Cancel still works, or the editor would be a trap.
+    expect(screen.getByRole("button", { name: "Cancel" }).hasAttribute("disabled")).toBe(false);
+
+    await click("Cancel");
+    expect(screen.queryByLabelText("Contents of a.ts")).toBeNull();
+    expect(screen.getByText("before")).toBeTruthy();
+  });
+
+  test("a file load that lands after the work item changed is dropped", async () => {
+    vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: [{ path: "a.ts", changeStatus: "none" }],
+    });
+    let finishLoad!: (file: WorktreeFileContent) => void;
+    vi.spyOn(authServices.workItemService, "getFileContent").mockReturnValue(
+      new Promise<WorktreeFileContent>((resolve) => {
+        finishLoad = resolve;
+      }),
+    );
+
+    const workItem = parked();
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(<FilesPanel workItem={workItem} />);
+      await Promise.resolve();
+    });
+    await open("a.ts");
+
+    // The item changes while that file is still being fetched.
+    await act(async () => {
+      view.rerender(<FilesPanel workItem={parked({ id: "wi-2", worktreePath: "/tmp/wt-2" })} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      finishLoad({ ...TEXT_FILE, content: "from the item we left" });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Held onto, it would sit behind a selection that no longer names it —
+    // drawn nowhere, but enough to offer an Edit for it.
+    expect(screen.queryByText("from the item we left")).toBeNull();
+    expect(screen.getByText("No file selected")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+  });
+
+  test("a background refresh leaves an open editor's unsaved text alone", async () => {
+    const { getFileContent } = mockOneFile();
+
+    const workItem = parked();
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(<FilesPanel workItem={workItem} />);
+      await Promise.resolve();
+    });
+    await open("a.ts");
+    await click("Edit");
+    await type("unsaved work");
+
+    // The run advances and the parent hands down a fresh work item while the
+    // editor is open. The silent re-pull that keeps the viewer current would
+    // take the draft with it, so it must not run for the file being edited.
+    getFileContent.mockResolvedValue({ ...TEXT_FILE, content: "refreshed by the run" });
+    await act(async () => {
+      view.rerender(<FilesPanel workItem={{ ...workItem }} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect((screen.getByLabelText("Contents of a.ts") as HTMLTextAreaElement).value).toBe(
+      "unsaved work",
+    );
+    expect(getFileContent).toHaveBeenCalledTimes(1);
+
+    // Once the edit is out of the way the viewer catches up again.
+    await click("Cancel");
+    await act(async () => {
+      view.rerender(<FilesPanel workItem={{ ...workItem }} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText("refreshed by the run")).toBeTruthy();
+  });
+
+  test("offers no edit for a binary, an image or a file that is not on disk", async () => {
+    const cases: {
+      label: string;
+      content: Partial<WorktreeFileContent>;
+      shown: () => unknown;
+    }[] = [
+      {
+        label: "binary",
+        content: { content: null, isBinary: true },
+        shown: () => screen.getByText(/Binary file/),
+      },
+      {
+        label: "image",
+        content: {
+          content: null,
+          isBinary: true,
+          imageMimeType: "image/png",
+          imageBase64: "iVBORw0KGgo=",
+        },
+        shown: () => screen.getByRole("img"),
+      },
+      {
+        label: "deleted",
+        content: { content: null, changeStatus: "deleted" },
+        shown: () => screen.getByText(/no content to display/),
+      },
+    ];
+
+    for (const { label, content, shown } of cases) {
+      mockOneFile(content);
+      await renderPanel(parked());
+      await open("a.ts");
+      // The file did arrive — it is drawn as the viewer's non-text case, which
+      // is what has no Edit to offer.
+      expect(shown(), label).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Edit" }), label).toBeNull();
+      cleanup();
+      vi.restoreAllMocks();
+    }
+  });
+
+  test("offers no edit outside the code view", async () => {
+    mockOneFile({ changeStatus: "modified", diff: "@@ -1 +1 @@\n-was\n+before" });
+
+    await renderPanel(parked());
+    await open("a.ts");
+    expect(screen.getByRole("button", { name: "Edit" })).toBeTruthy();
+
+    await click("Diff");
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
   });
 });

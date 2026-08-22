@@ -104,6 +104,20 @@ public interface IRepositoryManager
     Task<WorktreeFileContentResponse?> ReadWorktreeFileAsync(string worktreePath, string relativePath, string? defaultBranch = null);
 
     /// <summary>
+    /// Replace a single worktree file's contents with <paramref name="content"/>
+    /// and read it straight back, so the answer carries the change status and
+    /// diff the write produced rather than the ones the caller started from.
+    /// Only an existing text file is written — the file is opened, never
+    /// created, so a path with nothing at it stays that way — and anything else
+    /// is refused, saying which: callers answer a path that names nothing
+    /// differently from bytes that cannot take text. A file that goes away
+    /// underneath the write is refused too rather than raised, so no caller has
+    /// to catch to be correct. The write lands on disk and nowhere else;
+    /// committing it stays the run's business.
+    /// </summary>
+    Task<WorktreeFileWriteResult> WriteWorktreeFileAsync(string worktreePath, string relativePath, string content, string? defaultBranch = null);
+
+    /// <summary>
     /// Inspect a remote without cloning to infer the default branch (from the
     /// remote's advertised <c>HEAD</c> symref) and a name (from the clone URL).
     /// Honors the same <paramref name="auth"/> as clone. Returns null when the

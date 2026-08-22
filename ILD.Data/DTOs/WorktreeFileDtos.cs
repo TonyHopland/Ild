@@ -56,3 +56,77 @@ public sealed class WorktreeFileContentResponse
     /// </summary>
     public string? ImageBase64 { get; set; }
 }
+
+/// <summary>
+/// A save of one worktree file: <see cref="Content"/> replaces whatever stands
+/// at <see cref="Path"/> in its entirety, so a caller sends the whole file back
+/// rather than a patch. Empty content is a legitimate save — a file emptied out
+/// is not the same as one never sent — which is why <see cref="Content"/> is
+/// nullable here: null distinguishes an omitted field, which is rejected, from
+/// the empty string, which truncates the file.
+/// <para>
+/// The save answers with a <see cref="WorktreeFileContentResponse"/> read back
+/// off disk, so the change status and diff it carries describe the file as it
+/// now stands rather than as the editor last saw it.
+/// </para>
+/// </summary>
+public sealed class WorktreeFileSaveRequest
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Content { get; set; }
+}
+
+/// <summary>
+/// What a save did. The refusals are named rather than collapsed together
+/// because they are not the same answer: a path naming nothing in the worktree
+/// is what the read side already calls not-found, bytes the editor should never
+/// have offered to edit is the caller sending something the file cannot take,
+/// and a worktree that is no longer there is neither of those.
+/// </summary>
+public enum WorktreeFileWriteOutcome
+{
+    Saved,
+
+    /// <summary>The worktree is missing, or no longer a worktree git knows.</summary>
+    WorktreeUnavailable,
+
+    /// <summary>
+    /// Nothing writable stands at that path: it leads outside the worktree, or
+    /// it is not on disk — never created, or deleted under the editor.
+    /// </summary>
+    NotFound,
+
+    /// <summary>The file is there but is binary, so text cannot replace it.</summary>
+    NotText,
+}
+
+/// <summary>
+/// A save's outcome together with the file it produced. <see cref="File"/> is
+/// there for a save that happened and null for every refusal, and the two are
+/// built rather than assembled so that pairing cannot come apart: there is no
+/// way to say a file was saved without saying which file, and a caller that
+/// tests <see cref="File"/> has the answer to both questions.
+/// </summary>
+public readonly record struct WorktreeFileWriteResult
+{
+    private WorktreeFileWriteResult(WorktreeFileWriteOutcome outcome, WorktreeFileContentResponse? file)
+    {
+        Outcome = outcome;
+        File = file;
+    }
+
+    public WorktreeFileWriteOutcome Outcome { get; }
+    public WorktreeFileContentResponse? File { get; }
+
+    /// <summary>The write landed, and <paramref name="file"/> is what now stands there.</summary>
+    public static WorktreeFileWriteResult Saved(WorktreeFileContentResponse file) => new(WorktreeFileWriteOutcome.Saved, file);
+
+    /// <summary>The worktree is missing, or no longer one git knows.</summary>
+    public static WorktreeFileWriteResult WorktreeUnavailable { get; } = new(WorktreeFileWriteOutcome.WorktreeUnavailable, null);
+
+    /// <summary>Nothing writable stands at that path.</summary>
+    public static WorktreeFileWriteResult NotFound { get; } = new(WorktreeFileWriteOutcome.NotFound, null);
+
+    /// <summary>The file is there but is binary.</summary>
+    public static WorktreeFileWriteResult NotText { get; } = new(WorktreeFileWriteOutcome.NotText, null);
+}

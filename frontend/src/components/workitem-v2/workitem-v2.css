@@ -917,6 +917,63 @@
   white-space: pre;
 }
 
+/* The editor fills the pane the code view scrolls inside, so a long file is
+   scrolled by the textarea itself rather than by a box sized to its text. */
+.wiv2-code-editor {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  height: 100%;
+  resize: none;
+  border: none;
+  outline: none;
+  padding: 0 0.75rem;
+  background: none;
+  color: #d0d0e0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  /* Wrapped text would put a line somewhere other than where the file has it;
+     overflowing instead keeps the editor reading like the code view. */
+  white-space: pre;
+  overflow: auto;
+}
+
+/* The editor drops the browser's outline so it sits flush in the pane, which
+   leaves it owing a focus ring of its own — drawn inside the box, since it has
+   no border to hang one off. */
+.wiv2-code-editor:focus-visible {
+  outline: 1px solid #6366f1;
+  outline-offset: -1px;
+}
+
+.wiv2-files-edit {
+  flex-shrink: 0;
+  background: none;
+  border: 1px solid #3a3a5c;
+  border-radius: 0.25rem;
+  color: #a0a0b0;
+  font-size: 0.78rem;
+  padding: 0.2rem 0.6rem;
+  cursor: pointer;
+}
+
+.wiv2-files-edit:hover:not(:disabled) {
+  color: #e0e0e0;
+}
+
+.wiv2-files-edit-primary {
+  background-color: #6366f1;
+  border-color: #6366f1;
+  color: #fff;
+}
+
+.wiv2-files-edit:disabled,
+.wiv2-toggle:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 /* ---------- syntax highlighting ---------- */
 
 /* Token colours for the highlight.js class vocabulary, scoped to the code view

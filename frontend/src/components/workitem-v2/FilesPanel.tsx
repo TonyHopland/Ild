@@ -1,6 +1,7 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   WorkItem,
+  WorkItemStatus,
   WorktreeFileChangeStatus,
   WorktreeFileContent,
   WorktreeFileEntry,
@@ -59,6 +60,50 @@ const PREVIEW_RENDERER: Record<PreviewKind, (content: string, path: string) => R
   svg: (content, path) => <SvgView svg={content} path={path} />,
 };
 
+/**
+ * What makes the panel's contents a different thing to load: another work item,
+ * or the same one on another worktree. Both the refresh below and a save in
+ * flight measure against it, so neither can decide on its own that the panel is
+ * still showing what it was.
+ */
+function workItemKey(workItem: WorkItem): string {
+  return `${workItem.id}:${workItem.worktreePath ?? ""}`;
+}
+
+/**
+ * The editing half of the viewer's state, passed as one thing so the read-only
+ * viewer keeps a signature about the file it draws rather than about the editor
+ * it may put over it. A null `draft` is the read-only case.
+ */
+type EditorState = {
+  draft: string | null;
+  onChange: (next: string) => void;
+  saving: boolean;
+};
+
+/**
+ * Whether the worktree has one writer at the moment. Only while the run waits
+ * on a human does it: at any other time its agent is working in there, and an
+ * edit saved over what it is doing is a conflict neither side can see. Editing
+ * is offered then and not otherwise, which is the whole of how the two are kept
+ * apart — the server draws the same line, so this is the offer rather than the
+ * enforcement.
+ */
+function isWorktreeIdle(workItem: WorkItem): boolean {
+  return workItem.status === WorkItemStatus.HumanFeedback;
+}
+
+/**
+ * Whether the open file is one that can be edited at all. Only text the server
+ * actually handed over qualifies, and only under the code view: a binary, an
+ * inlined image and a file deleted on the branch all arrive with no `content`,
+ * so the one test covers every case the viewer already draws something else
+ * for. Whether *now* is a moment to edit it is {@link isWorktreeIdle}.
+ */
+function isEditable(content: WorktreeFileContent | null, mode: ViewMode): boolean {
+  return mode === "code" && content !== null && !content.isBinary && content.content !== null;
+}
+
 /** The modes the toolbar offers for a file: Preview joins them where one exists. */
 function offeredViewModes(path: string): ViewMode[] {
   return previewKindOf(path) ? ["code", "diff", "preview"] : ["code", "diff"];
@@ -103,6 +148,19 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   const [contentLoading, setContentLoading] = useState(false);
   const [contentError, setContentError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("code");
+  // The text being edited, or null when the viewer is read-only. Holding the
+  // draft rather than an `editing` flag keeps "what the user typed" and "are we
+  // editing" from ever disagreeing, and makes Cancel a single discard.
+  const [draft, setDraft] = useState<string | null>(null);
+  // Which file has a save in flight, rather than that one does: the tree stays
+  // clickable, so a save left behind on the file the user moved off must not
+  // reach the editor they open on the next one.
+  const [savingPath, setSavingPath] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // The key the panel is currently loaded for, set by the effect below and
+  // read by everything that resolves after it — see {@link workItemKey}.
+  const lastKeyRef = useRef<string | null>(null);
 
   const refresh = useCallback(
     async (showLoading: boolean) => {
@@ -127,6 +185,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
 
   const loadContent = useCallback(
     async (path: string, showLoading: boolean) => {
+      const key = workItemKey(workItem);
       setContentError(null);
       if (showLoading) {
         setContent(null);
@@ -134,14 +193,21 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
       }
       try {
         const result = await workItemService.getFileContent(workItem.id, path);
+        // Same reasoning as the save below: this is one worktree's file, and
+        // the panel may have been handed another item — or moved to another
+        // file — while it was in the air. Kept anyway it would sit behind a
+        // selection that no longer names it, which is enough to offer an Edit
+        // for a file the viewer is not even showing.
+        if (lastKeyRef.current !== key || selectedPathRef.current !== path) return;
         setContent(result);
       } catch (e) {
+        if (lastKeyRef.current !== key || selectedPathRef.current !== path) return;
         setContentError((e as { message?: string })?.message ?? "Failed to load file.");
       } finally {
         if (showLoading) setContentLoading(false);
       }
     },
-    [workItem.id],
+    [workItem],
   );
 
   // The parent refetches the work item every time the run advances (node/run
@@ -150,13 +216,29 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   // sync with the worktree without a manual page refresh. The first load (and
   // switching to a different item) shows the loading state; later background
   // refreshes are silent so the tree and viewer don't flicker.
-  const lastKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    const key = `${workItem.id}:${workItem.worktreePath ?? ""}`;
+    const key = workItemKey(workItem);
     const isNewItem = lastKeyRef.current !== key;
     lastKeyRef.current = key;
     void refresh(isNewItem);
-    if (!isNewItem && selectedPathRef.current) {
+    if (isNewItem) {
+      // Another item's worktree is another set of files. Whatever was open
+      // belonged to the item before it, so the viewer starts empty rather than
+      // keeping a path that may not exist here — and an edit of that file is
+      // certainly not an edit of this item's.
+      setSelectedPath(null);
+      selectedPathRef.current = null;
+      setContent(null);
+      setContentError(null);
+      setDraft(null);
+      setSaveError(null);
+      setSavingPath(null);
+      return;
+    }
+    // An open editor holds text that exists nowhere else yet, so the silent
+    // re-pull that keeps the viewer current is exactly what would destroy it.
+    // The tree still refreshes above; only the open file is left alone.
+    if (selectedPathRef.current && draft === null) {
       void loadContent(selectedPathRef.current, false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -178,10 +260,43 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
     (path: string) => {
       setSelectedPath(path);
       selectedPathRef.current = path;
+      setDraft(null);
+      setSaveError(null);
       void loadContent(path, true);
     },
     [loadContent],
   );
+
+  const itemKey = workItemKey(workItem);
+
+  const save = useCallback(async () => {
+    if (draft === null || !selectedPath) return;
+    setSavingPath(selectedPath);
+    setSaveError(null);
+    try {
+      // The save answers with the file as it now stands, so the viewer's status
+      // and diff come from the write itself; the list is re-pulled alongside it
+      // for the tree badge the same write may have just changed.
+      const saved = await workItemService.saveFileContent(workItem.id, selectedPath, draft);
+      // Neither the panel's item nor its selection is pinned while a save is
+      // out: the dialog can be handed a different work item, and the tree stays
+      // clickable. This answer is one worktree's file, so a panel now showing
+      // another item's has no use for any of it — not the file, and not the
+      // list refresh, which would pull the previous item's tree into it.
+      if (lastKeyRef.current !== itemKey) return;
+      // The badge on the file just written has to catch up even if the user
+      // has moved off it, so the list refreshes before the narrower guard.
+      void refresh(false);
+      if (selectedPathRef.current !== selectedPath) return;
+      setContent(saved);
+      setDraft(null);
+    } catch (e) {
+      if (lastKeyRef.current !== itemKey || selectedPathRef.current !== selectedPath) return;
+      setSaveError((e as { message?: string })?.message ?? "Failed to save file.");
+    } finally {
+      setSavingPath((current) => (current === selectedPath ? null : current));
+    }
+  }, [draft, selectedPath, itemKey, workItem.id, refresh]);
 
   const toggleFolder = useCallback((path: string) => {
     setToggledFolders((prev) => {
@@ -210,6 +325,9 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   );
 
   const mode = resolveViewMode(viewMode, selectedPath);
+  const idle = isWorktreeIdle(workItem);
+  const editable = idle && isEditable(content, mode) && !contentLoading && !contentError;
+  const saving = savingPath !== null && savingPath === selectedPath;
 
   if (!workItem.worktreePath) {
     return (
@@ -299,6 +417,9 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
       <div className="wiv2-files-viewer">
         <div className="wiv2-files-toolbar">
           <span className="wiv2-files-viewer-path">{selectedPath ?? "No file selected"}</span>
+          {/* The mode buttons lock while the editor is open: leaving the code
+              view mid-edit would hide the draft behind a pane that cannot show
+              it, so the user finishes or discards first. */}
           {selectedPath && (
             <div className="wiv2-toggle-group" role="group" aria-label="Viewer mode">
               {offeredViewModes(selectedPath).map((option) => (
@@ -308,13 +429,57 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
                   className={`wiv2-toggle${mode === option ? " wiv2-toggle-active" : ""}`}
                   onClick={() => setViewMode(option)}
                   aria-pressed={mode === option}
+                  disabled={draft !== null}
                 >
                   {VIEW_MODE_LABEL[option]}
                 </button>
               ))}
             </div>
           )}
+          {draft !== null ? (
+            <>
+              <button
+                type="button"
+                className="wiv2-files-edit wiv2-files-edit-primary"
+                onClick={() => void save()}
+                disabled={saving || !idle}
+              >
+                {saving ? "Saving…" : "Save"}
+              </button>
+              <button
+                type="button"
+                className="wiv2-files-edit"
+                onClick={() => {
+                  setDraft(null);
+                  setSaveError(null);
+                }}
+                disabled={saving}
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            editable && (
+              <button
+                type="button"
+                className="wiv2-files-edit"
+                onClick={() => setDraft(content?.content ?? "")}
+              >
+                Edit
+              </button>
+            )
+          )}
         </div>
+        {/* The run can pick back up while the editor is open. The draft is the
+            only copy of what the user typed, so it stays on screen with Save
+            withdrawn rather than being discarded out from under them. */}
+        {draft !== null && !idle && (
+          <div className="preview-message">
+            The run has started again, so this edit can no longer be saved — the agent is working in
+            these files now.
+          </div>
+        )}
+        {saveError && <div className="preview-message preview-error">{saveError}</div>}
         <div className="wiv2-files-content">
           <FileViewer
             selectedPath={selectedPath}
@@ -322,6 +487,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
             loading={contentLoading}
             error={contentError}
             mode={mode}
+            editor={{ draft, onChange: setDraft, saving }}
           />
         </div>
       </div>
@@ -335,12 +501,14 @@ function FileViewer({
   loading,
   error,
   mode,
+  editor,
 }: {
   selectedPath: string | null;
   content: WorktreeFileContent | null;
   loading: boolean;
   error: string | null;
   mode: ViewMode;
+  editor: EditorState;
 }) {
   if (!selectedPath) {
     return <div className="wiv2-empty">Select a file to view its contents.</div>;
@@ -387,6 +555,16 @@ function FileViewer({
 
   if (content.content === null) {
     return <div className="wiv2-empty">This file has no content to display.</div>;
+  }
+  if (editor.draft !== null) {
+    return (
+      <CodeEditor
+        value={editor.draft}
+        onChange={editor.onChange}
+        path={content.path}
+        readOnly={editor.saving}
+      />
+    );
   }
   return <CodeView code={content.content} path={content.path} />;
 }
@@ -471,6 +649,36 @@ function CodeView({ code, path }: { code: string; path: string }) {
         </div>
       ))}
     </pre>
+  );
+}
+
+/**
+ * The file open for editing: one plain textarea over the whole pane, deliberately
+ * without the code view's gutter and colouring. Numbering a box whose text moves
+ * as it is typed would have to be kept in step with it on every keystroke, and
+ * the alignment is wrong the moment a line wraps — the edit is the point here,
+ * not the reading.
+ */
+function CodeEditor({
+  value,
+  onChange,
+  path,
+  readOnly,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  path: string;
+  readOnly: boolean;
+}) {
+  return (
+    <textarea
+      className="wiv2-code-editor"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      readOnly={readOnly}
+      spellCheck={false}
+      aria-label={`Contents of ${path}`}
+    />
   );
 }
 

@@ -438,6 +438,45 @@ public class WorkItemsController : ControllerBase
         return Ok(content);
     }
 
+    // Writes land in the worktree and stop there — git is left alone, so an edit
+    // saved here reaches a branch the same way the run's own edits do.
+    [HttpPut("{id}/files/content")]
+    public async Task<IActionResult> SaveFileContent(string id, [FromBody] WorktreeFileSaveRequest? request)
+    {
+        if (request == null || string.IsNullOrWhiteSpace(request.Path))
+            return BadRequest(new { error = "path is required." });
+        if (request.Content == null)
+            return BadRequest(new { error = "content is required." });
+
+        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
+        if (error != null) return error;
+
+        // Only while the run is parked waiting on a human does the worktree
+        // have one writer. At any other time the agent owns it, and an edit
+        // saved into a file it is working on is a conflict neither side can
+        // see — so the answer is to not have two writers rather than to
+        // reconcile them.
+        if (workItem!.Status != RemoteWorkItemStatus.HumanFeedback)
+            return Conflict(new { error = "Files can only be edited while the work item is waiting for human feedback." });
+
+        var diffBase = await ResolveDiffBaseBranchAsync(workItem);
+        var result = await _repositoryManager.WriteWorktreeFileAsync(workItem.WorktreePath!, request.Path, request.Content, diffBase);
+        // A save that produced a file answers with it — asking for the file is
+        // the same question as asking whether it saved, so there is no arm here
+        // that could answer 200 with nothing in it. A file that is not there
+        // answers as it does when read, so the two endpoints do not disagree
+        // about the same path.
+        if (result.File is { } saved)
+            return Ok(saved);
+        return result.Outcome switch
+        {
+            WorktreeFileWriteOutcome.NotFound => NotFound(new { error = "File not found in worktree." }),
+            WorktreeFileWriteOutcome.NotText => BadRequest(new { error = "File is not a text file." }),
+            WorktreeFileWriteOutcome.WorktreeUnavailable => BadRequest(new { error = "Work item does not currently have an active worktree." }),
+            _ => BadRequest(new { error = "File could not be saved." }),
+        };
+    }
+
     [HttpPost("{id}/push-branch")]
     public async Task<IActionResult> PushBranch(string id)
     {

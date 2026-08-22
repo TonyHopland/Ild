@@ -1,6 +1,7 @@
 using ILD.Api.Controllers;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -54,11 +55,113 @@ public class WorkItemsControllerDiffBaseTests
         repoManager.Verify(m => m.ListWorktreeFilesAsync(WorktreePath, "main"), Times.Once);
     }
 
+    [Fact]
+    public async Task Saving_a_file_anchors_the_diff_it_answers_with_on_that_same_base()
+    {
+        // The save hands back the file as it now stands, and that response is
+        // what redraws the viewer — so it has to be measured from the fork point
+        // the reads use, or a save would rewrite the diff the user was reading.
+        var (controller, repoManager, db, _) = await SetupAsync(runBaseBranchOverride: "release/1.0");
+        using var _db = db;
+
+        var result = await controller.SaveFileContent(
+            WorkItemId,
+            new WorktreeFileSaveRequest { Path = "src/app.ts", Content = "edited" });
+
+        repoManager.Verify(m => m.WriteWorktreeFileAsync(WorktreePath, "src/app.ts", "edited", "release/1.0"), Times.Once);
+        var saved = Assert.IsType<WorktreeFileContentResponse>(Assert.IsType<OkObjectResult>(result).Value);
+        Assert.Equal("edited", saved.Content);
+        Assert.Equal("modified", saved.ChangeStatus);
+    }
+
+    [Fact]
+    public async Task A_save_missing_its_path_or_content_never_reaches_the_worktree()
+    {
+        var (controller, repoManager, db, _) = await SetupAsync(runBaseBranchOverride: null);
+        using var _db = db;
+
+        Assert.IsType<BadRequestObjectResult>(await controller.SaveFileContent(WorkItemId, null));
+        Assert.IsType<BadRequestObjectResult>(
+            await controller.SaveFileContent(WorkItemId, new WorktreeFileSaveRequest { Path = " ", Content = "x" }));
+        // Content absent is a malformed save; content empty is a file truncated.
+        Assert.IsType<BadRequestObjectResult>(
+            await controller.SaveFileContent(WorkItemId, new WorktreeFileSaveRequest { Path = "a.ts", Content = null }));
+        Assert.IsType<OkObjectResult>(
+            await controller.SaveFileContent(WorkItemId, new WorktreeFileSaveRequest { Path = "a.ts", Content = "" }));
+
+        repoManager.Verify(
+            m => m.WriteWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task A_file_is_only_editable_while_the_item_waits_on_a_human()
+    {
+        // Any other state and the run's agent is the one working in that
+        // worktree; a save into it would be a second writer nobody can see.
+        var (controller, repoManager, db, _) = await SetupAsync(
+            runBaseBranchOverride: null,
+            status: RemoteWorkItemStatus.Running);
+        using var _db = db;
+
+        var result = await controller.SaveFileContent(
+            WorkItemId,
+            new WorktreeFileSaveRequest { Path = "src/app.ts", Content = "edited" });
+
+        Assert.IsType<ConflictObjectResult>(result);
+        repoManager.Verify(
+            m => m.WriteWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task Reading_a_file_does_not_wait_on_a_human()
+    {
+        // The gate is on the write alone: a run in flight is exactly when
+        // someone wants to watch the files it is changing.
+        var (controller, repoManager, db, _) = await SetupAsync(
+            runBaseBranchOverride: null,
+            status: RemoteWorkItemStatus.Running);
+        using var _db = db;
+
+        await controller.GetFiles(WorkItemId);
+        await controller.GetFileContent(WorkItemId, "src/app.ts");
+
+        repoManager.Verify(m => m.ListWorktreeFilesAsync(WorktreePath, "main"), Times.Once);
+        repoManager.Verify(m => m.ReadWorktreeFileAsync(WorktreePath, "src/app.ts", "main"), Times.Once);
+    }
+
+    [Fact]
+    public async Task A_save_answers_each_refusal_in_its_own_terms()
+    {
+        // A file that is not there reads as 404, so it has to save as one too —
+        // the same path answering "not found" to one endpoint and "bad request"
+        // to the other is a contract a client cannot act on. Bytes and a worktree
+        // that has gone are the caller's problem, and stay 400.
+        var (controller, repoManager, db, _) = await SetupAsync(runBaseBranchOverride: null);
+        using var _db = db;
+
+        Assert.IsType<NotFoundObjectResult>(await SaveRefusedWith(WorktreeFileWriteResult.NotFound));
+        Assert.IsType<BadRequestObjectResult>(await SaveRefusedWith(WorktreeFileWriteResult.NotText));
+        Assert.IsType<BadRequestObjectResult>(await SaveRefusedWith(WorktreeFileWriteResult.WorktreeUnavailable));
+
+        async Task<IActionResult> SaveRefusedWith(WorktreeFileWriteResult refusal)
+        {
+            repoManager
+                .Setup(m => m.WriteWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
+                .ReturnsAsync(refusal);
+            return await controller.SaveFileContent(
+                WorkItemId,
+                new WorktreeFileSaveRequest { Path = "src/app.ts", Content = "edited" });
+        }
+    }
+
     private const string WorkItemId = "1";
     private const string WorktreePath = "/tmp/ild-difftest-worktree";
 
     private static async Task<(WorkItemsController Controller, Mock<IRepositoryManager> RepoManager, TestDb Db, string Id)> SetupAsync(
-        string? runBaseBranchOverride)
+        string? runBaseBranchOverride,
+        RemoteWorkItemStatus status = RemoteWorkItemStatus.HumanFeedback)
     {
         var db = new TestDb();
         var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
@@ -87,6 +190,9 @@ public class WorkItemsControllerDiffBaseTests
             .ReturnsAsync(new List<WorktreeFileEntry>());
         repoManager.Setup(m => m.ReadWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
             .ReturnsAsync((WorktreeFileContentResponse?)null);
+        repoManager.Setup(m => m.WriteWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
+            .ReturnsAsync((string _, string path, string content, string? __) => WorktreeFileWriteResult.Saved(
+                new WorktreeFileContentResponse { Path = path, ChangeStatus = "modified", Content = content }));
 
         var mgr = new WorkItemManager(
             repoManager.Object,
@@ -98,6 +204,9 @@ public class WorkItemsControllerDiffBaseTests
             engine: new Mock<ILoopEngine>().Object);
 
         var id = await mgr.CreateWorkItemAsync("t", "", repo.Id);
+        // Editing is only offered while the item waits on a human, so that is
+        // the state these save tests are written against.
+        await mgr.TransitionAsync(id, status);
 
         // The worktree the diff is taken in belongs to this run, and the run is
         // where the base was pinned — editing the work item since must not move

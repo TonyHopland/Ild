@@ -373,6 +373,52 @@ public class RepositoryManager : IRepositoryManager
         return response;
     }
 
+    public async Task<WorktreeFileWriteResult> WriteWorktreeFileAsync(string worktreePath, string relativePath, string content, string? defaultBranch = null)
+    {
+        if (!await ValidateWorktreeHealthAsync(worktreePath))
+            return WorktreeFileWriteResult.WorktreeUnavailable;
+
+        // A path that leads out of the worktree names nothing in it, which is
+        // the same answer as one that is simply not there — and the same one the
+        // read side gives, so neither endpoint tells a caller which it was.
+        var full = ResolveSafePath(worktreePath, relativePath);
+        if (full == null)
+            return WorktreeFileWriteResult.NotFound;
+
+        try
+        {
+            // One handle does the deciding and the writing, so the file sniffed
+            // is the file written — asking whether it exists first and acting on
+            // the answer afterwards leaves a gap that a delete fits through, and
+            // opening for create rather than open would fill that gap by putting
+            // the file back. A delete that beats this open is a refusal; one that
+            // races the write takes the bytes with it, as it would for any writer.
+            await using var file = new FileStream(full, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
+            if (await IsBinaryAsync(file))
+                return WorktreeFileWriteResult.NotText;
+
+            file.SetLength(0);
+            file.Position = 0;
+            // UTF-8 without a byte order mark, as File.WriteAllTextAsync wrote:
+            // a mark added here would show up as a change to the file's first
+            // line in every diff taken afterwards.
+            await file.WriteAsync(System.Text.Encoding.UTF8.GetBytes(content));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Gone, replaced by a directory, or otherwise not something this can
+            // write — all of which is the same to a caller as nothing writable
+            // standing there, and none of which is worth a 500.
+            return WorktreeFileWriteResult.NotFound;
+        }
+
+        // The run's agent works in this same worktree, so the file can be gone
+        // again before the read that describes it — a save cannot answer with a
+        // file it no longer holds, and says what a read of that path would now.
+        var written = await ReadWorktreeFileAsync(worktreePath, relativePath, defaultBranch);
+        return written == null ? WorktreeFileWriteResult.NotFound : WorktreeFileWriteResult.Saved(written);
+    }
+
     /// <summary>
     /// Resolve the fork point the run branched from. Prefers the repository's
     /// stored <paramref name="defaultBranch"/> (as <c>origin/&lt;branch&gt;</c>,
@@ -491,13 +537,66 @@ public class RepositoryManager : IRepositoryManager
         _ => "modified",
     };
 
+    /// <summary>
+    /// Where <paramref name="relativePath"/> actually lands inside
+    /// <paramref name="worktreePath"/>, or null if that is outside it. Links are
+    /// followed before the boundary is drawn, on both sides: a lexical check
+    /// answers where a path was spelled, not where it leads, so a link planted
+    /// in the worktree pointing out of it would otherwise be a way through —
+    /// one the write side would follow, carrying the user's text with it.
+    /// </summary>
     private static string? ResolveSafePath(string worktreePath, string relativePath)
     {
-        var root = Path.GetFullPath(worktreePath);
-        var full = Path.GetFullPath(Path.Combine(root, relativePath));
+        var root = ResolveLinks(Path.GetFullPath(worktreePath));
+        if (root == null) return null;
+        var full = ResolveLinks(Path.GetFullPath(Path.Combine(root, relativePath)));
+        if (full == null) return null;
         var rootWithSep = root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar;
         return full.StartsWith(rootWithSep, StringComparison.Ordinal) ? full : null;
     }
+
+    /// <summary>
+    /// <paramref name="path"/> with every link along it replaced by what it
+    /// points at, or null when it could not be resolved within
+    /// <see cref="MaxLinkHops"/>. Resolved a segment at a time, because a link
+    /// anywhere in the path leaves the rest of it somewhere else — a directory
+    /// link is as much a way out as a file one. A segment that does not exist
+    /// cannot be a link and is carried through as written, so this answers for
+    /// paths about to be created too.
+    /// <para>
+    /// Running out of hops is a refusal, not an answer: a path still holding a
+    /// link has not been followed to where it leads, and handing back where it
+    /// stopped would report a chain that ends outside the worktree as sitting
+    /// inside it — every hop but the last can be planted inside on purpose. The
+    /// budget spans the whole path and matches what Linux itself will follow, so
+    /// a chain this refuses is one the kernel would refuse to open anyway.
+    /// </para>
+    /// </summary>
+    private static string? ResolveLinks(string path)
+    {
+        var hops = 0;
+        var resolved = Path.GetPathRoot(path) ?? string.Empty;
+        foreach (var segment in path[resolved.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            resolved = Path.Combine(resolved, segment);
+            for (var target = LinkTargetOf(resolved); target != null; target = LinkTargetOf(resolved))
+            {
+                if (++hops > MaxLinkHops) return null;
+                resolved = Path.GetFullPath(target, Path.GetDirectoryName(resolved) ?? resolved);
+            }
+        }
+        return resolved;
+    }
+
+    /// <summary>What <paramref name="path"/> points at, or null if it is not a link.</summary>
+    private static string? LinkTargetOf(string path) =>
+        (Directory.Exists(path) ? (FileSystemInfo)new DirectoryInfo(path) : new FileInfo(path)).LinkTarget;
+
+    /// <summary>
+    /// Links followed across one path resolution, the same budget Linux spends
+    /// before it gives up with <c>ELOOP</c>.
+    /// </summary>
+    private const int MaxLinkHops = 40;
 
     /// <summary>
     /// Ceiling on the bytes of one image inlined into a file-content response.
@@ -533,9 +632,28 @@ public class RepositoryManager : IRepositoryManager
             _ => null,
         };
 
+    /// <summary>
+    /// Whether <paramref name="stream"/> reads as binary from where it stands,
+    /// without pulling it into memory: the sniff only ever looks at the head of
+    /// a file, so only the head is read. Leaves the stream wherever the read
+    /// left it, which a caller about to truncate does not care about.
+    /// </summary>
+    private static async Task<bool> IsBinaryAsync(Stream stream)
+    {
+        var head = new byte[BinarySniffBytes];
+        var read = await stream.ReadAtLeastAsync(head, head.Length, throwOnEndOfStream: false);
+        return IsBinary(read == head.Length ? head : head[..read]);
+    }
+
+    /// <summary>
+    /// How far into a file the binary sniff looks. A NUL this side of it is what
+    /// separates text from bytes; text that long without one is taken as text.
+    /// </summary>
+    private const int BinarySniffBytes = 8000;
+
     private static bool IsBinary(byte[] bytes)
     {
-        var limit = Math.Min(bytes.Length, 8000);
+        var limit = Math.Min(bytes.Length, BinarySniffBytes);
         for (var i = 0; i < limit; i++)
             if (bytes[i] == 0) return true;
         return false;
