@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Files in a work item are syntax coloured, and a Markdown file can be read as a rendered document — as can an SVG, shown as the picture it draws.**
 
-- **Edit a text file in a work item and save it, or cancel and keep what was there.**
+- **Edit a text file in a work item while it waits on you, and save it — or cancel and keep what was there.**
 
 ### Fixed
 

@@ -451,8 +451,16 @@ public class WorkItemsController : ControllerBase
         var (workItem, error) = await GetPreviewableWorkItemAsync(id);
         if (error != null) return error;
 
-        var diffBase = await ResolveDiffBaseBranchAsync(workItem!);
-        var result = await _repositoryManager.WriteWorktreeFileAsync(workItem!.WorktreePath!, request.Path, request.Content, diffBase);
+        // Only while the run is parked waiting on a human does the worktree
+        // have one writer. At any other time the agent owns it, and an edit
+        // saved into a file it is working on is a conflict neither side can
+        // see — so the answer is to not have two writers rather than to
+        // reconcile them.
+        if (workItem!.Status != RemoteWorkItemStatus.HumanFeedback)
+            return Conflict(new { error = "Files can only be edited while the work item is waiting for human feedback." });
+
+        var diffBase = await ResolveDiffBaseBranchAsync(workItem);
+        var result = await _repositoryManager.WriteWorktreeFileAsync(workItem.WorktreePath!, request.Path, request.Content, diffBase);
         // A save that produced a file answers with it — asking for the file is
         // the same question as asking whether it saved, so there is no arm here
         // that could answer 200 with nothing in it. A file that is not there

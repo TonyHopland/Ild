@@ -569,15 +569,40 @@ public class RepositoryManagerTests : IDisposable
         Assert.Equal(WorktreeFileWriteOutcome.NotFound, await OutcomeAsync(mgr, wt, "../outside.txt"));
         Assert.Equal("untouched\n", await File.ReadAllTextAsync(outside));
 
-        // Neither does the write invent a file the read side would not serve.
+        // Neither does the write invent a file the read side would not serve:
+        // it opens what is there rather than creating what is not, so a path
+        // with nothing at it stays empty instead of being filled in.
         Assert.Equal(WorktreeFileWriteOutcome.NotFound, await OutcomeAsync(mgr, wt, "does-not-exist.txt"));
         Assert.False(File.Exists(Path.Combine(wt, "does-not-exist.txt")));
+
+        // A directory standing where the file should be is refused the same
+        // way, rather than escaping as an error the endpoint cannot answer.
+        Directory.CreateDirectory(Path.Combine(wt, "a-directory"));
+        Assert.Equal(WorktreeFileWriteOutcome.NotFound, await OutcomeAsync(mgr, wt, "a-directory"));
+        Assert.True(Directory.Exists(Path.Combine(wt, "a-directory")));
 
         // Bytes are a different refusal: the file is there, it just cannot take
         // text — and the caller is told which of the two it hit.
         File.WriteAllBytes(Path.Combine(wt, "blob.bin"), new byte[] { 1, 2, 0, 3, 4 });
         Assert.Equal(WorktreeFileWriteOutcome.NotText, await OutcomeAsync(mgr, wt, "blob.bin"));
         Assert.Equal(new byte[] { 1, 2, 0, 3, 4 }, await File.ReadAllBytesAsync(Path.Combine(wt, "blob.bin")));
+    }
+
+    [Fact]
+    public async Task WriteWorktreeFile_replaces_the_file_without_leaving_a_mark_on_it()
+    {
+        var (work, mgr) = CloneWithOrigin();
+        var wt = await mgr.CreateWorktreeAsync(work, "feature-write-bytes");
+        var target = Path.Combine(wt, "mod.txt");
+
+        // Longer than the sniff reads, so the write has to truncate rather than
+        // overwrite in place, and non-ASCII so the encoding is not incidental.
+        await File.WriteAllTextAsync(target, new string('x', 9000));
+        await mgr.WriteWorktreeFileAsync(wt, "mod.txt", "aå\n");
+
+        // Byte for byte: UTF-8, no byte order mark, nothing of the old contents
+        // left past the end of the new ones.
+        Assert.Equal(new byte[] { 0x61, 0xC3, 0xA5, 0x0A }, await File.ReadAllBytesAsync(target));
     }
 
     [Fact]

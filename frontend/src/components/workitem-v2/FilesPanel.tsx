@@ -1,6 +1,7 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   WorkItem,
+  WorkItemStatus,
   WorktreeFileChangeStatus,
   WorktreeFileContent,
   WorktreeFileEntry,
@@ -81,10 +82,23 @@ type EditorState = {
 };
 
 /**
- * Whether the open file can be edited in place. Only text the server actually
- * handed over qualifies, and only under the code view: a binary, an inlined
- * image and a file deleted on the branch all arrive with no `content`, so the
- * one test covers every case the viewer already draws something else for.
+ * Whether the worktree has one writer at the moment. Only while the run waits
+ * on a human does it: at any other time its agent is working in there, and an
+ * edit saved over what it is doing is a conflict neither side can see. Editing
+ * is offered then and not otherwise, which is the whole of how the two are kept
+ * apart — the server draws the same line, so this is the offer rather than the
+ * enforcement.
+ */
+function isWorktreeIdle(workItem: WorkItem): boolean {
+  return workItem.status === WorkItemStatus.HumanFeedback;
+}
+
+/**
+ * Whether the open file is one that can be edited at all. Only text the server
+ * actually handed over qualifies, and only under the code view: a binary, an
+ * inlined image and a file deleted on the branch all arrive with no `content`,
+ * so the one test covers every case the viewer already draws something else
+ * for. Whether *now* is a moment to edit it is {@link isWorktreeIdle}.
  */
 function isEditable(content: WorktreeFileContent | null, mode: ViewMode): boolean {
   return mode === "code" && content !== null && !content.isBinary && content.content !== null;
@@ -300,7 +314,8 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   );
 
   const mode = resolveViewMode(viewMode, selectedPath);
-  const editable = isEditable(content, mode) && !contentLoading && !contentError;
+  const idle = isWorktreeIdle(workItem);
+  const editable = idle && isEditable(content, mode) && !contentLoading && !contentError;
   const saving = savingPath !== null && savingPath === selectedPath;
 
   if (!workItem.worktreePath) {
@@ -410,8 +425,30 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
               ))}
             </div>
           )}
-          {editable &&
-            (draft === null ? (
+          {draft !== null ? (
+            <>
+              <button
+                type="button"
+                className="wiv2-files-edit wiv2-files-edit-primary"
+                onClick={() => void save()}
+                disabled={saving || !idle}
+              >
+                {saving ? "Saving…" : "Save"}
+              </button>
+              <button
+                type="button"
+                className="wiv2-files-edit"
+                onClick={() => {
+                  setDraft(null);
+                  setSaveError(null);
+                }}
+                disabled={saving}
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            editable && (
               <button
                 type="button"
                 className="wiv2-files-edit"
@@ -419,30 +456,18 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
               >
                 Edit
               </button>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  className="wiv2-files-edit wiv2-files-edit-primary"
-                  onClick={() => void save()}
-                  disabled={saving}
-                >
-                  {saving ? "Saving…" : "Save"}
-                </button>
-                <button
-                  type="button"
-                  className="wiv2-files-edit"
-                  onClick={() => {
-                    setDraft(null);
-                    setSaveError(null);
-                  }}
-                  disabled={saving}
-                >
-                  Cancel
-                </button>
-              </>
-            ))}
+            )
+          )}
         </div>
+        {/* The run can pick back up while the editor is open. The draft is the
+            only copy of what the user typed, so it stays on screen with Save
+            withdrawn rather than being discarded out from under them. */}
+        {draft !== null && !idle && (
+          <div className="preview-message">
+            The run has started again, so this edit can no longer be saved — the agent is working in
+            these files now.
+          </div>
+        )}
         {saveError && <div className="preview-message preview-error">{saveError}</div>}
         <div className="wiv2-files-content">
           <FileViewer
