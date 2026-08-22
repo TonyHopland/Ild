@@ -128,7 +128,10 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   // draft rather than an `editing` flag keeps "what the user typed" and "are we
   // editing" from ever disagreeing, and makes Cancel a single discard.
   const [draft, setDraft] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  // Which file has a save in flight, rather than that one does: the tree stays
+  // clickable, so a save left behind on the file the user moved off must not
+  // reach the editor they open on the next one.
+  const [savingPath, setSavingPath] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const refresh = useCallback(
@@ -222,7 +225,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
 
   const save = useCallback(async () => {
     if (draft === null || !selectedPath) return;
-    setSaving(true);
+    setSavingPath(selectedPath);
     setSaveError(null);
     try {
       // The save answers with the file as it now stands, so the viewer's status
@@ -242,7 +245,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
       if (selectedPathRef.current !== selectedPath) return;
       setSaveError((e as { message?: string })?.message ?? "Failed to save file.");
     } finally {
-      setSaving(false);
+      setSavingPath((current) => (current === selectedPath ? null : current));
     }
   }, [draft, selectedPath, workItem.id, refresh]);
 
@@ -274,6 +277,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
 
   const mode = resolveViewMode(viewMode, selectedPath);
   const editable = isEditable(content, mode) && !contentLoading && !contentError;
+  const saving = savingPath !== null && savingPath === selectedPath;
 
   if (!workItem.worktreePath) {
     return (

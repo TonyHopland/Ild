@@ -575,6 +575,44 @@ public class RepositoryManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_link_out_of_the_worktree_is_not_a_way_through_the_guard()
+    {
+        var (work, mgr) = CloneWithOrigin();
+        var wt = await mgr.CreateWorktreeAsync(work, "feature-write-link");
+        var outside = Path.Combine(Directory.GetParent(wt)!.FullName, "outside.txt");
+        await File.WriteAllTextAsync(outside, "untouched\n");
+
+        // Spelled entirely inside the worktree, both of these lead out of it —
+        // the file link directly, the directory link one segment at a time.
+        File.CreateSymbolicLink(Path.Combine(wt, "escape.txt"), outside);
+        Directory.CreateSymbolicLink(Path.Combine(wt, "out"), Directory.GetParent(wt)!.FullName);
+
+        Assert.Null(await mgr.WriteWorktreeFileAsync(wt, "escape.txt", "clobbered\n"));
+        Assert.Null(await mgr.WriteWorktreeFileAsync(wt, "out/outside.txt", "clobbered\n"));
+        Assert.Equal("untouched\n", await File.ReadAllTextAsync(outside));
+
+        // The boundary is the same one the read side draws, so neither hands the
+        // file back either.
+        Assert.Null(await mgr.ReadWorktreeFileAsync(wt, "escape.txt"));
+        Assert.Null(await mgr.ReadWorktreeFileAsync(wt, "out/outside.txt"));
+    }
+
+    [Fact]
+    public async Task A_link_within_the_worktree_still_writes_through_to_its_target()
+    {
+        var (work, mgr) = CloneWithOrigin();
+        var wt = await mgr.CreateWorktreeAsync(work, "feature-write-inner-link");
+        var target = Path.Combine(wt, "inner.txt");
+        await File.WriteAllTextAsync(target, "before\n");
+        File.CreateSymbolicLink(Path.Combine(wt, "alias.txt"), target);
+
+        // Following links is not the same as refusing them: one that stays
+        // inside the worktree lands inside it, which is all the guard asks.
+        Assert.NotNull(await mgr.WriteWorktreeFileAsync(wt, "alias.txt", "after\n"));
+        Assert.Equal("after\n", await File.ReadAllTextAsync(target));
+    }
+
+    [Fact]
     public async Task WriteWorktreeFile_refuses_a_worktree_that_is_missing_or_not_one()
     {
         var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));

@@ -381,7 +381,7 @@ public class RepositoryManager : IRepositoryManager
         var full = ResolveSafePath(worktreePath, relativePath);
         if (full == null || !File.Exists(full))
             return null;
-        if (IsBinary(await File.ReadAllBytesAsync(full)))
+        if (await IsBinaryOnDiskAsync(full))
             return null;
 
         await File.WriteAllTextAsync(full, content);
@@ -506,13 +506,49 @@ public class RepositoryManager : IRepositoryManager
         _ => "modified",
     };
 
+    /// <summary>
+    /// Where <paramref name="relativePath"/> actually lands inside
+    /// <paramref name="worktreePath"/>, or null if that is outside it. Links are
+    /// followed before the boundary is drawn, on both sides: a lexical check
+    /// answers where a path was spelled, not where it leads, so a link planted
+    /// in the worktree pointing out of it would otherwise be a way through —
+    /// one the write side would follow, carrying the user's text with it.
+    /// </summary>
     private static string? ResolveSafePath(string worktreePath, string relativePath)
     {
-        var root = Path.GetFullPath(worktreePath);
-        var full = Path.GetFullPath(Path.Combine(root, relativePath));
+        var root = ResolveLinks(Path.GetFullPath(worktreePath));
+        var full = ResolveLinks(Path.GetFullPath(Path.Combine(root, relativePath)));
         var rootWithSep = root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar;
         return full.StartsWith(rootWithSep, StringComparison.Ordinal) ? full : null;
     }
+
+    /// <summary>
+    /// <paramref name="path"/> with every link along it replaced by what it
+    /// points at. Resolved a segment at a time, because a link anywhere in the
+    /// path leaves the rest of it somewhere else — a directory link is as much a
+    /// way out as a file one. A segment that does not exist cannot be a link and
+    /// is carried through as written, so this answers for paths about to be
+    /// created too. Chains stop after <see cref="MaxLinkHops"/>, which leaves a
+    /// loop unresolved rather than followed forever; the caller's boundary check
+    /// is what then refuses it.
+    /// </summary>
+    private static string ResolveLinks(string path)
+    {
+        var resolved = Path.GetPathRoot(path) ?? string.Empty;
+        foreach (var segment in path[resolved.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            resolved = Path.Combine(resolved, segment);
+            for (var hop = 0; hop < MaxLinkHops; hop++)
+            {
+                FileSystemInfo entry = Directory.Exists(resolved) ? new DirectoryInfo(resolved) : new FileInfo(resolved);
+                if (entry.LinkTarget == null) break;
+                resolved = Path.GetFullPath(entry.LinkTarget, Path.GetDirectoryName(resolved) ?? resolved);
+            }
+        }
+        return resolved;
+    }
+
+    private const int MaxLinkHops = 16;
 
     /// <summary>
     /// Ceiling on the bytes of one image inlined into a file-content response.
@@ -548,9 +584,28 @@ public class RepositoryManager : IRepositoryManager
             _ => null,
         };
 
+    /// <summary>
+    /// Whether the file at <paramref name="path"/> reads as binary, without
+    /// pulling it into memory: the sniff only ever looks at the head of a file,
+    /// so only the head is read.
+    /// </summary>
+    private static async Task<bool> IsBinaryOnDiskAsync(string path)
+    {
+        var head = new byte[BinarySniffBytes];
+        await using var stream = File.OpenRead(path);
+        var read = await stream.ReadAtLeastAsync(head, head.Length, throwOnEndOfStream: false);
+        return IsBinary(read == head.Length ? head : head[..read]);
+    }
+
+    /// <summary>
+    /// How far into a file the binary sniff looks. A NUL this side of it is what
+    /// separates text from bytes; text that long without one is taken as text.
+    /// </summary>
+    private const int BinarySniffBytes = 8000;
+
     private static bool IsBinary(byte[] bytes)
     {
-        var limit = Math.Min(bytes.Length, 8000);
+        var limit = Math.Min(bytes.Length, BinarySniffBytes);
         for (var i = 0; i < limit; i++)
             if (bytes[i] == 0) return true;
         return false;

@@ -939,6 +939,14 @@
   overflow: auto;
 }
 
+/* The editor drops the browser's outline so it sits flush in the pane, which
+   leaves it owing a focus ring of its own — drawn inside the box, since it has
+   no border to hang one off. */
+.wiv2-code-editor:focus-visible {
+  outline: 1px solid #6366f1;
+  outline-offset: -1px;
+}
+
 .wiv2-files-edit {
   flex-shrink: 0;
   background: none;

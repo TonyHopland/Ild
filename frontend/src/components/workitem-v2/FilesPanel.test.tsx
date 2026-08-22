@@ -868,11 +868,36 @@ describe("FilesPanel editing", () => {
     });
   }
 
-  async function type(text: string) {
+  async function type(text: string, path = "a.ts") {
     await act(async () => {
-      fireEvent.change(screen.getByLabelText("Contents of a.ts"), { target: { value: text } });
+      fireEvent.change(screen.getByLabelText(`Contents of ${path}`), { target: { value: text } });
       await Promise.resolve();
     });
+  }
+
+  /** Two files and a save that only resolves when the test says so. */
+  function mockTwoFilesWithHeldSave() {
+    vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: [
+        { path: "a.ts", changeStatus: "none" },
+        { path: "b.ts", changeStatus: "none" },
+      ],
+    });
+    vi.spyOn(authServices.workItemService, "getFileContent").mockImplementation(
+      async (_id: string, path: string) => ({
+        ...TEXT_FILE,
+        path,
+        content: path === "a.ts" ? "before" : "the other file",
+      }),
+    );
+    let finishSave!: (saved: WorktreeFileContent) => void;
+    vi.spyOn(authServices.workItemService, "saveFileContent").mockReturnValue(
+      new Promise<WorktreeFileContent>((resolve) => {
+        finishSave = resolve;
+      }),
+    );
+    return { finishSave: (saved: WorktreeFileContent) => finishSave(saved) };
   }
 
   test("writes the edited file back and redraws from what was saved", async () => {
@@ -942,26 +967,7 @@ describe("FilesPanel editing", () => {
   });
 
   test("a save that lands after the user moved on leaves the new file alone", async () => {
-    vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
-      worktreePath: "/tmp/wt",
-      files: [
-        { path: "a.ts", changeStatus: "none" },
-        { path: "b.ts", changeStatus: "none" },
-      ],
-    });
-    vi.spyOn(authServices.workItemService, "getFileContent").mockImplementation(
-      async (_id: string, path: string) => ({
-        ...TEXT_FILE,
-        path,
-        content: path === "a.ts" ? "before" : "the other file",
-      }),
-    );
-    let finishSave!: (saved: WorktreeFileContent) => void;
-    vi.spyOn(authServices.workItemService, "saveFileContent").mockReturnValue(
-      new Promise<WorktreeFileContent>((resolve) => {
-        finishSave = resolve;
-      }),
-    );
+    const { finishSave } = mockTwoFilesWithHeldSave();
 
     await renderPanel(makeWorkItem());
     await open("a.ts");
@@ -985,6 +991,29 @@ describe("FilesPanel editing", () => {
     // write it into that file.
     expect(screen.getByText("the other file")).toBeTruthy();
     expect(screen.queryByText("saved text")).toBeNull();
+  });
+
+  test("a save in flight on one file leaves the next file's editor writable", async () => {
+    mockTwoFilesWithHeldSave();
+
+    await renderPanel(makeWorkItem());
+    await open("a.ts");
+    await click("Edit");
+    await type("saved text");
+    await click("Save");
+
+    // The save for a.ts is still out. Editing b.ts is a different file's edit,
+    // so it must not be held read-only waiting on it.
+    await open("b.ts");
+    await click("Edit");
+    const box = screen.getByLabelText("Contents of b.ts") as HTMLTextAreaElement;
+    expect(box.readOnly).toBe(false);
+
+    await type("typed while a.ts saves", "b.ts");
+    expect((screen.getByLabelText("Contents of b.ts") as HTMLTextAreaElement).value).toBe(
+      "typed while a.ts saves",
+    );
+    expect(screen.getByRole("button", { name: "Save" }).hasAttribute("disabled")).toBe(false);
   });
 
   test("a background refresh leaves an open editor's unsaved text alone", async () => {
