@@ -158,6 +158,10 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   const [savingPath, setSavingPath] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  // The key the panel is currently loaded for, set by the effect below and
+  // read by everything that resolves after it — see {@link workItemKey}.
+  const lastKeyRef = useRef<string | null>(null);
+
   const refresh = useCallback(
     async (showLoading: boolean) => {
       if (!workItem.worktreePath) {
@@ -181,6 +185,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
 
   const loadContent = useCallback(
     async (path: string, showLoading: boolean) => {
+      const key = workItemKey(workItem);
       setContentError(null);
       if (showLoading) {
         setContent(null);
@@ -188,14 +193,21 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
       }
       try {
         const result = await workItemService.getFileContent(workItem.id, path);
+        // Same reasoning as the save below: this is one worktree's file, and
+        // the panel may have been handed another item — or moved to another
+        // file — while it was in the air. Kept anyway it would sit behind a
+        // selection that no longer names it, which is enough to offer an Edit
+        // for a file the viewer is not even showing.
+        if (lastKeyRef.current !== key || selectedPathRef.current !== path) return;
         setContent(result);
       } catch (e) {
+        if (lastKeyRef.current !== key || selectedPathRef.current !== path) return;
         setContentError((e as { message?: string })?.message ?? "Failed to load file.");
       } finally {
         if (showLoading) setContentLoading(false);
       }
     },
-    [workItem.id],
+    [workItem],
   );
 
   // The parent refetches the work item every time the run advances (node/run
@@ -204,7 +216,6 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   // sync with the worktree without a manual page refresh. The first load (and
   // switching to a different item) shows the loading state; later background
   // refreshes are silent so the tree and viewer don't flicker.
-  const lastKeyRef = useRef<string | null>(null);
   useEffect(() => {
     const key = workItemKey(workItem);
     const isNewItem = lastKeyRef.current !== key;

@@ -1129,6 +1129,46 @@ describe("FilesPanel editing", () => {
     expect(screen.getByText("before")).toBeTruthy();
   });
 
+  test("a file load that lands after the work item changed is dropped", async () => {
+    vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: [{ path: "a.ts", changeStatus: "none" }],
+    });
+    let finishLoad!: (file: WorktreeFileContent) => void;
+    vi.spyOn(authServices.workItemService, "getFileContent").mockReturnValue(
+      new Promise<WorktreeFileContent>((resolve) => {
+        finishLoad = resolve;
+      }),
+    );
+
+    const workItem = parked();
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(<FilesPanel workItem={workItem} />);
+      await Promise.resolve();
+    });
+    await open("a.ts");
+
+    // The item changes while that file is still being fetched.
+    await act(async () => {
+      view.rerender(<FilesPanel workItem={parked({ id: "wi-2", worktreePath: "/tmp/wt-2" })} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      finishLoad({ ...TEXT_FILE, content: "from the item we left" });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Held onto, it would sit behind a selection that no longer names it —
+    // drawn nowhere, but enough to offer an Edit for it.
+    expect(screen.queryByText("from the item we left")).toBeNull();
+    expect(screen.getByText("No file selected")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+  });
+
   test("a background refresh leaves an open editor's unsaved text alone", async () => {
     const { getFileContent } = mockOneFile();
 
