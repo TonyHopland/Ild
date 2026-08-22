@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   WorkItem,
   WorktreeFileChangeStatus,
@@ -35,8 +35,7 @@ type PreviewKind = "markdown" | "svg";
 /**
  * How a file previews, or null when it has nothing to preview as. The one
  * answer all three of its users share — the toolbar's offer, the fallback when
- * the selection moves off a previewable file, and the viewer's choice of
- * renderer — so a newly previewable suffix is added here and nowhere else.
+ * the selection moves off a previewable file, and {@link PREVIEW_RENDERER}.
  */
 function previewKindOf(path: string): PreviewKind | null {
   const lower = path.toLowerCase();
@@ -44,6 +43,21 @@ function previewKindOf(path: string): PreviewKind | null {
   if (lower.endsWith(".svg")) return "svg";
   return null;
 }
+
+/**
+ * What each kind draws. Keyed by the kind rather than picked out by a chain of
+ * ifs, so the two halves of adding a previewable suffix stay tied together: a
+ * kind named above with nothing to draw it does not compile, where a chain
+ * would silently hand the new file to whichever renderer sat at the end of it.
+ */
+const PREVIEW_RENDERER: Record<PreviewKind, (content: string, path: string) => ReactNode> = {
+  markdown: (content) => (
+    <div className="wiv2-file-markdown">
+      <MarkdownRenderer content={content} />
+    </div>
+  ),
+  svg: (content, path) => <SvgView svg={content} path={path} />,
+};
 
 /** The modes the toolbar offers for a file: Preview joins them where one exists. */
 function offeredViewModes(path: string): ViewMode[] {
@@ -366,15 +380,9 @@ function FileViewer({
   // whatever its name ends in. An empty markdown file does — it previews as an
   // empty document rather than falling through to the code view, which would
   // leave the toolbar claiming Preview over a pane showing something else.
-  if (mode === "preview" && content.content !== null) {
-    if (previewKindOf(content.path) === "svg") {
-      return <SvgView svg={content.content} path={content.path} />;
-    }
-    return (
-      <div className="wiv2-file-markdown">
-        <MarkdownRenderer content={content.content} />
-      </div>
-    );
+  const previewKind = mode === "preview" ? previewKindOf(content.path) : null;
+  if (previewKind && content.content !== null) {
+    return PREVIEW_RENDERER[previewKind](content.content, content.path);
   }
 
   if (content.content === null) {
