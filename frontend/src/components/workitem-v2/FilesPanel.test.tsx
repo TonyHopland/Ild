@@ -636,3 +636,198 @@ describe("FilesPanel diff rendering", () => {
     expect(screen.getByText("+world")).toBeTruthy();
   });
 });
+
+describe("FilesPanel SVG preview", () => {
+  function mockFiles(paths: string[], content: string) {
+    vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: paths.map((path) => ({ path, changeStatus: "modified" as const })),
+    });
+    vi.spyOn(authServices.workItemService, "getFileContent").mockImplementation(
+      async (_id: string, path: string) => ({
+        path,
+        changeStatus: "modified" as const,
+        content,
+        diff: null,
+        // The server serves SVG as text, deliberately — never as an inline
+        // image — so these stay null, as they do for any other text file.
+        isBinary: false,
+        imageMimeType: null,
+        imageBase64: null,
+      }),
+    );
+  }
+
+  async function open(name: string) {
+    await act(async () => {
+      fireEvent.click(screen.getByText(name));
+      await Promise.resolve();
+    });
+  }
+
+  async function click(name: string) {
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name }));
+      await Promise.resolve();
+    });
+  }
+
+  const CIRCLE = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><circle r="4"/></svg>';
+
+  test("offers Preview for an SVG and draws it as an image, leaving Code intact", async () => {
+    mockFiles(["logo.svg", "a.ts"], CIRCLE);
+    await renderPanel(makeWorkItem());
+
+    await open("logo.svg");
+    expect(screen.getByRole("button", { name: "Preview" })).toBeTruthy();
+    // Code stays the default, syntax-coloured as any other markup.
+    expect(document.querySelector(".wiv2-code")).toBeTruthy();
+
+    await click("Preview");
+    const img = screen.getByRole("img") as HTMLImageElement;
+    expect(img.getAttribute("alt")).toBe("Rendered contents of SVG file logo.svg");
+    expect(img.getAttribute("src")).toBe(
+      `data:image/svg+xml;charset=utf-8,${encodeURIComponent(CIRCLE)}`,
+    );
+    // Drawn as a picture, not spliced into the document as live markup.
+    expect(document.querySelector(".wiv2-files-content svg")).toBeNull();
+    expect(document.querySelector(".wiv2-code")).toBeNull();
+
+    // Back to Code, and the file reads as its own source again.
+    await click("Code");
+    expect(document.querySelector(".wiv2-code")).toBeTruthy();
+    expect(screen.queryByRole("img")).toBeNull();
+    expect(screen.getByText("circle")).toBeTruthy();
+
+    // A file with no preview still has none to offer.
+    await open("a.ts");
+    expect(screen.queryByRole("button", { name: "Preview" })).toBeNull();
+  });
+
+  test("keeps a script-bearing SVG inert: no element, no inline markup, no execution", async () => {
+    const hostile =
+      '<svg xmlns="http://www.w3.org/2000/svg"><script>window.__pwned = true;</script></svg>';
+    mockFiles(["hostile.svg"], hostile);
+    await renderPanel(makeWorkItem());
+
+    await open("hostile.svg");
+    await click("Preview");
+
+    // The markup only ever reaches the DOM percent-encoded inside an <img>
+    // src, which no browser executes; nothing is parsed into the document.
+    const img = screen.getByRole("img") as HTMLImageElement;
+    expect(img.getAttribute("src")).toBe(
+      `data:image/svg+xml;charset=utf-8,${encodeURIComponent(hostile)}`,
+    );
+    expect(document.querySelector(".wiv2-files-content svg")).toBeNull();
+    expect(document.querySelector(".wiv2-files-content script")).toBeNull();
+    expect((window as unknown as { __pwned?: boolean }).__pwned).toBeUndefined();
+  });
+
+  test("says an empty SVG is empty rather than drawing a broken image", async () => {
+    mockFiles(["empty.svg"], "");
+    await renderPanel(makeWorkItem());
+
+    await open("empty.svg");
+    await click("Preview");
+
+    // The toolbar says Preview, so the pane must not quietly show the code view.
+    expect(screen.getByRole("button", { name: "Preview" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(screen.getByText(/This file is empty/)).toBeTruthy();
+    expect(screen.queryByRole("img")).toBeNull();
+    expect(document.querySelector(".wiv2-code")).toBeNull();
+  });
+
+  test("says so when the markup will not draw, and recovers on the next file", async () => {
+    mockFiles(["broken.svg", "logo.svg"], "");
+    vi.spyOn(authServices.workItemService, "getFileContent").mockImplementation(
+      async (_id: string, path: string) => ({
+        path,
+        changeStatus: "modified" as const,
+        content: path === "broken.svg" ? "<svg><not closed" : CIRCLE,
+        diff: null,
+        isBinary: false,
+        imageMimeType: null,
+        imageBase64: null,
+      }),
+    );
+    await renderPanel(makeWorkItem());
+
+    await open("broken.svg");
+    await click("Preview");
+    await act(async () => {
+      fireEvent.error(screen.getByRole("img"));
+      await Promise.resolve();
+    });
+    expect(screen.getByText(/could not be drawn/)).toBeTruthy();
+
+    // The failure belongs to that file, not to the viewer: the next SVG draws.
+    await open("logo.svg");
+    expect(screen.queryByText(/could not be drawn/)).toBeNull();
+    expect(screen.getByRole("img")).toBeTruthy();
+  });
+
+  test("redraws in place when a refresh corrects markup the browser refused", async () => {
+    let markup = "<svg><not closed";
+    vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: [{ path: "fixing.svg", changeStatus: "modified" as const }],
+    });
+    vi.spyOn(authServices.workItemService, "getFileContent").mockImplementation(
+      async (_id: string, path: string) => ({
+        path,
+        changeStatus: "modified" as const,
+        content: markup,
+        diff: null,
+        isBinary: false,
+        imageMimeType: null,
+        imageBase64: null,
+      }),
+    );
+
+    const workItem = makeWorkItem();
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(<FilesPanel workItem={workItem} />);
+      await Promise.resolve();
+    });
+    await open("fixing.svg");
+    await click("Preview");
+    await act(async () => {
+      fireEvent.error(screen.getByRole("img"));
+      await Promise.resolve();
+    });
+    expect(screen.getByText(/could not be drawn/)).toBeTruthy();
+
+    // The run fixes the file. The background refresh is silent — it brings the
+    // new bytes in without unmounting the viewer — so recovering here is the
+    // component's own doing, where the case above recovers by being remounted.
+    markup = CIRCLE;
+    await act(async () => {
+      view.rerender(<FilesPanel workItem={{ ...workItem }} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(/could not be drawn/)).toBeNull();
+    expect(screen.getByRole("img")).toBeTruthy();
+  });
+
+  test("falls back to Code when a preview-mode selection lands on a plain file", async () => {
+    mockFiles(["logo.svg", "a.ts"], CIRCLE);
+    await renderPanel(makeWorkItem());
+
+    await open("logo.svg");
+    await click("Preview");
+    expect(screen.getByRole("img")).toBeTruthy();
+
+    await open("a.ts");
+    expect(screen.queryByRole("img")).toBeNull();
+    expect(screen.getByRole("button", { name: "Code" }).getAttribute("aria-pressed")).toBe("true");
+
+    // Going back restores the preview the user asked for.
+    await open("logo.svg");
+    expect(screen.getByRole("img")).toBeTruthy();
+  });
+});

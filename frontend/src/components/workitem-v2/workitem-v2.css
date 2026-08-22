@@ -867,6 +867,19 @@
   border-radius: 4px;
 }
 
+/* An SVG behind the Preview toggle takes the whole pane. A raster image is
+   capped at its own pixel size so it is never shown blurrier than it is; a
+   vector has no such size to respect, and an `<img>` would otherwise fall back
+   to a 300x150 default box for the many SVGs that carry a viewBox and no width.
+   `contain` above then scales the picture to fit at its own aspect ratio, so
+   the border and the checkerboard inherited from .wiv2-file-image frame the
+   pane rather than the picture — the checkerboard still reads a transparent
+   vector against something other than the panel, which is what it is for. */
+.wiv2-file-svg img {
+  width: 100%;
+  height: 100%;
+}
+
 .wiv2-code,
 .wiv2-diff {
   margin: 0;

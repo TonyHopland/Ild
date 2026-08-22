@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Files in a work item are syntax coloured, and a Markdown file can be read as a rendered document.**
+- **Files in a work item are syntax coloured, and a Markdown file can be read as a rendered document — as can an SVG, shown as the picture it draws.**
 
 ### Fixed
 
