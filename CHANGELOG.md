@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-22
+
 ### Added
 
 - **Files in a work item are syntax coloured, and a Markdown file can be read as a rendered document — as can an SVG, shown as the picture it draws.**
@@ -15,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **A pull request hands the next node the reason it moved on — which checks failed and what they said, or the review that asked for changes — instead of nothing at all.** An agent sent to fix red CI can also pull the failing check's log itself, so it works from the error rather than the summary.
+- **A pull request hands the next node the reason it moved on, instead of nothing at all.** An agent sent to fix red CI can read the failing check's log rather than working from the summary.
 
 - **The main menu and the work item dialog's tabs scroll sideways on a narrow screen, so the last of them are reachable.**
 
