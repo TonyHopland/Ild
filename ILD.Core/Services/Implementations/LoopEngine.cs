@@ -29,11 +29,6 @@ public sealed class LoopEngine : ILoopEngine
     private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _runCts = new();
     private readonly ConcurrentDictionary<Guid, Task> _runTasks = new();
 
-    /// <summary>Fallback maximum number of times an edge can be traversed within
-    /// a single run when the edge's own <c>MaxTraversals</c> is null. Counted
-    /// in-memory per run on a per-edge basis.</summary>
-    public const int DefaultMaxEdgeTraversals = 50;
-
     /// <summary>Upper bound for a crash/fail reason persisted to
     /// <c>LoopRun.HumanFeedbackReason</c>, whose column is <c>varchar(512)</c>
     /// (see <see cref="LoopRun.HumanFeedbackReason"/>'s <c>[MaxLength(512)]</c>).
@@ -417,6 +412,10 @@ public sealed class LoopEngine : ILoopEngine
         // captured session; the executor consumes and clears it one-shot.
         run.SteeringNote = note ?? string.Empty;
         run.IsHalted = false;
+        // A person just acted, which is what the AI traversal budget counts the
+        // absence of. Not optional for a MaxAiTraversals park: without it
+        // "just continue" would re-trip the cap on the very next node.
+        run.AiTraversalCount = 0;
         // Clear the stamp with the halt: left set, the next halt a human presses
         // would look like a shutdown park and be auto-resumed out from under them.
         run.HaltReason = null;
@@ -479,6 +478,7 @@ public sealed class LoopEngine : ILoopEngine
         // interaction history lives in the EventLog, and the next park writes a
         // fresh reason — so nulling it here loses nothing.
         run.HumanFeedbackReason = null;
+        run.AiTraversalCount = 0;
         var old = run.Status;
         run.Status = LoopRunStatus.Running;
         await loopRunStore.UpdateRunAsync(run);
@@ -525,6 +525,7 @@ public sealed class LoopEngine : ILoopEngine
         run.HaltReason = null;
         run.SteeringNote = null;
         run.HumanFeedbackReason = null;
+        run.AiTraversalCount = 0;
         run.Status = LoopRunStatus.Running;
         run.IsPaused = false;
         await loopRunStore.UpdateRunAsync(run);
@@ -546,7 +547,7 @@ public sealed class LoopEngine : ILoopEngine
         if (cleanup is null) return;
         run.CurrentNodeId = cleanup.Id;
         await loopRunStore.UpdateRunAsync(run);
-        await ExecuteSingleNodeAsync(run, cleanup, sp, CancellationToken.None, new Dictionary<Guid, int>());
+        await ExecuteSingleNodeAsync(run, cleanup, sp, CancellationToken.None);
     }
 
     // ----- Core loop -----
@@ -625,7 +626,6 @@ public sealed class LoopEngine : ILoopEngine
         var sp = scope.ServiceProvider;
         var loopRunStore = sp.GetRequiredService<ILoopRunStore>();
         var templateStore = sp.GetRequiredService<ILoopTemplateStore>();
-        var edgeTraversalCount = await RebuildEdgeTraversalCountsAsync(loopRunStore, runId);
 
         // Any LoopRunNode still marked Running as a new drive begins is stale: its
         // executor died with the previous driver, and the single-owner gate in
@@ -653,7 +653,9 @@ public sealed class LoopEngine : ILoopEngine
             var node = nodes.FirstOrDefault(n => n.Id == run.CurrentNodeId.Value);
             if (node is null) { _logger.LogError("Node {Id} missing", run.CurrentNodeId); return; }
 
-            var park = await ExecuteSingleNodeAsync(run, node, sp, ct, edgeTraversalCount);
+            if (await ChargeAiTraversalAsync(run, node, loopRunStore, sp) is ParkResult.Stop) return;
+
+            var park = await ExecuteSingleNodeAsync(run, node, sp, ct);
             if (park is ParkResult.Stop) return;
         }
     }
@@ -661,8 +663,7 @@ public sealed class LoopEngine : ILoopEngine
     private enum ParkResult { Continue, Stop }
 
     private async Task<ParkResult> ExecuteSingleNodeAsync(
-        LoopRun run, LoopNode node, IServiceProvider sp, CancellationToken ct,
-        Dictionary<Guid, int> edgeTraversalCount)
+        LoopRun run, LoopNode node, IServiceProvider sp, CancellationToken ct)
     {
         var loopRunStore = sp.GetRequiredService<ILoopRunStore>();
         var templateStore = sp.GetRequiredService<ILoopTemplateStore>();
@@ -808,8 +809,6 @@ public sealed class LoopEngine : ILoopEngine
                             }
                             return await CompleteRunAsync(run, loopRunStore, workItems, ok.Output);
                         }
-                        if (await TraversalLimitExceededAsync(run, successEdge, edgeTraversalCount, loopRunStore, sp))
-                            return ParkResult.Stop;
                         run.CurrentNodeId = successEdge.TargetNodeId;
                         run.IncomingEdgeId = successEdge.Id;
                         await loopRunStore.UpdateRunAsync(run);
@@ -854,8 +853,6 @@ public sealed class LoopEngine : ILoopEngine
                             await FailRunAsync(run, f.Reason, loopRunStore, sp);
                             return ParkResult.Stop;
                         }
-                        if (await TraversalLimitExceededAsync(run, failEdge, edgeTraversalCount, loopRunStore, sp))
-                            return ParkResult.Stop;
                         run.CurrentNodeId = failEdge.TargetNodeId;
                         run.IncomingEdgeId = failEdge.Id;
                         await loopRunStore.UpdateRunAsync(run);
@@ -909,6 +906,12 @@ public sealed class LoopEngine : ILoopEngine
                         var oldStatus = run.Status;
                         run.Status = LoopRunStatus.WaitingHuman;
                         run.HumanFeedbackReason = wa.Reason;
+                        // The run is now in a person's hands — a Human node's
+                        // prompt or a PR waiting to be merged — which is exactly
+                        // what the AI traversal budget measures the absence of.
+                        // Refill it here rather than only on the way back out, so
+                        // the invariant holds for a parked run too.
+                        run.AiTraversalCount = 0;
                         // Reset the PR heartbeat baseline so the poller treats a
                         // state already true at park time (e.g. CI already red, or
                         // a still-red state on a re-park after a fix loop) as a
@@ -1079,29 +1082,53 @@ public sealed class LoopEngine : ILoopEngine
         return edges.FirstOrDefault(e => e.SourceNodeId == fromNodeId && e.EdgeType == edge && e.Name == name);
     }
 
-    private static async Task<Dictionary<Guid, int>> RebuildEdgeTraversalCountsAsync(ILoopRunStore store, Guid runId)
+    /// <summary>
+    /// The runaway-graph safety net (ADR-0018), charged once per node before it
+    /// executes: an <see cref="NodeType.AI"/> node spends one AI traversal, and
+    /// nothing else costs anything, because an AI node is the only step that
+    /// spends a person's money and can loop without a person noticing. The
+    /// budget is refilled by human interaction — a park at a Human or PR node,
+    /// and every resume a person triggers — so a conversational graph never
+    /// approaches the cap however long the conversation runs.
+    ///
+    /// At the cap the run parks exactly where a Halt parks it (WaitingHuman +
+    /// IsHalted, stamped <see cref="HaltReason.MaxAiTraversals"/>), so the
+    /// existing continue / continue-with-steering / abandon controls apply
+    /// unchanged and <see cref="ResumeFromHaltAsync"/> is the way out. Nothing
+    /// is cancelled: the park happens before the node starts, so there is no
+    /// agent process to kill. Returns Stop when the run was parked.
+    /// </summary>
+    private async Task<ParkResult> ChargeAiTraversalAsync(
+        LoopRun run, LoopNode node, ILoopRunStore store, IServiceProvider sp)
     {
-        var counts = new Dictionary<Guid, int>();
-        var nodes = await store.GetRunNodesAsync(runId);
-        foreach (var rn in nodes)
-        {
-            if (rn.IncomingEdgeId is Guid eid)
-                counts[eid] = counts.GetValueOrDefault(eid) + 1;
-        }
-        return counts;
-    }
+        if (node.NodeType != NodeType.AI) return ParkResult.Continue;
 
-    private async Task<bool> TraversalLimitExceededAsync(
-        LoopRun run, LoopNodeEdge edge, Dictionary<Guid, int> counts, ILoopRunStore store, IServiceProvider sp)
-    {
-        counts[edge.Id] = counts.GetValueOrDefault(edge.Id) + 1;
-        var limit = edge.MaxTraversals ?? DefaultMaxEdgeTraversals;
-        if (counts[edge.Id] > limit)
+        var limit = await sp.GetRequiredService<ISchedulerSettingsService>().GetMaxAiTraversalsAsync();
+        if (run.AiTraversalCount < limit)
         {
-            await FailRunAsync(run, $"Max traversals exceeded for edge {edge.Id} (limit {limit})", store, sp);
-            return true;
+            run.AiTraversalCount++;
+            await store.UpdateRunAsync(run);
+            return ParkResult.Continue;
         }
-        return false;
+
+        var reason = $"The AI ran {run.AiTraversalCount} steps without human input (limit {limit}). "
+            + "Continue, continue with guidance, or abandon the run.";
+        var old = run.Status;
+        run.Status = LoopRunStatus.WaitingHuman;
+        run.IsHalted = true;
+        run.HaltReason = HaltReason.MaxAiTraversals;
+        run.HumanFeedbackReason = HumanFeedbackReasons.MaxAiTraversalsReached;
+        await store.UpdateRunAsync(run);
+        _logger.LogInformation(
+            "Run {RunId}: {Count} AI nodes ran without human input (limit {Limit}); parked at {NodeLabel} for a human",
+            run.Id, run.AiTraversalCount, limit, node.Label);
+        await _notifier.RunStateChangedAsync(run.Id, old, LoopRunStatus.WaitingHuman);
+        await _notifier.HaltedAsync(run.Id);
+        await sp.GetRequiredService<IWorkItemManager>().TransitionAsync(
+            run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+            reason: reason, humanFeedbackReason: HumanFeedbackReasons.MaxAiTraversalsReached,
+            currentLoopRunId: run.Id, name: node.Label);
+        return ParkResult.Stop;
     }
 
     private async Task<ParkResult> CompleteRunAsync(LoopRun run, ILoopRunStore store, IWorkItemManager workItems, string? output)

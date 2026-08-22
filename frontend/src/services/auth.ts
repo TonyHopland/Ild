@@ -639,6 +639,7 @@ export const SchedulerSettingKeys = {
   IsPaused: "scheduler.isPaused",
   RunRetentionDays: "run.retentionDays",
   PrHeartbeatSeconds: "pr.heartbeatSeconds",
+  MaxAiTraversals: "ai.maxTraversals",
 } as const;
 
 /** How long a sign-in survives. `0` disables that limit. */

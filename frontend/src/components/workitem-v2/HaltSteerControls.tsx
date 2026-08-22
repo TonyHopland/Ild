@@ -64,6 +64,16 @@ function isThrottleParked(run: LoopRun): boolean {
 }
 
 /**
+ * Whether the engine parked this run because it had run its budget of AI steps
+ * with nobody in the loop. Read off `haltReason` for the same reason the
+ * throttle park is: the node rows of a capped park and a human's Halt are
+ * indistinguishable. Resuming — with or without a note — refills the budget.
+ */
+function isStepCapParked(run: LoopRun): boolean {
+  return run.haltReason === HaltReason.MaxAiTraversals;
+}
+
+/**
  * The node the provider interrupted. It carries the explanation of which Resume
  * the human is about to get (same agent session, or a cold restart of the node)
  * and the provider's own words, which is where the reset time is stated: ILD
@@ -111,6 +121,7 @@ export default function HaltSteerControls({
     !!onHalt && workItemStatus === WorkItemStatus.Running && isRunningStatus && !!runningAiNode;
   const isHalted = !!onResumeSteer && isWaitingHuman && !!run.isHalted;
   const throttled = isHalted && isThrottleParked(run);
+  const stepCapped = isHalted && isStepCapParked(run);
   const interruption = throttled ? interruptedNode(run) : null;
   // Abandon applies to any non-terminal run — actively running OR parked for
   // human feedback — so a run heading the wrong way can be dropped without
@@ -223,8 +234,16 @@ export default function HaltSteerControls({
       {isHalted && (
         <div className="wiv2-feedback">
           <div className="wiv2-feedback-title">
-            {throttled ? "Provider interrupted — resume when ready" : "Halted — steer & resume"}
+            {throttled && "Provider interrupted — resume when ready"}
+            {stepCapped && "Enough AI steps — carry on?"}
+            {!throttled && !stepCapped && "Halted — steer & resume"}
           </div>
+          {stepCapped && (
+            <div className="feedback-reason">
+              The AI ran {run.aiTraversalCount ?? 0} steps without human input. Resume to let it
+              carry on — with guidance if it is heading the wrong way — or abandon the run.
+            </div>
+          )}
           {throttled && (
             <div className="feedback-reason">
               <div>{interruption?.error ?? "An AI provider interrupted this run."}</div>

@@ -29,7 +29,6 @@ describe("loopGraphConverter custom edges", () => {
           targetNodeId: "b",
           edgeType: EdgeType.Custom,
           name: "Escalate",
-          maxTraversals: null,
         },
       ]),
     );
@@ -49,7 +48,6 @@ describe("loopGraphConverter custom edges", () => {
           targetNodeId: "fix",
           edgeType: EdgeType.Custom,
           name: "on_ci_failed",
-          maxTraversals: null,
         },
         {
           id: "e-reject",
@@ -57,7 +55,6 @@ describe("loopGraphConverter custom edges", () => {
           targetNodeId: "fix",
           edgeType: EdgeType.Custom,
           name: "on_rejected",
-          maxTraversals: null,
         },
       ]),
     );
@@ -80,7 +77,6 @@ describe("loopGraphConverter custom edges", () => {
           targetNodeId: "human",
           edgeType: EdgeType.Custom,
           name: "true",
-          maxTraversals: null,
         },
         {
           id: "e-false",
@@ -88,7 +84,6 @@ describe("loopGraphConverter custom edges", () => {
           targetNodeId: "pr",
           edgeType: EdgeType.Custom,
           name: "false",
-          maxTraversals: null,
         },
       ]),
     );
@@ -114,7 +109,6 @@ describe("loopGraphConverter custom edges", () => {
           targetNodeId: "b",
           edgeType: EdgeType.Custom,
           name: null,
-          maxTraversals: null,
         },
       ]),
     );

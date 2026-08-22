@@ -33,4 +33,7 @@ public static class HumanFeedbackReasons
 
     /// <summary>A human halted an in-flight AI node and the run is parked awaiting a steer/resume.</summary>
     public const string RunHalted = "Run Halted";
+
+    /// <summary>The run hit the cap on AI nodes executed between human interactions.</summary>
+    public const string MaxAiTraversalsReached = "Max AI Steps Reached";
 }

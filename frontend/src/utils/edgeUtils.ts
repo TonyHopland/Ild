@@ -10,7 +10,6 @@ export interface EdgeConfig {
   target: string;
   edgeType: EdgeType;
   name?: string | null;
-  maxTraversals: number | null;
   sourceHandle: string;
   targetHandle: string;
 }

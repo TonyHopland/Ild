@@ -164,7 +164,6 @@ public class LoopTemplateManager : ILoopTemplateManager
             if (!idMap.TryGetValue(e.TargetNodeId, out var tgtId)) return null;
 
             var edgeType = Enum.TryParse<EdgeType>(e.EdgeType, ignoreCase: true, out var parsed) ? parsed : EdgeType.OnSuccess;
-            var srcDto = graph.Nodes.First(n => n.Id == e.SourceNodeId);
 
             return new LoopNodeEdge
             {
@@ -173,7 +172,6 @@ public class LoopTemplateManager : ILoopTemplateManager
                 TargetNodeId = tgtId,
                 EdgeType = edgeType,
                 Name = string.IsNullOrWhiteSpace(e.Name) ? null : e.Name,
-                MaxTraversals = srcDto.MaxTraversals,
             };
         }).Where(e => e != null).Cast<LoopNodeEdge>().ToList();
 

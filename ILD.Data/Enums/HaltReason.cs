@@ -25,4 +25,14 @@ public enum HaltReason
     /// reset is a judgement the person reading "resets 9:40am" makes.
     /// </summary>
     Throttled = 2,
+
+    /// <summary>
+    /// The run executed the configured maximum number of AI nodes without a
+    /// human touching it, and the engine parked it rather than letting the
+    /// graph spin on. Like <see cref="Human"/> and <see cref="Throttled"/>,
+    /// nothing auto-resumes it: the whole point is that a person decides
+    /// whether the loop is still making progress. Every resume zeroes the
+    /// counter, so continuing buys another full budget.
+    /// </summary>
+    MaxAiTraversals = 3,
 }

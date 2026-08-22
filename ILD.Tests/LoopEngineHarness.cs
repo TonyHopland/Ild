@@ -71,6 +71,10 @@ internal sealed class LoopEngineHarness : IDisposable
         services.AddSingleton<IWorkItemManager>(WorkItemsMock.Object);
         services.AddSingleton<IWorkItemNotifier>(WorkItemNotifierMock.Object);
         services.AddSingleton<INodeExecutorRegistry>(Registry);
+        // The engine reads the AI-traversal cap through this on every AI node;
+        // back it with the real store so a test can set the key and be believed.
+        services.AddSingleton<IAppSettingStore>(Db.Settings);
+        services.AddSingleton<ISchedulerSettingsService>(new SchedulerSettingsService(Db.Settings));
         services.AddSingleton<ILoopEngine>(sp =>
         {
             return new LoopEngine(sp, Registry, sp.GetRequiredService<IRunNotifier>(),

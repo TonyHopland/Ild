@@ -6,13 +6,11 @@ interface EdgePanelsProps {
   edgeType: EdgeType;
   edgeName: string;
   customEdgeOptions: string[];
-  edgeMaxTraversals: string;
   edgeError: string | null;
   showEdgeDeletePanel: boolean;
   selectedEdge: Edge | null;
   nodes: Node[];
   onEdgeNameChange: (value: string) => void;
-  onEdgeMaxTraversalsChange: (value: string) => void;
   onConfirmEdge: () => void;
   onCancelEdge: () => void;
   onDeleteEdge: () => void;
@@ -40,13 +38,11 @@ export function EdgePanels({
   edgeType,
   edgeName,
   customEdgeOptions,
-  edgeMaxTraversals,
   edgeError,
   showEdgeDeletePanel,
   selectedEdge,
   nodes,
   onEdgeNameChange,
-  onEdgeMaxTraversalsChange,
   onConfirmEdge,
   onCancelEdge,
   onDeleteEdge,
@@ -87,18 +83,7 @@ export function EdgePanels({
               )}
             </div>
           )}
-          <div className="config-field">
-            <label htmlFor="edge-max-traversals">Max Traversals</label>
-            <input
-              id="edge-max-traversals"
-              type="number"
-              min={0}
-              value={edgeMaxTraversals}
-              onChange={(event) => onEdgeMaxTraversalsChange(event.target.value)}
-              placeholder="Unlimited"
-            />
-            {edgeError && <div className="validation-error">{edgeError}</div>}
-          </div>
+          {edgeError && <div className="validation-error">{edgeError}</div>}
           <div className="edge-config-actions">
             <button className="connect-edge-btn" onClick={onConfirmEdge} disabled={!canConfirm}>
               Connect

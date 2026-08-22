@@ -199,7 +199,6 @@ describe("buildEdge", () => {
       target: "b",
       edgeType: EdgeType.Custom,
       name: "Escalate",
-      maxTraversals: null,
       sourceHandle: "respond",
       targetHandle: "target-handle",
     });
@@ -212,7 +211,6 @@ describe("buildEdge", () => {
       target: "b",
       edgeType: EdgeType.Custom,
       name: "Escalate",
-      maxTraversals: null,
       sourceHandle: "respond",
       targetHandle: "target-handle",
     });
@@ -224,7 +222,6 @@ describe("buildEdge", () => {
       target: "b",
       edgeType: EdgeType.OnSuccess,
       name: "ignored",
-      maxTraversals: null,
       sourceHandle: "success",
       targetHandle: "target-handle",
     });
@@ -243,7 +240,6 @@ describe("appendEdge", () => {
       source: "pr",
       target: "cleanup",
       edgeType: EdgeType.Custom,
-      maxTraversals: null,
       sourceHandle: "respond",
       targetHandle: "target-handle",
     };
@@ -265,7 +261,6 @@ describe("appendEdge", () => {
       target: "b",
       edgeType: EdgeType.OnSuccess,
       name: null,
-      maxTraversals: null,
       sourceHandle: "success",
       targetHandle: "target-handle",
     });

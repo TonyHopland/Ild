@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Edit a text file in a work item while it waits on you, and save it — or cancel and keep what was there.**
 
+### Changed
+
+- **A loop that has run the AI too long on its own stops and asks whether to carry on, rather than failing.** How many steps it takes to get there is yours to set, and anything you say to the run starts the count again.
+
 ### Fixed
 
 - **A pull request hands the next node the reason it moved on — which checks failed and what they said, or the review that asked for changes — instead of nothing at all.** An agent sent to fix red CI can also pull the failing check's log itself, so it works from the error rather than the summary.

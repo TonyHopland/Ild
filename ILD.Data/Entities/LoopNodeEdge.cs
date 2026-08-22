@@ -29,8 +29,6 @@ public class LoopNodeEdge
     [MaxLength(256)]
     public string? Name { get; set; }
 
-    public int? MaxTraversals { get; set; }
-
     public DateTime CreatedAt { get; set; }
 
     [ForeignKey(nameof(SourceNodeId))]

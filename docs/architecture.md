@@ -41,7 +41,7 @@ Both emit messages of shape `{ type, payload, timestamp }`. Event payload types 
 
 ## Why it's shaped this way
 
-The decisions behind this architecture — the WorkItem Server split, manual API versioning, per-edge traversal limits, the explicit PR node, tag-based template resolution, the clean-origin run isolation invariant, and adapter-owned AI execution — are recorded as [ADRs](./adr/).
+The decisions behind this architecture — the WorkItem Server split, manual API versioning, the global AI-traversal cap, the explicit PR node, tag-based template resolution, the clean-origin run isolation invariant, and adapter-owned AI execution — are recorded as [ADRs](./adr/).
 
 ## Deeper internals
 

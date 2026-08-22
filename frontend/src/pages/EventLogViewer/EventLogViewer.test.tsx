@@ -128,7 +128,6 @@ const mockTemplateGraph = {
       type: "Start",
       label: "Start Node",
       config: {},
-      maxTraversals: null,
     },
   ],
   edges: [],
@@ -177,7 +176,6 @@ const mockTemplateGraphAI = {
       type: "AI",
       label: "AI Node",
       config: {},
-      maxTraversals: null,
     },
   ],
   edges: [],
@@ -239,21 +237,18 @@ const mockTemplateGraphMulti = {
       type: "Start",
       label: "Start Node",
       config: {},
-      maxTraversals: null,
     },
     {
       id: "node-2",
       type: "Cmd",
       label: "Cmd Node",
       config: {},
-      maxTraversals: null,
     },
     {
       id: "node-3",
       type: "AI",
       label: "AI Node",
       config: {},
-      maxTraversals: null,
     },
   ],
   edges: [],
@@ -600,8 +595,8 @@ describe("EventLogViewer", () => {
 
     const mockGraphCustomEdge = {
       nodes: [
-        { id: "node-human", type: "Human", label: "Ask Human", config: {}, maxTraversals: null },
-        { id: "node-after", type: "Cmd", label: "After Human", config: {}, maxTraversals: null },
+        { id: "node-human", type: "Human", label: "Ask Human", config: {} },
+        { id: "node-after", type: "Cmd", label: "After Human", config: {} },
       ],
       edges: [
         {
@@ -610,7 +605,6 @@ describe("EventLogViewer", () => {
           targetNodeId: "node-after",
           edgeType: "Custom",
           name: "Respond",
-          maxTraversals: null,
         },
       ],
     };

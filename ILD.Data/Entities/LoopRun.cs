@@ -96,6 +96,16 @@ public class LoopRun : IHasUpdatedAt
 
     public int NodeExecutionCount { get; set; }
 
+    /// <summary>
+    /// AI nodes this run has executed since a human last touched it. Bounded by
+    /// the <c>ai.maxTraversals</c> app setting; reaching it parks the run for a
+    /// person instead of failing it. Reset to zero whenever the run passes
+    /// through human interaction — a Human node, a PR node awaiting merge, or
+    /// any resume a person triggers. Persisted rather than counted in memory so
+    /// a restart mid-loop cannot hand the graph a fresh budget.
+    /// </summary>
+    public int AiTraversalCount { get; set; }
+
     public int NextEventSeq { get; set; }
 
     public DateTime? StartedAt { get; set; }

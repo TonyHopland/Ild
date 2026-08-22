@@ -21,14 +21,12 @@ describe("loopTemplateExport", () => {
         type: NodeType.Start,
         label: "Initialize",
         config: { createWorktree: true, __pos: { x: 100, y: 80 } },
-        maxTraversals: null,
       },
       {
         id: "n-cleanup",
         type: NodeType.Cleanup,
         label: "Tidy Up",
         config: { __pos: { x: 100, y: 220 } },
-        maxTraversals: null,
       },
     ],
     edges: [
@@ -37,7 +35,6 @@ describe("loopTemplateExport", () => {
         sourceNodeId: "n-start",
         targetNodeId: "n-cleanup",
         edgeType: EdgeType.OnSuccess,
-        maxTraversals: null,
       },
     ],
     createdAt: "2025-01-01T00:00:00Z",
@@ -274,7 +271,6 @@ describe("loopTemplateExport", () => {
             targetNodeId: "n-ai",
             edgeType: EdgeType.Custom,
             name: "Escalate",
-            maxTraversals: null,
           },
         ],
       };

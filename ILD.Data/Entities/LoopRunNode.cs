@@ -31,9 +31,8 @@ public class LoopRunNode
     public Guid? PreviousNodeId { get; set; }
 
     // The LoopNodeEdge the engine traversed to enter this node visit; null
-    // for the entry visit. Used to rebuild per-edge traversal counts after
-    // server restart so the edge-traversal safety net stays accurate across
-    // recovery boundaries.
+    // for the entry visit. Attribution for the run timeline and the event log
+    // — no safety net reads it (see LoopRun.AiTraversalCount, ADR-0018).
     public Guid? IncomingEdgeId { get; set; }
 
     public DateTime? StartedAt { get; set; }

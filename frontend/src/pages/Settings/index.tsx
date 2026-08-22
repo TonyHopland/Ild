@@ -372,6 +372,23 @@ export default function Settings() {
         </div>
 
         <div className="settings-section">
+          <h2 className="settings-section-title">AI steps</h2>
+          <NumericSettingField
+            settingKey={SchedulerSettingKeys.MaxAiTraversals}
+            label="Max AI steps between human interactions"
+            min={1}
+            max={1000}
+            fallback={25}
+          >
+            How many AI nodes a run may execute before it stops and asks you whether to carry on.
+            The count resets every time you interact with the run, so a back-and-forth between you
+            and the AI never reaches it — only a loop running on its own does. At the cap the run
+            waits in Human Feedback, where you can continue it, continue with guidance, or abandon
+            it.
+          </NumericSettingField>
+        </div>
+
+        <div className="settings-section">
           <h2 className="settings-section-title">Logging</h2>
           <div className="form-group">
             <label htmlFor="logLevel">Backend Log Level</label>

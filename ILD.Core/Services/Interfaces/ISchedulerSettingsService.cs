@@ -36,6 +36,16 @@ public static class AppSettingKeys
     public const int DefaultPrHeartbeatSeconds = 60;
 
     /// <summary>
+    /// How many AI nodes a run may execute between human interactions before
+    /// the engine parks it for a person. Counted per run and reset by every
+    /// human touch, so a conversational graph that alternates AI and Human
+    /// never approaches it — only a graph looping through AI nodes on its own
+    /// does. <c>0</c> is not allowed; the run would never get to start.
+    /// </summary>
+    public const string MaxAiTraversals = "ai.maxTraversals";
+    public const int DefaultMaxAiTraversals = 25;
+
+    /// <summary>
     /// Days a sign-in survives without being used. Re-evaluated on every
     /// request, so lowering it signs idle devices out immediately. <c>0</c>
     /// disables idle expiry.
@@ -67,4 +77,7 @@ public interface ISchedulerSettingsService
 
     /// <summary>Seconds between PR heartbeat poller passes (minimum 1).</summary>
     Task<int> GetPrHeartbeatSecondsAsync(CancellationToken ct = default);
+
+    /// <summary>AI nodes a run may execute between human interactions (minimum 1).</summary>
+    Task<int> GetMaxAiTraversalsAsync(CancellationToken ct = default);
 }

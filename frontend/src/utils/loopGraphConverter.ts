@@ -67,12 +67,9 @@ export function templateToEdges(template: LoopTemplate): Edge[] {
       sourceHandle,
       targetHandle: "target-handle",
       type: LOOP_EDGE_TYPE,
-      // Round-trip maxTraversals into edge.data so the traversal cap survives a
-      // reload — edgesToLoopNodeEdges reads it back from here on save.
       data: {
         edgeType: edge.edgeType,
         name: edge.name ?? null,
-        maxTraversals: edge.maxTraversals ?? null,
       },
       animated: edge.edgeType === EdgeType.OnSuccess,
       style: strokeStyle,
@@ -96,7 +93,6 @@ export function edgesToLoopNodeEdges(edges: Edge[]): LoopNodeEdge[] {
       targetNodeId: edge.target,
       edgeType,
       name: edgeType === EdgeType.Custom ? (data?.name ?? null) : null,
-      maxTraversals: (edge.data as { maxTraversals?: number | null })?.maxTraversals ?? null,
     };
   });
 }
@@ -117,7 +113,6 @@ export function nodesToLoopNodes(nodes: Node[]): LoopNode[] {
       type: data.type as NodeType,
       label: data.label,
       config: config as Record<string, unknown>,
-      maxTraversals: null,
     };
   });
 }

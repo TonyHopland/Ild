@@ -6,7 +6,7 @@ Short records of architectural decisions that are **hard to reverse, surprising 
 | ------------------------------------------------------ | ------------------------------------------------------------------------------------- |
 | [0001](./0001-standalone-workitem-server.md)           | Standalone WorkItem Server as the work-item source of truth                           |
 | [0002](./0002-manual-api-versioning.md)                | Manual `/api/v1` prefix instead of `Asp.Versioning`                                   |
-| [0003](./0003-per-edge-traversal-limits.md)            | Runaway-graph safety net is per-edge, not per-node                                    |
+| [0003](./0003-per-edge-traversal-limits.md)            | Runaway-graph safety net is per-edge, not per-node _(superseded by 0018)_             |
 | [0004](./0004-pr-lifecycle-as-graph-node.md)           | PR lifecycle is an explicit graph node, not implicit engine behavior                  |
 | [0005](./0005-template-resolved-per-run-from-tags.md)  | Loop template is resolved per-run from WorkItem tags                                  |
 | [0006](./0006-run-isolation-clean-origin-base.md)      | Every run starts from a clean `origin/<default>` base                                 |
@@ -20,5 +20,6 @@ Short records of architectural decisions that are **hard to reverse, surprising 
 | [0015](./0015-wildcard-subdomain-preview-routing.md)   | Worktree previews are routed by wildcard subdomain, not by path prefix                |
 | [0016](./0016-preview-runs-as-the-agent.md)            | A Worktree Preview runs as the agent, with an environment ILD constructs              |
 | [0017](./0017-shutdown-halts-the-in-flight-ai-node.md) | A shutdown halts the in-flight AI node rather than letting it finish                  |
+| [0018](./0018-global-ai-traversal-cap.md)              | Runaway-graph safety net counts AI steps between human interactions                   |
 
 New ADRs use the next sequential number; see the format in `.agents/skills/grill-with-docs/ADR-FORMAT.md`.
