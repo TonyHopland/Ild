@@ -60,6 +60,16 @@ const PREVIEW_RENDERER: Record<PreviewKind, (content: string, path: string) => R
 };
 
 /**
+ * What makes the panel's contents a different thing to load: another work item,
+ * or the same one on another worktree. Both the refresh below and a save in
+ * flight measure against it, so neither can decide on its own that the panel is
+ * still showing what it was.
+ */
+function workItemKey(workItem: WorkItem): string {
+  return `${workItem.id}:${workItem.worktreePath ?? ""}`;
+}
+
+/**
  * The editing half of the viewer's state, passed as one thing so the read-only
  * viewer keeps a signature about the file it draws rather than about the editor
  * it may put over it. A null `draft` is the read-only case.
@@ -182,13 +192,22 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   // refreshes are silent so the tree and viewer don't flicker.
   const lastKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    const key = `${workItem.id}:${workItem.worktreePath ?? ""}`;
+    const key = workItemKey(workItem);
     const isNewItem = lastKeyRef.current !== key;
     lastKeyRef.current = key;
     void refresh(isNewItem);
     if (isNewItem) {
+      // Another item's worktree is another set of files. Whatever was open
+      // belonged to the item before it, so the viewer starts empty rather than
+      // keeping a path that may not exist here — and an edit of that file is
+      // certainly not an edit of this item's.
+      setSelectedPath(null);
+      selectedPathRef.current = null;
+      setContent(null);
+      setContentError(null);
       setDraft(null);
       setSaveError(null);
+      setSavingPath(null);
       return;
     }
     // An open editor holds text that exists nowhere else yet, so the silent
@@ -223,6 +242,8 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
     [loadContent],
   );
 
+  const itemKey = workItemKey(workItem);
+
   const save = useCallback(async () => {
     if (draft === null || !selectedPath) return;
     setSavingPath(selectedPath);
@@ -232,22 +253,25 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
       // and diff come from the write itself; the list is re-pulled alongside it
       // for the tree badge the same write may have just changed.
       const saved = await workItemService.saveFileContent(workItem.id, selectedPath, draft);
+      // Neither the panel's item nor its selection is pinned while a save is
+      // out: the dialog can be handed a different work item, and the tree stays
+      // clickable. This answer is one worktree's file, so a panel now showing
+      // another item's has no use for any of it — not the file, and not the
+      // list refresh, which would pull the previous item's tree into it.
+      if (lastKeyRef.current !== itemKey) return;
+      // The badge on the file just written has to catch up even if the user
+      // has moved off it, so the list refreshes before the narrower guard.
       void refresh(false);
-      // The tree stays clickable while a save is in flight, and the selection
-      // it moved to has loaded its own file already. This answer describes the
-      // file left behind, so it belongs to the viewer only if that is still the
-      // file on screen — applied blind it would draw one file's text under
-      // another's path, and the next save would write it there.
       if (selectedPathRef.current !== selectedPath) return;
       setContent(saved);
       setDraft(null);
     } catch (e) {
-      if (selectedPathRef.current !== selectedPath) return;
+      if (lastKeyRef.current !== itemKey || selectedPathRef.current !== selectedPath) return;
       setSaveError((e as { message?: string })?.message ?? "Failed to save file.");
     } finally {
       setSavingPath((current) => (current === selectedPath ? null : current));
     }
-  }, [draft, selectedPath, workItem.id, refresh]);
+  }, [draft, selectedPath, itemKey, workItem.id, refresh]);
 
   const toggleFolder = useCallback((path: string) => {
     setToggledFolders((prev) => {

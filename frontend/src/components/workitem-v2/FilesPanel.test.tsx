@@ -877,7 +877,7 @@ describe("FilesPanel editing", () => {
 
   /** Two files and a save that only resolves when the test says so. */
   function mockTwoFilesWithHeldSave() {
-    vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+    const getFiles = vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
       worktreePath: "/tmp/wt",
       files: [
         { path: "a.ts", changeStatus: "none" },
@@ -897,7 +897,7 @@ describe("FilesPanel editing", () => {
         finishSave = resolve;
       }),
     );
-    return { finishSave: (saved: WorktreeFileContent) => finishSave(saved) };
+    return { getFiles, finishSave: (saved: WorktreeFileContent) => finishSave(saved) };
   }
 
   test("writes the edited file back and redraws from what was saved", async () => {
@@ -1014,6 +1014,72 @@ describe("FilesPanel editing", () => {
       "typed while a.ts saves",
     );
     expect(screen.getByRole("button", { name: "Save" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  test("a save that lands after the work item changed reaches none of the new one", async () => {
+    const { getFiles, finishSave } = mockTwoFilesWithHeldSave();
+
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(<FilesPanel workItem={makeWorkItem()} />);
+      await Promise.resolve();
+    });
+    await open("a.ts");
+    await click("Edit");
+    await type("saved text");
+    await click("Save");
+
+    // The dialog is handed a different work item — a different worktree, a
+    // different set of files — while the save is still out.
+    await act(async () => {
+      view.rerender(
+        <FilesPanel workItem={makeWorkItem({ id: "wi-2", worktreePath: "/tmp/wt-2" })} />,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // Nothing of the previous item is left on screen to be written back.
+    expect(screen.getByText(/Select a file to view its contents/)).toBeTruthy();
+
+    const refreshesBefore = getFiles.mock.calls.length;
+    await act(async () => {
+      finishSave({ ...TEXT_FILE, path: "a.ts", changeStatus: "modified", content: "saved text" });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The answer describes a file in the worktree the panel has left. Drawing
+    // it here would put one item's file under another item's tree, and the next
+    // save would write it into that item.
+    expect(screen.queryByText("saved text")).toBeNull();
+    expect(screen.getByText(/Select a file to view its contents/)).toBeTruthy();
+    // Its list refresh is the previous item's too, and would have replaced this
+    // item's tree with that one's files.
+    expect(getFiles.mock.calls.length).toBe(refreshesBefore);
+  });
+
+  test("moving to another work item empties the viewer rather than keeping its file", async () => {
+    mockOneFile();
+
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(<FilesPanel workItem={makeWorkItem()} />);
+      await Promise.resolve();
+    });
+    await open("a.ts");
+    expect(screen.getByText("before")).toBeTruthy();
+
+    await act(async () => {
+      view.rerender(
+        <FilesPanel workItem={makeWorkItem({ id: "wi-2", worktreePath: "/tmp/wt-2" })} />,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The path belonged to the item before it, and may not exist in this one.
+    expect(screen.queryByText("before")).toBeNull();
+    expect(screen.getByText("No file selected")).toBeTruthy();
   });
 
   test("a background refresh leaves an open editor's unsaved text alone", async () => {
