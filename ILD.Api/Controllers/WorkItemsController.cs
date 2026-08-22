@@ -452,10 +452,17 @@ public class WorkItemsController : ControllerBase
         if (error != null) return error;
 
         var diffBase = await ResolveDiffBaseBranchAsync(workItem!);
-        var saved = await _repositoryManager.WriteWorktreeFileAsync(workItem!.WorktreePath!, request.Path, request.Content, diffBase);
-        if (saved == null)
-            return BadRequest(new { error = "File is not an editable text file in this worktree." });
-        return Ok(saved);
+        var result = await _repositoryManager.WriteWorktreeFileAsync(workItem!.WorktreePath!, request.Path, request.Content, diffBase);
+        // A file that is not there answers as it does when read, so the two
+        // endpoints do not disagree about the same path.
+        return result.Outcome switch
+        {
+            WorktreeFileWriteOutcome.Saved => Ok(result.File),
+            WorktreeFileWriteOutcome.NotFound => NotFound(new { error = "File not found in worktree." }),
+            WorktreeFileWriteOutcome.NotText => BadRequest(new { error = "File is not a text file." }),
+            WorktreeFileWriteOutcome.WorktreeUnavailable => BadRequest(new { error = "Work item does not currently have an active worktree." }),
+            _ => BadRequest(new { error = "File could not be saved." }),
+        };
     }
 
     [HttpPost("{id}/push-branch")]

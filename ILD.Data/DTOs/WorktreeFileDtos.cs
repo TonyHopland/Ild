@@ -75,3 +75,35 @@ public sealed class WorktreeFileSaveRequest
     public string Path { get; set; } = string.Empty;
     public string? Content { get; set; }
 }
+
+/// <summary>
+/// What a save did. The refusals are named rather than collapsed together
+/// because they are not the same answer: a path naming nothing in the worktree
+/// is what the read side already calls not-found, bytes the editor should never
+/// have offered to edit is the caller sending something the file cannot take,
+/// and a worktree that is no longer there is neither of those.
+/// </summary>
+public enum WorktreeFileWriteOutcome
+{
+    Saved,
+
+    /// <summary>The worktree is missing, or no longer a worktree git knows.</summary>
+    WorktreeUnavailable,
+
+    /// <summary>
+    /// Nothing writable stands at that path: it leads outside the worktree, or
+    /// it is not on disk — never created, or deleted under the editor.
+    /// </summary>
+    NotFound,
+
+    /// <summary>The file is there but is binary, so text cannot replace it.</summary>
+    NotText,
+}
+
+/// <summary>
+/// A save's outcome together with the file it produced, which is present for
+/// <see cref="WorktreeFileWriteOutcome.Saved"/> and null for every refusal.
+/// </summary>
+public readonly record struct WorktreeFileWriteResult(
+    WorktreeFileWriteOutcome Outcome,
+    WorktreeFileContentResponse? File);

@@ -94,19 +94,28 @@ public class WorkItemsControllerDiffBaseTests
     }
 
     [Fact]
-    public async Task A_file_the_worktree_refuses_to_take_is_a_bad_request()
+    public async Task A_save_answers_each_refusal_in_its_own_terms()
     {
+        // A file that is not there reads as 404, so it has to save as one too —
+        // the same path answering "not found" to one endpoint and "bad request"
+        // to the other is a contract a client cannot act on. Bytes and a worktree
+        // that has gone are the caller's problem, and stay 400.
         var (controller, repoManager, db, _) = await SetupAsync(runBaseBranchOverride: null);
         using var _db = db;
-        repoManager
-            .Setup(m => m.WriteWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
-            .ReturnsAsync((WorktreeFileContentResponse?)null);
 
-        var result = await controller.SaveFileContent(
-            WorkItemId,
-            new WorktreeFileSaveRequest { Path = "../escape.ts", Content = "edited" });
+        Assert.IsType<NotFoundObjectResult>(await SaveWithOutcome(WorktreeFileWriteOutcome.NotFound));
+        Assert.IsType<BadRequestObjectResult>(await SaveWithOutcome(WorktreeFileWriteOutcome.NotText));
+        Assert.IsType<BadRequestObjectResult>(await SaveWithOutcome(WorktreeFileWriteOutcome.WorktreeUnavailable));
 
-        Assert.IsType<BadRequestObjectResult>(result);
+        async Task<IActionResult> SaveWithOutcome(WorktreeFileWriteOutcome outcome)
+        {
+            repoManager
+                .Setup(m => m.WriteWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
+                .ReturnsAsync(new WorktreeFileWriteResult(outcome, null));
+            return await controller.SaveFileContent(
+                WorkItemId,
+                new WorktreeFileSaveRequest { Path = "src/app.ts", Content = "edited" });
+        }
     }
 
     private const string WorkItemId = "1";
@@ -143,8 +152,9 @@ public class WorkItemsControllerDiffBaseTests
         repoManager.Setup(m => m.ReadWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
             .ReturnsAsync((WorktreeFileContentResponse?)null);
         repoManager.Setup(m => m.WriteWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
-            .ReturnsAsync((string _, string path, string content, string? __) =>
-                new WorktreeFileContentResponse { Path = path, ChangeStatus = "modified", Content = content });
+            .ReturnsAsync((string _, string path, string content, string? __) => new WorktreeFileWriteResult(
+                WorktreeFileWriteOutcome.Saved,
+                new WorktreeFileContentResponse { Path = path, ChangeStatus = "modified", Content = content }));
 
         var mgr = new WorkItemManager(
             repoManager.Object,

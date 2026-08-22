@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
+using ILD.Data.DTOs;
 
 namespace ILD.Tests;
 
@@ -543,12 +544,13 @@ public class RepositoryManagerTests : IDisposable
 
         var saved = await mgr.WriteWorktreeFileAsync(wt, "mod.txt", "edited\n");
 
-        Assert.NotNull(saved);
+        Assert.Equal(WorktreeFileWriteOutcome.Saved, saved.Outcome);
+        Assert.NotNull(saved.File);
         Assert.Equal("edited\n", await File.ReadAllTextAsync(Path.Combine(wt, "mod.txt")));
         // The answer is read back off disk, so it already knows the file changed.
-        Assert.Equal("modified", saved!.ChangeStatus);
-        Assert.Equal("edited\n", saved.Content);
-        Assert.Contains("+edited", saved.Diff);
+        Assert.Equal("modified", saved.File!.ChangeStatus);
+        Assert.Equal("edited\n", saved.File.Content);
+        Assert.Contains("+edited", saved.File.Diff);
         // Saving touches the working tree and nothing else: no commit, no index.
         Assert.Equal(head, GitOut(wt, "rev-parse", "HEAD"));
         Assert.Contains("mod.txt", GitOut(wt, "status", "--porcelain"));
@@ -562,15 +564,19 @@ public class RepositoryManagerTests : IDisposable
         var outside = Path.Combine(Directory.GetParent(wt)!.FullName, "outside.txt");
         await File.WriteAllTextAsync(outside, "untouched\n");
 
-        Assert.Null(await mgr.WriteWorktreeFileAsync(wt, "../outside.txt", "clobbered\n"));
+        // Out of the worktree names nothing in it, which is what the read side
+        // says about the same path too.
+        Assert.Equal(WorktreeFileWriteOutcome.NotFound, await OutcomeAsync(mgr, wt, "../outside.txt"));
         Assert.Equal("untouched\n", await File.ReadAllTextAsync(outside));
 
         // Neither does the write invent a file the read side would not serve.
-        Assert.Null(await mgr.WriteWorktreeFileAsync(wt, "does-not-exist.txt", "new\n"));
+        Assert.Equal(WorktreeFileWriteOutcome.NotFound, await OutcomeAsync(mgr, wt, "does-not-exist.txt"));
         Assert.False(File.Exists(Path.Combine(wt, "does-not-exist.txt")));
 
+        // Bytes are a different refusal: the file is there, it just cannot take
+        // text — and the caller is told which of the two it hit.
         File.WriteAllBytes(Path.Combine(wt, "blob.bin"), new byte[] { 1, 2, 0, 3, 4 });
-        Assert.Null(await mgr.WriteWorktreeFileAsync(wt, "blob.bin", "text over bytes\n"));
+        Assert.Equal(WorktreeFileWriteOutcome.NotText, await OutcomeAsync(mgr, wt, "blob.bin"));
         Assert.Equal(new byte[] { 1, 2, 0, 3, 4 }, await File.ReadAllBytesAsync(Path.Combine(wt, "blob.bin")));
     }
 
@@ -587,8 +593,8 @@ public class RepositoryManagerTests : IDisposable
         File.CreateSymbolicLink(Path.Combine(wt, "escape.txt"), outside);
         Directory.CreateSymbolicLink(Path.Combine(wt, "out"), Directory.GetParent(wt)!.FullName);
 
-        Assert.Null(await mgr.WriteWorktreeFileAsync(wt, "escape.txt", "clobbered\n"));
-        Assert.Null(await mgr.WriteWorktreeFileAsync(wt, "out/outside.txt", "clobbered\n"));
+        Assert.Equal(WorktreeFileWriteOutcome.NotFound, await OutcomeAsync(mgr, wt, "escape.txt"));
+        Assert.Equal(WorktreeFileWriteOutcome.NotFound, await OutcomeAsync(mgr, wt, "out/outside.txt"));
         Assert.Equal("untouched\n", await File.ReadAllTextAsync(outside));
 
         // The boundary is the same one the read side draws, so neither hands the
@@ -613,7 +619,7 @@ public class RepositoryManagerTests : IDisposable
         for (var i = 1; i <= 48; i++)
             File.CreateSymbolicLink(Path.Combine(wt, $"hop-{i}.txt"), Path.Combine(wt, $"hop-{i - 1}.txt"));
 
-        Assert.Null(await mgr.WriteWorktreeFileAsync(wt, "hop-48.txt", "clobbered\n"));
+        Assert.Equal(WorktreeFileWriteOutcome.NotFound, await OutcomeAsync(mgr, wt, "hop-48.txt"));
         Assert.Null(await mgr.ReadWorktreeFileAsync(wt, "hop-48.txt"));
         Assert.Equal("untouched\n", await File.ReadAllTextAsync(outside));
     }
@@ -629,13 +635,13 @@ public class RepositoryManagerTests : IDisposable
 
         // Following links is not the same as refusing them: one that stays
         // inside the worktree lands inside it, which is all the guard asks.
-        Assert.NotNull(await mgr.WriteWorktreeFileAsync(wt, "alias.txt", "after\n"));
+        Assert.Equal(WorktreeFileWriteOutcome.Saved, await OutcomeAsync(mgr, wt, "alias.txt", "after\n"));
         Assert.Equal("after\n", await File.ReadAllTextAsync(target));
 
         // Short chains are followed the whole way; only exhausting the budget
         // above refuses.
         File.CreateSymbolicLink(Path.Combine(wt, "alias-to-alias.txt"), Path.Combine(wt, "alias.txt"));
-        Assert.NotNull(await mgr.WriteWorktreeFileAsync(wt, "alias-to-alias.txt", "again\n"));
+        Assert.Equal(WorktreeFileWriteOutcome.Saved, await OutcomeAsync(mgr, wt, "alias-to-alias.txt", "again\n"));
         Assert.Equal("again\n", await File.ReadAllTextAsync(target));
     }
 
@@ -649,9 +655,13 @@ public class RepositoryManagerTests : IDisposable
         Directory.CreateDirectory(plainDir);
         await File.WriteAllTextAsync(Path.Combine(plainDir, "file.txt"), "before\n");
 
-        Assert.Null(await mgr.WriteWorktreeFileAsync(null!, "file.txt", "after\n"));
-        Assert.Null(await mgr.WriteWorktreeFileAsync(Path.Combine(_tmp, "gone-" + Guid.NewGuid().ToString("N")), "file.txt", "after\n"));
-        Assert.Null(await mgr.WriteWorktreeFileAsync(plainDir, "file.txt", "after\n"));
+        // None of these is a missing file — the worktree itself is the problem,
+        // and the refusal says so rather than blaming the path.
+        Assert.Equal(WorktreeFileWriteOutcome.WorktreeUnavailable, await OutcomeAsync(mgr, null!, "file.txt"));
+        Assert.Equal(
+            WorktreeFileWriteOutcome.WorktreeUnavailable,
+            await OutcomeAsync(mgr, Path.Combine(_tmp, "gone-" + Guid.NewGuid().ToString("N")), "file.txt"));
+        Assert.Equal(WorktreeFileWriteOutcome.WorktreeUnavailable, await OutcomeAsync(mgr, plainDir, "file.txt"));
         Assert.Equal("before\n", await File.ReadAllTextAsync(Path.Combine(plainDir, "file.txt")));
     }
 
@@ -856,6 +866,10 @@ public class RepositoryManagerTests : IDisposable
 
         Assert.True(await mgr.RemoteHasBranchAsync("https://example.invalid/repo.git", "feature/foo"));
     }
+
+    private static async Task<WorktreeFileWriteOutcome> OutcomeAsync(
+        RepositoryManager mgr, string worktreePath, string relativePath, string content = "clobbered\n")
+        => (await mgr.WriteWorktreeFileAsync(worktreePath, relativePath, content)).Outcome;
 
     private (string Work, RepositoryManager Mgr) CloneWithOrigin()
     {

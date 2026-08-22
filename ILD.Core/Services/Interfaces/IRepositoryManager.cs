@@ -107,12 +107,12 @@ public interface IRepositoryManager
     /// Replace a single worktree file's contents with <paramref name="content"/>
     /// and read it straight back, so the answer carries the change status and
     /// diff the write produced rather than the ones the caller started from.
-    /// Only an existing text file is written: returns null — having touched
-    /// nothing — when the path escapes the worktree, the worktree is missing or
-    /// unhealthy, or the target does not exist or is binary. The write lands on
-    /// disk and nowhere else; committing it stays the run's business.
+    /// Only an existing text file is written; anything else is refused having
+    /// touched nothing, and the refusal says which — callers answer a path that
+    /// names nothing differently from bytes that cannot take text. The write
+    /// lands on disk and nowhere else; committing it stays the run's business.
     /// </summary>
-    Task<WorktreeFileContentResponse?> WriteWorktreeFileAsync(string worktreePath, string relativePath, string content, string? defaultBranch = null);
+    Task<WorktreeFileWriteResult> WriteWorktreeFileAsync(string worktreePath, string relativePath, string content, string? defaultBranch = null);
 
     /// <summary>
     /// Inspect a remote without cloning to infer the default branch (from the

@@ -373,19 +373,24 @@ public class RepositoryManager : IRepositoryManager
         return response;
     }
 
-    public async Task<WorktreeFileContentResponse?> WriteWorktreeFileAsync(string worktreePath, string relativePath, string content, string? defaultBranch = null)
+    public async Task<WorktreeFileWriteResult> WriteWorktreeFileAsync(string worktreePath, string relativePath, string content, string? defaultBranch = null)
     {
         if (!await ValidateWorktreeHealthAsync(worktreePath))
-            return null;
+            return new(WorktreeFileWriteOutcome.WorktreeUnavailable, null);
 
+        // A path that leads out of the worktree names nothing in it, which is
+        // the same answer as one that is simply not there — and the same one the
+        // read side gives, so neither endpoint tells a caller which it was.
         var full = ResolveSafePath(worktreePath, relativePath);
         if (full == null || !File.Exists(full))
-            return null;
+            return new(WorktreeFileWriteOutcome.NotFound, null);
         if (await IsBinaryOnDiskAsync(full))
-            return null;
+            return new(WorktreeFileWriteOutcome.NotText, null);
 
         await File.WriteAllTextAsync(full, content);
-        return await ReadWorktreeFileAsync(worktreePath, relativePath, defaultBranch);
+        return new(
+            WorktreeFileWriteOutcome.Saved,
+            await ReadWorktreeFileAsync(worktreePath, relativePath, defaultBranch));
     }
 
     /// <summary>
