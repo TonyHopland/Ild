@@ -598,6 +598,27 @@ public class RepositoryManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_chain_of_links_too_long_to_follow_is_refused_rather_than_half_resolved()
+    {
+        var (work, mgr) = CloneWithOrigin();
+        var wt = await mgr.CreateWorktreeAsync(work, "feature-write-chain");
+        var outside = Path.Combine(Directory.GetParent(wt)!.FullName, "outside.txt");
+        await File.WriteAllTextAsync(outside, "untouched\n");
+
+        // Every hop but the last sits inside the worktree, and only the far end
+        // leads out. A guard that gives up part way through the chain stops on
+        // one of the inside hops and calls it resolved — while it is still a
+        // link, which the write would then follow the rest of the way out.
+        File.CreateSymbolicLink(Path.Combine(wt, "hop-0.txt"), outside);
+        for (var i = 1; i <= 48; i++)
+            File.CreateSymbolicLink(Path.Combine(wt, $"hop-{i}.txt"), Path.Combine(wt, $"hop-{i - 1}.txt"));
+
+        Assert.Null(await mgr.WriteWorktreeFileAsync(wt, "hop-48.txt", "clobbered\n"));
+        Assert.Null(await mgr.ReadWorktreeFileAsync(wt, "hop-48.txt"));
+        Assert.Equal("untouched\n", await File.ReadAllTextAsync(outside));
+    }
+
+    [Fact]
     public async Task A_link_within_the_worktree_still_writes_through_to_its_target()
     {
         var (work, mgr) = CloneWithOrigin();
@@ -610,6 +631,12 @@ public class RepositoryManagerTests : IDisposable
         // inside the worktree lands inside it, which is all the guard asks.
         Assert.NotNull(await mgr.WriteWorktreeFileAsync(wt, "alias.txt", "after\n"));
         Assert.Equal("after\n", await File.ReadAllTextAsync(target));
+
+        // Short chains are followed the whole way; only exhausting the budget
+        // above refuses.
+        File.CreateSymbolicLink(Path.Combine(wt, "alias-to-alias.txt"), Path.Combine(wt, "alias.txt"));
+        Assert.NotNull(await mgr.WriteWorktreeFileAsync(wt, "alias-to-alias.txt", "again\n"));
+        Assert.Equal("again\n", await File.ReadAllTextAsync(target));
     }
 
     [Fact]

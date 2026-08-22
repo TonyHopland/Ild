@@ -517,38 +517,55 @@ public class RepositoryManager : IRepositoryManager
     private static string? ResolveSafePath(string worktreePath, string relativePath)
     {
         var root = ResolveLinks(Path.GetFullPath(worktreePath));
+        if (root == null) return null;
         var full = ResolveLinks(Path.GetFullPath(Path.Combine(root, relativePath)));
+        if (full == null) return null;
         var rootWithSep = root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar;
         return full.StartsWith(rootWithSep, StringComparison.Ordinal) ? full : null;
     }
 
     /// <summary>
     /// <paramref name="path"/> with every link along it replaced by what it
-    /// points at. Resolved a segment at a time, because a link anywhere in the
-    /// path leaves the rest of it somewhere else — a directory link is as much a
-    /// way out as a file one. A segment that does not exist cannot be a link and
-    /// is carried through as written, so this answers for paths about to be
-    /// created too. Chains stop after <see cref="MaxLinkHops"/>, which leaves a
-    /// loop unresolved rather than followed forever; the caller's boundary check
-    /// is what then refuses it.
+    /// points at, or null when it could not be resolved within
+    /// <see cref="MaxLinkHops"/>. Resolved a segment at a time, because a link
+    /// anywhere in the path leaves the rest of it somewhere else — a directory
+    /// link is as much a way out as a file one. A segment that does not exist
+    /// cannot be a link and is carried through as written, so this answers for
+    /// paths about to be created too.
+    /// <para>
+    /// Running out of hops is a refusal, not an answer: a path still holding a
+    /// link has not been followed to where it leads, and handing back where it
+    /// stopped would report a chain that ends outside the worktree as sitting
+    /// inside it — every hop but the last can be planted inside on purpose. The
+    /// budget spans the whole path and matches what Linux itself will follow, so
+    /// a chain this refuses is one the kernel would refuse to open anyway.
+    /// </para>
     /// </summary>
-    private static string ResolveLinks(string path)
+    private static string? ResolveLinks(string path)
     {
+        var hops = 0;
         var resolved = Path.GetPathRoot(path) ?? string.Empty;
         foreach (var segment in path[resolved.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
         {
             resolved = Path.Combine(resolved, segment);
-            for (var hop = 0; hop < MaxLinkHops; hop++)
+            for (var target = LinkTargetOf(resolved); target != null; target = LinkTargetOf(resolved))
             {
-                FileSystemInfo entry = Directory.Exists(resolved) ? new DirectoryInfo(resolved) : new FileInfo(resolved);
-                if (entry.LinkTarget == null) break;
-                resolved = Path.GetFullPath(entry.LinkTarget, Path.GetDirectoryName(resolved) ?? resolved);
+                if (++hops > MaxLinkHops) return null;
+                resolved = Path.GetFullPath(target, Path.GetDirectoryName(resolved) ?? resolved);
             }
         }
         return resolved;
     }
 
-    private const int MaxLinkHops = 16;
+    /// <summary>What <paramref name="path"/> points at, or null if it is not a link.</summary>
+    private static string? LinkTargetOf(string path) =>
+        (Directory.Exists(path) ? (FileSystemInfo)new DirectoryInfo(path) : new FileInfo(path)).LinkTarget;
+
+    /// <summary>
+    /// Links followed across one path resolution, the same budget Linux spends
+    /// before it gives up with <c>ELOOP</c>.
+    /// </summary>
+    private const int MaxLinkHops = 40;
 
     /// <summary>
     /// Ceiling on the bytes of one image inlined into a file-content response.
