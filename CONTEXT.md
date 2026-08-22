@@ -19,7 +19,7 @@ An immutable snapshot of a LoopTemplate's graph at a point in time. Created on e
 _Avoid_: template revision, template snapshot
 
 **LoopRun**:
-A single execution of a pinned LoopTemplateVersion against a WorkItem. Tracks node states (via `LoopRunNode` rows), timing, and per-edge traversal attribution — each `LoopRunNode.IncomingEdgeId` records which edge brought the engine to that visit, letting the safety net rebuild traversal counts after a process restart.
+A single execution of a pinned LoopTemplateVersion against a WorkItem. Tracks node states (via `LoopRunNode` rows), timing, edge attribution — each `LoopRunNode.IncomingEdgeId` records which edge brought the engine to that visit — and the run's `AiTraversalCount`, the budget behind the **AI Traversal Cap**.
 _Avoid_: execution, run, instance
 
 **Worktree**:
@@ -85,9 +85,9 @@ _Avoid_: tool sandbox, tool permissions
 Append-only audit stream per LoopRun. Serves as AI context and observability. Large payloads (>10KB) stored on disk; DB stores path reference. A background `EventLogRetentionSweeper` deletes entries older than `EventLogOptions.RetentionPeriod` (default 7 days) once per `RetentionSweepInterval` (default 24h), but **only** for runs whose linked WorkItem is in `Done` status — events for runs whose WorkItem is still Running/HumanFeedback/Backlog/etc. are preserved indefinitely.
 _Avoid_: audit trail, log
 
-**Edge Traversal Limits**:
-The engine's runaway-graph safety net is **per edge**, not per node. Each edge's traversal count is tracked per run; if it exceeds the edge's `MaxTraversals` (or `LoopEngine.DefaultMaxEdgeTraversals = 50` when the edge leaves it null), the run is failed. Counts are kept in memory while the run is active, but every edge traversal is also persisted on the destination `LoopRunNode.IncomingEdgeId` so the engine can rebuild the count dictionary on recovery (the in-memory state survives a process restart). There is no template-level execution cap.
-_Avoid_: max node execs, run iteration limit
+**AI Traversal Cap**:
+The engine's runaway-graph safety net is **one number per run**: `LoopRun.AiTraversalCount`, the AI nodes executed since a human last touched the run, capped by the `ai.maxTraversals` app setting (default 25). Spent when an AI node actually starts — every other node type is free, and a node the provider capacity gate defers (`WaitingIld`) is not charged for work it never did — checked before the next node runs, and refilled to zero by human interaction: a park at a Human node, a PR parked at `PrAwaitingMerge`, and every resume a person triggers (`ResumeFromHaltAsync`, `SignalNodeResultAsync`, `RetryFromNodeAsync`). A conversational graph therefore never approaches it however long the conversation runs; only an unattended stretch of AI nodes does. At the cap the run **parks** rather than fails — `WaitingHuman` + `IsHalted`, `HaltReason.MaxAiTraversals`, work item in Human Feedback — and the steer window's existing continue / continue-with-guidance / abandon controls are the way out. Unlike the halt and throttle parks, this one happens **before** the node starts, so it also clears `CurrentAiSessionId`: the resumed node cold-starts on its own rendered prompt with the human's note appended, rather than steering into the previous node's session. The count lives on the run row, so it survives a restart without being reconstructed. There is no per-edge and no template-level cap. See [ADR-0018](docs/adr/0018-global-ai-traversal-cap.md).
+_Avoid_: max edge traversals, max node execs, run iteration limit
 
 **Recovery Policy**:
 Per-LoopTemplate setting controlling crash recovery behavior: AutoResume, NeedsReview, or Cancel. The template's policy is pinned onto each `LoopRun` at start (like the template version), and recovery reads the run's copy. On recovery, stale `LoopRunNode` rows with `Status = Running` are transitioned to `Interrupted` and the engine re-enters the loop at `CurrentNodeId`; the node's `ExecuteAsync` is invoked fresh and re-checks its own preconditions. AutoResume does not resume runs at Human or PR nodes in `WaitingHuman` state — those require explicit human action. When the remote work-item scheduler is enabled, startup recovery is owned by `RemoteWorkItemStartupReconciler`, which consults the server first: it recovers via the policy, leaves parked (HumanFeedback/WaitingForIld) runs alive so the scheduler keeps heartbeating them, and cancels local runs whose work item the server has since reclaimed, finished, or deleted — cancelling being what takes them out of the Active Work Item Set.
@@ -158,7 +158,7 @@ _Avoid_: chat scope, session context, focus
 - Rebase happens only at loop start, not before each node
 - Failed/cancelled WorkItems: "Done" finishes the current run and discards; "Backlog" fully resets for re-planning. Neither destroys the run's worktree or branch — those live as long as the run row and are reclaimed by run deletion (manual or retention)
 - Moving a **WorkItem** back to Backlog from the board (drag, keyboard move, or status dropdown) is for an item that has not started: allowed from Work Queue, Ready and HumanFeedback, and only while no run of the item is still alive (Running or WaitingHuman). An item with a live run is refused rather than relabelled — the Active Work Item Set is derived from live runs, so a run left alive under a Backlog card would keep being heartbeated and holding a concurrency slot. Sending a _started_ item back is the reset above, which stops the run first
-- Safety net (max edge traversals): when an edge is traversed more than its `MaxTraversals` (default 50 via `LoopEngine.DefaultMaxEdgeTraversals`), the engine fails the run with "Max traversals exceeded for edge …"
+- Safety net (**AI Traversal Cap**): when a run has executed `ai.maxTraversals` AI nodes without a human touching it, the engine parks it for a person instead of failing it; any human interaction resets the count
 
 ## Example Dialogue
 

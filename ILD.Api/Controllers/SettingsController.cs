@@ -27,6 +27,7 @@ public class SettingsController : ControllerBase
         AppSettingKeys.SchedulerIsPaused,
         AppSettingKeys.RunRetentionDays,
         AppSettingKeys.PrHeartbeatSeconds,
+        AppSettingKeys.MaxAiTraversals,
         AppSettingKeys.SessionIdleDays,
         AppSettingKeys.SessionMaxDays,
     };
@@ -66,6 +67,8 @@ public class SettingsController : ControllerBase
             map[AppSettingKeys.RunRetentionDays] = AppSettingKeys.DefaultRunRetentionDays.ToString();
         if (!map.ContainsKey(AppSettingKeys.PrHeartbeatSeconds))
             map[AppSettingKeys.PrHeartbeatSeconds] = AppSettingKeys.DefaultPrHeartbeatSeconds.ToString();
+        if (!map.ContainsKey(AppSettingKeys.MaxAiTraversals))
+            map[AppSettingKeys.MaxAiTraversals] = AppSettingKeys.DefaultMaxAiTraversals.ToString();
         if (!map.ContainsKey(AppSettingKeys.SessionIdleDays))
             map[AppSettingKeys.SessionIdleDays] = AppSettingKeys.DefaultSessionIdleDays.ToString();
         if (!map.ContainsKey(AppSettingKeys.SessionMaxDays))
@@ -115,6 +118,7 @@ public class SettingsController : ControllerBase
         AppSettingKeys.SchedulerIsPaused => AppSettingKeys.DefaultIsPaused.ToString().ToLowerInvariant(),
         AppSettingKeys.RunRetentionDays => AppSettingKeys.DefaultRunRetentionDays.ToString(),
         AppSettingKeys.PrHeartbeatSeconds => AppSettingKeys.DefaultPrHeartbeatSeconds.ToString(),
+        AppSettingKeys.MaxAiTraversals => AppSettingKeys.DefaultMaxAiTraversals.ToString(),
         AppSettingKeys.SessionIdleDays => AppSettingKeys.DefaultSessionIdleDays.ToString(),
         AppSettingKeys.SessionMaxDays => AppSettingKeys.DefaultSessionMaxDays.ToString(),
         _ => string.Empty,
@@ -149,6 +153,13 @@ public class SettingsController : ControllerBase
                 if (!int.TryParse(value, out var secs) || secs < 5 || secs > 3600)
                 {
                     error = "pr.heartbeatSeconds must be an integer between 5 and 3600";
+                    return false;
+                }
+                break;
+            case AppSettingKeys.MaxAiTraversals:
+                if (!int.TryParse(value, out var aiSteps) || aiSteps < 1 || aiSteps > 1000)
+                {
+                    error = "ai.maxTraversals must be an integer between 1 and 1000";
                     return false;
                 }
                 break;

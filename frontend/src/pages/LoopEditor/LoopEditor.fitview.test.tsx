@@ -59,14 +59,12 @@ const loopOne = {
       type: NodeType.Start,
       label: "Alpha Start",
       config: {},
-      maxTraversals: null,
     },
     {
       id: "n-cleanup-1",
       type: NodeType.Cleanup,
       label: "Alpha Cleanup",
       config: {},
-      maxTraversals: null,
     },
   ],
   edges: [
@@ -75,7 +73,6 @@ const loopOne = {
       sourceNodeId: "n-start-1",
       targetNodeId: "n-cleanup-1",
       edgeType: EdgeType.OnSuccess,
-      maxTraversals: null,
     },
   ],
   createdAt: "2025-01-01T00:00:00Z",
@@ -88,13 +85,12 @@ const loopTwo = {
   description: "Second loop",
   version: 1,
   nodes: [
-    { id: "n-start-2", type: NodeType.Start, label: "Beta Start", config: {}, maxTraversals: null },
+    { id: "n-start-2", type: NodeType.Start, label: "Beta Start", config: {} },
     {
       id: "n-cleanup-2",
       type: NodeType.Cleanup,
       label: "Beta Cleanup",
       config: {},
-      maxTraversals: null,
     },
   ],
   edges: [
@@ -103,7 +99,6 @@ const loopTwo = {
       sourceNodeId: "n-start-2",
       targetNodeId: "n-cleanup-2",
       edgeType: EdgeType.OnSuccess,
-      maxTraversals: null,
     },
   ],
   createdAt: "2025-01-01T00:00:00Z",

@@ -35,7 +35,16 @@ internal sealed class LoopEngineHarness : IDisposable
     private readonly ServiceProvider _sp;
     private readonly LoopEngine _engine;
 
-    public LoopEngineHarness(IRunNotifier? notifier = null, IShutdownState? shutdown = null)
+    /// <param name="configure">
+    /// Extra registrations for the engine's scope, applied last so a test can
+    /// override a default. Needed by tests that register a real executor
+    /// (e.g. <c>AINodeExecutor</c>) rather than a <see cref="ScriptedExecutor"/>,
+    /// since a real one resolves its own collaborators out of this provider.
+    /// </param>
+    public LoopEngineHarness(
+        IRunNotifier? notifier = null,
+        IShutdownState? shutdown = null,
+        Action<IServiceCollection>? configure = null)
     {
         Db = new TestDb();
 
@@ -71,12 +80,17 @@ internal sealed class LoopEngineHarness : IDisposable
         services.AddSingleton<IWorkItemManager>(WorkItemsMock.Object);
         services.AddSingleton<IWorkItemNotifier>(WorkItemNotifierMock.Object);
         services.AddSingleton<INodeExecutorRegistry>(Registry);
+        // The engine reads the AI-traversal cap through this on every AI node;
+        // back it with the real store so a test can set the key and be believed.
+        services.AddSingleton<IAppSettingStore>(Db.Settings);
+        services.AddSingleton<ISchedulerSettingsService>(new SchedulerSettingsService(Db.Settings));
         services.AddSingleton<ILoopEngine>(sp =>
         {
             return new LoopEngine(sp, Registry, sp.GetRequiredService<IRunNotifier>(),
                 NullLogger<LoopEngine>.Instance, sp.GetRequiredService<IWorkItemNotifier>(),
                 progressBuffer: null, shutdown: shutdown);
         });
+        configure?.Invoke(services);
         _sp = services.BuildServiceProvider();
         Services = _sp;
         Engine = _sp.GetRequiredService<ILoopEngine>();

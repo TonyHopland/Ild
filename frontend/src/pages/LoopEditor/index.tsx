@@ -274,7 +274,6 @@ export default function LoopEditor() {
   const [pendingConnection, setPendingConnection] = useState<Connection | null>(null);
   const [edgeType, setEdgeType] = useState<EdgeType>(EdgeType.OnSuccess);
   const [edgeName, setEdgeName] = useState("");
-  const [edgeMaxTraversals, setEdgeMaxTraversals] = useState("");
   const [edgeError, setEdgeError] = useState<string | null>(null);
   const [showEdgeDeletePanel, setShowEdgeDeletePanel] = useState(false);
   const [showNodeSettingsModal, setShowNodeSettingsModal] = useState(false);
@@ -320,10 +319,8 @@ export default function LoopEditor() {
   // reviewed. persistSave writes the frozen graph (not the live canvas), so an AI
   // push arriving mid-review can't change what the human actually saves. Two
   // representations are kept on purpose: the export `snapshot`/`after` string
-  // drives the whole-document diff view, while `nodes`/`edges` are the lossless
-  // LoopNode[]/LoopNodeEdge[] we persist — the export format omits edge
-  // maxTraversals, so persisting from it would silently drop the traversal cap.
-  // Null when the modal is closed.
+  // drives the whole-document diff view, while `nodes`/`edges` are the
+  // LoopNode[]/LoopNodeEdge[] we persist. Null when the modal is closed.
   const [saveDiff, setSaveDiff] = useState<{
     before: string;
     after: string;
@@ -593,10 +590,8 @@ export default function LoopEditor() {
     setValidationErrors([]);
 
     try {
-      // Persist the lossless frozen graph, not the export snapshot — the export
-      // format drops edge maxTraversals, so persisting from it would silently null
-      // out any traversal cap the user set. The snapshot is still used for metadata
-      // (name/description/recoveryPolicy) and the diff/baseline strings.
+      // Persist the frozen graph, not the export snapshot: the snapshot is only
+      // used for metadata (name/description/recoveryPolicy) and the diff strings.
       const loopNodes = pending.nodes;
       const loopEdges = pending.edges;
       const validationResult = await loopTemplateService.validate({
@@ -1432,7 +1427,6 @@ export default function LoopEditor() {
 
       setEdgeType(nextEdgeType);
       setEdgeName("");
-      setEdgeMaxTraversals("");
       setEdgeError(null);
       setPendingConnection(connection);
     },
@@ -1441,14 +1435,6 @@ export default function LoopEditor() {
 
   const confirmEdge = useCallback(() => {
     if (!pendingConnection) return;
-
-    if (
-      edgeMaxTraversals !== "" &&
-      (Number.isNaN(Number(edgeMaxTraversals)) || Number(edgeMaxTraversals) < 0)
-    ) {
-      setEdgeError("Max traversals must be a non-negative number");
-      return;
-    }
 
     const trimmedName = edgeName.trim();
     if (edgeType === EdgeType.Custom) {
@@ -1474,7 +1460,6 @@ export default function LoopEditor() {
       target: pendingConnection.target,
       edgeType,
       name: edgeType === EdgeType.Custom ? trimmedName : null,
-      maxTraversals: edgeMaxTraversals !== "" ? Number(edgeMaxTraversals) : null,
       sourceHandle: pendingConnection.sourceHandle ?? "success",
       targetHandle: pendingConnection.targetHandle ?? "target-handle",
     });
@@ -1482,14 +1467,12 @@ export default function LoopEditor() {
     setEdges((currentEdges) => appendEdge(newEdge, currentEdges));
     setPendingConnection(null);
     setEdgeName("");
-    setEdgeMaxTraversals("");
     setEdgeError(null);
-  }, [edgeMaxTraversals, edgeName, edgeType, edges, pendingConnection, setEdges]);
+  }, [edgeName, edgeType, edges, pendingConnection, setEdges]);
 
   const cancelEdge = useCallback(() => {
     setPendingConnection(null);
     setEdgeName("");
-    setEdgeMaxTraversals("");
     setEdgeError(null);
     setSelectedEdge(null);
     setShowEdgeDeletePanel(false);
@@ -1822,13 +1805,11 @@ export default function LoopEditor() {
                     customEdgeOptions={getCustomEdgeNames(
                       nodes.find((node) => node.id === pendingConnection?.source),
                     )}
-                    edgeMaxTraversals={edgeMaxTraversals}
                     edgeError={edgeError}
                     showEdgeDeletePanel={showEdgeDeletePanel}
                     selectedEdge={selectedEdge}
                     nodes={nodes}
                     onEdgeNameChange={setEdgeName}
-                    onEdgeMaxTraversalsChange={setEdgeMaxTraversals}
                     onConfirmEdge={confirmEdge}
                     onCancelEdge={cancelEdge}
                     onDeleteEdge={deleteSelectedEdge}

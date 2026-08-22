@@ -220,6 +220,27 @@ describe("Settings numeric fields", () => {
       expect(put).toHaveBeenCalledWith(authServices.SchedulerSettingKeys.RunRetentionDays, "0");
     });
   });
+
+  test("saves the AI step cap", async () => {
+    const put = vi.spyOn(authServices.settingsService, "put");
+
+    render(
+      <MemoryRouter>
+        <Settings />
+      </MemoryRouter>,
+    );
+
+    const steps = (await screen.findByLabelText(/max ai steps/i)) as HTMLInputElement;
+    fireEvent.change(steps, { target: { value: "0" } });
+    fireEvent.click(steps.parentElement!.querySelector("button")!);
+    await screen.findByText("Must be an integer between 1 and 1000.");
+
+    fireEvent.change(steps, { target: { value: "40" } });
+    fireEvent.click(steps.parentElement!.querySelector("button")!);
+    await waitFor(() => {
+      expect(put).toHaveBeenCalledWith(authServices.SchedulerSettingKeys.MaxAiTraversals, "40");
+    });
+  });
 });
 
 describe("Settings notifications", () => {

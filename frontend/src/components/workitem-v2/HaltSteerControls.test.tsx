@@ -143,6 +143,35 @@ describe("HaltSteerControls", () => {
     expect(screen.queryByText(/run cancelled/i)).toBeNull();
   });
 
+  test("says how far the AI got when the step cap parked the run", () => {
+    const onResumeSteer = vi.fn();
+    render(
+      <HaltSteerControls
+        run={run({
+          status: LoopRunStatus.WaitingHuman,
+          isHalted: true,
+          haltReason: HaltReason.MaxAiTraversals,
+          aiTraversalCount: 25,
+          // No Interrupted node: the cap parks BEFORE the next AI node starts,
+          // so nothing was cut off and there is no node prose to read.
+          nodes: [node({ status: LoopRunNodeStatus.Succeeded })],
+        })}
+        workItemStatus={WorkItemStatus.HumanFeedback}
+        onResumeSteer={onResumeSteer}
+      />,
+    );
+    expect(screen.getByText(/enough ai steps/i)).toBeTruthy();
+    expect(screen.getByText(/25 steps without human input/i)).toBeTruthy();
+    expect(screen.queryByText(/provider interrupted/i)).toBeNull();
+
+    // Continue-with-steering is the same control the other parks use.
+    fireEvent.change(screen.getByPlaceholderText(/optional guidance/i), {
+      target: { value: "you are looping" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /resume/i }));
+    expect(onResumeSteer).toHaveBeenCalledWith("you are looping");
+  });
+
   test("labels a shutdown park as a plain halt, not a provider interruption", () => {
     render(
       <HaltSteerControls

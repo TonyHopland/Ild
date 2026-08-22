@@ -60,6 +60,7 @@ public class LoopRunsController : ControllerBase
                 haltReason = r.HaltReason?.ToString(),
                 retain = r.Retain,
                 nodeExecutionCount = r.NodeExecutionCount,
+                aiTraversalCount = r.AiTraversalCount,
                 startedAt = r.StartedAt,
                 completedAt = r.CompletedAt,
                 totalInputTokens = totals.TotalInputTokens,
@@ -108,6 +109,9 @@ public class LoopRunsController : ControllerBase
             worktreePath = run.WorktreePath,
             branchName = run.BranchName,
             nodeExecutionCount = run.NodeExecutionCount,
+            // AI nodes run since the last human touch. The steer window shows it
+            // on a MaxAiTraversals park so the person is told how far it got.
+            aiTraversalCount = run.AiTraversalCount,
             startedAt = run.StartedAt,
             completedAt = run.CompletedAt,
             prUrl = run.PrUrl,

@@ -296,7 +296,6 @@ export interface LoopNode {
   type: NodeType;
   label: string;
   config: Record<string, unknown>;
-  maxTraversals: number | null;
 }
 
 export interface LoopNodeEdge {
@@ -306,7 +305,6 @@ export interface LoopNodeEdge {
   edgeType: EdgeType;
   // Custom-edge key; null for default (OnSuccess) and fallback (OnFailure) edges.
   name?: string | null;
-  maxTraversals: number | null;
 }
 
 export enum RecoveryPolicy {
@@ -329,10 +327,9 @@ export interface LoopTemplate {
 }
 
 // Export file format (ild-loop-template/v1)
-// LoopNodeExportNode is LoopNode minus maxTraversals (not part of the export schema)
-export type LoopTemplateExportNode = Omit<LoopNode, "maxTraversals">;
+export type LoopTemplateExportNode = LoopNode;
 
-export type LoopTemplateExportEdge = Omit<LoopNodeEdge, "maxTraversals">;
+export type LoopTemplateExportEdge = LoopNodeEdge;
 
 export interface LoopTemplateExport {
   $schema: "ild-loop-template/v1";
@@ -360,6 +357,8 @@ export enum HaltReason {
   Shutdown = "Shutdown",
   /** An AI provider interrupted the node: usage/session limit, 429, overload. */
   Throttled = "Throttled",
+  /** The run executed the configured maximum AI steps with no human input. */
+  MaxAiTraversals = "MaxAiTraversals",
 }
 
 export enum LoopRunNodeStatus {
@@ -432,6 +431,8 @@ export interface LoopRun {
   worktreePath?: string | null;
   branchName?: string | null;
   nodeExecutionCount: number;
+  /** AI nodes run since a human last touched the run; reset by every human interaction. */
+  aiTraversalCount?: number;
   startedAt: string;
   completedAt: string | null;
   /** Run-level token/cost totals summed from the run's nodes. */

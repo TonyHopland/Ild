@@ -141,7 +141,6 @@ export function exportNodesToLoopNodes(nodes: LoopTemplateExportNode[]): LoopNod
     type: n.type,
     label: n.label,
     config: n.config,
-    maxTraversals: null,
   }));
 }
 
@@ -156,7 +155,6 @@ export function exportEdgesToLoopNodeEdges(edges: LoopTemplateExportEdge[]): Loo
     targetNodeId: e.targetNodeId,
     edgeType: e.edgeType,
     name: e.name ?? null,
-    maxTraversals: null,
   }));
 }
 
