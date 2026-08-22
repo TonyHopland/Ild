@@ -917,6 +917,76 @@ describe("FilesPanel editing", () => {
     expect(screen.getByRole("button", { name: "Edit" })).toBeTruthy();
   });
 
+  test("a refused save keeps the draft rather than losing the user's text", async () => {
+    mockOneFile();
+    // The file was deleted, made binary, or the worktree went away under the
+    // editor — every one of these comes back as a refusal, and the text the
+    // user typed exists nowhere but this textarea.
+    vi.spyOn(authServices.workItemService, "saveFileContent").mockRejectedValue({
+      message: "File is not an editable text file in this worktree.",
+    });
+
+    await renderPanel(makeWorkItem());
+    await open("a.ts");
+    await click("Edit");
+    await type("still mine");
+    await click("Save");
+
+    expect(screen.getByText(/not an editable text file/)).toBeTruthy();
+    expect((screen.getByLabelText("Contents of a.ts") as HTMLTextAreaElement).value).toBe(
+      "still mine",
+    );
+    // The editor stays open on a write that never happened, so Save can be
+    // tried again — it does not close as though it had gone through.
+    expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+  });
+
+  test("a save that lands after the user moved on leaves the new file alone", async () => {
+    vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: [
+        { path: "a.ts", changeStatus: "none" },
+        { path: "b.ts", changeStatus: "none" },
+      ],
+    });
+    vi.spyOn(authServices.workItemService, "getFileContent").mockImplementation(
+      async (_id: string, path: string) => ({
+        ...TEXT_FILE,
+        path,
+        content: path === "a.ts" ? "before" : "the other file",
+      }),
+    );
+    let finishSave!: (saved: WorktreeFileContent) => void;
+    vi.spyOn(authServices.workItemService, "saveFileContent").mockReturnValue(
+      new Promise<WorktreeFileContent>((resolve) => {
+        finishSave = resolve;
+      }),
+    );
+
+    await renderPanel(makeWorkItem());
+    await open("a.ts");
+    await click("Edit");
+    await type("saved text");
+    await click("Save");
+
+    // The tree is not disabled while the save is in flight, and the file the
+    // user clicks loads its own content straight away.
+    await open("b.ts");
+    expect(screen.getByText("the other file")).toBeTruthy();
+
+    await act(async () => {
+      finishSave({ ...TEXT_FILE, path: "a.ts", changeStatus: "modified", content: "saved text" });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The answer describes a.ts, so it must not land on b.ts — drawn there it
+    // would show one file's text under another's path, and the next save would
+    // write it into that file.
+    expect(screen.getByText("the other file")).toBeTruthy();
+    expect(screen.queryByText("saved text")).toBeNull();
+  });
+
   test("a background refresh leaves an open editor's unsaved text alone", async () => {
     const { getFileContent } = mockOneFile();
 

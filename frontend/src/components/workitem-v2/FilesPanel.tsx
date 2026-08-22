@@ -60,6 +60,17 @@ const PREVIEW_RENDERER: Record<PreviewKind, (content: string, path: string) => R
 };
 
 /**
+ * The editing half of the viewer's state, passed as one thing so the read-only
+ * viewer keeps a signature about the file it draws rather than about the editor
+ * it may put over it. A null `draft` is the read-only case.
+ */
+type EditorState = {
+  draft: string | null;
+  onChange: (next: string) => void;
+  saving: boolean;
+};
+
+/**
  * Whether the open file can be edited in place. Only text the server actually
  * handed over qualifies, and only under the code view: a binary, an inlined
  * image and a file deleted on the branch all arrive with no `content`, so the
@@ -217,10 +228,18 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
       // The save answers with the file as it now stands, so the viewer's status
       // and diff come from the write itself; the list is re-pulled alongside it
       // for the tree badge the same write may have just changed.
-      setContent(await workItemService.saveFileContent(workItem.id, selectedPath, draft));
-      setDraft(null);
+      const saved = await workItemService.saveFileContent(workItem.id, selectedPath, draft);
       void refresh(false);
+      // The tree stays clickable while a save is in flight, and the selection
+      // it moved to has loaded its own file already. This answer describes the
+      // file left behind, so it belongs to the viewer only if that is still the
+      // file on screen — applied blind it would draw one file's text under
+      // another's path, and the next save would write it there.
+      if (selectedPathRef.current !== selectedPath) return;
+      setContent(saved);
+      setDraft(null);
     } catch (e) {
+      if (selectedPathRef.current !== selectedPath) return;
       setSaveError((e as { message?: string })?.message ?? "Failed to save file.");
     } finally {
       setSaving(false);
@@ -404,9 +423,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
             loading={contentLoading}
             error={contentError}
             mode={mode}
-            draft={draft}
-            onDraftChange={setDraft}
-            saving={saving}
+            editor={{ draft, onChange: setDraft, saving }}
           />
         </div>
       </div>
@@ -420,18 +437,14 @@ function FileViewer({
   loading,
   error,
   mode,
-  draft,
-  onDraftChange,
-  saving,
+  editor,
 }: {
   selectedPath: string | null;
   content: WorktreeFileContent | null;
   loading: boolean;
   error: string | null;
   mode: ViewMode;
-  draft: string | null;
-  onDraftChange: (next: string) => void;
-  saving: boolean;
+  editor: EditorState;
 }) {
   if (!selectedPath) {
     return <div className="wiv2-empty">Select a file to view its contents.</div>;
@@ -479,9 +492,14 @@ function FileViewer({
   if (content.content === null) {
     return <div className="wiv2-empty">This file has no content to display.</div>;
   }
-  if (draft !== null) {
+  if (editor.draft !== null) {
     return (
-      <CodeEditor value={draft} onChange={onDraftChange} path={content.path} readOnly={saving} />
+      <CodeEditor
+        value={editor.draft}
+        onChange={editor.onChange}
+        path={content.path}
+        readOnly={editor.saving}
+      />
     );
   }
   return <CodeView code={content.content} path={content.path} />;
