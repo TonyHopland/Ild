@@ -653,7 +653,7 @@ public sealed class LoopEngine : ILoopEngine
             var node = nodes.FirstOrDefault(n => n.Id == run.CurrentNodeId.Value);
             if (node is null) { _logger.LogError("Node {Id} missing", run.CurrentNodeId); return; }
 
-            if (await ChargeAiTraversalAsync(run, node, loopRunStore, sp) is ParkResult.Stop) return;
+            if (await ParkIfAiBudgetSpentAsync(run, node, loopRunStore, sp) is ParkResult.Stop) return;
 
             var park = await ExecuteSingleNodeAsync(run, node, sp, ct);
             if (park is ParkResult.Stop) return;
@@ -759,6 +759,11 @@ public sealed class LoopEngine : ILoopEngine
                         run.CurrentNodeId = node.Id;
                         run.IncomingEdgeId = null;
                         run.NodeExecutionCount++;
+                        // The AI budget is spent here rather than at the gate that
+                        // reads it, so a node the provider capacity gate defers
+                        // (WaitingIld, yielded before this point) costs nothing:
+                        // it never ran, and the scheduler will re-drive it.
+                        if (node.NodeType == NodeType.AI) run.AiTraversalCount++;
                         await loopRunStore.UpdateRunAsync(run);
                         await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Pending, LoopRunNodeStatus.Running);
                         // The work item's current step just changed; nudge the
@@ -878,23 +883,17 @@ public sealed class LoopEngine : ILoopEngine
                             await TrySafe(() => eventLog.AppendAsync(run.Id, "NodeInterrupted", intr.Reason, node.Id, runNodeId: interruptedId));
                         if (!stillCurrent)
                             return ParkResult.Stop;
-                        var oldRunStatus = run.Status;
-                        run.Status = LoopRunStatus.WaitingHuman;
-                        run.IsHalted = true;
-                        run.HaltReason = HaltReason.Throttled;
-                        run.HumanFeedbackReason = HumanFeedbackReasons.AiProviderThrottled;
-                        await loopRunStore.UpdateRunAsync(run);
                         _logger.LogInformation(
                             "Run {RunId}: AI provider interrupted node {NodeLabel}; parked for a human Resume ({Reason})",
                             run.Id, node.Label, intr.Reason);
-                        await _notifier.RunStateChangedAsync(run.Id, oldRunStatus, LoopRunStatus.WaitingHuman);
-                        await _notifier.HaltedAsync(run.Id);
                         // HumanFeedback, not WaitingForIld: the scheduler
                         // auto-resumes what it finds waiting on ILD, and this park
                         // is waiting on a person deciding the limit has reset.
-                        await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
-                            reason: intr.Reason, humanFeedbackReason: HumanFeedbackReasons.AiProviderThrottled,
-                            currentLoopRunId: run.Id, name: node.Label);
+                        // CurrentAiSessionId is deliberately left alone — the
+                        // provider cut off a node that HAD started, so Resume
+                        // should continue that same session.
+                        await ParkForHumanAsync(run, node, HaltReason.Throttled,
+                            HumanFeedbackReasons.AiProviderThrottled, intr.Reason, loopRunStore, workItems);
                         return ParkResult.Stop;
                     }
                     case NodeOutcome.WaitingAction wa:
@@ -1083,52 +1082,74 @@ public sealed class LoopEngine : ILoopEngine
     }
 
     /// <summary>
-    /// The runaway-graph safety net (ADR-0018), charged once per node before it
-    /// executes: an <see cref="NodeType.AI"/> node spends one AI traversal, and
-    /// nothing else costs anything, because an AI node is the only step that
-    /// spends a person's money and can loop without a person noticing. The
-    /// budget is refilled by human interaction — a park at a Human or PR node,
-    /// and every resume a person triggers — so a conversational graph never
-    /// approaches the cap however long the conversation runs.
+    /// The runaway-graph safety net (ADR-0018), consulted once per node before it
+    /// executes: a run may execute at most <c>ai.maxTraversals</c>
+    /// <see cref="NodeType.AI"/> nodes between human interactions. Only AI nodes
+    /// are counted, because an AI node is the only step that spends a person's
+    /// money and can loop without a person noticing, and the count is refilled by
+    /// human interaction — a park at a Human or PR node, and every resume a person
+    /// triggers — so a conversational graph never approaches the cap however long
+    /// the conversation runs. The spend itself happens at
+    /// <see cref="NodeOutcome.NodeStarting"/>, so a node the provider capacity gate
+    /// defers is not charged for work it never did.
     ///
-    /// At the cap the run parks exactly where a Halt parks it (WaitingHuman +
-    /// IsHalted, stamped <see cref="HaltReason.MaxAiTraversals"/>), so the
-    /// existing continue / continue-with-steering / abandon controls apply
-    /// unchanged and <see cref="ResumeFromHaltAsync"/> is the way out. Nothing
-    /// is cancelled: the park happens before the node starts, so there is no
-    /// agent process to kill. Returns Stop when the run was parked.
+    /// At the cap the run parks for a human and this returns Stop.
     /// </summary>
-    private async Task<ParkResult> ChargeAiTraversalAsync(
+    private async Task<ParkResult> ParkIfAiBudgetSpentAsync(
         LoopRun run, LoopNode node, ILoopRunStore store, IServiceProvider sp)
     {
         if (node.NodeType != NodeType.AI) return ParkResult.Continue;
-
         var limit = await sp.GetRequiredService<ISchedulerSettingsService>().GetMaxAiTraversalsAsync();
-        if (run.AiTraversalCount < limit)
-        {
-            run.AiTraversalCount++;
-            await store.UpdateRunAsync(run);
-            return ParkResult.Continue;
-        }
+        if (run.AiTraversalCount < limit) return ParkResult.Continue;
 
-        var reason = $"The AI ran {run.AiTraversalCount} steps without human input (limit {limit}). "
-            + "Continue, continue with guidance, or abandon the run.";
-        var old = run.Status;
-        run.Status = LoopRunStatus.WaitingHuman;
-        run.IsHalted = true;
-        run.HaltReason = HaltReason.MaxAiTraversals;
-        run.HumanFeedbackReason = HumanFeedbackReasons.MaxAiTraversalsReached;
-        await store.UpdateRunAsync(run);
         _logger.LogInformation(
             "Run {RunId}: {Count} AI nodes ran without human input (limit {Limit}); parked at {NodeLabel} for a human",
             run.Id, run.AiTraversalCount, limit, node.Label);
+
+        // Unlike every other halt, this park happens BEFORE the node starts, so
+        // there is no live session for Resume to continue — the id on the row
+        // belongs to a node that already finished. Clearing it is what makes the
+        // resumed node cold-start on its own rendered prompt (with the human's
+        // note appended) instead of dropping "Continue where you left off." into
+        // an earlier node's conversation. See AINodeExecutor's steering path.
+        run.CurrentAiSessionId = null;
+        await ParkForHumanAsync(run, node, HaltReason.MaxAiTraversals,
+            HumanFeedbackReasons.MaxAiTraversalsReached,
+            $"The AI ran {run.AiTraversalCount} steps without human input (limit {limit}). "
+                + "Continue, continue with guidance, or abandon the run.",
+            store, sp.GetRequiredService<IWorkItemManager>());
+        return ParkResult.Stop;
+    }
+
+    /// <summary>
+    /// Park a run at a person's feet exactly as the Halt button does:
+    /// <see cref="LoopRunStatus.WaitingHuman"/> + <c>IsHalted</c> stamped with
+    /// <paramref name="haltReason"/>, so <see cref="ResumeFromHaltAsync"/> is the
+    /// way out and startup leaves it alone, and the work item moved to
+    /// HumanFeedback carrying <paramref name="reason"/> as the conversation entry.
+    /// The whole park is one write plus both notifications, which is why it lives
+    /// here rather than at each caller: a park missing the <c>HaltedAsync</c>
+    /// notification or the transition is a run nobody is told about.
+    ///
+    /// Deliberately does NOT cancel the run's cancellation token — that is
+    /// <see cref="HaltRunAsync"/>'s job and exists to kill a live agent process.
+    /// Every caller here parks a run with no node in flight.
+    /// </summary>
+    private async Task ParkForHumanAsync(
+        LoopRun run, LoopNode node, HaltReason haltReason, string feedbackReason,
+        string reason, ILoopRunStore store, IWorkItemManager workItems)
+    {
+        var old = run.Status;
+        run.Status = LoopRunStatus.WaitingHuman;
+        run.IsHalted = true;
+        run.HaltReason = haltReason;
+        run.HumanFeedbackReason = feedbackReason;
+        await store.UpdateRunAsync(run);
         await _notifier.RunStateChangedAsync(run.Id, old, LoopRunStatus.WaitingHuman);
         await _notifier.HaltedAsync(run.Id);
-        await sp.GetRequiredService<IWorkItemManager>().TransitionAsync(
-            run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
-            reason: reason, humanFeedbackReason: HumanFeedbackReasons.MaxAiTraversalsReached,
+        await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+            reason: reason, humanFeedbackReason: feedbackReason,
             currentLoopRunId: run.Id, name: node.Label);
-        return ParkResult.Stop;
     }
 
     private async Task<ParkResult> CompleteRunAsync(LoopRun run, ILoopRunStore store, IWorkItemManager workItems, string? output)

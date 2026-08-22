@@ -59,6 +59,13 @@ you have it the count no longer needs to be per-edge to be safe.
   person's hands, so the budget refills there. The cost is that a PR node
   looping through a fix cycle (`on_ci_failed` → AI → PR → …) refills every lap
   and so is bounded only by the person watching the PR, not by this cap.
+- **This is the one halt that parks before its node starts**, which the resume
+  path has to be told about. Every other halt interrupts a node mid-flight and
+  resumes against the session it captured; here the captured session belongs to
+  the step that already finished, so the park clears it and the pending node
+  cold-starts on its own prompt with the human's note appended. Steering into
+  that session instead would skip the node's prompt and its session config
+  entirely.
 - **The counter is visible.** Both run endpoints project `aiTraversalCount`, and
   the steer window shows it on a capped park, so the question a person is being
   asked comes with the number behind it.
