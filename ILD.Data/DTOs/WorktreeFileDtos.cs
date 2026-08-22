@@ -56,3 +56,22 @@ public sealed class WorktreeFileContentResponse
     /// </summary>
     public string? ImageBase64 { get; set; }
 }
+
+/// <summary>
+/// A save of one worktree file: <see cref="Content"/> replaces whatever stands
+/// at <see cref="Path"/> in its entirety, so a caller sends the whole file back
+/// rather than a patch. Empty content is a legitimate save — a file emptied out
+/// is not the same as one never sent — which is why <see cref="Content"/> is
+/// nullable here: null distinguishes an omitted field, which is rejected, from
+/// the empty string, which truncates the file.
+/// <para>
+/// The save answers with a <see cref="WorktreeFileContentResponse"/> read back
+/// off disk, so the change status and diff it carries describe the file as it
+/// now stands rather than as the editor last saw it.
+/// </para>
+/// </summary>
+public sealed class WorktreeFileSaveRequest
+{
+    public string Path { get; set; } = string.Empty;
+    public string? Content { get; set; }
+}

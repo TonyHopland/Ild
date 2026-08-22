@@ -25,6 +25,7 @@ import {
   WorktreePreviewServiceConfig,
   WorktreeFiles,
   WorktreeFileContent,
+  WorktreeFileSaveRequest,
   AppSetting,
   UserSession,
   WorkItemServerConfig,
@@ -324,6 +325,15 @@ export const workItemService = {
     return api.get<WorktreeFileContent>(
       `/workitems/${id}/files/content?path=${encodeURIComponent(path)}`,
     );
+  },
+
+  saveFileContent: async (
+    id: string,
+    path: string,
+    content: string,
+  ): Promise<WorktreeFileContent> => {
+    const body: WorktreeFileSaveRequest = { path, content };
+    return api.put<WorktreeFileContent>(`/workitems/${id}/files/content`, body);
   },
 };
 

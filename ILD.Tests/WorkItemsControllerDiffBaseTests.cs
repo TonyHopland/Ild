@@ -54,6 +54,61 @@ public class WorkItemsControllerDiffBaseTests
         repoManager.Verify(m => m.ListWorktreeFilesAsync(WorktreePath, "main"), Times.Once);
     }
 
+    [Fact]
+    public async Task Saving_a_file_anchors_the_diff_it_answers_with_on_that_same_base()
+    {
+        // The save hands back the file as it now stands, and that response is
+        // what redraws the viewer — so it has to be measured from the fork point
+        // the reads use, or a save would rewrite the diff the user was reading.
+        var (controller, repoManager, db, _) = await SetupAsync(runBaseBranchOverride: "release/1.0");
+        using var _db = db;
+
+        var result = await controller.SaveFileContent(
+            WorkItemId,
+            new WorktreeFileSaveRequest { Path = "src/app.ts", Content = "edited" });
+
+        repoManager.Verify(m => m.WriteWorktreeFileAsync(WorktreePath, "src/app.ts", "edited", "release/1.0"), Times.Once);
+        var saved = Assert.IsType<WorktreeFileContentResponse>(Assert.IsType<OkObjectResult>(result).Value);
+        Assert.Equal("edited", saved.Content);
+        Assert.Equal("modified", saved.ChangeStatus);
+    }
+
+    [Fact]
+    public async Task A_save_missing_its_path_or_content_never_reaches_the_worktree()
+    {
+        var (controller, repoManager, db, _) = await SetupAsync(runBaseBranchOverride: null);
+        using var _db = db;
+
+        Assert.IsType<BadRequestObjectResult>(await controller.SaveFileContent(WorkItemId, null));
+        Assert.IsType<BadRequestObjectResult>(
+            await controller.SaveFileContent(WorkItemId, new WorktreeFileSaveRequest { Path = " ", Content = "x" }));
+        // Content absent is a malformed save; content empty is a file truncated.
+        Assert.IsType<BadRequestObjectResult>(
+            await controller.SaveFileContent(WorkItemId, new WorktreeFileSaveRequest { Path = "a.ts", Content = null }));
+        Assert.IsType<OkObjectResult>(
+            await controller.SaveFileContent(WorkItemId, new WorktreeFileSaveRequest { Path = "a.ts", Content = "" }));
+
+        repoManager.Verify(
+            m => m.WriteWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task A_file_the_worktree_refuses_to_take_is_a_bad_request()
+    {
+        var (controller, repoManager, db, _) = await SetupAsync(runBaseBranchOverride: null);
+        using var _db = db;
+        repoManager
+            .Setup(m => m.WriteWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
+            .ReturnsAsync((WorktreeFileContentResponse?)null);
+
+        var result = await controller.SaveFileContent(
+            WorkItemId,
+            new WorktreeFileSaveRequest { Path = "../escape.ts", Content = "edited" });
+
+        Assert.IsType<BadRequestObjectResult>(result);
+    }
+
     private const string WorkItemId = "1";
     private const string WorktreePath = "/tmp/ild-difftest-worktree";
 
@@ -87,6 +142,9 @@ public class WorkItemsControllerDiffBaseTests
             .ReturnsAsync(new List<WorktreeFileEntry>());
         repoManager.Setup(m => m.ReadWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
             .ReturnsAsync((WorktreeFileContentResponse?)null);
+        repoManager.Setup(m => m.WriteWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
+            .ReturnsAsync((string _, string path, string content, string? __) =>
+                new WorktreeFileContentResponse { Path = path, ChangeStatus = "modified", Content = content });
 
         var mgr = new WorkItemManager(
             repoManager.Object,

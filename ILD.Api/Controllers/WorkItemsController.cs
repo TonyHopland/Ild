@@ -438,6 +438,26 @@ public class WorkItemsController : ControllerBase
         return Ok(content);
     }
 
+    // Writes land in the worktree and stop there — git is left alone, so an edit
+    // saved here reaches a branch the same way the run's own edits do.
+    [HttpPut("{id}/files/content")]
+    public async Task<IActionResult> SaveFileContent(string id, [FromBody] WorktreeFileSaveRequest? request)
+    {
+        if (request == null || string.IsNullOrWhiteSpace(request.Path))
+            return BadRequest(new { error = "path is required." });
+        if (request.Content == null)
+            return BadRequest(new { error = "content is required." });
+
+        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
+        if (error != null) return error;
+
+        var diffBase = await ResolveDiffBaseBranchAsync(workItem!);
+        var saved = await _repositoryManager.WriteWorktreeFileAsync(workItem!.WorktreePath!, request.Path, request.Content, diffBase);
+        if (saved == null)
+            return BadRequest(new { error = "File is not an editable text file in this worktree." });
+        return Ok(saved);
+    }
+
     [HttpPost("{id}/push-branch")]
     public async Task<IActionResult> PushBranch(string id)
     {

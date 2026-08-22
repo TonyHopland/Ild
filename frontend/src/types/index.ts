@@ -258,6 +258,19 @@ export interface WorktreeFileContent {
   imageBase64: string | null;
 }
 
+/**
+ * An edited file on its way back to the worktree: `content` replaces the file
+ * at `path` whole, and the save answers with a fresh {@link WorktreeFileContent}
+ * so the viewer redraws from the file as saved — status and diff included —
+ * rather than from what it had before. Only files the server handed over as
+ * text can be sent back; a binary, an image and a file deleted on the branch
+ * all arrive with a null `content` and are not editable.
+ */
+export interface WorktreeFileSaveRequest {
+  path: string;
+  content: string;
+}
+
 export enum NodeType {
   Start = "Start",
   Cmd = "Cmd",

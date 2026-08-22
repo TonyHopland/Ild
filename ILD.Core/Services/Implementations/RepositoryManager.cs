@@ -373,6 +373,21 @@ public class RepositoryManager : IRepositoryManager
         return response;
     }
 
+    public async Task<WorktreeFileContentResponse?> WriteWorktreeFileAsync(string worktreePath, string relativePath, string content, string? defaultBranch = null)
+    {
+        if (!await ValidateWorktreeHealthAsync(worktreePath))
+            return null;
+
+        var full = ResolveSafePath(worktreePath, relativePath);
+        if (full == null || !File.Exists(full))
+            return null;
+        if (IsBinary(await File.ReadAllBytesAsync(full)))
+            return null;
+
+        await File.WriteAllTextAsync(full, content);
+        return await ReadWorktreeFileAsync(worktreePath, relativePath, defaultBranch);
+    }
+
     /// <summary>
     /// Resolve the fork point the run branched from. Prefers the repository's
     /// stored <paramref name="defaultBranch"/> (as <c>origin/&lt;branch&gt;</c>,

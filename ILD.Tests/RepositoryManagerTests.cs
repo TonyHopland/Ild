@@ -534,6 +534,62 @@ public class RepositoryManagerTests : IDisposable
         Assert.Null(file.ImageBase64);
     }
 
+    [Fact]
+    public async Task WriteWorktreeFile_saves_the_edit_and_reports_what_it_changed()
+    {
+        var (work, mgr) = CloneWithOrigin();
+        var wt = await mgr.CreateWorktreeAsync(work, "feature-write");
+        var head = GitOut(wt, "rev-parse", "HEAD");
+
+        var saved = await mgr.WriteWorktreeFileAsync(wt, "mod.txt", "edited\n");
+
+        Assert.NotNull(saved);
+        Assert.Equal("edited\n", await File.ReadAllTextAsync(Path.Combine(wt, "mod.txt")));
+        // The answer is read back off disk, so it already knows the file changed.
+        Assert.Equal("modified", saved!.ChangeStatus);
+        Assert.Equal("edited\n", saved.Content);
+        Assert.Contains("+edited", saved.Diff);
+        // Saving touches the working tree and nothing else: no commit, no index.
+        Assert.Equal(head, GitOut(wt, "rev-parse", "HEAD"));
+        Assert.Contains("mod.txt", GitOut(wt, "status", "--porcelain"));
+    }
+
+    [Fact]
+    public async Task WriteWorktreeFile_refuses_a_path_that_escapes_the_worktree()
+    {
+        var (work, mgr) = CloneWithOrigin();
+        var wt = await mgr.CreateWorktreeAsync(work, "feature-write-escape");
+        var outside = Path.Combine(Directory.GetParent(wt)!.FullName, "outside.txt");
+        await File.WriteAllTextAsync(outside, "untouched\n");
+
+        Assert.Null(await mgr.WriteWorktreeFileAsync(wt, "../outside.txt", "clobbered\n"));
+        Assert.Equal("untouched\n", await File.ReadAllTextAsync(outside));
+
+        // Neither does the write invent a file the read side would not serve.
+        Assert.Null(await mgr.WriteWorktreeFileAsync(wt, "does-not-exist.txt", "new\n"));
+        Assert.False(File.Exists(Path.Combine(wt, "does-not-exist.txt")));
+
+        File.WriteAllBytes(Path.Combine(wt, "blob.bin"), new byte[] { 1, 2, 0, 3, 4 });
+        Assert.Null(await mgr.WriteWorktreeFileAsync(wt, "blob.bin", "text over bytes\n"));
+        Assert.Equal(new byte[] { 1, 2, 0, 3, 4 }, await File.ReadAllBytesAsync(Path.Combine(wt, "blob.bin")));
+    }
+
+    [Fact]
+    public async Task WriteWorktreeFile_refuses_a_worktree_that_is_missing_or_not_one()
+    {
+        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        // A work item between runs has no worktree path at all, and a stale one
+        // may name a directory git no longer knows about.
+        var plainDir = Path.Combine(_tmp, "not-a-worktree-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(plainDir);
+        await File.WriteAllTextAsync(Path.Combine(plainDir, "file.txt"), "before\n");
+
+        Assert.Null(await mgr.WriteWorktreeFileAsync(null!, "file.txt", "after\n"));
+        Assert.Null(await mgr.WriteWorktreeFileAsync(Path.Combine(_tmp, "gone-" + Guid.NewGuid().ToString("N")), "file.txt", "after\n"));
+        Assert.Null(await mgr.WriteWorktreeFileAsync(plainDir, "file.txt", "after\n"));
+        Assert.Equal("before\n", await File.ReadAllTextAsync(Path.Combine(plainDir, "file.txt")));
+    }
+
     /// <summary>A real 1x1 PNG — has the NUL bytes that make it read as binary.</summary>
     private static byte[] PngBytes() => Convert.FromBase64String(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");

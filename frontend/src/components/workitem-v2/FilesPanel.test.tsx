@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
 import FilesPanel from "./FilesPanel";
-import { WorkItem, WorkItemStatus, WorkItemPriority } from "../../types";
+import { WorkItem, WorkItemStatus, WorkItemPriority, WorktreeFileContent } from "../../types";
 import * as authServices from "../../services/auth";
 
 afterEach(() => {
@@ -829,5 +829,181 @@ describe("FilesPanel SVG preview", () => {
     // Going back restores the preview the user asked for.
     await open("logo.svg");
     expect(screen.getByRole("img")).toBeTruthy();
+  });
+});
+
+describe("FilesPanel editing", () => {
+  const TEXT_FILE: WorktreeFileContent = {
+    path: "a.ts",
+    changeStatus: "none",
+    content: "before",
+    diff: null,
+    isBinary: false,
+    imageMimeType: null,
+    imageBase64: null,
+  };
+
+  function mockOneFile(content: Partial<WorktreeFileContent> = {}) {
+    const getFiles = vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: [{ path: "a.ts", changeStatus: "none" }],
+    });
+    const getFileContent = vi
+      .spyOn(authServices.workItemService, "getFileContent")
+      .mockResolvedValue({ ...TEXT_FILE, ...content });
+    return { getFiles, getFileContent };
+  }
+
+  async function open(name: string) {
+    await act(async () => {
+      fireEvent.click(screen.getByText(name));
+      await Promise.resolve();
+    });
+  }
+
+  async function click(name: string | RegExp) {
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name }));
+      await Promise.resolve();
+    });
+  }
+
+  async function type(text: string) {
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Contents of a.ts"), { target: { value: text } });
+      await Promise.resolve();
+    });
+  }
+
+  test("writes the edited file back and redraws from what was saved", async () => {
+    const { getFiles } = mockOneFile();
+    const save = vi.spyOn(authServices.workItemService, "saveFileContent").mockResolvedValue({
+      ...TEXT_FILE,
+      changeStatus: "modified",
+      content: "after",
+      diff: "@@ -1 +1 @@\n-before\n+after",
+    });
+
+    await renderPanel(makeWorkItem());
+    await open("a.ts");
+    await click("Edit");
+    await type("after");
+    await click("Save");
+
+    expect(save).toHaveBeenCalledWith("wi-1", "a.ts", "after");
+    // The editor closes onto the saved file, and the answer the save gave —
+    // not the content the editor started from — is what the viewer now shows.
+    expect(screen.queryByLabelText("Contents of a.ts")).toBeNull();
+    expect(screen.getByText("after")).toBeTruthy();
+    await click("Diff");
+    expect(screen.getByText("+after")).toBeTruthy();
+    // The tree is re-pulled too: this file's badge just went none → M.
+    expect(getFiles).toHaveBeenCalledTimes(2);
+  });
+
+  test("cancel discards the edit and restores the loaded file", async () => {
+    mockOneFile();
+    const save = vi.spyOn(authServices.workItemService, "saveFileContent");
+
+    await renderPanel(makeWorkItem());
+    await open("a.ts");
+    await click("Edit");
+    await type("scribbled over");
+    await click("Cancel");
+
+    expect(save).not.toHaveBeenCalled();
+    expect(screen.queryByText("scribbled over")).toBeNull();
+    expect(screen.getByText("before")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Edit" })).toBeTruthy();
+  });
+
+  test("a background refresh leaves an open editor's unsaved text alone", async () => {
+    const { getFileContent } = mockOneFile();
+
+    const workItem = makeWorkItem();
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(<FilesPanel workItem={workItem} />);
+      await Promise.resolve();
+    });
+    await open("a.ts");
+    await click("Edit");
+    await type("unsaved work");
+
+    // The run advances and the parent hands down a fresh work item while the
+    // editor is open. The silent re-pull that keeps the viewer current would
+    // take the draft with it, so it must not run for the file being edited.
+    getFileContent.mockResolvedValue({ ...TEXT_FILE, content: "refreshed by the run" });
+    await act(async () => {
+      view.rerender(<FilesPanel workItem={{ ...workItem }} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect((screen.getByLabelText("Contents of a.ts") as HTMLTextAreaElement).value).toBe(
+      "unsaved work",
+    );
+    expect(getFileContent).toHaveBeenCalledTimes(1);
+
+    // Once the edit is out of the way the viewer catches up again.
+    await click("Cancel");
+    await act(async () => {
+      view.rerender(<FilesPanel workItem={{ ...workItem }} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText("refreshed by the run")).toBeTruthy();
+  });
+
+  test("offers no edit for a binary, an image or a file that is not on disk", async () => {
+    const cases: {
+      label: string;
+      content: Partial<WorktreeFileContent>;
+      shown: () => unknown;
+    }[] = [
+      {
+        label: "binary",
+        content: { content: null, isBinary: true },
+        shown: () => screen.getByText(/Binary file/),
+      },
+      {
+        label: "image",
+        content: {
+          content: null,
+          isBinary: true,
+          imageMimeType: "image/png",
+          imageBase64: "iVBORw0KGgo=",
+        },
+        shown: () => screen.getByRole("img"),
+      },
+      {
+        label: "deleted",
+        content: { content: null, changeStatus: "deleted" },
+        shown: () => screen.getByText(/no content to display/),
+      },
+    ];
+
+    for (const { label, content, shown } of cases) {
+      mockOneFile(content);
+      await renderPanel(makeWorkItem());
+      await open("a.ts");
+      // The file did arrive — it is drawn as the viewer's non-text case, which
+      // is what has no Edit to offer.
+      expect(shown(), label).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Edit" }), label).toBeNull();
+      cleanup();
+      vi.restoreAllMocks();
+    }
+  });
+
+  test("offers no edit outside the code view", async () => {
+    mockOneFile({ changeStatus: "modified", diff: "@@ -1 +1 @@\n-was\n+before" });
+
+    await renderPanel(makeWorkItem());
+    await open("a.ts");
+    expect(screen.getByRole("button", { name: "Edit" })).toBeTruthy();
+
+    await click("Diff");
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
   });
 });

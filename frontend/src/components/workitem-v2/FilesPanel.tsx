@@ -59,6 +59,16 @@ const PREVIEW_RENDERER: Record<PreviewKind, (content: string, path: string) => R
   svg: (content, path) => <SvgView svg={content} path={path} />,
 };
 
+/**
+ * Whether the open file can be edited in place. Only text the server actually
+ * handed over qualifies, and only under the code view: a binary, an inlined
+ * image and a file deleted on the branch all arrive with no `content`, so the
+ * one test covers every case the viewer already draws something else for.
+ */
+function isEditable(content: WorktreeFileContent | null, mode: ViewMode): boolean {
+  return mode === "code" && content !== null && !content.isBinary && content.content !== null;
+}
+
 /** The modes the toolbar offers for a file: Preview joins them where one exists. */
 function offeredViewModes(path: string): ViewMode[] {
   return previewKindOf(path) ? ["code", "diff", "preview"] : ["code", "diff"];
@@ -103,6 +113,12 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   const [contentLoading, setContentLoading] = useState(false);
   const [contentError, setContentError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("code");
+  // The text being edited, or null when the viewer is read-only. Holding the
+  // draft rather than an `editing` flag keeps "what the user typed" and "are we
+  // editing" from ever disagreeing, and makes Cancel a single discard.
+  const [draft, setDraft] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const refresh = useCallback(
     async (showLoading: boolean) => {
@@ -156,7 +172,15 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
     const isNewItem = lastKeyRef.current !== key;
     lastKeyRef.current = key;
     void refresh(isNewItem);
-    if (!isNewItem && selectedPathRef.current) {
+    if (isNewItem) {
+      setDraft(null);
+      setSaveError(null);
+      return;
+    }
+    // An open editor holds text that exists nowhere else yet, so the silent
+    // re-pull that keeps the viewer current is exactly what would destroy it.
+    // The tree still refreshes above; only the open file is left alone.
+    if (selectedPathRef.current && draft === null) {
       void loadContent(selectedPathRef.current, false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -178,10 +202,30 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
     (path: string) => {
       setSelectedPath(path);
       selectedPathRef.current = path;
+      setDraft(null);
+      setSaveError(null);
       void loadContent(path, true);
     },
     [loadContent],
   );
+
+  const save = useCallback(async () => {
+    if (draft === null || !selectedPath) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      // The save answers with the file as it now stands, so the viewer's status
+      // and diff come from the write itself; the list is re-pulled alongside it
+      // for the tree badge the same write may have just changed.
+      setContent(await workItemService.saveFileContent(workItem.id, selectedPath, draft));
+      setDraft(null);
+      void refresh(false);
+    } catch (e) {
+      setSaveError((e as { message?: string })?.message ?? "Failed to save file.");
+    } finally {
+      setSaving(false);
+    }
+  }, [draft, selectedPath, workItem.id, refresh]);
 
   const toggleFolder = useCallback((path: string) => {
     setToggledFolders((prev) => {
@@ -210,6 +254,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   );
 
   const mode = resolveViewMode(viewMode, selectedPath);
+  const editable = isEditable(content, mode) && !contentLoading && !contentError;
 
   if (!workItem.worktreePath) {
     return (
@@ -299,6 +344,9 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
       <div className="wiv2-files-viewer">
         <div className="wiv2-files-toolbar">
           <span className="wiv2-files-viewer-path">{selectedPath ?? "No file selected"}</span>
+          {/* The mode buttons lock while the editor is open: leaving the code
+              view mid-edit would hide the draft behind a pane that cannot show
+              it, so the user finishes or discards first. */}
           {selectedPath && (
             <div className="wiv2-toggle-group" role="group" aria-label="Viewer mode">
               {offeredViewModes(selectedPath).map((option) => (
@@ -308,13 +356,47 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
                   className={`wiv2-toggle${mode === option ? " wiv2-toggle-active" : ""}`}
                   onClick={() => setViewMode(option)}
                   aria-pressed={mode === option}
+                  disabled={draft !== null}
                 >
                   {VIEW_MODE_LABEL[option]}
                 </button>
               ))}
             </div>
           )}
+          {editable &&
+            (draft === null ? (
+              <button
+                type="button"
+                className="wiv2-files-edit"
+                onClick={() => setDraft(content?.content ?? "")}
+              >
+                Edit
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="wiv2-files-edit wiv2-files-edit-primary"
+                  onClick={() => void save()}
+                  disabled={saving}
+                >
+                  {saving ? "Saving…" : "Save"}
+                </button>
+                <button
+                  type="button"
+                  className="wiv2-files-edit"
+                  onClick={() => {
+                    setDraft(null);
+                    setSaveError(null);
+                  }}
+                  disabled={saving}
+                >
+                  Cancel
+                </button>
+              </>
+            ))}
         </div>
+        {saveError && <div className="preview-message preview-error">{saveError}</div>}
         <div className="wiv2-files-content">
           <FileViewer
             selectedPath={selectedPath}
@@ -322,6 +404,9 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
             loading={contentLoading}
             error={contentError}
             mode={mode}
+            draft={draft}
+            onDraftChange={setDraft}
+            saving={saving}
           />
         </div>
       </div>
@@ -335,12 +420,18 @@ function FileViewer({
   loading,
   error,
   mode,
+  draft,
+  onDraftChange,
+  saving,
 }: {
   selectedPath: string | null;
   content: WorktreeFileContent | null;
   loading: boolean;
   error: string | null;
   mode: ViewMode;
+  draft: string | null;
+  onDraftChange: (next: string) => void;
+  saving: boolean;
 }) {
   if (!selectedPath) {
     return <div className="wiv2-empty">Select a file to view its contents.</div>;
@@ -387,6 +478,11 @@ function FileViewer({
 
   if (content.content === null) {
     return <div className="wiv2-empty">This file has no content to display.</div>;
+  }
+  if (draft !== null) {
+    return (
+      <CodeEditor value={draft} onChange={onDraftChange} path={content.path} readOnly={saving} />
+    );
   }
   return <CodeView code={content.content} path={content.path} />;
 }
@@ -471,6 +567,36 @@ function CodeView({ code, path }: { code: string; path: string }) {
         </div>
       ))}
     </pre>
+  );
+}
+
+/**
+ * The file open for editing: one plain textarea over the whole pane, deliberately
+ * without the code view's gutter and colouring. Numbering a box whose text moves
+ * as it is typed would have to be kept in step with it on every keystroke, and
+ * the alignment is wrong the moment a line wraps — the edit is the point here,
+ * not the reading.
+ */
+function CodeEditor({
+  value,
+  onChange,
+  path,
+  readOnly,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  path: string;
+  readOnly: boolean;
+}) {
+  return (
+    <textarea
+      className="wiv2-code-editor"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      readOnly={readOnly}
+      spellCheck={false}
+      aria-label={`Contents of ${path}`}
+    />
   );
 }
 
