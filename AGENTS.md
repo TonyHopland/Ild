@@ -86,3 +86,9 @@ dotnet ef database update --project <project-with-dbcontext>
 ```
 
 Manually editing migration files is error-prone and will cause schema drift. The migration files are generated artifacts, not source of truth.
+
+## Code style
+
+Code is the explanation. No comments narrating what a change does or why.
+Comments only for non-obvious invariants or workarounds (with a link).
+No summary paragraphs in the diff. Prefer better names over comments.
