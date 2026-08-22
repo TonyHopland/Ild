@@ -101,9 +101,32 @@ public enum WorktreeFileWriteOutcome
 }
 
 /// <summary>
-/// A save's outcome together with the file it produced, which is present for
-/// <see cref="WorktreeFileWriteOutcome.Saved"/> and null for every refusal.
+/// A save's outcome together with the file it produced. <see cref="File"/> is
+/// there for a save that happened and null for every refusal, and the two are
+/// built rather than assembled so that pairing cannot come apart: there is no
+/// way to say a file was saved without saying which file, and a caller that
+/// tests <see cref="File"/> has the answer to both questions.
 /// </summary>
-public readonly record struct WorktreeFileWriteResult(
-    WorktreeFileWriteOutcome Outcome,
-    WorktreeFileContentResponse? File);
+public readonly record struct WorktreeFileWriteResult
+{
+    private WorktreeFileWriteResult(WorktreeFileWriteOutcome outcome, WorktreeFileContentResponse? file)
+    {
+        Outcome = outcome;
+        File = file;
+    }
+
+    public WorktreeFileWriteOutcome Outcome { get; }
+    public WorktreeFileContentResponse? File { get; }
+
+    /// <summary>The write landed, and <paramref name="file"/> is what now stands there.</summary>
+    public static WorktreeFileWriteResult Saved(WorktreeFileContentResponse file) => new(WorktreeFileWriteOutcome.Saved, file);
+
+    /// <summary>The worktree is missing, or no longer one git knows.</summary>
+    public static WorktreeFileWriteResult WorktreeUnavailable { get; } = new(WorktreeFileWriteOutcome.WorktreeUnavailable, null);
+
+    /// <summary>Nothing writable stands at that path.</summary>
+    public static WorktreeFileWriteResult NotFound { get; } = new(WorktreeFileWriteOutcome.NotFound, null);
+
+    /// <summary>The file is there but is binary.</summary>
+    public static WorktreeFileWriteResult NotText { get; } = new(WorktreeFileWriteOutcome.NotText, null);
+}

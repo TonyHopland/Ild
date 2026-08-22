@@ -453,11 +453,15 @@ public class WorkItemsController : ControllerBase
 
         var diffBase = await ResolveDiffBaseBranchAsync(workItem!);
         var result = await _repositoryManager.WriteWorktreeFileAsync(workItem!.WorktreePath!, request.Path, request.Content, diffBase);
-        // A file that is not there answers as it does when read, so the two
-        // endpoints do not disagree about the same path.
+        // A save that produced a file answers with it — asking for the file is
+        // the same question as asking whether it saved, so there is no arm here
+        // that could answer 200 with nothing in it. A file that is not there
+        // answers as it does when read, so the two endpoints do not disagree
+        // about the same path.
+        if (result.File is { } saved)
+            return Ok(saved);
         return result.Outcome switch
         {
-            WorktreeFileWriteOutcome.Saved => Ok(result.File),
             WorktreeFileWriteOutcome.NotFound => NotFound(new { error = "File not found in worktree." }),
             WorktreeFileWriteOutcome.NotText => BadRequest(new { error = "File is not a text file." }),
             WorktreeFileWriteOutcome.WorktreeUnavailable => BadRequest(new { error = "Work item does not currently have an active worktree." }),

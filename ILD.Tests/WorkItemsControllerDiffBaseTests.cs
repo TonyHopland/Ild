@@ -103,15 +103,15 @@ public class WorkItemsControllerDiffBaseTests
         var (controller, repoManager, db, _) = await SetupAsync(runBaseBranchOverride: null);
         using var _db = db;
 
-        Assert.IsType<NotFoundObjectResult>(await SaveWithOutcome(WorktreeFileWriteOutcome.NotFound));
-        Assert.IsType<BadRequestObjectResult>(await SaveWithOutcome(WorktreeFileWriteOutcome.NotText));
-        Assert.IsType<BadRequestObjectResult>(await SaveWithOutcome(WorktreeFileWriteOutcome.WorktreeUnavailable));
+        Assert.IsType<NotFoundObjectResult>(await SaveRefusedWith(WorktreeFileWriteResult.NotFound));
+        Assert.IsType<BadRequestObjectResult>(await SaveRefusedWith(WorktreeFileWriteResult.NotText));
+        Assert.IsType<BadRequestObjectResult>(await SaveRefusedWith(WorktreeFileWriteResult.WorktreeUnavailable));
 
-        async Task<IActionResult> SaveWithOutcome(WorktreeFileWriteOutcome outcome)
+        async Task<IActionResult> SaveRefusedWith(WorktreeFileWriteResult refusal)
         {
             repoManager
                 .Setup(m => m.WriteWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
-                .ReturnsAsync(new WorktreeFileWriteResult(outcome, null));
+                .ReturnsAsync(refusal);
             return await controller.SaveFileContent(
                 WorkItemId,
                 new WorktreeFileSaveRequest { Path = "src/app.ts", Content = "edited" });
@@ -152,8 +152,7 @@ public class WorkItemsControllerDiffBaseTests
         repoManager.Setup(m => m.ReadWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
             .ReturnsAsync((WorktreeFileContentResponse?)null);
         repoManager.Setup(m => m.WriteWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
-            .ReturnsAsync((string _, string path, string content, string? __) => new WorktreeFileWriteResult(
-                WorktreeFileWriteOutcome.Saved,
+            .ReturnsAsync((string _, string path, string content, string? __) => WorktreeFileWriteResult.Saved(
                 new WorktreeFileContentResponse { Path = path, ChangeStatus = "modified", Content = content }));
 
         var mgr = new WorkItemManager(

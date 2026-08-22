@@ -376,21 +376,24 @@ public class RepositoryManager : IRepositoryManager
     public async Task<WorktreeFileWriteResult> WriteWorktreeFileAsync(string worktreePath, string relativePath, string content, string? defaultBranch = null)
     {
         if (!await ValidateWorktreeHealthAsync(worktreePath))
-            return new(WorktreeFileWriteOutcome.WorktreeUnavailable, null);
+            return WorktreeFileWriteResult.WorktreeUnavailable;
 
         // A path that leads out of the worktree names nothing in it, which is
         // the same answer as one that is simply not there — and the same one the
         // read side gives, so neither endpoint tells a caller which it was.
         var full = ResolveSafePath(worktreePath, relativePath);
         if (full == null || !File.Exists(full))
-            return new(WorktreeFileWriteOutcome.NotFound, null);
+            return WorktreeFileWriteResult.NotFound;
         if (await IsBinaryOnDiskAsync(full))
-            return new(WorktreeFileWriteOutcome.NotText, null);
+            return WorktreeFileWriteResult.NotText;
 
         await File.WriteAllTextAsync(full, content);
-        return new(
-            WorktreeFileWriteOutcome.Saved,
-            await ReadWorktreeFileAsync(worktreePath, relativePath, defaultBranch));
+
+        // The run's agent works in this same worktree, so the file can be gone
+        // again before the read that describes it — a save cannot answer with a
+        // file it no longer holds, and says what a read of that path would now.
+        var written = await ReadWorktreeFileAsync(worktreePath, relativePath, defaultBranch);
+        return written == null ? WorktreeFileWriteResult.NotFound : WorktreeFileWriteResult.Saved(written);
     }
 
     /// <summary>
