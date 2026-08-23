@@ -1,6 +1,9 @@
+using System.Security.Cryptography;
+using System.Text;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
+using ILD.Data.Security;
 using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Tests;
@@ -61,7 +64,7 @@ public class AuthServiceTests
 
         var stored = await StoredSessionAsync(db);
         Assert.NotEqual(token, stored.TokenHash);
-        Assert.Equal(UserSession.HashToken(token), stored.TokenHash);
+        Assert.Equal(SessionTokenHasher.Hash(token), stored.TokenHash);
     }
 
     [Fact]
@@ -343,6 +346,85 @@ public class AuthServiceTests
         var session = await db.Context.UserSessions.SingleAsync();
         session.LastSeenAt = lastSeenAt;
         await db.Context.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// The reason the pepper exists. Anything that can write the database — the
+    /// lower-trust agent uid of ADR-0014, a restored backup — can insert a
+    /// UserSessions row naming a token it chose. With a pepper configured it cannot
+    /// compute the value that row has to be addressed by, so the token it holds
+    /// resolves to nothing.
+    /// </summary>
+    [Fact]
+    public async Task A_session_row_whose_hash_the_attacker_computed_does_not_authenticate()
+    {
+        SessionTokenHasher.Configure("a-strong-test-pepper");
+        try
+        {
+            using var db = new TestDb();
+            var svc = Make(db);
+            var minted = await LoginAsync(svc);
+
+            var forged = await InsertUnkeyedSessionAsync(db, "attacker-chosen-token");
+
+            Assert.False(await svc.ValidateSessionAsync(forged));
+            Assert.Null(await svc.GetUsernameAsync(forged));
+            Assert.Empty(await svc.GetSessionsAsync(forged));
+            Assert.True(await svc.ValidateSessionAsync(minted));
+        }
+        finally { SessionTokenHasher.Configure(null); }
+    }
+
+    /// <summary>
+    /// The same insert against the pre-pepper hashing, to pin that it is the pepper
+    /// doing the work above rather than some other property of the lookup.
+    /// </summary>
+    [Fact]
+    public async Task Without_a_pepper_that_same_row_does_authenticate()
+    {
+        using var db = new TestDb();
+        var svc = Make(db);
+        await LoginAsync(svc);
+
+        var forged = await InsertUnkeyedSessionAsync(db, "attacker-chosen-token");
+
+        Assert.True(await svc.ValidateSessionAsync(forged));
+    }
+
+    [Fact]
+    public async Task Turning_the_pepper_on_signs_existing_devices_out()
+    {
+        using var db = new TestDb();
+        var svc = Make(db);
+        var token = await LoginAsync(svc);
+
+        SessionTokenHasher.Configure("a-strong-test-pepper");
+        try
+        {
+            Assert.False(await svc.ValidateSessionAsync(token));
+            Assert.True(await svc.ValidateSessionAsync(await LoginAsync(Make(db))));
+        }
+        finally { SessionTokenHasher.Configure(null); }
+    }
+
+    /// <summary>
+    /// A row addressed by the plain SHA-256 of <paramref name="token"/> — everything
+    /// an attacker with database write access can produce. Returns the token.
+    /// </summary>
+    private static async Task<string> InsertUnkeyedSessionAsync(TestDb db, string token)
+    {
+        var now = DateTime.UtcNow;
+        db.Context.UserSessions.Add(new UserSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = await db.Context.Users.Select(u => u.Id).SingleAsync(),
+            TokenHash = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(token))),
+            CreatedAt = now,
+            LastSeenAt = now,
+            ExpiresAt = now.AddDays(90),
+        });
+        await db.Context.SaveChangesAsync();
+        return token;
     }
 
     private static async Task<UserSession> StoredSessionAsync(TestDb db)

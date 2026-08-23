@@ -7,21 +7,40 @@ The supported deployment is the checked-in Docker Compose stack with PostgreSQL 
 ```bash
 git clone <this repo> ild && cd ild
 cp .env.example .env
-# set ILD_PASSWORD before continuing
+# fill in the required secrets before continuing
 docker compose up --build
 ```
 
+Compose refuses to start until `.env` supplies every secret that has no default:
+`ILD_PASSWORD`, `WORKITEM_API_KEYS`, `ILD_SESSION_TOKEN_PEPPER`, and the three
+database passwords `POSTGRES_PASSWORD`, `ILD_DB_PASSWORD`, `WORKITEM_DB_PASSWORD`.
+Generate each independently — `openssl rand -hex 32` — and keep them out of version
+control. There are deliberately no shipped defaults: a credential that is the same on
+every install is a credential every install's attacker already knows.
+
 The compose stack starts three services:
 
-- `postgres` on port `5432`
+- `postgres`, reachable only on the compose network
 - `workitem-server` on port `8081`
 - `ild` on port `8080`
 
 Open <http://localhost:8080> and log in with the configured username (`admin` by default, or `ILD_USERNAME`) and the `ILD_PASSWORD` value you supplied.
 
-Only `8080` is published. Worktree previews are reached through it on wildcard
-subdomains rather than on ports of their own — see
+Only `8080` and `8081` are published. PostgreSQL is not: both services reach it on the
+compose network, and nothing outside needs to. Uncomment the `ports` line on the
+`postgres` service to attach a client from the host. Worktree previews are reached
+through `8080` on wildcard subdomains rather than on ports of their own — see
 [Worktree preview proxy](#worktree-preview-proxy).
+
+### Upgrading an existing stack
+
+The database passwords are written into the `ild_core` and `ild_workitems` roles the
+first time the `postgres-data` volume is initialised, so a stack created before these
+variables existed still has the old shipped values. Before upgrading, either
+`ALTER ROLE ild_core WITH PASSWORD '<new>';` (and the same for `ild_workitems` and
+`postgres`) to match the values you put in `.env`, or discard the volume and let the
+init script recreate the roles. Setting `ILD_SESSION_TOKEN_PEPPER` for the first time
+signs every device out once; that is expected and costs a re-login.
 
 ## Worktree preview proxy
 
@@ -140,12 +159,12 @@ and add the preview wildcard to their own allowed-hosts list.
 
 ## Volumes
 
-| Volume          | Purpose                                                |
-| --------------- | ------------------------------------------------------ |
-| `postgres-data` | PostgreSQL data for both ILD and the WorkItem Server   |
-| `ild-data`      | ILD runtime files under `/data`                        |
-| `ild-worktrees` | Per-run git worktrees                                  |
-| `workitem-data` | Additional WorkItem Server runtime files under `/data` |
+| Volume          | Purpose                                                                                                                                                                          |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `postgres-data` | PostgreSQL data for both ILD and the WorkItem Server. The role passwords are baked in when it is first created — see [Upgrading an existing stack](#upgrading-an-existing-stack) |
+| `ild-data`      | ILD runtime files under `/data`                                                                                                                                                  |
+| `ild-worktrees` | Per-run git worktrees                                                                                                                                                            |
+| `workitem-data` | Additional WorkItem Server runtime files under `/data`                                                                                                                           |
 
 Your host `~/.gitconfig` is mounted read-only into the ILD container, so agent commits inherit your local name and email by default. Point `GIT_CONFIG` at a different file, or override just the identity with `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` (and the matching `GIT_COMMITTER_*` vars) in your `.env` — git reads those natively and they take precedence over the mounted file.
 

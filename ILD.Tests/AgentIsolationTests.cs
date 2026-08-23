@@ -597,13 +597,13 @@ public class AgentIsolationTests
     }
 
     [Fact]
-    public void StripOrchestratorEnvironment_covers_the_nine_orchestrator_secrets()
+    public void StripOrchestratorEnvironment_covers_the_ten_orchestrator_secrets()
     {
         // Pinned by name. These are the values a preview command could otherwise
         // read straight out of `env` — the DB strings, the encryption-at-rest key,
-        // the bootstrap credentials and the orchestrator's own API tokens — so a
-        // new one being added to the app without being added here is the
-        // regression this guards.
+        // the session-token pepper, the bootstrap credentials and the
+        // orchestrator's own API tokens — so a new one being added to the app
+        // without being added here is the regression this guards.
         Assert.Equal(new[]
         {
             "ILD_AGENT_TOKEN",
@@ -611,6 +611,7 @@ public class AgentIsolationTests
             "ILD_DB_CONNECTION_STRING",
             "ILD_PASSWORD",
             "ILD_SECRET_KEY",
+            "ILD_SESSION_TOKEN_PEPPER",
             "ILD_USERNAME",
             "WORKITEM_API_KEYS",
             "WORKITEM_DB_CONNECTION_STRING",

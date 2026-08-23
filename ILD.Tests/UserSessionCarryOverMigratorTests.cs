@@ -1,6 +1,7 @@
 using ILD.Core.Services.Implementations;
 using ILD.Data.Entities;
 using ILD.Data.Migrations;
+using ILD.Data.Security;
 using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Tests;
@@ -41,7 +42,7 @@ public class UserSessionCarryOverMigratorTests
         await UserSessionCarryOverMigrator.ApplyAsync(db.Context, carried, null);
 
         var session = await db.Context.UserSessions.SingleAsync();
-        Assert.Equal(UserSession.HashToken("legacy-token"), session.TokenHash);
+        Assert.Equal(SessionTokenHasher.Hash("legacy-token"), session.TokenHash);
         Assert.DoesNotContain("legacy-token", session.TokenHash, StringComparison.Ordinal);
     }
 

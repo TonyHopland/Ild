@@ -21,6 +21,9 @@ jobs:
       - name: Compose security_opt tests
         run: .github/scripts/compose-security-opt.test.sh
 
+      - name: Compose credential tests
+        run: .github/scripts/compose-credentials.test.sh
+
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"

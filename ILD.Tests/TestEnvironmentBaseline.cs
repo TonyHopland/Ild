@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using ILD.Core.Services.Implementations;
+using ILD.Data.Security;
 
 namespace ILD.Tests;
 
@@ -50,6 +51,13 @@ internal static class TestEnvironmentBaseline
         // including the baseline guard below -- start depending on the ambient
         // shell after all, which is the exact failure this class exists to stop.
         Environment.SetEnvironmentVariable(AgentIsolation.SecretEnvDenylistEnvVar, null);
+
+        // Same reasoning for the session-token pepper: SessionTokenHasher reads it at
+        // type-init, so a shell that exports it would silently re-key every stored hash
+        // and the tests asserting the unkeyed default would fail on the ambient
+        // environment. Tests that want a pepper set one through Configure and restore it.
+        Environment.SetEnvironmentVariable(SessionTokenHasher.PepperEnvVar, null);
+        SessionTokenHasher.Configure(null);
 
         var privateRoot = Path.Combine(Path.GetTempPath(), RootPrefix + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(privateRoot);

@@ -166,10 +166,21 @@ try
             if (payloadsInlined > 0)
                 Log.Information("Inlined {Count} offloaded event-log payload(s) into the database", payloadsInlined);
 
+            var agentUser = ILD.Core.Services.Implementations.AgentIsolation.AgentUser;
+
             if (ILD.Data.Security.SecretProtector.IsEnabled)
                 Log.Information("Secret encryption-at-rest is enabled (ILD_SECRET_KEY set)");
+            else if (agentUser is not null)
+                Log.Warning(
+                    "ILD_SECRET_KEY is not set while agent uid isolation is on ({AgentUser}) — provider API keys and webhook secrets sit in the database in plaintext, and the agent is a lower-trust user reaching the same database. Set it.",
+                    agentUser);
             else
                 Log.Warning("ILD_SECRET_KEY is not set — provider API keys and webhook secrets are stored in plaintext. Set it to enable encryption-at-rest.");
+
+            if (ILD.Data.Security.SessionTokenHasher.IsPeppered)
+                Log.Information("Session tokens are hashed with a keyed pepper (ILD_SESSION_TOKEN_PEPPER set)");
+            else
+                Log.Warning("ILD_SESSION_TOKEN_PEPPER is not set — session tokens are hashed unkeyed, so anyone who can write the UserSessions table can mint a sign-in. Set it (setting it signs every device out once).");
 
             var templateStore = scope.ServiceProvider.GetRequiredService<ILD.Data.Stores.Interfaces.ILoopTemplateStore>();
             var mgr = scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Interfaces.ILoopTemplateManager>();

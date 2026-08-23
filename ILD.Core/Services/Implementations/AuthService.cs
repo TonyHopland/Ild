@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
+using ILD.Data.Security;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
 
@@ -11,8 +12,8 @@ namespace ILD.Core.Services.Implementations;
 ///
 /// Sessions are plural and independent: a sign-in inserts a row, a sign-out
 /// revokes that row, and neither touches the user's other devices. The bearer
-/// token is minted here and immediately forgotten — only its SHA-256 is stored,
-/// and every lookup hashes the presented token to find its row.
+/// token is minted here and immediately forgotten — only <see cref="SessionTokenHasher"/>
+/// output is stored, and every lookup hashes the presented token to find its row.
 ///
 /// A session dies three ways: revoked (<see cref="UserSession.RevokedAt"/>),
 /// idle past <see cref="AppSettingKeys.SessionIdleDays"/>, or older than the
@@ -90,7 +91,7 @@ public class AuthService : IAuthService
         {
             Id = Guid.NewGuid(),
             UserId = user.Id,
-            TokenHash = UserSession.HashToken(token),
+            TokenHash = SessionTokenHasher.Hash(token),
             CreatedAt = now,
             LastSeenAt = now,
             ExpiresAt = maxDays > 0 ? now.AddDays(maxDays) : null,
@@ -169,7 +170,7 @@ public class AuthService : IAuthService
     {
         if (string.IsNullOrEmpty(sessionToken)) return null;
 
-        var session = await _authStore.GetSessionByTokenHashAsync(UserSession.HashToken(sessionToken));
+        var session = await _authStore.GetSessionByTokenHashAsync(SessionTokenHasher.Hash(sessionToken));
         if (session == null) return null;
 
         return IsLive(session, DateTime.UtcNow, await IdleDaysAsync()) ? session : null;
