@@ -14,6 +14,7 @@ together.
 ```bash
 cp .env.example .env                            # then fill in the required secrets
 docker compose up postgres workitem-server      # infrastructure
+set -a; . ./.env; set +a                        # compose reads .env; your shell does not
 export ILD_PASSWORD=letmein
 export ILD_DB_CONNECTION_STRING="Host=localhost;Port=5432;Database=IldCore;Username=ild_core;Password=$ILD_DB_PASSWORD"
 dotnet run --project ILD.Api                      # backend

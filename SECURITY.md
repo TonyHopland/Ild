@@ -25,11 +25,13 @@ instance. Understanding the trust boundaries matters when deploying it:
 
 - **Authentication** is a single bootstrap user (`ILD_USERNAME` / `ILD_PASSWORD`). The
   password is stored hashed with PBKDF2-SHA256 (salted, 100k iterations); session tokens
-  are cryptographically random and stored only as an HMAC-SHA256 keyed on
-  `ILD_SESSION_TOKEN_PEPPER`, so a session row cannot be forged by anything that can
-  write the database without also holding that key. All API and SignalR endpoints
-  require authentication except health, metrics, login, and the runtime log-level
-  endpoint.
+  are cryptographically random and are stored only as a hash. **When
+  `ILD_SESSION_TOKEN_PEPPER` is set** — which the compose stack requires — that hash is
+  an HMAC-SHA256 keyed on it, so a session row cannot be forged by anything that can
+  write the database without also holding the key. Without it, running from source, the
+  hash is an unkeyed SHA-256 and anyone who can write the sessions table can mint a
+  sign-in; startup warns when this is the case. All API and SignalR endpoints require
+  authentication except health, metrics, login, and the runtime log-level endpoint.
 - **The application executes commands and external agent CLIs by design.** `Cmd` nodes
   and preview commands in loop templates run shell commands inside per-item git worktrees.
   Anyone who can author loop templates (i.e. the authenticated admin) can run arbitrary
