@@ -37,7 +37,7 @@ public class RemoteProvidersIntegrationTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var items = await response.Content.ReadFromJsonAsync<RemoteProviderTypeResponse[]>();
         Assert.NotNull(items);
-        Assert.Equal(new[] { "Forgejo", "GitHub" }, items!.Select(i => i.Type).OrderBy(t => t).ToArray());
+        Assert.Equal(new[] { "AzureDevOps", "Forgejo", "GitHub" }, items!.Select(i => i.Type).OrderBy(t => t).ToArray());
     }
 
     private sealed class RemoteProviderTypeResponse

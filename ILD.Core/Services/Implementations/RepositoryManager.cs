@@ -735,6 +735,9 @@ public class RepositoryManager : IRepositoryManager
         {
             "github" => "x-access-token",
             "gitlab" => "oauth2",
+            // Azure DevOps reads the PAT from the password and ignores the
+            // username, but git still needs a non-blank one to send at all.
+            "azuredevops" => "pat",
             _ => "git",
         };
     }
