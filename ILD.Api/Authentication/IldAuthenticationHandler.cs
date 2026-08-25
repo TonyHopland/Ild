@@ -16,6 +16,9 @@ namespace ILD.Api.Authentication;
 ///
 /// The token is read from <c>Authorization: Bearer &lt;token&gt;</c>, from a bare
 /// <c>Authorization</c> value, or from an <c>?access_token=</c> query parameter.
+/// A <c>Basic</c> Authorization header is skipped rather than read as a token:
+/// it belongs to a webhook adapter's own verification, and the caller carries
+/// its ILD token in the query instead.
 /// The query form is not decoration: browsers cannot set headers on a WebSocket
 /// handshake, so the interactive terminals and SignalR's WebSocket transport have
 /// no other way to authenticate.
@@ -91,7 +94,12 @@ public sealed class IldAuthenticationHandler : AuthenticationHandler<Authenticat
     {
         var authHeader = Request.Headers.Authorization.FirstOrDefault();
 
-        if (!string.IsNullOrWhiteSpace(authHeader))
+        // A Basic credential is never an ILD token: it is how an Azure DevOps
+        // service hook authenticates itself to the webhook adapter, which owns
+        // that check. Falling through to the query token is what lets such a
+        // caller carry both credentials at once.
+        if (!string.IsNullOrWhiteSpace(authHeader)
+            && !authHeader.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase))
         {
             return authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
                 ? authHeader["Bearer ".Length..].Trim()

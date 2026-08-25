@@ -9,20 +9,25 @@ using ILD.Data.Entities;
 namespace ILD.Core.Services.Implementations.RemoteProviders;
 
 /// <summary>
-/// Shared scaffolding for HTTP-API remote git providers (GitHub, Forgejo).
-/// The two providers expose the same REST shapes for the bulk of operations —
+/// Shared scaffolding for HTTP-API remote git providers.
+/// GitHub and Forgejo expose the same REST shapes for the bulk of operations —
 /// PR creation, comment/status reads, HMAC webhook verification — and only
 /// diverge on auth headers, host/api-base resolution, the merge/branch/webhook
 /// endpoints, and webhook payload parsing. The identical parts (notably the
 /// security-sensitive HMAC check) live here so they cannot drift between
-/// providers; the divergent parts are abstract hooks.
+/// providers; the divergent parts are abstract hooks. A provider shaped nothing
+/// like Gitea (Azure DevOps) overrides the virtual members wholesale rather than
+/// bending its REST surface into this one.
 /// </summary>
 public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
 {
     public abstract string ProviderType { get; }
     public abstract string WebhookRouteSegment { get; }
 
-    /// <summary>Header carrying the HMAC-SHA256 webhook signature for this provider.</summary>
+    /// <summary>
+    /// Header carrying this provider's webhook credential. HMAC-SHA256 for the
+    /// providers that keep the default <see cref="VerifyWebhookSignature"/>.
+    /// </summary>
     protected abstract string SignatureHeaderName { get; }
 
     /// <summary>Apply auth/accept/user-agent headers for this provider's API.</summary>
@@ -34,7 +39,7 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     /// <summary>Build the REST API base URL for a provider instance.</summary>
     protected abstract string BuildApiBase(Uri providerUri);
 
-    public ResolvedRemoteRepository? TryResolve(RemoteProvider provider, Uri repoUri)
+    public virtual ResolvedRemoteRepository? TryResolve(RemoteProvider provider, Uri repoUri)
     {
         if (!string.Equals(provider.Type, ProviderType, StringComparison.OrdinalIgnoreCase))
             return null;
@@ -56,7 +61,7 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         return new ResolvedRemoteRepository(provider, ProviderType, BuildApiBase(providerUri), parts[0], parts[1], this);
     }
 
-    public async Task<RemotePrResult> CreatePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string sourceBranch, string targetBranch, string title, string body)
+    public virtual async Task<RemotePrResult> CreatePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string sourceBranch, string targetBranch, string title, string body)
     {
         ApplyHeaders(http, repo.Provider);
 
@@ -75,7 +80,7 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
             null);
     }
 
-    public async Task<IEnumerable<RemotePrComment>> GetPullRequestCommentsAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+    public virtual async Task<IEnumerable<RemotePrComment>> GetPullRequestCommentsAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
     {
         ApplyHeaders(http, repo.Provider);
         using var resp = await http.GetAsync($"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/issues/{prNumber}/comments");
@@ -85,7 +90,7 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         return await ReadCommentsAsync(resp);
     }
 
-    public async Task<RemotePrStatus> GetPullRequestStatusAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+    public virtual async Task<RemotePrStatus> GetPullRequestStatusAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
     {
         ApplyHeaders(http, repo.Provider);
         using var resp = await http.GetAsync($"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/pulls/{prNumber}");
@@ -541,10 +546,10 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     public Task UnregisterWebhookAsync(HttpClient http, ResolvedRemoteRepository repo, string callbackUrl)
         => Task.CompletedTask;
 
-    public Task<bool> CreatePullRequestCommentAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string body)
+    public virtual Task<bool> CreatePullRequestCommentAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string body)
         => PrCommentHelper.CreatePullRequestCommentAsync(http, repo, prNumber, body, ApplyHeaders);
 
-    public bool VerifyWebhookSignature(string body, IReadOnlyDictionary<string, string> headers, string secret)
+    public virtual bool VerifyWebhookSignature(string body, IReadOnlyDictionary<string, string> headers, string secret)
         => VerifyHmacSha256(body, GetHeader(headers, SignatureHeaderName), secret);
 
     public abstract Task<bool> MergePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber);

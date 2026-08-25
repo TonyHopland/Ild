@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Run work items against Azure DevOps repositories, the same way you already can against GitHub and Forgejo ones.**
+
 ## [0.10.0] - 2026-08-22
 
 ### Added

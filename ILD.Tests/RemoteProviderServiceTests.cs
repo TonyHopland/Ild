@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using ILD.Core.Services.Implementations;
+using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Implementations.RemoteProviders;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
@@ -18,6 +19,7 @@ public class RemoteProviderServiceTests
             {
                 new ForgejoRemoteGitProviderAdapter(),
                 new GitHubRemoteGitProviderAdapter(),
+                new AzureDevOpsRemoteGitProviderAdapter(),
             },
             new HttpClient(handler));
 
@@ -805,5 +807,374 @@ public class RemoteProviderServiceTests
         Assert.Null(result.Error);
         Assert.Single(handler.Requests);
         Assert.Equal("https://api.github.com/repos/team/repo/pulls", handler.Requests[0].RequestUri?.ToString());
+    }
+    private const string AzureOrganizationUrl = "https://dev.azure.com/contoso";
+    private const string AzureRepoUrl = "https://dev.azure.com/contoso/widgets/_git/app";
+    private const string AzureGitApi = "https://dev.azure.com/contoso/widgets/_apis/git/repositories/app";
+
+    private static void AddAzureDevOps(TestDb db, string url = AzureOrganizationUrl, string apiKey = "pat-token")
+    {
+        db.Context.RemoteProviders.Add(new RemoteProvider
+        {
+            Id = Guid.NewGuid(),
+            Name = "azure",
+            Type = "AzureDevOps",
+            Url = url,
+            ApiKey = apiKey,
+        });
+        db.Context.SaveChanges();
+    }
+
+    // Records every request's method, URL, auth header and body, and answers
+    // from rules matched in declared order so a more specific path can be
+    // declared before the PR resource it hangs off.
+    private sealed class AzureHandler : HttpMessageHandler
+    {
+        private readonly List<(Func<string, bool> Match, Func<HttpRequestMessage, HttpResponseMessage> Respond)> _rules = new();
+        public List<(HttpMethod Method, string Url, string? Auth, string Body)> Calls { get; } = new();
+
+        public AzureHandler On(Func<string, bool> match, string body)
+            => OnRequest(match, _ => Json(body));
+
+        public AzureHandler OnRequest(Func<string, bool> match, Func<HttpRequestMessage, HttpResponseMessage> respond)
+        {
+            _rules.Add((match, respond));
+            return this;
+        }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var url = request.RequestUri!.ToString();
+            var body = request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken);
+            Calls.Add((request.Method, url, request.Headers.Authorization?.ToString(), body));
+
+            foreach (var (match, respond) in _rules)
+            {
+                if (match(url))
+                    return respond(request);
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        }
+    }
+
+    private static string ExpectedAzureBasicAuth(string pat)
+        => "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes($":{pat}"));
+
+    [Fact]
+    public async Task CreatePullRequestAsync_uses_the_azure_devops_project_scoped_api_and_basic_pat_auth()
+    {
+        using var db = new TestDb();
+        AddAzureDevOps(db);
+
+        var handler = new AzureHandler().On(_ => true, "{\"pullRequestId\":42}");
+        var result = await CreateService(db, handler)
+            .CreatePullRequestAsync(AzureRepoUrl, "ild/test", "main", "title", "body");
+
+        Assert.Null(result.Error);
+        var call = Assert.Single(handler.Calls);
+        Assert.Equal(HttpMethod.Post, call.Method);
+        Assert.Equal($"{AzureGitApi}/pullrequests?api-version=7.1", call.Url);
+        Assert.Equal(ExpectedAzureBasicAuth("pat-token"), call.Auth);
+        Assert.Contains("refs/heads/ild/test", call.Body);
+        Assert.Contains("refs/heads/main", call.Body);
+        Assert.Equal($"{AzureRepoUrl}/pullrequest/42", result.HtmlUrl);
+    }
+
+    [Fact]
+    public async Task CreatePullRequestAsync_resolves_a_legacy_visualstudio_com_repository()
+    {
+        using var db = new TestDb();
+        AddAzureDevOps(db, url: "https://contoso.visualstudio.com");
+
+        var handler = new AzureHandler().On(_ => true, "{\"pullRequestId\":42}");
+        var result = await CreateService(db, handler)
+            .CreatePullRequestAsync("https://contoso.visualstudio.com/widgets/_git/app", "ild/test", "main", "t", "b");
+
+        Assert.Null(result.Error);
+        // The organisation is the hostname there, so the path starts at the project.
+        Assert.Equal(
+            "https://contoso.visualstudio.com/widgets/_apis/git/repositories/app/pullrequests?api-version=7.1",
+            Assert.Single(handler.Calls).Url);
+    }
+
+    [Theory]
+    // Another organisation on the shared host: PATs are organisation-scoped.
+    [InlineData("https://dev.azure.com/fabrikam/widgets/_git/app")]
+    // No _git segment at all, and the GitHub-shaped owner/repo form.
+    [InlineData("https://dev.azure.com/contoso/widgets/app")]
+    [InlineData("https://dev.azure.com/contoso/_git")]
+    // A foreign host the Azure adapter must not claim.
+    [InlineData("https://github.com/team/repo")]
+    public async Task CreatePullRequestAsync_refuses_a_url_the_azure_provider_does_not_serve(string repoUrl)
+    {
+        using var db = new TestDb();
+        AddAzureDevOps(db);
+
+        var handler = new AzureHandler().On(_ => true, "{\"pullRequestId\":42}");
+        var result = await CreateService(db, handler)
+            .CreatePullRequestAsync(repoUrl, "ild/test", "main", "t", "b");
+
+        Assert.Equal("no provider configured", result.Error);
+        Assert.Empty(handler.Calls);
+    }
+
+    [Fact]
+    public async Task MergePullRequestAsync_azure_devops_completes_against_the_last_source_commit()
+    {
+        using var db = new TestDb();
+        AddAzureDevOps(db);
+
+        var handler = new AzureHandler()
+            .On(u => u.Contains("/pullrequests/7?"), "{\"lastMergeSourceCommit\":{\"commitId\":\"abc123\"}}");
+
+        Assert.True(await CreateService(db, handler).MergePullRequestAsync(AzureRepoUrl, "7"));
+        Assert.Equal(2, handler.Calls.Count);
+        Assert.Equal(HttpMethod.Patch, handler.Calls[1].Method);
+        Assert.Contains("\"status\":\"completed\"", handler.Calls[1].Body);
+        Assert.Contains("abc123", handler.Calls[1].Body);
+    }
+
+    [Fact]
+    public async Task EnablePullRequestAutoMergeAsync_azure_devops_arms_auto_complete_as_the_token_identity()
+    {
+        using var db = new TestDb();
+        AddAzureDevOps(db);
+
+        var handler = new AzureHandler()
+            .On(u => u.Contains("/_apis/connectionData"), "{\"authenticatedUser\":{\"id\":\"user-guid\"}}")
+            .On(_ => true, "{}");
+
+        Assert.True(await CreateService(db, handler).EnablePullRequestAutoMergeAsync(AzureRepoUrl, "11"));
+        Assert.Equal(2, handler.Calls.Count);
+        Assert.Equal("https://dev.azure.com/contoso/_apis/connectionData?api-version=7.1", handler.Calls[0].Url);
+        Assert.Equal(HttpMethod.Patch, handler.Calls[1].Method);
+        Assert.Contains("autoCompleteSetBy", handler.Calls[1].Body);
+        Assert.Contains("user-guid", handler.Calls[1].Body);
+    }
+
+    [Fact]
+    public async Task EnablePullRequestAutoMergeAsync_azure_devops_returns_false_when_the_token_identity_is_unknown()
+    {
+        using var db = new TestDb();
+        AddAzureDevOps(db);
+
+        var handler = new AzureHandler().OnRequest(
+            u => u.Contains("/_apis/connectionData"),
+            _ => new HttpResponseMessage(HttpStatusCode.Forbidden));
+
+        Assert.False(await CreateService(db, handler).EnablePullRequestAutoMergeAsync(AzureRepoUrl, "11"));
+        Assert.Single(handler.Calls);
+    }
+
+    [Fact]
+    public async Task GetPullRequestSnapshotAsync_azure_devops_aggregates_votes_threads_and_build_policies()
+    {
+        using var db = new TestDb();
+        AddAzureDevOps(db);
+
+        var handler = new AzureHandler()
+            .On(u => u.Contains("/pullrequests/7/threads"), """
+                {"value":[
+                  {"id":1,"comments":[
+                     {"id":1,"content":"hi","commentType":"text","author":{"displayName":"bob"},"publishedDate":"2026-01-02T00:00:00Z"},
+                     {"id":2,"content":"updated the source branch","commentType":"system","author":{"displayName":"azure"},"publishedDate":"2026-01-01T00:00:00Z"}]},
+                  {"id":2,"threadContext":{"filePath":"/src/a.ts"},"comments":[
+                     {"id":1,"content":"inline","commentType":"text","author":{"displayName":"carol"},"publishedDate":"2026-01-03T00:00:00Z"}]}]}
+                """)
+            .On(u => u.Contains("/pullrequests/7/statuses"), "{\"value\":[]}")
+            .On(u => u.Contains("/_apis/policy/evaluations"), """
+                {"value":[
+                  {"status":"rejected","configuration":{"type":{"id":"0609b952-1397-4640-95ec-e00a01b2c241"},"settings":{"displayName":"CI build"}},"context":{"buildId":4242}},
+                  {"status":"rejected","configuration":{"type":{"id":"fa4e907d-c16b-4a4c-9dfa-4906e5d171dd"}}}]}
+                """)
+            .On(u => u.Contains("/pullrequests/7?"), """
+                {"pullRequestId":7,"title":"My PR","description":"desc","status":"active","mergeStatus":"succeeded",
+                 "repository":{"id":"repo-guid","name":"app","project":{"id":"proj-guid"}},
+                 "reviewers":[{"displayName":"alice","vote":10},{"displayName":"dan","vote":0}]}
+                """);
+
+        var snapshot = await CreateService(db, handler).GetPullRequestSnapshotAsync(AzureRepoUrl, "7");
+
+        Assert.NotNull(snapshot);
+        Assert.Equal("My PR", snapshot!.Title);
+        Assert.Equal("desc", snapshot.Body);
+        Assert.Equal("open", snapshot.State);
+        Assert.False(snapshot.Merged);
+        Assert.True(snapshot.Mergeable);
+        Assert.True(snapshot.Approved);
+        Assert.False(snapshot.ChangesRequested);
+
+        // Only the build policy is CI; a minimum-reviewers policy is not.
+        Assert.Equal(RemotePrCiStatus.Failed, snapshot.Ci);
+        var check = Assert.Single(snapshot.FailedChecks);
+        Assert.Equal("CI build", check.Name);
+        Assert.Equal("4242", check.CheckId);
+        Assert.Contains("_build/results?buildId=4242", check.Url);
+
+        // The vote (undated) then the two human comments; the system comment is dropped.
+        Assert.Equal(3, snapshot.Conversation.Count);
+        Assert.Equal("review", snapshot.Conversation[0].Kind);
+        Assert.Equal("APPROVED", snapshot.Conversation[0].State);
+        Assert.Equal("comment", snapshot.Conversation[1].Kind);
+        Assert.Equal("review_comment", snapshot.Conversation[2].Kind);
+        Assert.Equal("carol", snapshot.Conversation[2].Author);
+    }
+
+    [Fact]
+    public async Task GetPullRequestSnapshotAsync_azure_devops_reports_a_conflict_and_a_negative_vote()
+    {
+        using var db = new TestDb();
+        AddAzureDevOps(db);
+
+        var handler = new AzureHandler()
+            .On(u => u.Contains("/threads") || u.Contains("/statuses") || u.Contains("/evaluations"), "{\"value\":[]}")
+            .On(u => u.Contains("/pullrequests/7?"), """
+                {"status":"active","mergeStatus":"conflicts",
+                 "repository":{"project":{"id":"proj-guid"}},
+                 "reviewers":[{"displayName":"alice","vote":-10}]}
+                """);
+
+        var snapshot = await CreateService(db, handler).GetPullRequestSnapshotAsync(AzureRepoUrl, "7");
+
+        Assert.NotNull(snapshot);
+        Assert.False(snapshot!.Mergeable);
+        // The conflict edge keys on GitHub's word for it.
+        Assert.Equal("dirty", snapshot.MergeableState);
+        Assert.True(snapshot.ChangesRequested);
+        Assert.Equal(RemotePrCiStatus.None, snapshot.Ci);
+    }
+
+    [Fact]
+    public async Task GetPullRequestSnapshotAsync_azure_devops_reports_a_completed_pull_request_as_merged()
+    {
+        using var db = new TestDb();
+        AddAzureDevOps(db);
+
+        var handler = new AzureHandler()
+            .On(u => u.Contains("/threads") || u.Contains("/statuses") || u.Contains("/evaluations"), "{\"value\":[]}")
+            .On(u => u.Contains("/pullrequests/7?"), "{\"status\":\"completed\",\"mergeStatus\":\"succeeded\"}");
+
+        var snapshot = await CreateService(db, handler).GetPullRequestSnapshotAsync(AzureRepoUrl, "7");
+
+        Assert.Equal("closed", snapshot!.State);
+        Assert.True(snapshot.Merged);
+    }
+
+    [Fact]
+    public async Task GetCheckLogAsync_azure_devops_returns_the_tail_of_the_step_that_failed()
+    {
+        using var db = new TestDb();
+        AddAzureDevOps(db);
+
+        var log = string.Join("\n", Enumerable.Range(1, 500).Select(i => $"line {i}"));
+        var handler = new AzureHandler()
+            .On(u => u.Contains("/builds/4242/timeline"),
+                "{\"records\":[{\"result\":\"succeeded\",\"log\":{\"id\":1}},{\"result\":\"failed\",\"log\":{\"id\":9}}]}")
+            .On(u => u.Contains("/builds/4242/logs/9"), log);
+
+        var window = await CreateService(db, handler)
+            .GetCheckLogAsync(AzureRepoUrl, "4242", tailLines: 3, offset: 0);
+
+        Assert.True(window.Available);
+        Assert.Equal("line 498\nline 499\nline 500", window.Text);
+        Assert.Equal(500, window.TotalLines);
+    }
+
+    [Fact]
+    public async Task GetCheckLogAsync_azure_devops_says_so_when_the_build_kept_no_logs()
+    {
+        using var db = new TestDb();
+        AddAzureDevOps(db);
+
+        var handler = new AzureHandler()
+            .On(u => u.Contains("/builds/4242/timeline"), "{\"records\":[]}")
+            .On(u => u.Contains("/builds/4242/logs"), "{\"value\":[]}");
+
+        var window = await CreateService(db, handler)
+            .GetCheckLogAsync(AzureRepoUrl, "4242", tailLines: 3, offset: 0);
+
+        Assert.False(window.Available);
+        Assert.Contains("No log for this check", window.Message);
+    }
+
+    [Fact]
+    public async Task CreatePullRequestCommentAsync_azure_devops_opens_a_thread()
+    {
+        using var db = new TestDb();
+        AddAzureDevOps(db);
+
+        var handler = new AzureHandler().On(_ => true, "{}");
+
+        Assert.True(await CreateService(db, handler).CreatePullRequestCommentAsync(AzureRepoUrl, "7", "well spotted"));
+        var call = Assert.Single(handler.Calls);
+        Assert.Equal($"{AzureGitApi}/pullrequests/7/threads?api-version=7.1", call.Url);
+        Assert.Contains("well spotted", call.Body);
+    }
+
+    [Fact]
+    public async Task DeleteBranchAsync_azure_devops_updates_the_ref_to_the_null_object_id()
+    {
+        using var db = new TestDb();
+        AddAzureDevOps(db);
+
+        var handler = new AzureHandler()
+            .On(u => u.Contains("/refs?filter="), "{\"value\":[{\"name\":\"refs/heads/ild/wi-1\",\"objectId\":\"cafe\"}]}")
+            .On(_ => true, "{}");
+
+        Assert.True(await CreateService(db, handler).DeleteBranchAsync(AzureRepoUrl, "ild/wi-1"));
+        Assert.Equal(2, handler.Calls.Count);
+        Assert.Contains("cafe", handler.Calls[1].Body);
+        Assert.Contains("0000000000000000000000000000000000000000", handler.Calls[1].Body);
+    }
+
+    [Fact]
+    public void ExtractRepoUrl_reads_an_azure_devops_pull_request_url()
+    {
+        Assert.Equal("7", RemotePrUrl.ExtractPrNumber($"{AzureRepoUrl}/pullrequest/7"));
+        Assert.Equal(AzureRepoUrl, RemotePrUrl.ExtractRepoUrl($"{AzureRepoUrl}/pullrequest/7"));
+    }
+
+    [Fact]
+    public async Task RegisterWebhookAsync_azure_devops_subscribes_with_the_secret_as_the_basic_password()
+    {
+        using var db = new TestDb();
+        db.Context.RemoteProviders.Add(new RemoteProvider
+        {
+            Id = Guid.NewGuid(),
+            Name = "azure",
+            Type = "AzureDevOps",
+            Url = AzureOrganizationUrl,
+            ApiKey = "pat-token",
+            WebhookSecret = "hook-secret",
+        });
+        db.Context.SaveChanges();
+
+        var handler = new AzureHandler()
+            .On(u => u.EndsWith("/repositories/app?api-version=7.1", StringComparison.Ordinal),
+                "{\"id\":\"repo-guid\",\"project\":{\"id\":\"proj-guid\"}}")
+            .On(_ => true, "{}");
+
+        await CreateService(db, handler).RegisterWebhookAsync(AzureRepoUrl, "https://ild.example/api/v1/webhooks/azuredevops");
+
+        var subscriptions = handler.Calls.Where(c => c.Url.Contains("/_apis/hooks/subscriptions")).ToList();
+        Assert.Equal(3, subscriptions.Count);
+        Assert.All(subscriptions, s => Assert.Contains("\"basicAuthPassword\":\"hook-secret\"", s.Body));
+        Assert.All(subscriptions, s => Assert.Contains("repo-guid", s.Body));
+        Assert.Contains(subscriptions, s => s.Body.Contains("git.pullrequest.merged"));
+    }
+
+    [Fact]
+    public async Task RegisterWebhookAsync_azure_devops_registers_nothing_without_a_secret_to_verify_against()
+    {
+        // The Basic password is the whole verification; a subscription created
+        // without one could only ever deliver requests the controller rejects.
+        using var db = new TestDb();
+        AddAzureDevOps(db);
+
+        var handler = new AzureHandler().On(_ => true, "{}");
+        await CreateService(db, handler).RegisterWebhookAsync(AzureRepoUrl, "https://ild.example/api/v1/webhooks/azuredevops");
+
+        Assert.Empty(handler.Calls);
     }
 }
