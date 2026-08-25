@@ -217,9 +217,10 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     /// How much of one check's own output is kept on the snapshot. CI output is
     /// unbounded (a full job log can be megabytes) and every heartbeat tick
     /// persists the snapshot, so each check contributes at most this much; the
-    /// <c>details_url</c> is what takes a reader to the rest.
+    /// link to the check is what takes a reader to the rest. One budget for
+    /// every provider, so a snapshot costs the same whoever produced it.
     /// </summary>
-    private const int MaxCheckSummaryLength = 1000;
+    protected const int MaxCheckSummaryLength = 1000;
 
     /// <summary>
     /// The head commit's CI verdict together with the detail behind a red one:
@@ -463,7 +464,8 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         return Truncate(string.Join("\n\n", parts), MaxCheckSummaryLength);
     }
 
-    private static string? Truncate(string? value, int max)
+    /// <summary>Trim to <paramref name="max"/> characters, marking the cut; null for anything blank.</summary>
+    protected static string? Truncate(string? value, int max)
     {
         if (string.IsNullOrWhiteSpace(value)) return null;
         var trimmed = value.Trim();
@@ -486,8 +488,13 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         return conversation.OrderBy(e => e.CreatedAt).ToList();
     }
 
-    /// <summary>GET a JSON array, returning cloned elements; empty on any failure (404, non-array).</summary>
-    private static async Task<IReadOnlyList<JsonElement>> GetArrayAsync(HttpClient http, string url, string? property = null)
+    /// <summary>
+    /// GET a JSON array, returning cloned elements; empty on any failure (404,
+    /// non-array). <paramref name="property"/> names the field the array is
+    /// wrapped in, for the providers that wrap it (<c>check_runs</c>,
+    /// <c>value</c>, <c>records</c>).
+    /// </summary>
+    protected static async Task<IReadOnlyList<JsonElement>> GetArrayAsync(HttpClient http, string url, string? property = null)
     {
         try
         {
@@ -512,7 +519,7 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     }
 
     /// <summary>GET a JSON object, returning a cloned element; null on any failure.</summary>
-    private static async Task<JsonElement?> GetObjectAsync(HttpClient http, string url)
+    protected static async Task<JsonElement?> GetObjectAsync(HttpClient http, string url)
     {
         try
         {

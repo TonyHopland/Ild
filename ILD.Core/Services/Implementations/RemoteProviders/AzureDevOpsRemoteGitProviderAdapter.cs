@@ -10,12 +10,15 @@ using ILD.Data.Entities;
 namespace ILD.Core.Services.Implementations.RemoteProviders;
 
 /// <summary>
-/// Azure DevOps Services / Server. Shares only the scaffolding of
-/// <see cref="RemoteGitProviderAdapterBase"/> — every REST call, the auth scheme
-/// and the webhook check are its own, because Azure DevOps is not Gitea-shaped:
-/// repositories live under an organisation *and* a project, the API is versioned
-/// per request, PR conversation is threads rather than issue comments, and its
-/// service hooks carry no signature at all.
+/// Azure DevOps Services (<c>dev.azure.com</c>, the legacy
+/// <c>{org}.visualstudio.com</c>) and self-hosted Azure DevOps Server, which is
+/// served by whatever host the provider is configured with. Shares only the
+/// scaffolding of <see cref="RemoteGitProviderAdapterBase"/> — every REST call,
+/// the auth scheme and the webhook check are its own, because Azure DevOps is
+/// not Gitea-shaped: repositories live under an organisation (a collection, on
+/// Server) *and* a project, the API is versioned per request, PR conversation is
+/// threads rather than issue comments, and its service hooks carry no signature
+/// at all.
 /// </summary>
 public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapterBase
 {
@@ -27,8 +30,11 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
 
     private const string GitPathSegment = "_git";
     private const string LegacyHostSuffix = ".visualstudio.com";
-    private const string ModernHost = "dev.azure.com";
+    private const string SharedHost = "dev.azure.com";
     private const string DeletedObjectId = "0000000000000000000000000000000000000000";
+
+    /// <summary>The field Azure DevOps wraps a collection response in.</summary>
+    private const string CollectionProperty = "value";
 
     /// <summary>
     /// Azure DevOps identifies the branch-policy build by a fixed type id;
@@ -54,9 +60,15 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
     public override string WebhookRouteSegment => "azuredevops";
     protected override string SignatureHeaderName => "Authorization";
 
+    /// <summary>
+    /// The configured host and nothing else, as Forgejo and GitHub Enterprise
+    /// already do — a self-hosted Azure DevOps Server answers on whatever host
+    /// its operator gave it, so there is no set of hostnames to allow. What
+    /// makes a URL this provider's is the <c>_git</c> segment, which
+    /// <see cref="TryResolve"/> requires.
+    /// </summary>
     protected override bool HostMatches(Uri providerUri, Uri repoUri)
-        => IsAzureDevOpsHost(repoUri.Host)
-            && providerUri.Host.Equals(repoUri.Host, StringComparison.OrdinalIgnoreCase)
+        => providerUri.Host.Equals(repoUri.Host, StringComparison.OrdinalIgnoreCase)
             && providerUri.Scheme.Equals(repoUri.Scheme, StringComparison.OrdinalIgnoreCase)
             && providerUri.Port == repoUri.Port;
 
@@ -64,14 +76,17 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
         => $"{providerUri.Scheme}://{providerUri.Authority}";
 
     /// <summary>
-    /// Azure DevOps repository URLs are
-    /// <c>https://dev.azure.com/{org}/{project}/_git/{repo}</c>, or the legacy
-    /// <c>https://{org}.visualstudio.com/[{collection}/]{project}/_git/{repo}</c>
-    /// where the organisation is the hostname instead. The base class's
-    /// owner/repo split cannot express that, so the project (and any collection
-    /// above it) is folded into <see cref="ResolvedRemoteRepository.ApiBase"/>,
-    /// which becomes the project-rooted API root every call here hangs off;
-    /// <c>Owner</c> stays the organisation and <c>Repo</c> the repository.
+    /// Azure DevOps repository URLs put a variable number of segments above the
+    /// project: <c>dev.azure.com/{org}/{project}/_git/{repo}</c>,
+    /// <c>{org}.visualstudio.com/{project}/_git/{repo}</c> (organisation in the
+    /// hostname), and on Server <c>{host}/[{virtualDir}/]{collection}/{project}/_git/{repo}</c>.
+    /// What every form shares is the <c>_git</c> marker, so the parse is
+    /// "everything before it scopes the project, the segment after it is the
+    /// repository" rather than a fixed segment count. The base class's
+    /// owner/repo split cannot express that, so the whole scope is folded into
+    /// <see cref="ResolvedRemoteRepository.ApiBase"/>, which becomes the
+    /// project-rooted API root every call here hangs off; <c>Owner</c> is the
+    /// organisation (the collection, on Server) and <c>Repo</c> the repository.
     /// </summary>
     public override ResolvedRemoteRepository? TryResolve(RemoteProvider provider, Uri repoUri)
     {
@@ -98,8 +113,11 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
         if (scope.Length < (legacyOrganization is null ? 2 : 1))
             return null;
 
-        var organization = legacyOrganization ?? Uri.UnescapeDataString(scope[0]);
-        if (legacyOrganization is null && !OrganizationAllowed(providerUri, organization))
+        // Everywhere but the legacy host, the organisation is whatever sits
+        // directly above the project — the organisation on dev.azure.com, the
+        // collection on Server, past any virtual directory in front of it.
+        var organization = legacyOrganization ?? Uri.UnescapeDataString(scope[^2]);
+        if (!OrganizationAllowed(providerUri, repoUri, organization))
             return null;
 
         return new ResolvedRemoteRepository(
@@ -221,15 +239,30 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
     {
         ApplyHeaders(http, repo.Provider);
 
-        var pr = await GetObjectAsync(http, Versioned(PrApi(repo, prNumber)));
-        if (pr is null)
-            return null;
+        var attempts = Math.Max(1, MergeableRetryAttempts);
+        JsonElement pr;
+        string status;
+        string mergeStatus;
+        for (var attempt = 0; ; attempt++)
+        {
+            var fetched = await GetObjectAsync(http, Versioned(PrApi(repo, prNumber)));
+            if (fetched is null)
+                return null;
 
-        var status = (ReadString(pr, "status") ?? "active").ToLowerInvariant();
+            pr = fetched.Value;
+            status = (ReadString(pr, "status") ?? "active").ToLowerInvariant();
+            mergeStatus = (ReadString(pr, "mergeStatus") ?? string.Empty).ToLowerInvariant();
+
+            // Azure DevOps computes mergeability after a push and reports
+            // "queued" until it has, exactly as GitHub reports a null mergeable.
+            var stillComputing = mergeStatus is "" or "queued" or "notset";
+            if (!stillComputing || status is "completed" or "abandoned" || attempt == attempts - 1)
+                break;
+            await Task.Delay(MergeableRetryDelay);
+        }
+
         var merged = status == "completed";
         var closed = merged || status == "abandoned";
-
-        var mergeStatus = (ReadString(pr, "mergeStatus") ?? string.Empty).ToLowerInvariant();
         bool? mergeable = mergeStatus switch
         {
             "succeeded" => true,
@@ -239,9 +272,9 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
             _ => null,
         };
 
-        var (approved, changesRequested, reviews) = ReadReviewers(pr.Value);
+        var (approved, changesRequested, reviews) = ReadReviewers(pr);
         var conversation = await ReadConversationAsync(http, repo, prNumber, reviews);
-        var (ci, failedChecks) = await ReadCiStatusAsync(http, repo, pr.Value, prNumber);
+        var (ci, failedChecks) = await ReadCiStatusAsync(http, repo, pr, prNumber);
 
         return new RemotePrSnapshot(
             ReadString(pr, "title"),
@@ -337,8 +370,8 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
         // A ref is deleted by updating it to the null object id, which means the
         // caller has to know what it currently points at.
         var refName = RefName(branchName);
-        var refs = await GetValuesAsync(http, Versioned(
-            $"{GitApi(repo)}/refs", $"filter={Uri.EscapeDataString(refName["refs/".Length..])}"));
+        var refs = await GetArrayAsync(http, Versioned(
+            $"{GitApi(repo)}/refs", $"filter={Uri.EscapeDataString(refName["refs/".Length..])}"), CollectionProperty);
         var objectId = refs
             .Where(r => string.Equals(ReadString(r, "name"), refName, StringComparison.Ordinal))
             .Select(r => ReadString(r, "objectId"))
@@ -452,10 +485,6 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
         http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("ILD", "1.0"));
     }
 
-    private static bool IsAzureDevOpsHost(string host)
-        => host.Equals(ModernHost, StringComparison.OrdinalIgnoreCase)
-            || host.EndsWith(LegacyHostSuffix, StringComparison.OrdinalIgnoreCase);
-
     private static string? LegacyOrganization(string host)
         => host.EndsWith(LegacyHostSuffix, StringComparison.OrdinalIgnoreCase)
             ? host[..^LegacyHostSuffix.Length]
@@ -465,10 +494,16 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
     /// dev.azure.com serves every organisation from the one host, so a provider
     /// URL that names one (<c>https://dev.azure.com/contoso</c>) is read as an
     /// organisation constraint — PATs are organisation-scoped, so two
-    /// organisations are two configured providers rather than one.
+    /// organisations are two configured providers rather than one. Only that
+    /// shared host needs the check: anywhere else the hostname already picks out
+    /// the one server, whose provider URL may carry a virtual directory rather
+    /// than an organisation in its first segment.
     /// </summary>
-    private static bool OrganizationAllowed(Uri providerUri, string organization)
+    private static bool OrganizationAllowed(Uri providerUri, Uri repoUri, string organization)
     {
+        if (!repoUri.Host.Equals(SharedHost, StringComparison.OrdinalIgnoreCase))
+            return true;
+
         var configured = providerUri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
         return configured.Length == 0
             || Uri.UnescapeDataString(configured[0]).Equals(organization, StringComparison.OrdinalIgnoreCase);
@@ -567,7 +602,7 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
     {
         var flattened = new List<ThreadComment>();
 
-        foreach (var thread in await GetValuesAsync(http, Versioned($"{PrApi(repo, prNumber)}/threads")))
+        foreach (var thread in await GetArrayAsync(http, Versioned($"{PrApi(repo, prNumber)}/threads"), CollectionProperty))
         {
             var threadId = ReadScalar(thread, "id") ?? "0";
             var kind = ReadString(Child(thread, "threadContext"), "filePath") is null ? "comment" : "review_comment";
@@ -612,8 +647,8 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
         if (projectId is not null)
         {
             var artifactId = $"vstfs:///CodeReview/CodeReviewId/{projectId}/{prNumber}";
-            var evaluations = await GetValuesAsync(http, Versioned(
-                $"{repo.ApiBase}/_apis/policy/evaluations", $"artifactId={Uri.EscapeDataString(artifactId)}"));
+            var evaluations = await GetArrayAsync(http, Versioned(
+                $"{repo.ApiBase}/_apis/policy/evaluations", $"artifactId={Uri.EscapeDataString(artifactId)}"), CollectionProperty);
 
             foreach (var evaluation in evaluations)
             {
@@ -641,7 +676,7 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
             }
         }
 
-        foreach (var status in await GetValuesAsync(http, Versioned($"{PrApi(repo, prNumber)}/statuses")))
+        foreach (var status in await GetArrayAsync(http, Versioned($"{PrApi(repo, prNumber)}/statuses"), CollectionProperty))
         {
             var state = (ReadString(status, "state") ?? string.Empty).ToLowerInvariant();
             if (state is "" or "notset" or "notapplicable")
@@ -655,7 +690,7 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
                     ReadString(Child(status, "context"), "name") ?? "status",
                     state,
                     ReadString(status, "targetUrl"),
-                    Truncate(ReadString(status, "description")),
+                    Truncate(ReadString(status, "description"), MaxCheckSummaryLength),
                     null));
         }
 
@@ -664,19 +699,9 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
         return (anyPending ? RemotePrCiStatus.Pending : RemotePrCiStatus.Passed, Array.Empty<RemotePrCheck>());
     }
 
-    /// <summary>Longest check description kept on a snapshot, matching the base class's own budget.</summary>
-    private const int MaxCheckSummaryLength = 1000;
-
-    private static string? Truncate(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return null;
-        var trimmed = value.Trim();
-        return trimmed.Length <= MaxCheckSummaryLength ? trimmed : trimmed[..MaxCheckSummaryLength] + "…";
-    }
-
     private async Task<string?> ResolveFailedLogIdAsync(HttpClient http, string buildApi)
     {
-        var records = await GetValuesAsync(http, Versioned($"{buildApi}/timeline"), "records");
+        var records = await GetArrayAsync(http, Versioned($"{buildApi}/timeline"), "records");
         var failedLog = records
             .Where(r => (ReadString(r, "result") ?? string.Empty).ToLowerInvariant() is "failed" or "canceled")
             .Select(r => ReadScalar(Child(r, "log"), "id"))
@@ -684,39 +709,9 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
         if (failedLog is not null)
             return failedLog;
 
-        return (await GetValuesAsync(http, Versioned($"{buildApi}/logs")))
+        return (await GetArrayAsync(http, Versioned($"{buildApi}/logs"), CollectionProperty))
             .Select(l => ReadScalar(l, "id"))
             .LastOrDefault(id => id is not null);
-    }
-
-    /// <summary>
-    /// GET a collection response, whose payload Azure DevOps wraps in
-    /// <c>value</c> (the build timeline being the exception, wrapping in
-    /// <c>records</c>); empty on any failure.
-    /// </summary>
-    private static async Task<IReadOnlyList<JsonElement>> GetValuesAsync(HttpClient http, string url, string property = "value")
-    {
-        var root = await GetObjectAsync(http, url);
-        if (root is null || !root.Value.TryGetProperty(property, out var values) || values.ValueKind != JsonValueKind.Array)
-            return Array.Empty<JsonElement>();
-
-        return values.EnumerateArray().Select(e => e.Clone()).ToList();
-    }
-
-    private static async Task<JsonElement?> GetObjectAsync(HttpClient http, string url)
-    {
-        try
-        {
-            using var resp = await http.GetAsync(url);
-            if (!resp.IsSuccessStatusCode)
-                return null;
-            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
-            return doc.RootElement.ValueKind == JsonValueKind.Object ? doc.RootElement.Clone() : null;
-        }
-        catch
-        {
-            return null;
-        }
     }
 
     private static JsonElement? Child(JsonElement? element, string property)

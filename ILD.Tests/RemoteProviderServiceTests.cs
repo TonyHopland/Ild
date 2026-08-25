@@ -1177,4 +1177,89 @@ public class RemoteProviderServiceTests
 
         Assert.Empty(handler.Calls);
     }
+
+    [Theory]
+    // Server, with a virtual directory in front of the collection.
+    [InlineData(
+        "https://tfs.contoso.com/tfs",
+        "https://tfs.contoso.com/tfs/DefaultCollection/widgets/_git/app",
+        "https://tfs.contoso.com/tfs/DefaultCollection/widgets/_apis/git/repositories/app/pullrequests?api-version=7.1")]
+    // Server, collection straight off the host root.
+    [InlineData(
+        "https://tfs.contoso.com",
+        "https://tfs.contoso.com/DefaultCollection/widgets/_git/app",
+        "https://tfs.contoso.com/DefaultCollection/widgets/_apis/git/repositories/app/pullrequests?api-version=7.1")]
+    // Legacy host with a collection above the project.
+    [InlineData(
+        "https://contoso.visualstudio.com",
+        "https://contoso.visualstudio.com/DefaultCollection/widgets/_git/app",
+        "https://contoso.visualstudio.com/DefaultCollection/widgets/_apis/git/repositories/app/pullrequests?api-version=7.1")]
+    public async Task CreatePullRequestAsync_resolves_a_self_hosted_azure_devops_server_repository(
+        string providerUrl, string repoUrl, string expectedApiUrl)
+    {
+        using var db = new TestDb();
+        AddAzureDevOps(db, url: providerUrl);
+
+        var handler = new AzureHandler().On(_ => true, "{\"pullRequestId\":42}");
+        var result = await CreateService(db, handler).CreatePullRequestAsync(repoUrl, "ild/test", "main", "t", "b");
+
+        Assert.Null(result.Error);
+        Assert.Equal(expectedApiUrl, Assert.Single(handler.Calls).Url);
+        Assert.Equal($"{repoUrl}/pullrequest/42", result.HtmlUrl);
+    }
+
+    [Fact]
+    public async Task RegisterWebhookAsync_azure_devops_server_subscribes_at_the_collection_root()
+    {
+        // Service hooks live above the project, which on Server is the
+        // collection — past any virtual directory the host serves it under.
+        using var db = new TestDb();
+        db.Context.RemoteProviders.Add(new RemoteProvider
+        {
+            Id = Guid.NewGuid(),
+            Name = "azure",
+            Type = "AzureDevOps",
+            Url = "https://tfs.contoso.com/tfs",
+            ApiKey = "pat-token",
+            WebhookSecret = "hook-secret",
+        });
+        db.Context.SaveChanges();
+
+        var handler = new AzureHandler()
+            .On(u => u.EndsWith("/repositories/app?api-version=7.1", StringComparison.Ordinal),
+                "{\"id\":\"repo-guid\",\"project\":{\"id\":\"proj-guid\"}}")
+            .On(_ => true, "{}");
+
+        await CreateService(db, handler).RegisterWebhookAsync(
+            "https://tfs.contoso.com/tfs/DefaultCollection/widgets/_git/app", "https://ild.example/hook");
+
+        Assert.All(
+            handler.Calls.Where(c => c.Url.Contains("/hooks/subscriptions")),
+            s => Assert.StartsWith("https://tfs.contoso.com/tfs/DefaultCollection/_apis/hooks/subscriptions", s.Url));
+    }
+
+    [Fact]
+    public async Task GetPullRequestSnapshotAsync_azure_devops_retries_while_the_merge_status_is_still_queued()
+    {
+        // Azure DevOps computes mergeability after a push; reporting the first
+        // "queued" verbatim would persist a stale unknown for a whole heartbeat.
+        using var db = new TestDb();
+        AddAzureDevOps(db);
+
+        var prCalls = 0;
+        var handler = new AzureHandler()
+            .On(u => u.Contains("/threads") || u.Contains("/statuses") || u.Contains("/evaluations"), "{\"value\":[]}")
+            .OnRequest(u => u.Contains("/pullrequests/7?"), _ =>
+            {
+                prCalls++;
+                return Json(prCalls == 1
+                    ? "{\"status\":\"active\",\"mergeStatus\":\"queued\"}"
+                    : "{\"status\":\"active\",\"mergeStatus\":\"succeeded\"}");
+            });
+
+        var snapshot = await CreateService(db, handler).GetPullRequestSnapshotAsync(AzureRepoUrl, "7");
+
+        Assert.True(snapshot!.Mergeable);
+        Assert.True(prCalls >= 2, $"expected a retry while the merge status was queued; PR fetched {prCalls} time(s)");
+    }
 }
