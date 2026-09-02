@@ -71,8 +71,13 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     /// one place instead of being remembered at each call site — a missed call
     /// would silently run the agent as the orchestrator again.
     /// </summary>
-    protected static Process? StartAgentProcess(ProcessStartInfo psi)
-        => Process.Start(AgentIsolation.Route(psi));
+    /// <param name="psi">The launch.</param>
+    /// <param name="aiProviderId">
+    /// The provider the launch is made for; the egress proxy applies that provider's
+    /// scoped whitelist/blacklist entries to the child's connections.
+    /// </param>
+    protected static Process? StartAgentProcess(ProcessStartInfo psi, Guid aiProviderId)
+        => Process.Start(AgentIsolation.Route(psi, aiProviderId));
 
     /// <summary>
     /// Kill a process and its children. Never throws, but unlike a blind

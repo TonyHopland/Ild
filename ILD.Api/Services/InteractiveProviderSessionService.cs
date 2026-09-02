@@ -64,7 +64,7 @@ public sealed class InteractiveProviderSessionService
             // The routed command carries the environment the crossing requires
             // (HOME, so the TUI writes credentials into the agent's home rather
             // than the orchestrator's); applying it is not optional.
-            var routed = AgentIsolation.RouteCommand(binaryPath, Array.Empty<string>());
+            var routed = AgentIsolation.RouteCommand(binaryPath, Array.Empty<string>(), provider.Id);
             var environment = new Dictionary<string, string>(routed.Environment);
 
             var options = new PtyOptions

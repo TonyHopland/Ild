@@ -60,6 +60,15 @@ public static class AppSettingKeys
     /// </summary>
     public const string SessionMaxDays = "session.maxDays";
     public const int DefaultSessionMaxDays = 90;
+
+    /// <summary>
+    /// How the egress proxy judges an agent connection: <c>off</c> records every
+    /// destination and allows it, <c>whitelist</c> allows only listed hosts,
+    /// <c>blacklist</c> blocks only listed hosts. The lists themselves live in
+    /// <c>NetworkPolicyEntries</c>, not in a setting value.
+    /// </summary>
+    public const string NetworkMode = "network.mode";
+    public const string DefaultNetworkMode = "off";
 }
 
 /// <summary>

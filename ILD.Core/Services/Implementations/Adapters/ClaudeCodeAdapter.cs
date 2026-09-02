@@ -71,7 +71,8 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             try
             {
                 proc = StartAgentProcess(
-                    BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.SessionId, mcpConfigPath, ctx.AdditionalAllowedDirectories));
+                    BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.SessionId, mcpConfigPath, ctx.AdditionalAllowedDirectories),
+                    ctx.Provider.Id);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {

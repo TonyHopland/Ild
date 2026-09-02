@@ -64,7 +64,8 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
             try
             {
                 proc = StartAgentProcess(
-                    BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.AdditionalAllowedDirectories));
+                    BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.AdditionalAllowedDirectories),
+                    ctx.Provider.Id);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {

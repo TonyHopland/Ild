@@ -37,6 +37,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private readonly string? _agentUser;
     private readonly string? _agentGroup;
     private readonly string? _agentHome;
+    private readonly string? _egressProxy;
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -50,7 +51,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         PreviewProxyBase proxyBase,
         ILogger<WorktreePreviewService> logger)
         : this(httpClientFactory, configuration, proxyBase, logger,
-            AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome)
+            AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome,
+            AgentIsolation.EgressProxyUrl(aiProviderId: null))
     {
     }
 
@@ -70,7 +72,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         ILogger<WorktreePreviewService> logger,
         string? agentUser,
         string? agentGroup,
-        string? agentHome)
+        string? agentHome,
+        string? egressProxy = null)
     {
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
@@ -81,6 +84,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         _agentUser = NonEmpty(agentUser);
         _agentGroup = NonEmpty(agentGroup);
         _agentHome = NonEmpty(agentHome);
+        _egressProxy = NonEmpty(egressProxy);
     }
 
     /// <summary>
@@ -1616,7 +1620,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         psi.ArgumentList.Add(resolved.Command);
 
         AgentIsolation.StripOrchestratorEnvironment(psi);
-        AgentIsolation.Route(psi, _agentUser, _agentGroup, _agentHome);
+        AgentIsolation.Route(psi, _agentUser, _agentGroup, _agentHome, _egressProxy);
 
         foreach (var entry in resolved.Environment)
         {

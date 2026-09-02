@@ -2,6 +2,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Implementations.Adapters;
+using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Implementations.RemoteProviders;
 using ILD.Core.Services.Remote;
 using ILD.Api.Middleware;
@@ -101,6 +102,19 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IRunProgressBuffer, RunProgressBuffer>();
         services.AddSingleton<IRunNotifier, SignalRRunNotifier>();
         services.AddSingleton<IWorkItemNotifier, SignalRWorkItemNotifier>();
+
+        // Agent egress filter (ADR-0019): the proxy every agent launch is pointed
+        // at, the cached policy it consults, the recorder that persists what it
+        // saw, and the enforcement status the entrypoint reported. All keyed off
+        // ILD_NETWORK_PROXY_PORT; unset, nothing listens and launches are untouched.
+        services.AddSingleton(_ => EgressProxyOptions.FromEnvironment());
+        services.AddSingleton(sp => NetworkEnforcementStatus.FromEnvironment(sp.GetRequiredService<EgressProxyOptions>()));
+        services.AddSingleton<IEgressPolicy, EgressPolicy>();
+        services.AddSingleton<INetworkNotifier, SignalRNetworkNotifier>();
+        services.AddSingleton<NetworkLogRecorder>();
+        services.AddSingleton<INetworkLogRecorder>(sp => sp.GetRequiredService<NetworkLogRecorder>());
+        services.AddHostedService(sp => sp.GetRequiredService<NetworkLogRecorder>());
+        services.AddHostedService<EgressProxy>();
         services.AddSingleton<INodeExecutor, StartNodeExecutor>();
         services.AddSingleton<INodeExecutor, CmdNodeExecutor>();
         services.AddSingleton<INodeExecutor, AINodeExecutor>();

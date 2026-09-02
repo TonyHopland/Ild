@@ -37,3 +37,9 @@ public record ChatTurnProgressPayload(Guid ChatSessionId, string Delta);
 public record ChatTurnCompletedPayload(Guid ChatSessionId, bool Interrupted);
 
 public record ChatLoopUpdatePayload(Guid ChatSessionId, string Document);
+
+public record NetworkPolicyChangedPayload();
+
+public record NetworkLogAppendedPayload(Guid Id, string Host, int Port, DateTime Timestamp, NetworkDecision Decision, Guid? AiProviderId);
+
+public record NetworkLogClearedPayload();
