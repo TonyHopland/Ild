@@ -36,11 +36,15 @@ through `8080` on wildcard subdomains rather than on ports of their own — see
 
 The database passwords are written into the `ild_core` and `ild_workitems` roles the
 first time the `postgres-data` volume is initialised, so a stack created before these
-variables existed still has the old shipped values. Before upgrading, either
-`ALTER ROLE ild_core WITH PASSWORD '<new>';` (and the same for `ild_workitems` and
-`postgres`) to match the values you put in `.env`, or discard the volume and let the
-init script recreate the roles. Setting `ILD_SESSION_TOKEN_PEPPER` for the first time
-signs every device out once; that is expected and costs a re-login.
+variables existed still has the old shipped values, and putting new ones in `.env` does
+not reach them — the containers start and then fail to authenticate. Before upgrading,
+either `ALTER ROLE ild_core WITH PASSWORD '<new>';` and the same for `ild_workitems`,
+matching the values you put in `.env`, or discard the volume and let the init script
+recreate the roles. `POSTGRES_PASSWORD` needs no such step: the image only reads it when
+it creates the cluster, and nothing connects as the superuser afterwards.
+
+Setting `ILD_SESSION_TOKEN_PEPPER` for the first time signs every device out once; that
+is expected and costs a re-login.
 
 ## Worktree preview proxy
 
