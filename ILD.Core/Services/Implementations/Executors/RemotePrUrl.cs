@@ -2,8 +2,9 @@ namespace ILD.Core.Services.Implementations.Executors;
 
 /// <summary>
 /// Helpers for reading the numeric pull-request id out of a remote PR URL.
-/// Both GitHub (<c>.../pull/N</c>) and Forgejo (<c>.../pulls/N</c>) end with
-/// the PR number as their last non-empty segment.
+/// GitHub (<c>.../pull/N</c>), Forgejo (<c>.../pulls/N</c>) and Azure DevOps
+/// (<c>.../pullrequest/N</c>) all end with the PR number as their last non-empty
+/// segment.
 /// </summary>
 internal static class RemotePrUrl
 {
@@ -21,14 +22,15 @@ internal static class RemotePrUrl
 
     /// <summary>
     /// The repository base URL a PR URL belongs to — everything up to the
-    /// <c>/pull/N</c> (GitHub) or <c>/pulls/N</c> (Forgejo) segment. Returns null
-    /// when the URL carries no such segment. Feeds the provider resolver, which
-    /// parses owner/repo out of the repo URL.
+    /// <c>/pull/N</c> (GitHub), <c>/pulls/N</c> (Forgejo) or
+    /// <c>/pullrequest/N</c> (Azure DevOps) segment. Returns null when the URL
+    /// carries no such segment. Feeds the provider resolver, which parses the
+    /// repository out of the repo URL.
     /// </summary>
     public static string? ExtractRepoUrl(string? prUrl)
     {
         if (string.IsNullOrEmpty(prUrl)) return null;
-        foreach (var marker in new[] { "/pulls/", "/pull/" })
+        foreach (var marker in new[] { "/pullrequest/", "/pulls/", "/pull/" })
         {
             var idx = prUrl.IndexOf(marker, StringComparison.Ordinal);
             if (idx > 0) return prUrl[..idx];

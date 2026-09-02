@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Run work items against Azure DevOps repositories, the same way you already can against GitHub and Forgejo ones.**
+
 ### Fixed
 
 - **Cancelling or timing out a run now stops the command a Cmd node was running, instead of leaving it going.**
