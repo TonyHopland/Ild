@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Cancelling or timing out a run now stops the command a Cmd node was running, instead of leaving it going.**
+
+- **A Cmd node runs its command exactly as written, including backslashes and quotes.**
+
+### Security
+
+- **A Cmd node's command no longer inherits the orchestrator's privileges.**
+
 ## [0.10.0] - 2026-08-22
 
 ### Added

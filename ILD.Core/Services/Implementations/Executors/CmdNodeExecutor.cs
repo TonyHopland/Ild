@@ -45,16 +45,27 @@ public sealed class CmdNodeExecutor : INodeExecutor
     private static async Task<(bool Ok, string Output, string? Error)> RunProcessAsync(
         string command, string workingDirectory, NodeExecutionContext ctx)
     {
-        var psi = new ProcessStartInfo("/bin/sh", $"-c \"{command.Replace("\"", "\\\"")}\"")
+        var psi = new ProcessStartInfo("/bin/sh")
         {
             WorkingDirectory = workingDirectory,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
         };
+        psi.ArgumentList.Add("-c");
+        psi.ArgumentList.Add(command);
+
         var sb = new StringBuilder();
         var err = new StringBuilder();
-        using var p = new Process { StartInfo = psi, EnableRaisingEvents = true };
+        // A loop-authored command, run as the orchestrator against a worktree the
+        // agent just wrote: it must not inherit the orchestrator's ambient
+        // capabilities. Same wrap as git/npm and the AI provider's shell tool
+        // (ADR-0014).
+        using var p = new Process
+        {
+            StartInfo = AgentIsolation.DropInheritedCapabilities(psi),
+            EnableRaisingEvents = true,
+        };
         // Forward the full stdout+stderr stream verbatim (newline included, ANSI
         // preserved) so the live view captures the complete output rather than
         // newline-stripped fragments.
@@ -70,6 +81,7 @@ public sealed class CmdNodeExecutor : INodeExecutor
             err.AppendLine(e.Data);
             try { ctx.ProgressCallback?.Invoke(e.Data + "\n"); } catch { }
         };
+        string Combined() => sb.ToString() + (err.Length > 0 ? "\n" + err.ToString() : "");
         try
         {
             p.Start();
@@ -77,13 +89,40 @@ public sealed class CmdNodeExecutor : INodeExecutor
             p.BeginErrorReadLine();
             await p.WaitForExitAsync(ctx.CancellationToken);
         }
+        catch (OperationCanceledException ex)
+        {
+            // Waiting stops; the shell does not. Without this reap a cancelled or
+            // timed-out node leaves /bin/sh and its children running over the
+            // worktree the engine is about to commit and delete. The tree is the
+            // orchestrator's own — the wrap above changes no uid — so the kill
+            // needs no privilege and a failure means something worth reading, not
+            // something to swallow.
+            return (false, Combined(), ex.Message + KillTree(p));
+        }
         catch (Exception ex)
         {
-            return (false, sb.ToString(), ex.Message);
+            return (false, Combined(), ex.Message);
         }
-        var combined = sb.ToString() + (err.Length > 0 ? "\n" + err.ToString() : "");
         if (p.ExitCode != 0)
-            return (false, combined, $"exit code {p.ExitCode}");
-        return (true, combined, null);
+            return (false, Combined(), $"exit code {p.ExitCode}");
+        return (true, Combined(), null);
+    }
+
+    /// <returns>Empty once the tree is gone; otherwise a clause naming why it is not.</returns>
+    private static string KillTree(Process p)
+    {
+        try
+        {
+            p.Kill(entireProcessTree: true);
+            return "";
+        }
+        catch (InvalidOperationException)
+        {
+            return "";
+        }
+        catch (Exception ex)
+        {
+            return $"; failed to kill the command's process tree: {ex.Message}";
+        }
     }
 }
