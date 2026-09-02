@@ -1,5 +1,6 @@
 using System.Data;
 using ILD.Data.Entities;
+using ILD.Data.Security;
 using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Data.Migrations;
@@ -77,7 +78,7 @@ public static class UserSessionCarryOverMigrator
         if (carried.Count == 0) return 0;
 
         var now = DateTime.UtcNow;
-        var hashes = carried.Select(c => UserSession.HashToken(c.Token)).ToList();
+        var hashes = carried.Select(c => SessionTokenHasher.Hash(c.Token)).ToList();
         var alreadyCarried = (await db.UserSessions
                 .Where(s => hashes.Contains(s.TokenHash))
                 .Select(s => s.TokenHash)

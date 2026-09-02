@@ -1,6 +1,4 @@
 using System.ComponentModel.DataAnnotations;
-using System.Security.Cryptography;
-using System.Text;
 
 namespace ILD.Data.Entities;
 
@@ -29,10 +27,13 @@ public class UserSession
     public User? User { get; set; }
 
     /// <summary>
-    /// Base64 SHA-256 of the bearer token. The token is 256 bits of
-    /// <see cref="System.Security.Cryptography.RandomNumberGenerator"/> output,
-    /// so a plain hash is enough — there is nothing to brute-force and a KDF
-    /// would cost a stretch on every authenticated request.
+    /// The bearer token as <see cref="ILD.Data.Security.SessionTokenHasher"/> maps
+    /// it. The token is 256 bits of
+    /// <see cref="System.Security.Cryptography.RandomNumberGenerator"/> output, so
+    /// there is nothing to brute-force and no KDF stretch is owed on every
+    /// authenticated request. What the hash must additionally be is unforgeable by
+    /// someone who can write this table but does not hold the server's pepper —
+    /// hence keyed rather than bare. Base64 of 32 bytes either way.
     /// </summary>
     [Required]
     [MaxLength(64)]
@@ -59,13 +60,4 @@ public class UserSession
     public string? CreatedFromIp { get; set; }
 
     public DateTime? RevokedAt { get; set; }
-
-    /// <summary>
-    /// Maps a bearer token to the <see cref="TokenHash"/> that addresses its row.
-    /// Lives on the entity because it is the only way a token and a session row
-    /// are ever related — the sign-in path and the one-time carry-across of the
-    /// old plaintext <c>User.SessionToken</c> column must agree on it exactly.
-    /// </summary>
-    public static string HashToken(string token)
-        => Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
 }

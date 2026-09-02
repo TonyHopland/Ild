@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **BREAKING — the database passwords are yours to set now, along with a new session-token secret, and the stack will not start until you do.** They used to be fixed values published in this repository, which meant every install shared them. Generate four with `openssl rand -hex 32` and put them in your `.env` as `POSTGRES_PASSWORD`, `ILD_DB_PASSWORD`, `WORKITEM_DB_PASSWORD` and `ILD_SESSION_TOKEN_PEPPER`. **If you already have a stack running, that alone is not enough** — the old passwords were written into the database when its volume was first created and a new value in `.env` never reaches them, so the containers come up and then cannot log in to their own database. Either change them in place, `ALTER ROLE ild_core WITH PASSWORD '…'` and the same for `ild_workitems`, matching what you just put in `.env`, or delete the `postgres-data` volume and lose what is in it. Your first start after setting the pepper also signs every device out once.
+
+- **BREAKING — PostgreSQL is no longer published on port `5432`.** Both services reach it inside the compose network, and nothing outside needed it. If you point a database client at it from the host, uncomment the `ports` line on the `postgres` service in `docker-compose.yml`.
+
 - **A Cmd node's command no longer inherits the orchestrator's privileges.**
 
 ## [0.10.0] - 2026-08-22

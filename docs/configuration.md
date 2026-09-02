@@ -10,10 +10,14 @@ Remote providers, the WorkItem Server connection, repositories, AI providers, an
 | `ILD_USERNAME`                               | Bootstrap username (defaults to `admin`); used to seed and authenticate the first user                            |
 | `ILD_DB_CONNECTION_STRING`                   | PostgreSQL connection string for ILD local state                                                                  |
 | `WORKITEM_DB_CONNECTION_STRING`              | PostgreSQL connection string for the WorkItem Server                                                              |
+| `POSTGRES_PASSWORD`                          | Compose only: superuser password for the `postgres` service. Required, no default                                 |
+| `ILD_DB_PASSWORD`                            | Compose only: password for the `ild_core` role, spliced into `ILD_DB_CONNECTION_STRING`. Required, no default     |
+| `WORKITEM_DB_PASSWORD`                       | Compose only: password for the `ild_workitems` role. Required, no default                                         |
 | `ILD_DATA_PATH`                              | Base data directory for ILD runtime files                                                                         |
 | `ILD_WORKTREES_PATH`                         | Base directory for per-item worktrees (overrides the `DataRoot`/`worktrees` default)                              |
 | `ILD_LOG_LEVEL`                              | Initial Serilog level (`Verbose`, `Debug`, `Information`, `Warning`, `Error`, `Fatal`)                            |
 | `ILD_SECRET_KEY`                             | Optional encryption-at-rest key for provider API keys and webhook secrets (see below)                             |
+| `ILD_SESSION_TOKEN_PEPPER`                   | Key the stored session-token hashes are derived under (see below); required under compose                         |
 | `ILD_WORKITEM_SERVER_URL`                    | URL used to auto-seed the global WorkItem Server connection                                                       |
 | `ILD_WORKITEM_SERVER_API_KEY`                | API key used to auto-seed the global WorkItem Server connection                                                   |
 | `ILD_API_URL`                                | Base URL agents and the MCP server use to call back into the ILD API                                              |
@@ -119,7 +123,15 @@ Behaviour is backwards-compatible so you can adopt it on an existing database wi
 - Existing plaintext rows remain readable after a key is added, and are re-written in encrypted form the next time that provider's secret is changed (a save that does not modify the secret leaves the stored value untouched). To encrypt existing secrets immediately, re-enter them on the affected providers.
 - **Losing the key makes already-encrypted secrets unrecoverable.** Back it up, and treat rotating it as re-entering the affected provider secrets.
 
-Other credentials follow their own paths: the bootstrap password is hashed (PBKDF2), and the WorkItem Server shared key is supplied at runtime via `WORKITEM_API_KEYS` / `ILD_WORKITEM_SERVER_API_KEY` rather than relying on database storage.
+Other credentials follow their own paths: the bootstrap password is hashed (PBKDF2), the WorkItem Server shared key is supplied at runtime via `WORKITEM_API_KEYS` / `ILD_WORKITEM_SERVER_API_KEY` rather than relying on database storage, and session tokens are hashed under the pepper below.
+
+## Session-token pepper
+
+A sign-in is a row in `UserSessions` addressed by a hash of the bearer token; the token itself is never stored. With `ILD_SESSION_TOKEN_PEPPER` set, that hash is HMAC-SHA256 keyed on it, so the stored value can only be derived by a process holding the key. That is what stops anything able to **write** the database but not read the pepper — the lower-trust agent uid of [ADR-0014](adr/0014-agent-uid-isolation.md), a restored backup, a replica — from inserting a row for a token of its choosing and presenting it as a live sign-in. The variable is stripped from the agent's environment along with the other orchestrator secrets.
+
+Docker Compose requires the variable and refuses to start without it. A direct run without it falls back to the unkeyed SHA-256 that predates the pepper and says so at startup, so development and any not-yet-migrated deployment keep working.
+
+Unkeyed hashes are **not** accepted once a pepper is configured: accepting them would hand back the exact row the pepper exists to make unforgeable. Setting the pepper for the first time, or rotating it, therefore re-addresses every row and signs every device out once. Nothing else about a session changes, and losing the value costs only a re-login — unlike `ILD_SECRET_KEY`, which is why the two are separate variables.
 
 ## ild.config.json
 
@@ -305,10 +317,10 @@ Three things follow that are worth knowing when you write a profile:
 
 - **Your commands do not see ILD's own secrets.** ILD removes them from the
   environment before your command runs: both of its database connection strings,
-  `ILD_SECRET_KEY`, `ILD_PASSWORD`, `ILD_USERNAME`, the API tokens it uses to
-  reach itself and the WorkItem Server, and anything you have named in
-  `ILD_AGENT_ENV_DENYLIST`. It also removes the five variables describing its own
-  uid topology (`ILD_AGENT_USER`, `ILD_AGENT_GROUP`, `ILD_AGENT_HOME`,
+  `ILD_SECRET_KEY`, `ILD_SESSION_TOKEN_PEPPER`, `ILD_PASSWORD`, `ILD_USERNAME`,
+  the API tokens it uses to reach itself and the WorkItem Server, and anything
+  you have named in `ILD_AGENT_ENV_DENYLIST`. It also removes the five variables
+  describing its own uid topology (`ILD_AGENT_USER`, `ILD_AGENT_GROUP`, `ILD_AGENT_HOME`,
   `ILD_AGENT_SCRATCH_ROOT`, `ILD_ORCHESTRATOR_PRIVATE_ROOT`), which describe the
   ILD process and are wrong for anything else. Everything else is inherited as
   before. This matters even if your app reads none of those names, because your
@@ -424,14 +436,15 @@ degrade silently if isolation is requested but `capsh`/`setpriv`, the ambient
 capabilities, or the shared group are missing.
 
 Under isolation the orchestrator's own secrets — the DB connection strings,
-`ILD_SECRET_KEY`, `ILD_PASSWORD`, and the API tokens/keys it uses to reach itself
-and the WorkItem server — are stripped from the agent's environment so the
-lower-trust agent uid never sees them. If you introduce additional secret
-environment variables that the orchestrator reads but the agent must not, list
-their names (comma-separated) in `ILD_AGENT_ENV_DENYLIST` and they are stripped
-too. The agent's git commit identity (`GIT_AUTHOR_*`/`GIT_COMMITTER_*`) and any
-provider API key an adapter passes to the CLI are kept. The same denylist governs
-what a Worktree Preview's processes inherit — see
+`ILD_SECRET_KEY`, `ILD_SESSION_TOKEN_PEPPER`, `ILD_PASSWORD`, and the API
+tokens/keys it uses to reach itself and the WorkItem server — are stripped
+from the agent's environment so the lower-trust agent uid never sees them. If
+you introduce additional secret environment variables that the orchestrator reads
+but the agent must not, list their names (comma-separated) in
+`ILD_AGENT_ENV_DENYLIST` and they are stripped too. The agent's git commit
+identity (`GIT_AUTHOR_*`/`GIT_COMMITTER_*`) and any provider API key an adapter
+passes to the CLI are kept. The same denylist governs what a Worktree Preview's
+processes inherit — see
 [What a preview process runs as](#what-a-preview-process-runs-as).
 
 The coding agents (Pi, OpenCode, Claude Code, GitHub Copilot) are **not** baked into the image.

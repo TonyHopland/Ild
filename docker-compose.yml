@@ -4,9 +4,17 @@ services:
     container_name: ild-postgres
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres_password
-    ports:
-      - "5432:5432"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your .env (generate one with: openssl rand -hex 32)}"
+      # Read by init-databases.sh, which creates one login role per database.
+      # They are baked into the roles the first time this volume is initialised;
+      # changing one later needs an ALTER ROLE, not just a new value here.
+      ILD_DB_PASSWORD: "${ILD_DB_PASSWORD:?Set ILD_DB_PASSWORD in your .env (generate one with: openssl rand -hex 32)}"
+      WORKITEM_DB_PASSWORD: "${WORKITEM_DB_PASSWORD:?Set WORKITEM_DB_PASSWORD in your .env (generate one with: openssl rand -hex 32)}"
+    # Nothing outside the compose network needs the database — both app services
+    # reach it as `postgres:5432`. Uncomment to attach a psql or GUI client from
+    # the host for local debugging.
+    # ports:
+    #   - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d
@@ -33,7 +41,7 @@ services:
       - "8081:8081"
     environment:
       - WORKITEM_DATA_PATH=/data
-      - WORKITEM_DB_CONNECTION_STRING=Host=postgres;Port=5432;Database=IldWorkitems;Username=ild_workitems;Password=ild_workitems_password
+      - "WORKITEM_DB_CONNECTION_STRING=Host=postgres;Port=5432;Database=IldWorkitems;Username=ild_workitems;Password=${WORKITEM_DB_PASSWORD:?Set WORKITEM_DB_PASSWORD in your .env (generate one with: openssl rand -hex 32)}"
       - "WORKITEM_API_KEYS=${WORKITEM_API_KEYS:?Set WORKITEM_API_KEYS in your .env (generate one with: openssl rand -hex 32)}"
       - WORKITEM_LOG_LEVEL=${WORKITEM_LOG_LEVEL:-${ILD_LOG_LEVEL:-Information}}
       - ASPNETCORE_URLS=http://+:8081
@@ -78,9 +86,13 @@ services:
       - ILD_PASSWORD=${ILD_PASSWORD}
       - ILD_DATA_PATH=/data
       - ILD_WORKTREES_PATH=/worktrees
-      - ILD_DB_CONNECTION_STRING=Host=postgres;Port=5432;Database=IldCore;Username=ild_core;Password=ild_core_password
+      - "ILD_DB_CONNECTION_STRING=Host=postgres;Port=5432;Database=IldCore;Username=ild_core;Password=${ILD_DB_PASSWORD:?Set ILD_DB_PASSWORD in your .env (generate one with: openssl rand -hex 32)}"
       - ILD_LOG_LEVEL=${ILD_LOG_LEVEL:-Information}
       - ILD_SECRET_KEY=${ILD_SECRET_KEY:-}
+      # Keys the session-token hashes, so a UserSessions row cannot be forged by
+      # anything that can only write the database. Required rather than optional:
+      # unset, the hash is the token's public SHA-256 and the row is forgeable.
+      - "ILD_SESSION_TOKEN_PEPPER=${ILD_SESSION_TOKEN_PEPPER:?Set ILD_SESSION_TOKEN_PEPPER in your .env (generate one with: openssl rand -hex 32)}"
       - ILD_ALLOWED_ORIGINS=${ILD_ALLOWED_ORIGINS:-}
       - ILD_API_URL=${ILD_API_URL:-http://localhost:8080}
       # Serves worktree previews on wildcard subdomains of this origin

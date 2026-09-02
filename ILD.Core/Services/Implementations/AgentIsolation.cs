@@ -98,10 +98,14 @@ public static class AgentIsolation
     private const string SetprivCommand = "/usr/bin/setpriv";
 
     // Orchestrator-only secrets that must never reach the agent uid — the DB
-    // connection strings, the encryption-at-rest key, the bootstrap password, and
-    // the API tokens/keys the orchestrator uses to talk to itself and the
-    // WorkItem server. .NET pre-populates a child's environment from the current
-    // process, so without stripping these the agent would inherit them verbatim.
+    // connection strings, the encryption-at-rest key, the session-token pepper,
+    // the bootstrap password, and the API tokens/keys the orchestrator uses to
+    // talk to itself and the WorkItem server. The pepper is what makes a
+    // UserSessions row unforgeable by anyone who can only write that table, so an
+    // agent holding it would be back to minting its own admin sign-in.
+    //
+    // .NET pre-populates a child's environment from the current process, so
+    // without stripping these the agent would inherit them verbatim.
     //
     // Exact names, not patterns: the adapters set the agent's OWN secrets on the
     // same environment (e.g. Pi's ILD_PI_PROVIDER_API_KEY, opencode's
@@ -116,6 +120,7 @@ public static class AgentIsolation
         "ILD_DB_CONNECTION_STRING",
         "WORKITEM_DB_CONNECTION_STRING",
         "ILD_SECRET_KEY",
+        "ILD_SESSION_TOKEN_PEPPER",
         "ILD_PASSWORD",
         "ILD_USERNAME",
         "WORKITEM_API_KEYS",

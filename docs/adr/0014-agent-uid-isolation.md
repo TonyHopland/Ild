@@ -133,7 +133,9 @@ safe.directory '*'` in the image, every git command the agent runs (the review
 - **The agent's environment is scrubbed of orchestrator secrets.** .NET
   pre-populates a child process's environment from the current process, so a
   spawned agent would otherwise inherit the DB connection strings, the
-  encryption-at-rest key (`ILD_SECRET_KEY`), the bootstrap password, and the API
+  encryption-at-rest key (`ILD_SECRET_KEY`), the session-token pepper
+  (`ILD_SESSION_TOKEN_PEPPER`, which is what makes a sessions row unforgeable by a
+  party that can only write the database), the bootstrap password, and the API
   tokens the orchestrator uses to reach itself and the WorkItem server. The launch
   seam removes those before the agent runs (for the PTY login terminal, which only
   merges overrides over the inherited environment, it neutralizes them to empty
