@@ -162,4 +162,55 @@ public class AuthorizationPolicyTests
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
+
+    /// <summary>
+    /// An Azure DevOps service hook has only one Authorization header and its own
+    /// verification needs it, so the ILD token travels in the query instead. If
+    /// the handler read the Basic credential as a token, the outer gate would
+    /// reject every such hook before the adapter ever saw it.
+    /// </summary>
+    [Fact]
+    public async Task An_azure_devops_webhook_authenticates_from_the_query_while_basic_auth_carries_its_own_secret()
+    {
+        const string webhookSecret = "azure-hook-secret";
+        await using var factory = new ApiFactory();
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ILD.Data.Entities.AppDbContext>();
+            db.RemoteProviders.Add(new ILD.Data.Entities.RemoteProvider
+            {
+                Id = Guid.NewGuid(),
+                Name = "azure",
+                Type = "AzureDevOps",
+                Url = "https://dev.azure.com/contoso",
+                WebhookSecret = webhookSecret,
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var token = await factory.GetAdminTokenAsync();
+        var client = factory.CreateClient();
+        var basic = new System.Net.Http.Headers.AuthenticationHeaderValue(
+            "Basic", Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"ild:{webhookSecret}")));
+        var payload = """
+            {"eventType":"git.pullrequest.merged","resource":{"pullRequestId":7,"status":"completed",
+             "repository":{"id":"repo-guid","webUrl":"https://dev.azure.com/contoso/widgets/_git/app"}}}
+            """;
+
+        HttpRequestMessage Hook(string url)
+        {
+            var request = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = JsonContent.Create(JsonDocument.Parse(payload).RootElement),
+            };
+            request.Headers.Authorization = basic;
+            return request;
+        }
+
+        var withoutToken = await client.SendAsync(Hook("/api/v1/webhooks/azuredevops"));
+        Assert.Equal(HttpStatusCode.Unauthorized, withoutToken.StatusCode);
+
+        var withToken = await client.SendAsync(Hook($"/api/v1/webhooks/azuredevops?access_token={token}"));
+        Assert.Equal(HttpStatusCode.OK, withToken.StatusCode);
+    }
 }

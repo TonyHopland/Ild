@@ -10,10 +10,11 @@ namespace ILD.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/webhooks")]
-// The caller is a git host replaying an operator-configured Authorization header,
-// which may hold either principal's token — so this asks only for an authenticated
-// caller, exactly as before. HMAC below is the real gate; the token is the outer
-// one, and dropping it to anonymous would remove a check that exists today.
+// The caller is a git host replaying an operator-configured credential, which may
+// hold either principal's token — so this asks only for an authenticated caller,
+// exactly as before. The adapter's own webhook check below is the real gate; the
+// token is the outer one, and dropping it to anonymous would remove a check that
+// exists today.
 [Authorize(Policy = IldAuthentication.AgentOrUserPolicy)]
 public class WebhooksController : ControllerBase
 {
@@ -35,6 +36,10 @@ public class WebhooksController : ControllerBase
     [HttpPost("github")]
     public Task<IActionResult> GitHub()
         => HandleAsync("github");
+
+    [HttpPost("azuredevops")]
+    public Task<IActionResult> AzureDevOps()
+        => HandleAsync("azuredevops");
 
     private async Task<IActionResult> HandleAsync(string routeSegment)
     {

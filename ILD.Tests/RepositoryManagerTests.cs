@@ -225,6 +225,22 @@ public class RepositoryManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task PushAsync_sends_the_azure_devops_pat_as_the_password_under_a_placeholder_username()
+    {
+        var runner = new RecordingRunner();
+        var mgr = new RepositoryManager(runner, worktreesRoot: Path.Combine(_tmp, "wt"));
+
+        await mgr.PushAsync(
+            _repo,
+            "ild/wi-18",
+            auth: new GitAuthOptions("https://dev.azure.com/contoso/widgets/_git/app", "pat-123", "AzureDevOps"));
+
+        Assert.Single(runner.Calls);
+        Assert.Equal("pat", runner.Calls[0].Environment!["ILD_GIT_USERNAME"]);
+        Assert.Equal("pat-123", runner.Calls[0].Environment!["ILD_GIT_PASSWORD"]);
+    }
+
+    [Fact]
     public async Task DeleteLocalBranchAsync_deletes_existing_branch()
     {
         var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));

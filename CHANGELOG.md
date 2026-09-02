@@ -7,9 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+### Added
+
+- **Run work items against Azure DevOps repositories, the same way you already can against GitHub and Forgejo ones.**
+
+### Fixed
+
+- **Cancelling or timing out a run now stops the command a Cmd node was running, instead of leaving it going.**
+
+- **A Cmd node runs its command exactly as written, including backslashes and quotes.**
+
+### Security
 
 - **Database passwords and a session-token secret are now yours to set, and the stack refuses to start without them.** Put `POSTGRES_PASSWORD`, `ILD_DB_PASSWORD`, `WORKITEM_DB_PASSWORD` and `ILD_SESSION_TOKEN_PEPPER` in your `.env` before upgrading; an existing database still holds the old passwords until you change them, and the first start with a pepper signs every device out once.
+
+- **A Cmd node's command no longer inherits the orchestrator's privileges.**
 
 ## [0.10.0] - 2026-08-22
 

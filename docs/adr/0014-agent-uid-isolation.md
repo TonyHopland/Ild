@@ -84,14 +84,14 @@ ambient`) is empty (a non-root→non-root setuid does not auto-clear caps, so th
   is chosen over a setuid-root `sudo`/`gosu` helper so that it survives
   `no_new_privs` — a setuid bit or file capability is ignored under
   `no_new_privs`, whereas a capability the orchestrator already holds is not.
-  **That is what made `no_new_privs` free to adopt**: `security_opt:
-  ["no-new-privileges:true"]` is now set on the `ild` and `workitem-server`
-  compose services, and this design needed no rework to take it (a regression
-  test guards the flag, since its absence has no runtime symptom). The other
-  half once anticipated here, `kernel.yama.ptrace_scope`, is **not** set and is
-  deliberately not pursued rather than deferred: it is not namespaced, so it can
-  only be set on the Docker host's kernel, which is outside anything this repo
-  provisions. No `sysctls` entry belongs here.
+  **That is what made `no_new_privs` free to adopt**:
+  `security_opt: ["no-new-privileges:true"]` is now set on the `ild` and
+  `workitem-server` compose services, and this design needed no rework to take it
+  (a regression test guards the flag, since its absence has no runtime symptom).
+  The other half once anticipated here, `kernel.yama.ptrace_scope`, is **not** set
+  and is deliberately not pursued rather than deferred: it is not namespaced, so
+  it can only be set on the Docker host's kernel, which is outside anything this
+  repo provisions. No `sysctls` entry belongs here.
 
 - **One code seam.** Every agent launch goes through
   `CliAgentAdapterBase.StartAgentProcess`, which applies
@@ -133,7 +133,9 @@ safe.directory '*'` in the image, every git command the agent runs (the review
 - **The agent's environment is scrubbed of orchestrator secrets.** .NET
   pre-populates a child process's environment from the current process, so a
   spawned agent would otherwise inherit the DB connection strings, the
-  encryption-at-rest key (`ILD_SECRET_KEY`), the bootstrap password, and the API
+  encryption-at-rest key (`ILD_SECRET_KEY`), the session-token pepper
+  (`ILD_SESSION_TOKEN_PEPPER`, which is what makes a sessions row unforgeable by a
+  party that can only write the database), the bootstrap password, and the API
   tokens the orchestrator uses to reach itself and the WorkItem server. The launch
   seam removes those before the agent runs (for the PTY login terminal, which only
   merges overrides over the inherited environment, it neutralizes them to empty
@@ -214,9 +216,12 @@ git/credential state as attacker-controlled input on the orchestrator side.
   would have _raised_ the ceiling of a successful escape while lowering its
   everyday reach. Every orchestrator-side spawn that can reach agent-authored
   input therefore goes through `AgentIsolation.DropInheritedCapabilities` —
-  `ProcessRunner` (git, npm) and `AIProviderService.RunShellAsync` — which wraps
-  them in `setpriv --inh-caps=-all --ambient-caps=-all` (no uid change, needs no
-  privilege).
+  `ProcessRunner` (git, npm), `AIProviderService.RunShellAsync` and the Cmd node
+  executor — which wraps them in `setpriv --inh-caps=-all --ambient-caps=-all`
+  (no uid change, needs no privilege). `AgentIsolationSpawnSiteTests` scans
+  ILD.Core for `Process` spawn sites this list has missed — the Cmd node executor
+  was one from the drop landing in 0.5.0 until 0.10.0. It does not cover the
+  PTY `RouteCommand` sites, or the other projects.
 - **The preview service was the one place where dropping capabilities was not
   enough, and it now runs as the agent outright.** Its command comes from the
   worktree's `ild.config.json`, which the agent writes and can trigger itself
