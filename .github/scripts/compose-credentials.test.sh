@@ -48,18 +48,26 @@ for constant in $retired_constants; do
 done
 
 # --- Resolve the compose model for the remaining assertions. -----------------
-# Dummies for the fail-if-unset variables: their values are irrelevant here, they
-# only have to let interpolation complete so compose can emit a model at all.
+# Values for the variables compose would otherwise refuse to interpolate. Read out
+# of the file rather than listed, so adding a required variable to the compose file
+# cannot silently break this: a machine without the docker CLI takes the raw-file
+# path and never exercises the list at all.
+compose_dummy_env() { # <compose file>
+  {
+    grep -o '\${[A-Za-z_][A-Za-z0-9_]*:?' "$1" | sed 's/^\${//; s/:?$//'
+    grep -o '\${[A-Za-z_][A-Za-z0-9_]*}' "$1" | sed 's/^\${//; s/}$//'
+  } | sort -u | sed 's/$/=ci-dummy/'
+}
+
 model="$compose_file"
 resolved=""
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
   resolved="$(mktemp)"
   compose_err="$(mktemp)"
   trap 'rm -f "$resolved" "$compose_err"' EXIT
+  # shellcheck disable=SC2046  # word splitting is how the assignments are passed
   if ! (cd "$repo_root" \
-        && POSTGRES_PASSWORD=ci-dummy ILD_DB_PASSWORD=ci-dummy \
-           WORKITEM_DB_PASSWORD=ci-dummy ILD_SESSION_TOKEN_PEPPER=ci-dummy \
-           WORKITEM_API_KEYS=ci-dummy ILD_PASSWORD=ci-dummy \
+        && env $(compose_dummy_env "$compose_file") \
            docker compose --file "$compose_file" config) \
        > "$resolved" 2>"$compose_err"; then
     echo "FAIL: 'docker compose config' could not resolve $compose_file:"

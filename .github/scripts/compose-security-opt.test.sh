@@ -110,6 +110,16 @@ values_in() { # <file> <service> <key> -> one value per line
   awk -v want="$2" -v key="$3" "$extract_awk" "$1"
 }
 
+# Every variable `docker compose config` would refuse to interpolate: the
+# `${VAR:?...}` required ones, plus bare `${VAR}` references. Printed as
+# NAME=ci-dummy assignments, one per line.
+compose_dummy_env() { # <compose file>
+  {
+    grep -o '\${[A-Za-z_][A-Za-z0-9_]*:?' "$1" | sed 's/^\${//; s/:?$//'
+    grep -o '\${[A-Za-z_][A-Za-z0-9_]*}' "$1" | sed 's/^\${//; s/}$//'
+  } | sort -u | sed 's/$/=ci-dummy/'
+}
+
 # --- Self-test: pin the scanner against fixtures before trusting it. ---------
 # The scanner is the only part of this test that can be subtly wrong — the two
 # assertions built on it are trivial — so it is exercised against inputs written
@@ -279,8 +289,14 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
   # `${ILD_PASSWORD}`; their values are irrelevant to what is asserted, they
   # only have to let interpolation complete. stderr is kept out of $resolved so
   # a future compose warning is reported rather than parsed as part of the model.
+  #
+  # The names are read out of the compose file rather than listed here. They are
+  # setup, not an assertion, and a hand-written list goes stale the moment someone
+  # adds a required variable to the compose file -- silently, because a machine
+  # without the docker CLI takes the raw-file path below and never runs this.
+  # shellcheck disable=SC2046  # word splitting is how the assignments are passed
   if ! (cd "$repo_root" \
-        && WORKITEM_API_KEYS=ci-dummy ILD_PASSWORD=ci-dummy \
+        && env $(compose_dummy_env "$compose_file") \
            docker compose --file "$compose_file" config) \
        > "$resolved" 2>"$compose_err"; then
     echo "FAIL: 'docker compose config' could not resolve $compose_file:"
