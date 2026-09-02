@@ -97,7 +97,8 @@ public sealed class CmdNodeExecutor : INodeExecutor
             // orchestrator's own — the wrap above changes no uid — so the kill
             // needs no privilege and a failure means something worth reading, not
             // something to swallow.
-            return (false, Combined(), ex.Message + KillTree(p));
+            var reaped = await ReapAsync(p);
+            return (false, Combined(), ex.Message + reaped);
         }
         catch (Exception ex)
         {
@@ -108,13 +109,17 @@ public sealed class CmdNodeExecutor : INodeExecutor
         return (true, Combined(), null);
     }
 
+    // Long enough that only a tree genuinely stuck in the kernel — an
+    // uninterruptible write to a slow mount — reaches the timeout, short enough
+    // that a run being cancelled still ends promptly.
+    private static readonly TimeSpan ReapGrace = TimeSpan.FromSeconds(5);
+
     /// <returns>Empty once the tree is gone; otherwise a clause naming why it is not.</returns>
-    private static string KillTree(Process p)
+    private static async Task<string> ReapAsync(Process p)
     {
         try
         {
             p.Kill(entireProcessTree: true);
-            return "";
         }
         catch (InvalidOperationException)
         {
@@ -123,6 +128,21 @@ public sealed class CmdNodeExecutor : INodeExecutor
         catch (Exception ex)
         {
             return $"; failed to kill the command's process tree: {ex.Message}";
+        }
+
+        // Kill only signals. Returning before the tree is actually gone would hand
+        // the caller a node that reads finished while the command is still holding
+        // the worktree it is about to commit and delete, so wait for the exit that
+        // makes "finished" true.
+        using var grace = new CancellationTokenSource(ReapGrace);
+        try
+        {
+            await p.WaitForExitAsync(grace.Token);
+            return "";
+        }
+        catch (OperationCanceledException)
+        {
+            return $"; the command's process tree was still alive {ReapGrace.TotalSeconds:0}s after being killed";
         }
     }
 }

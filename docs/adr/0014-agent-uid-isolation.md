@@ -84,14 +84,14 @@ ambient`) is empty (a non-root→non-root setuid does not auto-clear caps, so th
   is chosen over a setuid-root `sudo`/`gosu` helper so that it survives
   `no_new_privs` — a setuid bit or file capability is ignored under
   `no_new_privs`, whereas a capability the orchestrator already holds is not.
-  **That is what made `no_new_privs` free to adopt**: `security_opt:
-["no-new-privileges:true"]` is now set on the `ild` and `workitem-server`
-  compose services, and this design needed no rework to take it (a regression
-  test guards the flag, since its absence has no runtime symptom). The other
-  half once anticipated here, `kernel.yama.ptrace_scope`, is **not** set and is
-  deliberately not pursued rather than deferred: it is not namespaced, so it can
-  only be set on the Docker host's kernel, which is outside anything this repo
-  provisions. No `sysctls` entry belongs here.
+  **That is what made `no_new_privs` free to adopt**:
+  `security_opt: ["no-new-privileges:true"]` is now set on the `ild` and
+  `workitem-server` compose services, and this design needed no rework to take it
+  (a regression test guards the flag, since its absence has no runtime symptom).
+  The other half once anticipated here, `kernel.yama.ptrace_scope`, is **not** set
+  and is deliberately not pursued rather than deferred: it is not namespaced, so
+  it can only be set on the Docker host's kernel, which is outside anything this
+  repo provisions. No `sysctls` entry belongs here.
 
 - **One code seam.** Every agent launch goes through
   `CliAgentAdapterBase.StartAgentProcess`, which applies

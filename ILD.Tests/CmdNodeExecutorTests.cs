@@ -105,7 +105,12 @@ public class CmdNodeExecutorTests : IDisposable
         cancel.Cancel();
 
         var outcomes = await run.WaitAsync(TimeSpan.FromSeconds(30));
-        Assert.IsType<NodeOutcome.Fail>(Assert.Single(outcomes, o => o is NodeOutcome.Fail));
+        var fail = Assert.IsType<NodeOutcome.Fail>(Assert.Single(outcomes, o => o is NodeOutcome.Fail));
+
+        // The node does not report finished until the shell has actually exited,
+        // so the caller can delete the worktree the moment it sees this outcome.
+        Assert.DoesNotContain("still alive", fail.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain("failed to kill", fail.Reason, StringComparison.Ordinal);
 
         // Longer than the marker's delay, so "absent" means killed rather than
         // "not written yet".
