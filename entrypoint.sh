@@ -1,19 +1,3 @@
-  # Tab-indented (<<-) so the table's closing brace is not a column-0 line: the
-  # shell tests slice functions out of this file up to their first one.
-  "$NFT_BIN" -f - <<-EOF || return 1
-	table inet ild_agent_egress
-	delete table inet ild_agent_egress
-	table inet ild_agent_egress {
-	  chain output {
-	    type filter hook output priority filter; policy accept;
-	    meta skuid != $uid accept
-	    oif "lo" accept
-	    udp dport 53 accept
-	    tcp dport 53 accept
-	    counter drop
-	  }
-	}
-	EOF
 #!/bin/sh
 set -eu
 

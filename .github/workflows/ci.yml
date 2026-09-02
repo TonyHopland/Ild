@@ -15,6 +15,9 @@ jobs:
       - name: Publish version-stamping tests
         run: .github/scripts/compute-version.test.sh
 
+      - name: Entrypoint smoke test
+        run: .github/scripts/entrypoint-smoke.test.sh
+
       - name: Entrypoint config-store linking tests
         run: .github/scripts/entrypoint-link-stores.test.sh
 
