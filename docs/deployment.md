@@ -11,12 +11,17 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Compose refuses to start until `.env` supplies every secret that has no default:
-`ILD_PASSWORD`, `WORKITEM_API_KEYS`, `ILD_SESSION_TOKEN_PEPPER`, and the three
-database passwords `POSTGRES_PASSWORD`, `ILD_DB_PASSWORD`, `WORKITEM_DB_PASSWORD`.
-Generate each independently — `openssl rand -hex 32` — and keep them out of version
-control. There are deliberately no shipped defaults: a credential that is the same on
-every install is a credential every install's attacker already knows.
+Compose refuses to start until `.env` supplies every secret it treats as required:
+`WORKITEM_API_KEYS`, `ILD_SESSION_TOKEN_PEPPER`, and the three database passwords
+`POSTGRES_PASSWORD`, `ILD_DB_PASSWORD`, `WORKITEM_DB_PASSWORD`. Generate each
+independently — `openssl rand -hex 32` — and keep them out of version control. There
+are deliberately no shipped defaults: a credential that is the same on every install is
+a credential every install's attacker already knows.
+
+`ILD_PASSWORD` is deliberately not one of them. It seeds the bootstrap user on first
+login and is never read again once that account exists, so requiring it would stop every
+already-seeded stack that has since dropped it from starting at all. Set it for a fresh
+install: unset, the account is never created and every login is rejected.
 
 The compose stack starts three services:
 
