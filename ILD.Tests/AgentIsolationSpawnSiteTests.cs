@@ -18,6 +18,12 @@ namespace ILD.Tests;
 /// wrapping several statements earlier reads as a violation here; that is the point,
 /// since it also reads that way to the next person editing the method.
 /// </para>
+///
+/// <para>
+/// Its one blind spot is a string interpolation hole: <c>$"{…}"</c> is blanked
+/// whole, so a spawn written inside one goes unseen. Reading holes back out needs
+/// a real lexer, and no spawn has ever been written in one.
+/// </para>
 /// </summary>
 public class AgentIsolationSpawnSiteTests
 {
@@ -111,6 +117,31 @@ public class AgentIsolationSpawnSiteTests
         Assert.False(SpawnSite.IsMatch(Redact("""
             var p = proc ?? throw new InvalidOperationException("Process.Start returned null");
             """)));
+    }
+
+    [Theory]
+    // Plain, verbatim, raw, interpolated — plus the two that used to run the scan
+    // off the end of the literal: a verbatim string opening on an escaped quote,
+    // and one closing on a backslash behind an @$ prefix.
+    [InlineData("var s = \"Process.Start(x)\";")]
+    [InlineData("var s = @\"Process.Start(x)\";")]
+    [InlineData("var s = @\"\"\"Process.Start(x)\";")]
+    [InlineData("var s = \"\"\"Process.Start(x)\"\"\";")]
+    [InlineData("var s = $\"{n} Process.Start(x)\";")]
+    [InlineData("var s = @$\"x\\\";")]
+    [InlineData("var s = $@\"x\\\";")]
+    [InlineData("var c = '\"'; // Process.Start(x)")]
+    public void Redaction_hides_a_literal_without_swallowing_the_code_after_it(string literal)
+    {
+        var source = Redact(literal + "\nProcess.Start(AgentIsolation.Route(psi));");
+        var sites = SpawnSite.Matches(source);
+
+        // One site and not two, because a spawn named inside a literal is not one.
+        // One site and not zero, because a redactor that runs past a literal's end
+        // blanks the real code after it — and this scan cannot report a site it has
+        // already erased, which is the one way it fails silently.
+        Assert.Single(sites);
+        Assert.True(IsWrapped(Statement(source, sites[0].Index), Array.Empty<string>()));
     }
 
     private static bool IsWrapped(string statement, IReadOnlyCollection<string> launchers) =>
@@ -230,8 +261,14 @@ public class AgentIsolationSpawnSiteTests
     private static int BlankLiteral(string source, int start, StringBuilder outp)
     {
         var quote = source[start];
-        var verbatim = start > 0 && source[start - 1] == '@';
-        var fence = quote == '"' ? QuoteRun(source, start) : 1;
+        // The prefix is @ and $ in either order, and only @ makes a string
+        // verbatim — a check of the single preceding character misses @$"…\".
+        // A verbatim string is also never raw: @"""x" opens with an escaped
+        // quote, not a """ fence. Reading either wrong runs this past the
+        // literal's end, blanking the real code after it — and a spawn site
+        // blanked is a spawn site this scan reports as absent.
+        var verbatim = IsVerbatim(source, start);
+        var fence = quote == '"' && !verbatim ? QuoteRun(source, start) : 1;
         var raw = fence >= 3;
 
         outp.Append(quote, raw ? fence : 1);
@@ -265,6 +302,16 @@ public class AgentIsolationSpawnSiteTests
             outp.Append(source[i] == '\n' ? '\n' : ' ');
         }
         return source.Length - 1;
+    }
+
+    /// <summary>Whether the literal opening at <paramref name="start"/> carries an <c>@</c> prefix.</summary>
+    private static bool IsVerbatim(string source, int start)
+    {
+        for (var i = start - 1; i >= 0 && source[i] is '@' or '$'; i--)
+        {
+            if (source[i] == '@') return true;
+        }
+        return false;
     }
 
     private static int QuoteRun(string source, int i)
