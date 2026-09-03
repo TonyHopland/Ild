@@ -230,7 +230,12 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<NetworkPolicyEntry>(e =>
         {
-            e.HasIndex(p => new { p.ListKind, p.Host });
+            // One row per pattern, list and scope, enforced where the race is: two
+            // concurrent "Add to whitelist" clicks must not both insert. Nulls are
+            // NOT distinct here, or every global entry could be duplicated freely.
+            e.HasIndex(p => new { p.ListKind, p.Host, p.AiProviderId })
+                .IsUnique()
+                .AreNullsDistinct(false);
         });
 
         modelBuilder.Entity<NetworkLogEntry>(e =>

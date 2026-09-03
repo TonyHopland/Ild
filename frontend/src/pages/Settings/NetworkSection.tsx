@@ -151,21 +151,24 @@ export default function NetworkSection() {
   const [entries, setEntries] = useState<NetworkPolicyEntry[]>([]);
   const [log, setLog] = useState<NetworkLogEntry[]>([]);
   const [providers, setProviders] = useState<AiProvider[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+  const [logError, setLogError] = useState<string | null>(null);
 
   const refreshEntries = useCallback(async () => {
     try {
       setEntries(await networkService.getEntries());
+      setListError(null);
     } catch (err) {
-      setError(describeError(err, "Failed to load the network lists."));
+      setListError(describeError(err, "Failed to load the network lists."));
     }
   }, []);
 
   const refreshLog = useCallback(async () => {
     try {
       setLog(await networkService.getLog(LOG_TAKE));
+      setLogError(null);
     } catch (err) {
-      setError(describeError(err, "Failed to load the network log."));
+      setLogError(describeError(err, "Failed to load the network log."));
     }
   }, []);
 
@@ -238,7 +241,7 @@ export default function NetworkSection() {
       await networkService.deleteEntry(id);
       setEntries((prev) => prev.filter((e) => e.id !== id));
     } catch (err) {
-      setError(describeError(err, "Failed to remove the entry."));
+      setListError(describeError(err, "Failed to remove the entry."));
     }
   };
 
@@ -247,7 +250,7 @@ export default function NetworkSection() {
       const created = await networkService.addLogEntryToList(entry.id, kind);
       setEntries((prev) => [...prev.filter((e) => e.id !== created.id), created]);
     } catch (err) {
-      setError(describeError(err, "Failed to add the host to the list."));
+      setListError(describeError(err, "Failed to add the host to the list."));
     }
   };
 
@@ -256,7 +259,7 @@ export default function NetworkSection() {
       await networkService.clearLog();
       setLog([]);
     } catch (err) {
-      setError(describeError(err, "Failed to clear the log."));
+      setLogError(describeError(err, "Failed to clear the log."));
     }
   };
 
@@ -271,9 +274,9 @@ export default function NetworkSection() {
           <strong>Advisory mode — agent network limits are not enforced.</strong> {status.reason}
         </div>
       )}
-      {error && (
+      {listError && (
         <div className="form-error" style={{ color: "#f87171", marginBottom: "0.5rem" }}>
-          {error}
+          {listError}
         </div>
       )}
 
@@ -327,6 +330,11 @@ export default function NetworkSection() {
             Clear log
           </button>
         </div>
+        {logError && (
+          <div className="form-error" style={{ color: "#f87171", marginBottom: "0.5rem" }}>
+            {logError}
+          </div>
+        )}
         {log.length === 0 ? (
           <p className="settings-about-desc">No destinations recorded yet.</p>
         ) : (

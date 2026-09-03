@@ -40,8 +40,7 @@ public sealed class EgressPolicy : IEgressPolicy
     private readonly IServiceScopeFactory _scopes;
     private readonly TimeProvider _clock;
     private readonly SemaphoreSlim _reload = new(1, 1);
-    private EgressPolicySnapshot? _snapshot;
-    private long _loadedAt;
+    private Cached? _cached;
     private int _generation;
 
     public EgressPolicy(IServiceScopeFactory scopes, TimeProvider clock)
@@ -62,10 +61,11 @@ public sealed class EgressPolicy : IEgressPolicy
             if (Fresh() is { } raced) return raced;
 
             // A read that began before an edit committed can return the pre-edit
-            // lists after Invalidate has already run. Caching that would judge
-            // the next second of connections — and the tunnel re-check that
-            // Invalidate triggers — by rules the operator has just replaced, so a
-            // load is only kept if nothing was invalidated while it was in flight.
+            // lists after Invalidate has already run. The load is stamped with the
+            // generation it started under and published as one object, and Fresh()
+            // only honours a cache whose generation is still current — so an edit
+            // landing at any point before, during or after the publish leaves the
+            // next reader reloading rather than judging by rules just replaced.
             while (true)
             {
                 var generation = Volatile.Read(ref _generation);
@@ -73,8 +73,7 @@ public sealed class EgressPolicy : IEgressPolicy
                 if (Volatile.Read(ref _generation) != generation)
                     continue;
 
-                Volatile.Write(ref _loadedAt, _clock.GetTimestamp());
-                Volatile.Write(ref _snapshot, snapshot);
+                Volatile.Write(ref _cached, new Cached(snapshot, generation, _clock.GetTimestamp()));
                 return snapshot;
             }
         }
@@ -87,7 +86,6 @@ public sealed class EgressPolicy : IEgressPolicy
     public void Invalidate()
     {
         Interlocked.Increment(ref _generation);
-        Volatile.Write(ref _snapshot, null);
         Changed?.Invoke();
     }
 
@@ -105,8 +103,10 @@ public sealed class EgressPolicy : IEgressPolicy
 
     private EgressPolicySnapshot? Fresh()
     {
-        var snapshot = Volatile.Read(ref _snapshot);
-        if (snapshot is null) return null;
-        return _clock.GetElapsedTime(Volatile.Read(ref _loadedAt)) < CacheTtl ? snapshot : null;
+        var cached = Volatile.Read(ref _cached);
+        if (cached is null || cached.Generation != Volatile.Read(ref _generation)) return null;
+        return _clock.GetElapsedTime(cached.LoadedAt) < CacheTtl ? cached.Snapshot : null;
     }
+
+    private sealed record Cached(EgressPolicySnapshot Snapshot, int Generation, long LoadedAt);
 }

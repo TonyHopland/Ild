@@ -5,6 +5,7 @@ using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Api.Controllers;
 
@@ -80,8 +81,8 @@ public class NetworkController : ControllerBase
         if (request.AiProviderId is { } providerId && await _providers.GetAiProviderByIdAsync(providerId) is null)
             return BadRequest(new { error = "Unknown AI provider" });
 
-        var entry = await AddAsync(host, request.ListKind, request.AiProviderId, ct);
-        return CreatedAtAction(nameof(GetEntries), View(entry));
+        var (entry, created) = await AddOrFindAsync(host, request.ListKind, request.AiProviderId, ct);
+        return created ? CreatedAtAction(nameof(GetEntries), View(entry)) : Ok(View(entry));
     }
 
     [HttpDelete("entries/{id:guid}")]
@@ -123,16 +124,21 @@ public class NetworkController : ControllerBase
         if (providerId is { } id && await _providers.GetAiProviderByIdAsync(id) is null)
             providerId = null;
 
-        var existing = (await _store.GetEntriesAsync(ct))
-            .FirstOrDefault(e => e.ListKind == kind && e.Host == host && e.AiProviderId == providerId);
-        if (existing is not null) return Ok(View(existing));
-
-        var entry = await AddAsync(host, kind, providerId, ct);
-        return CreatedAtAction(nameof(GetEntries), View(entry));
+        var (entry, created) = await AddOrFindAsync(host, kind, providerId, ct);
+        return created ? CreatedAtAction(nameof(GetEntries), View(entry)) : Ok(View(entry));
     }
 
-    private async Task<NetworkPolicyEntry> AddAsync(string host, NetworkListKind kind, Guid? providerId, CancellationToken ct)
+    /// <summary>
+    /// Adding an entry that already exists is a no-op that answers with the
+    /// existing row: the read-before-insert covers the common case, and the
+    /// unique index on (list, host, scope) covers two clicks racing, whose loser
+    /// re-reads the winner instead of failing.
+    /// </summary>
+    private async Task<(NetworkPolicyEntry Entry, bool Created)> AddOrFindAsync(string host, NetworkListKind kind, Guid? providerId, CancellationToken ct)
     {
+        if (await _store.FindEntryAsync(kind, host, providerId, ct) is { } existing)
+            return (existing, false);
+
         var entry = new NetworkPolicyEntry
         {
             Id = Guid.NewGuid(),
@@ -141,9 +147,18 @@ public class NetworkController : ControllerBase
             AiProviderId = providerId,
             CreatedAt = DateTime.UtcNow,
         };
-        await _store.AddEntryAsync(entry, ct);
+        try
+        {
+            await _store.AddEntryAsync(entry, ct);
+        }
+        catch (DbUpdateException)
+        {
+            var winner = await _store.FindEntryAsync(kind, host, providerId, ct);
+            if (winner is null) throw;
+            return (winner, false);
+        }
         await PolicyChangedAsync();
-        return entry;
+        return (entry, true);
     }
 
     private async Task PolicyChangedAsync()

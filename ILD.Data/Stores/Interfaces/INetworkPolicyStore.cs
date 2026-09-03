@@ -12,6 +12,9 @@ public interface INetworkPolicyStore
 {
     Task<IReadOnlyList<NetworkPolicyEntry>> GetEntriesAsync(CancellationToken ct = default);
     Task<NetworkPolicyEntry?> GetEntryAsync(Guid id, CancellationToken ct = default);
+
+    /// <summary>The one entry with exactly this pattern, list and scope, if it exists.</summary>
+    Task<NetworkPolicyEntry?> FindEntryAsync(NetworkListKind kind, string host, Guid? aiProviderId, CancellationToken ct = default);
     Task AddEntryAsync(NetworkPolicyEntry entry, CancellationToken ct = default);
     Task<bool> DeleteEntryAsync(Guid id, CancellationToken ct = default);
 

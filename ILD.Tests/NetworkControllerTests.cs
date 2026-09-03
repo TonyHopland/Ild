@@ -4,6 +4,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Moq;
 
 namespace ILD.Tests;
@@ -48,6 +49,32 @@ public sealed class NetworkControllerTests : IDisposable
         Assert.Equal(".github.com", Assert.Single(await _db.Network.GetEntriesAsync()).Host);
         _policy.Verify(p => p.Invalidate(), Times.Once);
         _notifier.Verify(n => n.PolicyChangedAsync(), Times.Once);
+    }
+
+    [Fact]
+    public async Task Adding_an_entry_that_exists_answers_with_the_existing_row_and_changes_nothing()
+    {
+        var controller = Build();
+        var first = Body<EntryView>(Assert.IsType<CreatedAtActionResult>(
+            await controller.AddEntry(new NetworkController.AddEntryRequest { Host = "api.example.com", ListKind = NetworkListKind.Blacklist }, default)));
+
+        var again = Body<EntryView>(Assert.IsType<OkObjectResult>(
+            await controller.AddEntry(new NetworkController.AddEntryRequest { Host = "API.example.com." , ListKind = NetworkListKind.Blacklist }, default)));
+
+        Assert.Equal(first.Id, again.Id);
+        Assert.Single(await _db.Network.GetEntriesAsync());
+        _policy.Verify(p => p.Invalidate(), Times.Once);
+    }
+
+    [Fact]
+    public async Task The_unique_index_refuses_a_duplicate_scoped_entry_inserted_behind_the_controllers_back()
+    {
+        var provider = new AiProvider { Id = Guid.NewGuid(), Name = "claude", Type = "claude-code", BaseUrl = "", Model = "" };
+        await _db.Providers.CreateAiProviderAsync(provider);
+        await _db.Network.AddEntryAsync(new NetworkPolicyEntry { Host = "api.example.com", ListKind = NetworkListKind.Whitelist, AiProviderId = provider.Id });
+
+        await Assert.ThrowsAsync<DbUpdateException>(() => _db.Network.AddEntryAsync(
+            new NetworkPolicyEntry { Host = "api.example.com", ListKind = NetworkListKind.Whitelist, AiProviderId = provider.Id }));
     }
 
     [Fact]

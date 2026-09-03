@@ -228,6 +228,20 @@ describe("Network settings", () => {
     );
   });
 
+  test("a load failure is shown and cleared by the next successful load", async () => {
+    mockServices();
+    vi.spyOn(services.networkService, "getEntries")
+      .mockRejectedValueOnce({ status: 500, message: "database unavailable" })
+      .mockResolvedValue([github]);
+    render(<NetworkSection />);
+
+    expect(await screen.findByText("database unavailable")).toBeTruthy();
+
+    emit("NetworkPolicyChanged", {});
+    await waitFor(() => expect(screen.queryByText("database unavailable")).toBeNull());
+    expect(await screen.findByText(".github.com")).toBeTruthy();
+  });
+
   test("live-updates the log and the lists from the hub", async () => {
     mockServices();
     render(<NetworkSection />);

@@ -1,4 +1,5 @@
 using ILD.Data.Entities;
+using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.EntityFrameworkCore;
 
@@ -17,6 +18,10 @@ public sealed class NetworkPolicyStore : INetworkPolicyStore
 
     public Task<NetworkPolicyEntry?> GetEntryAsync(Guid id, CancellationToken ct = default)
         => _db.NetworkPolicyEntries.AsNoTracking().FirstOrDefaultAsync(e => e.Id == id, ct);
+
+    public Task<NetworkPolicyEntry?> FindEntryAsync(NetworkListKind kind, string host, Guid? aiProviderId, CancellationToken ct = default)
+        => _db.NetworkPolicyEntries.AsNoTracking()
+            .FirstOrDefaultAsync(e => e.ListKind == kind && e.Host == host && e.AiProviderId == aiProviderId, ct);
 
     public async Task AddEntryAsync(NetworkPolicyEntry entry, CancellationToken ct = default)
     {
