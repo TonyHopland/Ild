@@ -107,7 +107,7 @@ public static class EgressRules
             if (label.Length == 0 || label.Length > 63 || label[0] == '-' || label[^1] == '-'
                 || !label.All(c => char.IsAsciiLetterOrDigit(c) || c == '-' || c == '_'))
             {
-                error = "Not a valid host name: use letters, digits, hyphens and dots (a leading dot matches every subdomain)";
+                error = "Not a valid host name: use letters, digits, hyphens, underscores and dots (a leading dot matches every subdomain)";
                 return false;
             }
         }

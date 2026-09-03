@@ -108,8 +108,10 @@ public sealed class EgressPolicy : IEgressPolicy
     private EgressPolicySnapshot? Fresh()
     {
         var cached = Volatile.Read(ref _cached);
-        if (cached is null || cached.Generation != Volatile.Read(ref _generation)) return null;
-        return _clock.GetElapsedTime(cached.LoadedAt) < CacheTtl ? cached.Snapshot : null;
+        if (cached is null || _clock.GetElapsedTime(cached.LoadedAt) >= CacheTtl) return null;
+        // The generation is compared last, so the window in which an edit can slip
+        // past is the one after the caller holds the answer — nothing narrower exists.
+        return cached.Generation == Volatile.Read(ref _generation) ? cached.Snapshot : null;
     }
 
     private sealed record Cached(EgressPolicySnapshot Snapshot, int Generation, long LoadedAt);
