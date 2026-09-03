@@ -166,6 +166,43 @@ Services that need the browser-facing hostname to build those URLs themselves ca
 set `"rewriteHost": false` (see [Configuration](./configuration.md#service-fields))
 and add the preview wildcard to their own allowed-hosts list.
 
+## Agent network limits (`NET_ADMIN`)
+
+The coding agent's network access can be limited from Settings (see
+[Configuration → Agent network limits](./configuration.md#agent-network-limits)).
+The filtering itself happens inside the container: the orchestrator runs a proxy
+on loopback that every agent launch is pointed at, and the entrypoint installs
+firewall rules keyed on the agent uid so that a connection which skips the proxy
+is dropped. Installing those rules needs one capability, `NET_ADMIN`, which the
+root entrypoint spends once before dropping privilege — the orchestrator keeps
+only its usual three ambient capabilities and the agent gets none. Per runtime
+that is one knob:
+
+| Runtime          | Knob                                                                          |
+| ---------------- | ----------------------------------------------------------------------------- |
+| docker compose   | `cap_add: [NET_ADMIN]` on the `ild` service — already set in this repo's file |
+| docker / podman  | `--cap-add=NET_ADMIN`                                                         |
+| Kubernetes / k3s | `securityContext.capabilities.add: ["NET_ADMIN"]` on the `ild` container      |
+
+`security_opt: no-new-privileges` stays on; the rules persist in the network
+namespace after the capability is gone. The Kubernetes manifests on
+`feature/flux-example-setup` need the `securityContext` addition; nothing in this
+repository can make it for you. Behaviour is the same on every runtime because
+nothing outside the container is involved.
+
+**Without `NET_ADMIN` the container still starts, in advisory mode.** The proxy
+still runs, still logs every destination and still applies the lists to every
+client that honours `HTTP_PROXY` — but a hostile agent could bypass it. The
+entrypoint logs a `WARNING:` saying so, `GET /api/v1/network/status` answers
+`advisory` with the reason, and the Settings page shows a banner. Advisory is
+also what you get with uid isolation off (`AGENT_USER=`), since there is then no
+separate uid to key rules on.
+
+The rules open only loopback (the proxy, ILD's own API for the agent's MCP
+callback, and previews) and DNS for the agent uid; everything else it sends is
+dropped, IP literal or not. The orchestrator is not subject to them. The image
+ships `nftables` and falls back to `iptables` where nf_tables is unavailable.
+
 ## Volumes
 
 | Volume          | Purpose                                                                                                                                                                          |

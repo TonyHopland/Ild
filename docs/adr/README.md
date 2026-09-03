@@ -2,24 +2,25 @@
 
 Short records of architectural decisions that are **hard to reverse, surprising without context, and the result of a real trade-off**. Each captures _that_ a decision was made and _why_ — not implementation detail (that lives in [CONTEXT.md](../../CONTEXT.md)).
 
-| ADR                                                    | Decision                                                                              |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------------- |
-| [0001](./0001-standalone-workitem-server.md)           | Standalone WorkItem Server as the work-item source of truth                           |
-| [0002](./0002-manual-api-versioning.md)                | Manual `/api/v1` prefix instead of `Asp.Versioning`                                   |
-| [0003](./0003-per-edge-traversal-limits.md)            | Runaway-graph safety net is per-edge, not per-node _(superseded by 0018)_             |
-| [0004](./0004-pr-lifecycle-as-graph-node.md)           | PR lifecycle is an explicit graph node, not implicit engine behavior                  |
-| [0005](./0005-template-resolved-per-run-from-tags.md)  | Loop template is resolved per-run from WorkItem tags                                  |
-| [0006](./0006-run-isolation-clean-origin-base.md)      | Every run starts from a clean `origin/<default>` base                                 |
-| [0007](./0007-ai-execution-delegated-to-adapters.md)   | AI execution is delegated wholesale to pluggable CLI adapters                         |
-| [0008](./0008-worktree-and-branch-per-run.md)          | One worktree and branch per run, reclaimed by retention                               |
-| [0009](./0009-adapter-feature-parity.md)               | Every agent adapter stays feature-complete (incl. session fork)                       |
-| [0011](./0011-context-aware-chat.md)                   | Context-aware chat: fixed scratch cwd, worktree by add-dir, client-applied loop edits |
-| [0012](./0012-ghcr-image-tagging-strategy.md)          | GHCR image tagging: `latest` is the newest release, not `main`                        |
-| [0013](./0013-retained-chat-history.md)                | Retained chat history: many chats per user, deleted only on demand                    |
-| [0014](./0014-agent-uid-isolation.md)                  | The coding agent runs under a separate OS user from the orchestrator                  |
-| [0015](./0015-wildcard-subdomain-preview-routing.md)   | Worktree previews are routed by wildcard subdomain, not by path prefix                |
-| [0016](./0016-preview-runs-as-the-agent.md)            | A Worktree Preview runs as the agent, with an environment ILD constructs              |
-| [0017](./0017-shutdown-halts-the-in-flight-ai-node.md) | A shutdown halts the in-flight AI node rather than letting it finish                  |
-| [0018](./0018-global-ai-traversal-cap.md)              | Runaway-graph safety net counts AI steps between human interactions                   |
+| ADR                                                       | Decision                                                                              |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| [0001](./0001-standalone-workitem-server.md)              | Standalone WorkItem Server as the work-item source of truth                           |
+| [0002](./0002-manual-api-versioning.md)                   | Manual `/api/v1` prefix instead of `Asp.Versioning`                                   |
+| [0003](./0003-per-edge-traversal-limits.md)               | Runaway-graph safety net is per-edge, not per-node _(superseded by 0018)_             |
+| [0004](./0004-pr-lifecycle-as-graph-node.md)              | PR lifecycle is an explicit graph node, not implicit engine behavior                  |
+| [0005](./0005-template-resolved-per-run-from-tags.md)     | Loop template is resolved per-run from WorkItem tags                                  |
+| [0006](./0006-run-isolation-clean-origin-base.md)         | Every run starts from a clean `origin/<default>` base                                 |
+| [0007](./0007-ai-execution-delegated-to-adapters.md)      | AI execution is delegated wholesale to pluggable CLI adapters                         |
+| [0008](./0008-worktree-and-branch-per-run.md)             | One worktree and branch per run, reclaimed by retention                               |
+| [0009](./0009-adapter-feature-parity.md)                  | Every agent adapter stays feature-complete (incl. session fork)                       |
+| [0011](./0011-context-aware-chat.md)                      | Context-aware chat: fixed scratch cwd, worktree by add-dir, client-applied loop edits |
+| [0012](./0012-ghcr-image-tagging-strategy.md)             | GHCR image tagging: `latest` is the newest release, not `main`                        |
+| [0013](./0013-retained-chat-history.md)                   | Retained chat history: many chats per user, deleted only on demand                    |
+| [0014](./0014-agent-uid-isolation.md)                     | The coding agent runs under a separate OS user from the orchestrator                  |
+| [0015](./0015-wildcard-subdomain-preview-routing.md)      | Worktree previews are routed by wildcard subdomain, not by path prefix                |
+| [0016](./0016-preview-runs-as-the-agent.md)               | A Worktree Preview runs as the agent, with an environment ILD constructs              |
+| [0017](./0017-shutdown-halts-the-in-flight-ai-node.md)    | A shutdown halts the in-flight AI node rather than letting it finish                  |
+| [0018](./0018-global-ai-traversal-cap.md)                 | Runaway-graph safety net counts AI steps between human interactions                   |
+| [0019](./0019-agent-egress-through-in-container-proxy.md) | Agent egress is funnelled through an in-container proxy keyed on the agent uid        |
 
 New ADRs use the next sequential number; see the format in `.agents/skills/grill-with-docs/ADR-FORMAT.md`.

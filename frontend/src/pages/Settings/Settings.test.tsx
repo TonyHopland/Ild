@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import Settings from "./index";
 import * as useAuthHook from "../../hooks/useAuth";
@@ -333,7 +333,7 @@ describe("Settings log level", () => {
     const select = screen.getByRole("combobox", { name: /backend log level/i });
     expect(select).toBeTruthy();
 
-    const options = screen.getAllByRole("option");
+    const options = within(select).getAllByRole("option");
     expect(options).toHaveLength(4);
     expect(options.map((o) => o.textContent)).toEqual(["Debug", "Information", "Warning", "Error"]);
   });

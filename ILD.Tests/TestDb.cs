@@ -36,6 +36,7 @@ public sealed class TestDb : IDisposable
     public IAuthStore Auth { get; }
     public IProviderStore Providers { get; }
     public IAppSettingStore Settings { get; }
+    public INetworkPolicyStore Network { get; }
 
     /// <summary>
     /// Fake WorkItemServer harness backing the remote-backed
@@ -74,6 +75,7 @@ public sealed class TestDb : IDisposable
         Auth = new AuthStore(Context);
         Providers = new ProviderStore(Context);
         Settings = new AppSettingStore(Context);
+        Network = new NetworkPolicyStore(Context);
         _ownsServer = server is null;
         Server = server ?? new FakeWorkItemServerHarness();
     }

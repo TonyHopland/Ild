@@ -4,34 +4,36 @@ Remote providers, the WorkItem Server connection, repositories, AI providers, an
 
 ## Environment variables
 
-| Variable                                     | Purpose                                                                                                           |
-| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `ILD_PASSWORD`                               | Required bootstrap password; sets the password for the bootstrap user on first login                              |
-| `ILD_USERNAME`                               | Bootstrap username (defaults to `admin`); used to seed and authenticate the first user                            |
-| `ILD_DB_CONNECTION_STRING`                   | PostgreSQL connection string for ILD local state                                                                  |
-| `WORKITEM_DB_CONNECTION_STRING`              | PostgreSQL connection string for the WorkItem Server                                                              |
-| `POSTGRES_PASSWORD`                          | Compose only: superuser password for the `postgres` service. Required, no default                                 |
-| `ILD_DB_PASSWORD`                            | Compose only: password for the `ild_core` role, spliced into `ILD_DB_CONNECTION_STRING`. Required, no default     |
-| `WORKITEM_DB_PASSWORD`                       | Compose only: password for the `ild_workitems` role. Required, no default                                         |
-| `ILD_DATA_PATH`                              | Base data directory for ILD runtime files                                                                         |
-| `ILD_WORKTREES_PATH`                         | Base directory for per-item worktrees (overrides the `DataRoot`/`worktrees` default)                              |
-| `ILD_LOG_LEVEL`                              | Initial Serilog level (`Verbose`, `Debug`, `Information`, `Warning`, `Error`, `Fatal`)                            |
-| `ILD_SECRET_KEY`                             | Optional encryption-at-rest key for provider API keys and webhook secrets (see below)                             |
-| `ILD_SESSION_TOKEN_PEPPER`                   | Key the stored session-token hashes are derived under (see below); required under compose                         |
-| `ILD_WORKITEM_SERVER_URL`                    | URL used to auto-seed the global WorkItem Server connection                                                       |
-| `ILD_WORKITEM_SERVER_API_KEY`                | API key used to auto-seed the global WorkItem Server connection                                                   |
-| `ILD_API_URL`                                | Base URL agents and the MCP server use to call back into the ILD API                                              |
-| `ILD_ALLOWED_ORIGINS`                        | Comma-separated CORS origins allowed to call the ILD API                                                          |
-| `ILD_PREVIEW_PROXY_BASE`                     | Origin worktree previews are served under, e.g. `http://ild.localhost:8080`. Unset ⇒ preview proxying is off      |
-| `ILD_PREVIEW_PUBLIC_HOST`                    | Host used to build direct preview URLs when no proxy base is set (default `127.0.0.1`)                            |
-| `ILD_SHUTDOWN_DRAIN_SECONDS`                 | Seconds the shutdown drain may spend parking in-flight runs (default `20`; see below)                             |
-| `WORKITEM_API_KEYS`                          | Accepted bearer keys for the WorkItem Server (comma-separated)                                                    |
-| `WORKITEM_DATA_PATH`                         | Base data directory for WorkItem Server runtime files                                                             |
-| `WORKITEM_LOG_LEVEL`                         | Serilog level for the WorkItem Server (docker compose defaults it to `ILD_LOG_LEVEL`)                             |
-| `GIT_CONFIG`                                 | Path to the host `.gitconfig` mounted into the ILD container (default `~/.gitconfig`) so commits inherit identity |
-| `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL`       | Override the git author identity for agent commits (defaults to the mounted host `.gitconfig`)                    |
-| `GIT_COMMITTER_NAME` / `GIT_COMMITTER_EMAIL` | Override the git committer identity for agent commits                                                             |
-| `ASPNETCORE_URLS`                            | HTTP bind address for each .NET host (standard ASP.NET Core variable)                                             |
+| Variable                                     | Purpose                                                                                                                    |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `ILD_PASSWORD`                               | Required bootstrap password; sets the password for the bootstrap user on first login                                       |
+| `ILD_USERNAME`                               | Bootstrap username (defaults to `admin`); used to seed and authenticate the first user                                     |
+| `ILD_DB_CONNECTION_STRING`                   | PostgreSQL connection string for ILD local state                                                                           |
+| `WORKITEM_DB_CONNECTION_STRING`              | PostgreSQL connection string for the WorkItem Server                                                                       |
+| `POSTGRES_PASSWORD`                          | Compose only: superuser password for the `postgres` service. Required, no default                                          |
+| `ILD_DB_PASSWORD`                            | Compose only: password for the `ild_core` role, spliced into `ILD_DB_CONNECTION_STRING`. Required, no default              |
+| `WORKITEM_DB_PASSWORD`                       | Compose only: password for the `ild_workitems` role. Required, no default                                                  |
+| `ILD_DATA_PATH`                              | Base data directory for ILD runtime files                                                                                  |
+| `ILD_WORKTREES_PATH`                         | Base directory for per-item worktrees (overrides the `DataRoot`/`worktrees` default)                                       |
+| `ILD_LOG_LEVEL`                              | Initial Serilog level (`Verbose`, `Debug`, `Information`, `Warning`, `Error`, `Fatal`)                                     |
+| `ILD_SECRET_KEY`                             | Optional encryption-at-rest key for provider API keys and webhook secrets (see below)                                      |
+| `ILD_SESSION_TOKEN_PEPPER`                   | Key the stored session-token hashes are derived under (see below); required under compose                                  |
+| `ILD_WORKITEM_SERVER_URL`                    | URL used to auto-seed the global WorkItem Server connection                                                                |
+| `ILD_WORKITEM_SERVER_API_KEY`                | API key used to auto-seed the global WorkItem Server connection                                                            |
+| `ILD_API_URL`                                | Base URL agents and the MCP server use to call back into the ILD API                                                       |
+| `ILD_ALLOWED_ORIGINS`                        | Comma-separated CORS origins allowed to call the ILD API                                                                   |
+| `ILD_PREVIEW_PROXY_BASE`                     | Origin worktree previews are served under, e.g. `http://ild.localhost:8080`. Unset ⇒ preview proxying is off               |
+| `ILD_PREVIEW_PUBLIC_HOST`                    | Host used to build direct preview URLs when no proxy base is set (default `127.0.0.1`)                                     |
+| `ILD_SHUTDOWN_DRAIN_SECONDS`                 | Seconds the shutdown drain may spend parking in-flight runs (default `20`; see below)                                      |
+| `ILD_NETWORK_PROXY_PORT`                     | Loopback port of the agent egress proxy (image default `3128`). Empty ⇒ no proxy, agent launches are not funnelled         |
+| `ILD_NETWORK_ENFORCEMENT`                    | Set by the container entrypoint, not by you: `enforced` or `advisory`, with the reason in `ILD_NETWORK_ENFORCEMENT_REASON` |
+| `WORKITEM_API_KEYS`                          | Accepted bearer keys for the WorkItem Server (comma-separated)                                                             |
+| `WORKITEM_DATA_PATH`                         | Base data directory for WorkItem Server runtime files                                                                      |
+| `WORKITEM_LOG_LEVEL`                         | Serilog level for the WorkItem Server (docker compose defaults it to `ILD_LOG_LEVEL`)                                      |
+| `GIT_CONFIG`                                 | Path to the host `.gitconfig` mounted into the ILD container (default `~/.gitconfig`) so commits inherit identity          |
+| `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL`       | Override the git author identity for agent commits (defaults to the mounted host `.gitconfig`)                             |
+| `GIT_COMMITTER_NAME` / `GIT_COMMITTER_EMAIL` | Override the git committer identity for agent commits                                                                      |
+| `ASPNETCORE_URLS`                            | HTTP bind address for each .NET host (standard ASP.NET Core variable)                                                      |
 
 The ILD API log level is also changeable at runtime through `PUT /api/v1/logging/level` without restarting; `ILD_LOG_LEVEL` only sets the starting level. The WorkItem Server has no runtime endpoint; its level is fixed at startup.
 
@@ -462,6 +464,42 @@ Toolchain versions are also configurable: `NODE_VERSION`, `DOTNET_VERSION`, and
 `NODE_RUNTIME_VERSION`. With `WITH_DOTNET_SDK=1` the image is based on
 `mcr.microsoft.com/dotnet/sdk:$DOTNET_VERSION`, so the SDK available to agents
 tracks `DOTNET_VERSION` rather than a separate channel.
+
+### Agent network limits
+
+The **Network** section of Settings limits which hosts the coding agent may
+reach: a whitelist, a blacklist, a mode toggle (`off` / `whitelist` /
+`blacklist`, default `off`, stored as the `network.mode` app setting) and a log
+of every destination the agent asked for, each line with **Add to whitelist** /
+**Add to blacklist**. See [ADR-0019](adr/0019-agent-egress-through-in-container-proxy.md)
+for the design.
+
+A list entry is a host, not a URL. `api.example.com` matches exactly that host;
+`.example.com` (or `*.example.com`) matches `example.com` and every host beneath
+it. Matching ignores case and a trailing dot, and an IP literal matches exactly.
+An entry is either global or scoped to one AI provider, in which case it applies
+only to launches made for that provider. In `whitelist` mode a connection is
+allowed only if a matching whitelist entry applies to it; in `blacklist` mode it
+is blocked only if a matching blacklist entry does; `off` logs everything and
+blocks nothing. Edits apply to the agent's **next connection** — no restart, and
+a host that is newly blacklisted has its open connections reset.
+
+Everything the agent runs is pointed at the proxy through `HTTP_PROXY`,
+`HTTPS_PROXY` and `ALL_PROXY` (both spellings), with loopback on `NO_PROXY` so
+the agent's MCP server still reaches ILD's own API directly. Two consequences:
+
+- Only clients that honour a proxy work for the agent when enforcement is on:
+  git over HTTPS, curl, npm, pip and the agent CLIs all do; git over SSH and
+  anything speaking raw TCP does not, and fails with a dropped connection.
+- If `ILD_API_URL` is not a loopback address (a Kubernetes service name, say),
+  add its host to the whitelist before turning `whitelist` mode on, or the
+  agent's tool calls back into ILD are blocked with everything else.
+
+Whether the limit is **enforced** or **advisory** depends on the container being
+granted `NET_ADMIN` — see [Deployment](deployment.md#agent-network-limits-net_admin).
+`GET /api/v1/network/status` and a banner in Settings tell you which you have.
+Setting `ILD_NETWORK_PROXY_PORT` to an empty value turns the proxy off entirely;
+the lists are then not applied at all.
 
 ## AI provider configuration
 

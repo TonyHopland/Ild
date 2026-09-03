@@ -196,6 +196,12 @@ rather than overlooked:
 Narrowing these is follow-up work: per-run uids/groups, and treating the shared
 git/credential state as attacker-controlled input on the orchestrator side.
 
+The agent uid's _network_ reach is a separate matter and is now constrained:
+[ADR-0019](./0019-agent-egress-through-in-container-proxy.md) funnels it through
+an in-container proxy keyed on this same uid. The residuals above still apply to
+it — anything that has crossed to `ild` through them is not subject to those
+rules.
+
 ## Consequences
 
 - The orchestrator holds `CAP_SETUID`/`CAP_SETGID`/`CAP_KILL`. It is the trusted

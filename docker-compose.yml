@@ -75,6 +75,13 @@ services:
     # setuid chrome-sandbox helper is never the one relied on.
     security_opt:
       - "no-new-privileges:true"
+    # NET_ADMIN is spent once, by the root entrypoint, on the firewall rules that
+    # funnel the lower-trust agent uid through the in-container egress proxy
+    # (ADR-0019); the drop to `ild` sheds it before the app starts and the agent
+    # never holds it. Without it the stack still runs, but egress filtering is
+    # advisory: logged and applied to proxy-honouring clients, not enforced.
+    cap_add:
+      - NET_ADMIN
     # Worktree previews no longer need a published port each: they are served
     # through 8080 on wildcard subdomains of ILD_PREVIEW_PROXY_BASE below. The
     # old 3100/5100 mappings only ever worked for the two ports this repo's own

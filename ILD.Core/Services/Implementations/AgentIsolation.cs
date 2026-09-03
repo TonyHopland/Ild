@@ -82,6 +82,22 @@ public static class AgentIsolation
     /// </summary>
     public const string SecretEnvDenylistEnvVar = "ILD_AGENT_ENV_DENYLIST";
 
+    /// <summary>
+    /// Loopback port of the egress proxy (<c>ILD.Core.Services.Implementations.Network.EgressProxy</c>).
+    /// When set, every crossing points the child's <c>HTTP_PROXY</c>/<c>HTTPS_PROXY</c>/
+    /// <c>ALL_PROXY</c> at it (<see cref="EgressProxyEnvironment"/>); unset means no proxy
+    /// is running and no launch is pointed anywhere. Read by the container entrypoint too,
+    /// which lets exactly this port through the agent uid's firewall rules.
+    /// </summary>
+    public const string EgressProxyPortEnvVar = "ILD_NETWORK_PROXY_PORT";
+
+    /// <summary>
+    /// Destinations a proxied child reaches directly: ILD's own API (the MCP
+    /// callback at <c>ILD_API_URL</c>) and anything else on loopback, which the
+    /// agent uid's firewall rules let through untouched.
+    /// </summary>
+    public const string EgressNoProxy = "localhost,127.0.0.1,::1";
+
     // The privilege-drop tool, by absolute path. Shipped by util-linux in the
     // image (Dockerfile installs it explicitly), so the location is ours to fix.
     //
@@ -155,7 +171,7 @@ public static class AgentIsolation
     /// agent home is configured.
     ///
     /// <para>
-    /// This is the single owner of that rule. <see cref="Route(ProcessStartInfo, string?, string?, string?)"/>
+    /// This is the single owner of that rule. <see cref="Route(ProcessStartInfo, string?, string?, string?, string?)"/>
     /// and <see cref="RouteCommand(string, IReadOnlyList{string}, string?, string?, string?)"/>
     /// apply it as part of the crossing, so no launch site has to remember to; and
     /// callers that must <em>derive paths</em> from where the child's <c>HOME</c>
@@ -188,7 +204,15 @@ public static class AgentIsolation
     /// <c>setpriv</c> inherits all three and passes them through to the agent.
     /// </summary>
     public static ProcessStartInfo Route(ProcessStartInfo psi)
-        => Route(psi, AgentUser, AgentGroup, AgentHome);
+        => Route(psi, aiProviderId: null);
+
+    /// <summary>
+    /// <see cref="Route(ProcessStartInfo)"/> for a launch made on behalf of one AI
+    /// provider: the egress proxy URL then names the provider, so the whitelist and
+    /// blacklist entries scoped to it apply to this child's connections.
+    /// </summary>
+    public static ProcessStartInfo Route(ProcessStartInfo psi, Guid? aiProviderId)
+        => Route(psi, AgentUser, AgentGroup, AgentHome, EgressProxyUrl(aiProviderId));
 
     /// <summary>
     /// The wrap primitive with explicit parameters — the env-based
@@ -197,9 +221,18 @@ public static class AgentIsolation
     /// process environment variables. No-op when <paramref name="agentUser"/> is
     /// null/blank; <paramref name="agentGroup"/> defaults to the user and
     /// <paramref name="agentHome"/> is left as-is on the psi when null.
+    /// <paramref name="egressProxy"/> is applied whenever it is set, uid crossing
+    /// or not: the funnel is a property of the launch, the firewall behind it of
+    /// the uid, and a single-uid deployment still gets the log.
     /// </summary>
-    public static ProcessStartInfo Route(ProcessStartInfo psi, string? agentUser, string? agentGroup, string? agentHome)
+    public static ProcessStartInfo Route(ProcessStartInfo psi, string? agentUser, string? agentGroup, string? agentHome, string? egressProxy = null)
     {
+        if (NonEmpty(egressProxy) is { } proxy)
+        {
+            foreach (var (key, value) in EgressProxyEnvironment(proxy))
+                psi.Environment[key] = value;
+        }
+
         var user = NonEmpty(agentUser);
         if (user is null) return psi;
 
@@ -352,7 +385,11 @@ public static class AgentIsolation
     /// its CLI through a PTY. Returns the command unchanged when isolation is off.
     /// </summary>
     public static AgentCommand RouteCommand(string fileName, IReadOnlyList<string> arguments)
-        => RouteCommand(fileName, arguments, AgentUser, AgentGroup, AgentHome);
+        => RouteCommand(fileName, arguments, aiProviderId: null);
+
+    /// <inheritdoc cref="Route(ProcessStartInfo, Guid?)"/>
+    public static AgentCommand RouteCommand(string fileName, IReadOnlyList<string> arguments, Guid? aiProviderId)
+        => RouteCommand(fileName, arguments, AgentUser, AgentGroup, AgentHome, EgressProxyUrl(aiProviderId));
 
     /// <inheritdoc cref="RouteCommand(string, IReadOnlyList{string})"/>
     public static AgentCommand RouteCommand(
@@ -360,19 +397,25 @@ public static class AgentIsolation
         IReadOnlyList<string> arguments,
         string? agentUser,
         string? agentGroup,
-        string? agentHome)
+        string? agentHome,
+        string? egressProxy = null)
     {
-        var user = NonEmpty(agentUser);
-        if (user is null)
-            return new AgentCommand(fileName, arguments, EmptyEnvironment);
-
-        var argv = new List<string>(BuildSetprivArgs(user, NonEmpty(agentGroup) ?? user)) { fileName };
-        argv.AddRange(arguments);
-
         // The environment overrides travel WITH the command, for the same reason
         // Route applies them to the psi: they are part of the crossing, not extras
         // the caller may forget.
         var environment = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (NonEmpty(egressProxy) is { } proxy)
+        {
+            foreach (var (key, value) in EgressProxyEnvironment(proxy))
+                environment[key] = value;
+        }
+
+        var user = NonEmpty(agentUser);
+        if (user is null)
+            return new AgentCommand(fileName, arguments, environment.Count == 0 ? EmptyEnvironment : environment);
+
+        var argv = new List<string>(BuildSetprivArgs(user, NonEmpty(agentGroup) ?? user)) { fileName };
+        argv.AddRange(arguments);
 
         // HOME: forgetting it is silent and expensive — the login TUI would write
         // credentials into the orchestrator's home and every later run would read
@@ -391,6 +434,41 @@ public static class AgentIsolation
 
         return new AgentCommand(SetprivCommand, argv, environment);
     }
+
+    /// <summary>
+    /// The proxy URL a launch is pointed at, or <c>null</c> when
+    /// <see cref="EgressProxyPortEnvVar"/> is unset. With an
+    /// <paramref name="aiProviderId"/> the URL carries the provider as Basic-auth
+    /// credentials, which the proxy reads back out of <c>Proxy-Authorization</c>
+    /// to apply that provider's scoped list entries.
+    /// </summary>
+    public static string? EgressProxyUrl(Guid? aiProviderId)
+        => ResolveEgressProxyUrl(Environment.GetEnvironmentVariable(EgressProxyPortEnvVar), aiProviderId);
+
+    /// <inheritdoc cref="EgressProxyUrl"/>
+    /// <param name="configuredPort">The configured port, or null/blank for no proxy. Explicit form for tests.</param>
+    /// <param name="aiProviderId">The provider the launch is made for, if any.</param>
+    public static string? ResolveEgressProxyUrl(string? configuredPort, Guid? aiProviderId)
+        => Network.EgressProxyOptions.Parse(configuredPort).ClientUrl(aiProviderId);
+
+    /// <summary>
+    /// The variables that funnel a child's HTTP(S) traffic through
+    /// <paramref name="proxyUrl"/>. Both spellings of each, because the tools an
+    /// agent runs disagree: curl reads only lower-case <c>http_proxy</c>, while
+    /// most Node and Go clients read the upper-case forms.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> EgressProxyEnvironment(string proxyUrl)
+        => new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["HTTP_PROXY"] = proxyUrl,
+            ["HTTPS_PROXY"] = proxyUrl,
+            ["ALL_PROXY"] = proxyUrl,
+            ["http_proxy"] = proxyUrl,
+            ["https_proxy"] = proxyUrl,
+            ["all_proxy"] = proxyUrl,
+            ["NO_PROXY"] = EgressNoProxy,
+            ["no_proxy"] = EgressNoProxy,
+        };
 
     // Truly immutable so the shared sentinel cannot be mutated by a caller that
     // casts an AgentCommand.Environment back to Dictionary — that would leak into

@@ -83,7 +83,9 @@ ARG SHARED_GID=10003
 # libcap2-bin (capsh) + util-linux (setpriv): the entrypoint keeps ambient
 # CAP_SETUID/SETGID on the orchestrator so it can drop the agent CLI to a second
 # uid; acl (setfacl): default ACLs make shared dirs read/write across both uids.
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates gosu netcat-openbsd libcap2-bin util-linux acl && \
+# nftables (iptables as fallback): the entrypoint installs the uid-keyed egress
+# rules that funnel the agent through the in-container proxy (ADR-0019).
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates gosu netcat-openbsd libcap2-bin util-linux acl nftables iptables && \
     mkdir -p /usr/local/share/ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
@@ -240,6 +242,11 @@ ENV SHARED_GROUP=ild-agents
 # the worktree. The agent itself still gets no capabilities (setpriv clears the
 # inheritable + ambient sets, so its post-exec permitted set is empty).
 ENV RUNTIME_AMBIENT_CAPS=cap_setuid,cap_setgid,cap_kill
+# Loopback port of the agent egress proxy (ADR-0019). Read by the app, which
+# listens there and points every agent launch's HTTP(S)_PROXY at it, and by the
+# entrypoint, whose firewall rules let the agent uid reach loopback and DNS only.
+# Set it empty to run without the proxy.
+ENV ILD_NETWORK_PROXY_PORT=3128
 # Shared read/write: the agent writes its worktree, and git worktree commits go
 # through the base repo's object store under /data/repos.
 # Scratch both uids touch (per-run agent session state, the interactive

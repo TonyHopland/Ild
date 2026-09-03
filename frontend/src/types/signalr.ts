@@ -26,6 +26,9 @@ import type {
   ChatTurnProgressPayload,
   ChatTurnCompletedPayload,
   ChatLoopUpdatePayload,
+  NetworkPolicyChangedPayload,
+  NetworkLogAppendedPayload,
+  NetworkLogClearedPayload,
 } from "./index";
 
 export interface SignalREventPayloads {
@@ -47,6 +50,9 @@ export interface SignalREventPayloads {
   ChatTurnProgress: ChatTurnProgressPayload;
   ChatTurnCompleted: ChatTurnCompletedPayload;
   ChatLoopUpdate: ChatLoopUpdatePayload;
+  NetworkPolicyChanged: NetworkPolicyChangedPayload;
+  NetworkLogAppended: NetworkLogAppendedPayload;
+  NetworkLogCleared: NetworkLogClearedPayload;
 }
 
 export type SignalREventName = keyof SignalREventPayloads;

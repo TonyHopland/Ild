@@ -765,6 +765,45 @@ export interface AppSetting {
   value: string;
 }
 
+// ---- Network egress filter (ADR-0019) ----
+
+export type NetworkMode = "off" | "whitelist" | "blacklist";
+export type NetworkListKind = "Whitelist" | "Blacklist";
+export type NetworkDecision = "Allowed" | "Blocked" | "Advisory";
+
+/** One host pattern on the whitelist or blacklist. Mirrors ILD.Data.Entities.NetworkPolicyEntry. */
+export interface NetworkPolicyEntry {
+  id: string;
+  /** An exact host, or a leading-dot suffix covering the domain and every subdomain. */
+  host: string;
+  listKind: NetworkListKind;
+  /** Null applies to every agent launch; set, only to launches of that provider. */
+  aiProviderId: string | null;
+  createdAt: string;
+}
+
+/** One destination the agent asked the proxy for. Mirrors ILD.Data.Entities.NetworkLogEntry. */
+export interface NetworkLogEntry {
+  id: string;
+  host: string;
+  port: number;
+  timestamp: string;
+  decision: NetworkDecision;
+  aiProviderId: string | null;
+}
+
+/** Whether the firewall behind the proxy is in place, and why not when it is not. */
+export interface NetworkStatus {
+  enforcement: "enforced" | "advisory";
+  reason: string;
+  proxyEnabled: boolean;
+  proxyPort: number | null;
+}
+
+export type NetworkPolicyChangedPayload = Record<string, never>;
+export type NetworkLogAppendedPayload = NetworkLogEntry;
+export type NetworkLogClearedPayload = Record<string, never>;
+
 /**
  * One signed-in device. Never carries the session token or its hash — `id` is
  * the session's own key, which is all the revoke calls need.

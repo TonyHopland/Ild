@@ -9,6 +9,7 @@ import {
   SessionSettingKeys,
 } from "../../services/auth";
 import { UserSession } from "../../types";
+import NetworkSection from "./NetworkSection";
 
 const LOG_LEVELS = ["Debug", "Information", "Warning", "Error"] as const;
 
@@ -387,6 +388,8 @@ export default function Settings() {
             it.
           </NumericSettingField>
         </div>
+
+        <NetworkSection />
 
         <div className="settings-section">
           <h2 className="settings-section-title">Logging</h2>

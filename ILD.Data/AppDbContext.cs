@@ -31,6 +31,8 @@ public class AppDbContext : DbContext
     public DbSet<AppSetting> AppSettings => Set<AppSetting>();
     public DbSet<ChatSession> ChatSessions => Set<ChatSession>();
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
+    public DbSet<NetworkPolicyEntry> NetworkPolicyEntries => Set<NetworkPolicyEntry>();
+    public DbSet<NetworkLogEntry> NetworkLogEntries => Set<NetworkLogEntry>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -93,6 +95,14 @@ public class AppDbContext : DbContext
             .Property(r => r.RecoveryPolicy)
             .HasConversion<string>()
             .HasMaxLength(128);
+        modelBuilder.Entity<NetworkPolicyEntry>()
+            .Property(e => e.ListKind)
+            .HasConversion<string>()
+            .HasMaxLength(32);
+        modelBuilder.Entity<NetworkLogEntry>()
+            .Property(e => e.Decision)
+            .HasConversion<string>()
+            .HasMaxLength(32);
     }
 
     private void ConfigureIndexes(ModelBuilder modelBuilder)
@@ -217,6 +227,21 @@ public class AppDbContext : DbContext
         {
             e.HasIndex(s => s.Key).IsUnique();
         });
+
+        modelBuilder.Entity<NetworkPolicyEntry>(e =>
+        {
+            // One row per pattern, list and scope, enforced where the race is: two
+            // concurrent "Add to whitelist" clicks must not both insert. Nulls are
+            // NOT distinct here, or every global entry could be duplicated freely.
+            e.HasIndex(p => new { p.ListKind, p.Host, p.AiProviderId })
+                .IsUnique()
+                .AreNullsDistinct(false);
+        });
+
+        modelBuilder.Entity<NetworkLogEntry>(e =>
+        {
+            e.HasIndex(l => l.Timestamp);
+        });
     }
 
     private void ConfigureTimestamps(ModelBuilder modelBuilder)
@@ -296,6 +321,11 @@ public class AppDbContext : DbContext
         {
             e.Property(m => m.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
         });
+
+        modelBuilder.Entity<NetworkPolicyEntry>(e =>
+        {
+            e.Property(p => p.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
+        });
     }
 
     private void ConfigureConstraints(ModelBuilder modelBuilder)
@@ -352,6 +382,14 @@ public class AppDbContext : DbContext
             .HasOne(s => s.User)
             .WithMany()
             .HasForeignKey(s => s.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // A provider-scoped entry that outlived its provider would silently turn
+        // into a global one, widening the whitelist; it goes with the provider.
+        modelBuilder.Entity<NetworkPolicyEntry>()
+            .HasOne(p => p.AiProvider)
+            .WithMany()
+            .HasForeignKey(p => p.AiProviderId)
             .OnDelete(DeleteBehavior.Cascade);
     }
 

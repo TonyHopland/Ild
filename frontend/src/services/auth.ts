@@ -31,6 +31,10 @@ import {
   WorkItemServerConfig,
   RunAnalyticsOverview,
   AnalyticsFilters,
+  NetworkListKind,
+  NetworkLogEntry,
+  NetworkPolicyEntry,
+  NetworkStatus,
 } from "../types";
 
 interface BackendLoginResponse {
@@ -657,6 +661,45 @@ export const settingsService = {
   },
   put: async (key: string, value: string): Promise<AppSetting> => {
     return api.put<AppSetting>(`/settings/${key}`, { value });
+  },
+};
+
+/** The egress filter mode: `off` logs only, `whitelist` allows listed hosts, `blacklist` blocks them. */
+export const NetworkSettingKeys = {
+  Mode: "network.mode",
+} as const;
+
+export const networkService = {
+  getStatus: async (): Promise<NetworkStatus> => {
+    return api.get<NetworkStatus>("/network/status");
+  },
+  getEntries: async (): Promise<NetworkPolicyEntry[]> => {
+    return api.get<NetworkPolicyEntry[]>("/network/entries");
+  },
+  addEntry: async (data: {
+    host: string;
+    listKind: NetworkListKind;
+    aiProviderId?: string | null;
+  }): Promise<NetworkPolicyEntry> => {
+    return api.post<NetworkPolicyEntry>("/network/entries", data);
+  },
+  deleteEntry: async (id: string): Promise<void> => {
+    return api.delete<void>(`/network/entries/${id}`);
+  },
+  getLog: async (take = 200): Promise<NetworkLogEntry[]> => {
+    return api.get<NetworkLogEntry[]>(`/network/log?take=${take}`);
+  },
+  clearLog: async (): Promise<{ removed: number }> => {
+    return api.delete<{ removed: number }>("/network/log");
+  },
+  /** Promote a log line to a list; `scopeToProvider` limits the new entry to the line's provider. */
+  addLogEntryToList: async (
+    id: string,
+    listKind: NetworkListKind,
+    scopeToProvider = false,
+  ): Promise<NetworkPolicyEntry> => {
+    const target = listKind === "Whitelist" ? "whitelist" : "blacklist";
+    return api.post<NetworkPolicyEntry>(`/network/log/${id}/${target}`, { scopeToProvider });
   },
 };
 

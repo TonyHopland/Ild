@@ -15,8 +15,14 @@ jobs:
       - name: Publish version-stamping tests
         run: .github/scripts/compute-version.test.sh
 
+      - name: Entrypoint smoke test
+        run: .github/scripts/entrypoint-smoke.test.sh
+
       - name: Entrypoint config-store linking tests
         run: .github/scripts/entrypoint-link-stores.test.sh
+
+      - name: Entrypoint egress-rule tests
+        run: .github/scripts/entrypoint-egress-rules.test.sh
 
       - name: Compose security_opt tests
         run: .github/scripts/compose-security-opt.test.sh

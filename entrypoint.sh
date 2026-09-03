@@ -24,6 +24,15 @@ AGENT_SCRATCH_DIR="${AGENT_SCRATCH_DIR:-}"
 ORCHESTRATOR_PRIVATE_DIR="${ORCHESTRATOR_PRIVATE_DIR:-}"
 SHARED_GROUP="${SHARED_GROUP:-}"
 RUNTIME_AMBIENT_CAPS="${RUNTIME_AMBIENT_CAPS:-}"
+# Agent egress funnel (docs/adr/0019-agent-egress-through-in-container-proxy.md).
+# When set, the app runs a filtering proxy on 127.0.0.1:ILD_NETWORK_PROXY_PORT as the
+# orchestrator and points every agent launch at it; install_agent_egress_rules
+# below makes that the agent uid's only way out when NET_ADMIN allows.
+ILD_NETWORK_PROXY_PORT="${ILD_NETWORK_PROXY_PORT:-}"
+NFT_BIN="${NFT_BIN:-nft}"
+IPTABLES_BIN="${IPTABLES_BIN:-iptables}"
+IP6TABLES_BIN="${IP6TABLES_BIN:-ip6tables}"
+CAP_STATUS_FILE="${CAP_STATUS_FILE:-/proc/self/status}"
 SHARED_RW_DIRS="${SHARED_RW_DIRS:-}"
 SHARED_RO_DIRS="${SHARED_RO_DIRS:-}"
 DATA_TRAVERSE_DIRS="${DATA_TRAVERSE_DIRS:-}"
@@ -404,6 +413,100 @@ wait_for_postgres() {
   return 0
 }
 
+# Whether this process holds CAP_NET_ADMIN (bit 12 of CapEff) — the one thing the
+# egress rules need, and the one thing an operator may decline to grant.
+has_cap_net_admin() {
+  caps="$(awk '/^CapEff:/ {print $2}' "$CAP_STATUS_FILE" 2>/dev/null)"
+  [ -n "$caps" ] || return 1
+  [ $(( 0x$caps & 4096 )) -ne 0 ]
+}
+
+# The agent uid's egress, as a single uid-keyed rule set that carries no domains:
+# loopback (the proxy, ILD's own API for the MCP callback, previews) and DNS are
+# open, everything else is dropped — so a connection that skips the proxy, IP
+# literal or not, goes nowhere. Every allow/deny decision lives in the proxy, which
+# is why editing a list never touches these rules. Idempotent: the table is
+# replaced wholesale, so a restart never stacks a second copy.
+install_egress_rules_nft() {
+  uid="$1"
+  # Tab-indented (<<-) so the table's closing brace is not a column-0 line: the
+  # shell tests slice functions out of this file up to their first one.
+  "$NFT_BIN" -f - <<-EOF || return 1
+	table inet ild_agent_egress
+	delete table inet ild_agent_egress
+	table inet ild_agent_egress {
+	  chain output {
+	    type filter hook output priority filter; policy accept;
+	    meta skuid != $uid accept
+	    oif "lo" accept
+	    udp dport 53 accept
+	    tcp dport 53 accept
+	    counter drop
+	  }
+	}
+	EOF
+}
+
+# Same rules through legacy iptables, for a kernel or image without nf_tables.
+install_egress_rules_iptables() {
+  uid="$1"
+  installed=0
+  for ipt in "$IPTABLES_BIN" "$IP6TABLES_BIN"; do
+    command -v "$ipt" >/dev/null 2>&1 || continue
+    if ! "$ipt" -w -N ILD_AGENT_EGRESS 2>/dev/null; then
+      "$ipt" -w -F ILD_AGENT_EGRESS || return 1
+    fi
+    if ! "$ipt" -w -C OUTPUT -m owner --uid-owner "$uid" -j ILD_AGENT_EGRESS 2>/dev/null; then
+      "$ipt" -w -I OUTPUT 1 -m owner --uid-owner "$uid" -j ILD_AGENT_EGRESS || return 1
+    fi
+    "$ipt" -w -A ILD_AGENT_EGRESS -o lo -j ACCEPT || return 1
+    "$ipt" -w -A ILD_AGENT_EGRESS -p udp --dport 53 -j ACCEPT || return 1
+    "$ipt" -w -A ILD_AGENT_EGRESS -p tcp --dport 53 -j ACCEPT || return 1
+    "$ipt" -w -A ILD_AGENT_EGRESS -j DROP || return 1
+    installed=1
+  done
+  [ "$installed" = 1 ]
+}
+
+# Funnel the agent uid through the egress proxy, or say plainly why not. Runs as
+# root right before the drop, so NET_ADMIN is spent here and nowhere else; the
+# rules live in the network namespace and outlive the capability. Exports
+# ILD_NETWORK_ENFORCEMENT (enforced|advisory) and a reason the app surfaces in
+# Settings, so a deployment that could not enforce is never silently "protected".
+install_agent_egress_rules() {
+  export ILD_NETWORK_ENFORCEMENT=advisory
+  if [ -z "$ILD_NETWORK_PROXY_PORT" ]; then
+    export ILD_NETWORK_ENFORCEMENT_REASON="ILD_NETWORK_PROXY_PORT is empty, so no egress proxy runs and no firewall rules were installed."
+    echo "WARNING: agent egress is not filtered: $ILD_NETWORK_ENFORCEMENT_REASON" >&2
+    return 0
+  fi
+  agent_uid="$(id -u "$AGENT_USER" 2>/dev/null || true)"
+  if [ -z "$agent_uid" ]; then
+    export ILD_NETWORK_ENFORCEMENT_REASON="The agent user '$AGENT_USER' does not exist, so no uid-keyed firewall rules could be installed."
+    echo "WARNING: agent egress is advisory only: $ILD_NETWORK_ENFORCEMENT_REASON" >&2
+    return 0
+  fi
+  if ! has_cap_net_admin; then
+    export ILD_NETWORK_ENFORCEMENT_REASON="NET_ADMIN is not granted to the container, so the firewall rules that stop the agent bypassing the proxy were not installed. Grant it with --cap-add=NET_ADMIN (docker/podman) or securityContext.capabilities.add: [NET_ADMIN] (Kubernetes)."
+    echo "WARNING: agent egress is advisory only: $ILD_NETWORK_ENFORCEMENT_REASON" >&2
+    return 0
+  fi
+
+  if command -v "$NFT_BIN" >/dev/null 2>&1 && install_egress_rules_nft "$agent_uid"; then
+    tool="nftables"
+  elif install_egress_rules_iptables "$agent_uid"; then
+    tool="iptables"
+  else
+    export ILD_NETWORK_ENFORCEMENT_REASON="NET_ADMIN is granted but neither nftables nor iptables could install the agent egress rules (see the errors above)."
+    echo "WARNING: agent egress is advisory only: $ILD_NETWORK_ENFORCEMENT_REASON" >&2
+    return 0
+  fi
+
+  export ILD_NETWORK_ENFORCEMENT=enforced
+  export ILD_NETWORK_ENFORCEMENT_REASON="$tool rules drop everything uid $agent_uid ($AGENT_USER) sends except loopback and DNS, so only the proxy on 127.0.0.1:$ILD_NETWORK_PROXY_PORT reaches the network."
+  echo "Agent egress enforced: $ILD_NETWORK_ENFORCEMENT_REASON"
+}
+
 # Drop from root to the runtime user and exec the app. Under uid isolation the
 # orchestrator keeps ambient RUNTIME_AMBIENT_CAPS (via capsh --keep) so it can
 # later drop the agent CLI to AGENT_USER under no_new_privs; otherwise a plain
@@ -555,6 +658,13 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
         chown -h "$AGENT_USER:$AGENT_USER" "$agent_home/.gitconfig" 2>/dev/null || true
       fi
     fi
+  fi
+
+  if [ -n "$AGENT_USER" ]; then
+    install_agent_egress_rules
+  else
+    export ILD_NETWORK_ENFORCEMENT=advisory
+    export ILD_NETWORK_ENFORCEMENT_REASON="Agent uid isolation is off (AGENT_USER is empty), so there is no separate uid to key firewall rules on; the proxy still logs and filters proxy-honouring clients."
   fi
 
   wait_for_postgres

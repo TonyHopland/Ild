@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using ILD.Data.Stores.Interfaces;
@@ -20,6 +21,8 @@ public class SettingsController : ControllerBase
     private readonly IWorkItemScheduler _scheduler;
     private readonly ISchedulerSettingsService _schedulerSettings;
     private readonly ILD.Core.Services.Remote.IPrStatusPoller _prPoller;
+    private readonly IEgressPolicy _egressPolicy;
+    private readonly INetworkNotifier _networkNotifier;
 
     private static readonly HashSet<string> KnownKeys = new(StringComparer.Ordinal)
     {
@@ -30,6 +33,7 @@ public class SettingsController : ControllerBase
         AppSettingKeys.MaxAiTraversals,
         AppSettingKeys.SessionIdleDays,
         AppSettingKeys.SessionMaxDays,
+        AppSettingKeys.NetworkMode,
     };
 
     public SettingsController(
@@ -37,13 +41,17 @@ public class SettingsController : ControllerBase
         IWorkItemNotifier notifier,
         IWorkItemScheduler scheduler,
         ISchedulerSettingsService schedulerSettings,
-        ILD.Core.Services.Remote.IPrStatusPoller prPoller)
+        ILD.Core.Services.Remote.IPrStatusPoller prPoller,
+        IEgressPolicy egressPolicy,
+        INetworkNotifier networkNotifier)
     {
         _store = store;
         _notifier = notifier;
         _scheduler = scheduler;
         _schedulerSettings = schedulerSettings;
         _prPoller = prPoller;
+        _egressPolicy = egressPolicy;
+        _networkNotifier = networkNotifier;
     }
 
     public sealed class UpdateSettingRequest
@@ -73,6 +81,8 @@ public class SettingsController : ControllerBase
             map[AppSettingKeys.SessionIdleDays] = AppSettingKeys.DefaultSessionIdleDays.ToString();
         if (!map.ContainsKey(AppSettingKeys.SessionMaxDays))
             map[AppSettingKeys.SessionMaxDays] = AppSettingKeys.DefaultSessionMaxDays.ToString();
+        if (!map.ContainsKey(AppSettingKeys.NetworkMode))
+            map[AppSettingKeys.NetworkMode] = AppSettingKeys.DefaultNetworkMode;
         return Ok(map.Select(kv => new { key = kv.Key, value = kv.Value }));
     }
 
@@ -108,6 +118,13 @@ public class SettingsController : ControllerBase
             // than after the previous (possibly long) interval elapses.
             _prPoller.Pulse();
         }
+        else if (key == AppSettingKeys.NetworkMode)
+        {
+            // The proxy judges the agent's next connection by the new mode, and
+            // re-judges the tunnels already open under the old one.
+            _egressPolicy.Invalidate();
+            await _networkNotifier.PolicyChangedAsync();
+        }
 
         return Ok(new { key, value = request.Value });
     }
@@ -121,6 +138,7 @@ public class SettingsController : ControllerBase
         AppSettingKeys.MaxAiTraversals => AppSettingKeys.DefaultMaxAiTraversals.ToString(),
         AppSettingKeys.SessionIdleDays => AppSettingKeys.DefaultSessionIdleDays.ToString(),
         AppSettingKeys.SessionMaxDays => AppSettingKeys.DefaultSessionMaxDays.ToString(),
+        AppSettingKeys.NetworkMode => AppSettingKeys.DefaultNetworkMode,
         _ => string.Empty,
     };
 
@@ -174,6 +192,13 @@ public class SettingsController : ControllerBase
                 if (!int.TryParse(value, out var maxDays) || maxDays < 0 || maxDays > 3650)
                 {
                     error = "session.maxDays must be an integer between 0 (never) and 3650";
+                    return false;
+                }
+                break;
+            case AppSettingKeys.NetworkMode:
+                if (!EgressRules.TryParseMode(value, out _))
+                {
+                    error = "network.mode must be 'off', 'whitelist' or 'blacklist'";
                     return false;
                 }
                 break;

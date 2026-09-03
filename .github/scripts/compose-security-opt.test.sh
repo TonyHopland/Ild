@@ -39,6 +39,13 @@ compose_file="$repo_root/docker-compose.yml"
 required_flag="no-new-privileges:true"
 required_services="ild workitem-server"
 
+# The one capability the `ild` entrypoint spends before dropping privilege: the
+# uid-keyed firewall rules that make the agent egress proxy an enforced boundary
+# rather than an advisory one (ADR-0019). Its absence has no runtime symptom
+# either — the stack boots and only Settings says "advisory".
+required_cap="NET_ADMIN"
+cap_services="ild"
+
 failures=0
 fail() { echo "FAIL: $*"; failures=$((failures + 1)); }
 pass() { echo "ok: $*"; }
@@ -322,6 +329,16 @@ for service in $required_services; do
   else
     fail "service '$service' has security_opt [$(printf '%s' "$opts" | tr '\n' ' ')]" \
          "but not '$required_flag'"
+  fi
+done
+
+for service in $cap_services; do
+  caps="$(values_in "$model" "$service" cap_add)"
+  if printf '%s\n' "$caps" | grep -Fxq "$required_cap"; then
+    pass "service '$service' is granted '$required_cap' for the entrypoint's egress rules"
+  else
+    fail "service '$service' has cap_add [$(printf '%s' "$caps" | tr '\n' ' ')] but not '$required_cap'" \
+         "(without it the agent egress filter runs in advisory mode - see ADR-0019)"
   fi
 done
 

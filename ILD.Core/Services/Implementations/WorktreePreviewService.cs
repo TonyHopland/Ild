@@ -37,6 +37,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private readonly string? _agentUser;
     private readonly string? _agentGroup;
     private readonly string? _agentHome;
+    private readonly string? _egressProxy;
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -50,7 +51,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         PreviewProxyBase proxyBase,
         ILogger<WorktreePreviewService> logger)
         : this(httpClientFactory, configuration, proxyBase, logger,
-            AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome)
+            AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome,
+            AgentIsolation.EgressProxyUrl(aiProviderId: null))
     {
     }
 
@@ -70,7 +72,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         ILogger<WorktreePreviewService> logger,
         string? agentUser,
         string? agentGroup,
-        string? agentHome)
+        string? agentHome,
+        string? egressProxy = null)
     {
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
@@ -81,6 +84,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         _agentUser = NonEmpty(agentUser);
         _agentGroup = NonEmpty(agentGroup);
         _agentHome = NonEmpty(agentHome);
+        _egressProxy = NonEmpty(egressProxy);
     }
 
     /// <summary>
@@ -1374,7 +1378,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// <summary>
     /// The <c>HOME</c> a preview step runs with, and the root the npm global prefix
     /// is derived from. Under uid isolation that is the <em>agent's</em> home:
-    /// <see cref="AgentIsolation.Route(ProcessStartInfo, string?, string?, string?)"/>
+    /// <see cref="AgentIsolation.Route(ProcessStartInfo, string?, string?, string?, string?)"/>
     /// sets <c>HOME</c> there as part of the crossing, so deriving the prefix from
     /// anything else would point <c>npm install -g</c> at a directory the uid
     /// running it cannot write — the orchestrator's home is <c>0710</c>,
@@ -1579,7 +1583,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// The command text comes from the worktree's <c>ild.config.json</c>, a file the
     /// agent writes and can trigger itself through the ILD MCP tools. It is
     /// therefore agent-authored code, and it runs as the agent:
-    /// <see cref="AgentIsolation.Route(ProcessStartInfo, string?, string?, string?)"/>
+    /// <see cref="AgentIsolation.Route(ProcessStartInfo, string?, string?, string?, string?)"/>
     /// drops it to the agent uid, clears the inherited and ambient capability sets,
     /// and points <c>HOME</c> at the agent's own home. That gives a preview command
     /// exactly the privileges the agent already has and nothing more — and, because
@@ -1616,7 +1620,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         psi.ArgumentList.Add(resolved.Command);
 
         AgentIsolation.StripOrchestratorEnvironment(psi);
-        AgentIsolation.Route(psi, _agentUser, _agentGroup, _agentHome);
+        AgentIsolation.Route(psi, _agentUser, _agentGroup, _agentHome, _egressProxy);
 
         foreach (var entry in resolved.Environment)
         {

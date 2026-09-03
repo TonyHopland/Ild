@@ -740,6 +740,74 @@ namespace ILD.Data.Migrations
                     b.ToTable("LoopTemplateVersions");
                 });
 
+            modelBuilder.Entity("ILD.Data.Entities.NetworkLogEntry", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("AiProviderId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Decision")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("Host")
+                        .IsRequired()
+                        .HasMaxLength(253)
+                        .HasColumnType("character varying(253)");
+
+                    b.Property<int>("Port")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("Timestamp")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Timestamp");
+
+                    b.ToTable("NetworkLogEntries");
+                });
+
+            modelBuilder.Entity("ILD.Data.Entities.NetworkPolicyEntry", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("AiProviderId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP");
+
+                    b.Property<string>("Host")
+                        .IsRequired()
+                        .HasMaxLength(253)
+                        .HasColumnType("character varying(253)");
+
+                    b.Property<string>("ListKind")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AiProviderId");
+
+                    b.HasIndex("ListKind", "Host", "AiProviderId")
+                        .IsUnique();
+
+                    NpgsqlIndexBuilderExtensions.AreNullsDistinct(b.HasIndex("ListKind", "Host", "AiProviderId"), false);
+
+                    b.ToTable("NetworkPolicyEntries");
+                });
+
             modelBuilder.Entity("ILD.Data.Entities.RemoteProvider", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1046,6 +1114,16 @@ namespace ILD.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("LoopTemplate");
+                });
+
+            modelBuilder.Entity("ILD.Data.Entities.NetworkPolicyEntry", b =>
+                {
+                    b.HasOne("ILD.Data.Entities.AiProvider", "AiProvider")
+                        .WithMany()
+                        .HasForeignKey("AiProviderId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.Navigation("AiProvider");
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.Repository", b =>
