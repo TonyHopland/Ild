@@ -6,7 +6,11 @@ namespace ILD.Core.Services.Implementations;
 /// <summary>
 /// Decides whether a failed AI turn was the provider interrupting the work
 /// (park the run, resume later) or the work genuinely failing (follow the
-/// <c>on_failure</c> edge). Every CLI adapter reports a throttle the same way —
+/// <c>on_failure</c> edge), and — when the provider said so — reads back
+/// <em>when</em> it will let the work continue (<see cref="TryParseResetAt"/>).
+/// Both are the same job: reading provider prose nobody promised us a shape for,
+/// which is why they share the timeout and the precision-first bias below.
+/// Every CLI adapter reports a throttle the same way —
 /// as an ordinary failure whose text carries the whole signal — so one text
 /// classifier buys all four adapters the same behaviour, and an adapter that
 /// never learns to classify precisely still gets it (ADR-0009).
@@ -143,6 +147,98 @@ public static class AiFailureClassifier
     /// </summary>
     public static FailureKind ClassifyProviderMessage(string? message)
         => ClassifyText(message, trustAmbiguous: true);
+
+    /// <summary>
+    /// Longest wait this will report. A provider window is hours, not days, so a
+    /// further-out answer is far more likely a misread — a 12-hour clock read in
+    /// the wrong half of the day, or a time rolled to tomorrow that had in fact
+    /// just passed — than a real limit. Past it the caller gets nothing and
+    /// falls back to its own retry schedule, which costs one wasted attempt in
+    /// the worst case, where honouring a bad parse would idle a run for a day.
+    /// </summary>
+    private static readonly TimeSpan MaxHonouredWait = TimeSpan.FromHours(12);
+
+    /// <summary>
+    /// When the provider says its limit resets, e.g. the <c>"resets 9:40am
+    /// (UTC)"</c> a session limit ends with. Only a time the provider stamped
+    /// <b>UTC</b> is read, along with a relative "try again in 20 minutes";
+    /// a bare "resets 3pm" is deliberately left alone, because the zone it means
+    /// is the user's and guessing wrong parks the run for hours it did not have
+    /// to wait. Anything unread returns false and leaves the caller on its own
+    /// schedule, which is what every throttle got before this existed.
+    /// </summary>
+    public static bool TryParseResetAt(string? output, string? error, DateTime nowUtc, out DateTime resetAtUtc)
+        => TryParseResetAt(output, nowUtc, out resetAtUtc)
+            || TryParseResetAt(error, nowUtc, out resetAtUtc);
+
+    private static readonly Regex AbsoluteResetRule = Rule(
+        @"\b(?:resets?|available again)\b(?:\s+at)?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*[\(\[]?\s*(?:utc|gmt)\b");
+
+    private static readonly Regex RelativeResetRule = Rule(
+        @"\b(?:try again|retry|resets?|available again)\s+in\s+(\d{1,4})\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\b");
+
+    private static bool TryParseResetAt(string? text, DateTime nowUtc, out DateTime resetAtUtc)
+    {
+        resetAtUtc = default;
+        if (string.IsNullOrWhiteSpace(text)) return false;
+
+        var at = MatchAbsolute(text, nowUtc) ?? MatchRelative(text, nowUtc);
+        if (at is null || at <= nowUtc || at - nowUtc > MaxHonouredWait) return false;
+
+        resetAtUtc = at.Value;
+        return true;
+    }
+
+    private static DateTime? MatchAbsolute(string text, DateTime nowUtc)
+    {
+        var m = Match(AbsoluteResetRule, text);
+        if (m is null) return null;
+
+        var hour = int.Parse(m.Groups[1].Value);
+        var minute = m.Groups[2].Success ? int.Parse(m.Groups[2].Value) : 0;
+        if (minute > 59) return null;
+
+        if (m.Groups[3].Success)
+        {
+            if (hour is < 1 or > 12) return null;
+            var pm = m.Groups[3].Value.Equals("pm", StringComparison.OrdinalIgnoreCase);
+            hour = pm ? (hour == 12 ? 12 : hour + 12) : (hour == 12 ? 0 : hour);
+        }
+        else if (hour > 23) return null;
+
+        var today = new DateTime(nowUtc.Year, nowUtc.Month, nowUtc.Day, hour, minute, 0, DateTimeKind.Utc);
+        // A time already past is the same clock face coming round again — the
+        // notice written at 10pm saying "resets 9:40am" means tomorrow morning.
+        // The horizon above is what keeps a time that merely just elapsed from
+        // buying a full day's wait.
+        return today > nowUtc ? today : today.AddDays(1);
+    }
+
+    private static DateTime? MatchRelative(string text, DateTime nowUtc)
+    {
+        var m = Match(RelativeResetRule, text);
+        if (m is null) return null;
+
+        var amount = int.Parse(m.Groups[1].Value);
+        var unit = m.Groups[2].Value.ToLowerInvariant();
+        var span = unit[0] switch
+        {
+            's' => TimeSpan.FromSeconds(amount),
+            'm' => TimeSpan.FromMinutes(amount),
+            _ => TimeSpan.FromHours(amount),
+        };
+        return nowUtc + span;
+    }
+
+    private static Match? Match(Regex rule, string text)
+    {
+        try
+        {
+            var m = rule.Match(text);
+            return m.Success ? m : null;
+        }
+        catch (RegexMatchTimeoutException) { return null; }
+    }
 
     private static FailureKind ClassifyText(string? text, bool trustAmbiguous)
     {

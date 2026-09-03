@@ -142,6 +142,48 @@ public class LoopEngineThrottleParkTests
     }
 
     [Fact]
+    public async Task The_park_records_when_the_provider_said_the_limit_lifts()
+    {
+        var resetAt = DateTime.UtcNow.AddHours(1);
+        using var h = Harness(
+            new NodeOutcome.NodeStarting("do the work"),
+            new NodeOutcome.Interrupted(ParkReason, ProviderNotice, resetAt));
+
+        await h.RunAsync();
+
+        // Carried from the notice the adapter read, so the retry has a deadline
+        // to respect without re-reading the provider's prose.
+        Assert.Equal(resetAt, h.ReloadRun().ThrottleResetAt!.Value, TimeSpan.FromSeconds(1));
+    }
+
+    [Fact]
+    public async Task A_park_whose_notice_stated_no_time_overwrites_an_older_one()
+    {
+        var h = new LoopEngineHarness();
+        h.AddNode("ai", NodeType.AI, "Coder");
+        h.Registry.Register(new ScriptedExecutor(NodeType.AI,
+                new NodeOutcome.NodeStarting("do the work"),
+                new NodeOutcome.Interrupted(ParkReason, ProviderNotice, DateTime.UtcNow.AddHours(1)))
+            .Then(new NodeOutcome.NodeStarting("do the work"),
+                new NodeOutcome.Interrupted(ParkReason, ProviderNotice)));
+        h.SeedRun("ai");
+        using var harness = h;
+
+        await harness.RunAsync();
+        Assert.NotNull(harness.ReloadRun().ThrottleResetAt);
+
+        // The second notice named no time. A deadline left over from the first
+        // would hold this interruption's retry against a limit that has already
+        // lifted, so the park states its own or states none.
+        await harness.Engine.ResumeFromHaltAsync(harness.RunId, "");
+        await harness.WaitUntilIdleAsync();
+
+        var run = harness.ReloadRun();
+        Assert.Equal(HaltReason.Throttled, run.HaltReason);
+        Assert.Null(run.ThrottleResetAt);
+    }
+
+    [Fact]
     public async Task An_automatic_resume_buys_no_fresh_traversal_budget_and_counts_itself()
     {
         using var h = ThrottlesEveryTime();

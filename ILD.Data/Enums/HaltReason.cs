@@ -24,8 +24,8 @@ public enum HaltReason
     /// just spends another round-trip to be throttled again. Waiting for the
     /// reset is a judgement the person reading "resets 9:40am" makes — unless
     /// they have handed it to ILD with the opt-in <c>throttle.autoResume</c>
-    /// setting, which retries the resume on a widening delay and then leaves
-    /// the run parked here anyway.
+    /// setting, which waits out any reset time that notice stated, retries on a
+    /// widening delay, and then leaves the run parked here anyway.
     /// </summary>
     Throttled = 2,
 

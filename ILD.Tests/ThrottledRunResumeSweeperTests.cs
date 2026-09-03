@@ -163,6 +163,52 @@ public class ThrottledRunResumeSweeperTests
     }
 
     [Fact]
+    public async Task Waits_for_the_reset_time_the_provider_stated()
+    {
+        using var db = new TestDb();
+        // Past the backoff, but the provider said the limit lifts in another
+        // half hour. Spending an attempt now buys a refusal we were told about.
+        SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow - PastTheGrace,
+            resetAt: DateTime.UtcNow.AddMinutes(30));
+        await EnableAsync(db);
+        var engine = new Mock<ILoopEngine>();
+
+        await SweepAsync(db, engine.Object);
+
+        engine.Verify(e => e.ResumeFromHaltAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<bool>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Resumes_once_the_stated_reset_time_has_passed()
+    {
+        using var db = new TestDb();
+        var run = SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow - PastTheGrace,
+            resetAt: DateTime.UtcNow.AddMinutes(-1));
+        await EnableAsync(db);
+        var engine = new Mock<ILoopEngine>();
+
+        await SweepAsync(db, engine.Object);
+
+        engine.Verify(e => e.ResumeFromHaltAsync(run.Id, ThrottledRunResumeSweeper.AutomaticResumeNote, true), Times.Once);
+    }
+
+    [Fact]
+    public async Task A_passed_reset_time_does_not_shortcut_the_backoff()
+    {
+        using var db = new TestDb();
+        // The reset is long gone but the run was only just parked: the deadline
+        // is a floor under the backoff, never a trigger of its own.
+        SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow.AddMinutes(-1),
+            resetAt: DateTime.UtcNow.AddHours(-2));
+        await EnableAsync(db);
+        var engine = new Mock<ILoopEngine>();
+
+        await SweepAsync(db, engine.Object);
+
+        engine.Verify(e => e.ResumeFromHaltAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<bool>()), Times.Never);
+    }
+
+    [Fact]
     public async Task One_failing_resume_does_not_strand_the_rest_of_the_sweep()
     {
         using var db = new TestDb();
@@ -189,7 +235,8 @@ public class ThrottledRunResumeSweeperTests
         DateTime parkedAt,
         HaltReason haltReason = HaltReason.Throttled,
         bool isPaused = false,
-        int autoResumeCount = 0)
+        int autoResumeCount = 0,
+        DateTime? resetAt = null)
     {
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t" };
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
@@ -208,6 +255,7 @@ public class ThrottledRunResumeSweeperTests
             HumanFeedbackReason = HumanFeedbackReasons.AiProviderThrottled,
             IsPaused = isPaused,
             ThrottleAutoResumeCount = autoResumeCount,
+            ThrottleResetAt = resetAt,
             StartedAt = parkedAt,
             CreatedAt = parkedAt,
             // TouchUpdatedAt only stamps Modified entries, so this explicit park

@@ -430,6 +430,7 @@ public sealed class LoopEngine : ILoopEngine
         // Clear the stamp with the halt: left set, the next halt a human presses
         // would look like a shutdown park and be auto-resumed out from under them.
         run.HaltReason = null;
+        run.ThrottleResetAt = null;
         run.HumanFeedbackReason = null;
         run.Status = LoopRunStatus.Running;
         await loopRunStore.UpdateRunAsync(run);
@@ -534,6 +535,7 @@ public sealed class LoopEngine : ILoopEngine
         // the run parks at a genuine human-feedback node. Mirrors ResumeFromHaltAsync.
         run.IsHalted = false;
         run.HaltReason = null;
+        run.ThrottleResetAt = null;
         run.SteeringNote = null;
         run.HumanFeedbackReason = null;
         ResetUnattendedCounters(run);
@@ -895,8 +897,13 @@ public sealed class LoopEngine : ILoopEngine
                         if (!stillCurrent)
                             return ParkResult.Stop;
                         _logger.LogInformation(
-                            "Run {RunId}: AI provider interrupted node {NodeLabel}; parked for a human Resume ({Reason})",
-                            run.Id, node.Label, intr.Reason);
+                            "Run {RunId}: AI provider interrupted node {NodeLabel}; parked for a human Resume ({Reason}, resets {ResetAt})",
+                            run.Id, node.Label, intr.Reason, intr.ResetAt?.ToString("o") ?? "unstated");
+                        // Assigned unconditionally, including back to null: a
+                        // reset time left over from an earlier interruption would
+                        // hold this one's retry to a deadline that has nothing to
+                        // do with it.
+                        run.ThrottleResetAt = intr.ResetAt;
                         // HumanFeedback, not WaitingForIld: the scheduler
                         // auto-resumes what it finds waiting on ILD, and this park
                         // is waiting on a person deciding the limit has reset.

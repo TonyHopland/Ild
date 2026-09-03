@@ -80,9 +80,11 @@ public abstract record NodeOutcome
     /// <paramref name="Reason"/> says which kind of Resume the human is getting
     /// (same session, or a cold restart of the node); <paramref name="Output"/>
     /// is the adapter's raw text, which is where the provider states when the
-    /// limit resets.
+    /// limit resets. <paramref name="ResetAt"/> is that same statement read back
+    /// as a UTC instant when it could be — nothing before it is worth
+    /// attempting — and null when the provider gave no time this can trust.
     /// </summary>
-    public sealed record Interrupted(string Reason, string? Output = null) : NodeOutcome;
+    public sealed record Interrupted(string Reason, string? Output = null, DateTime? ResetAt = null) : NodeOutcome;
 
     /// <summary>
     /// Node is awaiting an external action (human response, webhook). The

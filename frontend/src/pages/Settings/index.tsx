@@ -463,9 +463,10 @@ export default function Settings() {
           >
             When the AI provider stops a step — a usage or session limit, a busy provider — the run
             waits in Human Feedback for you to click <strong>Resume</strong>. Turn this on to have
-            ILD try the resume for you instead, waiting longer before each further attempt. After a
-            few tries it stops and leaves the run for you — resuming it yourself gives it a fresh
-            set of tries, and you can do that at any point.
+            ILD try the resume for you instead — never before the reset time the provider named, and
+            waiting longer before each further attempt. After a few tries it stops and leaves the
+            run for you — resuming it yourself gives it a fresh set of tries, and you can do that at
+            any point.
           </ToggleSettingField>
         </div>
 

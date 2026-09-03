@@ -14,14 +14,17 @@ namespace ILD.Core.Services.Implementations;
 /// here touches a run and the park stays exactly what it has always been, one
 /// human Resume per interruption.
 ///
-/// <para><b>The retry is the schedule.</b> No reset time is parsed: the provider
-/// states it in its own prose ("resets 9:40am (UTC)") and building a timetable
-/// out of that would be ILD guessing at a contract no provider offers. Instead
-/// the resume itself is the probe — a provider still throttled interrupts the
-/// node again and the run simply re-parks, which is the next attempt's starting
-/// line. Attempts double from <see cref="FirstRetryDelay"/> so the sequence
-/// spans the hours a session window actually lasts rather than hammering the
-/// first five minutes.</para>
+/// <para><b>Wait for the stated reset, then back off from there.</b> When the
+/// notice named a time it can trust — "resets 9:40am (UTC)", read at park time
+/// into <c>LoopRun.ThrottleResetAt</c> — no attempt fires before it: an attempt
+/// spent inside a window the provider has already told us about is one the run
+/// does not get back. It is a floor and not a trigger, though, because the
+/// provider's prose is not a contract: the doubling backoff still decides how
+/// long after that deadline to ask, and a notice that named no time leaves the
+/// backoff to schedule alone. Either way the resume itself is the probe — a
+/// provider still throttled interrupts the node again and the run simply
+/// re-parks, which is the next attempt's starting line, this time with whatever
+/// reset the fresh notice states.</para>
 ///
 /// <para><b>Bounded, because a resume is not a human touch.</b>
 /// <c>ResumeFromHaltAsync</c> refills the AI traversal budget (ADR-0018) on the
@@ -143,11 +146,19 @@ public sealed class ThrottledRunResumeSweeper : BackgroundService
             }
 
             var parkedAt = run.UpdatedAt ?? run.StartedAt ?? run.CreatedAt;
-            if (parkedAt + FirstRetryDelay * Math.Pow(2, run.ThrottleAutoResumeCount) > now) continue;
+            var backoffDue = parkedAt + FirstRetryDelay * Math.Pow(2, run.ThrottleAutoResumeCount);
+            // The provider's own deadline is a floor, never a trigger: when it
+            // told us the limit lifts at 7:10pm, nothing before then is worth
+            // spending an attempt on, but the backoff still decides how long
+            // after that we ask. A notice that named no time (or none this could
+            // trust) leaves the backoff alone, exactly as before.
+            var due = run.ThrottleResetAt is DateTime resetAt && resetAt > backoffDue ? resetAt : backoffDue;
+            if (due > now) continue;
 
             _log.LogInformation(
-                "Auto-resuming throttle-parked run {RunId} (automatic resume {Attempt} of {Max} since a human touched it, parked since {ParkedAt:o})",
-                run.Id, run.ThrottleAutoResumeCount + 1, MaxAutomaticResumes, parkedAt);
+                "Auto-resuming throttle-parked run {RunId} (automatic resume {Attempt} of {Max} since a human touched it, parked since {ParkedAt:o}, provider reset {ResetAt})",
+                run.Id, run.ThrottleAutoResumeCount + 1, MaxAutomaticResumes, parkedAt,
+                run.ThrottleResetAt?.ToString("o") ?? "unstated");
             try
             {
                 await _engine.ResumeFromHaltAsync(run.Id, AutomaticResumeNote, automatic: true);

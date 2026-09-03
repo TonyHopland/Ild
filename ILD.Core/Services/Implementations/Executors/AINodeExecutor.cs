@@ -289,8 +289,16 @@ public sealed class AINodeExecutor : INodeExecutor
                 // this instance has not seen it. A failed reload leaves the
                 // pre-node value, which promises the less of the two Resumes.
                 await ReloadRunAsync(sp, ctx.Run);
+                // The notice usually says when the limit lifts ("resets 9:40am
+                // (UTC)"). Read here, where the provider's words are still in
+                // hand, so the park can carry an instant rather than the engine
+                // re-reading prose later.
+                var resetAt = AiFailureClassifier.TryParseResetAt(
+                    result.Output, result.Error, DateTime.UtcNow, out var parsed)
+                    ? parsed
+                    : (DateTime?)null;
                 yield return new NodeOutcome.Interrupted(
-                    InterruptedReason(ctx.Run.CurrentAiSessionId, result.Error), result.Output);
+                    InterruptedReason(ctx.Run.CurrentAiSessionId, result.Error), result.Output, resetAt);
                 yield break;
             }
             yield return new NodeOutcome.Fail(EdgeType.OnFailure, result.Error ?? "AI adapter failed", result.Output);

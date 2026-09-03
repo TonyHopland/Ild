@@ -117,6 +117,18 @@ public class LoopRun : IHasUpdatedAt
     /// </summary>
     public int ThrottleAutoResumeCount { get; set; }
 
+    /// <summary>
+    /// When the provider said the limit behind a Provider Interruption park
+    /// lifts, in UTC, as read off its own notice ("resets 9:40am (UTC)"). Null
+    /// when the notice named no time, or named one that could not be trusted —
+    /// most providers state a zone only sometimes. Written with every such park
+    /// and cleared with the halt, so it never describes an older interruption
+    /// than the one the run is sitting in. It is a floor on the automatic retry,
+    /// never a schedule of its own: nothing fires because this time arrived,
+    /// only later than it.
+    /// </summary>
+    public DateTime? ThrottleResetAt { get; set; }
+
     public int NextEventSeq { get; set; }
 
     public DateTime? StartedAt { get; set; }

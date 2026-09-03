@@ -98,20 +98,39 @@ Resume. That is the accepted cost: a throttled run needs one human Resume per
 interruption. Nothing here needs a migration — `HaltReason` is an existing int
 column.
 
-## Amendment: that retry exists now, off by default, and parses nothing
+## Amendment: that retry exists now, off by default, and does read the stated reset
 
 The bounded retry declined above is available as the `throttle.autoResume` app
-setting. The reasoning stands where it mattered: the setting is **off** by
-default, so the shipped behaviour is unchanged, and the half that was actually
-objectionable — parsing "resets 9:40am (UTC)" into a schedule — is still not
-done. The retry is the probe instead. `ThrottledRunResumeSweeper` resumes an
-eligible park through the ordinary `ResumeFromHaltAsync`, and a provider that is
-still throttled interrupts the node again, re-parking the run for the next
-attempt. Delays double from ten minutes and stop after five automatic resumes,
+setting. The reasoning stands where it mattered most: the setting is **off** by
+default, so the shipped behaviour is unchanged for anyone who does not ask for
+this. `ThrottledRunResumeSweeper` resumes an eligible park through the ordinary
+`ResumeFromHaltAsync`, and a provider that is still throttled interrupts the
+node again, re-parking the run for the next attempt. Delays double from ten
+minutes and stop after five automatic resumes,
 which spans the shape of a session window without spinning against a limit that
 is not going to lift. What remains an operator's judgement is whether a wasted
 round-trip costs them less than a run sitting idle overnight; the default
 answers that the same way this ADR did.
+
+**The reset time is read after all**, which is the part of the decision above
+that did not survive contact with the feature: when the provider has already
+said "resets 7:10pm (UTC)", firing before then spends one of five attempts on a
+refusal we were told to expect. `AiFailureClassifier.TryParseResetAt` reads it
+at park time onto `LoopRun.ThrottleResetAt` (one migration), and the sweeper
+treats it as a **floor** under the backoff, never as a trigger — nothing fires
+because the stated time arrived, only later than it. So the objection stands in
+the form it was actually about: ILD still does not build a timetable out of
+provider prose, and a notice it cannot read leaves the retry ladder to schedule
+alone, exactly as before.
+
+What keeps that from becoming the guesswork this ADR declined is refusing the
+ambiguous readings. Only a time the provider stamped UTC is taken, plus an
+unambiguous "try again in 20 minutes"; a bare "resets 3pm" is left alone,
+because the zone it means is the reader's and guessing west idles a run for
+hours it never had to wait. Anything further out than twelve hours is dropped
+too — at that distance a misread twelve-hour clock is likelier than a real
+window. Every unread case costs one early attempt, which the ladder already
+absorbs; the read cases are the ones where waiting was free.
 
 Both the delay and the bound are read off automatic resumes spent **since a
 human last touched the run**, not since the current interruption — the same
