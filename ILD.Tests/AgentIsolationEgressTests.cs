@@ -54,7 +54,11 @@ public class AgentIsolationEgressTests
         var header = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(uri.UserInfo));
 
         Assert.Equal(id, EgressProxy.ReadProviderScope(header));
-        Assert.Null(EgressProxy.ReadProviderScope("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("user:not-a-guid"))));
+        Assert.Null(EgressProxy.ReadProviderScope("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("provider:not-a-guid"))));
+        // Credentials some other tool put on the URL never attribute a provider,
+        // whatever their password looks like.
+        Assert.Null(EgressProxy.ReadProviderScope("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes($"someone:{id}"))));
+        Assert.Null(EgressProxy.ReadProviderScope("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(id.ToString()))));
         Assert.Null(EgressProxy.ReadProviderScope("Bearer abc"));
         Assert.Null(EgressProxy.ReadProviderScope("Basic %%%"));
     }

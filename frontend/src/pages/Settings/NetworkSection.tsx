@@ -8,6 +8,7 @@ import {
 } from "../../services/auth";
 import type {
   AiProvider,
+  NetworkDecision,
   NetworkListKind,
   NetworkLogEntry,
   NetworkMode,
@@ -22,6 +23,23 @@ const MODES: { value: NetworkMode; label: string; help: string }[] = [
 ];
 
 const LOG_TAKE = 200;
+
+const DECISIONS: NetworkDecision[] = ["Allowed", "Blocked", "Advisory"];
+
+/**
+ * A log line arrives as a name from the REST API and must be one from the hub
+ * too, but the hub has sent enums as their ordinal before; accept both so a
+ * mismatch degrades to a readable row rather than a crash.
+ */
+function normalizeDecision(value: unknown): NetworkDecision {
+  if (typeof value === "number") return DECISIONS[value] ?? "Advisory";
+  const name = DECISIONS.find((d) => d.toLowerCase() === String(value).toLowerCase());
+  return name ?? "Advisory";
+}
+
+function normalizeLogEntry(entry: NetworkLogEntry): NetworkLogEntry {
+  return { ...entry, decision: normalizeDecision(entry.decision) };
+}
 
 function isMode(value: string): value is NetworkMode {
   return value === "off" || value === "whitelist" || value === "blacklist";
@@ -165,7 +183,7 @@ export default function NetworkSection() {
 
   const refreshLog = useCallback(async () => {
     try {
-      setLog(await networkService.getLog(LOG_TAKE));
+      setLog((await networkService.getLog(LOG_TAKE)).map(normalizeLogEntry));
       setLogError(null);
     } catch (err) {
       setLogError(describeError(err, "Failed to load the network log."));
@@ -202,9 +220,8 @@ export default function NetworkSection() {
         .catch(() => {});
     };
     const onLogAppended = (message: { payload: NetworkLogEntry }) => {
-      setLog((prev) =>
-        [message.payload, ...prev.filter((e) => e.id !== message.payload.id)].slice(0, LOG_TAKE),
-      );
+      const entry = normalizeLogEntry(message.payload);
+      setLog((prev) => [entry, ...prev.filter((e) => e.id !== entry.id)].slice(0, LOG_TAKE));
     };
     const onLogCleared = () => setLog([]);
 

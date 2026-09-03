@@ -228,6 +228,24 @@ describe("Network settings", () => {
     );
   });
 
+  test("a decision that arrives as a number still renders as its name", async () => {
+    mockServices();
+    render(<NetworkSection />);
+    await screen.findByText("registry.npmjs.org");
+
+    emit("NetworkLogAppended", {
+      id: "l3",
+      host: "numeric.example",
+      port: 443,
+      timestamp: "2026-09-02T12:02:00Z",
+      decision: 1,
+      aiProviderId: null,
+    });
+
+    const row = (await screen.findByText("numeric.example")).closest("tr")!;
+    expect(within(row).getByText("Blocked")).toBeTruthy();
+  });
+
   test("a load failure is shown and cleared by the next successful load", async () => {
     mockServices();
     vi.spyOn(services.networkService, "getEntries")

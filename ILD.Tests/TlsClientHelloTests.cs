@@ -41,6 +41,27 @@ public class TlsClientHelloTests
         return record.ToArray();
     }
 
+    /// <summary>A ClientHello carrying exactly these bytes as its server_name extension payload.</summary>
+    private static byte[] BuildWithRawServerNameExtension(byte[] payload)
+    {
+        var hello = new List<byte> { 0x03, 0x03 };
+        hello.AddRange(new byte[32]);
+        hello.Add(0);
+        hello.AddRange(new byte[] { 0x00, 0x02, 0x13, 0x01 });
+        hello.AddRange(new byte[] { 0x01, 0x00 });
+        var extensions = new List<byte> { 0x00, 0x00 };
+        extensions.AddRange(BigEndian16(payload.Length));
+        extensions.AddRange(payload);
+        hello.AddRange(BigEndian16(extensions.Count));
+        hello.AddRange(extensions);
+        var handshake = new List<byte> { 0x01, (byte)(hello.Count >> 16), (byte)(hello.Count >> 8), (byte)hello.Count };
+        handshake.AddRange(hello);
+        var record = new List<byte> { 0x16, 0x03, 0x01 };
+        record.AddRange(BigEndian16(handshake.Count));
+        record.AddRange(handshake);
+        return record.ToArray();
+    }
+
     private static byte[] BigEndian16(int value) => new[] { (byte)(value >> 8), (byte)value };
 
     [Fact]
@@ -51,6 +72,19 @@ public class TlsClientHelloTests
         Assert.True(TlsClientHello.StartsHandshake(record));
         Assert.Equal(record.Length, TlsClientHello.RecordLength(record));
         Assert.Equal("api.example.com", TlsClientHello.ReadServerName(record));
+    }
+
+    [Fact]
+    public void Bytes_past_the_declared_server_name_list_are_not_a_name()
+    {
+        // A server_name extension whose list says it is empty, followed by a
+        // well-formed host_name entry that the list length does not cover.
+        var stray = Encoding.ASCII.GetBytes("stray.example");
+        var extension = new List<byte> { 0x00, 0x00, 0x00 , (byte)stray.Length };
+        extension.AddRange(stray);
+        var record = BuildWithRawServerNameExtension(extension.ToArray());
+
+        Assert.Null(TlsClientHello.ReadServerName(record));
     }
 
     [Fact]

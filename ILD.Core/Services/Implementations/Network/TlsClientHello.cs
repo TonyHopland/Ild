@@ -80,7 +80,7 @@ public static class TlsClientHello
             var nameType = extension[pos];
             var nameLength = BinaryPrimitives.ReadUInt16BigEndian(extension.Slice(pos + 1, 2));
             pos += 3;
-            if (nameType == 0 && pos + nameLength <= extension.Length)
+            if (nameType == 0 && pos + nameLength <= end)
                 return System.Text.Encoding.ASCII.GetString(extension.Slice(pos, nameLength));
             pos += nameLength;
         }

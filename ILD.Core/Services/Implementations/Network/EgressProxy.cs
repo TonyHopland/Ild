@@ -360,7 +360,9 @@ public sealed class EgressProxy : BackgroundService
 
     /// <summary>
     /// The provider a launch was made for, carried as the Basic password of the
-    /// proxy URL (<see cref="EgressProxyOptions.ClientUrl"/>).
+    /// proxy URL (<see cref="EgressProxyOptions.ClientUrl"/>) behind the fixed
+    /// <see cref="EgressProxyOptions.ScopeUser"/> name. Credentials of any other
+    /// shape are somebody else's and attribute nothing.
     /// </summary>
     internal static Guid? ReadProviderScope(string proxyAuthorization)
     {
@@ -370,8 +372,8 @@ public sealed class EgressProxy : BackgroundService
         {
             var credentials = Encoding.UTF8.GetString(Convert.FromBase64String(parts[1]));
             var colon = credentials.IndexOf(':');
-            var candidate = colon >= 0 ? credentials[(colon + 1)..] : credentials;
-            return Guid.TryParse(candidate, out var id) ? id : null;
+            if (colon < 0 || !credentials.AsSpan(0, colon).SequenceEqual(EgressProxyOptions.ScopeUser)) return null;
+            return Guid.TryParse(credentials.AsSpan(colon + 1), out var id) ? id : null;
         }
         catch (FormatException)
         {

@@ -40,6 +40,11 @@ public record ChatLoopUpdatePayload(Guid ChatSessionId, string Document);
 
 public record NetworkPolicyChangedPayload();
 
-public record NetworkLogAppendedPayload(Guid Id, string Host, int Port, DateTime Timestamp, NetworkDecision Decision, Guid? AiProviderId);
+/// <summary>
+/// <paramref name="Decision"/> is the <see cref="NetworkDecision"/> name, not the
+/// enum: the hub serialises enums as numbers where the REST API sends names, and
+/// the Settings page reads one shape from both.
+/// </summary>
+public record NetworkLogAppendedPayload(Guid Id, string Host, int Port, DateTime Timestamp, string Decision, Guid? AiProviderId);
 
 public record NetworkLogClearedPayload();
