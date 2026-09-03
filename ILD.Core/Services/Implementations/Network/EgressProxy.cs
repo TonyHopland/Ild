@@ -303,6 +303,7 @@ public sealed class EgressProxy : BackgroundService
         Guid? provider = null;
         string? hostHeader = null;
         var forwarded = new StringBuilder();
+        var sawHostHeader = false;
 
         foreach (var line in lines.Skip(1))
         {
@@ -320,7 +321,10 @@ public sealed class EgressProxy : BackgroundService
                 || name.Equals("Connection", StringComparison.OrdinalIgnoreCase))
                 continue;
             if (name.Equals("Host", StringComparison.OrdinalIgnoreCase))
+            {
                 hostHeader = value;
+                sawHostHeader = true;
+            }
             forwarded.Append(line).Append("\r\n");
         }
 
@@ -350,8 +354,11 @@ public sealed class EgressProxy : BackgroundService
             return null;
         }
 
+        // An absolute-form request may legitimately omit Host (the authority is in
+        // the target); the origin-form request the upstream gets may not.
         var headText = new StringBuilder()
             .Append(method).Append(' ').Append(originTarget).Append(' ').Append(version).Append("\r\n")
+            .Append(sawHostHeader ? string.Empty : "Host: " + hostHeader + "\r\n")
             .Append(forwarded)
             .Append("Connection: close\r\n\r\n")
             .ToString();

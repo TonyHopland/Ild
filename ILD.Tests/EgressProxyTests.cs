@@ -520,3 +520,47 @@ public sealed class EgressPolicyInvalidationTests
         public Task UpsertAsync(string key, string value, CancellationToken ct = default) => throw new NotSupportedException();
     }
 }
+
+public sealed class EgressProxyParseTests
+{
+    private static ArraySegment<byte> Head(string text) => new(Encoding.ASCII.GetBytes(text));
+
+    private static string Forwarded(string request)
+        => Encoding.ASCII.GetString(EgressProxy.ParseRequest(Head(request))!.ForwardedHead);
+
+    [Fact]
+    public void An_absolute_form_request_without_Host_gets_one_from_its_target()
+    {
+        var head = Forwarded("GET http://api.example.com:8080/v1/things?x=1 HTTP/1.1\r\nAccept: */*\r\n\r\n");
+
+        Assert.StartsWith("GET /v1/things?x=1 HTTP/1.1\r\nHost: api.example.com:8080\r\n", head);
+        Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(head, "(?m)^Host: ").Count);
+        Assert.EndsWith("Connection: close\r\n\r\n", head);
+    }
+
+    [Fact]
+    public void A_default_port_target_yields_a_bare_Host()
+    {
+        Assert.Contains("\r\nHost: api.example.com\r\n", Forwarded("GET http://api.example.com/ HTTP/1.1\r\n\r\n"));
+    }
+
+    [Fact]
+    public void A_client_supplied_Host_is_kept_and_not_doubled()
+    {
+        var head = Forwarded("GET http://api.example.com/ HTTP/1.1\r\nHost: api.example.com\r\nProxy-Connection: keep-alive\r\n\r\n");
+
+        Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(head, "(?m)^Host: ").Count);
+        Assert.DoesNotContain("Proxy-Connection", head);
+    }
+
+    [Fact]
+    public void Proxy_credentials_are_read_and_never_forwarded()
+    {
+        var id = Guid.NewGuid();
+        var auth = Convert.ToBase64String(Encoding.UTF8.GetBytes($"provider:{id}"));
+        var request = EgressProxy.ParseRequest(Head($"GET http://api.example.com/ HTTP/1.1\r\nProxy-Authorization: Basic {auth}\r\n\r\n"))!;
+
+        Assert.Equal(id, request.AiProviderId);
+        Assert.DoesNotContain("Proxy-Authorization", Encoding.ASCII.GetString(request.ForwardedHead));
+    }
+}

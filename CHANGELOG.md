@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Limit which hosts the coding agent may reach, from Settings: a whitelist, a blacklist, and a live log of everywhere it went.** Grant the container `NET_ADMIN` for the limit to be enforced rather than advisory; Settings tells you which you have.
+- **Limit which hosts the coding agent may reach, from Settings: a whitelist, a blacklist, and a live log of everywhere it went.**
 
 - **Run work items against Azure DevOps repositories, the same way you already can against GitHub and Forgejo ones.**
 
