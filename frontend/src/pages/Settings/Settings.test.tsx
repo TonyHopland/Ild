@@ -243,6 +243,80 @@ describe("Settings numeric fields", () => {
   });
 });
 
+describe("Settings automatic throttle resume", () => {
+  test("shows the saved value and is off when the server says so", async () => {
+    vi.spyOn(authServices.settingsService, "get").mockImplementation(async (key: string) => ({
+      key,
+      value: key === authServices.SchedulerSettingKeys.ThrottleAutoResume ? "false" : "30",
+    }));
+
+    render(
+      <MemoryRouter>
+        <Settings />
+      </MemoryRouter>,
+    );
+
+    const toggle = (await screen.findByRole("checkbox", {
+      name: /resume throttled runs automatically/i,
+    })) as HTMLInputElement;
+    await waitFor(() => expect(toggle.checked).toBe(false));
+  });
+
+  test("saves the toggle the moment it is ticked", async () => {
+    vi.spyOn(authServices.settingsService, "get").mockImplementation(async (key: string) => ({
+      key,
+      value: "false",
+    }));
+    const put = vi.spyOn(authServices.settingsService, "put").mockResolvedValue({
+      key: authServices.SchedulerSettingKeys.ThrottleAutoResume,
+      value: "true",
+    });
+
+    render(
+      <MemoryRouter>
+        <Settings />
+      </MemoryRouter>,
+    );
+
+    const toggle = (await screen.findByRole("checkbox", {
+      name: /resume throttled runs automatically/i,
+    })) as HTMLInputElement;
+    fireEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(put).toHaveBeenCalledWith(
+        authServices.SchedulerSettingKeys.ThrottleAutoResume,
+        "true",
+      );
+    });
+    expect(toggle.checked).toBe(true);
+  });
+
+  test("puts the box back when the save fails", async () => {
+    vi.spyOn(authServices.settingsService, "get").mockImplementation(async (key: string) => ({
+      key,
+      value: "false",
+    }));
+    vi.spyOn(authServices.settingsService, "put").mockRejectedValue(
+      new Error("Server unreachable"),
+    );
+
+    render(
+      <MemoryRouter>
+        <Settings />
+      </MemoryRouter>,
+    );
+
+    const toggle = (await screen.findByRole("checkbox", {
+      name: /resume throttled runs automatically/i,
+    })) as HTMLInputElement;
+    fireEvent.click(toggle);
+
+    await screen.findByText("Server unreachable");
+    expect(toggle.checked).toBe(false);
+  });
+});
+
 describe("Settings notifications", () => {
   test("shows notification toggle enabled by default", () => {
     render(

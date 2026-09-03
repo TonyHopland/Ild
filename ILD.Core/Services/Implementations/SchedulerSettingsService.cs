@@ -37,6 +37,13 @@ public sealed class SchedulerSettingsService : ISchedulerSettingsService
         return AppSettingKeys.DefaultPrHeartbeatSeconds;
     }
 
+    public async Task<bool> GetThrottleAutoResumeAsync(CancellationToken ct = default)
+    {
+        var s = await _store.GetByKeyAsync(AppSettingKeys.ThrottleAutoResume, ct);
+        if (s != null && bool.TryParse(s.Value, out var v)) return v;
+        return AppSettingKeys.DefaultThrottleAutoResume;
+    }
+
     public async Task<int> GetMaxAiTraversalsAsync(CancellationToken ct = default)
     {
         var s = await _store.GetByKeyAsync(AppSettingKeys.MaxAiTraversals, ct);

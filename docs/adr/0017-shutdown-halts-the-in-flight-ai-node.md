@@ -97,3 +97,27 @@ the park shows the adapter's raw output and a person decides when to click
 Resume. That is the accepted cost: a throttled run needs one human Resume per
 interruption. Nothing here needs a migration — `HaltReason` is an existing int
 column.
+
+## Amendment: that retry exists now, off by default, and parses nothing
+
+The bounded retry declined above is available as the `throttle.autoResume` app
+setting. The reasoning stands where it mattered: the setting is **off** by
+default, so the shipped behaviour is unchanged, and the half that was actually
+objectionable — parsing "resets 9:40am (UTC)" into a schedule — is still not
+done. The retry is the probe instead. `ThrottledRunResumeSweeper` resumes an
+eligible park through the ordinary `ResumeFromHaltAsync`, and a provider that is
+still throttled interrupts the node again, re-parking the run for the next
+attempt. Delays double from ten minutes and stop after five consecutive tries,
+which spans the shape of a session window without spinning against a limit that
+is not going to lift. What remains an operator's judgement is whether a wasted
+round-trip costs them less than a run sitting idle overnight; the default
+answers that the same way this ADR did.
+
+Two guards keep it from eroding decisions taken elsewhere. Only
+`HaltReason.Throttled` is eligible, so a human's Halt, a `Shutdown` park and a
+`MaxAiTraversals` park are untouched. And an automatic resume is explicitly not
+a human touch: it is the one caller of `ResumeFromHaltAsync` that does **not**
+refill the AI traversal budget (ADR-0018), because a run left to itself must not
+buy a fresh budget every time its provider hiccups. The count of consecutive
+automatic resumes lives on the run (`LoopRun.ThrottleAutoResumeCount`, one
+migration) and is refilled by exactly what refills that budget.

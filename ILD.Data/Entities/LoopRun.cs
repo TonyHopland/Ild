@@ -106,6 +106,17 @@ public class LoopRun : IHasUpdatedAt
     /// </summary>
     public int AiTraversalCount { get; set; }
 
+    /// <summary>
+    /// Automatic resumes of a Provider Interruption park this run has taken
+    /// since a human last touched it — the opt-in <c>throttle.autoResume</c>
+    /// retry, bounded so a provider that stays throttled for hours parks the
+    /// run for a person instead of being retried forever. Refilled by exactly
+    /// what refills <see cref="AiTraversalCount"/>, and deliberately by nothing
+    /// else: an automatic resume is not a human touch, so it must not hand
+    /// itself a fresh budget of either kind.
+    /// </summary>
+    public int ThrottleAutoResumeCount { get; set; }
+
     public int NextEventSeq { get; set; }
 
     public DateTime? StartedAt { get; set; }

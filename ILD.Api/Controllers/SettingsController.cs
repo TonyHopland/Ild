@@ -31,6 +31,7 @@ public class SettingsController : ControllerBase
         AppSettingKeys.RunRetentionDays,
         AppSettingKeys.PrHeartbeatSeconds,
         AppSettingKeys.MaxAiTraversals,
+        AppSettingKeys.ThrottleAutoResume,
         AppSettingKeys.SessionIdleDays,
         AppSettingKeys.SessionMaxDays,
         AppSettingKeys.NetworkMode,
@@ -77,6 +78,8 @@ public class SettingsController : ControllerBase
             map[AppSettingKeys.PrHeartbeatSeconds] = AppSettingKeys.DefaultPrHeartbeatSeconds.ToString();
         if (!map.ContainsKey(AppSettingKeys.MaxAiTraversals))
             map[AppSettingKeys.MaxAiTraversals] = AppSettingKeys.DefaultMaxAiTraversals.ToString();
+        if (!map.ContainsKey(AppSettingKeys.ThrottleAutoResume))
+            map[AppSettingKeys.ThrottleAutoResume] = AppSettingKeys.DefaultThrottleAutoResume.ToString().ToLowerInvariant();
         if (!map.ContainsKey(AppSettingKeys.SessionIdleDays))
             map[AppSettingKeys.SessionIdleDays] = AppSettingKeys.DefaultSessionIdleDays.ToString();
         if (!map.ContainsKey(AppSettingKeys.SessionMaxDays))
@@ -136,6 +139,7 @@ public class SettingsController : ControllerBase
         AppSettingKeys.RunRetentionDays => AppSettingKeys.DefaultRunRetentionDays.ToString(),
         AppSettingKeys.PrHeartbeatSeconds => AppSettingKeys.DefaultPrHeartbeatSeconds.ToString(),
         AppSettingKeys.MaxAiTraversals => AppSettingKeys.DefaultMaxAiTraversals.ToString(),
+        AppSettingKeys.ThrottleAutoResume => AppSettingKeys.DefaultThrottleAutoResume.ToString().ToLowerInvariant(),
         AppSettingKeys.SessionIdleDays => AppSettingKeys.DefaultSessionIdleDays.ToString(),
         AppSettingKeys.SessionMaxDays => AppSettingKeys.DefaultSessionMaxDays.ToString(),
         AppSettingKeys.NetworkMode => AppSettingKeys.DefaultNetworkMode,
@@ -178,6 +182,13 @@ public class SettingsController : ControllerBase
                 if (!int.TryParse(value, out var aiSteps) || aiSteps < 1 || aiSteps > 1000)
                 {
                     error = "ai.maxTraversals must be an integer between 1 and 1000";
+                    return false;
+                }
+                break;
+            case AppSettingKeys.ThrottleAutoResume:
+                if (!bool.TryParse(value, out _))
+                {
+                    error = "throttle.autoResume must be 'true' or 'false'";
                     return false;
                 }
                 break;

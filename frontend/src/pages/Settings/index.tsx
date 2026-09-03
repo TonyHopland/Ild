@@ -142,6 +142,69 @@ function NumericSettingField({
   );
 }
 
+interface ToggleSettingFieldProps {
+  /** The app-setting key this checkbox reads and writes. Also the input's id. */
+  settingKey: string;
+  label: string;
+  /** Help text under the checkbox. */
+  children?: React.ReactNode;
+}
+
+/**
+ * One boolean app setting, saved the moment it is ticked — there is nothing to
+ * validate and nothing to draft, so a Save button would only be a second step
+ * between the user and the one bit they came to change. A save that fails puts
+ * the box back where it was and says why, rather than leaving the UI claiming a
+ * setting the server never took.
+ */
+function ToggleSettingField({ settingKey, label, children }: ToggleSettingFieldProps) {
+  const [checked, setChecked] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void settingsService
+      .get(settingKey)
+      .then((s) => setChecked(s.value === "true"))
+      // Unreachable API: leave it showing off rather than a value we invented.
+      .catch(() => {});
+  }, [settingKey]);
+
+  const save = async (next: boolean) => {
+    setChecked(next);
+    setError(null);
+    try {
+      await settingsService.put(settingKey, next ? "true" : "false");
+    } catch (err) {
+      setChecked(!next);
+      setError(err instanceof Error ? err.message : "Failed to save.");
+    }
+  };
+
+  return (
+    <div className="form-group">
+      <label>
+        <input
+          id={settingKey}
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => void save(e.target.checked)}
+        />{" "}
+        {label}
+      </label>
+      {error && (
+        <div className="form-error" style={{ color: "#f87171", marginTop: "0.25rem" }}>
+          {error}
+        </div>
+      )}
+      {children && (
+        <p className="settings-about-desc" style={{ marginTop: "0.5rem" }}>
+          {children}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function Settings() {
   const { user } = useAuth();
   const chatEnabled = useChatEnabled();
@@ -387,6 +450,20 @@ export default function Settings() {
             waits in Human Feedback, where you can continue it, continue with guidance, or abandon
             it.
           </NumericSettingField>
+        </div>
+
+        <div className="settings-section">
+          <h2 className="settings-section-title">Provider interruptions</h2>
+          <ToggleSettingField
+            settingKey={SchedulerSettingKeys.ThrottleAutoResume}
+            label="Resume throttled runs automatically"
+          >
+            When the AI provider stops a step — a usage or session limit, a busy provider — the run
+            waits in Human Feedback for you to click <strong>Resume</strong>. Turn this on to have
+            ILD try the resume for you instead, waiting longer between each attempt. After a few
+            tries it stops and leaves the run for you, and you can still resume it yourself at any
+            point.
+          </ToggleSettingField>
         </div>
 
         <NetworkSection />

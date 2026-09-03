@@ -84,8 +84,14 @@ public interface ILoopEngine
     /// as the next message to the same agent session. Re-runs the parked AI
     /// node. Requires the run to be <c>WaitingHuman</c> and <c>IsHalted</c> —
     /// distinct from <see cref="ResumeRunAsync"/>, which refuses WaitingHuman runs.
+    ///
+    /// <paramref name="automatic"/> says nobody asked for this resume — the
+    /// opt-in retry of a Provider Interruption park. It is what stops a resume
+    /// ILD gave itself from counting as the human touch that refills the AI
+    /// traversal budget, and it is counted on the run so those retries stay
+    /// bounded. Every other caller is a person and leaves it false.
     /// </summary>
-    Task ResumeFromHaltAsync(Guid runId, string? note);
+    Task ResumeFromHaltAsync(Guid runId, string? note, bool automatic = false);
 
     /// <summary>
     /// Park every run this process is driving for a host shutdown, then wait up

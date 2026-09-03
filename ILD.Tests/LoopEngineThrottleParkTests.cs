@@ -140,4 +140,59 @@ public class LoopEngineThrottleParkTests
         // captured session rather than start a fresh one.
         Assert.Equal(string.Empty, run.SteeringNote);
     }
+
+    [Fact]
+    public async Task An_automatic_resume_buys_no_fresh_traversal_budget_and_counts_itself()
+    {
+        using var h = ThrottlesEveryTime();
+        await h.RunAsync();
+        var parked = h.ReloadRun();
+        Assert.Equal(1, parked.AiTraversalCount);
+        Assert.Equal(0, parked.ThrottleAutoResumeCount);
+
+        await h.Engine.ResumeFromHaltAsync(h.RunId, "auto", automatic: true);
+        await h.WaitUntilIdleAsync();
+
+        var run = h.ReloadRun();
+        // The landmine ADR-0018 guards: a resume nobody asked for must not
+        // refill the budget that measures a run left to its own devices, or an
+        // unattended loop would buy a fresh 25 steps per provider hiccup.
+        Assert.Equal(2, run.AiTraversalCount);
+        Assert.Equal(1, run.ThrottleAutoResumeCount);
+        // Still throttled, so the run is back where it started — which is what
+        // makes the re-park the next attempt rather than a new situation.
+        Assert.Equal(HaltReason.Throttled, run.HaltReason);
+    }
+
+    [Fact]
+    public async Task A_human_resume_clears_the_streak_of_automatic_ones()
+    {
+        using var h = ThrottlesEveryTime();
+        await h.RunAsync();
+        await h.Engine.ResumeFromHaltAsync(h.RunId, "auto", automatic: true);
+        await h.WaitUntilIdleAsync();
+        Assert.Equal(1, h.ReloadRun().ThrottleAutoResumeCount);
+
+        await h.Engine.ResumeFromHaltAsync(h.RunId, "");
+        await h.WaitUntilIdleAsync();
+
+        var run = h.ReloadRun();
+        // A person is at the run again: both counters that measure its absence
+        // start over, so a steered run gets the full retry budget back too.
+        Assert.Equal(0, run.ThrottleAutoResumeCount);
+        Assert.Equal(1, run.AiTraversalCount);
+    }
+
+    private static LoopEngineHarness ThrottlesEveryTime()
+    {
+        var h = new LoopEngineHarness();
+        h.AddNode("ai", NodeType.AI, "Coder");
+        h.Registry.Register(new ScriptedExecutor(NodeType.AI,
+                new NodeOutcome.NodeStarting("do the work"),
+                new NodeOutcome.Interrupted(ParkReason, ProviderNotice))
+            .Then(new NodeOutcome.NodeStarting("do the work"), new NodeOutcome.Interrupted(ParkReason, ProviderNotice))
+            .Then(new NodeOutcome.NodeStarting("do the work"), new NodeOutcome.Interrupted(ParkReason, ProviderNotice)));
+        h.SeedRun("ai");
+        return h;
+    }
 }

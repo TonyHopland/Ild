@@ -396,7 +396,7 @@ public sealed class LoopEngine : ILoopEngine
         await _notifier.HaltedAsync(runId);
     }
 
-    public async Task ResumeFromHaltAsync(Guid runId, string? note)
+    public async Task ResumeFromHaltAsync(Guid runId, string? note, bool automatic = false)
     {
         using var scope = _sp.CreateScope();
         var sp = scope.ServiceProvider;
@@ -412,10 +412,21 @@ public sealed class LoopEngine : ILoopEngine
         // captured session; the executor consumes and clears it one-shot.
         run.SteeringNote = note ?? string.Empty;
         run.IsHalted = false;
-        // A person just acted, which is what the AI traversal budget counts the
-        // absence of. Not optional for a MaxAiTraversals park: without it
-        // "just continue" would re-trip the cap on the very next node.
-        run.AiTraversalCount = 0;
+        if (automatic)
+        {
+            // Nobody acted, so neither budget is refilled: the traversal cap
+            // (ADR-0018) keeps counting the unattended stretch this resume
+            // continues, and the streak of automatic resumes grows until the
+            // sweeper's bound leaves the run parked for a person.
+            run.ThrottleAutoResumeCount++;
+        }
+        else
+        {
+            // A person just acted, which is what the AI traversal budget counts
+            // the absence of. Not optional for a MaxAiTraversals park: without
+            // it "just continue" would re-trip the cap on the very next node.
+            ResetUnattendedCounters(run);
+        }
         // Clear the stamp with the halt: left set, the next halt a human presses
         // would look like a shutdown park and be auto-resumed out from under them.
         run.HaltReason = null;
@@ -478,7 +489,7 @@ public sealed class LoopEngine : ILoopEngine
         // interaction history lives in the EventLog, and the next park writes a
         // fresh reason — so nulling it here loses nothing.
         run.HumanFeedbackReason = null;
-        run.AiTraversalCount = 0;
+        ResetUnattendedCounters(run);
         var old = run.Status;
         run.Status = LoopRunStatus.Running;
         await loopRunStore.UpdateRunAsync(run);
@@ -525,7 +536,7 @@ public sealed class LoopEngine : ILoopEngine
         run.HaltReason = null;
         run.SteeringNote = null;
         run.HumanFeedbackReason = null;
-        run.AiTraversalCount = 0;
+        ResetUnattendedCounters(run);
         run.Status = LoopRunStatus.Running;
         run.IsPaused = false;
         await loopRunStore.UpdateRunAsync(run);
@@ -910,7 +921,7 @@ public sealed class LoopEngine : ILoopEngine
                         // what the AI traversal budget measures the absence of.
                         // Refill it here rather than only on the way back out, so
                         // the invariant holds for a parked run too.
-                        run.AiTraversalCount = 0;
+                        ResetUnattendedCounters(run);
                         // Reset the PR heartbeat baseline so the poller treats a
                         // state already true at park time (e.g. CI already red, or
                         // a still-red state on a re-park after a fix loop) as a
@@ -1119,6 +1130,20 @@ public sealed class LoopEngine : ILoopEngine
                 + "Continue, continue with guidance, or abandon the run.",
             store, sp.GetRequiredService<IWorkItemManager>());
         return ParkResult.Stop;
+    }
+
+    /// <summary>
+    /// Refill both counters that measure how far the run has got without a
+    /// person: the AI traversal budget (ADR-0018) and the streak of automatic
+    /// throttle resumes. They are refilled together everywhere because they
+    /// answer the same question — a human touched this run, or reached a gate
+    /// only a human opens — and one left behind would silently shorten the
+    /// other's budget on a run that had in fact been steered.
+    /// </summary>
+    private static void ResetUnattendedCounters(LoopRun run)
+    {
+        run.AiTraversalCount = 0;
+        run.ThrottleAutoResumeCount = 0;
     }
 
     /// <summary>

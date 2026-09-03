@@ -46,6 +46,16 @@ public static class AppSettingKeys
     public const int DefaultMaxAiTraversals = 25;
 
     /// <summary>
+    /// Whether ILD retries a run parked by a Provider Interruption
+    /// (<c>HaltReason.Throttled</c>) on its own, rather than leaving it for a
+    /// person to Resume. Off by default, and a run whose automatic retries run
+    /// out parks for a human anyway — which is what happens for every such park
+    /// while this is off.
+    /// </summary>
+    public const string ThrottleAutoResume = "throttle.autoResume";
+    public const bool DefaultThrottleAutoResume = false;
+
+    /// <summary>
     /// Days a sign-in survives without being used. Re-evaluated on every
     /// request, so lowering it signs idle devices out immediately. <c>0</c>
     /// disables idle expiry.
@@ -89,4 +99,7 @@ public interface ISchedulerSettingsService
 
     /// <summary>AI nodes a run may execute between human interactions (minimum 1).</summary>
     Task<int> GetMaxAiTraversalsAsync(CancellationToken ct = default);
+
+    /// <summary>Whether ILD retries a Provider Interruption park itself instead of a person.</summary>
+    Task<bool> GetThrottleAutoResumeAsync(CancellationToken ct = default);
 }

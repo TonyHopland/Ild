@@ -19,10 +19,13 @@ public enum HaltReason
     /// The AI provider interrupted the node — a usage or session limit, a 429,
     /// an overloaded provider, a dropped stream — and the engine parked the run
     /// rather than routing it onto the <c>on_failure</c> edge. Startup treats
-    /// this like <see cref="Human"/>, not <see cref="Shutdown"/>: nobody
+    /// this like <see cref="Human"/>, not <see cref="Shutdown"/>: it never
     /// auto-resumes it, because resuming before the provider's window resets
     /// just spends another round-trip to be throttled again. Waiting for the
-    /// reset is a judgement the person reading "resets 9:40am" makes.
+    /// reset is a judgement the person reading "resets 9:40am" makes — unless
+    /// they have handed it to ILD with the opt-in <c>throttle.autoResume</c>
+    /// setting, which retries the resume on a widening delay and then leaves
+    /// the run parked here anyway.
     /// </summary>
     Throttled = 2,
 

@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
@@ -254,6 +255,26 @@ public class AINodeExecutorThrottleParkTests
         // Appended after rendering: the note is the human's own words, not a
         // template field (ADR-0011).
         Assert.Equal("do the work\n\nuse {{the}} smaller model", Assert.Single(adapter.Calls).Prompt);
+    }
+
+    [Fact]
+    public async Task An_automatic_resume_continues_the_captured_session()
+    {
+        using var db = new TestDb();
+        var adapter = new ScriptedAdapter(_ => NodeExecutionResult.Ok("done"));
+        var sp = BuildServices(db, adapter);
+        // The note ILD writes when it resumes a throttle park itself. It has to
+        // read as the next turn of the interrupted session, because that is what
+        // the executor does with any non-null note — the node's own prompt is
+        // never re-sent.
+        var run = SeedRun(db, sessionId: "sess-auto-1",
+            steeringNote: ThrottledRunResumeSweeper.AutomaticResumeNote);
+
+        await RunAsync(sp, run);
+
+        var call = Assert.Single(adapter.Calls);
+        Assert.Equal("sess-auto-1", call.SessionId);
+        Assert.Equal(ThrottledRunResumeSweeper.AutomaticResumeNote, call.Prompt);
     }
 
     [Fact]
