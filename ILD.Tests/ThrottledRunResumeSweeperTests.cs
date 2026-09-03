@@ -130,8 +130,9 @@ public class ThrottledRunResumeSweeperTests
     public async Task Stops_after_the_bound_and_leaves_the_run_for_a_person()
     {
         using var db = new TestDb();
-        // Five attempts spent, and the run has been parked far longer than even
-        // the last (doubled) delay — the only thing holding it back is the bound.
+        // Five automatic resumes spent since anyone touched this run, and it has
+        // been parked far longer than even the last (doubled) delay — the only
+        // thing holding it back is the bound, and only a human clears that.
         SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow.AddDays(-1), autoResumeCount: 5);
         await EnableAsync(db);
         var engine = new Mock<ILoopEngine>();
@@ -142,11 +143,13 @@ public class ThrottledRunResumeSweeperTests
     }
 
     [Fact]
-    public async Task Backs_off_further_with_every_attempt_already_spent()
+    public async Task Backs_off_further_with_every_automatic_resume_already_spent()
     {
         using var db = new TestDb();
-        // 40 minutes parked: past the 10-minute first delay and the 20-minute
-        // second, but not the 80 minutes a run on its fourth attempt waits.
+        // 40 minutes parked: past the 10 minutes a run with nothing spent waits
+        // and the 20 a run with one does, but not the 80 that three buys. Spent
+        // resumes are counted since a human last touched the run, so this is
+        // also what an earlier, since-resolved interruption leaves behind.
         var parkedAt = DateTime.UtcNow.AddMinutes(-40);
         var due = SeedThrottleParkedRun(db, parkedAt, autoResumeCount: 1);
         var notDue = SeedThrottleParkedRun(db, parkedAt, autoResumeCount: 3);

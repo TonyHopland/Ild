@@ -262,6 +262,26 @@ describe("Settings automatic throttle resume", () => {
     await waitFor(() => expect(toggle.checked).toBe(false));
   });
 
+  test("reads a value the API stored in another casing as on", async () => {
+    // The backend parses this with bool.TryParse, so "True" is on everywhere
+    // else in the system.
+    vi.spyOn(authServices.settingsService, "get").mockImplementation(async (key: string) => ({
+      key,
+      value: key === authServices.SchedulerSettingKeys.ThrottleAutoResume ? "True" : "30",
+    }));
+
+    render(
+      <MemoryRouter>
+        <Settings />
+      </MemoryRouter>,
+    );
+
+    const toggle = (await screen.findByRole("checkbox", {
+      name: /resume throttled runs automatically/i,
+    })) as HTMLInputElement;
+    await waitFor(() => expect(toggle.checked).toBe(true));
+  });
+
   test("saves the toggle the moment it is ticked", async () => {
     vi.spyOn(authServices.settingsService, "get").mockImplementation(async (key: string) => ({
       key,

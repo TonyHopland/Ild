@@ -165,6 +165,34 @@ public class LoopEngineThrottleParkTests
     }
 
     [Fact]
+    public async Task Getting_past_the_interruption_does_not_refund_the_automatic_resume()
+    {
+        // The counter deliberately measures the unattended stretch, not the one
+        // interruption the retries were spent on: a run that auto-resumes, works
+        // on and is stopped again is further into its budget, not back at the
+        // start of a fresh one. Only a human refills it.
+        var h = new LoopEngineHarness();
+        h.AddNode("ai", NodeType.AI, "Coder");
+        h.AddNode("next", NodeType.Cmd);
+        h.AddEdge("ai", "next", EdgeType.OnSuccess);
+        h.Registry.Register(new ScriptedExecutor(NodeType.AI,
+                new NodeOutcome.NodeStarting("do the work"),
+                new NodeOutcome.Interrupted(ParkReason, ProviderNotice))
+            .Then(new NodeOutcome.NodeStarting("do the work"), new NodeOutcome.Terminal("done")));
+        h.Registry.Register(new ScriptedExecutor(NodeType.Cmd,
+            new NodeOutcome.NodeStarting(), new NodeOutcome.Terminal("carried on")));
+        h.SeedRun("ai");
+        using var harness = h;
+
+        await harness.RunAsync();
+        await harness.Engine.ResumeFromHaltAsync(harness.RunId, "auto", automatic: true);
+        await harness.WaitUntilIdleAsync();
+
+        // The AI node completed this time and the run moved on.
+        Assert.Equal(1, harness.ReloadRun().ThrottleAutoResumeCount);
+    }
+
+    [Fact]
     public async Task A_human_resume_clears_the_streak_of_automatic_ones()
     {
         using var h = ThrottlesEveryTime();

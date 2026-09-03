@@ -107,11 +107,21 @@ objectionable — parsing "resets 9:40am (UTC)" into a schedule — is still not
 done. The retry is the probe instead. `ThrottledRunResumeSweeper` resumes an
 eligible park through the ordinary `ResumeFromHaltAsync`, and a provider that is
 still throttled interrupts the node again, re-parking the run for the next
-attempt. Delays double from ten minutes and stop after five consecutive tries,
+attempt. Delays double from ten minutes and stop after five automatic resumes,
 which spans the shape of a session window without spinning against a limit that
 is not going to lift. What remains an operator's judgement is whether a wasted
 round-trip costs them less than a run sitting idle overnight; the default
 answers that the same way this ADR did.
+
+Both the delay and the bound are read off automatic resumes spent **since a
+human last touched the run**, not since the current interruption — the same
+window the traversal budget is measured over, deliberately, because they are one
+question asked twice. A run that auto-resumes twice, works for an hour and is
+then interrupted afresh waits longer and has fewer tries left than a run nobody
+has helped yet. That is the intended reading: an unattended run being stopped
+for the fifth time is a run whose provider is rationing it, and the answer to
+that is a person rather than a sixth retry. One human Resume restores both
+budgets.
 
 Two guards keep it from eroding decisions taken elsewhere. Only
 `HaltReason.Throttled` is eligible, so a human's Halt, a `Shutdown` park and a

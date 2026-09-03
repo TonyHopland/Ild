@@ -164,7 +164,10 @@ function ToggleSettingField({ settingKey, label, children }: ToggleSettingFieldP
   useEffect(() => {
     void settingsService
       .get(settingKey)
-      .then((s) => setChecked(s.value === "true"))
+      // Case-insensitive because the API validates with bool.TryParse: a value
+      // written as "True" is on to every backend reader, and a box showing it
+      // off would be the only thing in the system that disagrees.
+      .then((s) => setChecked(s.value.toLowerCase() === "true"))
       // Unreachable API: leave it showing off rather than a value we invented.
       .catch(() => {});
   }, [settingKey]);
@@ -460,9 +463,9 @@ export default function Settings() {
           >
             When the AI provider stops a step — a usage or session limit, a busy provider — the run
             waits in Human Feedback for you to click <strong>Resume</strong>. Turn this on to have
-            ILD try the resume for you instead, waiting longer between each attempt. After a few
-            tries it stops and leaves the run for you, and you can still resume it yourself at any
-            point.
+            ILD try the resume for you instead, waiting longer before each further attempt. After a
+            few tries it stops and leaves the run for you — resuming it yourself gives it a fresh
+            set of tries, and you can do that at any point.
           </ToggleSettingField>
         </div>
 

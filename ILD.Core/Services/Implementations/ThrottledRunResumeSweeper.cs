@@ -28,10 +28,19 @@ namespace ILD.Core.Services.Implementations;
 /// grounds that a person acted; an automatic resume must not, or an unattended
 /// run would buy a fresh budget every time the provider hiccuped. So the
 /// automatic resume leaves that budget alone and is counted on the run, and
-/// after <see cref="MaxAutomaticResumes"/> consecutive tries this stops and
-/// leaves the run parked for a person — the same place it would have been all
-/// along with the setting off. Both counters are refilled by the same human
-/// touch, so a steered run starts over with a full budget of each.</para>
+/// once <see cref="MaxAutomaticResumes"/> have been spent this stops and leaves
+/// the run parked for a person — the same place it would have been all along
+/// with the setting off.</para>
+///
+/// <para><b>Both budgets are spent per unattended stretch, not per
+/// interruption.</b> The count is refilled by exactly what refills the traversal
+/// budget — a human touch — and by nothing else, so a run that auto-resumes
+/// twice, works for an hour and is interrupted afresh is on its third attempt
+/// rather than its first: it waits longer and has fewer tries left. That is the
+/// deliberate reading of the same question both counters ask. A run nobody has
+/// looked at is a run whose provider is rationing it, and the answer to the
+/// fifth interruption in an unattended stretch is a person, not a sixth retry.
+/// One Resume from a human gives it a full set of tries again.</para>
 ///
 /// <para><b>Never any other park.</b> Only <see cref="HaltReason.Throttled"/> is
 /// eligible: a human's Halt is somebody standing at the run, a
@@ -45,17 +54,20 @@ public sealed class ThrottledRunResumeSweeper : BackgroundService
     private static readonly TimeSpan InitialDelay = TimeSpan.FromMinutes(1);
 
     /// <summary>
-    /// How long a run sits parked before the first automatic retry, doubling
-    /// per attempt: a provider that has just said "not now" will still say it a
-    /// minute later, and the first retry is the one most likely to be wasted.
+    /// How long a park waits before the retry, on a run with no automatic
+    /// resumes yet spent: a provider that has just said "not now" will still say
+    /// it a minute later, and the first retry is the one most likely to be
+    /// wasted. Doubles per resume already spent, so a run the provider keeps
+    /// stopping is asked less and less often.
     /// </summary>
     private static readonly TimeSpan FirstRetryDelay = TimeSpan.FromMinutes(10);
 
     /// <summary>
-    /// Consecutive automatic resumes before the run is left for a person. With
-    /// the doubling delay this covers roughly five hours — the shape of a
-    /// provider session window — and then stops rather than spinning against a
-    /// limit that is not going to lift.
+    /// Automatic resumes a run may spend before it is left for a person, counted
+    /// — like the traversal budget — since a human last touched it. Spent on one
+    /// park in a row, the doubling delay makes that roughly five hours of cover,
+    /// the shape of a provider session window, and then it stops rather than
+    /// spinning against a limit that is not going to lift.
     /// </summary>
     private const int MaxAutomaticResumes = 5;
 
@@ -125,7 +137,7 @@ public sealed class ThrottledRunResumeSweeper : BackgroundService
             if (run.ThrottleAutoResumeCount >= MaxAutomaticResumes)
             {
                 _log.LogDebug(
-                    "Run {RunId} stays parked: {Count} automatic resumes already spent on this interruption",
+                    "Run {RunId} stays parked for a person: {Count} automatic resumes spent since anyone touched it",
                     run.Id, run.ThrottleAutoResumeCount);
                 continue;
             }
@@ -134,7 +146,7 @@ public sealed class ThrottledRunResumeSweeper : BackgroundService
             if (parkedAt + FirstRetryDelay * Math.Pow(2, run.ThrottleAutoResumeCount) > now) continue;
 
             _log.LogInformation(
-                "Auto-resuming throttle-parked run {RunId} (attempt {Attempt} of {Max}, parked since {ParkedAt:o})",
+                "Auto-resuming throttle-parked run {RunId} (automatic resume {Attempt} of {Max} since a human touched it, parked since {ParkedAt:o})",
                 run.Id, run.ThrottleAutoResumeCount + 1, MaxAutomaticResumes, parkedAt);
             try
             {

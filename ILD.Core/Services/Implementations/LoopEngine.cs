@@ -416,8 +416,8 @@ public sealed class LoopEngine : ILoopEngine
         {
             // Nobody acted, so neither budget is refilled: the traversal cap
             // (ADR-0018) keeps counting the unattended stretch this resume
-            // continues, and the streak of automatic resumes grows until the
-            // sweeper's bound leaves the run parked for a person.
+            // continues, and the automatic resumes spent in that same stretch
+            // grow until the sweeper's bound leaves the run parked for a person.
             run.ThrottleAutoResumeCount++;
         }
         else
