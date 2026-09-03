@@ -614,9 +614,22 @@ export const analyticsService = {
   },
 };
 
+/**
+ * The live level is a Serilog switch nobody persists: it is readable and
+ * writable while the process runs, and returns to `startupLevel` on restart.
+ */
+export interface LogLevelStatus {
+  level: string;
+  startupLevel: string;
+  isOverride: boolean;
+}
+
 export const loggingService = {
-  setLevel: async (level: string): Promise<{ level: string }> => {
-    return api.put<{ level: string }>("/logging/level", { level });
+  getLevel: async (): Promise<LogLevelStatus> => {
+    return api.get<LogLevelStatus>("/logging/level");
+  },
+  setLevel: async (level: string): Promise<LogLevelStatus> => {
+    return api.put<LogLevelStatus>("/logging/level", { level });
   },
 };
 

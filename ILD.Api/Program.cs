@@ -73,6 +73,7 @@ try
             host.ShutdownTimeout = shutdown.HostShutdownTimeout);
 
     builder.Services.AddSingleton<LoggingLevelSwitch>(loggingLevelSwitch);
+    builder.Services.AddSingleton(new ILD.Api.Configuration.StartupLogLevel(initialLogLevel));
 
     builder.Services.AddControllers()
         .AddJsonOptions(o =>

@@ -149,6 +149,14 @@ function AppRoutes() {
             }
           />
           <Route
+            path="/settings/:section"
+            element={
+              <ProtectedRoute>
+                <Settings />
+              </ProtectedRoute>
+            }
+          />
+          <Route
             path="/repositories"
             element={
               <ProtectedRoute>
