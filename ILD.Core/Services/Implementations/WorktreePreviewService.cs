@@ -1378,7 +1378,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// <summary>
     /// The <c>HOME</c> a preview step runs with, and the root the npm global prefix
     /// is derived from. Under uid isolation that is the <em>agent's</em> home:
-    /// <see cref="AgentIsolation.Route(ProcessStartInfo, string?, string?, string?)"/>
+    /// <see cref="AgentIsolation.Route(ProcessStartInfo, string?, string?, string?, string?)"/>
     /// sets <c>HOME</c> there as part of the crossing, so deriving the prefix from
     /// anything else would point <c>npm install -g</c> at a directory the uid
     /// running it cannot write — the orchestrator's home is <c>0710</c>,
@@ -1583,7 +1583,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// The command text comes from the worktree's <c>ild.config.json</c>, a file the
     /// agent writes and can trigger itself through the ILD MCP tools. It is
     /// therefore agent-authored code, and it runs as the agent:
-    /// <see cref="AgentIsolation.Route(ProcessStartInfo, string?, string?, string?)"/>
+    /// <see cref="AgentIsolation.Route(ProcessStartInfo, string?, string?, string?, string?)"/>
     /// drops it to the agent uid, clears the inherited and ambient capability sets,
     /// and points <c>HOME</c> at the agent's own home. That gives a preview command
     /// exactly the privileges the agent already has and nothing more — and, because

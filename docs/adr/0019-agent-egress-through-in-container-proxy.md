@@ -79,6 +79,11 @@ A launch made for an AI provider gets a proxy URL of the form
 scoped entries. A connection that carries no credentials is judged by the
 global entries alone. This is the only attribution the proxy has: all runs
 share one agent uid, so it cannot tell one run's connection from another's.
+And it is attribution, not authentication: the credentials sit in the agent's
+own environment, so a launch can present another provider's id and inherit its
+scoped entries. Provider scope is a convenience for keeping lists tidy per tool,
+not a boundary between agents — anything that must hold against a hostile agent
+belongs on the global lists.
 Per-run or per-repository lists need either the per-run-uid follow-up from
 ADR-0014 or a per-run credential the agent's client presents, and are a later
 layer.

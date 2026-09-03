@@ -206,15 +206,32 @@ public sealed class EgressProxy : BackgroundService
         _tunnels[id] = tunnel;
         try
         {
-            var up = client.CopyToAsync(upstreamStream, tunnel.Token);
-            var down = upstreamStream.CopyToAsync(client, tunnel.Token);
-            await Task.WhenAny(up, down).ConfigureAwait(false);
+            // Each direction ends on its own: a client that half-closes after
+            // sending its request must still receive the response, so its EOF is
+            // passed on as a send-shutdown rather than ending the whole tunnel.
+            // A failure (reset, cancellation) on either side ends both.
+            await Task.WhenAll(
+                PumpAsync(client, upstreamStream, tunnel),
+                PumpAsync(upstreamStream, client, tunnel)).ConfigureAwait(false);
         }
         finally
         {
             _tunnels.TryRemove(id, out _);
             tunnel.Reset();
             upstream.Close();
+        }
+    }
+
+    private static async Task PumpAsync(NetworkStream from, NetworkStream to, Tunnel tunnel)
+    {
+        try
+        {
+            await from.CopyToAsync(to, tunnel.Token).ConfigureAwait(false);
+            to.Socket.Shutdown(SocketShutdown.Send);
+        }
+        catch (Exception)
+        {
+            tunnel.Reset();
         }
     }
 
@@ -343,7 +360,7 @@ public sealed class EgressProxy : BackgroundService
 
     /// <summary>
     /// The provider a launch was made for, carried as the Basic password of the
-    /// proxy URL (<see cref="AgentIsolation.ResolveEgressProxyUrl"/>).
+    /// proxy URL (<see cref="EgressProxyOptions.ClientUrl"/>).
     /// </summary>
     internal static Guid? ReadProviderScope(string proxyAuthorization)
     {

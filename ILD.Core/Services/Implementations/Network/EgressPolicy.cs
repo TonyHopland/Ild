@@ -42,6 +42,7 @@ public sealed class EgressPolicy : IEgressPolicy
     private readonly SemaphoreSlim _reload = new(1, 1);
     private EgressPolicySnapshot? _snapshot;
     private long _loadedAt;
+    private int _generation;
 
     public EgressPolicy(IServiceScopeFactory scopes, TimeProvider clock)
     {
@@ -60,18 +61,22 @@ public sealed class EgressPolicy : IEgressPolicy
         {
             if (Fresh() is { } raced) return raced;
 
-            using var scope = _scopes.CreateScope();
-            var store = scope.ServiceProvider.GetRequiredService<INetworkPolicyStore>();
-            var settings = scope.ServiceProvider.GetRequiredService<IAppSettingStore>();
+            // A read that began before an edit committed can return the pre-edit
+            // lists after Invalidate has already run. Caching that would judge
+            // the next second of connections — and the tunnel re-check that
+            // Invalidate triggers — by rules the operator has just replaced, so a
+            // load is only kept if nothing was invalidated while it was in flight.
+            while (true)
+            {
+                var generation = Volatile.Read(ref _generation);
+                var snapshot = await LoadAsync(ct);
+                if (Volatile.Read(ref _generation) != generation)
+                    continue;
 
-            var modeSetting = await settings.GetByKeyAsync(AppSettingKeys.NetworkMode, ct);
-            EgressRules.TryParseMode(modeSetting?.Value ?? AppSettingKeys.DefaultNetworkMode, out var mode);
-            var entries = await store.GetEntriesAsync(ct);
-
-            var snapshot = new EgressPolicySnapshot(mode, entries);
-            Volatile.Write(ref _loadedAt, _clock.GetTimestamp());
-            Volatile.Write(ref _snapshot, snapshot);
-            return snapshot;
+                Volatile.Write(ref _loadedAt, _clock.GetTimestamp());
+                Volatile.Write(ref _snapshot, snapshot);
+                return snapshot;
+            }
         }
         finally
         {
@@ -81,8 +86,21 @@ public sealed class EgressPolicy : IEgressPolicy
 
     public void Invalidate()
     {
+        Interlocked.Increment(ref _generation);
         Volatile.Write(ref _snapshot, null);
         Changed?.Invoke();
+    }
+
+    private async Task<EgressPolicySnapshot> LoadAsync(CancellationToken ct)
+    {
+        using var scope = _scopes.CreateScope();
+        var store = scope.ServiceProvider.GetRequiredService<INetworkPolicyStore>();
+        var settings = scope.ServiceProvider.GetRequiredService<IAppSettingStore>();
+
+        var modeSetting = await settings.GetByKeyAsync(AppSettingKeys.NetworkMode, ct);
+        EgressRules.TryParseMode(modeSetting?.Value ?? AppSettingKeys.DefaultNetworkMode, out var mode);
+        var entries = await store.GetEntriesAsync(ct);
+        return new EgressPolicySnapshot(mode, entries);
     }
 
     private EgressPolicySnapshot? Fresh()

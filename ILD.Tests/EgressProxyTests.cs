@@ -323,6 +323,23 @@ public sealed class EgressProxyTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_client_that_half_closes_after_its_request_still_gets_the_response()
+    {
+        var (client, status) = await ConnectAsync("localhost");
+        using (client)
+        {
+            Assert.StartsWith("HTTP/1.1 200", status);
+            var stream = client.GetStream();
+            await stream.WriteAsync(Encoding.ASCII.GetBytes("last words"));
+            client.Client.Shutdown(SocketShutdown.Send);
+
+            // The upstream echo answers after it sees our EOF; the relay must still carry it back.
+            Assert.Equal("last words", await ReadToEndAsync(stream));
+        }
+        await WaitUntilAsync(() => _proxy!.OpenTunnelCount == 0);
+    }
+
+    [Fact]
     public async Task The_cached_policy_expires_on_its_own_after_the_ttl()
     {
         await SetModeAsync(NetworkMode.Blacklist);
@@ -417,5 +434,88 @@ public sealed class NetworkLogRecorderTests : IDisposable
         public Task PolicyChangedAsync() => Task.CompletedTask;
         public Task LogEntryAppendedAsync(NetworkLogEntry entry) { lock (Appended) Appended.Add(entry); return Task.CompletedTask; }
         public Task LogClearedAsync() => Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// The cache must never publish lists that an edit has already replaced. The
+/// race: a load starts, the operator's edit commits and invalidates, the load
+/// finishes with the pre-edit rows. Kept, those rows would judge the next second
+/// of connections and — worse — the tunnel re-check the edit triggered.
+/// </summary>
+public sealed class EgressPolicyInvalidationTests
+{
+    [Fact]
+    public async Task A_load_overtaken_by_an_edit_is_discarded_and_redone()
+    {
+        var store = new GatedStore();
+        var services = new ServiceCollection();
+        services.AddSingleton<INetworkPolicyStore>(store);
+        services.AddSingleton<IAppSettingStore>(new FixedSettings("blacklist"));
+        using var provider = services.BuildServiceProvider();
+        var policy = new EgressPolicy(provider.GetRequiredService<IServiceScopeFactory>(), TimeProvider.System);
+
+        store.Entries = new[] { Entry("old.example") };
+        var firstLoad = policy.GetAsync().AsTask();
+        await store.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // The edit lands while the first read is still in flight.
+        store.Entries = new[] { Entry("new.example") };
+        policy.Invalidate();
+        store.Release();
+
+        var snapshot = await firstLoad.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal("new.example", Assert.Single(snapshot.Entries).Host);
+        Assert.Equal(2, store.Reads);
+        Assert.Equal(NetworkDecision.Blocked, snapshot.Decide("new.example", null));
+        Assert.Equal("new.example", Assert.Single((await policy.GetAsync()).Entries).Host);
+        Assert.Equal(2, store.Reads);
+    }
+
+    private static NetworkPolicyEntry Entry(string host)
+        => new() { Id = Guid.NewGuid(), Host = host, ListKind = NetworkListKind.Blacklist };
+
+    /// <summary>Returns the entries as they were when the read began; the first read blocks until released.</summary>
+    private sealed class GatedStore : INetworkPolicyStore
+    {
+        private readonly TaskCompletionSource _gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _reads;
+
+        public IReadOnlyList<NetworkPolicyEntry> Entries { get; set; } = Array.Empty<NetworkPolicyEntry>();
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int Reads => Volatile.Read(ref _reads);
+
+        public void Release() => _gate.TrySetResult();
+
+        public async Task<IReadOnlyList<NetworkPolicyEntry>> GetEntriesAsync(CancellationToken ct = default)
+        {
+            var seen = Entries;
+            if (Interlocked.Increment(ref _reads) == 1)
+            {
+                Started.TrySetResult();
+                await _gate.Task.WaitAsync(ct);
+            }
+            return seen;
+        }
+
+        public Task<NetworkPolicyEntry?> GetEntryAsync(Guid id, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task AddEntryAsync(NetworkPolicyEntry entry, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<bool> DeleteEntryAsync(Guid id, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<IReadOnlyList<NetworkLogEntry>> GetLogAsync(int take, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<NetworkLogEntry?> GetLogEntryAsync(Guid id, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task AppendLogAsync(IReadOnlyList<NetworkLogEntry> entries, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<int> ClearLogAsync(CancellationToken ct = default) => throw new NotSupportedException();
+    }
+
+    private sealed class FixedSettings : IAppSettingStore
+    {
+        private readonly string _mode;
+        public FixedSettings(string mode) { _mode = mode; }
+
+        public Task<AppSetting?> GetByKeyAsync(string key, CancellationToken ct = default)
+            => Task.FromResult<AppSetting?>(key == AppSettingKeys.NetworkMode ? new AppSetting { Key = key, Value = _mode } : null);
+        public Task<IReadOnlyList<AppSetting>> GetAllAsync(CancellationToken ct = default) => throw new NotSupportedException();
+        public Task UpsertAsync(string key, string value, CancellationToken ct = default) => throw new NotSupportedException();
     }
 }

@@ -98,11 +98,6 @@ public static class AgentIsolation
     /// </summary>
     public const string EgressNoProxy = "localhost,127.0.0.1,::1";
 
-    // The Basic-auth user name on a provider-scoped proxy URL. Some proxy clients
-    // (undici among them) send Proxy-Authorization only when BOTH user and password
-    // are present, so the provider id travels as the password behind a fixed name.
-    private const string EgressProxyScopeUser = "provider";
-
     // The privilege-drop tool, by absolute path. Shipped by util-linux in the
     // image (Dockerfile installs it explicitly), so the location is ours to fix.
     //
@@ -176,7 +171,7 @@ public static class AgentIsolation
     /// agent home is configured.
     ///
     /// <para>
-    /// This is the single owner of that rule. <see cref="Route(ProcessStartInfo, string?, string?, string?)"/>
+    /// This is the single owner of that rule. <see cref="Route(ProcessStartInfo, string?, string?, string?, string?)"/>
     /// and <see cref="RouteCommand(string, IReadOnlyList{string}, string?, string?, string?)"/>
     /// apply it as part of the crossing, so no launch site has to remember to; and
     /// callers that must <em>derive paths</em> from where the child's <c>HOME</c>
@@ -454,13 +449,7 @@ public static class AgentIsolation
     /// <param name="configuredPort">The configured port, or null/blank for no proxy. Explicit form for tests.</param>
     /// <param name="aiProviderId">The provider the launch is made for, if any.</param>
     public static string? ResolveEgressProxyUrl(string? configuredPort, Guid? aiProviderId)
-    {
-        if (!int.TryParse(NonEmpty(configuredPort), out var port) || port <= 0 || port > 65535)
-            return null;
-        return aiProviderId is { } id
-            ? $"http://{EgressProxyScopeUser}:{id:D}@127.0.0.1:{port}"
-            : $"http://127.0.0.1:{port}";
-    }
+        => Network.EgressProxyOptions.Parse(configuredPort).ClientUrl(aiProviderId);
 
     /// <summary>
     /// The variables that funnel a child's HTTP(S) traffic through
