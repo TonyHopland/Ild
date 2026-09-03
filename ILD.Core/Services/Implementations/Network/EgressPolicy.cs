@@ -64,8 +64,11 @@ public sealed class EgressPolicy : IEgressPolicy
             // lists after Invalidate has already run. The load is stamped with the
             // generation it started under and published as one object, and Fresh()
             // only honours a cache whose generation is still current — so an edit
-            // landing at any point before, during or after the publish leaves the
-            // next reader reloading rather than judging by rules just replaced.
+            // landing at any point before, during or after the publish leaves both
+            // this caller and the next one reloading rather than judging by rules
+            // just replaced. What remains is the instant between that last check and
+            // the caller acting on the answer, which no snapshot design closes: a
+            // connection judged there is the one that arrived just before the edit.
             while (true)
             {
                 var generation = Volatile.Read(ref _generation);
@@ -74,7 +77,8 @@ public sealed class EgressPolicy : IEgressPolicy
                     continue;
 
                 Volatile.Write(ref _cached, new Cached(snapshot, generation, _clock.GetTimestamp()));
-                return snapshot;
+                if (Fresh() is { } published)
+                    return published;
             }
         }
         finally

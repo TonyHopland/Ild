@@ -78,6 +78,18 @@ public sealed class NetworkControllerTests : IDisposable
     }
 
     [Fact]
+    public async Task An_undefined_list_kind_is_refused_before_anything_is_stored()
+    {
+        var controller = Build();
+
+        var result = await controller.AddEntry(new NetworkController.AddEntryRequest { Host = "api.example.com", ListKind = (NetworkListKind)7 }, default);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Empty(await _db.Network.GetEntriesAsync());
+        _policy.Verify(p => p.Invalidate(), Times.Never);
+    }
+
+    [Fact]
     public async Task A_url_is_refused_with_the_reason_and_nothing_changes()
     {
         var controller = Build();

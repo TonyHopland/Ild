@@ -76,6 +76,8 @@ public class NetworkController : ControllerBase
     [HttpPost("entries")]
     public async Task<IActionResult> AddEntry([FromBody] AddEntryRequest request, CancellationToken ct)
     {
+        if (!Enum.IsDefined(request.ListKind))
+            return BadRequest(new { error = "listKind must be 'Whitelist' or 'Blacklist'" });
         if (!EgressRules.TryNormalizePattern(request.Host, out var host, out var error))
             return BadRequest(new { error });
         if (request.AiProviderId is { } providerId && await _providers.GetAiProviderByIdAsync(providerId) is null)
