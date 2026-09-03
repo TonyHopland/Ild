@@ -463,11 +463,30 @@ export default function Settings() {
           >
             When the AI provider stops a step — a usage or session limit, a busy provider — the run
             waits in Human Feedback for you to click <strong>Resume</strong>. Turn this on to have
-            ILD try the resume for you instead — never before the reset time the provider named, and
-            waiting longer before each further attempt. After a few tries it stops and leaves the
-            run for you — resuming it yourself gives it a fresh set of tries, and you can do that at
-            any point.
+            ILD try the resume for you instead — never before the reset time the provider named.
+            When the tries below run out it stops and leaves the run for you; resuming it yourself
+            gives it a fresh set, and you can do that at any point.
           </ToggleSettingField>
+          <NumericSettingField
+            settingKey={SchedulerSettingKeys.ThrottleRetryDelayMinutes}
+            label="Wait between attempts (minutes)"
+            min={1}
+            max={1440}
+            fallback={60}
+          >
+            How long a throttled run waits before each automatic attempt. A reset time the provider
+            stated can push an attempt later than this, never earlier.
+          </NumericSettingField>
+          <NumericSettingField
+            settingKey={SchedulerSettingKeys.ThrottleMaxRetries}
+            label="Attempts before asking you"
+            min={1}
+            max={100}
+            fallback={6}
+          >
+            How many automatic attempts a run may spend. Like the AI step cap, the count resets
+            whenever you interact with the run.
+          </NumericSettingField>
         </div>
 
         <NetworkSection />

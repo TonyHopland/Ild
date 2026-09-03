@@ -32,6 +32,8 @@ public class SettingsController : ControllerBase
         AppSettingKeys.PrHeartbeatSeconds,
         AppSettingKeys.MaxAiTraversals,
         AppSettingKeys.ThrottleAutoResume,
+        AppSettingKeys.ThrottleRetryDelayMinutes,
+        AppSettingKeys.ThrottleMaxRetries,
         AppSettingKeys.SessionIdleDays,
         AppSettingKeys.SessionMaxDays,
         AppSettingKeys.NetworkMode,
@@ -80,6 +82,10 @@ public class SettingsController : ControllerBase
             map[AppSettingKeys.MaxAiTraversals] = AppSettingKeys.DefaultMaxAiTraversals.ToString();
         if (!map.ContainsKey(AppSettingKeys.ThrottleAutoResume))
             map[AppSettingKeys.ThrottleAutoResume] = AppSettingKeys.DefaultThrottleAutoResume.ToString().ToLowerInvariant();
+        if (!map.ContainsKey(AppSettingKeys.ThrottleRetryDelayMinutes))
+            map[AppSettingKeys.ThrottleRetryDelayMinutes] = AppSettingKeys.DefaultThrottleRetryDelayMinutes.ToString();
+        if (!map.ContainsKey(AppSettingKeys.ThrottleMaxRetries))
+            map[AppSettingKeys.ThrottleMaxRetries] = AppSettingKeys.DefaultThrottleMaxRetries.ToString();
         if (!map.ContainsKey(AppSettingKeys.SessionIdleDays))
             map[AppSettingKeys.SessionIdleDays] = AppSettingKeys.DefaultSessionIdleDays.ToString();
         if (!map.ContainsKey(AppSettingKeys.SessionMaxDays))
@@ -140,6 +146,8 @@ public class SettingsController : ControllerBase
         AppSettingKeys.PrHeartbeatSeconds => AppSettingKeys.DefaultPrHeartbeatSeconds.ToString(),
         AppSettingKeys.MaxAiTraversals => AppSettingKeys.DefaultMaxAiTraversals.ToString(),
         AppSettingKeys.ThrottleAutoResume => AppSettingKeys.DefaultThrottleAutoResume.ToString().ToLowerInvariant(),
+        AppSettingKeys.ThrottleRetryDelayMinutes => AppSettingKeys.DefaultThrottleRetryDelayMinutes.ToString(),
+        AppSettingKeys.ThrottleMaxRetries => AppSettingKeys.DefaultThrottleMaxRetries.ToString(),
         AppSettingKeys.SessionIdleDays => AppSettingKeys.DefaultSessionIdleDays.ToString(),
         AppSettingKeys.SessionMaxDays => AppSettingKeys.DefaultSessionMaxDays.ToString(),
         AppSettingKeys.NetworkMode => AppSettingKeys.DefaultNetworkMode,
@@ -189,6 +197,20 @@ public class SettingsController : ControllerBase
                 if (!bool.TryParse(value, out _))
                 {
                     error = "throttle.autoResume must be 'true' or 'false'";
+                    return false;
+                }
+                break;
+            case AppSettingKeys.ThrottleRetryDelayMinutes:
+                if (!int.TryParse(value, out var retryMins) || retryMins < 1 || retryMins > 1440)
+                {
+                    error = "throttle.retryDelayMinutes must be an integer between 1 and 1440 (24 hours)";
+                    return false;
+                }
+                break;
+            case AppSettingKeys.ThrottleMaxRetries:
+                if (!int.TryParse(value, out var retries) || retries < 1 || retries > 100)
+                {
+                    error = "throttle.maxRetries must be an integer between 1 and 100";
                     return false;
                 }
                 break;

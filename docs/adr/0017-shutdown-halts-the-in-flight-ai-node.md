@@ -105,19 +105,22 @@ setting. The reasoning stands where it mattered most: the setting is **off** by
 default, so the shipped behaviour is unchanged for anyone who does not ask for
 this. `ThrottledRunResumeSweeper` resumes an eligible park through the ordinary
 `ResumeFromHaltAsync`, and a provider that is still throttled interrupts the
-node again, re-parking the run for the next attempt. Delays double from ten
-minutes and stop after five automatic resumes,
-which spans the shape of a session window without spinning against a limit that
-is not going to lift. What remains an operator's judgement is whether a wasted
-round-trip costs them less than a run sitting idle overnight; the default
-answers that the same way this ADR did.
+node again, re-parking the run for the next attempt. How long it waits and how
+many attempts it gets are the operator's — `throttle.retryDelayMinutes` (default 60) and `throttle.maxRetries` (default 6), read every sweep so a change reaches
+runs already parked. A flat gap rather than a widening one, because an operator
+who says "an hour" has priced their provider's window, and a ladder that turned
+that into sixteen hours by the fifth attempt would be answering a question they
+did not ask. What stays their judgement is whether a wasted round-trip costs
+them less than a run sitting idle overnight; the default answers it
+conservatively, and the setting being off answers it the way this ADR did.
 
 **The reset time is read after all**, which is the part of the decision above
 that did not survive contact with the feature: when the provider has already
-said "resets 7:10pm (UTC)", firing before then spends one of five attempts on a
-refusal we were told to expect. `AiFailureClassifier.TryParseResetAt` reads it
-at park time onto `LoopRun.ThrottleResetAt` (one migration), and the sweeper
-treats it as a **floor** under the backoff, never as a trigger — nothing fires
+said "resets 7:10pm (UTC)", firing before then spends one of the run's few
+attempts on a refusal we were told to expect.
+`AiFailureClassifier.TryParseResetAt` reads it at park time onto
+`LoopRun.ThrottleResetAt` (one migration), and the sweeper treats it as a
+**floor** under the configured delay, never as a trigger — nothing fires
 because the stated time arrived, only later than it. So the objection stands in
 the form it was actually about: ILD still does not build a timetable out of
 provider prose, and a notice it cannot read leaves the retry ladder to schedule
@@ -129,17 +132,22 @@ unambiguous "try again in 20 minutes"; a bare "resets 3pm" is left alone,
 because the zone it means is the reader's and guessing west idles a run for
 hours it never had to wait. Anything further out than twelve hours is dropped
 too — at that distance a misread twelve-hour clock is likelier than a real
-window. Every unread case costs one early attempt, which the ladder already
-absorbs; the read cases are the ones where waiting was free.
+window. Be honest about what that costs when the reading was right: a genuine
+reset a day out is longer than the default schedule covers at all, so the run
+spends every attempt refusing and then parks for a person. That is the same
+place it lands with the feature switched off, which is why the horizon is set
+where it is — but an operator who routinely hits day-long limits should raise
+the delay rather than expect the horizon to wait for them.
 
-Both the delay and the bound are read off automatic resumes spent **since a
-human last touched the run**, not since the current interruption — the same
-window the traversal budget is measured over, deliberately, because they are one
-question asked twice. A run that auto-resumes twice, works for an hour and is
-then interrupted afresh waits longer and has fewer tries left than a run nobody
-has helped yet. That is the intended reading: an unattended run being stopped
-for the fifth time is a run whose provider is rationing it, and the answer to
-that is a person rather than a sixth retry. One human Resume restores both
+The **bound** is read off automatic resumes spent **since a human last touched
+the run**, not since the current interruption — the same window the traversal
+budget is measured over, deliberately, because they are one question asked
+twice. A run that auto-resumes twice, works for an hour and is then interrupted
+afresh has fewer tries left than a run nobody has helped yet. (The delay is not
+counted this way: it is the operator's flat number, applied from each park.)
+That is the intended reading: an unattended run being stopped for the last time
+its budget allows is a run whose provider is rationing it, and the answer to
+that is a person rather than one more retry. One human Resume restores both
 budgets.
 
 Two guards keep it from eroding decisions taken elsewhere. Only

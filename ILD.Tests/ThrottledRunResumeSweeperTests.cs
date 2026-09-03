@@ -18,13 +18,14 @@ namespace ILD.Tests;
 /// </summary>
 public class ThrottledRunResumeSweeperTests
 {
-    private static readonly TimeSpan PastTheGrace = TimeSpan.FromMinutes(11);
+    /// <summary>Past the default hour between attempts, whatever else a case sets.</summary>
+    private static readonly TimeSpan PastTheDelay = TimeSpan.FromMinutes(61);
 
     [Fact]
     public async Task Does_nothing_while_the_setting_is_off()
     {
         using var db = new TestDb();
-        var run = SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow - PastTheGrace);
+        var run = SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow - PastTheDelay);
         var engine = new Mock<ILoopEngine>();
 
         // No key written at all: the default is what a fresh install runs with,
@@ -39,7 +40,7 @@ public class ThrottledRunResumeSweeperTests
     public async Task Does_nothing_when_the_setting_is_turned_off()
     {
         using var db = new TestDb();
-        SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow - PastTheGrace);
+        SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow - PastTheDelay);
         await db.Settings.UpsertAsync(AppSettingKeys.ThrottleAutoResume, "false");
         var engine = new Mock<ILoopEngine>();
 
@@ -49,10 +50,10 @@ public class ThrottledRunResumeSweeperTests
     }
 
     [Fact]
-    public async Task Resumes_a_throttle_park_that_is_past_the_grace_period()
+    public async Task Resumes_a_throttle_park_once_the_delay_has_elapsed()
     {
         using var db = new TestDb();
-        var run = SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow - PastTheGrace);
+        var run = SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow - PastTheDelay);
         await EnableAsync(db);
         var engine = new Mock<ILoopEngine>();
 
@@ -66,15 +67,15 @@ public class ThrottledRunResumeSweeperTests
     }
 
     [Fact]
-    public async Task Leaves_a_freshly_parked_run_alone()
+    public async Task Leaves_a_run_parked_inside_the_default_hour_alone()
     {
         using var db = new TestDb();
-        SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow.AddMinutes(-1));
+        SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow.AddMinutes(-30));
         await EnableAsync(db);
         var engine = new Mock<ILoopEngine>();
 
-        // A provider that has just said "not now" will still say it a minute
-        // later; retrying immediately spends a round trip to be told again.
+        // Nothing configured, so the default hour applies: a provider that said
+        // "not now" half an hour ago will mostly still say it.
         await SweepAsync(db, engine.Object);
 
         engine.Verify(e => e.ResumeFromHaltAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<bool>()), Times.Never);
@@ -87,7 +88,7 @@ public class ThrottledRunResumeSweeperTests
     public async Task Never_resumes_a_park_somebody_else_owns(HaltReason reason)
     {
         using var db = new TestDb();
-        SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow - PastTheGrace, haltReason: reason);
+        SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow - PastTheDelay, haltReason: reason);
         await EnableAsync(db);
         var engine = new Mock<ILoopEngine>();
 
@@ -100,7 +101,7 @@ public class ThrottledRunResumeSweeperTests
     public async Task Never_resumes_a_shutdown_halted_run()
     {
         using var db = new TestDb();
-        var run = SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow - PastTheGrace,
+        var run = SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow - PastTheDelay,
             haltReason: HaltReason.Shutdown);
         await EnableAsync(db);
         var engine = new Mock<ILoopEngine>();
@@ -117,7 +118,7 @@ public class ThrottledRunResumeSweeperTests
     public async Task Leaves_a_paused_run_alone()
     {
         using var db = new TestDb();
-        SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow - PastTheGrace, isPaused: true);
+        SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow - PastTheDelay, isPaused: true);
         await EnableAsync(db);
         var engine = new Mock<ILoopEngine>();
 
@@ -127,13 +128,13 @@ public class ThrottledRunResumeSweeperTests
     }
 
     [Fact]
-    public async Task Stops_after_the_bound_and_leaves_the_run_for_a_person()
+    public async Task Stops_after_the_default_six_retries_and_leaves_the_run_for_a_person()
     {
         using var db = new TestDb();
-        // Five automatic resumes spent since anyone touched this run, and it has
-        // been parked far longer than even the last (doubled) delay — the only
-        // thing holding it back is the bound, and only a human clears that.
-        SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow.AddDays(-1), autoResumeCount: 5);
+        // Six automatic resumes spent since anyone touched this run, and it has
+        // been parked far longer than the delay — the only thing holding it back
+        // is the bound, and only a human clears that.
+        SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow.AddDays(-1), autoResumeCount: 6);
         await EnableAsync(db);
         var engine = new Mock<ILoopEngine>();
 
@@ -143,17 +144,15 @@ public class ThrottledRunResumeSweeperTests
     }
 
     [Fact]
-    public async Task Backs_off_further_with_every_automatic_resume_already_spent()
+    public async Task Waits_the_configured_delay_between_attempts()
     {
         using var db = new TestDb();
-        // 40 minutes parked: past the 10 minutes a run with nothing spent waits
-        // and the 20 a run with one does, but not the 80 that three buys. Spent
-        // resumes are counted since a human last touched the run, so this is
-        // also what an earlier, since-resolved interruption leaves behind.
-        var parkedAt = DateTime.UtcNow.AddMinutes(-40);
-        var due = SeedThrottleParkedRun(db, parkedAt, autoResumeCount: 1);
-        var notDue = SeedThrottleParkedRun(db, parkedAt, autoResumeCount: 3);
-        await EnableAsync(db);
+        // The gap is the operator's number and stays that number however many
+        // attempts have been spent — it does not widen underneath them.
+        var parkedAt = DateTime.UtcNow.AddMinutes(-6);
+        var due = SeedThrottleParkedRun(db, parkedAt, autoResumeCount: 3);
+        var notDue = SeedThrottleParkedRun(db, DateTime.UtcNow.AddMinutes(-2));
+        await EnableAsync(db, retryDelayMinutes: 5);
         var engine = new Mock<ILoopEngine>();
 
         await SweepAsync(db, engine.Object);
@@ -163,12 +162,43 @@ public class ThrottledRunResumeSweeperTests
     }
 
     [Fact]
+    public async Task Stops_after_the_configured_number_of_retries()
+    {
+        using var db = new TestDb();
+        var parkedAt = DateTime.UtcNow - PastTheDelay;
+        var stillAllowed = SeedThrottleParkedRun(db, parkedAt, autoResumeCount: 1);
+        var spent = SeedThrottleParkedRun(db, parkedAt, autoResumeCount: 2);
+        await EnableAsync(db, maxRetries: 2);
+        var engine = new Mock<ILoopEngine>();
+
+        await SweepAsync(db, engine.Object);
+
+        engine.Verify(e => e.ResumeFromHaltAsync(stillAllowed.Id, It.IsAny<string?>(), true), Times.Once);
+        engine.Verify(e => e.ResumeFromHaltAsync(spent.Id, It.IsAny<string?>(), It.IsAny<bool>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task A_shortened_delay_applies_to_a_run_already_parked()
+    {
+        using var db = new TestDb();
+        // Read per sweep: an operator who decides an hour is too long should not
+        // have to wait out the old number on the runs already waiting.
+        var run = SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow.AddMinutes(-10));
+        await EnableAsync(db, retryDelayMinutes: 5);
+        var engine = new Mock<ILoopEngine>();
+
+        await SweepAsync(db, engine.Object);
+
+        engine.Verify(e => e.ResumeFromHaltAsync(run.Id, It.IsAny<string?>(), true), Times.Once);
+    }
+
+    [Fact]
     public async Task Waits_for_the_reset_time_the_provider_stated()
     {
         using var db = new TestDb();
         // Past the backoff, but the provider said the limit lifts in another
         // half hour. Spending an attempt now buys a refusal we were told about.
-        SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow - PastTheGrace,
+        SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow - PastTheDelay,
             resetAt: DateTime.UtcNow.AddMinutes(30));
         await EnableAsync(db);
         var engine = new Mock<ILoopEngine>();
@@ -182,7 +212,7 @@ public class ThrottledRunResumeSweeperTests
     public async Task Resumes_once_the_stated_reset_time_has_passed()
     {
         using var db = new TestDb();
-        var run = SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow - PastTheGrace,
+        var run = SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow - PastTheDelay,
             resetAt: DateTime.UtcNow.AddMinutes(-1));
         await EnableAsync(db);
         var engine = new Mock<ILoopEngine>();
@@ -212,8 +242,8 @@ public class ThrottledRunResumeSweeperTests
     public async Task One_failing_resume_does_not_strand_the_rest_of_the_sweep()
     {
         using var db = new TestDb();
-        var first = SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow - PastTheGrace);
-        var second = SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow - PastTheGrace);
+        var first = SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow - PastTheDelay);
+        var second = SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow - PastTheDelay);
         await EnableAsync(db);
         var engine = new Mock<ILoopEngine>();
         engine.Setup(e => e.ResumeFromHaltAsync(first.Id, It.IsAny<string?>(), It.IsAny<bool>()))
@@ -224,8 +254,14 @@ public class ThrottledRunResumeSweeperTests
         engine.Verify(e => e.ResumeFromHaltAsync(second.Id, It.IsAny<string?>(), true), Times.Once);
     }
 
-    private static Task EnableAsync(TestDb db)
-        => db.Settings.UpsertAsync(AppSettingKeys.ThrottleAutoResume, "true");
+    private static async Task EnableAsync(TestDb db, int? retryDelayMinutes = null, int? maxRetries = null)
+    {
+        await db.Settings.UpsertAsync(AppSettingKeys.ThrottleAutoResume, "true");
+        if (retryDelayMinutes is int mins)
+            await db.Settings.UpsertAsync(AppSettingKeys.ThrottleRetryDelayMinutes, mins.ToString());
+        if (maxRetries is int retries)
+            await db.Settings.UpsertAsync(AppSettingKeys.ThrottleMaxRetries, retries.ToString());
+    }
 
     private static LoopRun Reload(TestDb db, Guid runId)
         => db.Fresh().LoopRuns.First(r => r.Id == runId);

@@ -312,6 +312,60 @@ describe("Settings automatic throttle resume", () => {
     expect(toggle.checked).toBe(true);
   });
 
+  test("saves the wait between attempts and the attempt count", async () => {
+    vi.spyOn(authServices.settingsService, "get").mockImplementation(async (key: string) => ({
+      key,
+      value: key === authServices.SchedulerSettingKeys.ThrottleRetryDelayMinutes ? "60" : "6",
+    }));
+    const put = vi.spyOn(authServices.settingsService, "put").mockResolvedValue({
+      key: authServices.SchedulerSettingKeys.ThrottleRetryDelayMinutes,
+      value: "90",
+    });
+
+    render(
+      <MemoryRouter>
+        <Settings />
+      </MemoryRouter>,
+    );
+
+    const wait = (await screen.findByLabelText(/wait between attempts/i)) as HTMLInputElement;
+    await waitFor(() => expect(wait.value).toBe("60"));
+    fireEvent.change(wait, { target: { value: "90" } });
+    fireEvent.click(wait.parentElement!.querySelector("button")!);
+    await waitFor(() => {
+      expect(put).toHaveBeenCalledWith(
+        authServices.SchedulerSettingKeys.ThrottleRetryDelayMinutes,
+        "90",
+      );
+    });
+
+    const attempts = screen.getByLabelText(/attempts before asking you/i) as HTMLInputElement;
+    fireEvent.change(attempts, { target: { value: "3" } });
+    fireEvent.click(attempts.parentElement!.querySelector("button")!);
+    await waitFor(() => {
+      expect(put).toHaveBeenCalledWith(authServices.SchedulerSettingKeys.ThrottleMaxRetries, "3");
+    });
+  });
+
+  test("refuses an attempt count outside the allowed range without calling the API", async () => {
+    const put = vi.spyOn(authServices.settingsService, "put");
+
+    render(
+      <MemoryRouter>
+        <Settings />
+      </MemoryRouter>,
+    );
+
+    const attempts = (await screen.findByLabelText(
+      /attempts before asking you/i,
+    )) as HTMLInputElement;
+    fireEvent.change(attempts, { target: { value: "0" } });
+    fireEvent.click(attempts.parentElement!.querySelector("button")!);
+
+    await screen.findByText("Must be an integer between 1 and 100.");
+    expect(put).not.toHaveBeenCalled();
+  });
+
   test("puts the box back when the save fails", async () => {
     vi.spyOn(authServices.settingsService, "get").mockImplementation(async (key: string) => ({
       key,

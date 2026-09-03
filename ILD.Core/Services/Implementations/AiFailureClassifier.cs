@@ -153,8 +153,11 @@ public static class AiFailureClassifier
     /// further-out answer is far more likely a misread — a 12-hour clock read in
     /// the wrong half of the day, or a time rolled to tomorrow that had in fact
     /// just passed — than a real limit. Past it the caller gets nothing and
-    /// falls back to its own retry schedule, which costs one wasted attempt in
-    /// the worst case, where honouring a bad parse would idle a run for a day.
+    /// falls back to its own retry schedule. When the far-out reading was in
+    /// fact right, that costs the run its whole retry budget and a park for a
+    /// person — the same place it lands with the retry switched off — which is
+    /// still the better trade than honouring a misread and idling a run that
+    /// could have carried on for the best part of a day.
     /// </summary>
     private static readonly TimeSpan MaxHonouredWait = TimeSpan.FromHours(12);
 
