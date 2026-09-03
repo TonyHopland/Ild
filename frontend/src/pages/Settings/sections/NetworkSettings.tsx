@@ -113,43 +113,6 @@ export function groupConsecutive(entries: NetworkLogEntry[]): LogGroup[] {
   return groups;
 }
 
-/**
- * MOCKUP ONLY. A preview with no egress proxy behind it has nothing to show,
- * so an empty first load falls back to these and says so. Delete with the mockup.
- */
-const SAMPLE_RULES: NetworkPolicyEntry[] = [
-  { id: "s1", host: ".anthropic.com", listKind: "Whitelist", aiProviderId: null, createdAt: "" },
-  {
-    id: "s2",
-    host: "registry.npmjs.org",
-    listKind: "Whitelist",
-    aiProviderId: null,
-    createdAt: "",
-  },
-  { id: "s3", host: ".github.com", listKind: "Whitelist", aiProviderId: null, createdAt: "" },
-  { id: "s4", host: "pastebin.com", listKind: "Blacklist", aiProviderId: null, createdAt: "" },
-];
-
-const SAMPLE_LOG: NetworkLogEntry[] = (
-  [
-    ["api.anthropic.com", "Allowed", 0],
-    ["api.anthropic.com", "Allowed", 40],
-    ["api.anthropic.com", "Allowed", 80],
-    ["telemetry.example.net", "Blocked", 130],
-    ["registry.npmjs.org", "Allowed", 190],
-    ["registry.npmjs.org", "Allowed", 220],
-    ["objects.githubusercontent.com", "Advisory", 300],
-    ["api.github.com", "Allowed", 360],
-  ] as [string, NetworkDecision, number][]
-).map(([host, decision, ago], i) => ({
-  id: `sl${i}`,
-  host,
-  port: 443,
-  decision,
-  aiProviderId: null,
-  timestamp: new Date(Date.now() - ago * 1000).toISOString(),
-}));
-
 interface RuleTableProps {
   entries: NetworkPolicyEntry[];
   providers: AiProvider[];
@@ -338,27 +301,12 @@ export default function NetworkSettings() {
    * or narrowing to one provider first.
    */
   const [draftHost, setDraftHost] = useState<{ host: string; kind: NetworkListKind } | null>(null);
-  const [sampleRules, setSampleRules] = useState(false);
-  const [sampleLog, setSampleLog] = useState(false);
-  // Seeded once. A reload that is still empty must not overwrite whatever has
-  // been added to the sample data since, or the mockup undoes the click.
-  const seededRules = useRef(false);
-  const seededLog = useRef(false);
 
   const refreshEntries = useCallback(async () => {
     try {
       const loaded = await networkService.getEntries();
       setListError(null);
-      if (loaded.length > 0) {
-        setSampleRules(false);
-        setEntries(loaded);
-        return;
-      }
-      if (!seededRules.current) {
-        seededRules.current = true;
-        setSampleRules(true);
-        setEntries(SAMPLE_RULES);
-      }
+      setEntries(loaded);
     } catch (err) {
       setListError(describeError(err, "Failed to load the network lists."));
     }
@@ -368,16 +316,7 @@ export default function NetworkSettings() {
     try {
       const loaded = (await networkService.getLog(LOG_TAKE)).map(normalizeLogEntry);
       setLogError(null);
-      if (loaded.length > 0) {
-        setSampleLog(false);
-        setLog(loaded);
-        return;
-      }
-      if (!seededLog.current) {
-        seededLog.current = true;
-        setSampleLog(true);
-        setLog(SAMPLE_LOG);
-      }
+      setLog(loaded);
     } catch (err) {
       setLogError(describeError(err, "Failed to load the network log."));
     }
@@ -414,7 +353,6 @@ export default function NetworkSettings() {
     };
     const onLogAppended = (message: { payload: NetworkLogEntry }) => {
       const entry = normalizeLogEntry(message.payload);
-      setSampleLog(false);
       setLog((prev) => [entry, ...prev.filter((e) => e.id !== entry.id)].slice(0, LOG_TAKE));
     };
     const onLogCleared = () => setLog([]);
@@ -442,28 +380,11 @@ export default function NetworkSettings() {
   };
 
   const addEntry = async (host: string, kind: NetworkListKind, aiProviderId: string | null) => {
-    if (sampleRules) {
-      setEntries((prev) => [
-        ...prev,
-        {
-          id: `sample-${host}-${kind}`,
-          host: host.trim(),
-          listKind: kind,
-          aiProviderId,
-          createdAt: new Date().toISOString(),
-        },
-      ]);
-      return;
-    }
     const created = await networkService.addEntry({ host, listKind: kind, aiProviderId });
     setEntries((prev) => [...prev.filter((e) => e.id !== created.id), created]);
   };
 
   const removeEntry = async (id: string) => {
-    if (sampleRules) {
-      setEntries((prev) => prev.filter((e) => e.id !== id));
-      return;
-    }
     try {
       await networkService.deleteEntry(id);
       setEntries((prev) => prev.filter((e) => e.id !== id));
@@ -475,10 +396,6 @@ export default function NetworkSettings() {
   /** Take a host straight off the log onto a list, without retyping it. */
   const promote = async (entry: NetworkLogEntry, kind: NetworkListKind) => {
     try {
-      if (sampleRules || sampleLog) {
-        await addEntry(entry.host, kind, null);
-        return;
-      }
       const created = await networkService.addLogEntryToList(entry.id, kind);
       setEntries((prev) => [...prev.filter((e) => e.id !== created.id), created]);
     } catch (err) {
@@ -487,10 +404,6 @@ export default function NetworkSettings() {
   };
 
   const clearLog = async () => {
-    if (sampleLog) {
-      setLog([]);
-      return;
-    }
     try {
       await networkService.clearLog();
       setLog([]);
@@ -580,12 +493,7 @@ export default function NetworkSettings() {
 
       <section className="settings-card">
         <div className="settings-card-header">
-          <h3 className="settings-card-title">
-            Rules{" "}
-            {sampleRules && (
-              <span className="settings-badge settings-badge-proposed">Sample data</span>
-            )}
-          </h3>
+          <h3 className="settings-card-title">Rules</h3>
         </div>
         {mode === "off" && (
           <p className="settings-card-note">
@@ -624,17 +532,12 @@ export default function NetworkSettings() {
 
       <section className="settings-card">
         <div className="settings-card-header">
-          <h3 className="settings-card-title">
-            Traffic log{" "}
-            {sampleLog && (
-              <span className="settings-badge settings-badge-proposed">Sample data</span>
-            )}
-          </h3>
+          <h3 className="settings-card-title">Traffic log</h3>
           <button
             type="button"
             className="btn"
             onClick={() => void clearLog()}
-            disabled={sampleLog || log.length === 0}
+            disabled={log.length === 0}
           >
             Clear log
           </button>

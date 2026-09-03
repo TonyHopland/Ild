@@ -29,6 +29,7 @@ import type {
   NetworkPolicyChangedPayload,
   NetworkLogAppendedPayload,
   NetworkLogClearedPayload,
+  LogEntryAppendedPayload,
 } from "./index";
 
 export interface SignalREventPayloads {
@@ -53,6 +54,7 @@ export interface SignalREventPayloads {
   NetworkPolicyChanged: NetworkPolicyChangedPayload;
   NetworkLogAppended: NetworkLogAppendedPayload;
   NetworkLogCleared: NetworkLogClearedPayload;
+  LogEntryAppended: LogEntryAppendedPayload;
 }
 
 export type SignalREventName = keyof SignalREventPayloads;

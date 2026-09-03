@@ -156,11 +156,6 @@
   vertical-align: middle;
 }
 
-.settings-badge-proposed {
-  background-color: #312e60;
-  color: #a5b4fc;
-}
-
 .settings-switch {
   position: relative;
   display: inline-flex;

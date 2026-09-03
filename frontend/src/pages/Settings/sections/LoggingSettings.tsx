@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSignalR } from "../../../hooks/useSignalR";
 import { loggingService } from "../../../services/auth";
+import type { LogEntry } from "../../../types";
 import { Segmented, SettingRow, Switch } from "../controls";
+
+const TAKE = 200;
 
 const LEVELS = ["Debug", "Information", "Warning", "Error"] as const;
 type Level = (typeof LEVELS)[number];
@@ -28,99 +32,67 @@ interface LogLine {
   detail?: string;
 }
 
-/**
- * Sample lines for the mockup: the API has no endpoint that serves its own log
- * yet, so the viewer is fed from here to settle what it should look like.
- */
-const SAMPLE: Omit<LogLine, "id" | "timestamp">[] = [
-  {
-    level: "Information",
-    source: "ILD.Core.LoopEngine",
-    message: "Run 7f21 entered node 'Implement' (AI, claude-opus)",
-  },
-  {
-    level: "Debug",
-    source: "ILD.Core.Network.EgressProxy",
-    message: "CONNECT api.anthropic.com:443 → Allowed (whitelist .anthropic.com)",
-  },
-  {
-    level: "Information",
-    source: "Serilog.AspNetCore",
-    message: "HTTP GET /api/v1/loopruns responded 200 in 14.2ms",
-  },
-  {
-    level: "Warning",
-    source: "ILD.Core.Remote.PrStatusPoller",
-    message: "GitHub rate limit at 12% remaining; backing off to 120s",
-  },
-  {
-    level: "Debug",
-    source: "ILD.Core.Network.EgressProxy",
-    message: "CONNECT telemetry.example.net:443 → Blocked (no matching rule)",
-  },
-  {
-    level: "Error",
-    source: "ILD.Core.Executors.AINodeExecutor",
-    message: "Node 'Review' failed: provider returned 529 after 3 retries",
-    detail:
-      "System.Net.Http.HttpRequestException: Response status code does not indicate success: 529\n   at ILD.Core.Adapters.ClaudeAdapter.SendAsync(...)\n   at ILD.Core.Executors.AINodeExecutor.ExecuteAsync(...)",
-  },
-  {
-    level: "Information",
-    source: "ILD.Core.WorktreeRetentionSweeper",
-    message: "Reclaimed 3 worktrees older than 30 days",
-  },
-  {
-    level: "Information",
-    source: "ILD.Core.LoopEngine",
-    message: "Run 7f21 waiting for human feedback at 'Approve PR'",
-  },
-];
-
-function sampleLines(count: number): LogLine[] {
-  const start = Date.now() - count * 4000;
-  return Array.from({ length: count }, (_, i) => ({
-    ...SAMPLE[i % SAMPLE.length],
-    id: i,
-    timestamp: new Date(start + i * 4000).toISOString(),
-  })).reverse();
-}
-
 function isLevel(value: string): value is Level {
   return (LEVELS as readonly string[]).includes(value);
 }
 
+/**
+ * Serilog writes six levels where the page shows four: Verbose reads as Debug
+ * and Fatal as Error rather than as a level with no tag and no colour.
+ */
+function toLevel(value: string): Level {
+  if (isLevel(value)) return value;
+  if (value === "Verbose") return "Debug";
+  if (value === "Fatal") return "Error";
+  return "Information";
+}
+
+function toLine(entry: LogEntry): LogLine {
+  return {
+    id: entry.id,
+    timestamp: entry.timestamp,
+    level: toLevel(entry.level),
+    source: entry.source,
+    message: entry.message,
+    detail: entry.detail ?? undefined,
+  };
+}
+
 /** The backend's log level, and a view of what it has been writing. */
 export default function LoggingSettings() {
+  const { on, off } = useSignalR();
   // Read rather than assumed: the level lives in a switch the API can report,
   // so this page never claims one the backend is not actually logging at.
   const [level, setLevel] = useState<Level | null>(null);
   const [startupLevel, setStartupLevel] = useState<Level | null>(null);
   const [levelError, setLevelError] = useState<string | null>(null);
-  const [lines, setLines] = useState<LogLine[]>(() => sampleLines(24));
+  const [lines, setLines] = useState<LogLine[]>([]);
+  const [logError, setLogError] = useState<string | null>(null);
   const [minLevel, setMinLevel] = useState<"All" | Level>("All");
   const [search, setSearch] = useState("");
   const [tailing, setTailing] = useState(true);
   const [expanded, setExpanded] = useState<number | null>(null);
-  const nextId = useRef(24);
   const changed = useRef(false);
 
   useEffect(() => {
+    void loggingService
+      .getEntries({ take: TAKE })
+      .then((entries) => {
+        setLines(entries.map(toLine));
+        setLogError(null);
+      })
+      .catch(() => setLogError("Failed to read the log."));
+  }, []);
+
+  useEffect(() => {
     if (!tailing) return;
-    const timer = setInterval(() => {
-      setLines((prev) =>
-        [
-          {
-            ...SAMPLE[nextId.current % SAMPLE.length],
-            id: nextId.current++,
-            timestamp: new Date().toISOString(),
-          },
-          ...prev,
-        ].slice(0, 200),
-      );
-    }, 3000);
-    return () => clearInterval(timer);
-  }, [tailing]);
+    const onAppended = (message: { payload: LogEntry }) => {
+      const line = toLine(message.payload);
+      setLines((prev) => [line, ...prev.filter((l) => l.id !== line.id)].slice(0, TAKE));
+    };
+    on("LogEntryAppended", onAppended);
+    return () => off("LogEntryAppended", onAppended);
+  }, [on, off, tailing]);
 
   useEffect(() => {
     void loggingService
@@ -210,14 +182,16 @@ export default function LoggingSettings() {
 
       <section className="settings-card">
         <div className="settings-card-header">
-          <h3 className="settings-card-title">
-            Log <span className="settings-badge settings-badge-proposed">Sample data</span>
-          </h3>
+          <h3 className="settings-card-title">Log</h3>
           <label className="log-tail">
             <Switch checked={tailing} onChange={setTailing} label="Follow the log live" />
             Follow live
           </label>
         </div>
+        <p className="settings-card-note">
+          The most recent lines, held in memory by the backend process that answered: a restart
+          clears them, and if you run more than one backend you are reading one of them.
+        </p>
         <div className="log-toolbar">
           <input
             type="search"
@@ -237,8 +211,11 @@ export default function LoggingSettings() {
             ]}
           />
         </div>
+        {logError && <div className="settings-error">{logError}</div>}
         {visible.length === 0 ? (
-          <p className="settings-card-note">Nothing matches that filter.</p>
+          <p className="settings-card-note">
+            {lines.length === 0 ? "Nothing written yet." : "Nothing matches that filter."}
+          </p>
         ) : (
           <ul className="log-lines">
             {visible.map((line) => (

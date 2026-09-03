@@ -1,10 +1,58 @@
-import { afterEach, describe, expect, test, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import LoggingSettings from "./LoggingSettings";
+import * as signalRHook from "../../../hooks/useSignalR";
 import * as authServices from "../../../services/auth";
+import type { LogEntry } from "../../../types";
+
+type Handler = (message: { type: string; payload: unknown; timestamp: string }) => void;
+const handlers = new Map<string, Set<Handler>>();
+
+function emit(type: string, payload: unknown) {
+  handlers.get(type)?.forEach((h) => h({ type, payload, timestamp: new Date().toISOString() }));
+}
 
 const levelButton = (name: string) =>
   within(screen.getByRole("group", { name: "Log level override" })).getByRole("button", { name });
+
+const entry = (over: Partial<LogEntry> = {}): LogEntry => ({
+  id: 1,
+  timestamp: "2026-09-03T09:00:00Z",
+  level: "Information",
+  source: "ILD.Core.LoopEngine",
+  message: "Run 7f21 entered node 'Implement'",
+  detail: null,
+  ...over,
+});
+
+const warning = entry({
+  id: 2,
+  level: "Warning",
+  source: "ILD.Core.Remote.PrStatusPoller",
+  message: "GitHub rate limit at 12% remaining",
+});
+const failure = entry({
+  id: 3,
+  level: "Error",
+  source: "ILD.Core.Executors.AINodeExecutor",
+  message: "Node 'Review' failed: provider returned 529",
+  detail: "System.Net.Http.HttpRequestException: 529\n   at ILD.Core.Adapters.ClaudeAdapter",
+});
+
+function mockHub() {
+  vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+    connectionState: "connected",
+    on: vi.fn((type: string, handler: Handler) => {
+      const set = handlers.get(type) ?? new Set<Handler>();
+      set.add(handler);
+      handlers.set(type, set);
+    }),
+    off: vi.fn((type: string, handler: Handler) => {
+      handlers.get(type)?.delete(handler);
+    }),
+    invoke: vi.fn(),
+  } as any);
+}
 
 /** The level the backend reports it is running at, and what it started at. */
 function mockLevel(level = "Information", startupLevel = "Information") {
@@ -13,10 +61,21 @@ function mockLevel(level = "Information", startupLevel = "Information") {
     .mockResolvedValue({ level, startupLevel, isOverride: level !== startupLevel });
 }
 
+function mockEntries(entries: LogEntry[] = []) {
+  return vi.spyOn(authServices.loggingService, "getEntries").mockResolvedValue(entries);
+}
+
 const status = (level: string, startupLevel: string) => ({
   level,
   startupLevel,
   isOverride: level !== startupLevel,
+});
+
+beforeEach(() => {
+  handlers.clear();
+  mockHub();
+  mockLevel();
+  mockEntries();
 });
 
 afterEach(() => {
@@ -93,7 +152,6 @@ describe("Logging settings level", () => {
   });
 
   test("calls the API when the level changes", async () => {
-    mockLevel();
     const setLevel = vi
       .spyOn(authServices.loggingService, "setLevel")
       .mockResolvedValue(status("Debug", "Information"));
@@ -120,59 +178,115 @@ describe("Logging settings level", () => {
 });
 
 describe("Logging settings log view", () => {
-  test("filters by minimum level", () => {
+  test("shows what the backend has written", async () => {
+    const getEntries = mockEntries([failure, warning]);
     render(<LoggingSettings />);
 
-    expect(screen.getAllByText(/backing off to 120s/).length).toBeGreaterThan(0);
+    expect(await screen.findByText(/provider returned 529/)).toBeTruthy();
+    expect(screen.getByText(/GitHub rate limit/)).toBeTruthy();
+    expect(screen.getAllByText("ILD.Core.Executors.AINodeExecutor").length).toBeGreaterThan(0);
+    expect(getEntries).toHaveBeenCalledWith({ take: 200 });
+  });
+
+  test("says so when the backend has written nothing, and when it cannot be read", async () => {
+    render(<LoggingSettings />);
+    expect(await screen.findByText(/nothing written yet/i)).toBeTruthy();
+
+    cleanup();
+    vi.spyOn(authServices.loggingService, "getEntries").mockRejectedValue(new Error("denied"));
+    render(<LoggingSettings />);
+    expect(await screen.findByText(/failed to read the log/i)).toBeTruthy();
+  });
+
+  test("a line arriving over the hub lands at the top of the log", async () => {
+    mockEntries([warning]);
+    render(<LoggingSettings />);
+    await screen.findByText(/GitHub rate limit/);
+
+    emit("LogEntryAppended", entry({ id: 9, message: "Reclaimed 3 worktrees" }));
+
+    await waitFor(() => expect(screen.getByText(/Reclaimed 3 worktrees/)).toBeTruthy());
+    const messages = screen
+      .getAllByText(/Reclaimed 3 worktrees|GitHub rate limit/)
+      .map((n) => n.textContent);
+    expect(messages[0]).toMatch(/Reclaimed 3 worktrees/);
+  });
+
+  test("stops appending live lines when Follow live is switched off", async () => {
+    render(<LoggingSettings />);
+    await screen.findByText(/nothing written yet/i);
+
+    fireEvent.click(screen.getByLabelText("Follow the log live"));
+    emit("LogEntryAppended", entry({ id: 9, message: "Reclaimed 3 worktrees" }));
+
+    expect(screen.queryByText(/Reclaimed 3 worktrees/)).toBeNull();
+  });
+
+  test("a level Serilog has and the page does not still reads as a line", async () => {
+    mockEntries([entry({ id: 4, level: "Fatal", message: "The host is going down" })]);
+    render(<LoggingSettings />);
+
+    const line = (await screen.findByText(/The host is going down/)).closest("li")!;
+    expect(within(line).getByText("ERR")).toBeTruthy();
+  });
+
+  test("filters by minimum level", async () => {
+    mockEntries([failure, warning]);
+    render(<LoggingSettings />);
+    await screen.findByText(/GitHub rate limit/);
+
     fireEvent.click(
       within(screen.getByRole("group", { name: "Minimum level" })).getByRole("button", {
         name: "Error",
       }),
     );
 
-    expect(screen.queryByText(/backing off to 120s/)).toBeNull();
-    expect(screen.getAllByText(/provider returned 529/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/GitHub rate limit/)).toBeNull();
+    expect(screen.getByText(/provider returned 529/)).toBeTruthy();
   });
 
-  test("filters by text and reports when nothing matches", () => {
+  test("filters by text and reports when nothing matches", async () => {
+    mockEntries([failure, warning]);
     render(<LoggingSettings />);
+    await screen.findByText(/GitHub rate limit/);
 
-    fireEvent.change(screen.getByLabelText("Filter the log"), { target: { value: "worktrees" } });
-    expect(screen.getAllByText(/Reclaimed 3 worktrees/).length).toBeGreaterThan(0);
-    expect(screen.queryByText(/backing off to 120s/)).toBeNull();
+    fireEvent.change(screen.getByLabelText("Filter the log"), { target: { value: "PrStatus" } });
+    expect(screen.getByText(/GitHub rate limit/)).toBeTruthy();
+    expect(screen.queryByText(/provider returned 529/)).toBeNull();
 
     fireEvent.change(screen.getByLabelText("Filter the log"), { target: { value: "zzz" } });
     expect(screen.getByText(/nothing matches that filter/i)).toBeTruthy();
   });
 
-  test("expands a line that carries a stack trace", () => {
+  test("expands a line that carries a stack trace", async () => {
+    mockEntries([failure]);
     render(<LoggingSettings />);
 
-    const line = screen.getAllByText(/provider returned 529/)[0].closest("button")!;
+    const line = (await screen.findByText(/provider returned 529/)).closest("button")!;
     expect(screen.queryByText(/HttpRequestException/)).toBeNull();
 
     fireEvent.click(line);
     expect(screen.getByText(/HttpRequestException/)).toBeTruthy();
   });
 
-  test("opens the details of a line that carries no stack trace", () => {
+  test("opens the details of a line that carries no stack trace", async () => {
+    mockEntries([warning]);
     render(<LoggingSettings />);
 
-    const line = screen.getAllByText(/Reclaimed 3 worktrees/)[0].closest("button")!;
+    const line = (await screen.findByText(/GitHub rate limit/)).closest("button")!;
     expect(screen.queryByText("Source")).toBeNull();
 
     fireEvent.click(line);
     const details = line.parentElement!.querySelector("dl")!;
-    expect(
-      within(details as HTMLElement).getByText("ILD.Core.WorktreeRetentionSweeper"),
-    ).toBeTruthy();
-    expect(within(details as HTMLElement).getByText("Information")).toBeTruthy();
+    expect(within(details as HTMLElement).getByText("ILD.Core.Remote.PrStatusPoller")).toBeTruthy();
+    expect(within(details as HTMLElement).getByText("Warning")).toBeTruthy();
   });
 
-  test("a second click closes the details again", () => {
+  test("a second click closes the details again", async () => {
+    mockEntries([warning]);
     render(<LoggingSettings />);
 
-    const line = screen.getAllByText(/Reclaimed 3 worktrees/)[0].closest("button")!;
+    const line = (await screen.findByText(/GitHub rate limit/)).closest("button")!;
     fireEvent.click(line);
     expect(line.getAttribute("aria-expanded")).toBe("true");
 
