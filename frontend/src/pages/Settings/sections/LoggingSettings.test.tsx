@@ -185,7 +185,9 @@ describe("Logging settings log view", () => {
     expect(await screen.findByText(/provider returned 529/)).toBeTruthy();
     expect(screen.getByText(/GitHub rate limit/)).toBeTruthy();
     expect(screen.getAllByText("ILD.Core.Executors.AINodeExecutor").length).toBeGreaterThan(0);
-    expect(getEntries).toHaveBeenCalledWith({ take: 200 });
+    expect(getEntries).toHaveBeenCalledWith(
+      expect.objectContaining({ take: 200, minimumLevel: undefined, search: undefined }),
+    );
   });
 
   test("says so when the backend has written nothing, and when it cannot be read", async () => {
@@ -210,6 +212,69 @@ describe("Logging settings log view", () => {
       .getAllByText(/Reclaimed 3 worktrees|GitHub rate limit/)
       .map((n) => n.textContent);
     expect(messages[0]).toMatch(/Reclaimed 3 worktrees/);
+  });
+
+  test("the minimum level is a query the backend answers, not a filter on what is held", async () => {
+    const getEntries = mockEntries([failure, warning]);
+    render(<LoggingSettings />);
+    await screen.findByText(/GitHub rate limit/);
+
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Minimum level" })).getByRole("button", {
+        name: "Warning",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(getEntries).toHaveBeenCalledWith(
+        expect.objectContaining({ take: 200, minimumLevel: "Warning" }),
+      ),
+    );
+  });
+
+  test("asking for Debug asks the backend for Verbose too", async () => {
+    const getEntries = mockEntries([]);
+    render(<LoggingSettings />);
+    await screen.findByText(/nothing written yet/i);
+
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Minimum level" })).getByRole("button", {
+        name: "Debug",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(getEntries).toHaveBeenCalledWith(expect.objectContaining({ minimumLevel: "Verbose" })),
+    );
+  });
+
+  test("the text filter searches the whole log, not the lines already on screen", async () => {
+    const getEntries = mockEntries([failure, warning]);
+    render(<LoggingSettings />);
+    await screen.findByText(/GitHub rate limit/);
+
+    fireEvent.change(screen.getByLabelText("Filter the log"), { target: { value: "rate limit" } });
+
+    await waitFor(() =>
+      expect(getEntries).toHaveBeenCalledWith(
+        expect.objectContaining({ take: 200, search: "rate limit" }),
+      ),
+    );
+  });
+
+  test("resuming Follow live re-reads what was written while it was off", async () => {
+    const getEntries = mockEntries([warning]);
+    render(<LoggingSettings />);
+    await screen.findByText(/GitHub rate limit/);
+    expect(getEntries).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByLabelText("Follow the log live"));
+    getEntries.mockResolvedValue([entry({ id: 9, message: "Written while paused" }), warning]);
+    expect(screen.queryByText(/Written while paused/)).toBeNull();
+
+    fireEvent.click(screen.getByLabelText("Follow the log live"));
+
+    expect(await screen.findByText(/Written while paused/)).toBeTruthy();
   });
 
   test("stops appending live lines when Follow live is switched off", async () => {

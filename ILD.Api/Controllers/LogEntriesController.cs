@@ -45,6 +45,6 @@ public class LogEntriesController : ControllerBase
             floor = parsed;
         }
 
-        return Ok(_buffer.Entries(Math.Clamp(take, 1, _buffer.Capacity), floor, search));
+        return Ok(_buffer.Entries(Math.Clamp(take, 0, _buffer.Capacity), floor, search));
     }
 }

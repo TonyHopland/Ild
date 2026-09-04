@@ -57,7 +57,7 @@ public class LogEntriesControllerTests
 
         Assert.Equal(["line 6", "line 5"], Body(controller.GetEntries(take: 2)).Select(e => e.Message));
         Assert.Equal(4, Body(controller.GetEntries(take: 1000)).Count);
-        Assert.Single(Body(controller.GetEntries(take: 0)));
+        Assert.Empty(Body(controller.GetEntries(take: 0)));
     }
 
     [Fact]

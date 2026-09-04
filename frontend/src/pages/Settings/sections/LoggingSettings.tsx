@@ -6,6 +6,9 @@ import { Segmented, SettingRow, Switch } from "../controls";
 
 const TAKE = 200;
 
+/** Long enough that typing a word is one query rather than one per letter. */
+const TYPING_SETTLES_MS = 250;
+
 const LEVELS = ["Debug", "Information", "Warning", "Error"] as const;
 type Level = (typeof LEVELS)[number];
 
@@ -47,6 +50,18 @@ function toLevel(value: string): Level {
   return "Information";
 }
 
+/**
+ * The floor to ask the backend for. Serilog's Verbose shows here as Debug, so a
+ * minimum of Debug has to let it through or the page hides a line it would then
+ * have labelled DBG.
+ */
+const SERVER_FLOOR: Record<Level, string> = {
+  Debug: "Verbose",
+  Information: "Information",
+  Warning: "Warning",
+  Error: "Error",
+};
+
 function toLine(entry: LogEntry): LogLine {
   return {
     id: entry.id,
@@ -70,19 +85,41 @@ export default function LoggingSettings() {
   const [logError, setLogError] = useState<string | null>(null);
   const [minLevel, setMinLevel] = useState<"All" | Level>("All");
   const [search, setSearch] = useState("");
+  const [settledSearch, setSettledSearch] = useState("");
   const [tailing, setTailing] = useState(true);
   const [expanded, setExpanded] = useState<number | null>(null);
   const changed = useRef(false);
 
   useEffect(() => {
+    const timer = setTimeout(() => setSettledSearch(search.trim()), TYPING_SETTLES_MS);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  // Both filters are the backend's to apply: it holds more lines than the page
+  // asks for, so a search only reaches the ones that have scrolled off if it
+  // goes over the whole buffer. Re-read when following resumes, too — otherwise
+  // whatever was written while it was off is gone from the view for good.
+  useEffect(() => {
+    if (!tailing) return;
+    let stale = false;
     void loggingService
-      .getEntries({ take: TAKE })
+      .getEntries({
+        take: TAKE,
+        minimumLevel: minLevel === "All" ? undefined : SERVER_FLOOR[minLevel],
+        search: settledSearch || undefined,
+      })
       .then((entries) => {
+        if (stale) return;
         setLines(entries.map(toLine));
         setLogError(null);
       })
-      .catch(() => setLogError("Failed to read the log."));
-  }, []);
+      .catch(() => {
+        if (!stale) setLogError("Failed to read the log.");
+      });
+    return () => {
+      stale = true;
+    };
+  }, [tailing, minLevel, settledSearch]);
 
   useEffect(() => {
     if (!tailing) return;
@@ -122,6 +159,11 @@ export default function LoggingSettings() {
 
   const overriding = level !== null && startupLevel !== null && level !== startupLevel;
 
+  const filtering = minLevel !== "All" || search.trim() !== "";
+
+  // The same filter the backend just applied, over lines that have arrived
+  // since: a live one has to be judged by it too, and it never went through the
+  // query that fetched the rest.
   const visible = useMemo(() => {
     const needle = search.trim().toLowerCase();
     const floor = minLevel === "All" ? -1 : LEVELS.indexOf(minLevel);
@@ -214,7 +256,7 @@ export default function LoggingSettings() {
         {logError && <div className="settings-error">{logError}</div>}
         {visible.length === 0 ? (
           <p className="settings-card-note">
-            {lines.length === 0 ? "Nothing written yet." : "Nothing matches that filter."}
+            {filtering ? "Nothing matches that filter." : "Nothing written yet."}
           </p>
         ) : (
           <ul className="log-lines">
