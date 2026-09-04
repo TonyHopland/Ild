@@ -1,5 +1,11 @@
 using System.Net;
 using System.Net.Http.Json;
+using ILD.Core.Services.Interfaces;
+using ILD.Data;
+using ILD.Data.Entities;
+using ILD.Data.Enums;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Tests.Integration;
 
@@ -39,5 +45,132 @@ public class LoopRunsIntegrationTests
         var client = await factory.CreateAuthenticatedClientAsync();
         var response = await client.GetAsync("/api/v1/loopruns/" + Guid.NewGuid());
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    /// <summary>
+    /// Cleanup is the non-destructive counterpart of Delete (ADR-0008): the run
+    /// row and its history survive, but the worktree/branch it named do not, so
+    /// the branch is free for the next run.
+    /// </summary>
+    [Fact]
+    public async Task Cleanup_frees_the_branch_and_keeps_the_run_row()
+    {
+        var reclaimer = new StubRunReclaimer(succeeds: true);
+        await using var factory = NewFactory(reclaimer);
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var runId = SeedRun(factory, LoopRunStatus.Completed, branch: "feature/reclaim-me");
+
+        Assert.Contains("already used locally", await BranchWarningAsync(client, "feature/reclaim-me"));
+
+        var response = await client.PostAsync($"/api/v1/loopruns/{runId}/cleanup", null);
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.Equal([runId], reclaimer.Reclaimed);
+        var run = ReadRun(factory, runId);
+        Assert.NotNull(run);
+        Assert.Null(run!.WorktreePath);
+        Assert.Null(run.BranchName);
+        Assert.Null(await BranchWarningAsync(client, "feature/reclaim-me"));
+    }
+
+    [Fact]
+    public async Task Cleanup_is_rejected_for_a_run_that_has_not_finished()
+    {
+        var reclaimer = new StubRunReclaimer(succeeds: true);
+        await using var factory = NewFactory(reclaimer);
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var runId = SeedRun(factory, LoopRunStatus.Running, branch: "feature/live");
+
+        var response = await client.PostAsync($"/api/v1/loopruns/{runId}/cleanup", null);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Empty(reclaimer.Reclaimed);
+        Assert.Equal("feature/live", ReadRun(factory, runId)!.BranchName);
+    }
+
+    [Fact]
+    public async Task Cleanup_returns_409_and_leaves_the_run_untouched_when_reclaim_fails()
+    {
+        var reclaimer = new StubRunReclaimer(succeeds: false);
+        await using var factory = NewFactory(reclaimer);
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var runId = SeedRun(factory, LoopRunStatus.Failed, branch: "feature/stuck");
+
+        var response = await client.PostAsync($"/api/v1/loopruns/{runId}/cleanup", null);
+
+        // Clearing the pointers on a reclaim that did not happen would hide a
+        // worktree and branch that are still on disk from every later sweep.
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var run = ReadRun(factory, runId);
+        Assert.Equal("feature/stuck", run!.BranchName);
+        Assert.Equal("/tmp/ild-test-worktree", run.WorktreePath);
+    }
+
+    [Fact]
+    public async Task Cleanup_for_unknown_id_returns_404()
+    {
+        await using var factory = NewFactory(new StubRunReclaimer(succeeds: true));
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var response = await client.PostAsync($"/api/v1/loopruns/{Guid.NewGuid()}/cleanup", null);
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    private static ApiFactory NewFactory(IRunReclaimer reclaimer)
+        => new(configureServices: services => services.ReplaceSingleton(reclaimer));
+
+    private static Guid SeedRun(ApiFactory factory, LoopRunStatus status, string branch)
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var template = new LoopTemplate { Id = Guid.NewGuid(), Name = $"cleanup-{Guid.NewGuid():N}" };
+        db.LoopTemplates.Add(template);
+        var version = new LoopTemplateVersion
+        {
+            Id = Guid.NewGuid(),
+            LoopTemplateId = template.Id,
+            VersionNumber = 1,
+            CreatedAt = DateTime.UtcNow,
+        };
+        db.LoopTemplateVersions.Add(version);
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = "wi-" + Guid.NewGuid().ToString("N")[..8],
+            LoopTemplateVersionId = version.Id,
+            Status = status,
+            StartedAt = DateTime.UtcNow.AddHours(-2),
+            WorktreePath = "/tmp/ild-test-worktree",
+            BranchName = branch,
+        };
+        db.LoopRuns.Add(run);
+        db.SaveChanges();
+        return run.Id;
+    }
+
+    private static LoopRun? ReadRun(ApiFactory factory, Guid runId)
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        return db.LoopRuns.AsNoTracking().FirstOrDefault(r => r.Id == runId);
+    }
+
+    private static async Task<string?> BranchWarningAsync(HttpClient client, string name)
+    {
+        var response = await client.GetAsync($"/api/v1/workitems/branch-name-check?name={Uri.EscapeDataString(name)}");
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<BranchNameCheck>())!.Warning;
+    }
+
+    private sealed record BranchNameCheck(string? Error, string? Warning);
+
+    private sealed class StubRunReclaimer(bool succeeds) : IRunReclaimer
+    {
+        public List<Guid> Reclaimed { get; } = [];
+
+        public Task<bool> ReclaimLocalStateAsync(LoopRun run)
+        {
+            Reclaimed.Add(run.Id);
+            return Task.FromResult(succeeds);
+        }
     }
 }

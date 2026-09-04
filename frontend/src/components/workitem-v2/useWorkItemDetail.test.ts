@@ -8,6 +8,7 @@ import {
   loopTemplateService,
   workItemService,
   aiProviderService,
+  loopRunService,
 } from "../../services/auth";
 
 afterEach(() => {
@@ -227,5 +228,52 @@ describe("useWorkItemDetail preview live update", () => {
 
     // No extra fetch — the event was for another item.
     expect(getPreview).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useWorkItemDetail run cleanup", () => {
+  test("frees the run's local git state, then resyncs the work item and run list", async () => {
+    stubServices();
+    mockSignalR({ text: "", lastSeq: 0 });
+    const cleanupRun = vi.spyOn(loopRunService, "cleanup").mockResolvedValue(undefined);
+    const updated = makeWorkItem({ title: "Refetched" });
+    const getById = vi.spyOn(workItemService, "getById").mockResolvedValue(updated);
+    const getRuns = vi.spyOn(workItemService, "getRuns").mockResolvedValue([]);
+
+    const onSave = vi.fn();
+    const { result } = renderHook(() => useWorkItemDetail(makeWorkItem(), onSave));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    getRuns.mockClear();
+
+    await act(async () => {
+      await result.current.handleReclaimRun("run-1");
+      await Promise.resolve();
+    });
+
+    expect(cleanupRun).toHaveBeenCalledWith("run-1");
+    expect(getById).toHaveBeenCalledWith("wi-1");
+    expect(getRuns).toHaveBeenCalledWith("wi-1");
+    expect(onSave).toHaveBeenCalledWith(updated);
+  });
+
+  test("lets a refused cleanup through so the caller can show why", async () => {
+    stubServices();
+    mockSignalR({ text: "", lastSeq: 0 });
+    vi.spyOn(loopRunService, "cleanup").mockRejectedValue(
+      new Error("Could not reclaim the run's worktree/branch"),
+    );
+    const getById = vi.spyOn(workItemService, "getById").mockResolvedValue(makeWorkItem());
+
+    const { result } = renderHook(() => useWorkItemDetail(makeWorkItem(), vi.fn()));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await expect(result.current.handleReclaimRun("run-1")).rejects.toThrow(
+      "Could not reclaim the run's worktree/branch",
+    );
+    expect(getById).not.toHaveBeenCalled();
   });
 });

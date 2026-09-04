@@ -422,6 +422,11 @@ export const loopRunService = {
     return api.delete<void>(`/loopruns/${id}`);
   },
 
+  /** Free a finished run's worktree and branch, keeping the run and its history. */
+  cleanup: async (id: string): Promise<void> => {
+    return api.post<void>(`/loopruns/${id}/cleanup`, {});
+  },
+
   pause: async (id: string): Promise<void> => {
     return api.post<void>(`/loopruns/${id}/pause`, {});
   },

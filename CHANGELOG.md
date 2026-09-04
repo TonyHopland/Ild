@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Clean up a finished run to free the branch it is holding, without losing the run or its history.**
+
 - **Limit which hosts the coding agent may reach, from Settings: a whitelist, a blacklist, and a live log of everywhere it went.**
 
 - **Settings is four linkable pages behind a side menu — Ild, User, Network and Logging — and Logging now shows the backend's own log as it is written.**

@@ -59,7 +59,8 @@ public sealed class BranchNameOverrideService : IBranchNameOverrideService
                 : $"work item {holder.WorkItemId}";
             return Conflict(
                 $"Branch `{name}` is already used locally by run {holder.Id} of {whose}. " +
-                "Delete that run to free the branch, or give this work item a different branch name.");
+                "Clean up that run to free the branch while keeping its history, delete it outright, " +
+                "or give this work item a different branch name.");
         }
 
         if (repositoryId is null)

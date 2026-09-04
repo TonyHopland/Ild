@@ -26,6 +26,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     private readonly FakeWorkItemServerHarness _serverHarness = new();
     private readonly string _dataRoot;
     private readonly IReadOnlyDictionary<string, string?> _extraConfiguration;
+    private readonly Action<IServiceCollection>? _configureServices;
 
     public string AdminPassword { get; } = "ild-int-tests-admin-pw";
 
@@ -35,9 +36,16 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     /// <c>ILD_PREVIEW_PROXY_BASE</c>. Supplied here rather than as environment
     /// variables so parallel factories cannot see each other's values.
     /// </param>
-    public ApiFactory(IReadOnlyDictionary<string, string?>? extraConfiguration = null)
+    /// <param name="configureServices">
+    /// Applied last, after the test defaults, so a test can swap in a stub for a
+    /// service the pipeline would otherwise reach the real world through.
+    /// </param>
+    public ApiFactory(
+        IReadOnlyDictionary<string, string?>? extraConfiguration = null,
+        Action<IServiceCollection>? configureServices = null)
     {
         _extraConfiguration = extraConfiguration ?? new Dictionary<string, string?>();
+        _configureServices = configureServices;
         _connection = new SqliteConnection("DataSource=:memory:");
         _connection.Open();
         _dataRoot = Path.Combine(Path.GetTempPath(), "ild-int-" + Guid.NewGuid().ToString("N"));
@@ -88,6 +96,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             services.RemoveAll<IWorkItemServerOptionsResolver>();
             services.AddSingleton<IWorkItemServerClient>(_serverHarness.Client);
             services.AddSingleton<IWorkItemServerOptionsResolver>(_serverHarness.Options);
+
+            _configureServices?.Invoke(services);
         });
     }
 
