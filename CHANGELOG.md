@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Run work items against Azure DevOps repositories, the same way you already can against GitHub and Forgejo ones.**
 
-- **Let ILD retry a run the AI provider throttled, instead of waiting for you to resume it.** Off until you turn it on in Settings.
+- **Let ILD retry a run the AI provider throttled, instead of waiting for you to resume it, once you turn it on in Settings.**
 
 ### Fixed
 

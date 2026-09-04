@@ -120,12 +120,7 @@ public sealed class ThrottledRunResumeSweeper : BackgroundService
         var maxRetries = await settings.GetThrottleMaxRetriesAsync(ct);
 
         var runStore = sp.GetRequiredService<ILoopRunStore>();
-        var parked = (await runStore.GetActiveRunsAsync())
-            .Where(r => r.Status == LoopRunStatus.WaitingHuman
-                && r.IsHalted
-                && r.HaltReason == HaltReason.Throttled
-                && !r.IsPaused)
-            .ToList();
+        var parked = await runStore.GetThrottleParkedRunsAsync();
         if (parked.Count == 0) return;
 
         var now = DateTime.UtcNow;

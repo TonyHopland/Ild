@@ -95,16 +95,14 @@ public sealed class StuckRunWatchdog : BackgroundService
 
         // Superset of the orphaned-Running sweep by one shape — the shutdown park
         // startup never came back for — which is exactly what makes it the same
-        // question recovery asks, so LoopRun.IsRecoverable answers both. Startup
+        // question recovery asks, so LoopRun.Recoverable answers both. Startup
         // reconciliation is skipped wholesale when the
         // work-item server is unreachable — exactly what happens when one deploy
         // rolls both containers — and swallows its own failures, so without this
         // backstop the tidiest possible shutdown could park a run forever, which
         // is worse than the hard kill it replaces. Every per-run guard below then
         // applies unchanged.
-        var running = (await runStore.GetActiveRunsAsync())
-            .Where(r => r.IsRecoverable)
-            .ToList();
+        var running = await runStore.GetRecoverableRunsAsync();
         if (running.Count == 0) return;
 
         // In-process liveness: any run with a driving task is healthy and is

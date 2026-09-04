@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
+using System.Linq.Expressions;
 using ILD.Data.Enums;
 
 namespace ILD.Data.Entities;
@@ -46,31 +47,58 @@ public class LoopRun : IHasUpdatedAt
     /// <summary>
     /// The run was parked by the shutdown drain, not by a person: the halt this
     /// process inflicted on itself on the way out, and the one it resumes on the
-    /// next start. Computed rather than stored so the four readers that decide
-    /// whether to auto-resume — recovery, the startup reconciler, the stuck-run
-    /// watchdog and the drain's own tests — cannot drift apart.
+    /// next start.
     /// </summary>
-    [NotMapped]
-    public bool IsShutdownHalted =>
-        Status == LoopRunStatus.WaitingHuman && IsHalted && HaltReason == Enums.HaltReason.Shutdown;
+    public static readonly Expression<Func<LoopRun, bool>> ShutdownHalted =
+        r => r.Status == LoopRunStatus.WaitingHuman
+            && r.IsHalted
+            && r.HaltReason == Enums.HaltReason.Shutdown;
 
     /// <summary>
     /// The run needs a driver again and nobody else is coming for it: either a
     /// crash left it <see cref="LoopRunStatus.Running"/> with its driving loop
     /// gone, or the shutdown drain parked it on the way out. The two arrive at
     /// startup in different row shapes but want the same answer to the only
-    /// question startup asks — is this ours to pick up? — so the shapes are
-    /// spelled out once here rather than at each of the readers (recovery, the
-    /// stuck-run watchdog), which would otherwise have to be edited in step
-    /// whenever a halt reason or status is added.
+    /// question startup asks — is this ours to pick up?
     ///
-    /// Deliberately <b>not</b> a database query: both callers already read the
-    /// live set through <c>ILoopRunStore.GetActiveRunsAsync</c> and filter in
-    /// memory, and translating this to SQL would put the same knowledge back in
-    /// a second place.
+    /// Written out rather than composed from <see cref="ShutdownHalted"/>
+    /// because EF has to translate this one whole; the two say the same thing
+    /// about a drained run and change together.
+    /// </summary>
+    public static readonly Expression<Func<LoopRun, bool>> Recoverable =
+        r => r.Status == LoopRunStatus.Running
+            || (r.Status == LoopRunStatus.WaitingHuman
+                && r.IsHalted
+                && r.HaltReason == Enums.HaltReason.Shutdown);
+
+    /// <summary>
+    /// A run parked by a Provider Interruption and eligible for the opt-in
+    /// automatic retry: throttled, and not paused by a person on top of that.
+    /// Deliberately narrower than "halted" — every other halt reason belongs to
+    /// somebody else (a human, startup, the traversal cap).
+    /// </summary>
+    public static readonly Expression<Func<LoopRun, bool>> ThrottleParked =
+        r => r.Status == LoopRunStatus.WaitingHuman
+            && r.IsHalted
+            && r.HaltReason == Enums.HaltReason.Throttled
+            && !r.IsPaused;
+
+    private static readonly Func<LoopRun, bool> ShutdownHaltedHere = ShutdownHalted.Compile();
+    private static readonly Func<LoopRun, bool> RecoverableHere = Recoverable.Compile();
+
+    /// <summary>
+    /// <see cref="ShutdownHalted"/> asked of this run. The readers that decide
+    /// whether to auto-resume — recovery, the startup reconciler, the stuck-run
+    /// watchdog and the drain's own tests — go through the one expression, in
+    /// memory here and in SQL where a store queries for them, so the two cannot
+    /// drift apart.
     /// </summary>
     [NotMapped]
-    public bool IsRecoverable => Status == LoopRunStatus.Running || IsShutdownHalted;
+    public bool IsShutdownHalted => ShutdownHaltedHere(this);
+
+    /// <summary><see cref="Recoverable"/> asked of this run.</summary>
+    [NotMapped]
+    public bool IsRecoverable => RecoverableHere(this);
 
     /// <summary>
     /// The live AI session id captured mid-stream by the active adapter, so a

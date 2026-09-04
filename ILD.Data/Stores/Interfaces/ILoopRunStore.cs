@@ -48,6 +48,26 @@ public interface ILoopRunStore
     Task<IReadOnlyList<LoopRun>> GetActiveRunsAsync();
 
     /// <summary>
+    /// Runs that need a driver again and nobody else is coming for
+    /// (<see cref="LoopRun.Recoverable"/>): a crash left them Running, or the
+    /// shutdown drain parked them. Backs the stuck-run watchdog, which asks
+    /// every minute and only reads — hence untracked and filtered in SQL rather
+    /// than <see cref="GetActiveRunsAsync"/> sifted in memory, which would drag
+    /// every parked run into the change tracker each pass. A run it goes on to
+    /// heal is written through <see cref="UpdateRunAsync"/>, which attaches.
+    /// </summary>
+    Task<IReadOnlyList<LoopRun>> GetRecoverableRunsAsync();
+
+    /// <summary>
+    /// Runs parked by a Provider Interruption and eligible for the opt-in
+    /// automatic retry (<see cref="LoopRun.ThrottleParked"/>). Backs the throttle
+    /// resume sweeper — same untracked, ask-for-what-you-need reasoning as
+    /// <see cref="GetRecoverableRunsAsync"/>; the sweeper only reads these and
+    /// resumes by id.
+    /// </summary>
+    Task<IReadOnlyList<LoopRun>> GetThrottleParkedRunsAsync();
+
+    /// <summary>
     /// The Active Work Item Set: the work items this instance is currently
     /// working on, one per run <see cref="GetActiveRunsAsync"/> considers alive.
     /// The scheduler derives it fresh on every poll pass rather than maintaining
