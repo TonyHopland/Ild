@@ -20,11 +20,15 @@ try
 {
     var builder = WebApplication.CreateBuilder(args);
 
+    var logBuffer = new ILD.Api.Configuration.LogEntryBuffer(
+        builder.Configuration.GetValue("Serilog:BufferedEntries", ILD.Api.Configuration.LogEntryBuffer.DefaultCapacity));
+
     builder.Host.UseSerilog((context, _, loggerConfiguration) =>
     {
         loggerConfiguration
             .Enrich.FromLogContext()
-            .MinimumLevel.ControlledBy(loggingLevelSwitch);
+            .MinimumLevel.ControlledBy(loggingLevelSwitch)
+            .WriteTo.Sink(logBuffer);
 
         if (context.Configuration.GetValue("Serilog:WriteToConsole", true))
         {
@@ -73,6 +77,8 @@ try
             host.ShutdownTimeout = shutdown.HostShutdownTimeout);
 
     builder.Services.AddSingleton<LoggingLevelSwitch>(loggingLevelSwitch);
+    builder.Services.AddSingleton(new ILD.Api.Configuration.StartupLogLevel(initialLogLevel));
+    builder.Services.AddSingleton(logBuffer);
 
     builder.Services.AddControllers()
         .AddJsonOptions(o =>
@@ -112,6 +118,11 @@ try
     var app = builder.Build();
 
     _ = app.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>();
+
+    // Attached here rather than injected: the buffer is a sink, so it is built
+    // before the container holding the hub is.
+    var logNotifier = app.Services.GetRequiredService<ILD.Api.Configuration.SignalRLogNotifier>();
+    logBuffer.Appended = entry => _ = logNotifier.LogEntryAppendedAsync(entry);
 
     using (var scope = app.Services.CreateScope())
     {

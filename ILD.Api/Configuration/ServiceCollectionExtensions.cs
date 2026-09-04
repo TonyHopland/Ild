@@ -103,6 +103,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IRunProgressBuffer, RunProgressBuffer>();
         services.AddSingleton<IRunNotifier, SignalRRunNotifier>();
         services.AddSingleton<IWorkItemNotifier, SignalRWorkItemNotifier>();
+        services.AddSingleton<SignalRLogNotifier>();
 
         // Agent egress filter (ADR-0019): the proxy every agent launch is pointed
         // at, the cached policy it consults, the recorder that persists what it

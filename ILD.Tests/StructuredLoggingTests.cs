@@ -35,7 +35,7 @@ public class StructuredLoggingTests
     public void Put_logging_level_with_valid_level_returns_ok()
     {
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Information);
-        var controller = new ILD.Api.Controllers.LoggingController(levelSwitch);
+        var controller = new ILD.Api.Controllers.LoggingController(levelSwitch, new ILD.Api.Configuration.StartupLogLevel(LogEventLevel.Information));
 
         var result = controller.SetLevel(new ILD.Api.Controllers.LoggingController.LogLevelRequest { Level = "Debug" });
 
@@ -47,7 +47,7 @@ public class StructuredLoggingTests
     public void Put_logging_level_with_invalid_level_returns_bad_request()
     {
         var levelSwitch = new LoggingLevelSwitch(LogEventLevel.Information);
-        var controller = new ILD.Api.Controllers.LoggingController(levelSwitch);
+        var controller = new ILD.Api.Controllers.LoggingController(levelSwitch, new ILD.Api.Configuration.StartupLogLevel(LogEventLevel.Information));
 
         var result = controller.SetLevel(new ILD.Api.Controllers.LoggingController.LogLevelRequest { Level = "Invalid" });
 

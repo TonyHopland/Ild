@@ -48,3 +48,17 @@ public record NetworkPolicyChangedPayload();
 public record NetworkLogAppendedPayload(Guid Id, string Host, int Port, DateTime Timestamp, string Decision, Guid? AiProviderId);
 
 public record NetworkLogClearedPayload();
+
+/// <summary>
+/// One line of the process's own log: what <c>GET /api/v1/logging/entries</c>
+/// returns and what a live line arrives as, so the Logging settings page reads
+/// one shape from both. <paramref name="Detail"/> is the exception the event
+/// carried, when it carried one.
+/// </summary>
+public record LogEntryPayload(
+    long Id,
+    DateTimeOffset Timestamp,
+    string Level,
+    string Source,
+    string Message,
+    string? Detail);
