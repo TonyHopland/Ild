@@ -11,23 +11,31 @@ public sealed class RunReclaimer : IRunReclaimer
 {
     private readonly IRepositoryManager _repo;
     private readonly IProviderStore _providers;
+    private readonly IWorktreePreviewService _preview;
+    private readonly IWorkItemNotifier _notifier;
     private readonly IConfiguration? _config;
     private readonly ILogger<RunReclaimer>? _log;
 
     public RunReclaimer(
         IRepositoryManager repo,
         IProviderStore providers,
+        IWorktreePreviewService? preview = null,
+        IWorkItemNotifier? notifier = null,
         IConfiguration? config = null,
         ILogger<RunReclaimer>? log = null)
     {
         _repo = repo;
         _providers = providers;
+        _preview = preview ?? new NoopPreviewService();
+        _notifier = notifier ?? new NoopWorkItemNotifier();
         _config = config;
         _log = log;
     }
 
     public async Task<bool> ReclaimLocalStateAsync(LoopRun run)
     {
+        await StopPreviewIfRunningAsync(run);
+
         // Resolve the base repo before destroying the worktree — afterwards
         // the branch can no longer be located through it.
         string? baseRepoPath = null;
@@ -81,6 +89,32 @@ public sealed class RunReclaimer : IRunReclaimer
         {
             _log?.LogWarning(ex, "Failed to delete branch {Branch} for run {RunId}", run.BranchName, run.Id);
             return false;
+        }
+    }
+
+    /// <summary>
+    /// A preview's processes and ports outlive the directory they were started
+    /// in, and every preview endpoint is addressed by worktree path — so a
+    /// worktree destroyed under a live preview leaves it running with no way
+    /// left to reach its stop control. Same rule the Done transition applies
+    /// (<see cref="WorkItemManager"/>): stop it while the user still could.
+    /// Best-effort, like that one — a preview that will not stop must not
+    /// strand the worktree and branch it is sitting on.
+    /// </summary>
+    private async Task StopPreviewIfRunningAsync(LoopRun run)
+    {
+        if (string.IsNullOrEmpty(run.WorktreePath) || !_preview.IsPreviewRunning(run.WorktreePath))
+            return;
+
+        try
+        {
+            await _preview.StopAsync(run.WorktreePath);
+            await _notifier.PreviewStateChangedAsync(run.WorkItemId);
+        }
+        catch (Exception ex)
+        {
+            _log?.LogWarning(ex, "Failed to stop the preview on {Path} before reclaiming run {RunId}",
+                run.WorktreePath, run.Id);
         }
     }
 

@@ -251,8 +251,10 @@ public class LoopRunsController : ControllerBase
 
         var run = await _loopRunStore.GetByIdAsync(guid);
         if (run == null) return NotFound();
-        // Stricter than Delete: a WaitingHuman run can still be resumed into its
-        // worktree, and unlike a delete this leaves the row behind to resume.
+        // Stricter than Delete: resuming a WaitingHuman run is its expected next
+        // step and re-enters at CurrentNodeId without passing through Start, so
+        // it would not re-create what this destroys. A finished run's ↻ Retry
+        // would — or fails cleanly on a node that needs a worktree.
         if (run.Status is ILD.Data.Enums.LoopRunStatus.Running or ILD.Data.Enums.LoopRunStatus.WaitingHuman)
             return BadRequest(new { error = "Cannot clean up a run that has not finished. Cancel it first." });
 

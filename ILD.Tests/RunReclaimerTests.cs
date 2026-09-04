@@ -1,6 +1,7 @@
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
+using ILD.Data.DTOs;
 using ILD.Data.Stores.Interfaces;
 using Moq;
 
@@ -113,8 +114,77 @@ public class RunReclaimerTests : IDisposable
         repo.Verify(r => r.DeleteLocalBranchAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
     }
 
-    private static RunReclaimer Build(Mock<IRepositoryManager> repo)
-        => new(repo.Object, new Mock<IProviderStore>().Object);
+    [Fact]
+    public async Task Reclaim_stops_a_preview_on_the_worktree_before_destroying_it()
+    {
+        var worktree = NewTempDir();
+        var repo = new Mock<IRepositoryManager>();
+        var order = new List<string>();
+        repo.Setup(r => r.ResolveBaseRepoPathAsync(worktree)).ReturnsAsync("/repos/x");
+        repo.Setup(r => r.DestroyWorktreeAsync(worktree))
+            .Callback(() => { order.Add("destroy"); Directory.Delete(worktree, recursive: true); })
+            .Returns(Task.CompletedTask);
+        repo.Setup(r => r.LocalBranchExistsAsync("/repos/x", "ild/wi-a-run-1")).ReturnsAsync(false);
+
+        var preview = new Mock<IWorktreePreviewService>();
+        preview.Setup(p => p.IsPreviewRunning(worktree)).Returns(true);
+        preview.Setup(p => p.StopAsync(worktree, default))
+            .Callback(() => order.Add("stop"))
+            .ReturnsAsync(new WorktreePreviewResponse());
+        var notifier = new Mock<IWorkItemNotifier>();
+
+        var ok = await Build(repo, preview, notifier).ReclaimLocalStateAsync(Run(worktree, "ild/wi-a-run-1"));
+
+        Assert.True(ok);
+        // Destroying first would leave the preview holding its ports with no
+        // worktree path left to address its stop control by.
+        Assert.Equal(["stop", "destroy"], order);
+        notifier.Verify(n => n.PreviewStateChangedAsync("wi-a"), Times.Once);
+    }
+
+    [Fact]
+    public async Task Reclaim_proceeds_when_the_preview_refuses_to_stop()
+    {
+        var worktree = NewTempDir();
+        var repo = new Mock<IRepositoryManager>();
+        repo.Setup(r => r.ResolveBaseRepoPathAsync(worktree)).ReturnsAsync("/repos/x");
+        repo.Setup(r => r.DestroyWorktreeAsync(worktree))
+            .Callback(() => Directory.Delete(worktree, recursive: true))
+            .Returns(Task.CompletedTask);
+        repo.Setup(r => r.LocalBranchExistsAsync("/repos/x", "ild/wi-a-run-1")).ReturnsAsync(false);
+
+        var preview = new Mock<IWorktreePreviewService>();
+        preview.Setup(p => p.IsPreviewRunning(worktree)).Returns(true);
+        preview.Setup(p => p.StopAsync(worktree, default)).ThrowsAsync(new InvalidOperationException("boom"));
+
+        // A preview that will not stop must not strand the worktree and branch
+        // it is sitting on — the retention sweeper would retry forever.
+        Assert.True(await Build(repo, preview).ReclaimLocalStateAsync(Run(worktree, "ild/wi-a-run-1")));
+        repo.Verify(r => r.DestroyWorktreeAsync(worktree), Times.Once);
+    }
+
+    [Fact]
+    public async Task Reclaim_does_not_touch_the_preview_service_when_none_is_running()
+    {
+        var worktree = NewTempDir();
+        var repo = new Mock<IRepositoryManager>();
+        repo.Setup(r => r.ResolveBaseRepoPathAsync(worktree)).ReturnsAsync("/repos/x");
+        repo.Setup(r => r.DestroyWorktreeAsync(worktree))
+            .Callback(() => Directory.Delete(worktree, recursive: true))
+            .Returns(Task.CompletedTask);
+        repo.Setup(r => r.LocalBranchExistsAsync("/repos/x", "ild/wi-a-run-1")).ReturnsAsync(false);
+
+        var preview = new Mock<IWorktreePreviewService>(MockBehavior.Strict);
+        preview.Setup(p => p.IsPreviewRunning(worktree)).Returns(false);
+
+        Assert.True(await Build(repo, preview).ReclaimLocalStateAsync(Run(worktree, "ild/wi-a-run-1")));
+    }
+
+    private static RunReclaimer Build(
+        Mock<IRepositoryManager> repo,
+        Mock<IWorktreePreviewService>? preview = null,
+        Mock<IWorkItemNotifier>? notifier = null)
+        => new(repo.Object, new Mock<IProviderStore>().Object, preview?.Object, notifier?.Object);
 
     private static LoopRun Run(string? worktree, string? branch) => new()
     {
