@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
@@ -254,6 +255,56 @@ public class AINodeExecutorThrottleParkTests
         // Appended after rendering: the note is the human's own words, not a
         // template field (ADR-0011).
         Assert.Equal("do the work\n\nuse {{the}} smaller model", Assert.Single(adapter.Calls).Prompt);
+    }
+
+    [Fact]
+    public async Task The_park_carries_the_reset_time_out_of_the_providers_own_notice()
+    {
+        using var db = new TestDb();
+        // The notice states when the limit lifts; the executor is where the
+        // provider's words are still in hand, so it is where they are read.
+        // Stated as a wait rather than a clock time, so this pins the wiring
+        // without depending on what time of day the suite runs at — which times
+        // of day a "(UTC)" notice is honoured at is AiFailureResetTimeTests'
+        // job, where "now" is a parameter.
+        var adapter = new ScriptedAdapter(_ => ThrottledExit("rate_limit_error · try again in 20 minutes"));
+        var sp = BuildServices(db, adapter);
+
+        var parked = Assert.IsType<NodeOutcome.Interrupted>((await RunAsync(sp, SeedRun(db))).Last());
+
+        Assert.Equal(DateTime.UtcNow.AddMinutes(20), parked.ResetAt!.Value, TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
+    public async Task A_notice_that_states_no_time_parks_without_a_deadline()
+    {
+        using var db = new TestDb();
+        var adapter = new ScriptedAdapter(_ => ThrottledExit("You've hit your session limit"));
+        var sp = BuildServices(db, adapter);
+
+        var parked = Assert.IsType<NodeOutcome.Interrupted>((await RunAsync(sp, SeedRun(db))).Last());
+
+        Assert.Null(parked.ResetAt);
+    }
+
+    [Fact]
+    public async Task An_automatic_resume_continues_the_captured_session()
+    {
+        using var db = new TestDb();
+        var adapter = new ScriptedAdapter(_ => NodeExecutionResult.Ok("done"));
+        var sp = BuildServices(db, adapter);
+        // The note ILD writes when it resumes a throttle park itself. It has to
+        // read as the next turn of the interrupted session, because that is what
+        // the executor does with any non-null note — the node's own prompt is
+        // never re-sent.
+        var run = SeedRun(db, sessionId: "sess-auto-1",
+            steeringNote: ThrottledRunResumeSweeper.AutomaticResumeNote);
+
+        await RunAsync(sp, run);
+
+        var call = Assert.Single(adapter.Calls);
+        Assert.Equal("sess-auto-1", call.SessionId);
+        Assert.Equal(ThrottledRunResumeSweeper.AutomaticResumeNote, call.Prompt);
     }
 
     [Fact]

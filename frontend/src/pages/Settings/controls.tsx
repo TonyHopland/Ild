@@ -73,6 +73,62 @@ export function Segmented<T extends string>({
   );
 }
 
+interface ToggleSettingFieldProps {
+  /** The app-setting key this switch reads and writes. */
+  settingKey: string;
+  label: string;
+  /** Help text beside the switch. */
+  children?: React.ReactNode;
+}
+
+/**
+ * One boolean app setting, saved the moment it is flipped — there is nothing to
+ * validate and nothing to draft, so a Save button would only be a step between
+ * the user and the one bit they came to change. A save that fails puts the
+ * switch back and says why, rather than leaving the page claiming a setting the
+ * server never took.
+ */
+export function ToggleSettingField({ settingKey, label, children }: ToggleSettingFieldProps) {
+  const [checked, setChecked] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void settingsService
+      .get(settingKey)
+      // Case-insensitive because the API validates with bool.TryParse: a value
+      // written as "True" is on to every backend reader, and a switch showing it
+      // off would be the only thing in the system that disagrees.
+      .then((s) => setChecked(s.value.toLowerCase() === "true"))
+      // Unreachable API: leave it showing off rather than a value we invented.
+      .catch(() => {});
+  }, [settingKey]);
+
+  const save = async (next: boolean) => {
+    setChecked(next);
+    setError(null);
+    try {
+      await settingsService.put(settingKey, next ? "true" : "false");
+    } catch (err) {
+      setChecked(!next);
+      setError(err instanceof Error ? err.message : "Failed to save.");
+    }
+  };
+
+  return (
+    <SettingRow
+      label={label}
+      help={
+        <>
+          {children}
+          {error && <span className="settings-error"> {error}</span>}
+        </>
+      }
+    >
+      <Switch checked={checked} onChange={(v) => void save(v)} label={label} />
+    </SettingRow>
+  );
+}
+
 interface NumericSettingFieldProps {
   /** The app-setting key this field reads and writes. Also the input's id. */
   settingKey: string;

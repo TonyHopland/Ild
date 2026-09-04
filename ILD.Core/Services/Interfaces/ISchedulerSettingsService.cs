@@ -46,6 +46,32 @@ public static class AppSettingKeys
     public const int DefaultMaxAiTraversals = 25;
 
     /// <summary>
+    /// Whether ILD retries a run parked by a Provider Interruption
+    /// (<c>HaltReason.Throttled</c>) on its own, rather than leaving it for a
+    /// person to Resume. Off by default, and a run whose automatic retries run
+    /// out parks for a human anyway — which is what happens for every such park
+    /// while this is off.
+    /// </summary>
+    public const string ThrottleAutoResume = "throttle.autoResume";
+    public const bool DefaultThrottleAutoResume = false;
+
+    /// <summary>
+    /// Minutes a Provider Interruption park waits before each automatic retry.
+    /// A reset time stated in the provider's own notice can push an attempt
+    /// later than this, never earlier.
+    /// </summary>
+    public const string ThrottleRetryDelayMinutes = "throttle.retryDelayMinutes";
+    public const int DefaultThrottleRetryDelayMinutes = 60;
+
+    /// <summary>
+    /// Automatic retries a run may spend before it is left parked for a person,
+    /// counted — like <see cref="MaxAiTraversals"/> — since a human last touched
+    /// the run.
+    /// </summary>
+    public const string ThrottleMaxRetries = "throttle.maxRetries";
+    public const int DefaultThrottleMaxRetries = 6;
+
+    /// <summary>
     /// Days a sign-in survives without being used. Re-evaluated on every
     /// request, so lowering it signs idle devices out immediately. <c>0</c>
     /// disables idle expiry.
@@ -89,4 +115,13 @@ public interface ISchedulerSettingsService
 
     /// <summary>AI nodes a run may execute between human interactions (minimum 1).</summary>
     Task<int> GetMaxAiTraversalsAsync(CancellationToken ct = default);
+
+    /// <summary>Whether ILD retries a Provider Interruption park itself instead of a person.</summary>
+    Task<bool> GetThrottleAutoResumeAsync(CancellationToken ct = default);
+
+    /// <summary>Minutes between automatic retries of a Provider Interruption park (minimum 1).</summary>
+    Task<int> GetThrottleRetryDelayMinutesAsync(CancellationToken ct = default);
+
+    /// <summary>Automatic retries a run may spend before it parks for a person (minimum 1).</summary>
+    Task<int> GetThrottleMaxRetriesAsync(CancellationToken ct = default);
 }

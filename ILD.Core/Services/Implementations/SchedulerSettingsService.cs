@@ -37,6 +37,27 @@ public sealed class SchedulerSettingsService : ISchedulerSettingsService
         return AppSettingKeys.DefaultPrHeartbeatSeconds;
     }
 
+    public async Task<bool> GetThrottleAutoResumeAsync(CancellationToken ct = default)
+    {
+        var s = await _store.GetByKeyAsync(AppSettingKeys.ThrottleAutoResume, ct);
+        if (s != null && bool.TryParse(s.Value, out var v)) return v;
+        return AppSettingKeys.DefaultThrottleAutoResume;
+    }
+
+    public async Task<int> GetThrottleRetryDelayMinutesAsync(CancellationToken ct = default)
+    {
+        var s = await _store.GetByKeyAsync(AppSettingKeys.ThrottleRetryDelayMinutes, ct);
+        if (s != null && int.TryParse(s.Value, out var v) && v > 0) return v;
+        return AppSettingKeys.DefaultThrottleRetryDelayMinutes;
+    }
+
+    public async Task<int> GetThrottleMaxRetriesAsync(CancellationToken ct = default)
+    {
+        var s = await _store.GetByKeyAsync(AppSettingKeys.ThrottleMaxRetries, ct);
+        if (s != null && int.TryParse(s.Value, out var v) && v > 0) return v;
+        return AppSettingKeys.DefaultThrottleMaxRetries;
+    }
+
     public async Task<int> GetMaxAiTraversalsAsync(CancellationToken ct = default)
     {
         var s = await _store.GetByKeyAsync(AppSettingKeys.MaxAiTraversals, ct);

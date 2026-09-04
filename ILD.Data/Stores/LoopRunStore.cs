@@ -100,6 +100,18 @@ public class LoopRunStore : ILoopRunStore
     public async Task<IReadOnlyList<LoopRun>> GetActiveRunsAsync()
         => await _db.LoopRuns.Where(IsAlive).ToListAsync();
 
+    // The two sweeps below run on a timer for the life of the process, so they
+    // ask the database for the runs they act on rather than for every live run
+    // to sift in memory: the predicate is the entity's own (one definition,
+    // evaluated in SQL here and in memory by the matching property), and
+    // AsNoTracking keeps a pass that touches nothing from filling the change
+    // tracker — the same reasoning as GetActiveWorkItemIdsAsync.
+    public async Task<IReadOnlyList<LoopRun>> GetRecoverableRunsAsync()
+        => await _db.LoopRuns.AsNoTracking().Where(LoopRun.Recoverable).ToListAsync();
+
+    public async Task<IReadOnlyList<LoopRun>> GetThrottleParkedRunsAsync()
+        => await _db.LoopRuns.AsNoTracking().Where(LoopRun.ThrottleParked).ToListAsync();
+
     public async Task<IReadOnlyList<string>> GetActiveWorkItemIdsAsync()
     {
         // Projecting the one column the caller wants is also what keeps these

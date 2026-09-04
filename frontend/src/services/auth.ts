@@ -670,6 +670,11 @@ export const SchedulerSettingKeys = {
   RunRetentionDays: "run.retentionDays",
   PrHeartbeatSeconds: "pr.heartbeatSeconds",
   MaxAiTraversals: "ai.maxTraversals",
+  /** Retry a run parked by a provider interruption without waiting for a person. */
+  ThrottleAutoResume: "throttle.autoResume",
+  /** Minutes between those automatic retries, and how many a run may spend. */
+  ThrottleRetryDelayMinutes: "throttle.retryDelayMinutes",
+  ThrottleMaxRetries: "throttle.maxRetries",
 } as const;
 
 /** How long a sign-in survives. `0` disables that limit. */

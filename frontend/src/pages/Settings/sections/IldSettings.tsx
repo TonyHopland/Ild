@@ -1,14 +1,12 @@
 import { useEffect, useState } from "react";
-import { SchedulerSettingKeys, settingsService } from "../../../services/auth";
-import { NumericSettingField, SettingRow, Switch } from "../controls";
+import { SchedulerSettingKeys } from "../../../services/auth";
+import { NumericSettingField, SettingRow, ToggleSettingField } from "../controls";
 
 /**
  * How the loop engine behaves: how much it runs at once, how far it goes on its
  * own, and how long it keeps what it produced.
  */
 export default function IldSettings() {
-  const [paused, setPaused] = useState(false);
-  const [pauseError, setPauseError] = useState<string | null>(null);
   const [version, setVersion] = useState("");
 
   useEffect(() => {
@@ -17,25 +15,6 @@ export default function IldSettings() {
       .then((data) => setVersion(data.version ?? ""))
       .catch(() => {});
   }, []);
-
-  useEffect(() => {
-    void settingsService
-      .get(SchedulerSettingKeys.IsPaused)
-      .then((s) => setPaused(s.value === "true"))
-      .catch(() => {});
-  }, []);
-
-  const togglePause = async (next: boolean) => {
-    const previous = paused;
-    setPaused(next);
-    setPauseError(null);
-    try {
-      await settingsService.put(SchedulerSettingKeys.IsPaused, next ? "true" : "false");
-    } catch (err) {
-      setPaused(previous);
-      setPauseError(err instanceof Error ? err.message : "Failed to save.");
-    }
-  };
 
   return (
     <>
@@ -48,21 +27,9 @@ export default function IldSettings() {
         <div className="settings-card-header">
           <h3 className="settings-card-title">Scheduler</h3>
         </div>
-        <SettingRow
-          label="Pause the scheduler"
-          help={
-            <>
-              Nothing new starts while this is on. Runs already going carry on to their next node.
-              {pauseError && <span className="settings-error"> {pauseError}</span>}
-            </>
-          }
-        >
-          <Switch
-            checked={paused}
-            onChange={(v) => void togglePause(v)}
-            label="Pause the scheduler"
-          />
-        </SettingRow>
+        <ToggleSettingField settingKey={SchedulerSettingKeys.IsPaused} label="Pause the scheduler">
+          Nothing new starts while this is on. Runs already going carry on to their next node.
+        </ToggleSettingField>
         <NumericSettingField
           settingKey={SchedulerSettingKeys.MaxConcurrent}
           label="Max concurrent running work items"
@@ -102,6 +69,43 @@ export default function IldSettings() {
           How often the background poller fetches PR state (CI, reviews, merge status) for runs
           parked at a PR node awaiting merge. Lower values react faster but use more provider API
           calls.
+        </NumericSettingField>
+      </section>
+
+      <section className="settings-card">
+        <div className="settings-card-header">
+          <h3 className="settings-card-title">Provider interruptions</h3>
+        </div>
+        <ToggleSettingField
+          settingKey={SchedulerSettingKeys.ThrottleAutoResume}
+          label="Resume throttled runs automatically"
+        >
+          When the AI provider stops a step — a usage or session limit, a busy provider — the run
+          waits in Human Feedback for you to click <strong>Resume</strong>. Turn this on to have ILD
+          try the resume for you instead, never before the reset time the provider named. When the
+          attempts below run out it leaves the run for you; resuming it yourself gives it a fresh
+          set.
+        </ToggleSettingField>
+        <NumericSettingField
+          settingKey={SchedulerSettingKeys.ThrottleRetryDelayMinutes}
+          label="Wait between attempts"
+          min={1}
+          max={1440}
+          fallback={60}
+          unit="minutes"
+        >
+          How long a throttled run waits before each automatic attempt. A reset time the provider
+          stated can push an attempt later than this, never earlier.
+        </NumericSettingField>
+        <NumericSettingField
+          settingKey={SchedulerSettingKeys.ThrottleMaxRetries}
+          label="Attempts before asking you"
+          min={1}
+          max={100}
+          fallback={6}
+        >
+          How many automatic attempts a run may spend. Like the AI step cap, the count resets
+          whenever you interact with the run.
         </NumericSettingField>
       </section>
 
