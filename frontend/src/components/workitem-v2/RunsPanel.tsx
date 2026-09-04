@@ -289,7 +289,7 @@ export default function RunsPanel({
     (runDetail.status === LoopRunStatus.Completed ||
       runDetail.status === LoopRunStatus.Failed ||
       runDetail.status === LoopRunStatus.Cancelled) &&
-    !!(runDetail.worktreePath || runDetail.branchName);
+    !!runDetail.hasLocalGitState;
 
   return (
     <div className="wiv2-runs">

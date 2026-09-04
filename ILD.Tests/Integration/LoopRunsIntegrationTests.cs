@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.Entities;
@@ -113,6 +114,35 @@ public class LoopRunsIntegrationTests
         var client = await factory.CreateAuthenticatedClientAsync();
         var response = await client.PostAsync($"/api/v1/loopruns/{Guid.NewGuid()}/cleanup", null);
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    /// <summary>
+    /// The run list answers whether there is local git state to reclaim, not
+    /// where it is: a worktree path is an absolute server path and the cleanup
+    /// affordance never needs it. The per-run GET still carries the paths.
+    /// </summary>
+    [Fact]
+    public async Task GetAll_reports_reclaimability_without_exposing_server_paths()
+    {
+        await using var factory = NewFactory(new StubRunReclaimer(succeeds: true));
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var runId = SeedRun(factory, LoopRunStatus.Completed, branch: "feature/listed");
+
+        var listed = await client.GetStringAsync("/api/v1/loopruns");
+
+        Assert.DoesNotContain("worktreePath", listed, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("/tmp/ild-test-worktree", listed, StringComparison.Ordinal);
+        using var list = JsonDocument.Parse(listed);
+        var row = list.RootElement.EnumerateArray().Single(r => r.GetProperty("id").GetGuid() == runId);
+        Assert.True(row.GetProperty("hasLocalGitState").GetBoolean());
+
+        Assert.Equal(HttpStatusCode.NoContent,
+            (await client.PostAsync($"/api/v1/loopruns/{runId}/cleanup", null)).StatusCode);
+
+        using var after = JsonDocument.Parse(await client.GetStringAsync("/api/v1/loopruns"));
+        Assert.False(after.RootElement.EnumerateArray()
+            .Single(r => r.GetProperty("id").GetGuid() == runId)
+            .GetProperty("hasLocalGitState").GetBoolean());
     }
 
     private static ApiFactory NewFactory(IRunReclaimer reclaimer)

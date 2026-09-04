@@ -1,4 +1,5 @@
 using ILD.Core.Services.Interfaces;
+using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -57,10 +58,15 @@ public sealed class BranchNameOverrideService : IBranchNameOverrideService
             var whose = string.Equals(holder.WorkItemId, workItemId, StringComparison.Ordinal)
                 ? "this work item"
                 : $"work item {holder.WorkItemId}";
+            // Neither way of freeing the branch will accept a run that is still
+            // going, so an active holder is told to end it first rather than
+            // sent to an action that would refuse it.
+            var howToFree = holder.Status is LoopRunStatus.Running or LoopRunStatus.WaitingHuman
+                ? "That run is still active — let it finish or cancel it first, then clean it up (which keeps its history) or delete it"
+                : "Clean up that run to free the branch while keeping its history, or delete it outright";
             return Conflict(
                 $"Branch `{name}` is already used locally by run {holder.Id} of {whose}. " +
-                "Clean up that run to free the branch while keeping its history, delete it outright, " +
-                "or give this work item a different branch name.");
+                $"{howToFree}, or give this work item a different branch name.");
         }
 
         if (repositoryId is null)

@@ -73,6 +73,41 @@ public class BranchNameOverrideServiceTests : IDisposable
         git.Verify(g => g.RemoteHasBranchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Never);
     }
 
+    /// <summary>
+    /// Both ways of freeing the branch refuse a run that has not finished, so
+    /// the advice has to depend on the holder's status — pointing someone at
+    /// Clean up or Delete while the holder is live sends them to a 400.
+    /// </summary>
+    [Theory]
+    [InlineData(LoopRunStatus.Running)]
+    [InlineData(LoopRunStatus.WaitingHuman)]
+    public async Task An_active_holder_is_told_to_end_the_run_before_freeing_the_branch(LoopRunStatus status)
+    {
+        var (svc, db, repoId, _) = Setup();
+        SeedRun(db, "WI-1", "feature/foo", status);
+
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1");
+
+        Assert.Contains("still active", verdict.Conflict);
+        Assert.Contains("cancel it", verdict.Conflict);
+    }
+
+    [Theory]
+    [InlineData(LoopRunStatus.Completed)]
+    [InlineData(LoopRunStatus.Failed)]
+    [InlineData(LoopRunStatus.Cancelled)]
+    public async Task A_finished_holder_is_offered_cleanup_as_the_non_destructive_way_out(LoopRunStatus status)
+    {
+        var (svc, db, repoId, _) = Setup();
+        SeedRun(db, "WI-1", "feature/foo", status);
+
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1");
+
+        Assert.Contains("Clean up that run", verdict.Conflict);
+        Assert.Contains("keeping its history", verdict.Conflict);
+        Assert.DoesNotContain("still active", verdict.Conflict);
+    }
+
     [Fact]
     public async Task A_run_of_another_work_item_holding_the_branch_names_that_work_item()
     {

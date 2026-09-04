@@ -35,6 +35,14 @@ public class LoopRunsController : ControllerBase
         _runReclaimer = runReclaimer;
     }
 
+    /// <summary>
+    /// Whether the run still owns a worktree or local branch to reclaim. The
+    /// answer rather than the paths: it is all the cleanup affordance needs,
+    /// and a run's worktree path is an absolute server path.
+    /// </summary>
+    private static bool HasLocalGitState(ILD.Data.Entities.LoopRun run)
+        => !string.IsNullOrEmpty(run.WorktreePath) || !string.IsNullOrEmpty(run.BranchName);
+
     [HttpGet]
     public async Task<IActionResult> GetAll([FromQuery] int skip = 0, [FromQuery] int take = 100)
     {
@@ -59,11 +67,7 @@ public class LoopRunsController : ControllerBase
                 // from a node's prose. Null means a human pressed Halt.
                 haltReason = r.HaltReason?.ToString(),
                 retain = r.Retain,
-                // Present so the monitor can tell a run that still holds local
-                // git state from one already reclaimed, and offer cleanup only
-                // to the former.
-                worktreePath = r.WorktreePath,
-                branchName = r.BranchName,
+                hasLocalGitState = HasLocalGitState(r),
                 nodeExecutionCount = r.NodeExecutionCount,
                 aiTraversalCount = r.AiTraversalCount,
                 startedAt = r.StartedAt,
@@ -113,6 +117,7 @@ public class LoopRunsController : ControllerBase
             retain = run.Retain,
             worktreePath = run.WorktreePath,
             branchName = run.BranchName,
+            hasLocalGitState = HasLocalGitState(run),
             nodeExecutionCount = run.NodeExecutionCount,
             // AI nodes run since the last human touch. The steer window shows it
             // on a MaxAiTraversals park so the person is told how far it got.
@@ -256,7 +261,7 @@ public class LoopRunsController : ControllerBase
         // it would not re-create what this destroys. A finished run's ↻ Retry
         // would — or fails cleanly on a node that needs a worktree.
         if (run.Status is ILD.Data.Enums.LoopRunStatus.Running or ILD.Data.Enums.LoopRunStatus.WaitingHuman)
-            return BadRequest(new { error = "Cannot clean up a run that has not finished. Cancel it first." });
+            return BadRequest(new { error = "Cannot clean up a run that has not finished. Let it finish, or cancel it first." });
 
         if (!await _runReclaimer.ReclaimLocalStateAsync(run))
             return Conflict(new { error = "Could not reclaim the run's worktree/branch; the run was left untouched. Retry, or check server logs." });

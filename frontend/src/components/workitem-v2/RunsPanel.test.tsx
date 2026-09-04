@@ -50,8 +50,7 @@ function run(overrides: Partial<LoopRun> = {}): LoopRun {
     currentNodeId: null,
     isPaused: false,
     nodeExecutionCount: 2,
-    worktreePath: "/tmp/wt/run-1",
-    branchName: "feature/foo",
+    hasLocalGitState: true,
     startedAt: "2025-01-01T00:00:00Z",
     completedAt: "2025-01-01T01:00:00Z",
     nodes: [],
@@ -85,7 +84,7 @@ describe("RunsPanel cleanup action", () => {
 
     // The action is destructive on disk, so nothing happens before confirming.
     expect(onReclaimRun).not.toHaveBeenCalled();
-    getById.mockResolvedValue(run({ worktreePath: null, branchName: null }));
+    getById.mockResolvedValue(run({ hasLocalGitState: false }));
     fireEvent.click(screen.getByRole("button", { name: /confirm clean up/i }));
 
     await waitFor(() => expect(onReclaimRun).toHaveBeenCalledWith("run-1"));
@@ -114,7 +113,7 @@ describe("RunsPanel cleanup action", () => {
   });
 
   test("is not offered once the run holds no local git state", async () => {
-    renderPanel(run({ worktreePath: null, branchName: null }));
+    renderPanel(run({ hasLocalGitState: false }));
     await waitFor(() => expect(screen.getByText(/open full run view/i)).not.toBeNull());
     expect(cleanUpButton()).toBeNull();
   });
