@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor, within, act } from "@testing-library/react";
 import LoggingSettings from "./LoggingSettings";
 import * as signalRHook from "../../../hooks/useSignalR";
 import * as authServices from "../../../services/auth";
@@ -14,6 +14,12 @@ function emit(type: string, payload: unknown) {
 
 const levelButton = (name: string) =>
   within(screen.getByRole("group", { name: "Log level override" })).getByRole("button", { name });
+
+/** Every level button's aria-pressed, in the order they are drawn. */
+const pressedStates = () =>
+  within(screen.getByRole("group", { name: "Log level override" }))
+    .getAllByRole("button")
+    .map((b) => b.getAttribute("aria-pressed"));
 
 const entry = (over: Partial<LogEntry> = {}): LogEntry => ({
   id: 1,
@@ -136,23 +142,26 @@ describe("Logging settings level", () => {
   });
 
   test("presses nothing for a level it cannot place at all", async () => {
-    mockLevel("Chatty", "Chatty");
+    mockLevel("Chatty", "Information");
     render(<LoggingSettings />);
 
-    const group = within(screen.getByRole("group", { name: "Log level override" }));
-    await waitFor(() =>
-      expect(group.getAllByRole("button").every((b) => b.getAttribute("aria-pressed") === "false")),
-    );
+    // Waiting for the override text proves the read landed, so pressing nothing
+    // is a decision about this level rather than a control still loading — and
+    // the page can still say what a restart returns to.
+    expect(await screen.findByText(/overriding/i)).toBeTruthy();
+    expect(pressedStates()).toEqual(["false", "false", "false", "false"]);
   });
 
   test("presses nothing when the level cannot be read", async () => {
-    vi.spyOn(authServices.loggingService, "getLevel").mockRejectedValue(new Error("down"));
+    const getLevel = vi
+      .spyOn(authServices.loggingService, "getLevel")
+      .mockRejectedValue(new Error("down"));
     render(<LoggingSettings />);
 
-    const group = within(screen.getByRole("group", { name: "Log level override" }));
-    await waitFor(() =>
-      expect(group.getAllByRole("button").every((b) => b.getAttribute("aria-pressed") === "false")),
-    );
+    await waitFor(() => expect(getLevel).toHaveBeenCalled());
+    await act(async () => {});
+
+    expect(pressedStates()).toEqual(["false", "false", "false", "false"]);
   });
 
   test("reports a level that differs from the startup one as an override", async () => {
