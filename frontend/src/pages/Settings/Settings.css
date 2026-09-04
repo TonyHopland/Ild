@@ -164,11 +164,18 @@
   cursor: pointer;
 }
 
+/* The checkbox is the switch's hit area, laid transparently over the track it
+   draws: a zero-sized one is reachable by keyboard but impossible to click, and
+   most of these switches have no <label> around them to click instead. */
 .settings-switch input {
   position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
   opacity: 0;
-  width: 0;
-  height: 0;
+  cursor: pointer;
+  z-index: 1;
 }
 
 .settings-switch-track {
