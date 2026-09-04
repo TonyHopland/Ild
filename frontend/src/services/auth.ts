@@ -35,6 +35,7 @@ import {
   NetworkLogEntry,
   NetworkPolicyEntry,
   NetworkStatus,
+  LogEntry,
 } from "../types";
 
 interface BackendLoginResponse {
@@ -614,9 +615,34 @@ export const analyticsService = {
   },
 };
 
+/**
+ * The live level is a Serilog switch nobody persists: it is readable and
+ * writable while the process runs, and returns to `startupLevel` on restart.
+ */
+export interface LogLevelStatus {
+  level: string;
+  startupLevel: string;
+  isOverride: boolean;
+}
+
 export const loggingService = {
-  setLevel: async (level: string): Promise<{ level: string }> => {
-    return api.put<{ level: string }>("/logging/level", { level });
+  getLevel: async (): Promise<LogLevelStatus> => {
+    return api.get<LogLevelStatus>("/logging/level");
+  },
+  setLevel: async (level: string): Promise<LogLevelStatus> => {
+    return api.put<LogLevelStatus>("/logging/level", { level });
+  },
+  /** The most recent lines the backend still holds, newest first. */
+  getEntries: async (options?: {
+    take?: number;
+    minimumLevel?: string;
+    search?: string;
+  }): Promise<LogEntry[]> => {
+    const params = new URLSearchParams();
+    params.set("take", String(options?.take ?? 200));
+    if (options?.minimumLevel) params.set("minimumLevel", options.minimumLevel);
+    if (options?.search) params.set("search", options.search);
+    return api.get<LogEntry[]>(`/logging/entries?${params}`);
   },
 };
 

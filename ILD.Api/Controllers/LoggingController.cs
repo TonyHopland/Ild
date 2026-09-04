@@ -1,3 +1,4 @@
+using ILD.Api.Configuration;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Serilog.Core;
@@ -13,10 +14,23 @@ namespace ILD.Api.Controllers;
 public class LoggingController : ControllerBase
 {
     private readonly LoggingLevelSwitch _levelSwitch;
+    private readonly StartupLogLevel _startupLevel;
 
-    public LoggingController(LoggingLevelSwitch levelSwitch)
+    public LoggingController(LoggingLevelSwitch levelSwitch, StartupLogLevel startupLevel)
     {
         _levelSwitch = levelSwitch;
+        _startupLevel = startupLevel;
+    }
+
+    [HttpGet("level")]
+    public IActionResult GetLevel()
+    {
+        return Ok(new LogLevelResponse
+        {
+            Level = _levelSwitch.MinimumLevel.ToString(),
+            StartupLevel = _startupLevel.Level.ToString(),
+            IsOverride = _levelSwitch.MinimumLevel != _startupLevel.Level,
+        });
     }
 
     [HttpPut("level")]
@@ -29,11 +43,27 @@ public class LoggingController : ControllerBase
 
         _levelSwitch.MinimumLevel = level;
 
-        return Ok(new { level = request.Level });
+        return Ok(new LogLevelResponse
+        {
+            Level = level.ToString(),
+            StartupLevel = _startupLevel.Level.ToString(),
+            IsOverride = level != _startupLevel.Level,
+        });
     }
 
     public class LogLevelRequest
     {
         public string Level { get; set; } = string.Empty;
+    }
+
+    public class LogLevelResponse
+    {
+        /// <summary>What the process is logging at right now.</summary>
+        public string Level { get; set; } = string.Empty;
+
+        /// <summary>What ILD_LOG_LEVEL set at startup, and what a restart returns to.</summary>
+        public string StartupLevel { get; set; } = string.Empty;
+
+        public bool IsOverride { get; set; }
     }
 }

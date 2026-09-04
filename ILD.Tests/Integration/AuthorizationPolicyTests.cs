@@ -213,4 +213,26 @@ public class AuthorizationPolicyTests
         var withToken = await client.SendAsync(Hook($"/api/v1/webhooks/azuredevops?access_token={token}"));
         Assert.Equal(HttpStatusCode.OK, withToken.StatusCode);
     }
+
+    /// <summary>
+    /// Turning the level up is anonymous on purpose — an operator whose sign-in
+    /// is broken needs it — but what the process wrote is another matter: log
+    /// lines carry hostnames, tokens and user data, so reading them takes a
+    /// session. The two live on separate controllers because a class-level
+    /// [AllowAnonymous] cannot be tightened again per action.
+    /// </summary>
+    [Fact]
+    public async Task Reading_the_log_takes_a_session_while_the_level_stays_anonymous()
+    {
+        await using var factory = new ApiFactory();
+        var anonymous = factory.CreateClient();
+
+        Assert.Equal(HttpStatusCode.OK, (await anonymous.GetAsync("/api/v1/logging/level")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync("/api/v1/logging/entries")).StatusCode);
+
+        var signedIn = await factory.CreateAuthenticatedClientAsync();
+        var entries = await signedIn.GetAsync("/api/v1/logging/entries?take=5");
+
+        Assert.Equal(HttpStatusCode.OK, entries.StatusCode);
+    }
 }

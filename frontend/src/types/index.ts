@@ -805,6 +805,21 @@ export type NetworkLogAppendedPayload = NetworkLogEntry;
 export type NetworkLogClearedPayload = Record<string, never>;
 
 /**
+ * One line of the backend's own log. `detail` is the exception the line
+ * carried, when it carried one.
+ */
+export interface LogEntry {
+  id: number;
+  timestamp: string;
+  level: string;
+  source: string;
+  message: string;
+  detail?: string | null;
+}
+
+export type LogEntryAppendedPayload = LogEntry;
+
+/**
  * One signed-in device. Never carries the session token or its hash — `id` is
  * the session's own key, which is all the revoke calls need.
  *
