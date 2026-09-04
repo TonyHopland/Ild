@@ -49,11 +49,16 @@ describe("Settings sections", () => {
     ]);
   });
 
-  test("opens on Ild when no section is named", () => {
+  test("opens on Ild when no section is named, and says so in the menu", () => {
     renderAt("/settings");
 
     expect(screen.getByRole("heading", { level: 2, name: "Ild" })).toBeTruthy();
     expect(screen.getByLabelText(/max concurrent/i)).toBeTruthy();
+    // The URL names no section, so nothing but the page itself knows Ild is the
+    // one on screen: what is highlighted has to be announced as current too.
+    const nav = within(screen.getByRole("navigation", { name: /settings sections/i }));
+    expect(nav.getByRole("link", { name: "Ild" }).getAttribute("aria-current")).toBe("page");
+    expect(nav.getByRole("link", { name: "Logging" }).getAttribute("aria-current")).toBeNull();
   });
 
   test("shows the section named in the URL and marks it in the menu", () => {
@@ -62,12 +67,16 @@ describe("Settings sections", () => {
     expect(screen.getByRole("heading", { level: 2, name: "Logging" })).toBeTruthy();
     const nav = within(screen.getByRole("navigation", { name: /settings sections/i }));
     expect(nav.getByRole("link", { name: "Logging" }).className).toContain("active");
+    expect(nav.getByRole("link", { name: "Logging" }).getAttribute("aria-current")).toBe("page");
     expect(nav.getByRole("link", { name: "Ild" }).className).not.toContain("active");
+    expect(nav.getByRole("link", { name: "Ild" }).getAttribute("aria-current")).toBeNull();
   });
 
   test("falls back to the first section for an unknown one", () => {
     renderAt("/settings/nonsense");
 
     expect(screen.getByRole("heading", { level: 2, name: "Ild" })).toBeTruthy();
+    const nav = within(screen.getByRole("navigation", { name: /settings sections/i }));
+    expect(nav.getByRole("link", { name: "Ild" }).getAttribute("aria-current")).toBe("page");
   });
 });

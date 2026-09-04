@@ -12,7 +12,7 @@ namespace ILD.Api.Controllers;
 /// up, and a class-level AllowAnonymous cannot be tightened again per action.
 /// Log lines carry hostnames, tokens and user data, so reading them is left to
 /// the user-only fallback policy — see
-/// <see cref="Authentication.IldAuthentication"/>.
+/// <see cref="ILD.Api.Authentication.IldAuthentication"/>.
 /// </summary>
 [ApiController]
 [Route("api/v1/logging")]

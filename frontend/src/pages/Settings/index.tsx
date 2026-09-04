@@ -1,4 +1,4 @@
-import { NavLink, useParams } from "react-router";
+import { Link, useParams } from "react-router";
 import IldSettings from "./sections/IldSettings";
 import UserSettings from "./sections/UserSettings";
 import NetworkSettings from "./sections/NetworkSettings";
@@ -67,16 +67,19 @@ export default function Settings() {
         <nav className="settings-nav" aria-label="Settings sections">
           <span className="settings-nav-heading">Settings</span>
           {SECTIONS.map((s) => (
-            <NavLink
+            // Not a NavLink: `/settings` with no section renders the first one,
+            // which a link matching on its own path cannot know. Highlight and
+            // aria-current both come from the section actually on screen, so
+            // what is shown as current and what is announced cannot disagree.
+            <Link
               key={s.id}
               to={`/settings/${s.id}`}
-              className={() =>
-                s.id === active.id ? "settings-nav-link active" : "settings-nav-link"
-              }
+              className={s.id === active.id ? "settings-nav-link active" : "settings-nav-link"}
+              aria-current={s.id === active.id ? "page" : undefined}
             >
               <Icon path={s.icon} />
               {s.label}
-            </NavLink>
+            </Link>
           ))}
         </nav>
         <div className="settings-pane">

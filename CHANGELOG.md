@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Limit which hosts the coding agent may reach, from Settings: a whitelist, a blacklist, and a live log of everywhere it went.**
 
-- **Settings is four pages behind a side menu — Ild, User, Network and Logging — with the whitelist and blacklist as one rule table, repeated destinations collapsed into a counted line, and the backend's own log readable there as it is written.**
+- **Settings is four linkable pages behind a side menu — Ild, User, Network and Logging — and Logging now shows the backend's own log as it is written.**
 
 - **Run work items against Azure DevOps repositories, the same way you already can against GitHub and Forgejo ones.**
 
