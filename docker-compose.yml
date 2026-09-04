@@ -121,9 +121,11 @@ services:
       #
       # `-` rather than `:-`, same reasoning as ILD_PREVIEW_PROXY_BASE above:
       # `DO_NOT_TRACK=` in .env then reaches the agents as an empty value, which
-      # is the closest thing to opting back in without editing this file. Do not
-      # expect `DO_NOT_TRACK=0` to work — a CLI that only checks whether the
-      # variable is set at all reads `0` as "do not track".
+      # most CLIs read as unset. It is the closest thing to opting back in
+      # without editing this file, but not a guarantee — a CLI that only checks
+      # whether the variable is present at all sees an empty value, and `0`, as
+      # "do not track"; that one needs this line removed. See
+      # docs/configuration.md.
       - DO_NOT_TRACK=${DO_NOT_TRACK-1}
       # Agent commits default to the host ~/.gitconfig mounted below. Set any
       # of these in your .env to override that identity — git reads them
