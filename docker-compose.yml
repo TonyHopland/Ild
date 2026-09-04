@@ -116,6 +116,17 @@ services:
       - ILD_WORKITEM_SERVER_URL=${ILD_WORKITEM_SERVER_URL:-http://workitem-server:8081}
       - "ILD_WORKITEM_SERVER_API_KEY=${ILD_WORKITEM_SERVER_API_KEY:-${WORKITEM_API_KEYS:?Set WORKITEM_API_KEYS in your .env (generate one with: openssl rand -hex 32)}}"
       - ASPNETCORE_URLS=http://+:8080
+      # Asks the coding-agent CLIs not to send telemetry. Each CLI decides for
+      # itself whether to honour it; setting it is all this can do.
+      #
+      # `-` rather than `:-`, same reasoning as ILD_PREVIEW_PROXY_BASE above:
+      # `DO_NOT_TRACK=` in .env then reaches the agents as an empty value, which
+      # most CLIs read as unset. It is the closest thing to opting back in
+      # without editing this file, but not a guarantee — a CLI that only checks
+      # whether the variable is present at all sees an empty value, and `0`, as
+      # "do not track"; that one needs this line removed. See
+      # docs/configuration.md.
+      - DO_NOT_TRACK=${DO_NOT_TRACK-1}
       # Agent commits default to the host ~/.gitconfig mounted below. Set any
       # of these in your .env to override that identity — git reads them
       # natively and they win over the mounted file. The bare keys pass

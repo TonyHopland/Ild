@@ -27,6 +27,7 @@ Remote providers, the WorkItem Server connection, repositories, AI providers, an
 | `ILD_SHUTDOWN_DRAIN_SECONDS`                 | Seconds the shutdown drain may spend parking in-flight runs (default `20`; see below)                                      |
 | `ILD_NETWORK_PROXY_PORT`                     | Loopback port of the agent egress proxy (image default `3128`). Empty ⇒ no proxy, agent launches are not funnelled         |
 | `ILD_NETWORK_ENFORCEMENT`                    | Set by the container entrypoint, not by you: `enforced` or `advisory`, with the reason in `ILD_NETWORK_ENFORCEMENT_REASON` |
+| `DO_NOT_TRACK`                               | Asks the agent CLIs not to send telemetry; compose defaults it to `1`. Opting back in has caveats (see below)              |
 | `WORKITEM_API_KEYS`                          | Accepted bearer keys for the WorkItem Server (comma-separated)                                                             |
 | `WORKITEM_DATA_PATH`                         | Base data directory for WorkItem Server runtime files                                                                      |
 | `WORKITEM_LOG_LEVEL`                         | Serilog level for the WorkItem Server (docker compose defaults it to `ILD_LOG_LEVEL`)                                      |
@@ -38,6 +39,22 @@ Remote providers, the WorkItem Server connection, repositories, AI providers, an
 The ILD API log level is also changeable at runtime through `PUT /api/v1/logging/level` without restarting; `ILD_LOG_LEVEL` only sets the starting level. The WorkItem Server has no runtime endpoint; its level is fixed at startup.
 
 The ILD container additionally uses an `ILD_AGENT_TOKEN` for agent/MCP calls back into the local API. It is auto-generated at startup if unset, so you normally don't need to provide one.
+
+## Agent telemetry
+
+Coding-agent CLIs report usage to their vendors unless `DO_NOT_TRACK` is set, so
+compose defaults it to `1` on the ILD container and the agent processes inherit
+it. It is a convention rather than an enforcement point: each CLI decides whether
+to honour it, and some carry their own switch instead — the Pi adapter sets
+`PI_TELEMETRY=0` for that reason. What can leave the container at all is settled
+by the egress limits below, not by this.
+
+Opting back in is less clean than it looks. `DO_NOT_TRACK=0` is not an off
+switch: a CLI that only checks whether the variable exists reads any value,
+including `0`, as "do not track". Blanking it (`DO_NOT_TRACK=` in your `.env`)
+passes an empty value through, which most CLIs treat as unset, and is as far as
+`.env` alone can take you. To be certain, drop the `DO_NOT_TRACK` line from the
+`ild` service in `docker-compose.yml`.
 
 ## Session expiry
 
