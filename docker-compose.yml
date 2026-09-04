@@ -116,6 +116,9 @@ services:
       - ILD_WORKITEM_SERVER_URL=${ILD_WORKITEM_SERVER_URL:-http://workitem-server:8081}
       - "ILD_WORKITEM_SERVER_API_KEY=${ILD_WORKITEM_SERVER_API_KEY:-${WORKITEM_API_KEYS:?Set WORKITEM_API_KEYS in your .env (generate one with: openssl rand -hex 32)}}"
       - ASPNETCORE_URLS=http://+:8080
+      # Suppresses the telemetry the coding-agent CLIs would otherwise send.
+      # `:-` on purpose: an empty value should still mean do not track.
+      - DO_NOT_TRACK=${DO_NOT_TRACK:-1}
       # Agent commits default to the host ~/.gitconfig mounted below. Set any
       # of these in your .env to override that identity — git reads them
       # natively and they win over the mounted file. The bare keys pass

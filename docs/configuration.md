@@ -27,6 +27,7 @@ Remote providers, the WorkItem Server connection, repositories, AI providers, an
 | `ILD_SHUTDOWN_DRAIN_SECONDS`                 | Seconds the shutdown drain may spend parking in-flight runs (default `20`; see below)                                      |
 | `ILD_NETWORK_PROXY_PORT`                     | Loopback port of the agent egress proxy (image default `3128`). Empty ⇒ no proxy, agent launches are not funnelled         |
 | `ILD_NETWORK_ENFORCEMENT`                    | Set by the container entrypoint, not by you: `enforced` or `advisory`, with the reason in `ILD_NETWORK_ENFORCEMENT_REASON` |
+| `DO_NOT_TRACK`                               | Set to `1` so the coding-agent CLIs do not send usage telemetry; set to `0` to let them report normally                    |
 | `WORKITEM_API_KEYS`                          | Accepted bearer keys for the WorkItem Server (comma-separated)                                                             |
 | `WORKITEM_DATA_PATH`                         | Base data directory for WorkItem Server runtime files                                                                      |
 | `WORKITEM_LOG_LEVEL`                         | Serilog level for the WorkItem Server (docker compose defaults it to `ILD_LOG_LEVEL`)                                      |
