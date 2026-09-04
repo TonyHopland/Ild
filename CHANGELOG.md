@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Let ILD retry a run the AI provider throttled, instead of waiting for you to resume it, once you turn it on in Settings.**
 
-- **Coding agents no longer send usage telemetry home.**
+- **Coding agents that honour the do-not-track convention no longer send usage telemetry home.**
 
 ### Fixed
 
