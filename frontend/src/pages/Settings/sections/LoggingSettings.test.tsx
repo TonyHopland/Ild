@@ -270,11 +270,44 @@ describe("Logging settings log view", () => {
 
     fireEvent.click(screen.getByLabelText("Follow the log live"));
     getEntries.mockResolvedValue([entry({ id: 9, message: "Written while paused" }), warning]);
+    // Pausing freezes the list rather than re-reading it.
+    expect(getEntries).toHaveBeenCalledTimes(1);
     expect(screen.queryByText(/Written while paused/)).toBeNull();
 
     fireEvent.click(screen.getByLabelText("Follow the log live"));
 
     expect(await screen.findByText(/Written while paused/)).toBeTruthy();
+  });
+
+  test("filtering while Follow live is off still asks the backend", async () => {
+    const getEntries = mockEntries([failure, warning]);
+    render(<LoggingSettings />);
+    await screen.findByText(/GitHub rate limit/);
+    fireEvent.click(screen.getByLabelText("Follow the log live"));
+
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "Minimum level" })).getByRole("button", {
+        name: "Error",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(getEntries).toHaveBeenCalledWith(
+        expect.objectContaining({ take: 200, minimumLevel: "Error" }),
+      ),
+    );
+  });
+
+  test("searching while Follow live is off reaches past the lines on screen", async () => {
+    const getEntries = mockEntries([warning]);
+    render(<LoggingSettings />);
+    await screen.findByText(/GitHub rate limit/);
+    fireEvent.click(screen.getByLabelText("Follow the log live"));
+
+    getEntries.mockResolvedValue([entry({ id: 9, message: "Scrolled off long ago" })]);
+    fireEvent.change(screen.getByLabelText("Filter the log"), { target: { value: "scrolled" } });
+
+    expect(await screen.findByText(/Scrolled off long ago/)).toBeTruthy();
   });
 
   test("stops appending live lines when Follow live is switched off", async () => {

@@ -95,12 +95,18 @@ export default function LoggingSettings() {
     return () => clearTimeout(timer);
   }, [search]);
 
-  // Both filters are the backend's to apply: it holds more lines than the page
-  // asks for, so a search only reaches the ones that have scrolled off if it
-  // goes over the whole buffer. Re-read when following resumes, too — otherwise
-  // whatever was written while it was off is gone from the view for good.
+  // Both filters are the backend's to apply, following or not: it holds more
+  // lines than the page asks for, so a filter only reaches the ones that have
+  // scrolled off if it goes over the whole buffer. Resuming re-reads as well,
+  // or whatever was written while following was off stays missing from the
+  // view; pausing on its own does not, since that would jump the list it has
+  // just frozen.
+  const following = useRef(tailing);
   useEffect(() => {
-    if (!tailing) return;
+    const pausing = following.current && !tailing;
+    following.current = tailing;
+    if (pausing) return;
+
     let stale = false;
     void loggingService
       .getEntries({
