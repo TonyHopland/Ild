@@ -169,6 +169,11 @@ interface RunsPanelProps {
   /** Cleanup handlers reused from the work item dialog for a halted run. */
   onCleanupDone?: () => void | Promise<unknown>;
   onCleanupBacklog?: () => void | Promise<unknown>;
+  /**
+   * Free a finished run's worktree and branch, keeping the run and its history.
+   * Rejects (409) when the git state survives, so its error is shown.
+   */
+  onReclaimRun?: (runId: string) => Promise<unknown>;
 }
 
 /**
@@ -185,11 +190,14 @@ export default function RunsPanel({
   onResumeSteer,
   onCleanupDone,
   onCleanupBacklog,
+  onReclaimRun,
 }: RunsPanelProps) {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [runDetail, setRunDetail] = useState<LoopRun | null>(null);
   const [loading, setLoading] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [reclaiming, setReclaiming] = useState(false);
+  const [confirmingReclaim, setConfirmingReclaim] = useState(false);
   const [errorText, setErrorText] = useState("");
 
   const effectiveRunId = selectedRunId ?? workItem.currentLoopRunId ?? runs[0]?.id ?? null;
@@ -207,6 +215,7 @@ export default function RunsPanel({
     }
     let cancelled = false;
     setLoading(true);
+    setConfirmingReclaim(false);
     loopRunService
       .getById(effectiveRunId)
       .then((data) => {
@@ -241,6 +250,24 @@ export default function RunsPanel({
     }
   };
 
+  const handleReclaim = async () => {
+    if (!onReclaimRun || !effectiveRunId) return;
+    setErrorText("");
+    setReclaiming(true);
+    try {
+      await onReclaimRun(effectiveRunId);
+      setConfirmingReclaim(false);
+      await reloadRunDetail();
+      onRunsChanged?.();
+    } catch (error) {
+      setErrorText(
+        error instanceof Error ? error.message : "Failed to free the run's worktree and branch.",
+      );
+    } finally {
+      setReclaiming(false);
+    }
+  };
+
   if (runs.length === 0) {
     return <div className="wiv2-empty">No runs yet for this work item.</div>;
   }
@@ -252,6 +279,17 @@ export default function RunsPanel({
 
   const isLiveRun =
     runDetail?.id === workItem.currentLoopRunId && workItem.status === WorkItemStatus.Running;
+
+  // A finished run keeps its worktree and branch so it stays inspectable
+  // (ADR-0008), which is what blocks a later run wanting the same branch name.
+  // Offered only once there is something left to reclaim.
+  const canReclaim =
+    !!onReclaimRun &&
+    !!runDetail &&
+    (runDetail.status === LoopRunStatus.Completed ||
+      runDetail.status === LoopRunStatus.Failed ||
+      runDetail.status === LoopRunStatus.Cancelled) &&
+    !!runDetail.hasLocalGitState;
 
   return (
     <div className="wiv2-runs">
@@ -307,6 +345,44 @@ export default function RunsPanel({
               >
                 Open full run view ↗
               </Link>
+              {canReclaim &&
+                (confirmingReclaim ? (
+                  <span
+                    className="wiv2-abandon-confirm"
+                    role="group"
+                    aria-label="Confirm clean up run"
+                  >
+                    <span className="wiv2-abandon-prompt">
+                      Delete this run&rsquo;s worktree and local branch? The run and its history are
+                      kept.
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-danger"
+                      onClick={() => void handleReclaim()}
+                      disabled={reclaiming}
+                    >
+                      {reclaiming ? "Cleaning up…" : "Confirm clean up"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-secondary"
+                      onClick={() => setConfirmingReclaim(false)}
+                      disabled={reclaiming}
+                    >
+                      Cancel
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-secondary"
+                    onClick={() => setConfirmingReclaim(true)}
+                    title="Free this run's worktree and local branch so a new run can reuse the branch name. The run and its history are kept."
+                  >
+                    Clean up worktree
+                  </button>
+                ))}
             </div>
             <RunCostSummary run={runDetail} />
             <HaltSteerControls

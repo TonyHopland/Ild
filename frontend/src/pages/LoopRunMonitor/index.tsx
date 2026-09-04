@@ -165,6 +165,23 @@ export default function LoopRunMonitor() {
     }
   };
 
+  const handleCleanup = async (id: string) => {
+    if (
+      !window.confirm(
+        "Delete this run's worktree and local branch? The run and its history are kept.",
+      )
+    )
+      return;
+    try {
+      await loopRunService.cleanup(id);
+      setRuns((prev) =>
+        prev.map((run) => (run.id === id ? { ...run, hasLocalGitState: false } : run)),
+      );
+    } catch (error) {
+      setErrorText(errorMessage(error, "Failed to clean up run."));
+    }
+  };
+
   const statusColors: Record<string, string> = {
     [LoopRunStatus.Running]: "#3b82f6",
     [LoopRunStatus.Completed]: "#22c55e",
@@ -271,6 +288,15 @@ export default function LoopRunMonitor() {
             )}
             {run.status !== LoopRunStatus.Running && (
               <div style={{ display: "flex", gap: "0.5rem" }}>
+                {run.status !== LoopRunStatus.WaitingHuman && run.hasLocalGitState && (
+                  <button
+                    className="btn btn-secondary btn-small"
+                    onClick={() => handleCleanup(run.id)}
+                    title="Free this run's worktree and local branch so a new run can reuse the branch name. The run and its history are kept."
+                  >
+                    Clean up worktree
+                  </button>
+                )}
                 <button
                   className="btn btn-danger btn-small"
                   onClick={() => handleDelete(run.id)}

@@ -627,6 +627,18 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const handleCleanupBacklog = () =>
     runAction((id) => workItemService.cleanupToBacklog(id), "cleanup to backlog");
 
+  // Reclaims a finished run's worktree and branch. Unlike the actions above it
+  // lets the failure through: reclaiming can legitimately be refused (409), and
+  // the panel that offered the action is where that has to be read.
+  const handleReclaimRun = useCallback(
+    async (runId: string) => {
+      await loopRunService.cleanup(runId);
+      refetchWorkItem();
+      refreshRuns();
+    },
+    [refetchWorkItem, refreshRuns],
+  );
+
   const handleLinkPr = async (prUrl: string) =>
     runAction((id) => workItemService.linkPr(id, prUrl), "link PR");
 
@@ -696,6 +708,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     handleResumeSteer,
     handleCleanupDone,
     handleCleanupBacklog,
+    handleReclaimRun,
     handleLinkPr,
     handleAddDependency,
     handleRemoveDependency,

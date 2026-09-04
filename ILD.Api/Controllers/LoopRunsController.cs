@@ -35,6 +35,14 @@ public class LoopRunsController : ControllerBase
         _runReclaimer = runReclaimer;
     }
 
+    /// <summary>
+    /// Whether the run still owns a worktree or local branch to reclaim. The
+    /// answer rather than the paths: it is all the cleanup affordance needs,
+    /// and a run's worktree path is an absolute server path.
+    /// </summary>
+    private static bool HasLocalGitState(ILD.Data.Entities.LoopRun run)
+        => !string.IsNullOrEmpty(run.WorktreePath) || !string.IsNullOrEmpty(run.BranchName);
+
     [HttpGet]
     public async Task<IActionResult> GetAll([FromQuery] int skip = 0, [FromQuery] int take = 100)
     {
@@ -59,6 +67,7 @@ public class LoopRunsController : ControllerBase
                 // from a node's prose. Null means a human pressed Halt.
                 haltReason = r.HaltReason?.ToString(),
                 retain = r.Retain,
+                hasLocalGitState = HasLocalGitState(r),
                 nodeExecutionCount = r.NodeExecutionCount,
                 aiTraversalCount = r.AiTraversalCount,
                 startedAt = r.StartedAt,
@@ -108,6 +117,7 @@ public class LoopRunsController : ControllerBase
             retain = run.Retain,
             worktreePath = run.WorktreePath,
             branchName = run.BranchName,
+            hasLocalGitState = HasLocalGitState(run),
             nodeExecutionCount = run.NodeExecutionCount,
             // AI nodes run since the last human touch. The steer window shows it
             // on a MaxAiTraversals park so the person is told how far it got.
@@ -222,15 +232,47 @@ public class LoopRunsController : ControllerBase
         if (run.Status == ILD.Data.Enums.LoopRunStatus.Running)
             return BadRequest(new { error = "Cannot delete a running loop. Cancel it first." });
 
-        // Deleting the run is the only path (besides retention) that destroys
-        // its worktree and branch; the row may only go once that state is
-        // verifiably gone — a deleted row would leave the leftovers orphaned
-        // with nothing pointing at them.
+        // The row may only go once the git state it names is verifiably gone —
+        // a deleted row would leave the leftovers orphaned with nothing
+        // pointing at them.
         if (!await _runReclaimer.ReclaimLocalStateAsync(run))
             return Conflict(new { error = "Could not reclaim the run's worktree/branch; the run was not deleted. Retry, or check server logs." });
 
         var deleted = await _loopRunStore.DeleteAsync(guid);
         return deleted ? NoContent() : NotFound();
+    }
+
+    /// <summary>
+    /// Reclaim a finished run's worktree and local branch while keeping the run
+    /// row and its history — the non-destructive counterpart of <c>Delete</c>,
+    /// for freeing a branch name a later run wants to reuse. Unrelated to the
+    /// Cleanup <em>node</em>, which ends a run rather than reclaiming one.
+    /// </summary>
+    [HttpPost("{id}/cleanup")]
+    public async Task<IActionResult> Cleanup(string id)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+
+        var run = await _loopRunStore.GetByIdAsync(guid);
+        if (run == null) return NotFound();
+        // Stricter than Delete: resuming a WaitingHuman run is its expected next
+        // step and re-enters at CurrentNodeId without passing through Start, so
+        // it would not re-create what this destroys. A finished run's ↻ Retry
+        // would — or fails cleanly on a node that needs a worktree.
+        if (run.Status is ILD.Data.Enums.LoopRunStatus.Running or ILD.Data.Enums.LoopRunStatus.WaitingHuman)
+            return BadRequest(new { error = "Cannot clean up a run that has not finished. Let it finish, or cancel it first." });
+
+        if (!await _runReclaimer.ReclaimLocalStateAsync(run))
+            return Conflict(new { error = "Could not reclaim the run's worktree/branch; the run was left untouched. Retry, or check server logs." });
+
+        // The row now outlives the git state it names, so the pointers go with
+        // it: a surviving BranchName would keep claiming a branch that is free,
+        // and a surviving WorktreePath would name a directory that is gone.
+        run.WorktreePath = null;
+        run.BranchName = null;
+        await _loopRunStore.UpdateRunAsync(run);
+        return NoContent();
     }
 
     [HttpPost("{id}/nodes/{runNodeId}/retry")]

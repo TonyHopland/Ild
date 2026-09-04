@@ -430,6 +430,8 @@ export interface LoopRun {
   retain?: boolean;
   worktreePath?: string | null;
   branchName?: string | null;
+  /** Whether the run still owns a worktree or local branch to reclaim. */
+  hasLocalGitState?: boolean;
   nodeExecutionCount: number;
   /** AI nodes run since a human last touched the run; reset by every human interaction. */
   aiTraversalCount?: number;

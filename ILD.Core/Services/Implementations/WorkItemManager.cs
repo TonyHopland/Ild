@@ -52,7 +52,7 @@ public class WorkItemManager : IWorkItemManager
         _previewService = previewService ?? new NoopPreviewService();
         _scheduler = scheduler;
         _engine = engine;
-        _runReclaimer = runReclaimer ?? new RunReclaimer(repoManager, providerStore);
+        _runReclaimer = runReclaimer ?? new RunReclaimer(repoManager, providerStore, _previewService, _notifier);
         _remoteProvider = remoteProvider;
     }
 

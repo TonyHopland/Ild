@@ -311,6 +311,7 @@ export default function WorkItemModalV2({
           onResumeSteer={detail.handleResumeSteer}
           onCleanupDone={detail.handleCleanupDone}
           onCleanupBacklog={detail.handleCleanupBacklog}
+          onReclaimRun={detail.handleReclaimRun}
         />
       </section>
       <section

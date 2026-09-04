@@ -105,6 +105,30 @@ public class LoopRunsControllerTests
         store.Verify(s => s.DeleteAsync(It.IsAny<Guid>()), Times.Never);
     }
 
+    [Theory]
+    [InlineData(LoopRunStatus.Running)]
+    [InlineData(LoopRunStatus.WaitingHuman)]
+    public async Task Cleanup_refuses_a_run_that_can_still_be_resumed(LoopRunStatus status)
+    {
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = "wi-1",
+            Status = status,
+            WorktreePath = "/tmp/wt/run-a",
+            BranchName = "ild/wi-1-run-a",
+        };
+        var store = new Mock<ILoopRunStore>();
+        store.Setup(s => s.GetByIdAsync(run.Id)).ReturnsAsync(run);
+        var reclaimer = new Mock<IRunReclaimer>();
+
+        var result = await BuildController(store, reclaimer).Cleanup(run.Id.ToString());
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.IsAny<LoopRun>()), Times.Never);
+        Assert.Equal("ild/wi-1-run-a", run.BranchName);
+    }
+
     private static LoopRunsController BuildController(Mock<ILoopRunStore> store, Mock<IRunReclaimer> reclaimer)
         => new(new Mock<ILoopEngine>().Object, new Mock<IEventLogService>().Object, store.Object,
             new Mock<IAdapterSessionSnapshotStore>().Object,
