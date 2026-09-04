@@ -108,9 +108,9 @@ public class SettingsController : ControllerBase
     public async Task<IActionResult> Put(string key, [FromBody] UpdateSettingRequest request, CancellationToken ct)
     {
         if (!KnownKeys.Contains(key)) return NotFound(new { error = $"Unknown setting key '{key}'" });
-        if (!ValidateValue(key, request.Value, out var error)) return BadRequest(new { error });
+        if (!TryCanonicalize(key, request.Value, out var value, out var error)) return BadRequest(new { error });
 
-        await _store.UpsertAsync(key, request.Value, ct);
+        await _store.UpsertAsync(key, value, ct);
 
         // Settings drive scheduler behaviour: wake it so the change takes
         // effect immediately and broadcast so the UI can sync.
@@ -135,7 +135,7 @@ public class SettingsController : ControllerBase
             await _networkNotifier.PolicyChangedAsync();
         }
 
-        return Ok(new { key, value = request.Value });
+        return Ok(new { key, value });
     }
 
     private static string DefaultFor(string key) => key switch
@@ -154,8 +154,15 @@ public class SettingsController : ControllerBase
         _ => string.Empty,
     };
 
-    private static bool ValidateValue(string key, string value, out string error)
+    /// <summary>
+    /// Validates a value and hands back the form to persist. The boolean
+    /// settings are stored as "true"/"false": <c>bool.TryParse</c> also accepts
+    /// padding and any casing, which readers comparing against the literal
+    /// would not.
+    /// </summary>
+    private static bool TryCanonicalize(string key, string value, out string canonical, out string error)
     {
+        canonical = value;
         switch (key)
         {
             case AppSettingKeys.SchedulerMaxConcurrent:
@@ -166,11 +173,12 @@ public class SettingsController : ControllerBase
                 }
                 break;
             case AppSettingKeys.SchedulerIsPaused:
-                if (!bool.TryParse(value, out _))
+                if (!bool.TryParse(value, out var paused))
                 {
                     error = "scheduler.isPaused must be 'true' or 'false'";
                     return false;
                 }
+                canonical = paused ? "true" : "false";
                 break;
             case AppSettingKeys.RunRetentionDays:
                 if (!int.TryParse(value, out var days) || days < 0 || days > 3650)
@@ -194,11 +202,12 @@ public class SettingsController : ControllerBase
                 }
                 break;
             case AppSettingKeys.ThrottleAutoResume:
-                if (!bool.TryParse(value, out _))
+                if (!bool.TryParse(value, out var autoResume))
                 {
                     error = "throttle.autoResume must be 'true' or 'false'";
                     return false;
                 }
+                canonical = autoResume ? "true" : "false";
                 break;
             case AppSettingKeys.ThrottleRetryDelayMinutes:
                 if (!int.TryParse(value, out var retryMins) || retryMins < 1 || retryMins > 1440)
