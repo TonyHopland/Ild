@@ -100,6 +100,51 @@ describe("Logging settings level", () => {
     expect(screen.queryByRole("button", { name: "Reset" })).toBeNull();
   });
 
+  test("presses the button a level the page has no button for is drawn as", async () => {
+    // Serilog has six levels and the page shows four. A backend at Verbose is
+    // at a real level, so the control has to say so rather than press nothing.
+    mockLevel("Verbose", "Verbose");
+    render(<LoggingSettings />);
+
+    await waitFor(() => expect(levelButton("Debug").getAttribute("aria-pressed")).toBe("true"));
+    expect(screen.getByText(/following/i)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Reset" })).toBeNull();
+  });
+
+  test("Fatal presses Error", async () => {
+    mockLevel("Fatal", "Fatal");
+    render(<LoggingSettings />);
+
+    await waitFor(() => expect(levelButton("Error").getAttribute("aria-pressed")).toBe("true"));
+  });
+
+  test("Debug against a startup level of Verbose is still an override, and Reset restores Verbose", async () => {
+    // Both draw as Debug, so comparing what is drawn would call this "following"
+    // and reset the process to Debug — not the level ILD_LOG_LEVEL names.
+    mockLevel("Debug", "Verbose");
+    const setLevel = vi
+      .spyOn(authServices.loggingService, "setLevel")
+      .mockResolvedValue(status("Verbose", "Verbose"));
+
+    render(<LoggingSettings />);
+
+    expect(await screen.findByText(/overriding/i)).toBeTruthy();
+    expect(screen.getAllByText("Verbose").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+
+    await waitFor(() => expect(setLevel).toHaveBeenCalledWith("Verbose"));
+  });
+
+  test("presses nothing for a level it cannot place at all", async () => {
+    mockLevel("Chatty", "Chatty");
+    render(<LoggingSettings />);
+
+    const group = within(screen.getByRole("group", { name: "Log level override" }));
+    await waitFor(() =>
+      expect(group.getAllByRole("button").every((b) => b.getAttribute("aria-pressed") === "false")),
+    );
+  });
+
   test("presses nothing when the level cannot be read", async () => {
     vi.spyOn(authServices.loggingService, "getLevel").mockRejectedValue(new Error("down"));
     render(<LoggingSettings />);

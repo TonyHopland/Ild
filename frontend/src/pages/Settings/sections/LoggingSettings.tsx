@@ -35,19 +35,22 @@ interface LogLine {
   detail?: string;
 }
 
-function isLevel(value: string): value is Level {
-  return (LEVELS as readonly string[]).includes(value);
-}
-
 /**
  * Serilog writes six levels where the page shows four: Verbose reads as Debug
- * and Fatal as Error rather than as a level with no tag and no colour.
+ * and Fatal as Error rather than as a level with no tag, no colour and no
+ * button. Anything else is a level this page cannot speak for.
  */
-function toLevel(value: string): Level {
-  if (isLevel(value)) return value;
-  if (value === "Verbose") return "Debug";
-  if (value === "Fatal") return "Error";
-  return "Information";
+const SHOWN_AS: Record<string, Level> = {
+  Verbose: "Debug",
+  Debug: "Debug",
+  Information: "Information",
+  Warning: "Warning",
+  Error: "Error",
+  Fatal: "Error",
+};
+
+function toLevel(value: string): Level | undefined {
+  return SHOWN_AS[value];
 }
 
 /**
@@ -66,7 +69,7 @@ function toLine(entry: LogEntry): LogLine {
   return {
     id: entry.id,
     timestamp: entry.timestamp,
-    level: toLevel(entry.level),
+    level: toLevel(entry.level) ?? "Information",
     source: entry.source,
     message: entry.message,
     detail: entry.detail ?? undefined,
@@ -76,10 +79,10 @@ function toLine(entry: LogEntry): LogLine {
 /** The backend's log level, and a view of what it has been writing. */
 export default function LoggingSettings() {
   const { on, off } = useSignalR();
-  // Read rather than assumed: the level lives in a switch the API can report,
-  // so this page never claims one the backend is not actually logging at.
-  const [level, setLevel] = useState<Level | null>(null);
-  const [startupLevel, setStartupLevel] = useState<Level | null>(null);
+  // Read rather than assumed, and kept as read: the level lives in a switch the
+  // API can report, and the switch has levels this page has no button for.
+  const [level, setLevel] = useState<string | null>(null);
+  const [startupLevel, setStartupLevel] = useState<string | null>(null);
   const [levelError, setLevelError] = useState<string | null>(null);
   const [lines, setLines] = useState<LogLine[]>([]);
   const [logError, setLogError] = useState<string | null>(null);
@@ -141,16 +144,16 @@ export default function LoggingSettings() {
     void loggingService
       .getLevel()
       .then((status) => {
-        if (isLevel(status.startupLevel)) setStartupLevel(status.startupLevel);
+        setStartupLevel(status.startupLevel);
         // A click that beat this read already set the level, and its own PUT
         // is the newer truth; the stale read must not put the old one back.
-        if (!changed.current && isLevel(status.level)) setLevel(status.level);
+        if (!changed.current) setLevel(status.level);
       })
       // Unreachable API: press nothing rather than guess a level.
       .catch(() => {});
   }, []);
 
-  const changeLevel = async (next: Level) => {
+  const changeLevel = async (next: string) => {
     changed.current = true;
     const previous = level;
     setLevel(next);
@@ -163,6 +166,11 @@ export default function LoggingSettings() {
     }
   };
 
+  // The level and the startup level are held exactly as the backend reported
+  // them: Reset has to put back the level ILD_LOG_LEVEL actually names, and
+  // Verbose against Debug is an override however the two are drawn. Only the
+  // four-button control folds, since it has no button of its own for either.
+  const pressed = level === null ? null : (toLevel(level) ?? null);
   const overriding = level !== null && startupLevel !== null && level !== startupLevel;
 
   const filtering = minLevel !== "All" || search.trim() !== "";
@@ -197,7 +205,7 @@ export default function LoggingSettings() {
           label="Log level override"
           help={
             <>
-              {level && <>{LEVEL_HELP[level]} </>}
+              {pressed && <>{LEVEL_HELP[pressed]} </>}
               {overriding ? (
                 <>
                   Overriding <code>ILD_LOG_LEVEL</code>, which is <strong>{startupLevel}</strong>.
@@ -216,7 +224,7 @@ export default function LoggingSettings() {
         >
           <Segmented
             label="Log level override"
-            value={level}
+            value={pressed}
             onChange={(v) => void changeLevel(v)}
             options={LEVELS.map((l) => ({ value: l, label: l }))}
           />
