@@ -433,8 +433,8 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
 
     /// <summary>
     /// Build readable markers for any <c>tool_use</c> parts in an assistant
-    /// message (e.g. <c>\n[tool: Bash]\n</c>). These feed the live view so the
-    /// run's tool activity is visible, without polluting the node's text output.
+    /// message (e.g. <c>\n[tool: Bash] npm test\n</c>). These feed the live view so
+    /// the run's tool activity is visible, without polluting the node's text output.
     /// </summary>
     private static IEnumerable<string> ExtractToolMarkers(JsonElement message)
     {
@@ -450,10 +450,8 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
                 || !string.Equals(partType, "tool_use", StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            var name = TryGetString(item, "name", out var toolName) && !string.IsNullOrWhiteSpace(toolName)
-                ? toolName
-                : "tool";
-            yield return $"\n[tool: {name}]\n";
+            var arguments = item.TryGetProperty("input", out var input) ? input : default;
+            yield return $"\n{ToolMarkerFormatter.Format(GetString(item, "name"), arguments)}\n";
         }
     }
 

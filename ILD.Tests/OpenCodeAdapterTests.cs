@@ -330,6 +330,51 @@ public class OpenCodeAdapterTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_streams_tool_arguments_from_the_wrapped_tool_part()
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-tool-args-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
+        // `opencode run --format json` wraps the SDK tool part in the event:
+        // the name is at part.tool and the arguments at part.state.input.
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "printf '%s\\n' '{\"type\":\"tool_use\",\"sessionID\":\"ses-1\",\"part\":{\"type\":\"tool\",\"tool\":\"write\",\"state\":" +
+            "{\"status\":\"completed\",\"input\":{\"filePath\":\"notes.md\",\"content\":\"line one\\nline two\"},\"output\":\"done\"}}}'\n" +
+            "echo '{\"type\":\"text\",\"text\":\"Wrote the file.\"}'\n");
+        MakeExecutable(scriptPath);
+
+        try
+        {
+            var adapter = new OpenCodeAdapter();
+            var progressLines = new System.Collections.Concurrent.ConcurrentBag<string>();
+
+            var result = await adapter.ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                prompt: "ignored",
+                worktreePath: worktreeDir,
+                executionCount: 1,
+                progressCallback: line =>
+                {
+                    progressLines.Add(line);
+                    return Task.CompletedTask;
+                }));
+
+            Assert.True(result.Success);
+            Assert.Contains("[tool: write] notes.md", progressLines);
+            // The written file's content rides in the same arguments object; the
+            // live view gets the marker, not the file.
+            Assert.DoesNotContain(progressLines, l => l.Contains("line two"));
+            Assert.Contains("Wrote the file.", result.Output);
+            Assert.DoesNotContain("[tool:", result.Output);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_streams_stdout_lines_to_progress_callback()
     {
         var scriptPath = Path.Combine(Path.GetTempPath(), $"ild-stream-test-{Guid.NewGuid():N}.sh");

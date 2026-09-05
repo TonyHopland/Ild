@@ -80,6 +80,46 @@ public class PiAdapterTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_streams_tool_calls_to_progress_without_polluting_output()
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-pi-tool-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-tool\",\"cwd\":\"$PWD\"}'\n" +
+            "printf '%s\\n' '{\"type\":\"tool_execution_start\",\"toolCallId\":\"call-1\",\"toolName\":\"bash\",\"args\":{\"command\":\"npm\\n  test\"}}'\n" +
+            "echo '{\"type\":\"message_update\",\"message\":{\"role\":\"assistant\",\"content\":[]},\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"ran the tests\"}}'\n" +
+            "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ran the tests\"}]}}'\n");
+        MakeExecutable(scriptPath);
+
+        try
+        {
+            var progress = new System.Collections.Concurrent.ConcurrentBag<string>();
+
+            var result = await new PiAdapter().ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                prompt: "ignored",
+                worktreePath: worktreeDir,
+                executionCount: 1,
+                progressCallback: chunk =>
+                {
+                    progress.Add(chunk);
+                    return Task.CompletedTask;
+                }));
+
+            Assert.True(result.Success);
+            Assert.Contains("\n[tool: bash] npm test\n", progress);
+            Assert.Equal("ran the tests", result.Output);
+            Assert.DoesNotContain("[tool:", result.Output);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_invokes_OnSessionId_once_on_session_event()
     {
         var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-pi-sid-{Guid.NewGuid():N}");
@@ -582,6 +622,16 @@ public class PiAdapterTests
                 Directory.Delete(agentDir, true);
             Directory.Delete(worktreeDir, true);
         }
+    }
+
+    private static void MakeExecutable(string scriptPath)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("chmod") { UseShellExecute = false };
+        psi.ArgumentList.Add("+x");
+        psi.ArgumentList.Add(scriptPath);
+        using var proc = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start chmod");
+        proc.WaitForExit();
     }
 
     private static AgentExecutionContext BuildContext(

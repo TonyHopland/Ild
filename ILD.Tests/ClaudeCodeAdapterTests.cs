@@ -137,11 +137,13 @@ public class ClaudeCodeAdapterTests
         File.WriteAllText(scriptPath,
             "#!/bin/sh\n" +
             "echo '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"sess-t\"}'\n" +
-            "echo '{\"type\":\"assistant\",\"session_id\":\"sess-t\",\"message\":{\"content\":[" +
+            // printf %s so the embedded \n stays an escape inside the JSON string
+            // rather than being expanded by the shell into a second line.
+            "printf '%s\\n' '{\"type\":\"assistant\",\"session_id\":\"sess-t\",\"message\":{\"content\":[" +
             "{\"type\":\"text\",\"text\":\"Listing files.\"}," +
-            "{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"ls\"}}]}}'\n" +
+            "{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"description\":\"list\",\"command\":\"ls\\n  -la\"}}]}}'\n" +
             "echo '{\"type\":\"result\",\"session_id\":\"sess-t\",\"is_error\":false,\"result\":\"Listing files.\"}'\n");
-        Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         try
         {
@@ -159,12 +161,15 @@ public class ClaudeCodeAdapterTests
             var result = await adapter.ExecuteAsync(ctx);
 
             Assert.True(result.Success);
-            // The tool call surfaces on the live stream...
-            Assert.Contains(progress, p => p.Contains("[tool: Bash]"));
+            // The tool call surfaces on the live stream, saying what it is doing —
+            // on one line, whatever the argument's own formatting was...
+            var marker = Assert.Single(progress, p => p.Contains("[tool: Bash]"));
+            Assert.Equal("\n[tool: Bash] ls -la\n", marker);
             Assert.Contains("Listing files.", progress);
             // ...but never bleeds into the node's text output.
             Assert.Equal("Listing files.", result.Output);
             Assert.DoesNotContain("[tool: Bash]", result.Output);
+            Assert.DoesNotContain("ls -la", result.Output);
         }
         finally
         {
@@ -425,6 +430,15 @@ public class ClaudeCodeAdapterTests
         var path = Path.Combine(Path.GetTempPath(), $"ild-claude-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    private static void MakeExecutable(string scriptPath)
+    {
+        var psi = new ProcessStartInfo("chmod") { UseShellExecute = false };
+        psi.ArgumentList.Add("+x");
+        psi.ArgumentList.Add(scriptPath);
+        using var proc = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start chmod");
+        proc.WaitForExit();
     }
 
     private static AgentExecutionContext BuildContext(
