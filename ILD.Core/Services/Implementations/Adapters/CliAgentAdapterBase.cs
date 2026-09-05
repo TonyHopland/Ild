@@ -60,7 +60,7 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
             + "{ \"name\": { \"command\": \"npx\" or [\"npx\", \"-y\", …], \"args\": [ … ], \"env\": { … } } }. "
             + "command may be a string or an array of argv tokens; args and env are optional. "
             + "These MCP servers are attached to the agent for every repository this provider runs in. "
-            + "Example: {\"chrome-devtools\": {\"command\": [\"npx\", \"-y\", \"chrome-devtools-mcp@latest\", \"--headless\", \"--isolated\", \"--no-sandbox\"]}}. "
+            + "Example: {\"chrome-devtools\": {\n  \"command\": \"npx\",\n  \"args\": [\n    \"-y\", \"chrome-devtools-mcp@latest\",\n    \"--headless\", \"--isolated\",\n    \"--chrome-arg=--no-sandbox\",\n    \"--chrome-arg=--disable-setuid-sandbox\"\n  ]\n}}. "
             + "Invalid JSON is ignored and never fails a run. The reserved name \"ild\" is ignored.");
 
     public abstract Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context);

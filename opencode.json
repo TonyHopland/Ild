@@ -22,9 +22,9 @@
         "npx",
         "-y",
         "chrome-devtools-mcp@latest",
-        "--headless",
-        "--disable-setuid-sandbox",
-        "--no-sandbox"
+        "--headless", "--isolated",
+        "--chrome-arg=--no-sandbox",
+        "--chrome-arg=--disable-setuid-sandbox"
       ]
     }
   }
