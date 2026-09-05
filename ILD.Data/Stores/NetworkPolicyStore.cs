@@ -55,4 +55,7 @@ public sealed class NetworkPolicyStore : INetworkPolicyStore
 
     public Task<int> ClearLogAsync(CancellationToken ct = default)
         => _db.NetworkLogEntries.ExecuteDeleteAsync(ct);
+
+    public Task<int> DeleteLogOlderThanAsync(DateTime cutoff, CancellationToken ct = default)
+        => _db.NetworkLogEntries.Where(l => l.Timestamp < cutoff).ExecuteDeleteAsync(ct);
 }

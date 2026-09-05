@@ -68,6 +68,30 @@ public sealed class SettingsControllerTests : IDisposable
     }
 
     [Theory]
+    [InlineData("-1")]
+    [InlineData("3651")]
+    [InlineData("thirty")]
+    [InlineData("7.5")]
+    public async Task A_network_log_retention_outside_the_allowed_days_is_refused_and_stores_nothing(string sent)
+    {
+        var result = await Put(AppSettingKeys.NetworkLogRetentionDays, sent);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Null(await Stored(AppSettingKeys.NetworkLogRetentionDays));
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("3650")]
+    public async Task A_network_log_retention_at_either_end_of_the_range_is_stored(string sent)
+    {
+        var result = await Put(AppSettingKeys.NetworkLogRetentionDays, sent);
+
+        Assert.Equal(sent, StatedValue(result));
+        Assert.Equal(sent, await Stored(AppSettingKeys.NetworkLogRetentionDays));
+    }
+
+    [Theory]
     [InlineData(AppSettingKeys.NetworkMode, " Whitelist ")]
     [InlineData(AppSettingKeys.SchedulerMaxConcurrent, " 7 ")]
     public async Task Canonicalising_is_for_the_booleans_only_and_leaves_every_other_value_as_sent(string key, string sent)

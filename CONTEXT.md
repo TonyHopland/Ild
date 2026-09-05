@@ -156,7 +156,7 @@ The `network.mode` app setting (`off` / `whitelist` / `blacklist`, default `off`
 _Avoid_: allowlist/denylist (the UI says whitelist/blacklist), firewall rules
 
 **Network Log**:
-`NetworkLogEntries`: one row per destination the agent asked the proxy for — hostname, port, timestamp, the **decision** (`allowed`, `blocked`, or `advisory`, meaning the mode was `off` and no list was consulted) and the provider when the launch carried one. Written by `NetworkLogRecorder` off the connection path and pushed live as `NetworkLogAppended`. Each line has **Add to whitelist** / **Add to blacklist** in Settings, which is the live control: click, and the agent's next connection is judged by the new entry. **Clear log** empties it.
+`NetworkLogEntries`: one row per destination the agent asked the proxy for — hostname, port, timestamp, the **decision** (`allowed`, `blocked`, or `advisory`, meaning the mode was `off` and no list was consulted) and the provider when the launch carried one. Written by `NetworkLogRecorder` off the connection path and pushed live as `NetworkLogAppended`. Each line has **Add to whitelist** / **Add to blacklist** in Settings, which is the live control: click, and the agent's next connection is judged by the new entry. **Clear log** empties it. A background `NetworkLogRetentionSweeper` deletes entries older than `network.logRetentionDays` (default 30; `0` keeps the log forever) every six hours, reading the window from settings on every pass so a change takes effect without a restart; a sweep that removed anything broadcasts `NetworkLogCleared`, which means "rows went, re-read the log" rather than "the log is empty".
 _Avoid_: audit log, connection history
 
 **Network Enforcement**:

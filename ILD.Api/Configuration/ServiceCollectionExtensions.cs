@@ -68,6 +68,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IEventLogService, EventLogService>();
         services.AddHostedService<EventLogRetentionSweeper>();
         services.AddHostedService<WorktreeRetentionSweeper>();
+        services.AddHostedService<NetworkLogRetentionSweeper>();
         services.AddHostedService<StuckRunWatchdog>();
         services.AddHostedService<ThrottledRunResumeSweeper>();
         services.AddScoped<IRunReclaimer, RunReclaimer>();

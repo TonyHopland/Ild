@@ -507,6 +507,7 @@ public sealed class EgressPolicyInvalidationTests
         public Task<NetworkLogEntry?> GetLogEntryAsync(Guid id, CancellationToken ct = default) => throw new NotSupportedException();
         public Task AppendLogAsync(IReadOnlyList<NetworkLogEntry> entries, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<int> ClearLogAsync(CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<int> DeleteLogOlderThanAsync(DateTime cutoff, CancellationToken ct = default) => throw new NotSupportedException();
     }
 
     private sealed class FixedSettings : IAppSettingStore

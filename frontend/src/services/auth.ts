@@ -703,6 +703,7 @@ export const settingsService = {
 /** The egress filter mode: `off` logs only, `whitelist` allows listed hosts, `blacklist` blocks them. */
 export const NetworkSettingKeys = {
   Mode: "network.mode",
+  LogRetentionDays: "network.logRetentionDays",
 } as const;
 
 export const networkService = {

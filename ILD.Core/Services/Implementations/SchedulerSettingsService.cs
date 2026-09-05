@@ -58,6 +58,17 @@ public sealed class SchedulerSettingsService : ISchedulerSettingsService
         return AppSettingKeys.DefaultThrottleMaxRetries;
     }
 
+    public async Task<int> GetNetworkLogRetentionDaysAsync(CancellationToken ct = default)
+    {
+        var s = await _store.GetByKeyAsync(AppSettingKeys.NetworkLogRetentionDays, ct);
+        // A value past the ceiling only reaches the row by bypassing the API,
+        // and is held to the longest legal window rather than the default: a
+        // window nobody can have meant is no reason to start deleting sooner.
+        if (s != null && int.TryParse(s.Value, out var v) && v >= 0)
+            return Math.Min(v, AppSettingKeys.MaxNetworkLogRetentionDays);
+        return AppSettingKeys.DefaultNetworkLogRetentionDays;
+    }
+
     public async Task<int> GetMaxAiTraversalsAsync(CancellationToken ct = default)
     {
         var s = await _store.GetByKeyAsync(AppSettingKeys.MaxAiTraversals, ct);

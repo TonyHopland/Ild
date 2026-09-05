@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Coding agents that honour the do-not-track convention no longer send usage telemetry home.**
 
+- **The agent traffic log now forgets old destinations instead of growing forever; set how long it keeps them in Settings.**
+
 ### Fixed
 
 - **Cancelling or timing out a run now stops the command a Cmd node was running, instead of leaving it going.**
