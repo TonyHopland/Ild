@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-05
+
 ### Added
 
 - **The live view now shows what each tool call is doing.**
@@ -25,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The agent traffic log now forgets old destinations instead of growing forever; set how long it keeps them in Settings.**
 
+### Changed
+
+- **A loop that has run the AI too long on its own stops and asks whether to carry on, rather than failing.** How many steps it takes to get there is yours to set, and anything you say to the run starts the count again.
+
 ### Fixed
 
 - **Blacklisting a host now also cuts off a connection to it that had only just opened.**
@@ -39,11 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **BREAKING — the database passwords are yours to set now, along with a new session-token secret, and the stack will not start until you do.** They used to be fixed values published in this repository, which meant every install shared them. Generate four with `openssl rand -hex 32` and put them in your `.env` as `POSTGRES_PASSWORD`, `ILD_DB_PASSWORD`, `WORKITEM_DB_PASSWORD` and `ILD_SESSION_TOKEN_PEPPER`. **If you already have a stack running, that alone is not enough** — the old passwords were written into the database when its volume was first created and a new value in `.env` never reaches them, so the containers come up and then cannot log in to their own database. Either change them in place, `ALTER ROLE ild_core WITH PASSWORD '…'` and the same for `ild_workitems`, matching what you just put in `.env`, or delete the `postgres-data` volume and lose what is in it. Your first start after setting the pepper also signs every device out once.
+- **BREAKING — the database passwords and a session-token secret are yours to set now, and the stack will not start until you do.** Put your own values in `.env` for `POSTGRES_PASSWORD`, `ILD_DB_PASSWORD`, `WORKITEM_DB_PASSWORD` and `ILD_SESSION_TOKEN_PEPPER`. A stack that is already running needs those passwords changed inside its database as well, or its `postgres-data` volume deleted and everything in it lost, and every device is signed out once.
 
 - **BREAKING — PostgreSQL is no longer published on port `5432`.** Both services reach it inside the compose network, and nothing outside needed it. If you point a database client at it from the host, uncomment the `ports` line on the `postgres` service in `docker-compose.yml`.
 
 - **A Cmd node's command no longer inherits the orchestrator's privileges.**
+
+- **Another signed-in user can no longer read your chats as they arrive.**
 
 ## [0.10.0] - 2026-08-22
 
@@ -52,10 +60,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Files in a work item are syntax coloured, and a Markdown file can be read as a rendered document — as can an SVG, shown as the picture it draws.**
 
 - **Edit a text file in a work item while it waits on you, and save it — or cancel and keep what was there.**
-
-### Changed
-
-- **A loop that has run the AI too long on its own stops and asks whether to carry on, rather than failing.** How many steps it takes to get there is yours to set, and anything you say to the run starts the count again.
 
 ### Fixed
 
