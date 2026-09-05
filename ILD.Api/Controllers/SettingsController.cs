@@ -249,9 +249,9 @@ public class SettingsController : ControllerBase
                 }
                 break;
             case AppSettingKeys.NetworkLogRetentionDays:
-                if (!int.TryParse(value, out var logDays) || logDays < 0 || logDays > 3650)
+                if (!int.TryParse(value, out var logDays) || logDays < 0 || logDays > AppSettingKeys.MaxNetworkLogRetentionDays)
                 {
-                    error = "network.logRetentionDays must be an integer between 0 (never) and 3650";
+                    error = $"network.logRetentionDays must be an integer between 0 (never) and {AppSettingKeys.MaxNetworkLogRetentionDays}";
                     return false;
                 }
                 break;

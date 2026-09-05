@@ -98,10 +98,14 @@ public static class AppSettingKeys
 
     /// <summary>
     /// Days a destination stays in the network log before the retention sweeper
-    /// deletes it. <c>0</c> keeps the log forever.
+    /// deletes it. <c>0</c> keeps the log forever, and
+    /// <see cref="MaxNetworkLogRetentionDays"/> is the ceiling both the write
+    /// path and the read path hold the value to — a longer window than that
+    /// cannot be turned into a cutoff date at all.
     /// </summary>
     public const string NetworkLogRetentionDays = "network.logRetentionDays";
-    public const int DefaultNetworkLogRetentionDays = DefaultRunRetentionDays;
+    public const int DefaultNetworkLogRetentionDays = 30;
+    public const int MaxNetworkLogRetentionDays = 3650;
 }
 
 /// <summary>
@@ -133,7 +137,9 @@ public interface ISchedulerSettingsService
     Task<int> GetThrottleMaxRetriesAsync(CancellationToken ct = default);
 
     /// <summary>
-    /// Network log retention window in days; <c>0</c> means never sweep.
+    /// Network log retention window in days, never above
+    /// <see cref="AppSettingKeys.MaxNetworkLogRetentionDays"/>; <c>0</c> means
+    /// never sweep.
     /// </summary>
     Task<int> GetNetworkLogRetentionDaysAsync(CancellationToken ct = default);
 }

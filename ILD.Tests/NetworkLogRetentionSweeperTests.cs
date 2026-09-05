@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
@@ -65,6 +66,24 @@ public class NetworkLogRetentionSweeperTests
         notifier.Verify(n => n.LogClearedAsync(), Times.Once);
     }
 
+    [Fact]
+    public async Task A_stored_window_past_the_ceiling_sweeps_at_the_ceiling_instead_of_failing_every_pass()
+    {
+        using var db = new TestDb();
+        // Only reachable by editing the row directly; the API refuses it. Left
+        // unbounded it makes the cutoff subtraction throw, which the sweeper
+        // swallows — the log would then never be pruned again.
+        await db.Settings.UpsertAsync(AppSettingKeys.NetworkLogRetentionDays, "999999999");
+        var beyondCeiling = SeedLine(db, "ancient.example", DateTime.UtcNow.AddDays(-4000));
+        var withinCeiling = SeedLine(db, "old.example", DateTime.UtcNow.AddDays(-3000));
+
+        await InvokeSweepOnceAsync(BuildSweeper(db, new Mock<INetworkNotifier>().Object, new SchedulerSettingsService(db.Settings)));
+
+        var remaining = (await db.Network.GetLogAsync(100)).Select(l => l.Id).ToList();
+        Assert.Equal(new[] { withinCeiling }, remaining);
+        Assert.DoesNotContain(beyondCeiling, remaining);
+    }
+
     private static Guid SeedLine(TestDb db, string host, DateTime timestamp)
     {
         var entry = new NetworkLogEntry
@@ -84,10 +103,14 @@ public class NetworkLogRetentionSweeperTests
     {
         var settings = new Mock<ISchedulerSettingsService>();
         settings.Setup(s => s.GetNetworkLogRetentionDaysAsync(It.IsAny<CancellationToken>())).ReturnsAsync(retentionDays);
+        return BuildSweeper(db, notifier, settings.Object);
+    }
 
+    private static NetworkLogRetentionSweeper BuildSweeper(TestDb db, INetworkNotifier notifier, ISchedulerSettingsService settings)
+    {
         var services = new ServiceCollection();
         services.AddSingleton(db.Network);
-        services.AddSingleton(settings.Object);
+        services.AddSingleton(settings);
         var provider = services.BuildServiceProvider();
         var scopes = provider.GetRequiredService<IServiceScopeFactory>();
         return new NetworkLogRetentionSweeper(scopes, notifier, NullLogger<NetworkLogRetentionSweeper>.Instance);
