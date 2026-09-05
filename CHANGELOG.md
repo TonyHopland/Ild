@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The live view now shows what each tool call is doing.**
+
 - **Clean up a finished run to free the branch it is holding, without losing the run or its history.**
 
 - **Limit which hosts the coding agent may reach, from Settings: a whitelist, a blacklist, and a live log of everywhere it went.**

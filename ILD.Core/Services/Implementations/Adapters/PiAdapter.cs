@@ -313,6 +313,21 @@ public sealed class PiAdapter : CliAgentAdapterBase
                     continue;
                 }
 
+                // `pi --mode json` announces each tool call as its own event
+                // carrying the tool's name and arguments. It belongs on the live
+                // stream only — the node's output is the assistant's text.
+                if (hasEventType
+                    && string.Equals(eventType, "tool_execution_start", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (progressCallback is not null)
+                    {
+                        var arguments = root.TryGetProperty("args", out var args) ? args : default;
+                        var marker = ToolMarkerFormatter.Format(GetString(root, "toolName"), arguments);
+                        await progressCallback($"\n{marker}\n").ConfigureAwait(false);
+                    }
+                    continue;
+                }
+
                 if (hasEventType
                     && (string.Equals(eventType, "message_end", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(eventType, "turn_end", StringComparison.OrdinalIgnoreCase)))

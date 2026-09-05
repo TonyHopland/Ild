@@ -825,30 +825,51 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         try
         {
             using var doc = JsonDocument.Parse(trimmed);
+            var type = doc.RootElement.ValueKind == JsonValueKind.Object
+                ? GetString(doc.RootElement, "type")
+                : null;
+
+            // A tool event is never assistant prose, and its arguments routinely
+            // carry a `content` field (a written file, an edit's replacement) that
+            // the generic text walk below would spill into the live view whole.
+            if (type == "tool_use")
+                return FormatToolMarker(doc.RootElement);
+
             var sb = new StringBuilder();
             ExtractTextFromElement(doc.RootElement, sb);
             if (sb.Length > 0) return sb.ToString();
 
-            // No text content; surface event metadata based on real opencode output
-            if (doc.RootElement.ValueKind == JsonValueKind.Object)
-            {
-                var type = GetString(doc.RootElement, "type");
-                if (type == "tool_use")
-                {
-                    var tool = GetString(doc.RootElement, "tool");
-                    return tool != null ? $"[tool: {tool}]" : "[tool call]";
-                }
-                if (type != null)
-                {
-                    return $"[{type}]";
-                }
-            }
-            return null;
+            // No text content; surface the bare event type so the live view still
+            // shows the session moving.
+            return type != null ? $"[{type}]" : null;
         }
         catch
         {
             // Not valid JSON; pass through as-is for non-JSON output
             return trimmed;
         }
+    }
+
+    /// <summary>
+    /// `opencode run --format json` emits a tool call as its SDK part wrapped in
+    /// the event envelope: the tool name sits at <c>part.tool</c> and the call's
+    /// arguments at <c>part.state.input</c>. Older/flatter shapes carrying the
+    /// name and arguments at the root are read the same way.
+    /// </summary>
+    private static string FormatToolMarker(JsonElement root)
+    {
+        var part = root.TryGetProperty("part", out var wrapped) && wrapped.ValueKind == JsonValueKind.Object
+            ? wrapped
+            : root;
+
+        JsonElement arguments = default;
+        if (part.TryGetProperty("state", out var state)
+            && state.ValueKind == JsonValueKind.Object
+            && state.TryGetProperty("input", out var stateInput))
+            arguments = stateInput;
+        else if (part.TryGetProperty("input", out var directInput))
+            arguments = directInput;
+
+        return ToolMarkerFormatter.Format(GetString(part, "tool"), arguments);
     }
 }
