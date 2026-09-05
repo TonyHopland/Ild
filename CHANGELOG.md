@@ -31,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A Cmd node runs its command exactly as written, including backslashes and quotes.**
 
-- **Fixed the mcp example so it actually works if you add it as is.**
+- **Make the MCP example work when pasted as-is.**
 
 ### Security
 

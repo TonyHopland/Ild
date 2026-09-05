@@ -17,9 +17,11 @@
   "model": "default_model",
   "mcp": {
     "chrome-devtools": {
-      "command": "npx",
-      "args": [
-        "-y", "chrome-devtools-mcp@latest",
+      "type": "local",
+      "command": [
+        "npx",
+        "-y",
+        "chrome-devtools-mcp@latest",
         "--headless", "--isolated",
         "--chrome-arg=--no-sandbox",
         "--chrome-arg=--disable-setuid-sandbox"
