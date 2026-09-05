@@ -1,11 +1,35 @@
+using ILD.Api.Authentication;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 
 namespace ILD.Api.Hubs;
 
+/// <summary>
+/// Streams a Loop Run's state transitions, event log and live node output to the
+/// clients watching it. Each run is its own group, joined by run id.
+///
+/// <para>There is deliberately no per-run ownership check on
+/// <see cref="SubscribeToRun"/>: <see cref="Data.Entities.LoopRun"/> carries no
+/// owner. Its only "created by" field is
+/// <see cref="Data.Entities.LoopRun.CreatedByLoopRunId"/>, which is provenance
+/// (which run spawned this one), not ownership, and ILD's authenticated surface
+/// is a single seeded operator (see <see cref="IldAuthentication"/>).
+/// So every authenticated user may watch every run, and there is nothing to
+/// scope against short of introducing run ownership — a product decision, not a
+/// hardening one. This paragraph exists so the next reader knows the question
+/// was asked and answered rather than overlooked.</para>
+///
+/// <para>The attribute is deliberately redundant with the user-only fallback
+/// policy that already covers this hub: it states at the class what the pipeline
+/// states globally. It names <see cref="IldAuthentication.UserOnlyPolicy"/> and
+/// not a bare <c>[Authorize]</c> for the reason documented there — a bare one
+/// would suppress the fallback and leave the hub open to the agent token.</para>
+/// </summary>
+[Authorize(Policy = IldAuthentication.UserOnlyPolicy)]
 public class LoopRunHub : Hub
 {
     private readonly IRunProgressBuffer _progressBuffer;

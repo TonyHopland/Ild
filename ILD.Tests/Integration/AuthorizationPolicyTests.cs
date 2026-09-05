@@ -138,6 +138,42 @@ public class AuthorizationPolicyTests
     }
 
     /// <summary>
+    /// The hubs stream a user's chats, runs and backlog events, and ILD's own
+    /// spawned agents have no business on any of them. They carry no opt-out, so
+    /// the user-only fallback policy already refuses the agent service token —
+    /// this pins that, on both legs of the handshake, so a later opt-out or a
+    /// change to the fallback cannot quietly hand an agent a live event stream.
+    /// </summary>
+    [Theory]
+    [InlineData("/hubs/chat")]
+    [InlineData("/hubs/loop-run")]
+    [InlineData("/hubs/work-item")]
+    public async Task The_agent_token_is_refused_at_every_hub(string path)
+    {
+        await using var factory = new ApiFactory();
+        var agentToken = factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token;
+        var client = factory.CreateClient();
+
+        // Authenticated but not a user, so it is a 403 and not a 401: the token is
+        // recognised, the role is what stops it.
+        var negotiate = await client.PostAsync($"{path}/negotiate?negotiateVersion=1&access_token={agentToken}", null);
+        Assert.Equal(HttpStatusCode.Forbidden, negotiate.StatusCode);
+
+        // The socket leg authorizes independently of negotiate, so it has to be
+        // checked on its own — borrow a connection token from a legitimate user
+        // negotiate and present the agent token on the upgrade.
+        var userToken = await factory.GetAdminTokenAsync();
+        var userNegotiate = await client.PostAsync($"{path}/negotiate?negotiateVersion=1&access_token={userToken}", null);
+        Assert.Equal(HttpStatusCode.OK, userNegotiate.StatusCode);
+        var connectionToken = (await userNegotiate.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("connectionToken").GetString();
+
+        var sockets = factory.Server.CreateWebSocketClient();
+        var asAgent = new Uri(factory.Server.BaseAddress, $"{path}?id={connectionToken}&access_token={agentToken}");
+        await Assert.ThrowsAnyAsync<Exception>(() => sockets.ConnectAsync(asAgent, CancellationToken.None));
+    }
+
+    /// <summary>
     /// The other side of the fallback policy: the opt-out on AgentController has
     /// to actually admit the agent, or ILD's MCP server is locked out of every
     /// tool at once. These are the paths behind the read-only tools, requested

@@ -28,6 +28,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     private readonly IReadOnlyDictionary<string, string?> _extraConfiguration;
     private readonly Action<IServiceCollection>? _configureServices;
 
+    public string AdminUsername { get; } = "admin";
     public string AdminPassword { get; } = "ild-int-tests-admin-pw";
 
     /// <param name="extraConfiguration">
@@ -51,7 +52,12 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         _dataRoot = Path.Combine(Path.GetTempPath(), "ild-int-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dataRoot);
         // Tests may run in parallel, so the env var must be a constant: every factory
-        // that boots the API expects the same admin password to bootstrap login.
+        // that boots the API expects the same admin credentials to bootstrap login.
+        // Both halves have to be pinned, not just the password: AuthService takes the
+        // bootstrap username from ILD_USERNAME, so an ambient value — a preview shell
+        // exports one — seeds a user LoginAsync's hardcoded "admin" cannot log in as,
+        // and every test that needs a token fails at the handshake.
+        Environment.SetEnvironmentVariable("ILD_USERNAME", AdminUsername);
         Environment.SetEnvironmentVariable("ILD_PASSWORD", AdminPassword);
         Environment.SetEnvironmentVariable("ILD_DATA_PATH", null);
         Environment.SetEnvironmentVariable("ILD_WORKTREES_PATH", null);
@@ -142,7 +148,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 
     private async Task<string> LoginAsync(HttpClient client)
     {
-        var login = await client.PostAsJsonAsync("/api/v1/auth/login", new { username = "admin", password = AdminPassword });
+        var login = await client.PostAsJsonAsync("/api/v1/auth/login", new { username = AdminUsername, password = AdminPassword });
         login.EnsureSuccessStatusCode();
         var jsonOptions = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
         var body = await login.Content.ReadFromJsonAsync<LoginBody>(jsonOptions);

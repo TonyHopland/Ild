@@ -835,9 +835,11 @@ export default function LoopEditor() {
   // group or miss the new one.
   useEffect(() => {
     if (chatConnectionState !== "connected" || !chatSessionId) return;
-    void invokeChat("SubscribeToChat", chatSessionId);
+    // The server refuses a chat the caller does not own, so the invocation can
+    // reject: log it rather than leaving an unhandled rejection.
+    void invokeChat("SubscribeToChat", chatSessionId)?.catch((err) => console.error(err));
     return () => {
-      void invokeChat("UnsubscribeFromChat", chatSessionId);
+      void invokeChat("UnsubscribeFromChat", chatSessionId)?.catch((err) => console.error(err));
     };
   }, [chatConnectionState, chatSessionId, invokeChat]);
 
