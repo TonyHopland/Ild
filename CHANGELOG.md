@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Blacklisting a host now also cuts off a connection to it that had only just opened.**
+
 - **The coding agent bell only counts agents you have installed, so a fresh install no longer looks like a pile of pending updates.**
 
 - **Cancelling or timing out a run now stops the command a Cmd node was running, instead of leaving it going.**

@@ -183,29 +183,34 @@ public sealed class EgressProxy : BackgroundService
             return;
         }
 
-        var upstreamStream = upstream.GetStream();
-        switch (request.Kind)
-        {
-            case RequestKind.Connect:
-                await client.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 200 Connection Established\r\n\r\n"), stoppingToken).ConfigureAwait(false);
-                if (request.BodyStart < head.Count)
-                    await upstreamStream.WriteAsync(head.AsMemory(request.BodyStart), stoppingToken).ConfigureAwait(false);
-                break;
-            case RequestKind.Tls:
-                await upstreamStream.WriteAsync(head, stoppingToken).ConfigureAwait(false);
-                break;
-            default:
-                await upstreamStream.WriteAsync(request.ForwardedHead, stoppingToken).ConfigureAwait(false);
-                if (request.BodyStart < head.Count)
-                    await upstreamStream.WriteAsync(head.AsMemory(request.BodyStart), stoppingToken).ConfigureAwait(false);
-                break;
-        }
-
+        // Registered before the handshake reaches either side, so a host
+        // blacklisted from here on is re-judged rather than keeping a live relay
+        // nothing can see. Everything past this point runs on the tunnel's token
+        // so that a reset in this window closes the connection rather than
+        // completing a handshake the policy has already withdrawn.
         var id = Interlocked.Increment(ref _nextTunnelId);
         using var tunnel = new Tunnel(request.Host, request.Port, request.AiProviderId, stoppingToken);
         _tunnels[id] = tunnel;
         try
         {
+            var upstreamStream = upstream.GetStream();
+            switch (request.Kind)
+            {
+                case RequestKind.Connect:
+                    await client.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 200 Connection Established\r\n\r\n"), tunnel.Token).ConfigureAwait(false);
+                    if (request.BodyStart < head.Count)
+                        await upstreamStream.WriteAsync(head.AsMemory(request.BodyStart), tunnel.Token).ConfigureAwait(false);
+                    break;
+                case RequestKind.Tls:
+                    await upstreamStream.WriteAsync(head, tunnel.Token).ConfigureAwait(false);
+                    break;
+                default:
+                    await upstreamStream.WriteAsync(request.ForwardedHead, tunnel.Token).ConfigureAwait(false);
+                    if (request.BodyStart < head.Count)
+                        await upstreamStream.WriteAsync(head.AsMemory(request.BodyStart), tunnel.Token).ConfigureAwait(false);
+                    break;
+            }
+
             // Each direction ends on its own: a client that half-closes after
             // sending its request must still receive the response, so its EOF is
             // passed on as a send-shutdown rather than ending the whole tunnel.
