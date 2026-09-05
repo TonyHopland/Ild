@@ -552,13 +552,12 @@ The value is a JSON object mapping a server name to its definition:
 ```json
 {
   "chrome-devtools": {
-    "command": [
-      "npx",
-      "-y",
-      "chrome-devtools-mcp@latest",
-      "--headless",
-      "--isolated",
-      "--no-sandbox"
+    "command": "npx",
+    "args": [
+      "-y", "chrome-devtools-mcp@latest",
+      "--headless", "--isolated",
+      "--chrome-arg=--no-sandbox",
+      "--chrome-arg=--disable-setuid-sandbox"
     ]
   }
 }

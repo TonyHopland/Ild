@@ -17,14 +17,12 @@
   "model": "default_model",
   "mcp": {
     "chrome-devtools": {
-      "type": "local",
-      "command": [
-        "npx",
-        "-y",
-        "chrome-devtools-mcp@latest",
-        "--headless",
-        "--disable-setuid-sandbox",
-        "--no-sandbox"
+      "command": "npx",
+      "args": [
+        "-y", "chrome-devtools-mcp@latest",
+        "--headless", "--isolated",
+        "--chrome-arg=--no-sandbox",
+        "--chrome-arg=--disable-setuid-sandbox"
       ]
     }
   }

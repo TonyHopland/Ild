@@ -31,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A Cmd node runs its command exactly as written, including backslashes and quotes.**
 
+- **Fixed the mcp example so it actually works if you add it as is.**
+
 ### Security
 
 - **BREAKING — the database passwords are yours to set now, along with a new session-token secret, and the stack will not start until you do.** They used to be fixed values published in this repository, which meant every install shared them. Generate four with `openssl rand -hex 32` and put them in your `.env` as `POSTGRES_PASSWORD`, `ILD_DB_PASSWORD`, `WORKITEM_DB_PASSWORD` and `ILD_SESSION_TOKEN_PEPPER`. **If you already have a stack running, that alone is not enough** — the old passwords were written into the database when its volume was first created and a new value in `.env` never reaches them, so the containers come up and then cannot log in to their own database. Either change them in place, `ALTER ROLE ild_core WITH PASSWORD '…'` and the same for `ild_workitems`, matching what you just put in `.env`, or delete the `postgres-data` volume and lose what is in it. Your first start after setting the pepper also signs every device out once.
