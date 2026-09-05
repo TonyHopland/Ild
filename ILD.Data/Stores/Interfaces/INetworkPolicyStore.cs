@@ -23,4 +23,7 @@ public interface INetworkPolicyStore
     Task<NetworkLogEntry?> GetLogEntryAsync(Guid id, CancellationToken ct = default);
     Task AppendLogAsync(IReadOnlyList<NetworkLogEntry> entries, CancellationToken ct = default);
     Task<int> ClearLogAsync(CancellationToken ct = default);
+
+    /// <summary>Drops every log row stamped before <paramref name="cutoff"/>, and says how many.</summary>
+    Task<int> DeleteLogOlderThanAsync(DateTime cutoff, CancellationToken ct = default);
 }

@@ -58,6 +58,13 @@ public sealed class SchedulerSettingsService : ISchedulerSettingsService
         return AppSettingKeys.DefaultThrottleMaxRetries;
     }
 
+    public async Task<int> GetNetworkLogRetentionDaysAsync(CancellationToken ct = default)
+    {
+        var s = await _store.GetByKeyAsync(AppSettingKeys.NetworkLogRetentionDays, ct);
+        if (s != null && int.TryParse(s.Value, out var v) && v >= 0) return v;
+        return AppSettingKeys.DefaultNetworkLogRetentionDays;
+    }
+
     public async Task<int> GetMaxAiTraversalsAsync(CancellationToken ct = default)
     {
         var s = await _store.GetByKeyAsync(AppSettingKeys.MaxAiTraversals, ct);

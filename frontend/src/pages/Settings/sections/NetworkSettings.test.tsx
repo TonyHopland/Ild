@@ -64,10 +64,10 @@ function mockServices(status: NetworkStatus = enforced, mode = "off") {
   vi.spyOn(services.networkService, "getStatus").mockResolvedValue(status);
   vi.spyOn(services.networkService, "getEntries").mockResolvedValue([github, evil]);
   vi.spyOn(services.networkService, "getLog").mockResolvedValue([npmLine]);
-  vi.spyOn(services.settingsService, "get").mockResolvedValue({
-    key: services.NetworkSettingKeys.Mode,
-    value: mode,
-  });
+  vi.spyOn(services.settingsService, "get").mockImplementation(async (key: string) => ({
+    key,
+    value: key === services.NetworkSettingKeys.Mode ? mode : "30",
+  }));
   vi.spyOn(services.aiProviderService, "getAll").mockResolvedValue([
     { id: "p1", name: "Claude", type: "claude-code" } as any,
   ]);
@@ -343,6 +343,59 @@ describe("Network settings", () => {
     );
   });
 
+  test("saves a log retention window", async () => {
+    mockServices();
+    const put = vi
+      .spyOn(services.settingsService, "put")
+      .mockResolvedValue({ key: services.NetworkSettingKeys.LogRetentionDays, value: "7" });
+    render(<NetworkSettings />);
+
+    const input = (await screen.findByLabelText("Delete log entries after")) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("30"));
+
+    fireEvent.change(input, { target: { value: "7" } });
+    fireEvent.click(input.parentElement!.querySelector("button")!);
+
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith(services.NetworkSettingKeys.LogRetentionDays, "7"),
+    );
+  });
+
+  test("refuses a log retention window outside the allowed range without calling the server", async () => {
+    mockServices();
+    const put = vi.spyOn(services.settingsService, "put");
+    render(<NetworkSettings />);
+
+    const input = (await screen.findByLabelText("Delete log entries after")) as HTMLInputElement;
+    await waitFor(() => expect(input.value).toBe("30"));
+
+    fireEvent.change(input, { target: { value: "3651" } });
+    fireEvent.click(input.parentElement!.querySelector("button")!);
+
+    expect(await screen.findByText(/between 0 \(disabled\) and 3650/i)).toBeTruthy();
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  test("a retention sweep re-reads the log rather than emptying the view", async () => {
+    mockServices();
+    render(<NetworkSettings />);
+    await screen.findByText("registry.npmjs.org");
+
+    const survivor: NetworkLogEntry = {
+      id: "l9",
+      host: "api.anthropic.com",
+      port: 443,
+      timestamp: "2026-09-04T12:00:00Z",
+      decision: "Allowed",
+      aiProviderId: null,
+    };
+    vi.spyOn(services.networkService, "getLog").mockResolvedValue([survivor]);
+    emit("NetworkLogCleared", {});
+
+    expect(await trafficLog().findByText("api.anthropic.com")).toBeTruthy();
+    await waitFor(() => expect(trafficLog().queryByText("registry.npmjs.org")).toBeNull());
+  });
+
   test("a decision that arrives as a number still renders as its name", async () => {
     mockServices();
     render(<NetworkSettings />);
@@ -460,6 +513,7 @@ describe("Network settings", () => {
     const rows = trafficLog().getAllByRole("row").slice(1);
     expect(rows[0].textContent).toContain("api.anthropic.com");
 
+    vi.spyOn(services.networkService, "getLog").mockResolvedValue([]);
     emit("NetworkLogCleared", {});
     expect(await screen.findByText(/no destinations recorded yet/i)).toBeTruthy();
 

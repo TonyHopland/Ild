@@ -37,6 +37,7 @@ public class SettingsController : ControllerBase
         AppSettingKeys.SessionIdleDays,
         AppSettingKeys.SessionMaxDays,
         AppSettingKeys.NetworkMode,
+        AppSettingKeys.NetworkLogRetentionDays,
     };
 
     public SettingsController(
@@ -92,6 +93,8 @@ public class SettingsController : ControllerBase
             map[AppSettingKeys.SessionMaxDays] = AppSettingKeys.DefaultSessionMaxDays.ToString();
         if (!map.ContainsKey(AppSettingKeys.NetworkMode))
             map[AppSettingKeys.NetworkMode] = AppSettingKeys.DefaultNetworkMode;
+        if (!map.ContainsKey(AppSettingKeys.NetworkLogRetentionDays))
+            map[AppSettingKeys.NetworkLogRetentionDays] = AppSettingKeys.DefaultNetworkLogRetentionDays.ToString();
         return Ok(map.Select(kv => new { key = kv.Key, value = kv.Value }));
     }
 
@@ -151,6 +154,7 @@ public class SettingsController : ControllerBase
         AppSettingKeys.SessionIdleDays => AppSettingKeys.DefaultSessionIdleDays.ToString(),
         AppSettingKeys.SessionMaxDays => AppSettingKeys.DefaultSessionMaxDays.ToString(),
         AppSettingKeys.NetworkMode => AppSettingKeys.DefaultNetworkMode,
+        AppSettingKeys.NetworkLogRetentionDays => AppSettingKeys.DefaultNetworkLogRetentionDays.ToString(),
         _ => string.Empty,
     };
 
@@ -241,6 +245,13 @@ public class SettingsController : ControllerBase
                 if (!EgressRules.TryParseMode(value, out _))
                 {
                     error = "network.mode must be 'off', 'whitelist' or 'blacklist'";
+                    return false;
+                }
+                break;
+            case AppSettingKeys.NetworkLogRetentionDays:
+                if (!int.TryParse(value, out var logDays) || logDays < 0 || logDays > 3650)
+                {
+                    error = "network.logRetentionDays must be an integer between 0 (never) and 3650";
                     return false;
                 }
                 break;

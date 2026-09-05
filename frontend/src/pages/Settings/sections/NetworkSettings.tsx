@@ -15,7 +15,7 @@ import type {
   NetworkPolicyEntry,
   NetworkStatus,
 } from "../../../types";
-import { Segmented, SettingRow, Switch } from "../controls";
+import { NumericSettingField, Segmented, SettingRow, Switch } from "../controls";
 
 const MODES: { value: NetworkMode; label: string; help: string }[] = [
   {
@@ -355,7 +355,10 @@ export default function NetworkSettings() {
       const entry = normalizeLogEntry(message.payload);
       setLog((prev) => [entry, ...prev.filter((e) => e.id !== entry.id)].slice(0, LOG_TAKE));
     };
-    const onLogCleared = () => setLog([]);
+    // Lines were removed wholesale — by a manual clear, or by the retention
+    // sweep, which leaves the newer ones behind. Re-read rather than empty the
+    // view, so a sweep does not read as a clear.
+    const onLogCleared = () => void refreshLog();
 
     on("NetworkPolicyChanged", onPolicyChanged);
     on("NetworkLogAppended", onLogAppended);
@@ -365,7 +368,7 @@ export default function NetworkSettings() {
       off("NetworkLogAppended", onLogAppended);
       off("NetworkLogCleared", onLogCleared);
     };
-  }, [on, off, refreshEntries]);
+  }, [on, off, refreshEntries, refreshLog]);
 
   const changeMode = async (next: NetworkMode) => {
     const previous = mode;
@@ -656,6 +659,19 @@ export default function NetworkSettings() {
             </tbody>
           </table>
         )}
+        <NumericSettingField
+          settingKey={NetworkSettingKeys.LogRetentionDays}
+          label="Delete log entries after"
+          min={0}
+          max={3650}
+          fallback={30}
+          minLabel="0 (disabled)"
+          unit="days"
+        >
+          How long a destination stays in the log before it is deleted. Every agent connection adds
+          a line, so without a limit the log only grows. Set to <strong>0</strong> to keep every
+          line forever.
+        </NumericSettingField>
       </section>
 
       <style>{`

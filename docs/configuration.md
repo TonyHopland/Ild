@@ -512,6 +512,13 @@ the agent's MCP server still reaches ILD's own API directly. Two consequences:
   add its host to the whitelist before turning `whitelist` mode on, or the
   agent's tool calls back into ILD are blocked with everything else.
 
+The log is swept, not kept forever: an entry older than
+`network.logRetentionDays` (default `30`, capped at 3650, `0` keeps the log
+forever) is deleted by a background sweep that runs every six hours. Like
+`run.retentionDays` the window is read on every pass, so a change in Settings
+takes effect on the next sweep without a restart, and a sweep that removed
+anything refreshes an open log view.
+
 Whether the limit is **enforced** or **advisory** depends on the container being
 granted `NET_ADMIN` — see [Deployment](deployment.md#agent-network-limits-net_admin).
 `GET /api/v1/network/status` and a banner in Settings tell you which you have.

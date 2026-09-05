@@ -95,6 +95,13 @@ public static class AppSettingKeys
     /// </summary>
     public const string NetworkMode = "network.mode";
     public const string DefaultNetworkMode = "off";
+
+    /// <summary>
+    /// Days a destination stays in the network log before the retention sweeper
+    /// deletes it. <c>0</c> keeps the log forever.
+    /// </summary>
+    public const string NetworkLogRetentionDays = "network.logRetentionDays";
+    public const int DefaultNetworkLogRetentionDays = DefaultRunRetentionDays;
 }
 
 /// <summary>
@@ -124,4 +131,9 @@ public interface ISchedulerSettingsService
 
     /// <summary>Automatic retries a run may spend before it parks for a person (minimum 1).</summary>
     Task<int> GetThrottleMaxRetriesAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Network log retention window in days; <c>0</c> means never sweep.
+    /// </summary>
+    Task<int> GetNetworkLogRetentionDaysAsync(CancellationToken ct = default);
 }
