@@ -43,9 +43,19 @@ internal static class ToolMarkerFormatter
         if (arguments.ValueKind != JsonValueKind.Object)
             return string.Empty;
 
-        var preferred = string.Empty;
-        var preferredRank = int.MaxValue;
-        var firstString = string.Empty;
+        // Candidates are chosen by name and only then read: a `content` argument
+        // can hold a whole written file, and reading it just to keep 120
+        // characters would materialise the file on every tool call.
+        foreach (var key in PreferredKeys)
+            foreach (var property in arguments.EnumerateObject())
+            {
+                if (property.Value.ValueKind != JsonValueKind.String || !NameMatches(property.Name, key))
+                    continue;
+
+                var value = Condense(property.Value.GetString());
+                if (value.Length > 0)
+                    return value;
+            }
 
         foreach (var property in arguments.EnumerateObject())
         {
@@ -53,25 +63,29 @@ internal static class ToolMarkerFormatter
                 continue;
 
             var value = Condense(property.Value.GetString());
-            if (value.Length == 0)
-                continue;
-
-            var rank = Array.IndexOf(
-                PreferredKeys,
-                property.Name.Replace("_", string.Empty, StringComparison.Ordinal).ToLowerInvariant());
-
-            if (rank >= 0 && rank < preferredRank)
-            {
-                preferredRank = rank;
-                preferred = value;
-            }
-            else if (firstString.Length == 0)
-            {
-                firstString = value;
-            }
+            if (value.Length > 0)
+                return value;
         }
 
-        return preferred.Length > 0 ? preferred : firstString;
+        return string.Empty;
+    }
+
+    /// <param name="normalizedKey">An entry of <see cref="PreferredKeys"/>: already
+    /// lowercase and free of underscores, which is how <paramref name="name"/> is
+    /// read as it is compared.</param>
+    private static bool NameMatches(string name, string normalizedKey)
+    {
+        var matched = 0;
+        foreach (var ch in name)
+        {
+            if (ch == '_')
+                continue;
+            if (matched == normalizedKey.Length || char.ToLowerInvariant(ch) != normalizedKey[matched])
+                return false;
+            matched++;
+        }
+
+        return matched == normalizedKey.Length;
     }
 
     private static string Condense(string? value)
@@ -90,8 +104,11 @@ internal static class ToolMarkerFormatter
                 continue;
             }
 
-            if (sb.Length >= MaxArgumentLength)
-                return sb.ToString(0, MaxArgumentLength - 1) + '…';
+            // Counting the pending space too: appending it first and checking
+            // afterwards would let a value whose collapsed whitespace lands on the
+            // boundary run one character past the cap, un-ellipsised.
+            if (sb.Length + (pendingSpace ? 2 : 1) > MaxArgumentLength)
+                return Truncate(sb);
 
             if (pendingSpace)
             {
@@ -103,5 +120,14 @@ internal static class ToolMarkerFormatter
         }
 
         return sb.ToString();
+    }
+
+    private static string Truncate(StringBuilder sb)
+    {
+        var length = MaxArgumentLength - 1;
+        while (length > 0 && sb[length - 1] == ' ')
+            length--;
+
+        return sb.ToString(0, length) + '…';
     }
 }

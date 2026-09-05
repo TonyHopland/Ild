@@ -5,7 +5,11 @@ namespace ILD.Tests;
 
 public class ToolMarkerFormatterTests
 {
-    private static JsonElement Args(string json) => JsonDocument.Parse(json).RootElement;
+    private static JsonElement Args(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.Clone();
+    }
 
     [Fact]
     public void Format_picks_the_most_telling_argument_regardless_of_property_order()
@@ -55,6 +59,35 @@ public class ToolMarkerFormatterTests
         Assert.Equal(120, argument.Length);
         Assert.EndsWith("…", argument);
         Assert.Equal(new string('x', 119), argument[..^1]);
+    }
+
+    [Fact]
+    public void Format_holds_the_cap_when_the_collapsed_space_lands_on_the_boundary()
+    {
+        // 119 characters, a whitespace run, then one last character: the space the
+        // collapse inserts is what tips the argument over the cap, and the value
+        // ends there, so nothing later would have trimmed it back.
+        var marker = ToolMarkerFormatter.Format("Bash", Args($$"""{"command":"{{new string('x', 119)}}\n\n  t"}"""));
+
+        Assert.Equal($"[tool: Bash] {new string('x', 119)}…", marker);
+    }
+
+    [Theory]
+    [InlineData(115)]
+    [InlineData(117)]
+    [InlineData(118)]
+    [InlineData(119)]
+    [InlineData(120)]
+    [InlineData(121)]
+    public void Format_never_renders_an_argument_past_the_cap(int leadingLength)
+    {
+        var marker = ToolMarkerFormatter.Format(
+            "Bash",
+            Args($$"""{"command":"{{new string('x', leadingLength)}} \t tail end"}"""));
+
+        var argument = marker["[tool: Bash] ".Length..];
+        Assert.InRange(argument.Length, 1, 120);
+        Assert.DoesNotContain(" …", argument);
     }
 
     [Theory]
