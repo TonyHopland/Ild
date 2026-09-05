@@ -91,7 +91,7 @@ public class PiAdapterTests
             "printf '%s\\n' '{\"type\":\"tool_execution_start\",\"toolCallId\":\"call-1\",\"toolName\":\"bash\",\"args\":{\"command\":\"npm\\n  test\"}}'\n" +
             "echo '{\"type\":\"message_update\",\"message\":{\"role\":\"assistant\",\"content\":[]},\"assistantMessageEvent\":{\"type\":\"text_delta\",\"delta\":\"ran the tests\"}}'\n" +
             "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ran the tests\"}]}}'\n");
-        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         try
         {
@@ -622,6 +622,16 @@ public class PiAdapterTests
                 Directory.Delete(agentDir, true);
             Directory.Delete(worktreeDir, true);
         }
+    }
+
+    private static void MakeExecutable(string scriptPath)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("chmod") { UseShellExecute = false };
+        psi.ArgumentList.Add("+x");
+        psi.ArgumentList.Add(scriptPath);
+        using var proc = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("Failed to start chmod");
+        proc.WaitForExit();
     }
 
     private static AgentExecutionContext BuildContext(

@@ -143,7 +143,7 @@ public class ClaudeCodeAdapterTests
             "{\"type\":\"text\",\"text\":\"Listing files.\"}," +
             "{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"description\":\"list\",\"command\":\"ls\\n  -la\"}}]}}'\n" +
             "echo '{\"type\":\"result\",\"session_id\":\"sess-t\",\"is_error\":false,\"result\":\"Listing files.\"}'\n");
-        Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        MakeExecutable(scriptPath);
 
         try
         {
@@ -430,6 +430,15 @@ public class ClaudeCodeAdapterTests
         var path = Path.Combine(Path.GetTempPath(), $"ild-claude-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    private static void MakeExecutable(string scriptPath)
+    {
+        var psi = new ProcessStartInfo("chmod") { UseShellExecute = false };
+        psi.ArgumentList.Add("+x");
+        psi.ArgumentList.Add(scriptPath);
+        using var proc = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start chmod");
+        proc.WaitForExit();
     }
 
     private static AgentExecutionContext BuildContext(

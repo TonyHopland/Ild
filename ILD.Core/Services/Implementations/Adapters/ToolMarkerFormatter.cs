@@ -33,6 +33,16 @@ internal static class ToolMarkerFormatter
     private static readonly string[] PreferredKeys =
         ["command", "filepath", "path", "pattern", "url", "query", "description"];
 
+    /// <summary>The mirror of <see cref="PreferredKeys"/>: names that mean "this is
+    /// the thing being written" rather than "this is what the call is doing". They
+    /// are skipped in the fallback <em>without being read</em>, because reading one
+    /// materialises a whole file body to render at most 120 characters of it. A
+    /// call whose only argument is its payload therefore renders bare, which is the
+    /// honest answer — the head of a file body does not say what the call did.
+    /// Normalized like <see cref="PreferredKeys"/>.</summary>
+    private static readonly string[] PayloadKeys =
+        ["content", "contents", "body", "data", "patch", "diff", "oldstring", "newstring", "newsource"];
+
     /// <param name="arguments">The tool's arguments object. Anything else — a
     /// missing element, a scalar, an array — falls back to the bare marker.</param>
     public static string Format(string? toolName, JsonElement arguments = default)
@@ -66,12 +76,12 @@ internal static class ToolMarkerFormatter
             }
 
         // An argument vocabulary we don't know: take the first string that reads
-        // like a label. One this far past what a marker can hold is a payload —
-        // a file body, a patch — whose first 120 characters say nothing about
-        // what the call is doing, so the bare marker is the better answer.
+        // like a label. A payload-named argument is skipped unread; one that is
+        // merely payload-sized is caught after the fact, since only the value
+        // itself can say so.
         foreach (var property in arguments.EnumerateObject())
         {
-            if (property.Value.ValueKind != JsonValueKind.String)
+            if (property.Value.ValueKind != JsonValueKind.String || IsPayloadName(property.Name))
                 continue;
 
             var raw = property.Value.GetString();
@@ -86,9 +96,18 @@ internal static class ToolMarkerFormatter
         return string.Empty;
     }
 
-    /// <param name="normalizedKey">An entry of <see cref="PreferredKeys"/>: already
-    /// lowercase and free of underscores, which is how <paramref name="name"/> is
-    /// read as it is compared.</param>
+    private static bool IsPayloadName(string name)
+    {
+        foreach (var key in PayloadKeys)
+            if (NameMatches(name, key))
+                return true;
+
+        return false;
+    }
+
+    /// <param name="normalizedKey">An entry of <see cref="PreferredKeys"/> or
+    /// <see cref="PayloadKeys"/>: already lowercase and free of underscores, which
+    /// is how <paramref name="name"/> is read as it is compared.</param>
     private static bool NameMatches(string name, string normalizedKey)
     {
         var matched = 0;

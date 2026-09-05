@@ -39,12 +39,25 @@ public class ToolMarkerFormatterTests
         Assert.Equal("[tool: mcp__ild__get_workitem] wi-144", marker);
     }
 
+    [Theory]
+    [InlineData("content")]
+    [InlineData("new_string")]
+    [InlineData("body")]
+    public void Format_never_reads_an_argument_named_as_the_payload(string key)
+    {
+        // Short on purpose: the name alone decides, because deciding on the value
+        // would mean reading the file body this exists to leave unread.
+        var marker = ToolMarkerFormatter.Format("mcp__docs__publish", Args($$"""{"{{key}}":"hello"}"""));
+
+        Assert.Equal("[tool: mcp__docs__publish]", marker);
+    }
+
     [Fact]
-    public void Format_leaves_a_payload_it_cannot_name_off_the_marker()
+    public void Format_leaves_a_payload_sized_argument_it_cannot_name_off_the_marker()
     {
         var marker = ToolMarkerFormatter.Format(
             "mcp__docs__publish",
-            Args($$"""{"body":"{{new string('p', 5000)}}"}"""));
+            Args($$"""{"blob":"{{new string('p', 5000)}}"}"""));
 
         Assert.Equal("[tool: mcp__docs__publish]", marker);
     }
