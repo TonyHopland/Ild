@@ -589,6 +589,71 @@ describe("AI Providers page", () => {
     expect(screen.queryByRole("button", { name: /Update|Install/ })).toBeNull();
   });
 
+  test("a not-installed agent raises no badge but still offers its install", async () => {
+    const agents = [
+      {
+        key: "pi",
+        displayName: "Pi",
+        npmPackage: "@earendil-works/pi-coding-agent",
+        installedVersion: null,
+        latestVersion: "0.80.2",
+        updateAvailable: true,
+        error: null,
+      },
+    ];
+
+    const fetchMock = mockFetch(null);
+    queueInitialLoad(fetchMock, [], agents);
+    renderPage(fetchMock);
+
+    const bell = await screen.findByRole("button", { name: /Coding agents/i });
+    expect(bell.getAttribute("aria-label")).toBe("Coding agents — all up to date");
+    expect(bell.querySelector(".ap-bell-dot")).toBeNull();
+
+    fireEvent.click(bell);
+
+    expect(screen.getByText("All up to date")).toBeTruthy();
+    const installBtn = screen.getByText("Install 0.80.2") as HTMLButtonElement;
+    expect(installBtn.disabled).toBe(false);
+  });
+
+  test("the badge counts installed agents that are behind, not ones awaiting install", async () => {
+    const agents = [
+      {
+        key: "pi",
+        displayName: "Pi",
+        npmPackage: "@earendil-works/pi-coding-agent",
+        installedVersion: "0.80.1",
+        latestVersion: "0.80.2",
+        updateAvailable: true,
+        error: null,
+      },
+      {
+        key: "opencode",
+        displayName: "OpenCode",
+        npmPackage: "opencode-ai",
+        installedVersion: null,
+        latestVersion: "1.17.9",
+        updateAvailable: true,
+        error: null,
+      },
+    ];
+
+    const fetchMock = mockFetch(null);
+    queueInitialLoad(fetchMock, [], agents);
+    renderPage(fetchMock);
+
+    const bell = await screen.findByRole("button", { name: /Coding agents/i });
+    expect(bell.getAttribute("aria-label")).toBe("Coding agents — 1 update available");
+    expect(bell.querySelector(".ap-bell-dot")?.textContent).toBe("1");
+
+    fireEvent.click(bell);
+
+    expect(screen.getByText("1 update available")).toBeTruthy();
+    expect(screen.getByText("Update → 0.80.2")).toBeTruthy();
+    expect(screen.getByText("Install 1.17.9")).toBeTruthy();
+  });
+
   test("offers an enabled Install button when the agent is not installed", async () => {
     const agents = [
       {

@@ -10,6 +10,12 @@ type ConfigValue = string | number | boolean;
 /** The one schema field the server round-trips as a dedicated, non-secret value. */
 const CUSTOM_MCP_SERVERS_FIELD = "customMcpServersJson";
 
+const isInstalled = (agent: ManagedAgentStatus) => agent.installedVersion != null;
+
+// The server also reports `updateAvailable` for an agent that was never installed, so
+// that its first install is offered as an action. Those are not updates to notify about.
+const hasPendingUpdate = (agent: ManagedAgentStatus) => isInstalled(agent) && agent.updateAvailable;
+
 export default function AiProviders() {
   const [providers, setProviders] = useState<AiProvider[]>([]);
   const [providerTypes, setProviderTypes] = useState<string[]>([]);
@@ -185,11 +191,11 @@ export default function AiProviders() {
     setEditingProvider(null);
   };
 
-  const updateCount = agents.filter((a) => a.updateAvailable).length;
+  const updateCount = agents.filter(hasPendingUpdate).length;
 
   const renderAgentRow = (agent: ManagedAgentStatus) => {
     const updating = updatingAgent === agent.key;
-    const notInstalled = agent.installedVersion == null;
+    const notInstalled = !isInstalled(agent);
     const label = updating
       ? notInstalled
         ? "Installing…"

@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The coding agent bell only counts agents you have installed, so a fresh install no longer looks like a pile of pending updates.**
+
 - **Cancelling or timing out a run now stops the command a Cmd node was running, instead of leaving it going.**
 
 - **A Cmd node runs its command exactly as written, including backslashes and quotes.**
