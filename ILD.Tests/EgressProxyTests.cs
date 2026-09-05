@@ -185,8 +185,9 @@ public sealed class EgressProxyTests : IAsyncLifetime
         await SetModeAsync(NetworkMode.Blacklist);
 
         var (first, before) = await ConnectAsync("localhost");
-        first.Dispose();
         Assert.StartsWith("HTTP/1.1 200", before);
+        Assert.Equal("x", await EchoAsync(first, "x"));
+        first.Dispose();
         await WaitUntilAsync(() => _proxy!.OpenTunnelCount == 0);
 
         await ListAsync("localhost", NetworkListKind.Blacklist);
@@ -268,6 +269,40 @@ public sealed class EgressProxyTests : IAsyncLifetime
 
         await WaitUntilAsync(() => _proxy!.OpenTunnelCount == 0);
         Assert.Contains(_log.Entries, e => e.Decision == NetworkDecision.Blocked && e.Host == "localhost");
+    }
+
+    /// <summary>
+    /// The tunnel must be open to policy no later than the moment the client is
+    /// told the CONNECT succeeded — otherwise a blacklist landing in between
+    /// leaves a live relay the re-judging sweep never sees.
+    /// </summary>
+    [Fact]
+    public async Task A_tunnel_is_visible_to_policy_as_soon_as_the_client_sees_the_connect_succeed()
+    {
+        await SetModeAsync(NetworkMode.Blacklist);
+        var (client, status) = await ConnectAsync("localhost");
+        using (client)
+        {
+            Assert.StartsWith("HTTP/1.1 200", status);
+            Assert.Equal(1, _proxy!.OpenTunnelCount);
+
+            // No traffic driven first, so the blacklist lands on a tunnel that
+            // has never relayed a byte.
+            await ListAsync("localhost", NetworkListKind.Blacklist);
+
+            var buffer = new byte[16];
+            using var cts = new CancellationTokenSource(Timeout);
+            try
+            {
+                Assert.Equal(0, await client.GetStream().ReadAsync(buffer, cts.Token));
+            }
+            catch (IOException) { }
+        }
+
+        await WaitUntilAsync(() => _proxy!.OpenTunnelCount == 0);
+        Assert.Equal(
+            new[] { NetworkDecision.Allowed, NetworkDecision.Blocked },
+            _log.Entries.Select(e => e.Decision));
     }
 
     [Fact]
