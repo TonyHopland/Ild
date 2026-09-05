@@ -40,6 +40,37 @@ public class ToolMarkerFormatterTests
     }
 
     [Fact]
+    public void Format_leaves_a_payload_it_cannot_name_off_the_marker()
+    {
+        var marker = ToolMarkerFormatter.Format(
+            "mcp__docs__publish",
+            Args($$"""{"body":"{{new string('p', 5000)}}"}"""));
+
+        Assert.Equal("[tool: mcp__docs__publish]", marker);
+    }
+
+    [Fact]
+    public void Format_keeps_scanning_past_a_payload_for_something_that_reads_like_a_label()
+    {
+        var marker = ToolMarkerFormatter.Format(
+            "mcp__docs__publish",
+            Args($$"""{"body":"{{new string('p', 5000)}}","slug":"release-notes"}"""));
+
+        Assert.Equal("[tool: mcp__docs__publish] release-notes", marker);
+    }
+
+    [Fact]
+    public void Format_summarizes_a_long_argument_it_can_name()
+    {
+        // The payload guard is for arguments the formatter cannot name: a heredoc
+        // under `command` is still exactly what the call is doing.
+        var marker = ToolMarkerFormatter.Format("Bash", Args($$"""{"command":"git commit -m {{new string('m', 5000)}}"}"""));
+
+        Assert.StartsWith("[tool: Bash] git commit -m mmm", marker);
+        Assert.EndsWith("…", marker);
+    }
+
+    [Fact]
     public void Format_collapses_a_multi_line_argument_to_one_line()
     {
         var marker = ToolMarkerFormatter.Format(

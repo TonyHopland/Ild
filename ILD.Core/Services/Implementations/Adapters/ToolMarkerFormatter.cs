@@ -17,6 +17,14 @@ internal static class ToolMarkerFormatter
     /// <summary>Upper bound on the rendered argument, ellipsis included.</summary>
     private const int MaxArgumentLength = 120;
 
+    /// <summary>How long an argument the formatter cannot name by itself may be
+    /// and still be treated as a description of the call rather than as its
+    /// payload. Deliberately generous — prose worth showing is far shorter than
+    /// the file bodies and patches this keeps off the live stream. A
+    /// <see cref="PreferredKeys"/> argument is exempt: a heredoc under
+    /// <c>command</c> is still what the call is doing.</summary>
+    private const int MaxSummarizableLength = 4096;
+
     /// <summary>Argument names that identify what a call is doing, most telling
     /// first. Every CLI's built-in tools draw from roughly this vocabulary, but
     /// each spells it its own way — claude-code's <c>file_path</c> is opencode's
@@ -57,12 +65,20 @@ internal static class ToolMarkerFormatter
                     return value;
             }
 
+        // An argument vocabulary we don't know: take the first string that reads
+        // like a label. One this far past what a marker can hold is a payload —
+        // a file body, a patch — whose first 120 characters say nothing about
+        // what the call is doing, so the bare marker is the better answer.
         foreach (var property in arguments.EnumerateObject())
         {
             if (property.Value.ValueKind != JsonValueKind.String)
                 continue;
 
-            var value = Condense(property.Value.GetString());
+            var raw = property.Value.GetString();
+            if (raw is null || raw.Length > MaxSummarizableLength)
+                continue;
+
+            var value = Condense(raw);
             if (value.Length > 0)
                 return value;
         }
