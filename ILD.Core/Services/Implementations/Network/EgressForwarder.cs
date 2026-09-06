@@ -109,10 +109,16 @@ public sealed class EgressForwarder : BackgroundService, IEgressForwarderState
         }
     }
 
+    /// <summary>
+    /// Runs on the thread that edited the policy, so it must not throw: a wake
+    /// already pending, or one arriving after shutdown, is nothing to report.
+    /// </summary>
     private void OnPolicyChanged()
     {
         _ = _relay.ResetNewlyBlockedAsync();
-        try { _wake.Release(); } catch (SemaphoreFullException) { }
+        try { _wake.Release(); }
+        catch (SemaphoreFullException) { }
+        catch (ObjectDisposedException) { }
     }
 
     /// <summary>
@@ -240,6 +246,14 @@ public sealed class EgressForwarder : BackgroundService, IEgressForwarderState
             try
             {
                 client = await listener.Socket.AcceptTcpClientAsync(listener.Token).ConfigureAwait(false);
+            }
+            catch (SocketException ex)
+            {
+                // A handshake the client abandoned fails the accept, not the
+                // forward; giving up here would leave the row saying it is
+                // listening on a port that has stopped answering.
+                _logger.LogDebug(ex, "Forward {Name} could not accept a connection ({Error})", listener.Forward.Name, ex.SocketErrorCode);
+                continue;
             }
             catch (Exception)
             {
