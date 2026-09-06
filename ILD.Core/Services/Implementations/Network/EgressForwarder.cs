@@ -261,8 +261,6 @@ public sealed class EgressForwarder : BackgroundService, IEgressForwarderState
 
     private async Task AcceptAsync(Listener listener)
     {
-        // Read once: the token outlives its source's disposal, and the source is
-        // disposed the moment this listener is taken out of service.
         var token = listener.Token;
         while (!token.IsCancellationRequested)
         {
@@ -375,12 +373,19 @@ public sealed class EgressForwarder : BackgroundService, IEgressForwarderState
             Forward = forward;
             Socket = socket;
             _cts = CancellationTokenSource.CreateLinkedTokenSource(stopping);
+            // Taken here, while the source is certainly alive. The accept loop
+            // starts on a later turn, by which time a reconcile may already have
+            // retired this listener, and `_cts.Token` on a disposed source throws
+            // — inside a task nobody awaits. The struct read out before disposal
+            // stays answerable, and Dispose always cancels first, so it answers
+            // cancelled.
+            Token = _cts.Token;
         }
 
         public NetworkForwardEntry Forward { get; }
         public TcpListener Socket { get; }
         public int Port => Forward.LocalPort;
-        public CancellationToken Token => _cts.Token;
+        public CancellationToken Token { get; }
 
         /// <summary>Whether this listener still serves the row as it now reads.</summary>
         public bool Serves(NetworkForwardEntry forward)

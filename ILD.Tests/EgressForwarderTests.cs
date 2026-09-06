@@ -306,6 +306,30 @@ public sealed class EgressForwarderTests : IAsyncLifetime
         Assert.Equal(retried, EgressForwarder.IsAbandonedHandshake(error));
     }
 
+    /// <summary>
+    /// Binding and retiring race the accept loop that each bind starts, and a
+    /// loop that faults on the way up leaves a row advertising a port nothing
+    /// answers on. Churn the same port and insist that "listening" keeps meaning
+    /// it.
+    /// </summary>
+    [Fact]
+    public async Task A_port_declared_and_withdrawn_repeatedly_still_answers_when_it_says_it_is_listening()
+    {
+        var localPort = FreePort();
+
+        for (var i = 0; i < 8; i++)
+        {
+            var forward = await DeclareAsync(name: $"churn-{i}", localPort: localPort);
+
+            using (var client = await DialAsync(localPort))
+                Assert.Equal("round trip", await EchoAsync(client, "round trip"));
+
+            Assert.True(await _db.NetworkForwards.DeleteForwardAsync(forward.Id));
+            _policy.Invalidate();
+            await WaitUntilAsync(() => !_forwarder!.ListeningPorts.Contains(localPort));
+        }
+    }
+
     [Fact]
     public async Task One_forward_carries_several_connections_at_once()
     {
