@@ -371,12 +371,16 @@ function ForwardTable({ forwards, onRemove, onWhitelist }: ForwardTableProps) {
   );
 }
 
-/** A typed port, or null when it is not one — blank and `5432x` both read as null. */
+/**
+ * A typed port, or null when it is not one — blank, `5432x` and `0x10` all read
+ * as null. Digits only: `Number` would take `1e3` and `0x10` as 1000 and 16,
+ * sending a port nobody typed.
+ */
 function parsePort(value: string): number | null {
   const trimmed = value.trim();
-  if (trimmed === "") return null;
+  if (!/^\d+$/.test(trimmed)) return null;
   const port = Number(trimmed);
-  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
+  return port >= 1 && port <= 65535 ? port : null;
 }
 
 interface AddForwardRowProps {
@@ -396,8 +400,11 @@ function AddForwardRow({ onAdd }: AddForwardRowProps) {
   const complete =
     name.trim() !== "" && host.trim() !== "" && destination !== null && local !== null;
 
+  // Enter reaches here past the disabled button, and twice over reaches it while
+  // the first request is still out, so the guard lives with the request rather
+  // than on the control.
   const add = async () => {
-    if (destination === null || local === null) return;
+    if (busy || !complete || destination === null || local === null) return;
     setBusy(true);
     setError(null);
     try {

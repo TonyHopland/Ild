@@ -465,6 +465,62 @@ describe("Network settings", () => {
     expect(add).not.toHaveBeenCalled();
   });
 
+  // `Number` reads both as ports in range, so they would have been sent as 1000
+  // and 16 — values nobody typed.
+  test.each(["1e3", "0x10", "+80", "80.0"])(
+    "refuses %s as a port rather than coercing it",
+    async (typed) => {
+      mockServices();
+      render(<NetworkSettings />);
+      await forwardRow("postgres");
+
+      fireEvent.change(screen.getByLabelText("Forward name"), { target: { value: "redis" } });
+      fireEvent.change(screen.getByLabelText("Destination host"), { target: { value: "cache" } });
+      fireEvent.change(screen.getByLabelText("Destination port"), { target: { value: typed } });
+      fireEvent.change(screen.getByLabelText("Local port"), { target: { value: "16379" } });
+
+      expect(
+        (screen.getByRole("button", { name: "Add forward" }) as HTMLButtonElement).disabled,
+      ).toBe(true);
+      expect(screen.getByText(/whole numbers between 1 and 65535/i)).toBeTruthy();
+    },
+  );
+
+  test("Enter neither submits an incomplete forward nor sends a second while one is in flight", async () => {
+    mockServices();
+    let inFlight: (() => void) | null = null;
+    const add = vi
+      .spyOn(services.networkService, "addForward")
+      .mockImplementation(
+        () => new Promise((resolve) => (inFlight = () => resolve({ ...postgres, id: "f2" }))),
+      );
+    render(<NetworkSettings />);
+    await forwardRow("postgres");
+
+    // Enter reaches add() past the disabled button, so the form must guard itself.
+    const name = screen.getByLabelText("Forward name");
+    fireEvent.keyDown(name, { key: "Enter" });
+    expect(add).not.toHaveBeenCalled();
+
+    fireEvent.change(name, { target: { value: "redis" } });
+    fireEvent.change(screen.getByLabelText("Destination host"), { target: { value: "cache" } });
+    fireEvent.keyDown(name, { key: "Enter" });
+    expect(add).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("Destination port"), { target: { value: "6379" } });
+    fireEvent.change(screen.getByLabelText("Local port"), { target: { value: "16379" } });
+
+    fireEvent.keyDown(name, { key: "Enter" });
+    await waitFor(() => expect(add).toHaveBeenCalledTimes(1));
+
+    fireEvent.keyDown(name, { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "Add forward" }));
+    expect(add).toHaveBeenCalledTimes(1);
+
+    inFlight!();
+    await waitFor(() => expect(add).toHaveBeenCalledTimes(1));
+  });
+
   test("removes a forward", async () => {
     mockServices();
     const remove = vi.spyOn(services.networkService, "deleteForward").mockResolvedValue(undefined);
