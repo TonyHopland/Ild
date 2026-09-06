@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-06
+
 ### Added
 
 - **A preview can now reach a database, or anything else outside the container, through a named forward you declare in Settings.**
