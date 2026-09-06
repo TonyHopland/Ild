@@ -371,8 +371,16 @@ function ForwardTable({ forwards, onRemove, onWhitelist }: ForwardTableProps) {
   );
 }
 
+/** A typed port, or null when it is not one — blank and `5432x` both read as null. */
+function parsePort(value: string): number | null {
+  const trimmed = value.trim();
+  if (trimmed === "") return null;
+  const port = Number(trimmed);
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
+}
+
 interface AddForwardRowProps {
-  onAdd: (name: string, host: string, port: string, localPort: string) => Promise<void>;
+  onAdd: (name: string, host: string, port: number, localPort: number) => Promise<void>;
 }
 
 function AddForwardRow({ onAdd }: AddForwardRowProps) {
@@ -383,11 +391,17 @@ function AddForwardRow({ onAdd }: AddForwardRowProps) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const destination = parsePort(port);
+  const local = parsePort(localPort);
+  const complete =
+    name.trim() !== "" && host.trim() !== "" && destination !== null && local !== null;
+
   const add = async () => {
+    if (destination === null || local === null) return;
     setBusy(true);
     setError(null);
     try {
-      await onAdd(name, host, port, localPort);
+      await onAdd(name, host, destination, local);
       setName("");
       setHost("");
       setPort("");
@@ -402,6 +416,12 @@ function AddForwardRow({ onAdd }: AddForwardRowProps) {
   const onEnter = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") void add();
   };
+
+  // Only once something has been typed: an empty form is incomplete, not wrong.
+  const portProblem =
+    (port.trim() !== "" && destination === null) || (localPort.trim() !== "" && local === null)
+      ? "Both ports are whole numbers between 1 and 65535."
+      : null;
 
   return (
     <div className="net-add">
@@ -448,7 +468,7 @@ function AddForwardRow({ onAdd }: AddForwardRowProps) {
           type="button"
           className="btn btn-primary"
           onClick={() => void add()}
-          disabled={busy || name.trim() === "" || host.trim() === ""}
+          disabled={busy || !complete}
         >
           Add forward
         </button>
@@ -456,6 +476,7 @@ function AddForwardRow({ onAdd }: AddForwardRowProps) {
       <p className="settings-row-help">
         A destination is one host name or IP address — a pattern like <code>.example.com</code>{" "}
         covers a set and is not somewhere to connect.
+        {portProblem && <span className="settings-error"> {portProblem}</span>}
         {error && <span className="settings-error"> {error}</span>}
       </p>
     </div>
@@ -600,12 +621,12 @@ export default function NetworkSettings() {
     }
   };
 
-  const addForward = async (name: string, host: string, port: string, localPort: string) => {
+  const addForward = async (name: string, host: string, port: number, localPort: number) => {
     const created = await networkService.addForward({
       name: name.trim(),
       host: host.trim(),
-      port: Number(port),
-      localPort: Number(localPort),
+      port,
+      localPort,
     });
     setForwards((prev) => [...prev.filter((f) => f.id !== created.id), created]);
   };

@@ -443,6 +443,28 @@ describe("Network settings", () => {
     expect(await (await forwardTable()).findByText("redis")).toBeTruthy();
   });
 
+  test("will not send a forward whose ports are blank or not numbers", async () => {
+    mockServices();
+    const add = vi.spyOn(services.networkService, "addForward");
+    render(<NetworkSettings />);
+    await forwardRow("postgres");
+
+    const addButton = () =>
+      screen.getByRole("button", { name: "Add forward" }) as HTMLButtonElement;
+    fireEvent.change(screen.getByLabelText("Forward name"), { target: { value: "redis" } });
+    fireEvent.change(screen.getByLabelText("Destination host"), { target: { value: "cache" } });
+    expect(addButton().disabled).toBe(true);
+
+    fireEvent.change(screen.getByLabelText("Destination port"), { target: { value: "63a79" } });
+    fireEvent.change(screen.getByLabelText("Local port"), { target: { value: "16379" } });
+    expect(addButton().disabled).toBe(true);
+    expect(screen.getByText(/whole numbers between 1 and 65535/i)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Destination port"), { target: { value: "6379" } });
+    expect(addButton().disabled).toBe(false);
+    expect(add).not.toHaveBeenCalled();
+  });
+
   test("removes a forward", async () => {
     mockServices();
     const remove = vi.spyOn(services.networkService, "deleteForward").mockResolvedValue(undefined);

@@ -109,13 +109,19 @@ public sealed class EgressForwarder : BackgroundService, IEgressForwarderState
         }
     }
 
-    /// <summary>
-    /// Runs on the thread that edited the policy, so it must not throw: a wake
-    /// already pending, or one arriving after shutdown, is nothing to report.
-    /// </summary>
     private void OnPolicyChanged()
     {
         _ = _relay.ResetNewlyBlockedAsync();
+        Wake();
+    }
+
+    /// <summary>
+    /// Ask for a reconcile without waiting for one. Called from the thread that
+    /// edited the policy, so it must not throw: a wake already pending, or one
+    /// arriving after shutdown, is nothing to report.
+    /// </summary>
+    private void Wake()
+    {
         try { _wake.Release(); }
         catch (SemaphoreFullException) { }
         catch (ObjectDisposedException) { }
@@ -185,8 +191,14 @@ public sealed class EgressForwarder : BackgroundService, IEgressForwarderState
             error = ex.SocketErrorCode == SocketError.AddressAlreadyInUse
                 ? $"Local port {forward.LocalPort} is already in use by something else"
                 : $"Could not listen on {EgressProxyOptions.ListenAddress}:{forward.LocalPort} ({ex.SocketErrorCode})";
-            _logger.LogError(ex, "Forward {Name} could not listen on {Address}:{Port}",
-                forward.Name, EgressProxyOptions.ListenAddress, forward.LocalPort);
+
+            // A squatted port is retried for as long as it stays squatted, and a
+            // line every retry says nothing the first one did not.
+            if (!_listenErrors.TryGetValue(forward.Id, out var reported) || reported != error)
+            {
+                _logger.LogError(ex, "Forward {Name} could not listen on {Address}:{Port}",
+                    forward.Name, EgressProxyOptions.ListenAddress, forward.LocalPort);
+            }
             return false;
         }
 
@@ -238,29 +250,68 @@ public sealed class EgressForwarder : BackgroundService, IEgressForwarderState
         }
     }
 
+    /// <summary>
+    /// A client that walks away between the handshake and the accept fails that
+    /// one accept and nothing else. Every other socket error is about the
+    /// listener rather than the caller, and retrying those is what turns a dead
+    /// listener into a spinning one.
+    /// </summary>
+    internal static bool IsAbandonedHandshake(SocketError error)
+        => error is SocketError.ConnectionReset or SocketError.ConnectionAborted or SocketError.Interrupted;
+
     private async Task AcceptAsync(Listener listener)
     {
-        while (!listener.Token.IsCancellationRequested)
+        // Read once: the token outlives its source's disposal, and the source is
+        // disposed the moment this listener is taken out of service.
+        var token = listener.Token;
+        while (!token.IsCancellationRequested)
         {
             TcpClient client;
             try
             {
-                client = await listener.Socket.AcceptTcpClientAsync(listener.Token).ConfigureAwait(false);
+                client = await listener.Socket.AcceptTcpClientAsync(token).ConfigureAwait(false);
+            }
+            catch (SocketException ex) when (IsAbandonedHandshake(ex.SocketErrorCode))
+            {
+                _logger.LogDebug(ex, "Forward {Name} lost a connection before accepting it ({Error})",
+                    listener.Forward.Name, ex.SocketErrorCode);
+                continue;
             }
             catch (SocketException ex)
             {
-                // A handshake the client abandoned fails the accept, not the
-                // forward; giving up here would leave the row saying it is
-                // listening on a port that has stopped answering.
-                _logger.LogDebug(ex, "Forward {Name} could not accept a connection ({Error})", listener.Forward.Name, ex.SocketErrorCode);
-                continue;
+                // Persistent — the file-descriptor ceiling, a socket left in a
+                // failing state. Looping on it would burn a core while the row
+                // went on claiming to listen on a port serving nothing.
+                _logger.LogError(ex, "Forward {Name} stopped accepting on {Address}:{Port} ({Error})",
+                    listener.Forward.Name, EgressProxyOptions.ListenAddress, listener.Port, ex.SocketErrorCode);
+                Retire(listener, $"Stopped accepting on local port {listener.Port} ({ex.SocketErrorCode})");
+                return;
             }
             catch (Exception)
             {
                 return;
             }
-            _ = HandleConnectionAsync(listener.Forward, client, listener.Token);
+            _ = HandleConnectionAsync(listener.Forward, client, token);
         }
+    }
+
+    /// <summary>
+    /// Take a listener out of service and say why, then ask for a reconcile. Not
+    /// a verdict — the next pass rebinds the port and either clears the error or
+    /// reports why it could not. What this buys is that the row stops claiming to
+    /// listen in the meantime.
+    /// </summary>
+    private void Retire(Listener listener, string error)
+    {
+        lock (_listeners)
+        {
+            if (!_listeners.TryGetValue(listener.Forward.Id, out var current) || !ReferenceEquals(current, listener))
+                return;
+            _listeners.Remove(listener.Forward.Id);
+        }
+        listener.Dispose();
+        _listenErrors = new Dictionary<Guid, string>(_listenErrors) { [listener.Forward.Id] = error };
+        Wake();
     }
 
     private async Task HandleConnectionAsync(NetworkForwardEntry forward, TcpClient client, CancellationToken ct)

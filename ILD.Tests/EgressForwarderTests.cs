@@ -266,6 +266,46 @@ public sealed class EgressForwarderTests : IAsyncLifetime
         }
     }
 
+    /// <summary>
+    /// Clients that reset before the accept completes are ordinary traffic, not a
+    /// reason to stop serving; the listener has to survive a run of them.
+    /// </summary>
+    [Fact]
+    public async Task Connections_abandoned_before_they_are_accepted_do_not_end_the_forward()
+    {
+        var forward = await DeclareAsync();
+
+        for (var i = 0; i < 25; i++)
+        {
+            using var aborted = new TcpClient { LingerState = new LingerOption(true, 0) };
+            await aborted.ConnectAsync(IPAddress.Loopback, forward.LocalPort);
+        }
+
+        using var client = await DialAsync(forward.LocalPort);
+        Assert.Equal("still serving", await EchoAsync(client, "still serving"));
+        Assert.Contains(forward.LocalPort, _forwarder!.ListeningPorts);
+        Assert.Null(_forwarder.ListenErrorFor(forward.Id));
+    }
+
+    /// <summary>
+    /// Only the caller's own failures are worth another accept. Retrying the rest
+    /// spins a core on a listener that has stopped working while the row goes on
+    /// saying it is listening, so they retire it and let the next reconcile
+    /// rebind.
+    /// </summary>
+    [Theory]
+    [InlineData(SocketError.ConnectionReset, true)]
+    [InlineData(SocketError.ConnectionAborted, true)]
+    [InlineData(SocketError.Interrupted, true)]
+    [InlineData(SocketError.TooManyOpenSockets, false)]
+    [InlineData(SocketError.NotSocket, false)]
+    [InlineData(SocketError.InvalidArgument, false)]
+    [InlineData(SocketError.NoBufferSpaceAvailable, false)]
+    public void An_accept_failure_is_retried_only_when_it_was_the_clients(SocketError error, bool retried)
+    {
+        Assert.Equal(retried, EgressForwarder.IsAbandonedHandshake(error));
+    }
+
     [Fact]
     public async Task One_forward_carries_several_connections_at_once()
     {
