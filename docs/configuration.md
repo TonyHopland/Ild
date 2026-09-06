@@ -405,6 +405,58 @@ This is the only migration step for an existing profile: if a service used to co
 up without configuration you never wrote down, it was reading ILD's, and it now
 needs its own.
 
+### Reaching a database from a preview
+
+A preview runs as the `agent` user, and that user's egress is dropped by the
+firewall unless it goes through loopback ([Agent network limits](#agent-network-limits)).
+So a connection string pointing straight at `postgres:5432` does not fail — it
+_hangs_, and times out with nothing in the Network log, because the packet never
+reaches ILD. Databases, caches and mail servers all land here: they cannot be
+pointed at the egress proxy, because their first bytes on the wire are their own
+protocol rather than anything that can name a destination.
+
+Declare a **forward** instead, in the **Network** section of Settings: a name, the
+real destination, and a loopback port for it to answer on.
+
+```
+postgres   postgres:5432        →  127.0.0.1:15432
+redis      cache.internal:6379  →  127.0.0.1:16379
+```
+
+Then point the preview's `.env` at the loopback side:
+
+```
+ILD_DB_CONNECTION_STRING=Host=127.0.0.1;Port=15432;Database=ild_preview;Username=ild;Password=…
+```
+
+ILD accepts the connection, judges `postgres` against the same whitelist and
+blacklist that govern the agent, records it in the Network log under that
+**hostname**, and dials the real server itself. Adding, editing and deleting a
+forward takes effect on the next connection — nothing restarts. One forward
+serves every database on that server: the second connection string differs only in
+`Database=`.
+
+Three things to know:
+
+- **The forward is transport, not permission.** In `whitelist` mode with
+  `postgres` unlisted, the connection is refused immediately (rather than hanging)
+  and logged as blocked; the row's **Allow** button adds the whitelist entry, and
+  the next attempt succeeds with no restart.
+- **`SSL Mode=Verify-Full` will not work.** Your client now addresses the server
+  as `127.0.0.1`, so hostname verification fails. Use a weaker SSL mode for the
+  forwarded connection.
+- **A forward is instance-wide and reachable by any `agent` process**, not only
+  the preview you declared it for — the same shared-uid caveat as everything else
+  in [ADR-0014](adr/0014-agent-uid-isolation.md). Scope the credential
+  accordingly.
+
+A preview in one ILD instance reaches a preview in another the same way: a forward
+to that instance's preview-proxy port. Two previews in the _same_ instance already
+reach each other over loopback and need no forward.
+
+See [ADR-0020](adr/0020-raw-tcp-egress-through-declared-forwards.md) for why this
+is a declared relay rather than a hole in the firewall.
+
 **Previewing an ILD-shaped app.** If the application you are previewing reads the
 same `ILD_*` variables ILD does — in practice, ILD itself; this repository's own
 profile boots one — it is now cleanly separated from the outer instance rather
@@ -488,8 +540,11 @@ The **Network** section of Settings limits which hosts the coding agent may
 reach: a whitelist, a blacklist, a mode toggle (`off` / `whitelist` /
 `blacklist`, default `off`, stored as the `network.mode` app setting) and a log
 of every destination the agent asked for, each line with **Add to whitelist** /
-**Add to blacklist**. See [ADR-0019](adr/0019-agent-egress-through-in-container-proxy.md)
-for the design.
+**Add to blacklist**. The same section declares **forwards**, the way anything
+speaking raw TCP gets out at all — see
+[Reaching a database from a preview](#reaching-a-database-from-a-preview). See
+[ADR-0019](adr/0019-agent-egress-through-in-container-proxy.md) and
+[ADR-0020](adr/0020-raw-tcp-egress-through-declared-forwards.md) for the design.
 
 A list entry is a host, not a URL. `api.example.com` matches exactly that host;
 `.example.com` (or `*.example.com`) matches `example.com` and every host beneath
@@ -507,7 +562,10 @@ the agent's MCP server still reaches ILD's own API directly. Two consequences:
 
 - Only clients that honour a proxy work for the agent when enforcement is on:
   git over HTTPS, curl, npm, pip and the agent CLIs all do; git over SSH and
-  anything speaking raw TCP does not, and fails with a dropped connection.
+  anything speaking raw TCP does not, and fails with a dropped connection. For a
+  destination that matters — a database, a cache, a mail server — declare a
+  **forward** and address it on loopback instead; see
+  [Reaching a database from a preview](#reaching-a-database-from-a-preview).
 - If `ILD_API_URL` is not a loopback address (a Kubernetes service name, say),
   add its host to the whitelist before turning `whitelist` mode on, or the
   agent's tool calls back into ILD are blocked with everything else.
@@ -554,8 +612,10 @@ The value is a JSON object mapping a server name to its definition:
   "chrome-devtools": {
     "command": "npx",
     "args": [
-      "-y", "chrome-devtools-mcp@latest",
-      "--headless", "--isolated",
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--headless",
+      "--isolated",
       "--chrome-arg=--no-sandbox",
       "--chrome-arg=--disable-setuid-sandbox"
     ]

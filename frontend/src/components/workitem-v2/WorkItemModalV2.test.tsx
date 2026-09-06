@@ -1321,6 +1321,10 @@ describe("WorkItemModalV2 creation", () => {
     expect(warning.textContent).toMatch(/Repository-wide/);
     expect(warning.textContent).toMatch(/every.*work item that uses it, not just this one/);
 
+    // Egress out of the container is dropped silently, so the .env editor says
+    // where a connection string is actually meant to point.
+    expect(screen.getByText(/Settings → Network/)).toBeTruthy();
+
     // The plaintext is only fetched once the user expands the editor.
     expect(envSpy).not.toHaveBeenCalled();
     const textarea = screen.getByPlaceholderText(
