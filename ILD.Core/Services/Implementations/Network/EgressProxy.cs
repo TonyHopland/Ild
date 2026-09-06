@@ -1,5 +1,4 @@
 using System.Buffers;
-using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -40,9 +39,8 @@ public sealed class EgressProxy : BackgroundService
     private readonly IEgressPolicy _policy;
     private readonly INetworkLogRecorder _log;
     private readonly ILogger<EgressProxy> _logger;
-    private readonly ConcurrentDictionary<long, Tunnel> _tunnels = new();
+    private readonly EgressRelay _relay;
     private readonly TaskCompletionSource<int> _bound = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private long _nextTunnelId;
 
     public EgressProxy(EgressProxyOptions options, IEgressPolicy policy, INetworkLogRecorder log, ILogger<EgressProxy> logger)
     {
@@ -50,12 +48,13 @@ public sealed class EgressProxy : BackgroundService
         _policy = policy;
         _log = log;
         _logger = logger;
+        _relay = new EgressRelay(policy, log, logger);
     }
 
     /// <summary>The port actually bound, once listening; lets a test ask for port 0.</summary>
     public Task<int> BoundPort => _bound.Task;
 
-    public int OpenTunnelCount => _tunnels.Count;
+    public int OpenTunnelCount => _relay.OpenCount;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -103,31 +102,11 @@ public sealed class EgressProxy : BackgroundService
         {
             _policy.Changed -= OnPolicyChanged;
             listener.Stop();
-            foreach (var tunnel in _tunnels.Values)
-                tunnel.Reset();
+            _relay.ResetAll();
         }
     }
 
-    private void OnPolicyChanged() => _ = ResetNewlyBlockedTunnelsAsync();
-
-    private async Task ResetNewlyBlockedTunnelsAsync()
-    {
-        try
-        {
-            var snapshot = await _policy.GetAsync().ConfigureAwait(false);
-            foreach (var tunnel in _tunnels.Values)
-            {
-                if (snapshot.Decide(tunnel.Host, tunnel.AiProviderId) != NetworkDecision.Blocked)
-                    continue;
-                _log.Record(tunnel.Host, tunnel.Port, NetworkDecision.Blocked, tunnel.AiProviderId);
-                tunnel.Reset();
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Could not re-judge open tunnels after a policy change");
-        }
-    }
+    private void OnPolicyChanged() => _ = _relay.ResetNewlyBlockedAsync();
 
     private async Task HandleConnectionAsync(TcpClient client, CancellationToken stoppingToken)
     {
@@ -183,60 +162,41 @@ public sealed class EgressProxy : BackgroundService
             return;
         }
 
-        // Registered before the handshake reaches either side, so a host
-        // blacklisted from here on is re-judged rather than keeping a live relay
-        // nothing can see. Everything past this point runs on the tunnel's token
-        // so that a reset in this window closes the connection rather than
-        // completing a handshake the policy has already withdrawn.
-        var id = Interlocked.Increment(ref _nextTunnelId);
-        using var tunnel = new Tunnel(request.Host, request.Port, request.AiProviderId, stoppingToken);
-        _tunnels[id] = tunnel;
+        var upstreamStream = upstream.GetStream();
         try
         {
-            var upstreamStream = upstream.GetStream();
-            switch (request.Kind)
-            {
-                case RequestKind.Connect:
-                    await client.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 200 Connection Established\r\n\r\n"), tunnel.Token).ConfigureAwait(false);
-                    if (request.BodyStart < head.Count)
-                        await upstreamStream.WriteAsync(head.AsMemory(request.BodyStart), tunnel.Token).ConfigureAwait(false);
-                    break;
-                case RequestKind.Tls:
-                    await upstreamStream.WriteAsync(head, tunnel.Token).ConfigureAwait(false);
-                    break;
-                default:
-                    await upstreamStream.WriteAsync(request.ForwardedHead, tunnel.Token).ConfigureAwait(false);
-                    if (request.BodyStart < head.Count)
-                        await upstreamStream.WriteAsync(head.AsMemory(request.BodyStart), tunnel.Token).ConfigureAwait(false);
-                    break;
-            }
-
-            // Each direction ends on its own: a client that half-closes after
-            // sending its request must still receive the response, so its EOF is
-            // passed on as a send-shutdown rather than ending the whole tunnel.
-            // A failure (reset, cancellation) on either side ends both.
-            await Task.WhenAll(
-                PumpAsync(client, upstreamStream, tunnel),
-                PumpAsync(upstreamStream, client, tunnel)).ConfigureAwait(false);
+            await _relay.RelayAsync(client, upstreamStream, request.Host, request.Port, request.AiProviderId, stoppingToken,
+                token => SendHeadAsync(client, upstreamStream, request, head, token)).ConfigureAwait(false);
         }
         finally
         {
-            _tunnels.TryRemove(id, out _);
-            tunnel.Reset();
             upstream.Close();
         }
     }
 
-    private static async Task PumpAsync(NetworkStream from, NetworkStream to, Tunnel tunnel)
+    /// <summary>
+    /// What each kind of request owes the two sides before bytes start flowing:
+    /// the CONNECT acknowledgement, the ClientHello a redirected flow arrived
+    /// with, or the rewritten origin-form head — plus whatever of the body was
+    /// read along with the head.
+    /// </summary>
+    private static async Task SendHeadAsync(NetworkStream client, NetworkStream upstream, ProxyRequest request, ArraySegment<byte> head, CancellationToken ct)
     {
-        try
+        switch (request.Kind)
         {
-            await from.CopyToAsync(to, tunnel.Token).ConfigureAwait(false);
-            to.Socket.Shutdown(SocketShutdown.Send);
-        }
-        catch (Exception)
-        {
-            tunnel.Reset();
+            case RequestKind.Connect:
+                await client.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 200 Connection Established\r\n\r\n"), ct).ConfigureAwait(false);
+                if (request.BodyStart < head.Count)
+                    await upstream.WriteAsync(head.AsMemory(request.BodyStart), ct).ConfigureAwait(false);
+                break;
+            case RequestKind.Tls:
+                await upstream.WriteAsync(head, ct).ConfigureAwait(false);
+                break;
+            default:
+                await upstream.WriteAsync(request.ForwardedHead, ct).ConfigureAwait(false);
+                if (request.BodyStart < head.Count)
+                    await upstream.WriteAsync(head.AsMemory(request.BodyStart), ct).ConfigureAwait(false);
+                break;
         }
     }
 
@@ -421,29 +381,4 @@ public sealed class EgressProxy : BackgroundService
     internal enum RequestKind { Connect, Http, Tls }
 
     internal sealed record ProxyRequest(RequestKind Kind, string Host, int Port, Guid? AiProviderId, int BodyStart, byte[] ForwardedHead);
-
-    private sealed class Tunnel : IDisposable
-    {
-        private readonly CancellationTokenSource _cts;
-
-        public Tunnel(string host, int port, Guid? aiProviderId, CancellationToken stopping)
-        {
-            Host = host;
-            Port = port;
-            AiProviderId = aiProviderId;
-            _cts = CancellationTokenSource.CreateLinkedTokenSource(stopping);
-        }
-
-        public string Host { get; }
-        public int Port { get; }
-        public Guid? AiProviderId { get; }
-        public CancellationToken Token => _cts.Token;
-
-        public void Reset()
-        {
-            try { _cts.Cancel(); } catch (ObjectDisposedException) { }
-        }
-
-        public void Dispose() => _cts.Dispose();
-    }
 }
