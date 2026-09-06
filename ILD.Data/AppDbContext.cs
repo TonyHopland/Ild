@@ -33,6 +33,7 @@ public class AppDbContext : DbContext
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
     public DbSet<NetworkPolicyEntry> NetworkPolicyEntries => Set<NetworkPolicyEntry>();
     public DbSet<NetworkLogEntry> NetworkLogEntries => Set<NetworkLogEntry>();
+    public DbSet<NetworkForwardEntry> NetworkForwardEntries => Set<NetworkForwardEntry>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -242,6 +243,13 @@ public class AppDbContext : DbContext
         {
             e.HasIndex(l => l.Timestamp);
         });
+
+        modelBuilder.Entity<NetworkForwardEntry>(e =>
+        {
+            // One listener per loopback port: two forwards on the same port would
+            // leave whichever bound second permanently unreachable.
+            e.HasIndex(f => f.LocalPort).IsUnique();
+        });
     }
 
     private void ConfigureTimestamps(ModelBuilder modelBuilder)
@@ -325,6 +333,11 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<NetworkPolicyEntry>(e =>
         {
             e.Property(p => p.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
+        });
+
+        modelBuilder.Entity<NetworkForwardEntry>(e =>
+        {
+            e.Property(f => f.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
         });
     }
 

@@ -9,6 +9,7 @@ import {
 import type {
   AiProvider,
   NetworkDecision,
+  NetworkForward,
   NetworkListKind,
   NetworkLogEntry,
   NetworkMode,
@@ -275,10 +276,197 @@ function AddRuleRow({ providers, draft, onAdd }: AddRuleRowProps) {
 }
 
 /**
- * The Network page: the mode, one table of rules for both lists, and the live
- * destination log the rules are usually written from. The lists and the log
- * update in place from the hub, so a click here is judged by the agent's next
- * connection and shows up as such without a refresh.
+ * Where a forward stands right now. The local port not being bound outranks
+ * everything — nothing reaches the policy through a port that does not answer.
+ */
+function forwardState(forward: NetworkForward): {
+  tone: "ok" | "warn" | "blocked";
+  label: string;
+  detail: string;
+} {
+  if (forward.listenError) {
+    return { tone: "warn", label: "Local port unavailable", detail: forward.listenError };
+  }
+  if (forward.decision === "Blocked") {
+    return {
+      tone: "blocked",
+      label: "Host not allowed by current mode",
+      detail: `Connections are answered and refused at once; ${forward.host} is not reachable until the rules allow it.`,
+    };
+  }
+  return {
+    tone: "ok",
+    label: "Listening",
+    detail: `Point a client at 127.0.0.1:${forward.localPort}.`,
+  };
+}
+
+interface ForwardTableProps {
+  forwards: NetworkForward[];
+  onRemove: (id: string) => Promise<void>;
+  onWhitelist: (host: string) => Promise<void>;
+}
+
+function ForwardTable({ forwards, onRemove, onWhitelist }: ForwardTableProps) {
+  if (forwards.length === 0) {
+    return <p className="settings-card-note">No forwards yet.</p>;
+  }
+  return (
+    <table className="net-table" aria-label="Forwards">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Destination</th>
+          <th>Local address</th>
+          <th>State</th>
+          <th />
+        </tr>
+      </thead>
+      <tbody>
+        {forwards.map((forward) => {
+          const state = forwardState(forward);
+          return (
+            <tr key={forward.id} className={state.tone === "ok" ? "" : "net-row-idle"}>
+              <td>{forward.name}</td>
+              <td>
+                <span className="net-host">
+                  {forward.host}
+                  <span className="net-port">:{forward.port}</span>
+                </span>
+              </td>
+              <td>
+                <span className="net-host">
+                  127.0.0.1<span className="net-port">:{forward.localPort}</span>
+                </span>
+              </td>
+              <td>
+                <span className={`net-decision net-forward-${state.tone}`}>{state.label}</span>
+                <span className="net-sub">{state.detail}</span>
+              </td>
+              <td className="net-actions">
+                {state.tone === "blocked" && (
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={() => void onWhitelist(forward.host)}
+                    aria-label={`Add ${forward.host} to whitelist`}
+                  >
+                    Allow
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => void onRemove(forward.id)}
+                  aria-label={`Remove the ${forward.name} forward`}
+                >
+                  Remove
+                </button>
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+interface AddForwardRowProps {
+  onAdd: (name: string, host: string, port: string, localPort: string) => Promise<void>;
+}
+
+function AddForwardRow({ onAdd }: AddForwardRowProps) {
+  const [name, setName] = useState("");
+  const [host, setHost] = useState("");
+  const [port, setPort] = useState("");
+  const [localPort, setLocalPort] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const add = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await onAdd(name, host, port, localPort);
+      setName("");
+      setHost("");
+      setPort("");
+      setLocalPort("");
+    } catch (err) {
+      setError(describeError(err, "Failed to add the forward."));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onEnter = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") void add();
+  };
+
+  return (
+    <div className="net-add">
+      <div className="net-add-row">
+        <input
+          type="text"
+          className="settings-input"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={onEnter}
+          placeholder="postgres"
+          aria-label="Forward name"
+        />
+        <input
+          type="text"
+          className="settings-input"
+          value={host}
+          onChange={(e) => setHost(e.target.value)}
+          onKeyDown={onEnter}
+          placeholder="Destination host"
+          aria-label="Destination host"
+        />
+        <input
+          type="text"
+          inputMode="numeric"
+          className="settings-input net-port-input"
+          value={port}
+          onChange={(e) => setPort(e.target.value)}
+          onKeyDown={onEnter}
+          placeholder="5432"
+          aria-label="Destination port"
+        />
+        <input
+          type="text"
+          inputMode="numeric"
+          className="settings-input net-port-input"
+          value={localPort}
+          onChange={(e) => setLocalPort(e.target.value)}
+          onKeyDown={onEnter}
+          placeholder="15432"
+          aria-label="Local port"
+        />
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => void add()}
+          disabled={busy || name.trim() === "" || host.trim() === ""}
+        >
+          Add forward
+        </button>
+      </div>
+      <p className="settings-row-help">
+        A destination is one host name or IP address — a pattern like <code>.example.com</code>{" "}
+        covers a set and is not somewhere to connect.
+        {error && <span className="settings-error"> {error}</span>}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * The Network page: the mode, one table of rules for both lists, the forwards
+ * that carry traffic no proxy can read, and the live destination log the rules
+ * are usually written from. Everything updates in place from the hub, so a click
+ * here is judged by the next connection and shows up as such without a refresh.
  */
 export default function NetworkSettings() {
   const { on, off } = useSignalR();
@@ -286,9 +474,11 @@ export default function NetworkSettings() {
   const [mode, setMode] = useState<NetworkMode>("off");
   const [modeError, setModeError] = useState<string | null>(null);
   const [entries, setEntries] = useState<NetworkPolicyEntry[]>([]);
+  const [forwards, setForwards] = useState<NetworkForward[]>([]);
   const [log, setLog] = useState<NetworkLogEntry[]>([]);
   const [providers, setProviders] = useState<AiProvider[]>([]);
   const [listError, setListError] = useState<string | null>(null);
+  const [forwardError, setForwardError] = useState<string | null>(null);
   const [logError, setLogError] = useState<string | null>(null);
   const [ruleFilter, setRuleFilter] = useState("");
   const [kindFilter, setKindFilter] = useState<"All" | NetworkListKind>("All");
@@ -309,6 +499,16 @@ export default function NetworkSettings() {
       setEntries(loaded);
     } catch (err) {
       setListError(describeError(err, "Failed to load the network lists."));
+    }
+  }, []);
+
+  const refreshForwards = useCallback(async () => {
+    try {
+      const loaded = await networkService.getForwards();
+      setForwardError(null);
+      setForwards(loaded);
+    } catch (err) {
+      setForwardError(describeError(err, "Failed to load the forwards."));
     }
   }, []);
 
@@ -338,12 +538,16 @@ export default function NetworkSettings() {
       .then(setProviders)
       .catch(() => {});
     void refreshEntries();
+    void refreshForwards();
     void refreshLog();
-  }, [refreshEntries, refreshLog]);
+  }, [refreshEntries, refreshForwards, refreshLog]);
 
   useEffect(() => {
+    // The forwards ride on the same event: their listener set and the verdict on
+    // each destination both move with the lists and the mode.
     const onPolicyChanged = () => {
       void refreshEntries();
+      void refreshForwards();
       void settingsService
         .get(NetworkSettingKeys.Mode)
         .then((s) => {
@@ -368,7 +572,7 @@ export default function NetworkSettings() {
       off("NetworkLogAppended", onLogAppended);
       off("NetworkLogCleared", onLogCleared);
     };
-  }, [on, off, refreshEntries, refreshLog]);
+  }, [on, off, refreshEntries, refreshForwards, refreshLog]);
 
   const changeMode = async (next: NetworkMode) => {
     const previous = mode;
@@ -393,6 +597,39 @@ export default function NetworkSettings() {
       setEntries((prev) => prev.filter((e) => e.id !== id));
     } catch (err) {
       setListError(describeError(err, "Failed to remove the entry."));
+    }
+  };
+
+  const addForward = async (name: string, host: string, port: string, localPort: string) => {
+    const created = await networkService.addForward({
+      name: name.trim(),
+      host: host.trim(),
+      port: Number(port),
+      localPort: Number(localPort),
+    });
+    setForwards((prev) => [...prev.filter((f) => f.id !== created.id), created]);
+  };
+
+  const removeForward = async (id: string) => {
+    try {
+      await networkService.deleteForward(id);
+      setForwards((prev) => prev.filter((f) => f.id !== id));
+    } catch (err) {
+      setForwardError(describeError(err, "Failed to remove the forward."));
+    }
+  };
+
+  /**
+   * The forward is transport; the lists are the decision. Allowing a blocked
+   * destination is therefore the same click as anywhere else — one whitelist
+   * entry — and the refetch the broadcast triggers re-reads the verdict.
+   */
+  const whitelistForwardHost = async (host: string) => {
+    try {
+      await addEntry(host, "Whitelist", null);
+      await refreshForwards();
+    } catch (err) {
+      setForwardError(describeError(err, "Failed to add the host to the whitelist."));
     }
   };
 
@@ -531,6 +768,26 @@ export default function NetworkSettings() {
           onRemove={removeEntry}
         />
         <AddRuleRow providers={providers} draft={draftHost} onAdd={addEntry} />
+      </section>
+
+      <section className="settings-card">
+        <div className="settings-card-header">
+          <h3 className="settings-card-title">Forwards</h3>
+        </div>
+        <p className="settings-card-note">
+          A named destination the orchestrator relays on loopback, for clients that cannot be
+          pointed at a proxy — databases, caches, mail. Point the client at{" "}
+          <code>127.0.0.1:&lt;local port&gt;</code>; the rules above still decide whether the
+          connection is made, and the log below still records it under the destination&apos;s host
+          name.
+        </p>
+        {forwardError && <div className="settings-error">{forwardError}</div>}
+        <ForwardTable
+          forwards={forwards}
+          onRemove={removeForward}
+          onWhitelist={whitelistForwardHost}
+        />
+        <AddForwardRow onAdd={addForward} />
       </section>
 
       <section className="settings-card">
@@ -731,6 +988,10 @@ export default function NetworkSettings() {
         .net-decision-blocked { color: #f87171; }
         .net-decision-allowed { color: #4ade80; }
         .net-decision-advisory { color: #a0a0b0; }
+        .net-forward-ok { color: #4ade80; }
+        .net-forward-warn { color: #fbbf24; }
+        .net-forward-blocked { color: #f87171; }
+        .net-port-input { width: 6rem; flex: 0 0 auto; }
       `}</style>
     </>
   );

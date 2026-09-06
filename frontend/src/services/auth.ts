@@ -31,6 +31,7 @@ import {
   WorkItemServerConfig,
   RunAnalyticsOverview,
   AnalyticsFilters,
+  NetworkForward,
   NetworkListKind,
   NetworkLogEntry,
   NetworkPolicyEntry,
@@ -722,6 +723,20 @@ export const networkService = {
   },
   deleteEntry: async (id: string): Promise<void> => {
     return api.delete<void>(`/network/entries/${id}`);
+  },
+  getForwards: async (): Promise<NetworkForward[]> => {
+    return api.get<NetworkForward[]>("/network/forwards");
+  },
+  addForward: async (data: {
+    name: string;
+    host: string;
+    port: number;
+    localPort: number;
+  }): Promise<NetworkForward> => {
+    return api.post<NetworkForward>("/network/forwards", data);
+  },
+  deleteForward: async (id: string): Promise<void> => {
+    return api.delete<void>(`/network/forwards/${id}`);
   },
   getLog: async (take = 200): Promise<NetworkLogEntry[]> => {
     return api.get<NetworkLogEntry[]>(`/network/log?take=${take}`);

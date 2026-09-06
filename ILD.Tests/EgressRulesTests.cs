@@ -119,6 +119,47 @@ public class EgressRulesTests
     }
 
     [Theory]
+    [InlineData("postgres", "postgres")]
+    [InlineData(" POSTGRES.internal. ", "postgres.internal")]
+    [InlineData("10.0.0.5", "10.0.0.5")]
+    [InlineData("[::1]", "::1")]
+    public void A_forward_destination_is_canonicalised_like_any_other_host(string input, string expected)
+    {
+        Assert.True(EgressRules.TryNormalizeForwardHost(input, out var host, out _));
+        Assert.Equal(expected, host);
+    }
+
+    /// <summary>
+    /// A leading-dot or wildcard form is a set of hosts. It is meaningful on a
+    /// list and meaningless as somewhere to open a socket, so the forward form
+    /// refuses what <see cref="EgressRules.TryNormalizePattern"/> accepts.
+    /// </summary>
+    [Theory]
+    [InlineData(".example.com")]
+    [InlineData("*.example.com")]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("https://postgres")]
+    [InlineData("postgres/db")]
+    [InlineData("postgres:5432")]
+    [InlineData("has space.internal")]
+    [InlineData("-leading.example.com")]
+    public void A_forward_destination_must_be_one_concrete_host(string input)
+    {
+        Assert.False(EgressRules.TryNormalizeForwardHost(input, out var host, out var error));
+        Assert.Empty(host);
+        Assert.NotEmpty(error);
+    }
+
+    [Fact]
+    public void A_pattern_the_lists_accept_is_still_refused_as_a_forward_destination()
+    {
+        Assert.True(EgressRules.TryNormalizePattern("*.example.com", out var pattern, out _));
+        Assert.Equal(".example.com", pattern);
+        Assert.False(EgressRules.TryNormalizeForwardHost("*.example.com", out _, out _));
+    }
+
+    [Theory]
     [InlineData("off", true, NetworkMode.Off)]
     [InlineData("Whitelist", true, NetworkMode.Whitelist)]
     [InlineData(" blacklist ", true, NetworkMode.Blacklist)]

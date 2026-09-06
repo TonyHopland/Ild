@@ -3,7 +3,12 @@ import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-li
 import NetworkSettings, { groupConsecutive } from "./NetworkSettings";
 import * as signalRHook from "../../../hooks/useSignalR";
 import * as services from "../../../services/auth";
-import type { NetworkLogEntry, NetworkPolicyEntry, NetworkStatus } from "../../../types";
+import type {
+  NetworkForward,
+  NetworkLogEntry,
+  NetworkPolicyEntry,
+  NetworkStatus,
+} from "../../../types";
 
 type Handler = (message: { type: string; payload: unknown; timestamp: string }) => void;
 const handlers = new Map<string, Set<Handler>>();
@@ -48,7 +53,22 @@ const npmLine: NetworkLogEntry = {
   aiProviderId: "p1",
 };
 
-function mockServices(status: NetworkStatus = enforced, mode = "off") {
+const postgres: NetworkForward = {
+  id: "f1",
+  name: "postgres",
+  host: "postgres",
+  port: 5432,
+  localPort: 15432,
+  createdAt: "2026-09-01T10:00:00Z",
+  decision: "Advisory",
+  listenError: null,
+};
+
+function mockServices(
+  status: NetworkStatus = enforced,
+  mode = "off",
+  forwards: NetworkForward[] = [postgres],
+) {
   vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
     connectionState: "connected",
     on: vi.fn((type: string, handler: Handler) => {
@@ -63,6 +83,7 @@ function mockServices(status: NetworkStatus = enforced, mode = "off") {
   } as any);
   vi.spyOn(services.networkService, "getStatus").mockResolvedValue(status);
   vi.spyOn(services.networkService, "getEntries").mockResolvedValue([github, evil]);
+  vi.spyOn(services.networkService, "getForwards").mockResolvedValue(forwards);
   vi.spyOn(services.networkService, "getLog").mockResolvedValue([npmLine]);
   vi.spyOn(services.settingsService, "get").mockImplementation(async (key: string) => ({
     key,
@@ -74,6 +95,11 @@ function mockServices(status: NetworkStatus = enforced, mode = "off") {
 }
 
 const trafficLog = () => within(screen.getByLabelText("Traffic log"));
+const forwardTable = async () => within(await screen.findByLabelText("Forwards"));
+const forwardRow = async (name: string) =>
+  within(
+    (await screen.findByRole("button", { name: `Remove the ${name} forward` })).closest("tr")!,
+  );
 const modeButton = (name: string) =>
   within(screen.getByRole("group", { name: "Filter mode" })).getByRole("button", { name });
 
@@ -326,6 +352,121 @@ describe("Network settings", () => {
         listKind: "Whitelist",
         aiProviderId: null,
       }),
+    );
+  });
+
+  test("shows a forward's destination, its loopback address and that it is listening", async () => {
+    mockServices();
+    render(<NetworkSettings />);
+
+    const row = await forwardRow("postgres");
+    expect(row.getByText(":5432")).toBeTruthy();
+    expect(row.getByText("127.0.0.1")).toBeTruthy();
+    expect(row.getByText(":15432")).toBeTruthy();
+    expect(row.getByText("Listening")).toBeTruthy();
+  });
+
+  test("a forward whose local port will not bind says so on its own row", async () => {
+    mockServices(enforced, "off", [
+      { ...postgres, listenError: "Local port 15432 is already in use by something else" },
+    ]);
+    render(<NetworkSettings />);
+
+    const row = await forwardRow("postgres");
+    expect(row.getByText("Local port unavailable")).toBeTruthy();
+    expect(row.getByText(/already in use by something else/i)).toBeTruthy();
+  });
+
+  test("a forward the mode blocks is whitelisted in the same click", async () => {
+    mockServices(enforced, "whitelist", [{ ...postgres, decision: "Blocked" }]);
+    const add = vi.spyOn(services.networkService, "addEntry").mockResolvedValue({
+      id: "e7",
+      host: "postgres",
+      listKind: "Whitelist",
+      aiProviderId: null,
+      createdAt: "2026-09-02T12:00:00Z",
+    });
+    const getForwards = vi
+      .spyOn(services.networkService, "getForwards")
+      .mockResolvedValueOnce([{ ...postgres, decision: "Blocked" }])
+      .mockResolvedValue([postgres]);
+    render(<NetworkSettings />);
+
+    const row = await forwardRow("postgres");
+    expect(row.getByText("Host not allowed by current mode")).toBeTruthy();
+    fireEvent.click(row.getByRole("button", { name: "Add postgres to whitelist" }));
+
+    await waitFor(() =>
+      expect(add).toHaveBeenCalledWith({
+        host: "postgres",
+        listKind: "Whitelist",
+        aiProviderId: null,
+      }),
+    );
+    await waitFor(() => expect(getForwards).toHaveBeenCalledTimes(2));
+    expect(await (await forwardTable()).findByText("Listening")).toBeTruthy();
+  });
+
+  test("adds a forward and reports the server's reason when one is refused", async () => {
+    mockServices();
+    const add = vi
+      .spyOn(services.networkService, "addForward")
+      .mockRejectedValueOnce({
+        status: 400,
+        message: "A forward needs one destination, not a pattern: drop the leading dot or *",
+      })
+      .mockResolvedValue({ ...postgres, id: "f2", name: "redis", host: "cache", port: 6379 });
+    render(<NetworkSettings />);
+    await forwardRow("postgres");
+
+    fireEvent.change(screen.getByLabelText("Forward name"), { target: { value: "redis" } });
+    fireEvent.change(screen.getByLabelText("Destination host"), {
+      target: { value: ".example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("Destination port"), { target: { value: "6379" } });
+    fireEvent.change(screen.getByLabelText("Local port"), { target: { value: "16379" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add forward" }));
+
+    expect(await screen.findByText(/not a pattern/i)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Destination host"), { target: { value: "cache" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add forward" }));
+
+    await waitFor(() =>
+      expect(add).toHaveBeenLastCalledWith({
+        name: "redis",
+        host: "cache",
+        port: 6379,
+        localPort: 16379,
+      }),
+    );
+    expect(await (await forwardTable()).findByText("redis")).toBeTruthy();
+  });
+
+  test("removes a forward", async () => {
+    mockServices();
+    const remove = vi.spyOn(services.networkService, "deleteForward").mockResolvedValue(undefined);
+    render(<NetworkSettings />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Remove the postgres forward" }));
+
+    await waitFor(() => expect(remove).toHaveBeenCalledWith("f1"));
+    expect(await screen.findByText(/no forwards yet/i)).toBeTruthy();
+  });
+
+  test("re-reads the forwards when the policy changes", async () => {
+    mockServices();
+    render(<NetworkSettings />);
+    await forwardRow("postgres");
+
+    vi.spyOn(services.networkService, "getForwards").mockResolvedValue([
+      { ...postgres, id: "f3", name: "smtp", host: "mail.internal", port: 25, localPort: 10025 },
+    ]);
+    emit("NetworkPolicyChanged", {});
+
+    expect(await (await forwardTable()).findByText("smtp")).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Remove the postgres forward" })).toBeNull(),
     );
   });
 

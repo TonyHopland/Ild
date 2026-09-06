@@ -118,6 +118,12 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<INetworkLogRecorder>(sp => sp.GetRequiredService<NetworkLogRecorder>());
         services.AddHostedService(sp => sp.GetRequiredService<NetworkLogRecorder>());
         services.AddHostedService<EgressProxy>();
+        // The declared forwards (ADR-0020) need none of that: they are loopback
+        // listeners the orchestrator runs whether or not the proxy is enabled, for
+        // clients that cannot name a destination in band.
+        services.AddSingleton<EgressForwarder>();
+        services.AddSingleton<IEgressForwarderState>(sp => sp.GetRequiredService<EgressForwarder>());
+        services.AddHostedService(sp => sp.GetRequiredService<EgressForwarder>());
         services.AddSingleton<INodeExecutor, StartNodeExecutor>();
         services.AddSingleton<INodeExecutor, CmdNodeExecutor>();
         services.AddSingleton<INodeExecutor, AINodeExecutor>();
