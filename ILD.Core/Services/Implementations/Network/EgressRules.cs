@@ -102,19 +102,80 @@ public static class EgressRules
             return true;
         }
 
-        foreach (var label in host.Split('.'))
+        if (!LabelsAreValid(host))
         {
-            if (label.Length == 0 || label.Length > 63 || label[0] == '-' || label[^1] == '-'
-                || !label.All(c => char.IsAsciiLetterOrDigit(c) || c == '-' || c == '_'))
-            {
-                error = "Not a valid host name: use letters, digits, hyphens, underscores and dots (a leading dot matches every subdomain)";
-                return false;
-            }
+            error = "Not a valid host name: use letters, digits, hyphens, underscores and dots (a leading dot matches every subdomain)";
+            return false;
         }
 
         pattern = suffix ? "." + host : host;
         return true;
     }
+
+    /// <summary>
+    /// Validate and canonicalise a forward's destination. Unlike a list pattern
+    /// this has to name one place: a leading-dot or wildcard form covers a set of
+    /// hosts, and there is nothing to connect a socket to in a set.
+    /// </summary>
+    public static bool TryNormalizeForwardHost(string? input, out string host, out string error)
+    {
+        host = string.Empty;
+        error = string.Empty;
+
+        var raw = (input ?? string.Empty).Trim();
+        if (raw.Length == 0)
+        {
+            error = "Enter the destination host, e.g. postgres or db.internal";
+            return false;
+        }
+        if (raw.Contains("://", StringComparison.Ordinal) || raw.Contains('/'))
+        {
+            error = "Enter a host name, not a URL";
+            return false;
+        }
+        if (raw.StartsWith('.') || raw.StartsWith("*.", StringComparison.Ordinal))
+        {
+            error = "A forward needs one destination, not a pattern: drop the leading dot or *";
+            return false;
+        }
+
+        var canonical = NormalizeHost(raw);
+        if (canonical.Length == 0)
+        {
+            error = "Enter the destination host, e.g. postgres or db.internal";
+            return false;
+        }
+        if (canonical.Length > MaxHostLength)
+        {
+            error = $"Host names are at most {MaxHostLength} characters";
+            return false;
+        }
+
+        if (IPAddress.TryParse(canonical, out var ip))
+        {
+            host = ip.ToString();
+            return true;
+        }
+        if (canonical.Contains(':'))
+        {
+            error = "Enter the host on its own; the port has its own field";
+            return false;
+        }
+        if (!LabelsAreValid(canonical))
+        {
+            error = "Not a valid host name: use letters, digits, hyphens, underscores and dots";
+            return false;
+        }
+
+        host = canonical;
+        return true;
+    }
+
+    private static bool LabelsAreValid(string host)
+        => host.Split('.').All(label =>
+            label.Length is > 0 and <= 63
+            && label[0] != '-' && label[^1] != '-'
+            && label.All(c => char.IsAsciiLetterOrDigit(c) || c == '-' || c == '_'));
 
     /// <summary>Whether a canonical pattern covers a canonical host.</summary>
     public static bool Matches(string pattern, string host)

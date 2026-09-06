@@ -794,6 +794,23 @@ export interface NetworkLogEntry {
   aiProviderId: string | null;
 }
 
+/**
+ * One declared TCP forward: the orchestrator answers on `127.0.0.1:localPort`
+ * and relays to `host:port`. Mirrors ILD.Data.Entities.NetworkForwardEntry plus
+ * the two live facts the row itself does not carry — what the lists currently
+ * say about `host`, and why the local port is not bound when it is not.
+ */
+export interface NetworkForward {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  localPort: number;
+  createdAt: string;
+  decision: NetworkDecision;
+  listenError: string | null;
+}
+
 /** Whether the firewall behind the proxy is in place, and why not when it is not. */
 export interface NetworkStatus {
   enforcement: "enforced" | "advisory";

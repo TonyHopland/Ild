@@ -599,6 +599,12 @@ function RepoEnvEditor({
             : "KEY=value\n# injected into preview processes as environment variables"
         }
       />
+      <div className="preview-message">
+        A preview reaches a database or anything else outside the container through a{" "}
+        <strong>forward</strong> declared in Settings → Network — point the connection string at{" "}
+        <code>127.0.0.1:&lt;local port&gt;</code>. Without one the attempt is dropped by the
+        firewall and times out with nothing recorded anywhere.
+      </div>
       <div className="preview-config-toolbar">
         <span className="preview-message">
           {message ??

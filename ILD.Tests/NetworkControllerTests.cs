@@ -14,12 +14,26 @@ public sealed class NetworkControllerTests : IDisposable
     private readonly TestDb _db = new();
     private readonly Mock<IEgressPolicy> _policy = new();
     private readonly Mock<INetworkNotifier> _notifier = new();
+    private readonly StubForwarderState _forwarder = new();
+    private EgressPolicySnapshot _snapshot = EgressPolicySnapshot.Off;
+
+    public NetworkControllerTests()
+        => _policy.Setup(p => p.GetAsync(It.IsAny<CancellationToken>()))
+            .Returns(() => ValueTask.FromResult(_snapshot));
 
     public void Dispose() => _db.Dispose();
 
     private NetworkController Build(NetworkEnforcementStatus? status = null)
-        => new(_db.Network, _db.Providers, _policy.Object, _notifier.Object,
-            status ?? NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null));
+        => new(_db.Network, _db.NetworkForwards, _db.Providers, _policy.Object, _notifier.Object,
+            status ?? NetworkEnforcementStatus.Resolve(EgressProxyOptions.Parse("3128"), "enforced", null),
+            _forwarder);
+
+    private sealed class StubForwarderState : IEgressForwarderState
+    {
+        public Dictionary<Guid, string> Errors { get; } = new();
+
+        public string? ListenErrorFor(Guid forwardId) => Errors.GetValueOrDefault(forwardId);
+    }
 
     private static T Body<T>(IActionResult result)
     {
@@ -177,6 +191,116 @@ public sealed class NetworkControllerTests : IDisposable
         var page = Body<List<Dictionary<string, object>>>(await controller.GetLog(take: 2, ct: default));
 
         Assert.Equal(new[] { "h4.example", "h3.example" }, page.Select(e => e["host"].ToString()));
+    }
+
+    private sealed record ForwardView(
+        Guid Id, string Name, string Host, int Port, int LocalPort, NetworkDecision Decision, string? ListenError);
+
+    private static NetworkController.AddForwardRequest Forward(
+        string name = "postgres", string host = "postgres", int port = 5432, int localPort = 15432)
+        => new() { Name = name, Host = host, Port = port, LocalPort = localPort };
+
+    [Fact]
+    public async Task Adding_a_forward_canonicalises_its_host_invalidates_the_policy_and_broadcasts()
+    {
+        var controller = Build();
+
+        var created = Assert.IsType<CreatedAtActionResult>(
+            await controller.AddForward(Forward(name: " postgres ", host: " POSTGRES. "), default));
+
+        var view = Body<ForwardView>(created);
+        Assert.Equal(("postgres", "postgres", 5432, 15432), (view.Name, view.Host, view.Port, view.LocalPort));
+        Assert.Equal(NetworkDecision.Advisory, view.Decision);
+        Assert.Null(view.ListenError);
+        _policy.Verify(p => p.Invalidate(), Times.Once);
+        _notifier.Verify(n => n.PolicyChangedAsync(), Times.Once);
+    }
+
+    [Theory]
+    [InlineData(".example.com")]
+    [InlineData("*.example.com")]
+    public async Task A_pattern_is_not_a_destination_and_is_refused(string host)
+    {
+        var controller = Build();
+
+        var result = await controller.AddForward(Forward(host: host), default);
+
+        Assert.Contains("not a pattern", Body<Dictionary<string, string>>(result)["error"]);
+        Assert.Empty(await _db.NetworkForwards.GetForwardsAsync());
+        _policy.Verify(p => p.Invalidate(), Times.Never);
+    }
+
+    [Theory]
+    [InlineData("", "postgres", 5432, 15432)]
+    [InlineData("postgres", "https://postgres", 5432, 15432)]
+    [InlineData("postgres", "postgres:5432", 5432, 15432)]
+    [InlineData("postgres", "postgres", 0, 15432)]
+    [InlineData("postgres", "postgres", 70000, 15432)]
+    [InlineData("postgres", "postgres", 5432, 0)]
+    [InlineData("postgres", "postgres", 5432, 65536)]
+    public async Task An_unusable_forward_is_refused_before_anything_is_stored(string name, string host, int port, int localPort)
+    {
+        var controller = Build();
+
+        Assert.IsType<BadRequestObjectResult>(await controller.AddForward(Forward(name, host, port, localPort), default));
+
+        Assert.Empty(await _db.NetworkForwards.GetForwardsAsync());
+        _policy.Verify(p => p.Invalidate(), Times.Never);
+    }
+
+    [Fact]
+    public async Task A_local_port_already_forwarded_is_refused_with_what_holds_it()
+    {
+        var controller = Build();
+        await controller.AddForward(Forward(), default);
+
+        var result = await controller.AddForward(Forward(name: "redis", host: "cache", port: 6379), default);
+
+        Assert.Contains("postgres:5432", Body<Dictionary<string, string>>(result)["error"]);
+        Assert.Single(await _db.NetworkForwards.GetForwardsAsync());
+    }
+
+    [Fact]
+    public async Task The_unique_index_refuses_a_second_forward_on_a_local_port_behind_the_controllers_back()
+    {
+        await _db.NetworkForwards.AddForwardAsync(new NetworkForwardEntry { Name = "a", Host = "a.example", Port = 1, LocalPort = 15432 });
+
+        await Assert.ThrowsAsync<DbUpdateException>(() => _db.NetworkForwards.AddForwardAsync(
+            new NetworkForwardEntry { Name = "b", Host = "b.example", Port = 2, LocalPort = 15432 }));
+    }
+
+    [Fact]
+    public async Task A_forward_reads_back_with_the_current_verdict_on_its_host_and_its_listener_state()
+    {
+        var controller = Build();
+        var created = Body<ForwardView>(Assert.IsType<CreatedAtActionResult>(await controller.AddForward(Forward(), default)));
+        _forwarder.Errors[created.Id] = "Local port 15432 is already in use by something else";
+        _snapshot = new EgressPolicySnapshot(NetworkMode.Whitelist, Array.Empty<NetworkPolicyEntry>());
+
+        var blocked = Assert.Single(Body<List<ForwardView>>(await controller.GetForwards(default)));
+        Assert.Equal(NetworkDecision.Blocked, blocked.Decision);
+        Assert.Contains("already in use", blocked.ListenError);
+
+        _snapshot = new EgressPolicySnapshot(NetworkMode.Whitelist, new[]
+        {
+            new NetworkPolicyEntry { Host = "postgres", ListKind = NetworkListKind.Whitelist },
+        });
+
+        Assert.Equal(NetworkDecision.Allowed, Assert.Single(Body<List<ForwardView>>(await controller.GetForwards(default))).Decision);
+    }
+
+    [Fact]
+    public async Task Deleting_a_forward_invalidates_the_policy()
+    {
+        var controller = Build();
+        var created = Body<ForwardView>(Assert.IsType<CreatedAtActionResult>(await controller.AddForward(Forward(), default)));
+        _policy.Invocations.Clear();
+
+        Assert.IsType<NoContentResult>(await controller.DeleteForward(created.Id, default));
+        Assert.IsType<NotFoundResult>(await controller.DeleteForward(created.Id, default));
+
+        Assert.Empty(await _db.NetworkForwards.GetForwardsAsync());
+        _policy.Verify(p => p.Invalidate(), Times.Once);
     }
 
     [Fact]
