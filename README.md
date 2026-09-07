@@ -34,21 +34,41 @@ See [docs/deployment.md](docs/deployment.md) for volumes, bind mounts, and first
 
 ## Screenshots
 
-**Loop Editor** — build loop templates visually by wiring together `Start`, `Prompt`, `AI`, `PR`, `Cleanup`, and other node types. Edges carry success, failure, and custom routing so you can model retries, human gates, and multi-stage review flows without touching config files.
+**Taskboard** — every work item across the seven statuses, in one view. A running card carries the node it is on and how long it has been there; a parked one says why it stopped, down to the PR's CI and review verdicts. Tags that name a loop template are highlighted, because that is what decides which loop the item runs.
+
+![Taskboard](docs/screenshots/TaskboardOverview.png)
+
+**AI chat** — a chat bubble on every page, wired to the same work-item tools the loops use. Ask it what is on the board and it reads the real one; tell it to file something and the card is there when you close the panel.
+
+![AI chat](docs/screenshots/ChatWorkItems.png)
+
+**Loop Editor** — build loop templates visually by wiring together `Start`, `Prompt`, `AI`, `PR`, `Condition`, `Human`, and `Cleanup` nodes. This is the `DevTeam` loop: an orchestrator that routes to a spec analyst, an explorer, a developer, a QA engineer and a reviewer, with named edges — `qa_failed`, `on_merge_conflict`, `ask_human` — carrying the work back to whichever role should handle it.
 
 ![Loop Editor](docs/screenshots/LoopEditorExample.png)
 
-**Live output** — the Overview tab on a running work item streams the AI agent's tool calls and reasoning in real time alongside run metadata: status, priority, repository, loop assignment, branch, and dependencies.
+**Run timeline** — the Runs tab replays a run node by node: what each one was given, what it produced, how long it took, and what the AI nodes cost in tokens and dollars. Any node can be retried on its own without restarting the loop.
 
-![Live output](docs/screenshots/OverviewLiveOutput.png)
+![Run timeline](docs/screenshots/RunTimeline.png)
+
+**Human gates** — when a loop reaches a `Human` or `PR` node it parks and waits. The Action tab shows why it stopped, the pull request's state and review thread, and the buttons that send it back down a success, failure, or custom edge.
+
+![Human gates](docs/screenshots/HumanFeedbackPr.png)
 
 **Files diff** — the Files tab shows the exact git diff produced by the AI agent inside its isolated worktree, so you can review every addition and deletion before the branch is pushed or a PR is opened.
 
 ![Files diff](docs/screenshots/FilesDiffView.png)
 
-**QA preview** — the Preview tab boots the project's full stack (API, app, WorkItem Server) inside the run's worktree and gives you a direct link to open and test the AI's changes live before they are merged. Configured via [`ild.config.json`](docs/configuration.md#ildconfigjson) in the repository root.
+**QA preview** — the Preview tab boots the project's own services inside the run's worktree, on ports allocated for that run, and gives you a link to open and test the AI's changes live before they are merged. Which services, and how they start, comes from [`ild.config.json`](docs/configuration.md#ildconfigjson) in the repository root.
 
 ![QA preview](docs/screenshots/PreviewRunning.png)
+
+**Network** — agents reach the outside world through one proxy, and every attempt is on the record: an allow/block list, a live log of what was tried and what happened to it, and an **Allow** button on any blocked row. Forwards relay a named destination on loopback for the clients that cannot be pointed at a proxy — databases, caches, mail.
+
+![Network](docs/screenshots/SettingsNetwork.png)
+
+**Run analytics** — what the loops actually cost. Totals and per-day spend, broken down by agent provider and by loop template, so an expensive template is visible before the bill is.
+
+![Run analytics](docs/screenshots/AnalyticsCost.png)
 
 ## Documentation
 
