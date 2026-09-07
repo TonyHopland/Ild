@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useSignalR } from "../../../hooks/useSignalR";
 import {
   aiProviderService,
@@ -388,6 +388,7 @@ interface AddForwardRowProps {
 }
 
 function AddForwardRow({ onAdd }: AddForwardRowProps) {
+  const field = useId();
   const [name, setName] = useState("");
   const [host, setHost] = useState("");
   const [port, setPort] = useState("");
@@ -432,45 +433,67 @@ function AddForwardRow({ onAdd }: AddForwardRowProps) {
 
   return (
     <div className="net-add">
-      <div className="net-add-row">
-        <input
-          type="text"
-          className="settings-input"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={onEnter}
-          placeholder="postgres"
-          aria-label="Forward name"
-        />
-        <input
-          type="text"
-          className="settings-input"
-          value={host}
-          onChange={(e) => setHost(e.target.value)}
-          onKeyDown={onEnter}
-          placeholder="Destination host"
-          aria-label="Destination host"
-        />
-        <input
-          type="text"
-          inputMode="numeric"
-          className="settings-input net-port-input"
-          value={port}
-          onChange={(e) => setPort(e.target.value)}
-          onKeyDown={onEnter}
-          placeholder="5432"
-          aria-label="Destination port"
-        />
-        <input
-          type="text"
-          inputMode="numeric"
-          className="settings-input net-port-input"
-          value={localPort}
-          onChange={(e) => setLocalPort(e.target.value)}
-          onKeyDown={onEnter}
-          placeholder="15432"
-          aria-label="Local port"
-        />
+      <div className="net-add-row net-forward-add">
+        <div className="net-field">
+          <label className="net-field-label" htmlFor={`${field}-name`}>
+            Name
+          </label>
+          <input
+            id={`${field}-name`}
+            type="text"
+            className="settings-input"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={onEnter}
+            placeholder="postgres"
+          />
+        </div>
+        <div className="net-field net-field-destination">
+          <span className="net-field-label" id={`${field}-destination`}>
+            Destination
+          </span>
+          <div className="net-field-pair" role="group" aria-labelledby={`${field}-destination`}>
+            <input
+              type="text"
+              className="settings-input net-host-input"
+              value={host}
+              onChange={(e) => setHost(e.target.value)}
+              onKeyDown={onEnter}
+              placeholder="db.example.com"
+              aria-label="Destination host"
+            />
+            <span className="net-field-sep">:</span>
+            <input
+              type="text"
+              inputMode="numeric"
+              className="settings-input net-port-input"
+              value={port}
+              onChange={(e) => setPort(e.target.value)}
+              onKeyDown={onEnter}
+              placeholder="5432"
+              aria-label="Destination port"
+            />
+          </div>
+        </div>
+        <div className="net-field net-field-local">
+          <span className="net-field-label" id={`${field}-local`}>
+            Local address
+          </span>
+          <div className="net-field-pair" role="group" aria-labelledby={`${field}-local`}>
+            <span className="net-fixed-host">127.0.0.1</span>
+            <span className="net-field-sep">:</span>
+            <input
+              type="text"
+              inputMode="numeric"
+              className="settings-input net-port-input"
+              value={localPort}
+              onChange={(e) => setLocalPort(e.target.value)}
+              onKeyDown={onEnter}
+              placeholder="15432"
+              aria-label="Local port"
+            />
+          </div>
+        </div>
         <button
           type="button"
           className="btn btn-primary"
@@ -1008,7 +1031,7 @@ export default function NetworkSettings() {
         .net-actions .btn:hover { background-color: #3a3a5c; }
         .net-add { margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid #2d2d44; }
         .net-add-row { display: flex; gap: 0.5rem; align-items: center; }
-        .net-add-row input[type="text"] { flex: 1; min-width: 0; }
+        .net-add-row > input[type="text"] { flex: 1; min-width: 0; }
         .net-toolbar { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; }
         .net-toolbar input[type="search"] { flex: 1; min-width: 10rem; }
         .net-group-toggle { display: flex; align-items: center; gap: 0.5rem; font-size: 0.78rem; color: #a0a0b0; }
@@ -1020,6 +1043,20 @@ export default function NetworkSettings() {
         .net-forward-warn { color: #fbbf24; }
         .net-forward-blocked { color: #f87171; }
         .net-port-input { width: 6rem; flex: 0 0 auto; }
+        .net-forward-add { align-items: flex-end; flex-wrap: wrap; }
+        .net-field { display: flex; flex: 1 1 11rem; flex-direction: column; gap: 0.25rem; min-width: 0; }
+        .net-field-destination { flex: 2 1 16rem; }
+        .net-field-local { flex: 0 0 auto; }
+        .net-field-label {
+          color: #707090;
+          font-size: 0.7rem;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+        }
+        .net-field > .settings-input { min-width: 0; }
+        .net-field-pair { display: flex; gap: 0.35rem; align-items: center; }
+        .net-host-input { flex: 1 1 auto; min-width: 0; }
+        .net-field-sep, .net-fixed-host { font-family: monospace; color: #707090; }
       `}</style>
     </>
   );

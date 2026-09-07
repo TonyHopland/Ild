@@ -419,7 +419,7 @@ describe("Network settings", () => {
     render(<NetworkSettings />);
     await forwardRow("postgres");
 
-    fireEvent.change(screen.getByLabelText("Forward name"), { target: { value: "redis" } });
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "redis" } });
     fireEvent.change(screen.getByLabelText("Destination host"), {
       target: { value: ".example.com" },
     });
@@ -451,7 +451,7 @@ describe("Network settings", () => {
 
     const addButton = () =>
       screen.getByRole("button", { name: "Add forward" }) as HTMLButtonElement;
-    fireEvent.change(screen.getByLabelText("Forward name"), { target: { value: "redis" } });
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "redis" } });
     fireEvent.change(screen.getByLabelText("Destination host"), { target: { value: "cache" } });
     expect(addButton().disabled).toBe(true);
 
@@ -474,7 +474,7 @@ describe("Network settings", () => {
       render(<NetworkSettings />);
       await forwardRow("postgres");
 
-      fireEvent.change(screen.getByLabelText("Forward name"), { target: { value: "redis" } });
+      fireEvent.change(screen.getByLabelText("Name"), { target: { value: "redis" } });
       fireEvent.change(screen.getByLabelText("Destination host"), { target: { value: "cache" } });
       fireEvent.change(screen.getByLabelText("Destination port"), { target: { value: typed } });
       fireEvent.change(screen.getByLabelText("Local port"), { target: { value: "16379" } });
@@ -498,7 +498,7 @@ describe("Network settings", () => {
     await forwardRow("postgres");
 
     // Enter reaches add() past the disabled button, so the form must guard itself.
-    const name = screen.getByLabelText("Forward name");
+    const name = screen.getByLabelText("Name");
     fireEvent.keyDown(name, { key: "Enter" });
     expect(add).not.toHaveBeenCalled();
 
