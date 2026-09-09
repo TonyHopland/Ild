@@ -43,6 +43,14 @@ public static class AttachmentIntake
     /// <summary>How many files one request may carry.</summary>
     public const int MaxFilesPerRequest = 10;
 
+    /// <summary>
+    /// The most one upload request may weigh. Endpoints declare this as both the
+    /// request-size and the multipart-body limit: ASP.NET's own defaults for the
+    /// two differ, and a request refused by the smaller of them would fail
+    /// somewhere other than the check that reports a useful message.
+    /// </summary>
+    public const long MaxRequestBytes = MaxBytesPerFile * MaxFilesPerRequest;
+
     /// <summary>Longest stored file name, extension included.</summary>
     private const int MaxFileNameLength = 120;
 

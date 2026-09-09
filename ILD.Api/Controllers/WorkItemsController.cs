@@ -226,6 +226,7 @@ public class WorkItemsController : ControllerBase
     /// </summary>
     [HttpPost("{id}/attachments")]
     [RequestSizeLimit(AttachmentIntake.MaxBytesPerFile)]
+    [RequestFormLimits(MultipartBodyLengthLimit = AttachmentIntake.MaxBytesPerFile)]
     public async Task<IActionResult> AddAttachment(string id, IFormFile? file, CancellationToken cancellationToken)
     {
         if (file is null || file.Length == 0)

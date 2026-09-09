@@ -129,7 +129,7 @@ public sealed class ChatService : IChatService
     /// the scratch tree on purpose — that tree is the one the agent uid can
     /// already read (ADR-0014) and is deleted with the chat.
     /// </summary>
-    public static string UploadsDirectory(string scratchPath) => Path.Combine(scratchPath, "uploads");
+    private static string UploadsDirectory(string scratchPath) => Path.Combine(scratchPath, "uploads");
 
     public async Task<IReadOnlyList<AttachmentRef>?> SaveAttachmentsAsync(
         string userId, Guid sessionId, IReadOnlyList<UploadedFile> files, CancellationToken ct = default)

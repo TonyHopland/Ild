@@ -86,7 +86,8 @@ public class ChatController : ControllerBase
     /// </summary>
     [HttpPost("{id:guid}/messages")]
     [Consumes("multipart/form-data")]
-    [RequestSizeLimit(AttachmentIntake.MaxBytesPerFile * AttachmentIntake.MaxFilesPerRequest)]
+    [RequestSizeLimit(AttachmentIntake.MaxRequestBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = AttachmentIntake.MaxRequestBytes)]
     public async Task<IActionResult> SendMessageWithAttachments(
         Guid id, [FromForm] ChatMessageForm form, CancellationToken ct)
     {

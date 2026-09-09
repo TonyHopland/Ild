@@ -107,6 +107,7 @@ public sealed class WorkItemsController : ControllerBase
     /// </summary>
     [HttpPost("{id}/attachments")]
     [RequestSizeLimit(WorkItemAttachmentStore.MaxBytesPerFile)]
+    [RequestFormLimits(MultipartBodyLengthLimit = WorkItemAttachmentStore.MaxBytesPerFile)]
     public async Task<ActionResult<WorkItemAttachment>> AddAttachment(string id, IFormFile? file, CancellationToken ct)
     {
         if (file is null || file.Length == 0) return BadRequest("A file is required");
