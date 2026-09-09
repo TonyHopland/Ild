@@ -30,23 +30,21 @@ import {
 import MarkdownRenderer from "./MarkdownRenderer";
 import { getOpenLoopDocument } from "../utils/openLoopDocument";
 import { setCurrentChatSessionId } from "../services/chatSessionStore";
+import {
+  downloadAttachment,
+  formatBytes,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENT_MB,
+} from "../utils/downloadAttachment";
 import "./ChatBubble.css";
 
 // Treat tiny pointer movements as a click, not a drag, so the icon still opens
 // the panel when tapped.
 const DRAG_THRESHOLD_PX = 4;
 
-// Mirrors the server's AttachmentIntake limits, so an oversized file is refused
-// before it is uploaded rather than after.
-const MAX_ATTACHMENT_MB = 25;
-const MAX_ATTACHMENT_BYTES = MAX_ATTACHMENT_MB * 1024 * 1024;
+// Mirrors the server's AttachmentIntake cap on how many files one turn carries;
+// the per-file size cap is shared with the other upload surfaces.
 const MAX_ATTACHMENTS_PER_MESSAGE = 10;
-
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${bytes} B`;
-}
 
 // The v1 tool catalog (read/write/execute/ild). `ild` is the only default-on
 // entry; the backend re-normalizes the selection against the provider type.
@@ -463,18 +461,13 @@ export default function ChatBubble() {
     }
   };
 
-  // Attachments are behind the bearer token, so the bytes are fetched and handed
-  // to a temporary object URL rather than linked to directly.
-  const downloadAttachment = async (attachment: Attachment) => {
+  const saveAttachment = async (attachment: Attachment) => {
     if (!session) return;
     try {
-      const blob = await chatService.getAttachment(session.id, attachment.id);
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = attachment.fileName;
-      link.click();
-      URL.revokeObjectURL(url);
+      await downloadAttachment(
+        () => chatService.getAttachment(session.id, attachment.id),
+        attachment.fileName,
+      );
     } catch {
       setError(`Could not open ${attachment.fileName}.`);
     }
@@ -668,7 +661,7 @@ export default function ChatBubble() {
                         <button
                           type="button"
                           className="chat-attachment"
-                          onClick={() => void downloadAttachment(a)}
+                          onClick={() => void saveAttachment(a)}
                         >
                           📎 {a.fileName}
                           <span className="chat-attachment-size">{formatBytes(a.sizeBytes)}</span>

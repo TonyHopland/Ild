@@ -277,3 +277,142 @@ describe("useWorkItemDetail run cleanup", () => {
     expect(getById).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Files handed over at a parked Human node. They are attached to the work item
+ * rather than kept run-local: the next AI node re-reads the item and
+ * materializes its attachments, which is the path that already puts a file in
+ * front of the agent, so a sketch handed over mid-run arrives the same way as
+ * one attached when the item was written.
+ */
+describe("useWorkItemDetail feedback attachments", () => {
+  async function mountParked() {
+    stubServices();
+    mockSignalR({ text: "", lastSeq: 0 });
+    const onSave = vi.fn();
+    const wi = makeWorkItem({
+      status: WorkItemStatus.HumanFeedback,
+      humanFeedbackReason: "Human Input Needed",
+    });
+    const { result } = renderHook(() => useWorkItemDetail(wi, onSave));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    return { result, onSave };
+  }
+
+  const png = (name = "sketch.png") => new File(["pixels"], name, { type: "image/png" });
+
+  test("responding uploads the staged files and names them in the response", async () => {
+    const { result } = await mountParked();
+    const upload = vi.spyOn(workItemService, "uploadAttachment").mockResolvedValue({
+      id: "a1",
+      fileName: "sketch.png",
+      contentType: "image/png",
+      sizeBytes: 6,
+    });
+    const respond = vi.spyOn(workItemService, "humanFeedbackInput").mockResolvedValue(undefined);
+    vi.spyOn(workItemService, "getById").mockResolvedValue(makeWorkItem());
+
+    const file = png();
+    act(() => result.current.addFeedbackFiles([file]));
+    act(() => result.current.setFeedbackInput("Match this sketch."));
+    expect(result.current.feedbackFiles).toEqual([file]);
+
+    // Nothing is uploaded until they actually respond.
+    expect(upload).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await result.current.handleApprove();
+    });
+
+    expect(upload).toHaveBeenCalledWith("wi-1", file);
+    // The note names the files but not their paths: those are assigned per run
+    // when the next AI node materializes them.
+    expect(respond).toHaveBeenCalledWith(
+      "wi-1",
+      "Match this sketch.\n\nAttached to this work item: sketch.png",
+    );
+    expect(result.current.feedbackFiles).toEqual([]);
+  });
+
+  test("files alone respond with a note and no empty preamble", async () => {
+    const { result } = await mountParked();
+    vi.spyOn(workItemService, "uploadAttachment").mockResolvedValue({
+      id: "a1",
+      fileName: "sketch.png",
+      contentType: "image/png",
+      sizeBytes: 6,
+    });
+    const respond = vi.spyOn(workItemService, "humanFeedbackInput").mockResolvedValue(undefined);
+    vi.spyOn(workItemService, "getById").mockResolvedValue(makeWorkItem());
+
+    act(() => result.current.addFeedbackFiles([png()]));
+    await act(async () => {
+      await result.current.handleApprove();
+    });
+
+    expect(respond).toHaveBeenCalledWith("wi-1", "Attached to this work item: sketch.png");
+  });
+
+  test("a failed upload does not advance the loop past the file", async () => {
+    const { result } = await mountParked();
+    vi.spyOn(workItemService, "uploadAttachment").mockRejectedValue(new Error("disk full"));
+    const respond = vi.spyOn(workItemService, "humanFeedbackInput").mockResolvedValue(undefined);
+
+    act(() => result.current.addFeedbackFiles([png()]));
+    await act(async () => {
+      await result.current.handleApprove();
+    });
+
+    expect(respond).not.toHaveBeenCalled();
+    expect(result.current.feedbackError).toBe("disk full");
+  });
+
+  test("rejecting and routing a custom edge carry the files too", async () => {
+    const { result } = await mountParked();
+    vi.spyOn(workItemService, "uploadAttachment").mockResolvedValue({
+      id: "a1",
+      fileName: "run.log",
+      contentType: "text/plain",
+      sizeBytes: 4,
+    });
+    const reject = vi.spyOn(workItemService, "humanFeedbackReject").mockResolvedValue(undefined);
+    const edge = vi.spyOn(workItemService, "humanFeedbackEdge").mockResolvedValue(undefined);
+    vi.spyOn(workItemService, "getById").mockResolvedValue(makeWorkItem());
+
+    act(() => result.current.addFeedbackFiles([png("run.log")]));
+    await act(async () => {
+      await result.current.handleReject();
+    });
+    expect(reject).toHaveBeenCalledWith("wi-1", "Attached to this work item: run.log");
+
+    act(() => result.current.addFeedbackFiles([png("run.log")]));
+    await act(async () => {
+      await result.current.handleEdge("Needs work");
+    });
+    expect(edge).toHaveBeenCalledWith("wi-1", "Needs work", "Attached to this work item: run.log");
+  });
+
+  test("an oversized file is refused before it is staged", async () => {
+    const { result } = await mountParked();
+    const huge = new File(["x"], "huge.bin");
+    Object.defineProperty(huge, "size", { value: 26 * 1024 * 1024 });
+
+    act(() => result.current.addFeedbackFiles([huge]));
+
+    expect(result.current.feedbackFiles).toEqual([]);
+    expect(result.current.feedbackError).toContain("25 MB");
+  });
+
+  test("a staged file can be dropped before responding", async () => {
+    const { result } = await mountParked();
+    const a = png("a.png");
+    const b = png("b.png");
+
+    act(() => result.current.addFeedbackFiles([a, b]));
+    act(() => result.current.removeFeedbackFile(0));
+
+    expect(result.current.feedbackFiles).toEqual([b]);
+  });
+});

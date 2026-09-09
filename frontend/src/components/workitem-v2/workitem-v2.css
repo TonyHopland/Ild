@@ -675,6 +675,24 @@
   flex: 1;
 }
 
+.wiv2-feedback-attach {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  margin-top: 0.4rem;
+}
+
+/* Driven by the Attach files button; the native control has no styling worth keeping. */
+.wiv2-feedback-file-input {
+  display: none;
+}
+
+.wiv2-feedback-attach .wiv2-attachment-list {
+  width: 100%;
+  margin: 0;
+}
+
 .wiv2-attachment-list {
   list-style: none;
   margin: 0.5rem 0 0;

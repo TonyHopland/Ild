@@ -11,17 +11,12 @@ import { workItemService } from "../../services/auth";
 import { parseTags } from "../../utils/workItemJson";
 import TagAutocomplete from "../TagAutocomplete";
 import type { WorkItemDetail } from "./useWorkItemDetail";
-
-// Mirrors the server's per-file ceiling, so an oversized pick is refused before
-// it is uploaded rather than after.
-const MAX_ATTACHMENT_MB = 25;
-const MAX_ATTACHMENT_BYTES = MAX_ATTACHMENT_MB * 1024 * 1024;
-
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${bytes} B`;
-}
+import {
+  downloadAttachment,
+  formatBytes,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENT_MB,
+} from "../../utils/downloadAttachment";
 
 interface EditPanelProps {
   /** The item being edited, or null to create a new one. */
@@ -164,16 +159,13 @@ export default function EditPanel({
     if (accepted.length > 0) setNewFiles((prev) => [...prev, ...accepted]);
   };
 
-  const downloadAttachment = async (attachment: Attachment) => {
+  const saveAttachment = async (attachment: Attachment) => {
     if (!workItem) return;
     try {
-      const blob = await workItemService.getAttachment(workItem.id, attachment.id);
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = attachment.fileName;
-      link.click();
-      URL.revokeObjectURL(url);
+      await downloadAttachment(
+        () => workItemService.getAttachment(workItem.id, attachment.id),
+        attachment.fileName,
+      );
     } catch {
       setSubmitError(`Could not open ${attachment.fileName}.`);
     }
@@ -349,7 +341,7 @@ export default function EditPanel({
                 <button
                   type="button"
                   className="wiv2-attachment-name"
-                  onClick={() => void downloadAttachment(a)}
+                  onClick={() => void saveAttachment(a)}
                 >
                   📎 {a.fileName}
                 </button>

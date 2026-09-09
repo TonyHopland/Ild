@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Attach images or files to a chat message or a work item, and the agent can open them.**
+- **Attach images or files to a chat message, a work item, or your answer when a run asks for input, and the agent can open them.**
 
 ### Changed
 
