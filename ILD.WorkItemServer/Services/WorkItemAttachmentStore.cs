@@ -36,6 +36,14 @@ public sealed class WorkItemAttachmentStore : IWorkItemAttachmentStore
     /// <summary>Per-file ceiling, matched by the ILD side's own limit.</summary>
     public const long MaxBytesPerFile = 25L * 1024 * 1024;
 
+    /// <summary>
+    /// What one upload request may weigh. Above <see cref="MaxBytesPerFile"/> by
+    /// the multipart framing a file arrives wrapped in, so a file of exactly the
+    /// per-file size reaches the check that names it rather than being cut off by
+    /// ASP.NET's generic "Request body too large".
+    /// </summary>
+    public const long MaxRequestBytes = MaxBytesPerFile + 1L * 1024 * 1024;
+
     private const int MaxFileNameLength = 120;
     private const string FallbackFileName = "attachment";
 

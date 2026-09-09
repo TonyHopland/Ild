@@ -47,6 +47,14 @@ public interface IWorkItemServerClient
     /// local state, but the file is part of the item's specification and must
     /// reach whichever instance later runs it (ADR-0001). Null when the server
     /// does not know the work item.
+    ///
+    /// <para>
+    /// <paramref name="fileName"/> must already be a bare file name
+    /// (<c>AttachmentIntake.SanitizeFileName</c>): it becomes a multipart part
+    /// name, so a quote or backslash in it does not make an odd file name but an
+    /// invalid Content-Disposition header, which throws rather than uploading.
+    /// Callers sanitize at their trust boundary.
+    /// </para>
     /// </summary>
     Task<RemoteWorkItemAttachment?> AddAttachmentAsync(
         WorkItemServerOptions opts, string id, string fileName, string? contentType, Stream content, CancellationToken ct = default);

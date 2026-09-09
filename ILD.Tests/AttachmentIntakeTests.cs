@@ -45,6 +45,29 @@ public class AttachmentIntakeTests : IDisposable
         Assert.Equal(expected, WorkItemAttachmentStore.SanitizeFileName(raw));
     }
 
+    /// <summary>
+    /// A sanitized name has to be a legal multipart part name, not just a legal
+    /// file name: the work-item leg forwards it to the WorkItem server as a form
+    /// part, and <see cref="MultipartFormDataContent"/> throws on a name it cannot
+    /// put in a Content-Disposition header (a quote does exactly that) — which
+    /// would surface as a 500 on an ordinary attachment rather than an upload.
+    /// </summary>
+    [Theory]
+    [InlineData("my\"quoted\".png")]
+    [InlineData("back\\slash.png")]
+    [InlineData("new\nline.png")]
+    [InlineData("../../etc/passwd")]
+    [InlineData("board shot.png")]
+    public void A_sanitized_name_is_always_a_legal_multipart_part_name(string raw)
+    {
+        var sanitized = AttachmentIntake.SanitizeFileName(raw);
+
+        using var form = new MultipartFormDataContent();
+        form.Add(new StringContent("x"), "file", sanitized);
+
+        Assert.Equal(sanitized, WorkItemAttachmentStore.SanitizeFileName(raw));
+    }
+
     [Fact]
     public void Sanitize_truncates_a_long_name_but_keeps_its_extension()
     {

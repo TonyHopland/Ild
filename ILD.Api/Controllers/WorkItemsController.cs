@@ -225,8 +225,8 @@ public class WorkItemsController : ControllerBase
     /// materializes it into a run-scoped directory and gives the agent its path.
     /// </summary>
     [HttpPost("{id}/attachments")]
-    [RequestSizeLimit(AttachmentIntake.MaxBytesPerFile)]
-    [RequestFormLimits(MultipartBodyLengthLimit = AttachmentIntake.MaxBytesPerFile)]
+    [RequestSizeLimit(AttachmentIntake.MaxSingleFileRequestBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = AttachmentIntake.MaxSingleFileRequestBytes)]
     public async Task<IActionResult> AddAttachment(string id, IFormFile? file, CancellationToken cancellationToken)
     {
         if (file is null || file.Length == 0)
@@ -234,9 +234,13 @@ public class WorkItemsController : ControllerBase
         if (file.Length > AttachmentIntake.MaxBytesPerFile)
             return BadRequest(new { error = $"Files must be {AttachmentIntake.MaxBytesPerFile / (1024 * 1024)} MB or smaller." });
 
+        // Sanitized here, at the trust boundary, the way the chat path's intake
+        // sanitizes on the way to disk — this leg hands the name to the WorkItem
+        // server as a multipart part name, and a quote or backslash in it makes an
+        // invalid Content-Disposition header rather than an odd file name.
         await using var content = file.OpenReadStream();
         var attachment = await _workItemManager.AddAttachmentAsync(
-            id, file.FileName, file.ContentType, content, cancellationToken);
+            id, AttachmentIntake.SanitizeFileName(file.FileName), file.ContentType, content, cancellationToken);
         return attachment is null ? NotFound() : Ok(attachment);
     }
 

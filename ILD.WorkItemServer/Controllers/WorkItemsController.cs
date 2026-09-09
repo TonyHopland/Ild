@@ -106,8 +106,8 @@ public sealed class WorkItemsController : ControllerBase
     /// has to be able to fetch it (ADR-0001).
     /// </summary>
     [HttpPost("{id}/attachments")]
-    [RequestSizeLimit(WorkItemAttachmentStore.MaxBytesPerFile)]
-    [RequestFormLimits(MultipartBodyLengthLimit = WorkItemAttachmentStore.MaxBytesPerFile)]
+    [RequestSizeLimit(WorkItemAttachmentStore.MaxRequestBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = WorkItemAttachmentStore.MaxRequestBytes)]
     public async Task<ActionResult<WorkItemAttachment>> AddAttachment(string id, IFormFile? file, CancellationToken ct)
     {
         if (file is null || file.Length == 0) return BadRequest("A file is required");

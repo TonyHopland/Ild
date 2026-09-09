@@ -44,12 +44,26 @@ public static class AttachmentIntake
     public const int MaxFilesPerRequest = 10;
 
     /// <summary>
-    /// The most one upload request may weigh. Endpoints declare this as both the
-    /// request-size and the multipart-body limit: ASP.NET's own defaults for the
-    /// two differ, and a request refused by the smaller of them would fail
-    /// somewhere other than the check that reports a useful message.
+    /// How much a request may weigh beyond its files. Multipart framing (the
+    /// boundary lines and each part's headers) rides along with the bytes, and a
+    /// chat turn also carries its message and the open Loop Editor's document, so
+    /// the transport ceilings have to sit <em>above</em> the per-file one. Without
+    /// the headroom a file of exactly <see cref="MaxBytesPerFile"/> — one the UI
+    /// accepts and the size check below calls legal — is cut off by ASP.NET's
+    /// generic "Request body too large" before any of our own checks run.
     /// </summary>
-    public const long MaxRequestBytes = MaxBytesPerFile * MaxFilesPerRequest;
+    public const long MultipartOverheadAllowance = 1L * 1024 * 1024;
+
+    /// <summary>
+    /// The most a multi-file upload request may weigh. Endpoints declare this as
+    /// both the request-size and the multipart-body limit: ASP.NET's defaults for
+    /// the two differ, and a request refused by the smaller of them fails
+    /// somewhere other than the check that names the offending file.
+    /// </summary>
+    public const long MaxRequestBytes = MaxBytesPerFile * MaxFilesPerRequest + MultipartOverheadAllowance;
+
+    /// <summary>The same ceiling for an endpoint that takes exactly one file.</summary>
+    public const long MaxSingleFileRequestBytes = MaxBytesPerFile + MultipartOverheadAllowance;
 
     /// <summary>Longest stored file name, extension included.</summary>
     private const int MaxFileNameLength = 120;
