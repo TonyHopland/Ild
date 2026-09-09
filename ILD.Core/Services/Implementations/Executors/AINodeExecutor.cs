@@ -175,23 +175,19 @@ public sealed class AINodeExecutor : INodeExecutor
             rendered = string.IsNullOrWhiteSpace(rendered) ? coldRestartNote : $"{rendered}\n\n{coldRestartNote}";
 
         // Files a human attached to the work item, brought down to disk so the
-        // agent can open them by path (adapters are transport — nothing can be
-        // inlined into the prompt but text). The paths are appended unless the
-        // author placed {{WorkItem.Attachments}} themselves, so attaching a file
-        // reaches the agent without every loop template being edited first; a
-        // steering continuation is exempt, since the session it resumes was
-        // already told. The directory is outside the worktree, so it is granted
-        // explicitly.
+        // agent can open them by path (adapters are transport — nothing but text
+        // can be inlined into the prompt). Appended by the node rather than placed
+        // by the template author, so attaching a file reaches the agent without
+        // every loop template being edited first; a steering continuation is
+        // exempt, since the session it resumes was already told. The directory is
+        // outside the worktree, so it is granted explicitly.
         var attachments = MaterializedAttachments.None;
-        if (wi.Attachments.Count > 0 && sp.GetService<IWorkItemAttachmentMaterializer>() is { } materializer)
+        if (wi.Attachments.Count > 0)
         {
-            attachments = await materializer.EnsureLocalAsync(wi, ctx.Run.Id, ctx.CancellationToken);
-            if (!isSteering
-                && !PromptPlaceholderRegistry.References(prompt, PromptPlaceholderRegistry.WorkItemAttachments)
-                && AttachmentPromptBlock.Format(attachments.Files) is { } block)
-            {
+            attachments = await sp.GetRequiredService<IWorkItemAttachmentMaterializer>()
+                .EnsureLocalAsync(wi, ctx.Run.Id, ctx.CancellationToken);
+            if (!isSteering && AttachmentPromptBlock.Format(attachments.Files) is { } block)
                 rendered = string.IsNullOrWhiteSpace(rendered) ? block : $"{rendered}\n\n{block}";
-            }
         }
 
         // Consumed either way — a note left behind would re-apply on every later

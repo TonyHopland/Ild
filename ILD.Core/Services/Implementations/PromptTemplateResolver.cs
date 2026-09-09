@@ -1,4 +1,3 @@
-using ILD.Core.Services.Attachments;
 using ILD.Core.Services.Interfaces;
 
 namespace ILD.Core.Services.Implementations;
@@ -22,8 +21,6 @@ public sealed class PromptTemplateResolver : IPromptTemplateResolver
             ["Conversation.Full"] = context.ConversationFull,
             ["Conversation.AI"] = context.ConversationAI,
             ["Conversation.Human"] = context.ConversationHuman,
-            [PromptPlaceholderRegistry.WorkItemAttachments] =
-                AttachmentPromptBlock.Format(context.WorkItemAttachments),
         };
 
         return PromptPlaceholderRegistry.Pattern.Replace(template, m =>

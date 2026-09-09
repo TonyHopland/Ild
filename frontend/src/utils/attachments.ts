@@ -30,6 +30,12 @@ export function formatBytes(bytes: number): string {
   return `${bytes} B`;
 }
 
-/** Per-file upload ceiling, mirroring the server's so an oversized pick is refused early. */
+/**
+ * The upload limits, as the browser knows them. The server enforces its own —
+ * these exist so an oversized pick is refused before it is sent, and they mirror
+ * `AttachmentIntake`. This is the only place the numbers are written on this side
+ * of the wire; every surface that stages files imports them from here.
+ */
 export const MAX_ATTACHMENT_MB = 25;
 export const MAX_ATTACHMENT_BYTES = MAX_ATTACHMENT_MB * 1024 * 1024;
+export const MAX_ATTACHMENTS_PER_MESSAGE = 10;

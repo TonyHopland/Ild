@@ -10,7 +10,7 @@ import {
 } from "../../types";
 import { repositoryService, workItemService } from "../../services/auth";
 import { useStoredPreviewEnv } from "../../hooks/useStoredPreviewEnv";
-import { downloadAttachment, formatBytes } from "../../utils/downloadAttachment";
+import { downloadAttachment, formatBytes } from "../../utils/attachments";
 import { makeLoopTagMatcher, parseConversation, parseTags } from "../../utils/workItemJson";
 import { prStatusBadges } from "../../utils/prStatusBadges";
 import MarkdownRenderer from "../MarkdownRenderer";

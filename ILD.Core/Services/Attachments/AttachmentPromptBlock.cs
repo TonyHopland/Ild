@@ -4,10 +4,9 @@ using ILD.Data.DTOs;
 namespace ILD.Core.Services.Attachments;
 
 /// <summary>
-/// How attached files are described to the agent. One wording for every path —
-/// a chat turn, a work item's AI node, the <c>{{WorkItem.Attachments}}</c>
-/// placeholder — so an agent trained by one never meets a different shape in
-/// another.
+/// How attached files are described to the agent. One wording for both paths —
+/// a chat turn and a work item's AI node — so an agent that has met one never
+/// meets a different shape in the other.
 /// </summary>
 public static class AttachmentPromptBlock
 {

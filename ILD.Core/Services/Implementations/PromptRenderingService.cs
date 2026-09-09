@@ -1,6 +1,4 @@
-using ILD.Core.Services.Attachments;
 using ILD.Core.Services.Interfaces;
-using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
@@ -13,20 +11,17 @@ public sealed class PromptRenderingService : IPromptRenderingService
     private readonly IPromptTemplateResolver _resolver;
     private readonly IEventLogService _eventLog;
     private readonly ILoopRunStore _runs;
-    private readonly IWorkItemAttachmentMaterializer? _attachments;
     private readonly ILogger<PromptRenderingService>? _logger;
 
     public PromptRenderingService(
         IPromptTemplateResolver resolver,
         IEventLogService eventLog,
         ILoopRunStore runs,
-        IWorkItemAttachmentMaterializer? attachments = null,
         ILogger<PromptRenderingService>? logger = null)
     {
         _resolver = resolver;
         _eventLog = eventLog;
         _runs = runs;
-        _attachments = attachments;
         _logger = logger;
     }
 
@@ -92,18 +87,6 @@ public sealed class PromptRenderingService : IPromptRenderingService
         }
         catch { /* loop variables are best-effort, like the event log */ }
 
-        // Only fetched when the author actually placed the placeholder: an AI node
-        // that leaves it out still gets the attachments, but appended by the
-        // executor after rendering, so a Human or PR template never pays for a
-        // download it has nothing to do with.
-        IReadOnlyList<AttachmentRef>? attachments = null;
-        if (_attachments is not null
-            && workItem.Attachments.Count > 0
-            && PromptPlaceholderRegistry.References(template, PromptPlaceholderRegistry.WorkItemAttachments))
-        {
-            attachments = (await _attachments.EnsureLocalAsync(workItem, runId)).Files;
-        }
-
         return _resolver.Render(template, new PromptContext(
             WorkItemTitle: workItem.Title,
             WorkItemDescription: workItem.Description,
@@ -113,8 +96,7 @@ public sealed class PromptRenderingService : IPromptRenderingService
             ConversationFull: conversationFull,
             ConversationAI: conversationAi,
             ConversationHuman: conversationHuman,
-            RunVariables: variables,
-            WorkItemAttachments: attachments));
+            RunVariables: variables));
     }
 
     // Attribution for the Full and AI views: author plus source node, stable and

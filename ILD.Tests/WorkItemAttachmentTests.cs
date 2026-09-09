@@ -185,11 +185,24 @@ public sealed class WorkItemAttachmentTests : IDisposable
         }
     }
 
-    private async Task<(CapturingAdapter Adapter, MaterializedAttachments Local)> RunAiNodeAsync(
+    private Task<(CapturingAdapter Adapter, MaterializedAttachments Local)> RunAiNodeAsync(
         string prompt, params (string Name, string Content)[] files)
+        => RunAiNodeAsync(prompt, steeringNote: null, files);
+
+    private async Task<(CapturingAdapter Adapter, MaterializedAttachments Local)> RunAiNodeAsync(
+        string prompt, string? steeringNote, params (string Name, string Content)[] files)
     {
         var (view, materializer) = await ItemWithAttachmentsAsync(files);
-        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = view.Id, WorktreePath = "/worktrees/wi" };
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = view.Id,
+            WorktreePath = "/worktrees/wi",
+            SteeringNote = steeringNote,
+            // Steering continues the session captured before the halt; without one
+            // the executor restarts the node cold and renders the prompt instead.
+            CurrentAiSessionId = steeringNote is null ? null : "sess-1",
+        };
 
         var provider = new AiProvider
         {
@@ -246,38 +259,15 @@ public sealed class WorkItemAttachmentTests : IDisposable
     }
 
     [Fact]
-    public async Task A_prompt_that_places_the_placeholder_is_not_also_given_the_appended_block()
+    public async Task A_steering_continuation_keeps_the_grant_without_re_listing_the_files()
     {
-        var (adapter, _) = await RunAiNodeAsync(
-            "Look at {{WorkItem.Attachments}} and fix it.", ("sketch.png", "pixels"));
+        // The session being resumed was told about the attachments on the turn
+        // that first sent them; repeating the list would be noise. The directory
+        // grant still has to be there, or the paths it was given stop resolving.
+        var (adapter, local) = await RunAiNodeAsync("ignored", steeringNote: "Try the other approach.",
+            files: ("sketch.png", "pixels"));
 
-        // The renderer is not wired into this executor-only harness, so the token
-        // survives; what matters is that the executor left the author's layout
-        // alone rather than appending a second copy of the list.
-        Assert.DoesNotContain("[Attachments]", adapter.LastContext!.Prompt);
-    }
-
-    [Fact]
-    public async Task The_placeholder_renders_the_same_block_the_executor_would_have_appended()
-    {
-        var (view, materializer) = await ItemWithAttachmentsAsync(("sketch.png", "pixels"));
-        var local = await materializer.EnsureLocalAsync(view, Guid.NewGuid());
-
-        var rendered = new PromptTemplateResolver().Render(
-            "Before {{WorkItem.Attachments}} after",
-            new PromptContext(WorkItemAttachments: local.Files));
-
-        Assert.Contains("[Attachments]", rendered);
-        Assert.Contains(local.Files[0].StoredPath, rendered);
-        Assert.StartsWith("Before ", rendered);
-        Assert.EndsWith(" after", rendered);
-    }
-
-    [Fact]
-    public void The_placeholder_renders_empty_for_an_item_with_no_attachments()
-    {
-        var rendered = new PromptTemplateResolver().Render("A{{WorkItem.Attachments}}B", new PromptContext());
-
-        Assert.Equal("AB", rendered);
+        Assert.Equal("Try the other approach.", adapter.LastContext!.Prompt);
+        Assert.Contains(local.Directory!, adapter.LastContext.AdditionalAllowedDirectories!);
     }
 }

@@ -1,7 +1,5 @@
-using ILD.Core.Services.Attachments;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
-using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -52,8 +50,7 @@ public class PromptRenderingServiceTests
 
     private static PromptRenderingService Build(
         IReadOnlyList<LoopRunNode> runNodes,
-        IEnumerable<EventLogEntry> events,
-        IWorkItemAttachmentMaterializer? attachments = null)
+        IEnumerable<EventLogEntry> events)
     {
         var eventLog = new Mock<IEventLogService>();
         eventLog.Setup(s => s.GetByRunIdAsync(RunId, null)).ReturnsAsync(events);
@@ -61,8 +58,7 @@ public class PromptRenderingServiceTests
         var store = new Mock<ILoopRunStore>();
         store.Setup(s => s.GetRunNodesWithNodeAsync(RunId)).ReturnsAsync(runNodes);
 
-        return new PromptRenderingService(
-            new PromptTemplateResolver(), eventLog.Object, store.Object, attachments);
+        return new PromptRenderingService(new PromptTemplateResolver(), eventLog.Object, store.Object);
     }
 
     [Fact]
@@ -137,82 +133,5 @@ public class PromptRenderingServiceTests
             RunId, WorkItem, null);
 
         Assert.Equal("F:[] A:[] H:[]", result);
-    }
-
-    // -- {{WorkItem.Attachments}} ---------------------------------------------
-    //
-    // This is the only path that puts a work item's attachments in front of an
-    // agent when the template places the placeholder itself: the AI node executor
-    // deliberately suppresses its appended copy in exactly that case, so there is
-    // no fallback behind these three cases.
-
-    private static WorkItemView WithAttachments(params string[] fileNames) => new()
-    {
-        Id = "WI-1",
-        Title = "Title",
-        Description = "Body",
-        Attachments = fileNames
-            .Select((n, i) => new RemoteWorkItemAttachment($"a{i}", n, "image/png", 6, DateTime.UtcNow))
-            .ToList(),
-    };
-
-    private static Mock<IWorkItemAttachmentMaterializer> MaterializerFor(params string[] fileNames)
-    {
-        var local = new MaterializedAttachments(
-            "/scratch/workitem-attachments/run",
-            fileNames
-                .Select((n, i) => new AttachmentRef($"a{i}", n, $"/scratch/workitem-attachments/run/{n}", "image/png", 6))
-                .ToList());
-
-        var mock = new Mock<IWorkItemAttachmentMaterializer>();
-        mock.Setup(m => m.EnsureLocalAsync(It.IsAny<WorkItemView>(), RunId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(local);
-        return mock;
-    }
-
-    [Fact]
-    public async Task A_template_placing_the_attachments_placeholder_gets_the_materialized_paths()
-    {
-        var materializer = MaterializerFor("sketch.png");
-        var svc = Build(Array.Empty<LoopRunNode>(), Array.Empty<EventLogEntry>(), materializer.Object);
-
-        var result = await svc.RenderAsync(
-            "Look: {{WorkItem.Attachments}}", RunId, WithAttachments("sketch.png"), null);
-
-        Assert.StartsWith("Look: ", result);
-        Assert.Contains("/scratch/workitem-attachments/run/sketch.png", result);
-        Assert.Contains("sketch.png", result);
-        materializer.Verify(
-            m => m.EnsureLocalAsync(It.IsAny<WorkItemView>(), RunId, It.IsAny<CancellationToken>()), Times.Once);
-    }
-
-    [Fact]
-    public async Task A_template_that_never_mentions_attachments_does_not_fetch_them()
-    {
-        var materializer = MaterializerFor("sketch.png");
-        var svc = Build(Array.Empty<LoopRunNode>(), Array.Empty<EventLogEntry>(), materializer.Object);
-
-        // A Human or PR template must not pay for a download it has nothing to do
-        // with — the AI node appends the block itself in this case.
-        var result = await svc.RenderAsync("Just {{WorkItem.Title}}.", RunId, WithAttachments("sketch.png"), null);
-
-        Assert.Equal("Just Title.", result);
-        materializer.Verify(
-            m => m.EnsureLocalAsync(It.IsAny<WorkItemView>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
-            Times.Never);
-    }
-
-    [Fact]
-    public async Task The_placeholder_renders_empty_on_an_item_with_nothing_attached()
-    {
-        var materializer = MaterializerFor();
-        var svc = Build(Array.Empty<LoopRunNode>(), Array.Empty<EventLogEntry>(), materializer.Object);
-
-        var result = await svc.RenderAsync("A{{WorkItem.Attachments}}B", RunId, WorkItem, null);
-
-        Assert.Equal("AB", result);
-        materializer.Verify(
-            m => m.EnsureLocalAsync(It.IsAny<WorkItemView>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()),
-            Times.Never);
     }
 }

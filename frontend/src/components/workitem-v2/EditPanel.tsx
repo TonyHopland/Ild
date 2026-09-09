@@ -16,7 +16,7 @@ import {
   formatBytes,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENT_MB,
-} from "../../utils/downloadAttachment";
+} from "../../utils/attachments";
 
 interface EditPanelProps {
   /** The item being edited, or null to create a new one. */

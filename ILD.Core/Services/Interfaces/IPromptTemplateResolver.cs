@@ -30,5 +30,4 @@ public sealed record PromptContext(
     string? ConversationFull = null,
     string? ConversationAI = null,
     string? ConversationHuman = null,
-    IReadOnlyDictionary<string, string>? RunVariables = null,
-    IReadOnlyList<ILD.Data.DTOs.AttachmentRef>? WorkItemAttachments = null);
+    IReadOnlyDictionary<string, string>? RunVariables = null);

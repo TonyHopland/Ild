@@ -33,16 +33,24 @@ public interface IWorkItemAttachmentStore
 
 public sealed class WorkItemAttachmentStore : IWorkItemAttachmentStore
 {
-    /// <summary>Per-file ceiling, matched by the ILD side's own limit.</summary>
+    /// <summary>
+    /// Per-file ceiling. This server takes no project references (ADR-0001), so
+    /// it declares its own rather than sharing ILD's <c>AttachmentIntake</c> —
+    /// one declaration per boundary, and this is the boundary's. It has to be
+    /// enforced here and not only on the ILD leg, since an API key reaches this
+    /// server directly.
+    /// </summary>
     public const long MaxBytesPerFile = 25L * 1024 * 1024;
 
     /// <summary>
-    /// What one upload request may weigh. Above <see cref="MaxBytesPerFile"/> by
-    /// the multipart framing a file arrives wrapped in, so a file of exactly the
-    /// per-file size reaches the check that names it rather than being cut off by
-    /// ASP.NET's generic "Request body too large".
+    /// Headroom for the multipart framing a file arrives wrapped in, so a file of
+    /// exactly <see cref="MaxBytesPerFile"/> reaches the check that names it
+    /// rather than being cut off by ASP.NET's generic "Request body too large".
     /// </summary>
-    public const long MaxRequestBytes = MaxBytesPerFile + 1L * 1024 * 1024;
+    private const long MultipartOverheadAllowance = 1L * 1024 * 1024;
+
+    /// <summary>What one upload request may weigh, framing included.</summary>
+    public const long MaxRequestBytes = MaxBytesPerFile + MultipartOverheadAllowance;
 
     private const int MaxFileNameLength = 120;
     private const string FallbackFileName = "attachment";

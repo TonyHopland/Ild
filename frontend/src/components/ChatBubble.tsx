@@ -35,16 +35,13 @@ import {
   formatBytes,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENT_MB,
-} from "../utils/downloadAttachment";
+  MAX_ATTACHMENTS_PER_MESSAGE,
+} from "../utils/attachments";
 import "./ChatBubble.css";
 
 // Treat tiny pointer movements as a click, not a drag, so the icon still opens
 // the panel when tapped.
 const DRAG_THRESHOLD_PX = 4;
-
-// Mirrors the server's AttachmentIntake cap on how many files one turn carries;
-// the per-file size cap is shared with the other upload surfaces.
-const MAX_ATTACHMENTS_PER_MESSAGE = 10;
 
 // The v1 tool catalog (read/write/execute/ild). `ild` is the only default-on
 // entry; the backend re-normalizes the selection against the provider type.

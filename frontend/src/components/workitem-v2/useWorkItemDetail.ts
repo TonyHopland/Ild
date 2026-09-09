@@ -9,7 +9,7 @@ import {
   AiProvider,
 } from "../../types";
 import type { TypedSignalRMessage } from "../../types/signalr";
-import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_MB } from "../../utils/downloadAttachment";
+import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_MB } from "../../utils/attachments";
 import {
   workItemService,
   repositoryService,
