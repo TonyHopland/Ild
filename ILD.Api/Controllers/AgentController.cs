@@ -268,6 +268,16 @@ public class AgentController : ControllerBase
             updatedAt = wi.UpdatedAt,
             dependencies = deps.Select(d => new { id = d.Id, title = d.Title, status = d.Status.ToString() }),
             blocks = blocks.Select(b => new { id = b.Id, title = b.Title, status = b.Status.ToString() }),
+            // Names and sizes only. An agent running this item is handed the
+            // files' local paths in its prompt; one merely reading the item is
+            // being told what a human attached, not where the bytes went.
+            attachments = wi.Attachments.Select(a => new
+            {
+                id = a.Id,
+                fileName = a.FileName,
+                contentType = a.ContentType,
+                sizeBytes = a.SizeBytes,
+            }),
             // The conversation is the largest field and rarely needed for
             // planning, so it is gated behind an explicit flag (ADR scope note).
             conversation = includeConversation

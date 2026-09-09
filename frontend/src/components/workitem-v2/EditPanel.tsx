@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
+  Attachment,
   WorkItem,
   WorkItemStatus,
   WorkItemPriority,
@@ -10,6 +11,17 @@ import { workItemService } from "../../services/auth";
 import { parseTags } from "../../utils/workItemJson";
 import TagAutocomplete from "../TagAutocomplete";
 import type { WorkItemDetail } from "./useWorkItemDetail";
+
+// Mirrors the server's per-file ceiling, so an oversized pick is refused before
+// it is uploaded rather than after.
+const MAX_ATTACHMENT_MB = 25;
+const MAX_ATTACHMENT_BYTES = MAX_ATTACHMENT_MB * 1024 * 1024;
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
 
 interface EditPanelProps {
   /** The item being edited, or null to create a new one. */
@@ -68,6 +80,14 @@ export default function EditPanel({
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
+  // Attachments are applied on save alongside every other field, so a create
+  // form can stage files before the item it will hang them on exists, and a
+  // cancelled edit uploads and deletes nothing.
+  const baseAttachments = workItem?.attachments ?? [];
+  const [keptAttachments, setKeptAttachments] = useState<Attachment[]>(baseAttachments);
+  const [newFiles, setNewFiles] = useState<File[]>([]);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
   const overridesProvider = aiProviderOverride !== AiProviderOverrideMode.None;
 
   // Advice on the branch name, debounced while typing. Deliberately never gates
@@ -109,11 +129,55 @@ export default function EditPanel({
     aiProviderOverride !== baseAiProviderOverride ||
     aiProviderOverrideId !== baseAiProviderOverrideId ||
     branchNameOverride !== baseBranchNameOverride ||
-    baseBranchOverride !== baseBaseBranchOverride;
+    baseBranchOverride !== baseBaseBranchOverride ||
+    newFiles.length > 0 ||
+    keptAttachments.length !== baseAttachments.length;
 
   useEffect(() => {
     onDirtyChange?.(dirty);
   }, [dirty, onDirtyChange]);
+
+  /**
+   * Upload the staged files and drop the removed ones. Returns whether anything
+   * changed, so only a save that touched attachments pays for a re-read.
+   */
+  const applyAttachmentsAsync = async (id: string): Promise<boolean> => {
+    const removed = baseAttachments.filter((a) => !keptAttachments.some((k) => k.id === a.id));
+    if (removed.length === 0 && newFiles.length === 0) return false;
+
+    for (const attachment of removed) {
+      await workItemService.deleteAttachment(id, attachment.id);
+    }
+    for (const file of newFiles) {
+      await workItemService.uploadAttachment(id, file);
+    }
+    setNewFiles([]);
+    return true;
+  };
+
+  const addFiles = (incoming: FileList | null) => {
+    const accepted = Array.from(incoming ?? []).filter((f) => {
+      if (f.size <= MAX_ATTACHMENT_BYTES) return true;
+      setSubmitError(`${f.name} exceeds the ${MAX_ATTACHMENT_MB} MB limit.`);
+      return false;
+    });
+    if (accepted.length > 0) setNewFiles((prev) => [...prev, ...accepted]);
+  };
+
+  const downloadAttachment = async (attachment: Attachment) => {
+    if (!workItem) return;
+    try {
+      const blob = await workItemService.getAttachment(workItem.id, attachment.id);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = attachment.fileName;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      setSubmitError(`Could not open ${attachment.fileName}.`);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -163,6 +227,13 @@ export default function EditPanel({
       } else {
         saved = await workItemService.create(data as Partial<WorkItem>);
       }
+
+      if (await applyAttachmentsAsync(saved.id)) {
+        // Attachments live on the server-held item, so re-read rather than
+        // patching the copy the save returned.
+        saved = await workItemService.getById(saved.id);
+      }
+
       onSave(saved);
       onDone();
     } catch (error) {
@@ -253,6 +324,62 @@ export default function EditPanel({
           options={detail.templates.map((t) => t.name)}
           placeholder="e.g. build, deploy"
         />
+      </div>
+      <div className="form-group">
+        <label htmlFor="wiv2-attachments">Attachments</label>
+        <input
+          id="wiv2-attachments"
+          ref={fileInputRef}
+          type="file"
+          multiple
+          onChange={(e) => {
+            addFiles(e.target.files);
+            e.target.value = "";
+          }}
+          aria-describedby="wiv2-attachments-hint"
+        />
+        <small id="wiv2-attachments-hint" className="form-hint">
+          Images, logs or documents. Every run of this item gets these files on disk and is told
+          where to find them. Up to {MAX_ATTACHMENT_MB} MB each.
+        </small>
+        {(keptAttachments.length > 0 || newFiles.length > 0) && (
+          <ul className="wiv2-attachment-list">
+            {keptAttachments.map((a) => (
+              <li key={a.id}>
+                <button
+                  type="button"
+                  className="wiv2-attachment-name"
+                  onClick={() => void downloadAttachment(a)}
+                >
+                  📎 {a.fileName}
+                </button>
+                <span className="wiv2-attachment-size">{formatBytes(a.sizeBytes)}</span>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-danger"
+                  aria-label={`Remove ${a.fileName}`}
+                  onClick={() => setKeptAttachments((prev) => prev.filter((k) => k.id !== a.id))}
+                >
+                  Remove
+                </button>
+              </li>
+            ))}
+            {newFiles.map((f, i) => (
+              <li key={`new-${f.name}-${i}`}>
+                <span className="wiv2-attachment-name">📎 {f.name}</span>
+                <span className="wiv2-attachment-size">{formatBytes(f.size)} — on save</span>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-danger"
+                  aria-label={`Remove ${f.name}`}
+                  onClick={() => setNewFiles((prev) => prev.filter((_, j) => j !== i))}
+                >
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
       <div className="form-row">
         <div className="form-group">

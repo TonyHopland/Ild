@@ -40,6 +40,23 @@ public interface IWorkItemServerClient
     Task<bool> RecordPullRequestAsync(WorkItemServerOptions opts, string id, string url, Guid? loopRunId, bool merged, DateTime? createdAt, CancellationToken ct = default);
 
     Task<RemotePollResponse> PollAsync(WorkItemServerOptions opts, IReadOnlyList<string> activeIds, CancellationToken ct = default);
+
+    /// <summary>
+    /// Attach a file to a work item on the server, which is where a work item's
+    /// attachments live — an ILD instance's worktrees and runs are throwaway
+    /// local state, but the file is part of the item's specification and must
+    /// reach whichever instance later runs it (ADR-0001). Null when the server
+    /// does not know the work item.
+    /// </summary>
+    Task<RemoteWorkItemAttachment?> AddAttachmentAsync(
+        WorkItemServerOptions opts, string id, string fileName, string? contentType, Stream content, CancellationToken ct = default);
+
+    /// <summary>An attachment's bytes, or null when the item or attachment is unknown.</summary>
+    Task<RemoteAttachmentContent?> GetAttachmentAsync(
+        WorkItemServerOptions opts, string id, string attachmentId, CancellationToken ct = default);
+
+    Task<bool> DeleteAttachmentAsync(
+        WorkItemServerOptions opts, string id, string attachmentId, CancellationToken ct = default);
 }
 
 public sealed class WorkItemServerClient : IWorkItemServerClient
@@ -179,6 +196,47 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
     {
         var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/pull-requests");
         msg.Content = JsonContent.Create(new { url, loopRunId, merged, createdAt }, options: JsonOpts);
+        using var resp = await _http.SendAsync(msg, ct);
+        return resp.IsSuccessStatusCode;
+    }
+
+    public async Task<RemoteWorkItemAttachment?> AddAttachmentAsync(
+        WorkItemServerOptions opts, string id, string fileName, string? contentType, Stream content, CancellationToken ct = default)
+    {
+        var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/attachments");
+        var form = new MultipartFormDataContent();
+        var part = new StreamContent(content);
+        if (!string.IsNullOrWhiteSpace(contentType))
+            part.Headers.ContentType = new MediaTypeHeaderValue(contentType);
+        form.Add(part, "file", fileName);
+        msg.Content = form;
+
+        using var resp = await _http.SendAsync(msg, ct);
+        if (resp.StatusCode == HttpStatusCode.NotFound) return null;
+        EnsureSuccess(resp, msg);
+        return await resp.Content.ReadFromJsonAsync<RemoteWorkItemAttachment>(JsonOpts, ct);
+    }
+
+    public async Task<RemoteAttachmentContent?> GetAttachmentAsync(
+        WorkItemServerOptions opts, string id, string attachmentId, CancellationToken ct = default)
+    {
+        var msg = Build(opts, HttpMethod.Get, $"/workitems/{id}/attachments/{attachmentId}");
+        using var resp = await _http.SendAsync(msg, ct);
+        if (resp.StatusCode == HttpStatusCode.NotFound) return null;
+        EnsureSuccess(resp, msg);
+
+        return new RemoteAttachmentContent(
+            resp.Content.Headers.ContentDisposition?.FileNameStar
+                ?? resp.Content.Headers.ContentDisposition?.FileName?.Trim('"')
+                ?? attachmentId,
+            resp.Content.Headers.ContentType?.MediaType,
+            await resp.Content.ReadAsByteArrayAsync(ct));
+    }
+
+    public async Task<bool> DeleteAttachmentAsync(
+        WorkItemServerOptions opts, string id, string attachmentId, CancellationToken ct = default)
+    {
+        var msg = Build(opts, HttpMethod.Delete, $"/workitems/{id}/attachments/{attachmentId}");
         using var resp = await _http.SendAsync(msg, ct);
         return resp.IsSuccessStatusCode;
     }

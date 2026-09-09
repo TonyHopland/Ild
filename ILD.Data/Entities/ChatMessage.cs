@@ -31,6 +31,14 @@ public class ChatMessage
     /// <summary>True when this assistant reply was cut short by a mid-turn interrupt.</summary>
     public bool Interrupted { get; set; }
 
+    /// <summary>
+    /// JSON-serialized array of <see cref="DTOs.AttachmentRef"/> — the files the
+    /// human attached to this turn. Metadata only: the bytes sit in the session's
+    /// scratch directory, and the agent was handed their paths in the prompt.
+    /// Null on every turn that carried no attachment, which is most of them.
+    /// </summary>
+    public string? AttachmentsJson { get; set; }
+
     /// <summary>Monotonic per-session ordering key.</summary>
     public int Sequence { get; set; }
 

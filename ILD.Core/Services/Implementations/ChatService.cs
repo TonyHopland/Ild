@@ -1,3 +1,5 @@
+using System.Text.Json;
+using ILD.Core.Services.Attachments;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
@@ -117,7 +119,48 @@ public sealed class ChatService : IChatService
     public Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, CancellationToken ct)
         => ExecuteTurnAsync(chatSessionId, userMessage, openWorkItemId: null, openLoopDocument: null, ct);
 
-    public async Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, string? openLoopDocument, CancellationToken ct)
+    public Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, string? openLoopDocument, CancellationToken ct)
+        => ExecuteTurnAsync(chatSessionId, userMessage, openWorkItemId, openLoopDocument, attachments: null, ct);
+
+    /// <summary>
+    /// Where a chat session's uploads live: a dedicated subdirectory of the
+    /// session's scratch directory, so a human's attachments stay distinguishable
+    /// from whatever the agent itself writes into its working directory. Inside
+    /// the scratch tree on purpose — that tree is the one the agent uid can
+    /// already read (ADR-0014) and is deleted with the chat.
+    /// </summary>
+    public static string UploadsDirectory(string scratchPath) => Path.Combine(scratchPath, "uploads");
+
+    public async Task<IReadOnlyList<AttachmentRef>?> SaveAttachmentsAsync(
+        string userId, Guid sessionId, IReadOnlyList<UploadedFile> files, CancellationToken ct = default)
+    {
+        var scratchPath = await _db.ChatSessions.AsNoTracking()
+            .Where(c => c.Id == sessionId && c.UserId == userId)
+            .Select(c => c.ScratchPath)
+            .FirstOrDefaultAsync(ct);
+        if (scratchPath is null) return null;
+
+        return await AttachmentIntake.SaveAsync(UploadsDirectory(scratchPath), files, ct);
+    }
+
+    public async Task<AttachmentRef?> FindAttachmentAsync(
+        string userId, Guid sessionId, string attachmentId, CancellationToken ct = default)
+    {
+        if (!await ExistsForUserAsync(userId, sessionId, ct)) return null;
+
+        var stored = await _db.ChatMessages.AsNoTracking()
+            .Where(m => m.ChatSessionId == sessionId && m.AttachmentsJson != null)
+            .Select(m => m.AttachmentsJson!)
+            .ToListAsync(ct);
+
+        var match = stored
+            .SelectMany(ReadAttachments)
+            .FirstOrDefault(a => a.Id == attachmentId);
+
+        return match is not null && File.Exists(match.StoredPath) ? match : null;
+    }
+
+    public async Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, string? openLoopDocument, IReadOnlyList<AttachmentRef>? attachments, CancellationToken ct)
     {
         var session = await _db.ChatSessions.FirstOrDefaultAsync(c => c.Id == chatSessionId, ct);
         if (session is null) return;
@@ -141,7 +184,7 @@ public sealed class ChatService : IChatService
         // a turn resumes the provider's session, so whatever the preamble carries
         // stays in the agent's history for the rest of that session. That is why the
         // static half is delivered once per session and not per turn (#27).
-        var userEntry = await AppendMessageAsync(chatSessionId, "user", userMessage, interrupted: false, nextSeq, ct);
+        var userEntry = await AppendMessageAsync(chatSessionId, "user", userMessage, interrupted: false, nextSeq, attachments, ct);
         await _notifier.MessageAppendedAsync(chatSessionId, ToView(userEntry));
 
         var provider = await _providers.GetAiProviderByIdAsync(session.AiProviderId);
@@ -187,9 +230,15 @@ public sealed class ChatService : IChatService
 
         var (contextPreamble, additionalAllowedDirectories) =
             await BuildChatContextAsync(openWorkItemId, loopEditor, tools);
-        var promptForAgent = contextPreamble is null
-            ? userMessage
-            : $"{contextPreamble}\n\n{userMessage}";
+
+        // Attachments reach the agent as paths, never as content: the adapter
+        // passes this prompt to the CLI verbatim (ADR-0007/ADR-0011), and every
+        // CLI can open a file. They sit under the agent's own working directory,
+        // so no extra directory grant is needed for them.
+        var attachmentBlock = AttachmentPromptBlock.Format(attachments);
+
+        var promptForAgent = string.Join("\n\n",
+            new[] { contextPreamble, userMessage, attachmentBlock }.Where(p => !string.IsNullOrEmpty(p)));
 
         var runContext = new LoopRunContext(
             LoopRunId: session.Id,
@@ -467,7 +516,8 @@ public sealed class ChatService : IChatService
     }
 
     private async Task<ChatMessage> AppendMessageAsync(
-        Guid chatSessionId, string role, string content, bool interrupted, int sequence, CancellationToken ct)
+        Guid chatSessionId, string role, string content, bool interrupted, int sequence,
+        IReadOnlyList<AttachmentRef>? attachments, CancellationToken ct)
     {
         var message = new ChatMessage
         {
@@ -477,6 +527,7 @@ public sealed class ChatService : IChatService
             Content = content,
             Interrupted = interrupted,
             Sequence = sequence,
+            AttachmentsJson = attachments is { Count: > 0 } ? JsonSerializer.Serialize(attachments) : null,
             CreatedAt = DateTime.UtcNow,
         };
         _db.ChatMessages.Add(message);
@@ -495,7 +546,25 @@ public sealed class ChatService : IChatService
     }
 
     private static ChatMessageView ToView(ChatMessage m)
-        => new(m.Id, m.Role, m.Content, m.Interrupted, m.Sequence, m.CreatedAt);
+        => new(m.Id, m.Role, m.Content, m.Interrupted, m.Sequence, m.CreatedAt,
+            m.AttachmentsJson is null ? null : ReadAttachments(m.AttachmentsJson).Select(a => a.ToView()).ToList());
+
+    /// <summary>
+    /// Attachment metadata off a stored column. A blob that will not parse reads
+    /// as no attachments rather than taking the whole transcript down with it —
+    /// the same tolerance the WorkItem server's JSON columns take.
+    /// </summary>
+    private static IReadOnlyList<AttachmentRef> ReadAttachments(string json)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<List<AttachmentRef>>(json) ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
 
     private static ChatSessionView ToView(ChatSession session, IReadOnlyList<ChatMessage> messages)
         => new(

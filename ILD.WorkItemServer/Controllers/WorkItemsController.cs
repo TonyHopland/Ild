@@ -99,6 +99,39 @@ public sealed class WorkItemsController : ControllerBase
         return await _svc.AppendConversationAsync(id, role, req.Content, req.Name, ct) ? NoContent() : NotFound();
     }
 
+    /// <summary>
+    /// Attach a file to a work item. The bytes are held here, beside the item,
+    /// rather than on the ILD instance that happens to run it: an attachment is
+    /// part of the item's specification, and any instance that picks the item up
+    /// has to be able to fetch it (ADR-0001).
+    /// </summary>
+    [HttpPost("{id}/attachments")]
+    [RequestSizeLimit(WorkItemAttachmentStore.MaxBytesPerFile)]
+    public async Task<ActionResult<WorkItemAttachment>> AddAttachment(string id, IFormFile? file, CancellationToken ct)
+    {
+        if (file is null || file.Length == 0) return BadRequest("A file is required");
+        if (file.Length > WorkItemAttachmentStore.MaxBytesPerFile)
+            return BadRequest($"Files must be {WorkItemAttachmentStore.MaxBytesPerFile / (1024 * 1024)} MB or smaller");
+
+        await using var content = file.OpenReadStream();
+        var attachment = await _svc.AddAttachmentAsync(id, file.FileName, file.ContentType, content, ct);
+        return attachment == null ? NotFound() : Ok(attachment);
+    }
+
+    [HttpGet("{id}/attachments/{attachmentId}")]
+    public async Task<IActionResult> GetAttachment(string id, string attachmentId, CancellationToken ct)
+    {
+        var found = await _svc.OpenAttachmentAsync(id, attachmentId, ct);
+        if (found is null) return NotFound();
+
+        var (meta, content) = found.Value;
+        return File(content, meta.ContentType ?? "application/octet-stream", meta.FileName);
+    }
+
+    [HttpDelete("{id}/attachments/{attachmentId}")]
+    public async Task<IActionResult> DeleteAttachment(string id, string attachmentId, CancellationToken ct)
+        => await _svc.DeleteAttachmentAsync(id, attachmentId, ct) ? NoContent() : NotFound();
+
     [HttpPost("{id}/pull-requests")]
     public async Task<IActionResult> RecordPullRequest(string id, [FromBody] RecordPullRequestRequest req, CancellationToken ct)
     {

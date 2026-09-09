@@ -49,6 +49,15 @@ public class WorkItem
     /// </summary>
     public string PullRequestsJson { get; set; } = "[]";
 
+    /// <summary>
+    /// JSON-serialized array of <see cref="WorkItemAttachment"/> — the files a
+    /// human attached to this item. The bytes live on this server's data volume
+    /// beside the metadata, not on any ILD instance: an attachment is part of the
+    /// item's specification, like its description, and has to outlive the run
+    /// that reads it and survive an ILD instance being reset (ADR-0001).
+    /// </summary>
+    public string AttachmentsJson { get; set; } = "[]";
+
     [MaxLength(2048)]
     public string? HumanFeedbackActions { get; set; }
 

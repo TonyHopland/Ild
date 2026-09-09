@@ -22,6 +22,9 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
     private static ILD.WorkItemServer.Domain.WorkItemPriority MapPri(RemoteWorkItemPriority p) => (ILD.WorkItemServer.Domain.WorkItemPriority)(int)p;
     private static RemoteWorkItemPriority MapPriBack(ILD.WorkItemServer.Domain.WorkItemPriority p) => (RemoteWorkItemPriority)(int)p;
 
+    private static RemoteWorkItemAttachment ToRemote(WorkItemAttachment a)
+        => new(a.Id, a.FileName, a.ContentType, a.SizeBytes, a.CreatedAt);
+
     private static RemoteWorkItem ToRemote(WorkItemDto dto) => new()
     {
         Id = dto.Id,
@@ -40,6 +43,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         PullRequests = dto.PullRequests
             .Select(p => new RemoteWorkItemPullRequest(p.Url, p.LoopRunId, p.Merged, p.CreatedAt))
             .ToList(),
+        Attachments = dto.Attachments.Select(ToRemote).ToList(),
         HumanFeedbackActions = dto.HumanFeedbackActions,
         CreatedByLoopRunId = dto.CreatedByLoopRunId,
         CreatedByChatSessionId = dto.CreatedByChatSessionId,
@@ -146,6 +150,32 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             ReadyItems = resp.ReadyItems.Select(ToRemote).ToList(),
         };
     }
+
+    public async Task<RemoteWorkItemAttachment?> AddAttachmentAsync(
+        WorkItemServerOptions opts, string id, string fileName, string? contentType, Stream content, CancellationToken ct = default)
+    {
+        var saved = await _svc.AddAttachmentAsync(id, fileName, contentType, content, ct);
+        return saved is null ? null : ToRemote(saved);
+    }
+
+    public async Task<RemoteAttachmentContent?> GetAttachmentAsync(
+        WorkItemServerOptions opts, string id, string attachmentId, CancellationToken ct = default)
+    {
+        var found = await _svc.OpenAttachmentAsync(id, attachmentId, ct);
+        if (found is null) return null;
+
+        var (meta, content) = found.Value;
+        await using (content)
+        {
+            using var buffer = new MemoryStream();
+            await content.CopyToAsync(buffer, ct);
+            return new RemoteAttachmentContent(meta.FileName, meta.ContentType, buffer.ToArray());
+        }
+    }
+
+    public Task<bool> DeleteAttachmentAsync(
+        WorkItemServerOptions opts, string id, string attachmentId, CancellationToken ct = default)
+        => _svc.DeleteAttachmentAsync(id, attachmentId, ct);
 }
 
 /// <summary>

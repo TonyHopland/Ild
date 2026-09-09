@@ -1,4 +1,6 @@
+using ILD.Core.Services.Attachments;
 using ILD.Core.Services.Interfaces;
+using ILD.Data.DTOs;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ILD.Api.Controllers;
@@ -59,6 +61,7 @@ public class ChatController : ControllerBase
     }
 
     [HttpPost("{id:guid}/messages")]
+    [Consumes("application/json")]
     public async Task<IActionResult> SendMessage(Guid id, [FromBody] ChatMessageRequest request, CancellationToken ct)
     {
         if (!TryResolveUser(out var userId, out var error)) return error;
@@ -73,6 +76,63 @@ public class ChatController : ControllerBase
         await _runner.SubmitAsync(id, request.Content, request.OpenWorkItemId, request.OpenLoopDocument);
         return Accepted();
     }
+
+    /// <summary>
+    /// The same turn, with files attached. A separate action selected by content
+    /// type rather than a widened JSON body: the files have to arrive as
+    /// multipart, and the two bindings cannot share one signature. The upload is
+    /// stored before the turn is submitted, so the agent's prompt can carry
+    /// absolute paths to files that already exist.
+    /// </summary>
+    [HttpPost("{id:guid}/messages")]
+    [Consumes("multipart/form-data")]
+    [RequestSizeLimit(AttachmentIntake.MaxBytesPerFile * AttachmentIntake.MaxFilesPerRequest)]
+    public async Task<IActionResult> SendMessageWithAttachments(
+        Guid id, [FromForm] ChatMessageForm form, CancellationToken ct)
+    {
+        if (!TryResolveUser(out var userId, out var error)) return error;
+
+        var files = form.Files ?? new List<IFormFile>();
+        if (string.IsNullOrWhiteSpace(form.Content) && files.Count == 0)
+            return BadRequest(new { error = "Message content is required." });
+
+        IReadOnlyList<AttachmentRef>? stored;
+        try
+        {
+            stored = await _chat.SaveAttachmentsAsync(userId, id, ToUploads(files), ct);
+        }
+        catch (AttachmentRejectedException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+
+        // A null store means the chat is not this user's — the same ownership
+        // check the JSON path makes before driving the chat.
+        if (stored is null)
+            return NotFound(new { error = "Chat not found." });
+
+        await _runner.SubmitAsync(id, form.Content ?? string.Empty, form.OpenWorkItemId, form.OpenLoopDocument, stored);
+        return Accepted();
+    }
+
+    [HttpGet("{id:guid}/attachments/{attachmentId}")]
+    public async Task<IActionResult> GetAttachment(Guid id, string attachmentId, CancellationToken ct)
+    {
+        if (!TryResolveUser(out var userId, out var error)) return error;
+
+        var attachment = await _chat.FindAttachmentAsync(userId, id, attachmentId, ct);
+        if (attachment is null) return NotFound();
+
+        return PhysicalFile(
+            attachment.StoredPath,
+            attachment.ContentType ?? "application/octet-stream",
+            attachment.FileName);
+    }
+
+    private static IReadOnlyList<UploadedFile> ToUploads(IReadOnlyList<IFormFile> files)
+        => files
+            .Select(f => new UploadedFile(f.FileName, f.ContentType, f.Length, f.OpenReadStream()))
+            .ToList();
 
     [HttpPost("{id:guid}/interrupt")]
     public async Task<IActionResult> Interrupt(Guid id, CancellationToken ct)
@@ -161,4 +221,17 @@ public sealed class ChatMessageRequest
     /// not the persisted version.
     /// </summary>
     public string? OpenLoopDocument { get; set; }
+}
+
+/// <summary>
+/// The multipart form of <see cref="ChatMessageRequest"/>. Same per-turn Chat
+/// Context fields, plus the attached files; content may be blank when the human
+/// sends files on their own.
+/// </summary>
+public sealed class ChatMessageForm
+{
+    public string? Content { get; set; }
+    public string? OpenWorkItemId { get; set; }
+    public string? OpenLoopDocument { get; set; }
+    public List<IFormFile>? Files { get; set; }
 }

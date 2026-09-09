@@ -15,6 +15,10 @@ public class WorkItemServiceTests : IAsyncLifetime
     private TestClock _clock = null!;
     private WorkItemService _svc = null!;
     private DbContextOptions<WorkItemServerDbContext> _options = null!;
+    private string _attachmentRoot = null!;
+
+    private WorkItemService NewService(WorkItemServerDbContext db)
+        => new(db, _clock, new WorkItemAttachmentStore(_attachmentRoot));
 
     public async Task InitializeAsync()
     {
@@ -27,13 +31,16 @@ public class WorkItemServiceTests : IAsyncLifetime
         _db = new WorkItemServerDbContext(options);
         await _db.Database.EnsureCreatedAsync();
         _clock = new TestClock(new DateTime(2026, 5, 1, 12, 0, 0, DateTimeKind.Utc));
-        _svc = new WorkItemService(_db, _clock);
+        _attachmentRoot = Path.Combine(Path.GetTempPath(), "ild-test-wi-attachments", Guid.NewGuid().ToString("N"));
+        _svc = NewService(_db);
     }
 
     public async Task DisposeAsync()
     {
         await _db.DisposeAsync();
         await _conn.DisposeAsync();
+        try { if (Directory.Exists(_attachmentRoot)) Directory.Delete(_attachmentRoot, recursive: true); }
+        catch (IOException) { }
     }
 
     private sealed class TestClock : TimeProvider
@@ -297,9 +304,9 @@ public class WorkItemServiceTests : IAsyncLifetime
         await clientA.WorkItems.FirstAsync(w => w.Id == dto.Id);
         await clientB.WorkItems.FirstAsync(w => w.Id == dto.Id);
 
-        var first = await new WorkItemService(clientA, _clock)
+        var first = await NewService(clientA)
             .TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running });
-        var second = await new WorkItemService(clientB, _clock)
+        var second = await NewService(clientB)
             .TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running });
 
         // Exactly one wins; the loser is rejected as already claimed.
@@ -824,7 +831,7 @@ public class WorkItemServiceTests : IAsyncLifetime
         // Another writer — a second request, or another ILD instance
         // reconciling the same item — records a PR this one has never seen.
         await using var otherDb = new WorkItemServerDbContext(_options);
-        var other = new WorkItemService(otherDb, _clock);
+        var other = NewService(otherDb);
         Assert.Equal(RecordPullRequestOutcome.Recorded, await other.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/1", CreatedAt = day }));
 
         Assert.Equal(RecordPullRequestOutcome.Recorded, await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/2", CreatedAt = day.AddHours(1) }));

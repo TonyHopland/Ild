@@ -1,3 +1,4 @@
+using ILD.Core.Services.Attachments;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
@@ -37,6 +38,7 @@ public static class ServiceCollectionExtensions
                 string.IsNullOrWhiteSpace(worktreesRoot) ? null : worktreesRoot);
         });
         services.AddSingleton<IPromptTemplateResolver, PromptTemplateResolver>();
+        services.AddScoped<IWorkItemAttachmentMaterializer, WorkItemAttachmentMaterializer>();
         services.AddScoped<IPromptRenderingService, PromptRenderingService>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
         services.AddSingleton<IRemoteGitProviderAdapter, ForgejoRemoteGitProviderAdapter>();

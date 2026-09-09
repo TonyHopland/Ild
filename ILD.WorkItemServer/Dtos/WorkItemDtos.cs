@@ -18,6 +18,9 @@ public sealed class WorkItemDto
 
     /// <summary>Every PR opened against this item, newest first.</summary>
     public IReadOnlyList<WorkItemPullRequest> PullRequests { get; set; } = Array.Empty<WorkItemPullRequest>();
+
+    /// <summary>Files attached to this item, oldest first. Metadata only — bytes are fetched by id.</summary>
+    public IReadOnlyList<WorkItemAttachment> Attachments { get; set; } = Array.Empty<WorkItemAttachment>();
     public string? HumanFeedbackActions { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? CreatedByChatSessionId { get; set; }

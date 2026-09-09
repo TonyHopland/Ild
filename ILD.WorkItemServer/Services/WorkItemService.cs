@@ -45,6 +45,25 @@ public interface IWorkItemService
     /// </returns>
     Task<RecordPullRequestOutcome> RecordPullRequestAsync(string id, RecordPullRequestRequest req, CancellationToken ct = default);
 
+    /// <summary>
+    /// Store an attached file against a work item: bytes on this server's data
+    /// volume, metadata on the item. Null when there is no such work item, in
+    /// which case nothing is written.
+    /// </summary>
+    Task<WorkItemAttachment?> AddAttachmentAsync(
+        string id, string fileName, string? contentType, Stream content, CancellationToken ct = default);
+
+    /// <summary>
+    /// One attachment's metadata and an open read stream over its bytes, or null
+    /// when the item, the attachment or the file is gone. The caller owns the
+    /// stream.
+    /// </summary>
+    Task<(WorkItemAttachment Meta, Stream Content)?> OpenAttachmentAsync(
+        string id, string attachmentId, CancellationToken ct = default);
+
+    /// <summary>Detach a file and delete its bytes. False when either is unknown.</summary>
+    Task<bool> DeleteAttachmentAsync(string id, string attachmentId, CancellationToken ct = default);
+
     Task<PollResponse> PollAsync(IReadOnlyList<string> activeIds, CancellationToken ct = default);
     Task<int> ReclaimStaleAsync(TimeSpan timeout, CancellationToken ct = default);
 
@@ -63,11 +82,70 @@ public sealed class WorkItemService : IWorkItemService
 {
     private readonly WorkItemServerDbContext _db;
     private readonly TimeProvider _clock;
+    private readonly IWorkItemAttachmentStore _attachments;
 
-    public WorkItemService(WorkItemServerDbContext db, TimeProvider clock)
+    public WorkItemService(WorkItemServerDbContext db, TimeProvider clock, IWorkItemAttachmentStore attachments)
     {
         _db = db;
         _clock = clock;
+        _attachments = attachments;
+    }
+
+    public async Task<WorkItemAttachment?> AddAttachmentAsync(
+        string id, string fileName, string? contentType, Stream content, CancellationToken ct = default)
+    {
+        var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (w == null) return null;
+
+        var attachmentId = Guid.NewGuid().ToString("N");
+        var size = await _attachments.SaveAsync(id, attachmentId, content, ct);
+
+        var attachment = new WorkItemAttachment(
+            attachmentId,
+            WorkItemAttachmentStore.SanitizeFileName(fileName),
+            string.IsNullOrWhiteSpace(contentType) ? null : contentType.Trim(),
+            size,
+            _clock.GetUtcNow().UtcDateTime);
+
+        var attachments = WorkItemMapper.ReadAttachments(w);
+        attachments.Add(attachment);
+        WorkItemMapper.WriteAttachments(w, attachments);
+        w.UpdatedAt = _clock.GetUtcNow().UtcDateTime;
+        await _db.SaveChangesAsync(ct);
+
+        return attachment;
+    }
+
+    public async Task<(WorkItemAttachment Meta, Stream Content)?> OpenAttachmentAsync(
+        string id, string attachmentId, CancellationToken ct = default)
+    {
+        var w = await _db.WorkItems.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (w == null) return null;
+
+        var meta = WorkItemMapper.ReadAttachments(w).FirstOrDefault(a => a.Id == attachmentId);
+        if (meta == null) return null;
+
+        var content = _attachments.Open(id, attachmentId);
+        return content == null ? null : (meta, content);
+    }
+
+    public async Task<bool> DeleteAttachmentAsync(string id, string attachmentId, CancellationToken ct = default)
+    {
+        var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (w == null) return false;
+
+        var attachments = WorkItemMapper.ReadAttachments(w);
+        if (attachments.RemoveAll(a => a.Id == attachmentId) == 0) return false;
+
+        WorkItemMapper.WriteAttachments(w, attachments);
+        w.UpdatedAt = _clock.GetUtcNow().UtcDateTime;
+        await _db.SaveChangesAsync(ct);
+
+        // Bytes go after the metadata write commits: an orphaned file wastes
+        // space, whereas metadata pointing at a file that is already gone is a
+        // broken download.
+        _attachments.Delete(id, attachmentId);
+        return true;
     }
 
     public async Task<WorkItemDto> CreateAsync(CreateWorkItemRequest req, CancellationToken ct = default)
@@ -162,6 +240,7 @@ public sealed class WorkItemService : IWorkItemService
         if (w == null) return false;
         _db.WorkItems.Remove(w);
         await _db.SaveChangesAsync(ct);
+        _attachments.DeleteAll(id);
 
         // Scrub the deleted id from every other item's dependency list. A
         // dangling reference would otherwise wedge a dependent forever: a

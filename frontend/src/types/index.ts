@@ -64,6 +64,12 @@ export interface WorkItem {
    */
   conversation?: ConversationMessage[] | null;
   /**
+   * Files attached to this item, oldest first. Held by the WorkItemServer
+   * alongside the description, and handed to the agent as file paths on every
+   * run of the item.
+   */
+  attachments?: Attachment[] | null;
+  /**
    * Deprecated: template is resolved from {@link tags} at run start
    * (PRD §3.7). The server may still return it for legacy reasons.
    */
@@ -711,6 +717,18 @@ export interface SchedulerStateChangedPayload {
 // ---- Chat (ADR-0010) ----
 
 /** A renderable transcript turn. Mirrors ILD.Data.DTOs.ChatMessageView. */
+/**
+ * A file a human attached, as the server describes it back. The bytes are
+ * fetched by id from the owner's attachment endpoint; there is no path here on
+ * purpose — where ILD keeps them is not the browser's business.
+ */
+export interface Attachment {
+  id: string;
+  fileName: string;
+  contentType: string | null;
+  sizeBytes: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
@@ -718,6 +736,7 @@ export interface ChatMessage {
   interrupted: boolean;
   sequence: number;
   createdAt: string;
+  attachments?: Attachment[] | null;
 }
 
 /** A resumed chat session with its transcript. Mirrors ILD.Data.DTOs.ChatSessionView. */

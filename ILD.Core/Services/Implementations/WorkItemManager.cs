@@ -195,6 +195,26 @@ public class WorkItemManager : IWorkItemManager
         return BuildView(remote, currentRun, runs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty));
     }
 
+    public async Task<RemoteWorkItemAttachment?> AddAttachmentAsync(
+        string workItemId, string fileName, string? contentType, Stream content, CancellationToken ct = default)
+    {
+        var opts = await _options.ResolveForWorkItemAsync(workItemId, ct);
+        return await _server.AddAttachmentAsync(opts, workItemId, fileName, contentType, content, ct);
+    }
+
+    public async Task<RemoteAttachmentContent?> GetAttachmentAsync(
+        string workItemId, string attachmentId, CancellationToken ct = default)
+    {
+        var opts = await _options.ResolveForWorkItemAsync(workItemId, ct);
+        return await _server.GetAttachmentAsync(opts, workItemId, attachmentId, ct);
+    }
+
+    public async Task<bool> DeleteAttachmentAsync(string workItemId, string attachmentId, CancellationToken ct = default)
+    {
+        var opts = await _options.ResolveForWorkItemAsync(workItemId, ct);
+        return await _server.DeleteAttachmentAsync(opts, workItemId, attachmentId, ct);
+    }
+
     public async Task<IReadOnlyList<WorkItemView>> ListAsync(
         RemoteWorkItemStatus? status,
         Guid? createdByLoopRunId,
@@ -376,6 +396,7 @@ public class WorkItemManager : IWorkItemManager
             Status = remote.Status,
             Tags = remote.Tags,
             Conversation = remote.Conversation,
+            Attachments = remote.Attachments,
             HumanFeedbackActions = remote.HumanFeedbackActions,
             AiProviderOverride = remote.AiProviderOverride,
             AiProviderOverrideId = remote.AiProviderOverrideId,

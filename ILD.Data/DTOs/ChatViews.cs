@@ -7,7 +7,8 @@ public sealed record ChatMessageView(
     string Content,
     bool Interrupted,
     int Sequence,
-    DateTime CreatedAt);
+    DateTime CreatedAt,
+    IReadOnlyList<AttachmentView>? Attachments = null);
 
 /// <summary>A resumed chat session plus its rehydrated transcript.</summary>
 public sealed record ChatSessionView(

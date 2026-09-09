@@ -19,6 +19,13 @@ public sealed class WorkItemView
     public RemoteWorkItemStatus Status { get; set; }
     public IReadOnlyList<string> Tags { get; set; } = Array.Empty<string>();
     public IReadOnlyList<RemoteConversationMessage> Conversation { get; set; } = Array.Empty<RemoteConversationMessage>();
+
+    /// <summary>
+    /// Files a human attached to this item, oldest first. Held by the WorkItem
+    /// server alongside the description they belong with; an AI node materializes
+    /// them into a run-scoped directory and hands the agent their paths.
+    /// </summary>
+    public IReadOnlyList<RemoteWorkItemAttachment> Attachments { get; set; } = Array.Empty<RemoteWorkItemAttachment>();
     public string? HumanFeedbackActions { get; set; }
 
     /// <summary>

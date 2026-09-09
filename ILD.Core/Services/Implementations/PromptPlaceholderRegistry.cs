@@ -24,6 +24,7 @@ public static class PromptPlaceholderRegistry
         {
             "WorkItem.Title",
             "WorkItem.Description",
+            WorkItemAttachments,
             "WorkTree.Diff",
             "EventLog.Summary",
             "EventLog.LastN",
@@ -43,6 +44,26 @@ public static class PromptPlaceholderRegistry
         new(@"\{\{\s*([A-Za-z][A-Za-z0-9_.:/\\-]*)\s*\}\}", RegexOptions.Compiled);
 
     public const string WorkTreeFilePrefix = "WorkTree.File:";
+
+    /// <summary>
+    /// Expands to the list of files a human attached to the work item, each with
+    /// the absolute path the agent should open it at. Placing it is optional: an
+    /// AI node whose prompt never mentions it still gets the same list appended,
+    /// because attaching a file to a work item has to reach the agent without
+    /// every existing loop template being edited first.
+    /// </summary>
+    public const string WorkItemAttachments = "WorkItem.Attachments";
+
+    /// <summary>
+    /// Whether <paramref name="template"/> names the <paramref name="placeholder"/>
+    /// itself — as opposed to whether the rendered result contains its value. Lets
+    /// a caller tell "the author placed this" from "the author left it out", which
+    /// is the difference between honouring their layout and supplying a default.
+    /// </summary>
+    public static bool References(string? template, string placeholder)
+        => !string.IsNullOrEmpty(template)
+           && Pattern.Matches(template).Any(m =>
+               string.Equals(m.Groups[1].Value, placeholder, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// Prefix for per-run loop variables: <c>{{Var.&lt;name&gt;}}</c>. The name

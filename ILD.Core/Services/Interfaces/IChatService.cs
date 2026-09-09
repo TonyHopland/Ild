@@ -1,3 +1,4 @@
+using ILD.Core.Services.Attachments;
 using ILD.Data.DTOs;
 
 namespace ILD.Core.Services.Interfaces;
@@ -58,6 +59,35 @@ public interface IChatService
     /// A null/empty work item and document run a context-free turn.
     /// </summary>
     Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, string? openLoopDocument, CancellationToken ct);
+
+    /// <inheritdoc cref="ExecuteTurnAsync(Guid, string, string?, string?, CancellationToken)"/>
+    /// <param name="attachments">
+    /// Files already stored by <see cref="SaveAttachmentsAsync"/>. Their absolute
+    /// paths are appended to the prompt so the agent can open them, and the
+    /// metadata is kept on the persisted user turn so reopening the chat still
+    /// shows what was attached.
+    /// </param>
+    Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, string? openLoopDocument, IReadOnlyList<AttachmentRef>? attachments, CancellationToken ct);
+
+    /// <summary>
+    /// Store files uploaded with a chat message in the session's scratch
+    /// directory — the agent's own working directory — and return what to hand
+    /// to <see cref="ExecuteTurnAsync(Guid, string, string?, string?, IReadOnlyList{AttachmentRef}?, CancellationToken)"/>.
+    /// Scoped by <paramref name="userId"/>; returns null when the chat does not
+    /// exist or belongs to another user. Throws
+    /// <see cref="AttachmentRejectedException"/> for an upload that exceeds the
+    /// size or count limits.
+    /// </summary>
+    Task<IReadOnlyList<AttachmentRef>?> SaveAttachmentsAsync(
+        string userId, Guid sessionId, IReadOnlyList<UploadedFile> files, CancellationToken ct = default);
+
+    /// <summary>
+    /// One attachment of one of the user's chats, by id, so the transcript can
+    /// offer it back for download. Null when the chat is not the user's, the id
+    /// is unknown, or the file is no longer on disk.
+    /// </summary>
+    Task<AttachmentRef?> FindAttachmentAsync(
+        string userId, Guid sessionId, string attachmentId, CancellationToken ct = default);
 
     /// <summary>
     /// Hard-delete one of the user's chats — the session row, its adapter snapshots

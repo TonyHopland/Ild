@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Attach images or files to a chat message or a work item, and the agent can open them.**
+
 ### Changed
 
 - **The form for adding a forward now labels each box, so it is clear which is the name, which is the destination, and which port a client connects to on `127.0.0.1`.**

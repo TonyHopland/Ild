@@ -1,4 +1,5 @@
 import { api } from "./api";
+import type { Attachment } from "../types";
 import {
   User,
   WorkItem,
@@ -173,6 +174,23 @@ export const workItemService = {
   delete: async (id: string): Promise<void> => {
     return api.delete<void>(`/workitems/${id}`);
   },
+
+  /**
+   * Attach a file to a work item. Stored by the WorkItemServer beside the
+   * description, so every run of the item can hand it to the agent.
+   */
+  uploadAttachment: async (id: string, file: File): Promise<Attachment> => {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    return api.postForm<Attachment>(`/workitems/${id}/attachments`, form);
+  },
+
+  deleteAttachment: async (id: string, attachmentId: string): Promise<void> => {
+    return api.delete<void>(`/workitems/${id}/attachments/${attachmentId}`);
+  },
+
+  getAttachment: async (id: string, attachmentId: string): Promise<Blob> =>
+    api.getBlob(`/workitems/${id}/attachments/${attachmentId}`),
 
   /**
    * Advice on a custom branch name while it is being typed: `error` is a name
@@ -576,18 +594,38 @@ export const chatService = {
     return api.post<ChatSession>("/chat", { aiProviderId, tools });
   },
 
+  /**
+   * Send a turn. With files attached it goes as multipart — the server selects
+   * the matching action on content type — so the bytes land in the chat's
+   * scratch directory before the agent is given their paths.
+   */
   sendMessage: async (
     sessionId: string,
     content: string,
     openWorkItemId?: string | null,
     openLoopDocument?: string | null,
+    files?: File[],
   ): Promise<void> => {
+    if (files && files.length > 0) {
+      const form = new FormData();
+      form.append("content", content);
+      if (openWorkItemId) form.append("openWorkItemId", openWorkItemId);
+      if (openLoopDocument) form.append("openLoopDocument", openLoopDocument);
+      for (const file of files) form.append("files", file, file.name);
+      await api.postForm<void>(`/chat/${sessionId}/messages`, form);
+      return;
+    }
+
     await api.post<void>(`/chat/${sessionId}/messages`, {
       content,
       openWorkItemId: openWorkItemId ?? null,
       openLoopDocument: openLoopDocument ?? null,
     });
   },
+
+  /** One attachment's bytes, for saving or previewing a past turn's file. */
+  getAttachment: async (sessionId: string, attachmentId: string): Promise<Blob> =>
+    api.getBlob(`/chat/${sessionId}/attachments/${attachmentId}`),
 
   /**
    * Cancel the chat's in-flight turn. The partial reply is still persisted and

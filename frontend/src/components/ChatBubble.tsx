@@ -5,6 +5,7 @@ import { useChatEnabled } from "../hooks/useChatEnabled";
 import { aiProviderService, chatService } from "../services/auth";
 import type {
   AiProvider,
+  Attachment,
   ChatMessage,
   ChatSession,
   ChatSessionSummary,
@@ -34,6 +35,18 @@ import "./ChatBubble.css";
 // Treat tiny pointer movements as a click, not a drag, so the icon still opens
 // the panel when tapped.
 const DRAG_THRESHOLD_PX = 4;
+
+// Mirrors the server's AttachmentIntake limits, so an oversized file is refused
+// before it is uploaded rather than after.
+const MAX_ATTACHMENT_MB = 25;
+const MAX_ATTACHMENT_BYTES = MAX_ATTACHMENT_MB * 1024 * 1024;
+const MAX_ATTACHMENTS_PER_MESSAGE = 10;
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
 
 // The v1 tool catalog (read/write/execute/ild). `ild` is the only default-on
 // entry; the backend re-normalizes the selection against the provider type.
@@ -341,11 +354,46 @@ export default function ChatBubble() {
     }
   };
 
+  // Files staged for the next turn. They are uploaded with the message rather
+  // than up front, so an abandoned draft leaves nothing on the server.
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const addFiles = useCallback((incoming: FileList | File[] | null) => {
+    const list = Array.from(incoming ?? []);
+    if (list.length === 0) return;
+    const tooBig = list.filter((f) => f.size > MAX_ATTACHMENT_BYTES);
+    if (tooBig.length > 0) {
+      setError(
+        `${tooBig.map((f) => f.name).join(", ")} exceeds the ${MAX_ATTACHMENT_MB} MB limit.`,
+      );
+    }
+    const accepted = list.filter((f) => f.size <= MAX_ATTACHMENT_BYTES);
+    if (accepted.length > 0) {
+      setPendingFiles((prev) => [...prev, ...accepted].slice(0, MAX_ATTACHMENTS_PER_MESSAGE));
+    }
+  }, []);
+
+  const onPaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      // Pasting a screenshot: the clipboard carries files alongside the text,
+      // and only the files are ours to intercept.
+      const files = Array.from(e.clipboardData?.files ?? []);
+      if (files.length === 0) return;
+      e.preventDefault();
+      addFiles(files);
+    },
+    [addFiles],
+  );
+
   const [input, setInput] = useState("");
   const send = async () => {
     const content = input.trim();
-    if (!content || !session) return;
+    if ((!content && pendingFiles.length === 0) || !session) return;
+    const files = pendingFiles;
     setInput("");
+    setPendingFiles([]);
     setBusy(true);
     try {
       // The open Loop Editor's live, possibly-unsaved document travels with each
@@ -358,9 +406,12 @@ export default function ChatBubble() {
         content,
         openWorkItemIdRef.current,
         openLoopDocument,
+        files,
       );
     } catch (e) {
       setBusy(false);
+      // Hand the files back so a failed send can be retried without re-picking.
+      setPendingFiles(files);
       setError((e as { message?: string })?.message ?? "Could not send message.");
     }
   };
@@ -409,6 +460,23 @@ export default function ChatBubble() {
       sessionIdRef.current = resumed.id;
     } catch (e) {
       setError((e as { message?: string })?.message ?? "Could not open chat.");
+    }
+  };
+
+  // Attachments are behind the bearer token, so the bytes are fetched and handed
+  // to a temporary object URL rather than linked to directly.
+  const downloadAttachment = async (attachment: Attachment) => {
+    if (!session) return;
+    try {
+      const blob = await chatService.getAttachment(session.id, attachment.id);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = attachment.fileName;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      setError(`Could not open ${attachment.fileName}.`);
     }
   };
 
@@ -593,6 +661,22 @@ export default function ChatBubble() {
             {messages.map((m) => (
               <div key={m.id} className={`chat-msg chat-msg-${m.role}`}>
                 <MarkdownRenderer content={m.content} className="chat-msg-content" />
+                {m.attachments && m.attachments.length > 0 && (
+                  <ul className="chat-attachments">
+                    {m.attachments.map((a) => (
+                      <li key={a.id}>
+                        <button
+                          type="button"
+                          className="chat-attachment"
+                          onClick={() => void downloadAttachment(a)}
+                        >
+                          📎 {a.fileName}
+                          <span className="chat-attachment-size">{formatBytes(a.sizeBytes)}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 {m.interrupted && <span className="chat-interrupted">interrupted</span>}
               </div>
             ))}
@@ -611,18 +695,71 @@ export default function ChatBubble() {
             )}
           </div>
 
+          {pendingFiles.length > 0 && (
+            <ul className="chat-attachments chat-attachments-pending">
+              {pendingFiles.map((f, i) => (
+                <li key={`${f.name}-${i}`}>
+                  <span className="chat-attachment">
+                    📎 {f.name}
+                    <span className="chat-attachment-size">{formatBytes(f.size)}</span>
+                  </span>
+                  <button
+                    type="button"
+                    className="chat-link-btn chat-danger"
+                    aria-label={`Remove ${f.name}`}
+                    onClick={() => setPendingFiles((prev) => prev.filter((_, j) => j !== i))}
+                  >
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
           <form
-            className="chat-input-row"
+            className={dragging ? "chat-input-row is-dragging" : "chat-input-row"}
             onSubmit={(e) => {
               e.preventDefault();
               void send();
             }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragging(true);
+            }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragging(false);
+              addFiles(e.dataTransfer?.files ?? null);
+            }}
           >
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="chat-file-input"
+              aria-label="Attach files"
+              onChange={(e) => {
+                addFiles(e.target.files);
+                // Clear the picker so re-choosing the same file fires change again.
+                e.target.value = "";
+              }}
+            />
+            <button
+              type="button"
+              className="chat-attach-btn"
+              aria-label="Attach a file"
+              title="Attach a file"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              📎
+            </button>
             <input
               className="chat-input"
               placeholder="Message…"
               value={input}
               onChange={(e) => setInput(e.target.value)}
+              onPaste={onPaste}
               aria-label="Chat message"
             />
             {/* Only offered while a turn is in flight — the same window the
@@ -640,7 +777,11 @@ export default function ChatBubble() {
                 </svg>
               </button>
             )}
-            <button type="submit" className="chat-primary-btn" disabled={!input.trim()}>
+            <button
+              type="submit"
+              className="chat-primary-btn"
+              disabled={!input.trim() && pendingFiles.length === 0}
+            >
               Send
             </button>
           </form>
