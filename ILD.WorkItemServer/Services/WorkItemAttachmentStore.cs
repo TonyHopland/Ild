@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.Extensions.Logging;
 
 namespace ILD.WorkItemServer.Services;
 
@@ -56,10 +57,15 @@ public sealed class WorkItemAttachmentStore : IWorkItemAttachmentStore
     private const string FallbackFileName = "attachment";
 
     private readonly string _root;
-    private readonly Microsoft.Extensions.Logging.ILogger<WorkItemAttachmentStore>? _log;
 
-    public WorkItemAttachmentStore(
-        string dataPath, Microsoft.Extensions.Logging.ILogger<WorkItemAttachmentStore>? log = null)
+    /// <summary>
+    /// Absent in every construction but the server's own, so every use of it has
+    /// to tolerate null: these are best-effort catch blocks whose contract is to
+    /// stay silent, and a logging call that throws would invert exactly that.
+    /// </summary>
+    private readonly ILogger<WorkItemAttachmentStore>? _log;
+
+    public WorkItemAttachmentStore(string dataPath, ILogger<WorkItemAttachmentStore>? log = null)
     {
         _root = Path.Combine(dataPath, "attachments");
         _log = log;
@@ -141,7 +147,7 @@ public sealed class WorkItemAttachmentStore : IWorkItemAttachmentStore
         try { File.Delete(PathFor(workItemId, attachmentId)); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            Microsoft.Extensions.Logging.LoggerExtensions.LogWarning(_log, ex,
+            _log?.LogWarning(ex,
                 "Could not delete attachment {AttachmentId} of work item {WorkItemId}; its bytes are orphaned",
                 attachmentId, workItemId);
         }
@@ -160,7 +166,7 @@ public sealed class WorkItemAttachmentStore : IWorkItemAttachmentStore
             // The work item row is already gone, so nothing will ever ask for
             // these again and one failure strands every attachment it had.
             // Swallowing it silently is what makes that undiagnosable.
-            Microsoft.Extensions.Logging.LoggerExtensions.LogWarning(_log, ex,
+            _log?.LogWarning(ex,
                 "Could not remove the attachment directory for work item {WorkItemId}; its bytes are orphaned",
                 workItemId);
         }
