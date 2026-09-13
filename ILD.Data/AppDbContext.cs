@@ -31,6 +31,7 @@ public class AppDbContext : DbContext
     public DbSet<AppSetting> AppSettings => Set<AppSetting>();
     public DbSet<ChatSession> ChatSessions => Set<ChatSession>();
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
+    public DbSet<ChatAttachment> ChatAttachments => Set<ChatAttachment>();
     public DbSet<NetworkPolicyEntry> NetworkPolicyEntries => Set<NetworkPolicyEntry>();
     public DbSet<NetworkLogEntry> NetworkLogEntries => Set<NetworkLogEntry>();
     public DbSet<NetworkForwardEntry> NetworkForwardEntries => Set<NetworkForwardEntry>();
@@ -187,6 +188,14 @@ public class AppDbContext : DbContext
             e.HasIndex(m => new { m.ChatSessionId, m.Sequence });
         });
 
+        modelBuilder.Entity<ChatAttachment>(e =>
+        {
+            // Looked up by the turn that carries them and by the download, which
+            // scopes to the session before trusting an id from the URL.
+            e.HasIndex(a => a.ChatSessionId);
+            e.HasIndex(a => a.ChatMessageId);
+        });
+
         modelBuilder.Entity<LoopRunSessionBinding>(e =>
         {
             e.HasKey(s => new { s.LoopRunId, s.AdapterName, s.PlaceholderId });
@@ -330,6 +339,11 @@ public class AppDbContext : DbContext
             e.Property(m => m.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
         });
 
+        modelBuilder.Entity<ChatAttachment>(e =>
+        {
+            e.Property(a => a.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
+        });
+
         modelBuilder.Entity<NetworkPolicyEntry>(e =>
         {
             e.Property(p => p.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
@@ -378,6 +392,23 @@ public class AppDbContext : DbContext
             .WithMany(c => c.Messages)
             .HasForeignKey(m => m.ChatSessionId)
             .OnDelete(DeleteBehavior.Cascade);
+
+        // Deleting the chat takes its attachments' bytes with it — the guarantee
+        // the decision to keep them in the database rests on.
+        modelBuilder.Entity<ChatAttachment>()
+            .HasOne(a => a.ChatSession)
+            .WithMany()
+            .HasForeignKey(a => a.ChatSessionId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // The turn is the weaker link of the two: an upload exists before the
+        // message does, so the row must survive without one. Cascading on the
+        // session above is what actually reclaims it.
+        modelBuilder.Entity<ChatAttachment>()
+            .HasOne(a => a.ChatMessage)
+            .WithMany(m => m.Attachments)
+            .HasForeignKey(a => a.ChatMessageId)
+            .OnDelete(DeleteBehavior.SetNull);
 
         modelBuilder.Entity<LoopRunSessionBinding>()
             .HasOne(s => s.LoopRun)

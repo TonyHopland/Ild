@@ -1,12 +1,17 @@
 namespace ILD.Data.DTOs;
 
 /// <summary>
-/// One file a human attached, as it is stored: the bytes live on disk and this
-/// record lives in a JSON column beside the thing they were attached to (a
-/// <c>ChatMessage</c>, a work item). <see cref="StoredPath"/> is the absolute
-/// path the agent is told to open — attachments reach the model as paths in the
-/// rendered prompt, never as inline content, because adapters are transport and
-/// pass <c>AgentExecutionContext.Prompt</c> through unchanged (ADR-0007).
+/// One attached file as it sits on disk for an agent to open.
+/// <see cref="StoredPath"/> is the absolute path the agent is told to open —
+/// attachments reach the model as paths in the rendered prompt, never as inline
+/// content, because adapters are transport and pass
+/// <c>AgentExecutionContext.Prompt</c> through unchanged (ADR-0007).
+///
+/// <para>
+/// This is the <em>materialized</em> view, not the durable one. A work item's
+/// attachments are downloaded to a run directory; a chat's are written out of
+/// the database for the length of one turn. Neither store is this record.
+/// </para>
 /// </summary>
 public sealed record AttachmentRef(
     string Id,

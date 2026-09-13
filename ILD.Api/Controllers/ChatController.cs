@@ -98,7 +98,7 @@ public class ChatController : ControllerBase
             return BadRequest(new { error = "Message content or at least one file is required." });
 
         var uploads = ToUploads(files);
-        IReadOnlyList<AttachmentRef>? stored;
+        IReadOnlyList<AttachmentView>? stored;
         try
         {
             stored = await _chat.SaveAttachmentsAsync(userId, id, uploads, ct);
@@ -119,12 +119,12 @@ public class ChatController : ControllerBase
         if (stored is null)
             return NotFound(new { error = "Chat not found." });
 
-        await _runner.SubmitAsync(id, form.Content ?? string.Empty, form.OpenWorkItemId, form.OpenLoopDocument, stored);
+        await _runner.SubmitAsync(id, form.Content ?? string.Empty, form.OpenWorkItemId, form.OpenLoopDocument, stored.Select(a => Guid.Parse(a.Id)).ToList());
         return Accepted();
     }
 
-    [HttpGet("{id:guid}/attachments/{attachmentId}")]
-    public async Task<IActionResult> GetAttachment(Guid id, string attachmentId, CancellationToken ct)
+    [HttpGet("{id:guid}/attachments/{attachmentId:guid}")]
+    public async Task<IActionResult> GetAttachment(Guid id, Guid attachmentId, CancellationToken ct)
     {
         if (!TryResolveUser(out var userId, out var error)) return error;
 

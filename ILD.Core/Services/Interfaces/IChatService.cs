@@ -61,42 +61,47 @@ public interface IChatService
     Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, string? openLoopDocument, CancellationToken ct);
 
     /// <inheritdoc cref="ExecuteTurnAsync(Guid, string, string?, string?, CancellationToken)"/>
-    /// <param name="attachments">
-    /// Files already stored by <see cref="SaveAttachmentsAsync"/>. Their absolute
-    /// paths are appended to the prompt so the agent can open them, and the
-    /// metadata is kept on the persisted user turn so reopening the chat still
-    /// shows what was attached.
+    /// <param name="attachmentIds">
+    /// Attachments already stored by <see cref="SaveAttachmentsAsync"/>. The turn
+    /// links them to the transcript entry it creates, writes them into the
+    /// session's scratch directory for the agent to open, and removes those files
+    /// once the turn is over.
     /// </param>
-    Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, string? openLoopDocument, IReadOnlyList<AttachmentRef>? attachments, CancellationToken ct);
+    Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, string? openLoopDocument, IReadOnlyList<Guid>? attachmentIds, CancellationToken ct);
 
     /// <summary>
-    /// Store files uploaded with a chat message in the session's scratch
-    /// directory — the agent's own working directory — and return what to hand
-    /// to <see cref="ExecuteTurnAsync(Guid, string, string?, string?, IReadOnlyList{AttachmentRef}?, CancellationToken)"/>.
+    /// Store files uploaded with a chat message and return their ids, to hand to
+    /// <see cref="ExecuteTurnAsync(Guid, string, string?, string?, IReadOnlyList{Guid}?, CancellationToken)"/>.
+    ///
+    /// <para>
+    /// The bytes go into the database, not onto disk: a chat's scratch directory
+    /// is readable by the agent uid, and one uid serves every chat, so anything
+    /// left there for the life of a chat is readable by every later agent. The
+    /// database is out of that uid's reach entirely.
+    /// </para>
+    ///
     /// Scoped by <paramref name="userId"/>; returns null when the chat does not
     /// exist or belongs to another user. Throws
     /// <see cref="AttachmentRejectedException"/> for an upload that exceeds the
     /// size or count limits.
     /// </summary>
-    Task<IReadOnlyList<AttachmentRef>?> SaveAttachmentsAsync(
+    Task<IReadOnlyList<AttachmentView>?> SaveAttachmentsAsync(
         string userId, Guid sessionId, IReadOnlyList<UploadedFile> files, CancellationToken ct = default);
 
     /// <summary>
-    /// One attachment of one of the user's chats, by id, with an open handle on
-    /// its bytes so the transcript can offer it back for download. Null when the
-    /// chat is not the user's, the id is unknown, or the file is not one this
-    /// service is willing to serve. The caller owns the stream.
+    /// One attachment of one of the user's chats, by id, with its bytes, so the
+    /// transcript can offer it back for download. Null when the chat is not the
+    /// user's or the id is unknown. The caller owns the stream.
     ///
     /// <para>
-    /// Deliberately not "return a path the caller re-opens": these files live in
-    /// a tree the agent can reach, and it can swap a directory between the
-    /// validation and a second open by name — which would leave the checks
-    /// describing a file other than the one served. A handle opened while the
-    /// path is known good is pinned to that file.
+    /// Read from the database, so showing an attachment to a human never touches
+    /// the filesystem. That is what removes the confused deputy this used to be:
+    /// there is no path to validate, and nothing the agent could swap underneath
+    /// it between the check and the read.
     /// </para>
     /// </summary>
-    Task<(AttachmentRef Meta, Stream Content)?> OpenAttachmentAsync(
-        string userId, Guid sessionId, string attachmentId, CancellationToken ct = default);
+    Task<(AttachmentView Meta, Stream Content)?> OpenAttachmentAsync(
+        string userId, Guid sessionId, Guid attachmentId, CancellationToken ct = default);
 
     /// <summary>
     /// Hard-delete one of the user's chats — the session row, its adapter snapshots

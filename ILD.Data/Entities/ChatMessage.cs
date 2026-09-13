@@ -32,12 +32,11 @@ public class ChatMessage
     public bool Interrupted { get; set; }
 
     /// <summary>
-    /// JSON-serialized array of <see cref="DTOs.AttachmentRef"/> — the files the
-    /// human attached to this turn. Metadata only: the bytes sit in the session's
-    /// scratch directory, and the agent was handed their paths in the prompt.
-    /// Null on every turn that carried no attachment, which is most of them.
+    /// Files the human attached to this turn. A row per file rather than a JSON
+    /// column, because each carries its bytes — see <see cref="ChatAttachment"/>
+    /// for why they are in the database and not on disk.
     /// </summary>
-    public string? AttachmentsJson { get; set; }
+    public List<ChatAttachment> Attachments { get; set; } = new();
 
     /// <summary>Monotonic per-session ordering key.</summary>
     public int Sequence { get; set; }

@@ -90,7 +90,8 @@ public class ChatControllerTests
     public async Task Attached_files_are_stored_before_the_turn_is_submitted()
     {
         var id = Guid.NewGuid();
-        var stored = new[] { new AttachmentRef("a1", "sketch.png", "/scratch/uploads/sketch.png", "image/png", 6) };
+        var attachmentId = Guid.NewGuid();
+        var stored = new[] { new AttachmentView(attachmentId.ToString(), "sketch.png", "image/png", 6) };
         _chat.Setup(c => c.SaveAttachmentsAsync("tony", id, It.IsAny<IReadOnlyList<UploadedFile>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(stored);
 
@@ -98,7 +99,8 @@ public class ChatControllerTests
         var result = await CreateController().SendMessageWithAttachments(id, form, CancellationToken.None);
 
         Assert.IsType<AcceptedResult>(result);
-        _runner.Verify(r => r.SubmitAsync(id, "look at this", null, null, stored), Times.Once);
+        _runner.Verify(
+            r => r.SubmitAsync(id, "look at this", null, null, new[] { attachmentId }), Times.Once);
     }
 
     [Fact]
@@ -106,7 +108,7 @@ public class ChatControllerTests
     {
         var id = Guid.NewGuid();
         _chat.Setup(c => c.SaveAttachmentsAsync("tony", id, It.IsAny<IReadOnlyList<UploadedFile>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Array.Empty<AttachmentRef>());
+            .ReturnsAsync(Array.Empty<AttachmentView>());
 
         var result = await CreateController()
             .SendMessageWithAttachments(id, new ChatMessageForm { Files = [File("sketch.png")] }, CancellationToken.None);
@@ -121,7 +123,7 @@ public class ChatControllerTests
             .SendMessageWithAttachments(Guid.NewGuid(), new ChatMessageForm(), CancellationToken.None);
 
         Assert.IsType<BadRequestObjectResult>(result);
-        _runner.Verify(r => r.SubmitAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<IReadOnlyList<AttachmentRef>?>()), Times.Never);
+        _runner.Verify(r => r.SubmitAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<IReadOnlyList<Guid>?>()), Times.Never);
     }
 
     [Fact]
@@ -129,13 +131,13 @@ public class ChatControllerTests
     {
         var id = Guid.NewGuid();
         _chat.Setup(c => c.SaveAttachmentsAsync("tony", id, It.IsAny<IReadOnlyList<UploadedFile>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((IReadOnlyList<AttachmentRef>?)null);
+            .ReturnsAsync((IReadOnlyList<AttachmentView>?)null);
 
         var form = new ChatMessageForm { Content = "hi", Files = [File("sketch.png")] };
         var result = await CreateController().SendMessageWithAttachments(id, form, CancellationToken.None);
 
         Assert.IsType<NotFoundObjectResult>(result);
-        _runner.Verify(r => r.SubmitAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<IReadOnlyList<AttachmentRef>?>()), Times.Never);
+        _runner.Verify(r => r.SubmitAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<IReadOnlyList<Guid>?>()), Times.Never);
     }
 
     [Fact]

@@ -21,7 +21,7 @@ public interface IChatTurnRunner
     /// open. <paramref name="attachments"/> are files already stored for this turn,
     /// whose absolute paths ride the prompt.
     /// </summary>
-    Task SubmitAsync(Guid chatSessionId, string userMessage, string? openWorkItemId = null, string? openLoopDocument = null, IReadOnlyList<AttachmentRef>? attachments = null);
+    Task SubmitAsync(Guid chatSessionId, string userMessage, string? openWorkItemId = null, string? openLoopDocument = null, IReadOnlyList<Guid>? attachmentIds = null);
 
     /// <summary>Cancel any in-flight turn for the session and await its finalization.</summary>
     Task InterruptAsync(Guid chatSessionId);

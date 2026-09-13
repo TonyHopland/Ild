@@ -257,6 +257,51 @@ public static class AttachmentIntake
     }
 
     /// <summary>
+    /// An upload read into memory and ready to be stored, with the name it will
+    /// be stored under already sanitized.
+    /// </summary>
+    public sealed record AcceptedUpload(string FileName, string? ContentType, byte[] Content);
+
+    /// <summary>
+    /// Read <paramref name="files"/> into memory, refusing more or larger files
+    /// than are accepted. Nothing touches the filesystem — this is the path for a
+    /// store that keeps the bytes itself, where putting them on disk first would
+    /// be the very exposure the store exists to avoid.
+    ///
+    /// <para>
+    /// The ceiling is checked against what is actually read as well as against the
+    /// declared length, for the same reason the WorkItem server's store counts:
+    /// a declared length is the request's claim about its body.
+    /// </para>
+    /// </summary>
+    public static async Task<IReadOnlyList<AcceptedUpload>> ReadWithinLimitsAsync(
+        IReadOnlyList<UploadedFile> files, CancellationToken ct = default)
+    {
+        if (files.Count == 0) return Array.Empty<AcceptedUpload>();
+        if (files.Count > MaxFilesPerRequest)
+            throw new AttachmentRejectedException(
+                $"At most {MaxFilesPerRequest} files can be attached at once.");
+
+        var accepted = new List<AcceptedUpload>(files.Count);
+        foreach (var file in files)
+        {
+            var name = SanitizeFileName(file.FileName);
+            if (file.Length > MaxBytesPerFile) throw TooLarge(name);
+
+            using var buffer = new MemoryStream();
+            await file.Content.CopyToAsync(buffer, ct);
+            if (buffer.Length > MaxBytesPerFile) throw TooLarge(name);
+
+            accepted.Add(new AcceptedUpload(name, NormalizeContentType(file.ContentType), buffer.ToArray()));
+        }
+
+        return accepted;
+    }
+
+    private static AttachmentRejectedException TooLarge(string fileName)
+        => new($"'{fileName}' is larger than the {MaxBytesPerFile / (1024 * 1024)} MB limit.");
+
+    /// <summary>
     /// Create the upload directory and close it to the agent.
     ///
     /// <para>
