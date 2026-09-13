@@ -171,8 +171,12 @@ public sealed class WorkItemService : IWorkItemService
         }
         catch
         {
-            // The bytes are written but nothing will ever point at them.
-            _attachments.Delete(id, attachmentId);
+            // Whether the metadata committed is genuinely unknown here:
+            // cancellation, and the reload that follows a successful update, can
+            // both surface after the write went through. Reclaiming the bytes
+            // unconditionally would leave an attachment that is listed but can
+            // never be downloaded, so the list decides.
+            await DeleteBytesIfUnreferencedAsync(id, attachmentId);
             throw;
         }
 
@@ -184,6 +188,32 @@ public sealed class WorkItemService : IWorkItemService
         }
 
         return attachment;
+    }
+
+    /// <summary>
+    /// Drop an attachment's bytes only if the item's committed list does not name
+    /// it. Used on the failure path, where the write may or may not have landed;
+    /// orphaned bytes cost disk, whereas deleting bytes something still points at
+    /// costs the attachment.
+    /// </summary>
+    private async Task DeleteBytesIfUnreferencedAsync(string id, string attachmentId)
+    {
+        try
+        {
+            // Not the caller's token: the usual way to reach here is that it was
+            // cancelled, and this check still has to run.
+            var w = await _db.WorkItems.AsNoTracking()
+                .FirstOrDefaultAsync(x => x.Id == id, CancellationToken.None);
+            if (w is not null && WorkItemMapper.ReadAttachments(w).Any(a => a.Id == attachmentId))
+                return;
+        }
+        catch
+        {
+            // Could not find out. Keeping the bytes is the recoverable side.
+            return;
+        }
+
+        _attachments.Delete(id, attachmentId);
     }
 
     public async Task<(WorkItemAttachment Meta, Stream Content)?> OpenAttachmentAsync(

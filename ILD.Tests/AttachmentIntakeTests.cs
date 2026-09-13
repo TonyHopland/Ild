@@ -142,6 +142,20 @@ public class AttachmentIntakeTests : IDisposable
         Assert.Empty(Directory.GetFiles(_dir));
     }
 
+    [Fact]
+    public async Task A_failed_upload_takes_the_files_that_already_landed_with_it()
+    {
+        var failing = new UploadedFile("broken.bin", "application/octet-stream", 8, new ThrowingStream());
+
+        await Assert.ThrowsAnyAsync<Exception>(
+            () => AttachmentIntake.SaveAsync(_dir, [Upload("landed.txt", "ok"), failing]));
+
+        // The caller only ever receives the whole list, so a file written before
+        // the failure is referenced by nothing — and retrying would leave a
+        // suffixed duplicate of it beside the real one.
+        Assert.Empty(Directory.GetFiles(_dir));
+    }
+
     private sealed class ThrowingStream : Stream
     {
         public override bool CanRead => true;

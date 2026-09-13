@@ -201,7 +201,9 @@ public static class AttachmentIntake
     /// it if needed, and return what the caller should persist beside the thing
     /// they were attached to. Throws <see cref="AttachmentRejectedException"/>
     /// when a file is too large or there are too many of them — before anything
-    /// is written, so a rejected request leaves no partial upload behind.
+    /// is written. Either every file lands or none does: a failure part-way
+    /// through removes what it already wrote, so no request leaves bytes on disk
+    /// that nothing references.
     /// </summary>
     public static async Task<IReadOnlyList<AttachmentRef>> SaveAsync(
         string directory, IReadOnlyList<UploadedFile> files, CancellationToken ct = default)
@@ -221,15 +223,26 @@ public static class AttachmentIntake
         var root = PrepareDirectory(directory);
 
         var saved = new List<AttachmentRef>(files.Count);
-        foreach (var file in files)
+        try
         {
-            var path = await WriteToFreeNameAsync(root, SanitizeFileName(file.FileName), file.Content, ct);
-            saved.Add(new AttachmentRef(
-                Guid.NewGuid().ToString("N"),
-                Path.GetFileName(path),
-                path,
-                NormalizeContentType(file.ContentType),
-                new FileInfo(path).Length));
+            foreach (var file in files)
+            {
+                var path = await WriteToFreeNameAsync(root, SanitizeFileName(file.FileName), file.Content, ct);
+                saved.Add(new AttachmentRef(
+                    Guid.NewGuid().ToString("N"),
+                    Path.GetFileName(path),
+                    path,
+                    NormalizeContentType(file.ContentType),
+                    new FileInfo(path).Length));
+            }
+        }
+        catch
+        {
+            // All of them or none: the caller only ever receives the whole list,
+            // so a file written before the failure is referenced by nothing, and
+            // retrying would leave a suffixed duplicate beside it.
+            foreach (var written in saved) TryDelete(written.StoredPath);
+            throw;
         }
 
         return saved;

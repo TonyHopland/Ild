@@ -167,11 +167,18 @@ public sealed class ChatAttachmentTests : IDisposable
         await service.ExecuteTurnAsync(
             session.Id, "look", openWorkItemId: null, openLoopDocument: null, saved, CancellationToken.None);
 
-        var found = await service.FindAttachmentAsync("alice", session.Id, saved![0].Id);
-        Assert.Equal("sketch.png", found!.FileName);
+        var found = await service.OpenAttachmentAsync("alice", session.Id, saved![0].Id);
+        Assert.Equal("sketch.png", found!.Value.Meta.FileName);
 
-        Assert.Null(await service.FindAttachmentAsync("mallory", session.Id, saved[0].Id));
-        Assert.Null(await service.FindAttachmentAsync("alice", session.Id, "no-such-id"));
+        // The bytes come from the handle the service validated and opened, not
+        // from a path the caller re-opens for itself.
+        await using (var content = found.Value.Content)
+        {
+            Assert.Equal("pixels", await new StreamReader(content).ReadToEndAsync());
+        }
+
+        Assert.Null(await service.OpenAttachmentAsync("mallory", session.Id, saved[0].Id));
+        Assert.Null(await service.OpenAttachmentAsync("alice", session.Id, "no-such-id"));
     }
 
     /// <summary>
@@ -220,7 +227,7 @@ public sealed class ChatAttachmentTests : IDisposable
         Directory.Delete(uploads, recursive: true);
         Directory.CreateSymbolicLink(uploads, planted);
 
-        Assert.Null(await service.FindAttachmentAsync("alice", session.Id, saved![0].Id));
+        Assert.Null(await service.OpenAttachmentAsync("alice", session.Id, saved![0].Id));
     }
 
     [Fact]

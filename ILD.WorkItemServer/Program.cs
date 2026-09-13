@@ -59,7 +59,9 @@ public sealed class WorkItemServerProgram
         // its own DbContext in ConfigureServices.
 
         builder.Services.AddSingleton(TimeProvider.System);
-        builder.Services.AddSingleton<IWorkItemAttachmentStore>(new WorkItemAttachmentStore(dataPath));
+        builder.Services.AddSingleton<IWorkItemAttachmentStore>(sp => new WorkItemAttachmentStore(
+            dataPath,
+            sp.GetService<Microsoft.Extensions.Logging.ILogger<WorkItemAttachmentStore>>()));
         builder.Services.AddScoped<IWorkItemService, WorkItemService>();
 
         builder.Services.Configure<ApiKeyOptions>(opts =>

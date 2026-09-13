@@ -321,14 +321,20 @@ public class WorkItemServiceTests : IAsyncLifetime
         => new(new DbContextOptionsBuilder<WorkItemServerDbContext>().UseSqlite(_conn).Options);
 
     /// <summary>
-    /// Attaching is a read-modify-write of one JSON list, so two uploads landing
-    /// together must not have the second save its own stale snapshot over the
-    /// first — least of all while telling its caller the attachment was stored.
-    /// Both contexts read the item before either writes, which is the shape that
-    /// used to lose one.
+    /// Attaching is a read-modify-write of one JSON list. Both contexts read the
+    /// item before either writes, so the second holds a snapshot that predates
+    /// the first's upload — the shape that used to save that stale list back and
+    /// silently drop an attachment while telling its caller it was stored.
+    ///
+    /// <para>
+    /// Sequential on purpose: this pins the outcome, not the retry. The retry
+    /// loop needs writers genuinely interleaving, which
+    /// <see cref="Nothing_that_reported_success_is_lost_when_uploads_genuinely_interleave"/>
+    /// covers.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task Concurrent_uploads_both_survive_on_the_work_item()
+    public async Task An_upload_is_not_overwritten_by_a_writer_holding_a_stale_snapshot()
     {
         var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "attachments" });
 
@@ -353,8 +359,14 @@ public class WorkItemServiceTests : IAsyncLifetime
             (await NewService(reader).GetAsync(dto.Id))!.Attachments.Select(a => a.FileName).OrderBy(n => n));
     }
 
+    /// <summary>
+    /// The mirror of the above for removal: the deleting context read the list
+    /// before the upload landed, so writing its snapshot back would bring the
+    /// deleted attachment's neighbour back from the dead. Sequential for the same
+    /// reason — it pins the outcome.
+    /// </summary>
     [Fact]
-    public async Task Concurrent_removal_does_not_resurrect_another_upload()
+    public async Task A_removal_does_not_resurrect_an_upload_it_never_saw()
     {
         var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "attachments" });
         var doomed = await _svc.AddAttachmentAsync(dto.Id, "old.png", "image/png", new MemoryStream([1]));
@@ -373,6 +385,59 @@ public class WorkItemServiceTests : IAsyncLifetime
         Assert.Equal(
             new[] { "new.png" },
             (await NewService(reader).GetAsync(dto.Id))!.Attachments.Select(a => a.FileName));
+    }
+
+    /// <summary>
+    /// Genuinely concurrent, unlike the two above: a connection per writer against
+    /// one shared in-memory database, so they really do interleave and the CAS
+    /// retry loop is exercised rather than assumed. Losing every retry is a
+    /// legitimate outcome under this much contention — it comes back as a refusal.
+    /// What must never happen is an upload reporting success and then not being
+    /// there, which is the failure the retry exists to prevent.
+    /// </summary>
+    [Fact]
+    public async Task Nothing_that_reported_success_is_lost_when_uploads_genuinely_interleave()
+    {
+        var connectionString =
+            $"DataSource=file:wi-{Guid.NewGuid():N}?mode=memory&cache=shared;Default Timeout=30";
+
+        // One connection held open for the lifetime of the test: a shared-cache
+        // in-memory database exists only while someone has it open.
+        await using var keepAlive = new SqliteConnection(connectionString);
+        await keepAlive.OpenAsync();
+
+        var options = new DbContextOptionsBuilder<WorkItemServerDbContext>()
+            .UseSqlite(connectionString).Options;
+        await using (var seed = new WorkItemServerDbContext(options))
+            await seed.Database.EnsureCreatedAsync();
+
+        string itemId;
+        await using (var seed = new WorkItemServerDbContext(options))
+            itemId = (await NewService(seed).CreateAsync(new CreateWorkItemRequest { Title = "attachments" })).Id;
+
+        var reported = await Task.WhenAll(Enumerable.Range(0, 6).Select(async n =>
+        {
+            await using var db = new WorkItemServerDbContext(options);
+            try
+            {
+                var added = await NewService(db)
+                    .AddAttachmentAsync(itemId, $"f{n}.png", "image/png", new MemoryStream([(byte)n]));
+                return added?.FileName;
+            }
+            catch (AttachmentConflictException)
+            {
+                return null;   // refused after exhausting its retries, not silently dropped
+            }
+        }));
+
+        var succeeded = reported.Where(f => f is not null).ToArray();
+        await using var reader = new WorkItemServerDbContext(options);
+        var stored = (await NewService(reader).GetAsync(itemId))!
+            .Attachments.Select(a => a.FileName).ToHashSet();
+
+        Assert.NotEmpty(succeeded);
+        Assert.All(succeeded, f => Assert.Contains(f!, stored));
+        Assert.Equal(succeeded.Length, stored.Count);
     }
 
     [Fact]

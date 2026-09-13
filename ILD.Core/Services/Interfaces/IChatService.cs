@@ -82,11 +82,20 @@ public interface IChatService
         string userId, Guid sessionId, IReadOnlyList<UploadedFile> files, CancellationToken ct = default);
 
     /// <summary>
-    /// One attachment of one of the user's chats, by id, so the transcript can
-    /// offer it back for download. Null when the chat is not the user's, the id
-    /// is unknown, or the file is no longer on disk.
+    /// One attachment of one of the user's chats, by id, with an open handle on
+    /// its bytes so the transcript can offer it back for download. Null when the
+    /// chat is not the user's, the id is unknown, or the file is not one this
+    /// service is willing to serve. The caller owns the stream.
+    ///
+    /// <para>
+    /// Deliberately not "return a path the caller re-opens": these files live in
+    /// a tree the agent can reach, and it can swap a directory between the
+    /// validation and a second open by name — which would leave the checks
+    /// describing a file other than the one served. A handle opened while the
+    /// path is known good is pinned to that file.
+    /// </para>
     /// </summary>
-    Task<AttachmentRef?> FindAttachmentAsync(
+    Task<(AttachmentRef Meta, Stream Content)?> OpenAttachmentAsync(
         string userId, Guid sessionId, string attachmentId, CancellationToken ct = default);
 
     /// <summary>

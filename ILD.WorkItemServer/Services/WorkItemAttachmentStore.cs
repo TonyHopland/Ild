@@ -56,9 +56,14 @@ public sealed class WorkItemAttachmentStore : IWorkItemAttachmentStore
     private const string FallbackFileName = "attachment";
 
     private readonly string _root;
+    private readonly Microsoft.Extensions.Logging.ILogger<WorkItemAttachmentStore>? _log;
 
-    public WorkItemAttachmentStore(string dataPath)
-        => _root = Path.Combine(dataPath, "attachments");
+    public WorkItemAttachmentStore(
+        string dataPath, Microsoft.Extensions.Logging.ILogger<WorkItemAttachmentStore>? log = null)
+    {
+        _root = Path.Combine(dataPath, "attachments");
+        _log = log;
+    }
 
     /// <summary>
     /// The display name an attachment is stored under: one path segment, no
@@ -134,8 +139,12 @@ public sealed class WorkItemAttachmentStore : IWorkItemAttachmentStore
     {
         if (!IsSafeSegment(workItemId) || !IsSafeSegment(attachmentId)) return;
         try { File.Delete(PathFor(workItemId, attachmentId)); }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Microsoft.Extensions.Logging.LoggerExtensions.LogWarning(_log, ex,
+                "Could not delete attachment {AttachmentId} of work item {WorkItemId}; its bytes are orphaned",
+                attachmentId, workItemId);
+        }
     }
 
     public void DeleteAll(string workItemId)
@@ -146,8 +155,15 @@ public sealed class WorkItemAttachmentStore : IWorkItemAttachmentStore
             var directory = DirectoryFor(workItemId);
             if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
         }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // The work item row is already gone, so nothing will ever ask for
+            // these again and one failure strands every attachment it had.
+            // Swallowing it silently is what makes that undiagnosable.
+            Microsoft.Extensions.Logging.LoggerExtensions.LogWarning(_log, ex,
+                "Could not remove the attachment directory for work item {WorkItemId}; its bytes are orphaned",
+                workItemId);
+        }
     }
 
     // Both ids are server-assigned, but they arrive back on the URL, so they are

@@ -153,7 +153,7 @@ public sealed class ChatService : IChatService
         return await AttachmentIntake.SaveAsync(uploads, files, ct);
     }
 
-    public async Task<AttachmentRef?> FindAttachmentAsync(
+    public async Task<(AttachmentRef Meta, Stream Content)?> OpenAttachmentAsync(
         string userId, Guid sessionId, string attachmentId, CancellationToken ct = default)
     {
         if (!await ExistsForUserAsync(userId, sessionId, ct)) return null;
@@ -169,14 +169,23 @@ public sealed class ChatService : IChatService
 
         if (match is null) return null;
 
-        // This is the deputy: whatever path is returned here is opened by the
-        // orchestrator and handed to the chat's owner. Both halves of the
-        // redirection have to be refused — the file swapped for a link, and the
-        // directory holding it swapped for one, which leaves the file itself
-        // looking perfectly ordinary.
+        // This is the deputy: what is returned here is handed to the chat's
+        // owner. Both halves of the redirection have to be refused — the file
+        // swapped for a link, and the directory holding it swapped for one, which
+        // leaves the file itself looking perfectly ordinary.
         var info = new FileInfo(match.StoredPath);
         if (!info.Exists || info.LinkTarget is not null) return null;
-        return AgentIsolation.IsUnredirectedPath(_options.ScratchRoot, info.DirectoryName!) ? match : null;
+        if (!AgentIsolation.IsUnredirectedPath(_options.ScratchRoot, info.DirectoryName!)) return null;
+
+        // Opened here rather than by the caller: re-opening by name would put
+        // another swappable window between these checks and the bytes actually
+        // served. This handle is pinned to the file just validated.
+        try
+        {
+            return (match, File.OpenRead(match.StoredPath));
+        }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
     }
 
     public async Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, string? openLoopDocument, IReadOnlyList<AttachmentRef>? attachments, CancellationToken ct)

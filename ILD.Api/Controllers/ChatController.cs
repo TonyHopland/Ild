@@ -97,14 +97,21 @@ public class ChatController : ControllerBase
         if (string.IsNullOrWhiteSpace(form.Content) && files.Count == 0)
             return BadRequest(new { error = "Message content is required." });
 
+        var uploads = ToUploads(files);
         IReadOnlyList<AttachmentRef>? stored;
         try
         {
-            stored = await _chat.SaveAttachmentsAsync(userId, id, ToUploads(files), ct);
+            stored = await _chat.SaveAttachmentsAsync(userId, id, uploads, ct);
         }
         catch (AttachmentRejectedException ex)
         {
             return BadRequest(new { error = ex.Message });
+        }
+        finally
+        {
+            // Opened here, so closed here: the store does not own them, and a
+            // rejected upload returns without ever having read them.
+            foreach (var upload in uploads) upload.Content.Dispose();
         }
 
         // A null store means the chat is not this user's — the same ownership
@@ -121,13 +128,13 @@ public class ChatController : ControllerBase
     {
         if (!TryResolveUser(out var userId, out var error)) return error;
 
-        var attachment = await _chat.FindAttachmentAsync(userId, id, attachmentId, ct);
-        if (attachment is null) return NotFound();
+        var found = await _chat.OpenAttachmentAsync(userId, id, attachmentId, ct);
+        if (found is null) return NotFound();
 
-        return PhysicalFile(
-            attachment.StoredPath,
-            attachment.ContentType ?? "application/octet-stream",
-            attachment.FileName);
+        // Served from the handle the service validated and opened. Re-opening by
+        // path here would reintroduce the window it just closed.
+        var (meta, content) = found.Value;
+        return File(content, meta.ContentType ?? "application/octet-stream", meta.FileName);
     }
 
     private static IReadOnlyList<UploadedFile> ToUploads(IReadOnlyList<IFormFile> files)
