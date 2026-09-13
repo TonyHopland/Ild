@@ -135,6 +135,11 @@ try
             // any database that never had the column.
             var carriedSessions = await ILD.Data.Migrations.UserSessionCarryOverMigrator.CaptureAsync(dbContext);
 
+            // Likewise read the chat attachment metadata before the migration
+            // drops its column: the bytes it points at are files on disk, and
+            // nothing else records where they are.
+            var carriedAttachments = await ILD.Data.Migrations.ChatAttachmentCarryOverMigrator.CaptureAsync(dbContext);
+
             if (connectionString != null && connectionString.Length > 0)
             {
                 dbContext.Database.Migrate();
@@ -176,6 +181,19 @@ try
             var payloadsInlined = await ILD.Data.Migrations.EventLogPayloadInliningMigrator.MigrateAsync(dbContext);
             if (payloadsInlined > 0)
                 Log.Information("Inlined {Count} offloaded event-log payload(s) into the database", payloadsInlined);
+
+            // Move chat attachments off disk into rows and clear what is left
+            // behind, so no attachment bytes stay durably readable by the agent uid.
+            var attachments = await ILD.Data.Migrations.ChatAttachmentCarryOverMigrator.ApplyAsync(
+                dbContext, carriedAttachments);
+            if (attachments.Carried > 0)
+                Log.Information("Carried {Count} chat attachment(s) into the database", attachments.Carried);
+            if (attachments.Missing > 0)
+                Log.Warning(
+                    "Dropped {Count} chat attachment(s) whose file was already gone — the transcript no longer offers them",
+                    attachments.Missing);
+            if (attachments.Swept > 0)
+                Log.Information("Swept {Count} stale chat upload file(s) off disk", attachments.Swept);
 
             var agentUser = ILD.Core.Services.Implementations.AgentIsolation.AgentUser;
 
