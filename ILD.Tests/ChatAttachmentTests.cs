@@ -174,6 +174,55 @@ public sealed class ChatAttachmentTests : IDisposable
         Assert.Null(await service.FindAttachmentAsync("alice", session.Id, "no-such-id"));
     }
 
+    /// <summary>
+    /// The uploads directory has group write stripped, but its parent is the
+    /// agent's own working directory — and on POSIX it is the parent's write bit
+    /// that governs renaming the entry. So the agent can move the directory aside
+    /// and leave a link pointing wherever it likes. Nothing else catches this:
+    /// the exclusive create only refuses an existing final component, and it
+    /// happily walks a symlinked directory component.
+    /// </summary>
+    [Fact]
+    public async Task An_upload_is_refused_when_the_uploads_directory_was_swapped_for_a_link()
+    {
+        var (service, _, session) = await StartChatAsync();
+
+        var scratchPath = _db.Context.ChatSessions.Single().ScratchPath;
+        var uploads = Path.Combine(scratchPath, "uploads");
+        var victim = Path.Combine(_scratchRoot, "victim");
+        Directory.CreateDirectory(victim);
+        Directory.Delete(uploads, recursive: true);
+        Directory.CreateSymbolicLink(uploads, victim);
+
+        await Assert.ThrowsAsync<IOException>(
+            () => service.SaveAttachmentsAsync("alice", session.Id, [Upload("sketch.png", "pixels")]));
+
+        // Nothing was written through the link.
+        Assert.Empty(Directory.GetFileSystemEntries(victim));
+    }
+
+    [Fact]
+    public async Task A_download_is_refused_when_the_directory_holding_it_was_swapped_for_a_link()
+    {
+        var (service, _, session) = await StartChatAsync();
+        var saved = await service.SaveAttachmentsAsync("alice", session.Id, [Upload("sketch.png", "pixels")]);
+        await service.ExecuteTurnAsync(
+            session.Id, "look", openWorkItemId: null, openLoopDocument: null, saved, CancellationToken.None);
+
+        // The file at the recorded path still exists and is not itself a link, so
+        // only checking the directory chain can catch this one — and this is the
+        // path whose bytes get served back to the chat's owner.
+        var scratchPath = _db.Context.ChatSessions.Single().ScratchPath;
+        var uploads = Path.Combine(scratchPath, "uploads");
+        var planted = Path.Combine(_scratchRoot, "planted");
+        Directory.CreateDirectory(planted);
+        await File.WriteAllTextAsync(Path.Combine(planted, "sketch.png"), "the agent's file");
+        Directory.Delete(uploads, recursive: true);
+        Directory.CreateSymbolicLink(uploads, planted);
+
+        Assert.Null(await service.FindAttachmentAsync("alice", session.Id, saved![0].Id));
+    }
+
     [Fact]
     public async Task Deleting_the_chat_takes_its_uploads_with_it()
     {

@@ -60,11 +60,16 @@ public sealed class WorkItemAttachmentMaterializer : IWorkItemAttachmentMaterial
         // worktree it does not live in (ADR-0011).
         var directory = RunDirectory(runId);
 
+        // Checked before anything is created, or the create itself would follow a
+        // redirected component. The shared scratch root is agent-writable by
+        // design, so the directory entry can be swapped however tightly its
+        // contents are locked down — see AgentIsolation.IsUnredirectedPath.
+        AgentIsolation.RequireUnredirectedPath(AgentIsolation.ScratchRoot, directory);
+        Directory.CreateDirectory(directory);
+
         // Readable by the agent, writable only by us: the agent is handed these
-        // paths, so if it could replace one with a symlink it would be choosing
-        // what the orchestrator writes over on the next node (ADR-0014). The
-        // parent is closed too — otherwise a run directory could be planted
-        // before it is created.
+        // paths, so if it could rewrite one it would be choosing what the next
+        // node reads (ADR-0014).
         AgentIsolation.ProtectFromAgentWrites(Path.GetDirectoryName(directory)!);
         AgentIsolation.ProtectFromAgentWrites(directory);
 
@@ -93,10 +98,11 @@ public sealed class WorkItemAttachmentMaterializer : IWorkItemAttachmentMaterial
     /// <summary>
     /// Where a run's attachments are materialized. Derived from the run id alone
     /// so run cleanup can find and remove them without the run having to record
-    /// the path.
+    /// the path — and naming only, so asking where they would go does not create
+    /// a directory for a run that never had any.
     /// </summary>
     public static string RunDirectory(Guid runId)
-        => AgentIsolation.CreateScratchDirectory("workitem-attachments", runId.ToString("N"));
+        => Path.Combine(AgentIsolation.ScratchRoot, "workitem-attachments", runId.ToString("N"));
 
     private static bool IsAlreadyLocal(string path, long expectedSize)
     {

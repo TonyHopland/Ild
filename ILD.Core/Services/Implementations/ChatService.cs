@@ -101,10 +101,11 @@ public sealed class ChatService : IChatService
         var scratchPath = Path.GetFullPath(Path.Combine(_options.ScratchRoot, id.ToString("N")));
         Directory.CreateDirectory(scratchPath);
 
-        // Created and closed to the agent now, before the agent has ever run in
-        // this session, so it cannot get there first and leave a symlink where
-        // the uploads directory should be. The agent's own working directory
-        // stays writable — only this subdirectory is taken away from it.
+        // Created up front and closed to the agent, so the agent cannot be the one
+        // that creates it. Its own working directory stays writable — only this
+        // subdirectory is taken away from it. That protects the contents, not the
+        // entry: the agent can still swap the directory itself, which is why every
+        // use re-checks with RequireUnredirectedPath.
         Directory.CreateDirectory(UploadsDirectory(scratchPath));
         AgentIsolation.ProtectFromAgentWrites(UploadsDirectory(scratchPath));
 
@@ -147,7 +148,9 @@ public sealed class ChatService : IChatService
             .FirstOrDefaultAsync(ct);
         if (scratchPath is null) return null;
 
-        return await AttachmentIntake.SaveAsync(UploadsDirectory(scratchPath), files, ct);
+        var uploads = UploadsDirectory(scratchPath);
+        AgentIsolation.RequireUnredirectedPath(_options.ScratchRoot, uploads);
+        return await AttachmentIntake.SaveAsync(uploads, files, ct);
     }
 
     public async Task<AttachmentRef?> FindAttachmentAsync(
@@ -166,12 +169,14 @@ public sealed class ChatService : IChatService
 
         if (match is null) return null;
 
-        // The uploads directory is agent-unwritable, which is what stops the
-        // agent substituting a symlink here between this check and the download
-        // opening the path. Refusing a link as well keeps the guarantee from
-        // resting on file modes alone.
+        // This is the deputy: whatever path is returned here is opened by the
+        // orchestrator and handed to the chat's owner. Both halves of the
+        // redirection have to be refused — the file swapped for a link, and the
+        // directory holding it swapped for one, which leaves the file itself
+        // looking perfectly ordinary.
         var info = new FileInfo(match.StoredPath);
-        return info.Exists && info.LinkTarget is null ? match : null;
+        if (!info.Exists || info.LinkTarget is not null) return null;
+        return AgentIsolation.IsUnredirectedPath(_options.ScratchRoot, info.DirectoryName!) ? match : null;
     }
 
     public async Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, string? openLoopDocument, IReadOnlyList<AttachmentRef>? attachments, CancellationToken ct)

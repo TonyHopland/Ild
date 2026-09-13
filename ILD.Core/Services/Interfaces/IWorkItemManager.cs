@@ -24,12 +24,21 @@ public interface IWorkItemManager
     /// run-scoped directory and gives the agent their paths. Null when the server
     /// does not know the item.
     /// </summary>
+    /// <exception cref="Remote.RemoteAttachmentConflictException">
+    /// Other writers kept winning the race for the item's attachment list. Nothing
+    /// was stored and nothing was lost — worth retrying, and not the same thing as
+    /// the item being missing.
+    /// </exception>
     Task<RemoteWorkItemAttachment?> AddAttachmentAsync(
         string workItemId, string fileName, string? contentType, Stream content, CancellationToken ct = default);
 
     /// <summary>One attachment's bytes, or null when it is unknown.</summary>
     Task<RemoteAttachmentContent?> GetAttachmentAsync(string workItemId, string attachmentId, CancellationToken ct = default);
 
+    /// <summary>
+    /// Detach a file. False when the item or the attachment is unknown.
+    /// </summary>
+    /// <inheritdoc cref="AddAttachmentAsync" path="/exception"/>
     Task<bool> DeleteAttachmentAsync(string workItemId, string attachmentId, CancellationToken ct = default);
 
     /// <summary>

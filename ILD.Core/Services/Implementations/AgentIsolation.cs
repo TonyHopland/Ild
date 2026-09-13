@@ -676,6 +676,61 @@ public static class AgentIsolation
         => ProtectFromAgentWrites(path, AgentUser);
 
     /// <summary>
+    /// Whether every directory between <paramref name="trustedRoot"/> and
+    /// <paramref name="path"/> is a real directory rather than a symbolic link.
+    ///
+    /// <para>
+    /// <see cref="ProtectFromAgentWrites(string)"/> protects what is <em>inside</em>
+    /// a directory, but on POSIX renaming or unlinking the directory entry itself
+    /// is governed by the <em>parent's</em> write bit — and the parents here are
+    /// agent-writable by design: a chat session's scratch directory is the agent's
+    /// own working directory, and the shared scratch root is shared. So the agent
+    /// can move a directory aside and leave a link in its place. Nothing already
+    /// in this class catches that: <c>O_EXCL</c> refuses an existing <em>final</em>
+    /// component but follows a symlinked directory component without complaint,
+    /// and a file inside a redirected directory has no link target of its own. The
+    /// orchestrator would then write attachments into, and serve them back from, a
+    /// directory the agent chose.
+    /// </para>
+    ///
+    /// <para>
+    /// Checked on every use rather than once at creation, because the swap can
+    /// happen at any point afterwards. It does not close a determined racer — the
+    /// agent can still swap between this check and the open — but it closes
+    /// planting a link and waiting, which needs no timing at all. Closing the race
+    /// outright needs the directory opened by handle and used with <c>openat</c>,
+    /// which .NET does not expose.
+    /// </para>
+    /// </summary>
+    public static bool IsUnredirectedPath(string trustedRoot, string path)
+    {
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(trustedRoot));
+        var full = Path.GetFullPath(path);
+        if (!full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            return false;
+
+        for (var current = full;
+             current is not null && current.Length > root.Length;
+             current = Path.GetDirectoryName(current))
+        {
+            // Null for a path that is not a link, and for one that does not exist
+            // yet — which is the normal case for the component about to be created.
+            if (new DirectoryInfo(current).LinkTarget is not null) return false;
+        }
+
+        return true;
+    }
+
+    /// <inheritdoc cref="IsUnredirectedPath"/>
+    /// <exception cref="IOException">A component was redirected.</exception>
+    public static void RequireUnredirectedPath(string trustedRoot, string path)
+    {
+        if (!IsUnredirectedPath(trustedRoot, path))
+            throw new IOException(
+                $"'{path}' is not a real directory under '{trustedRoot}'; refusing to use it.");
+    }
+
+    /// <summary>
     /// Build a tree the agent will execute but must never be able to modify,
     /// keeping it unreachable while it is incomplete.
     ///

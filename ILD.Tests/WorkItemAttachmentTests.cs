@@ -179,6 +179,26 @@ public sealed class WorkItemAttachmentTests : IDisposable
                 .EnsureLocalAsync(view, Guid.NewGuid(), CancellationToken.None));
     }
 
+    /// <summary>
+    /// Same hole as the chat uploads directory, one level up: the shared scratch
+    /// root is agent-writable by design, so the agent can swap the
+    /// <c>workitem-attachments</c> directory for a link and have the orchestrator
+    /// write a run's files wherever it points.
+    /// </summary>
+    [Fact]
+    public async Task Materializing_is_refused_when_the_scratch_directory_was_swapped_for_a_link()
+    {
+        var (view, materializer) = await ItemWithAttachmentsAsync(("sketch.png", "pixels"));
+
+        var planted = Path.Combine(_scratchRoot, "planted");
+        Directory.CreateDirectory(planted);
+        Directory.CreateSymbolicLink(Path.Combine(_scratchRoot, "workitem-attachments"), planted);
+
+        await Assert.ThrowsAsync<IOException>(() => materializer.EnsureLocalAsync(view, Guid.NewGuid()));
+
+        Assert.Empty(Directory.GetFileSystemEntries(planted));
+    }
+
     [Fact]
     public async Task An_item_with_no_attachments_materializes_nothing()
     {
