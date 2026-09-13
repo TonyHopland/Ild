@@ -126,6 +126,11 @@ public sealed class WorkItemsController : ControllerBase
             // was lost, so this is a retry — not a missing work item.
             return Conflict(ex.Message);
         }
+        catch (AttachmentTooLargeException ex)
+        {
+            // The declared length passed the check above but the body outran it.
+            return BadRequest(ex.Message);
+        }
     }
 
     [HttpGet("{id}/attachments/{attachmentId}")]

@@ -95,7 +95,7 @@ public class ChatController : ControllerBase
 
         var files = form.Files ?? new List<IFormFile>();
         if (string.IsNullOrWhiteSpace(form.Content) && files.Count == 0)
-            return BadRequest(new { error = "Message content is required." });
+            return BadRequest(new { error = "Message content or at least one file is required." });
 
         var uploads = ToUploads(files);
         IReadOnlyList<AttachmentRef>? stored;

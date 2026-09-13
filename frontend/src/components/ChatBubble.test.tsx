@@ -303,6 +303,22 @@ describe("ChatBubble", () => {
     );
   });
 
+  test("attaching more files than a message allows says so instead of dropping them quietly", async () => {
+    chatService.sendMessage.mockResolvedValue(undefined);
+    await openResumed(chatSession());
+
+    // Eleven against a cap of ten: the extras used to vanish with no explanation.
+    const many = Array.from(
+      { length: 11 },
+      (_, i) => new File(["pixels"], `shot-${i}.png`, { type: "image/png" }),
+    );
+    fireEvent.change(screen.getByLabelText("Attach files"), { target: { files: many } });
+
+    expect(await screen.findByText(/Only 10 files can be attached/)).toBeTruthy();
+    expect(screen.queryByLabelText("Remove shot-10.png")).toBeNull();
+    expect(await screen.findByLabelText("Remove shot-9.png")).toBeTruthy();
+  });
+
   test("an oversized file is refused before it is uploaded", async () => {
     chatService.sendMessage.mockResolvedValue(undefined);
     await openResumed(chatSession());

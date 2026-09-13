@@ -373,7 +373,15 @@ export default function ChatBubble() {
     }
     const accepted = list.filter((f) => f.size <= MAX_ATTACHMENT_BYTES);
     if (accepted.length > 0) {
-      setPendingFiles((prev) => [...prev, ...accepted].slice(0, MAX_ATTACHMENTS_PER_MESSAGE));
+      setPendingFiles((prev) => {
+        const next = [...prev, ...accepted];
+        // Say so rather than silently keeping the first ten: a file that is
+        // dropped without a word looks attached until the agent never mentions it.
+        if (next.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+          setError(`Only ${MAX_ATTACHMENTS_PER_MESSAGE} files can be attached to one message.`);
+        }
+        return next.slice(0, MAX_ATTACHMENTS_PER_MESSAGE);
+      });
     }
   }, []);
 
@@ -719,10 +727,11 @@ export default function ChatBubble() {
               e.preventDefault();
               void send();
             }}
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDragging(true);
-            }}
+            // preventDefault on every dragover is what makes the drop fire at
+            // all; the highlight is set on enter instead, so dragging across the
+            // form does not re-set state on every tick.
+            onDragOver={(e) => e.preventDefault()}
+            onDragEnter={() => setDragging(true)}
             onDragLeave={() => setDragging(false)}
             onDrop={(e) => {
               e.preventDefault();

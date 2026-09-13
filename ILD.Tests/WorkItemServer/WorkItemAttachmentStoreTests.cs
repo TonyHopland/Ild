@@ -28,6 +28,36 @@ public sealed class WorkItemAttachmentStoreTests : IDisposable
         catch (UnauthorizedAccessException) { }
     }
 
+    /// <summary>
+    /// The ceiling is enforced against what actually arrives, not against what the
+    /// request claimed. Both callers check a declared length first, but a declared
+    /// length is the client's claim about the body — the store owns the constant,
+    /// so it owns the guarantee.
+    /// </summary>
+    [Fact]
+    public async Task An_upload_past_the_ceiling_is_refused_even_when_its_declared_length_lied()
+    {
+        var store = new WorkItemAttachmentStore(_root);
+        var oversized = new MemoryStream(new byte[WorkItemAttachmentStore.MaxBytesPerFile + 1]);
+
+        await Assert.ThrowsAsync<AttachmentTooLargeException>(
+            () => store.SaveAsync("42", "a1", oversized));
+
+        // Refused *and* not occupying the disk it was refused for.
+        Assert.Null(store.Open("42", "a1"));
+    }
+
+    [Fact]
+    public async Task An_upload_at_the_ceiling_is_still_accepted()
+    {
+        var store = new WorkItemAttachmentStore(_root);
+
+        var written = await store.SaveAsync(
+            "42", "a1", new MemoryStream(new byte[WorkItemAttachmentStore.MaxBytesPerFile]));
+
+        Assert.Equal(WorkItemAttachmentStore.MaxBytesPerFile, written);
+    }
+
     [Fact]
     public async Task A_delete_that_cannot_remove_the_bytes_stays_silent_without_a_logger()
     {

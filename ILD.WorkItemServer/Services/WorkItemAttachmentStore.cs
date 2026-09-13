@@ -112,18 +112,49 @@ public sealed class WorkItemAttachmentStore : IWorkItemAttachmentStore
         {
             await using (var target = File.Create(path))
             {
-                await content.CopyToAsync(target, ct);
+                await CopyWithinCeilingAsync(content, target, ct);
             }
         }
         catch
         {
             // Metadata is only written once this returns, so a half-written file
-            // would be referenced by nothing and never cleaned up.
+            // would be referenced by nothing and never cleaned up. That covers the
+            // over-ceiling abort too: nothing is left occupying the disk it was
+            // refused for.
             try { File.Delete(path); } catch (IOException) { } catch (UnauthorizedAccessException) { }
             throw;
         }
 
         return new FileInfo(path).Length;
+    }
+
+    /// <summary>
+    /// Copy, refusing anything past <see cref="MaxBytesPerFile"/>.
+    ///
+    /// <para>
+    /// This class declares the ceiling, so this class enforces it. Both callers
+    /// today check a declared length up front and reject before reaching here, but
+    /// a declared length is a claim about the request rather than a count of what
+    /// arrives, and the guard would not travel with the store to a third caller.
+    /// Counting what is actually written is what makes the limit true rather than
+    /// merely stated.
+    /// </para>
+    /// </summary>
+    private static async Task CopyWithinCeilingAsync(Stream source, Stream target, CancellationToken ct)
+    {
+        var buffer = new byte[81920];
+        long written = 0;
+
+        while (true)
+        {
+            var read = await source.ReadAsync(buffer, ct);
+            if (read == 0) return;
+
+            written += read;
+            if (written > MaxBytesPerFile) throw new AttachmentTooLargeException(MaxBytesPerFile);
+
+            await target.WriteAsync(buffer.AsMemory(0, read), ct);
+        }
     }
 
     public Stream? Open(string workItemId, string attachmentId)

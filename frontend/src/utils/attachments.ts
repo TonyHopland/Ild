@@ -12,13 +12,18 @@
  */
 export async function downloadAttachment(fetchBlob: () => Promise<Blob>, fileName: string) {
   const url = URL.createObjectURL(await fetchBlob());
+  const link = document.createElement("a");
   try {
-    const link = document.createElement("a");
     link.href = url;
     link.download = fileName;
     link.rel = "noopener";
+    // In the document rather than detached: some engines ignore a click on an
+    // unattached anchor, and honour the download attribute only for one that is
+    // in the tree. Chromium is forgiving about it; that is not the bar.
+    document.body.appendChild(link);
     link.click();
   } finally {
+    link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 }
