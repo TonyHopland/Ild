@@ -128,6 +128,9 @@ public static class ChatAttachmentCarryOverMigrator
                         FileName = legacy.FileName,
                         ContentType = legacy.ContentType,
                         Content = content,
+                        // The bytes that survived, not the size the metadata
+                        // claimed — a truncated file should report what it is.
+                        SizeBytes = content.LongLength,
                         CreatedAt = now,
                     });
                     carriedCount++;

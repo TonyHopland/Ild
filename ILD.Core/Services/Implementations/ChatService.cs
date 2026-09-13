@@ -97,6 +97,7 @@ public sealed class ChatService : IChatService
                         Id = a.Id,
                         FileName = a.FileName,
                         ContentType = a.ContentType,
+                        SizeBytes = a.SizeBytes,
                         Content = Array.Empty<byte>(),
                     })
                     .ToList(),
@@ -181,6 +182,7 @@ public sealed class ChatService : IChatService
                 FileName = file.FileName,
                 ContentType = file.ContentType,
                 Content = file.Content,
+                SizeBytes = file.Content.LongLength,
                 CreatedAt = DateTime.UtcNow,
             })
             .ToList();
@@ -288,54 +290,62 @@ public sealed class ChatService : IChatService
         var (contextPreamble, additionalAllowedDirectories) =
             await BuildChatContextAsync(openWorkItemId, loopEditor, tools);
 
+        var streamed = new System.Text.StringBuilder();
+        string? capturedSessionId = null;
+
         // Attachments reach the agent as paths, never as content: the adapter
         // passes this prompt to the CLI verbatim (ADR-0007/ADR-0011), and every
         // CLI can open a file. Written out of the database for this turn only and
         // removed once it ends, so the bytes are not sitting in the agent-readable
         // scratch tree for the life of the chat.
-        var materialized = await MaterializeForTurnAsync(session, attachmentRows, ct);
-        var attachmentBlock = AttachmentPromptBlock.Format(materialized);
-
-        var promptForAgent = string.Join("\n\n",
-            new[] { contextPreamble, userMessage, attachmentBlock }.Where(p => !string.IsNullOrEmpty(p)));
-
-        var runContext = new LoopRunContext(
-            LoopRunId: session.Id,
-            WorkItemId: string.Empty,
-            WorkItemTitle: string.Empty,
-            WorkItemDescription: string.Empty,
-            WorktreePath: session.ScratchPath,
-            BranchName: string.Empty,
-            EventLogSummary: new List<string>(),
-            PreviousNodeOutput: null);
-
-        var streamed = new System.Text.StringBuilder();
-        string? capturedSessionId = null;
-
-        var agentCtx = new AgentExecutionContext(
-            provider,
-            promptForAgent,
-            runContext,
-            ExecutionCount: 0,
-            Cancel: ct,
-            ProgressCallback: async chunk =>
-            {
-                streamed.Append(chunk);
-                await _notifier.TurnProgressAsync(chatSessionId, chunk);
-            },
-            AdapterConfig: null,
-            ToolAllowlist: tools,
-            SessionId: session.CurrentSessionId,
-            IncomingSessionId: session.CurrentSessionId,
-            ManageSession: true,
-            OnSessionId: sid => capturedSessionId = sid,
-            ForkFromSessionId: null,
-            ChatSessionId: session.Id,
-            AdditionalAllowedDirectories: additionalAllowedDirectories);
-
+        //
+        // Materializing is inside the try because it can fail — a redirected
+        // uploads directory is refused — and this runs after the human's message
+        // has been persisted and announced. An exception escaping here would leave
+        // that turn with no completion ever sent, so the client would stream a
+        // reply that never arrives; as a caught failure it becomes a [chat-error]
+        // like any other.
+        IReadOnlyList<AttachmentRef> materialized = Array.Empty<AttachmentRef>();
         NodeExecutionResult result;
         try
         {
+            materialized = await MaterializeForTurnAsync(session, attachmentRows, ct);
+            var attachmentBlock = AttachmentPromptBlock.Format(materialized);
+
+            var promptForAgent = string.Join("\n\n",
+                new[] { contextPreamble, userMessage, attachmentBlock }.Where(p => !string.IsNullOrEmpty(p)));
+
+            var runContext = new LoopRunContext(
+                LoopRunId: session.Id,
+                WorkItemId: string.Empty,
+                WorkItemTitle: string.Empty,
+                WorkItemDescription: string.Empty,
+                WorktreePath: session.ScratchPath,
+                BranchName: string.Empty,
+                EventLogSummary: new List<string>(),
+                PreviousNodeOutput: null);
+
+            var agentCtx = new AgentExecutionContext(
+                provider,
+                promptForAgent,
+                runContext,
+                ExecutionCount: 0,
+                Cancel: ct,
+                ProgressCallback: async chunk =>
+                {
+                    streamed.Append(chunk);
+                    await _notifier.TurnProgressAsync(chatSessionId, chunk);
+                },
+                AdapterConfig: null,
+                ToolAllowlist: tools,
+                SessionId: session.CurrentSessionId,
+                IncomingSessionId: session.CurrentSessionId,
+                ManageSession: true,
+                OnSessionId: sid => capturedSessionId = sid,
+                ForkFromSessionId: null,
+                ChatSessionId: session.Id,
+                AdditionalAllowedDirectories: additionalAllowedDirectories);
+
             result = await adapter.ExecuteAsync(agentCtx);
         }
         catch (OperationCanceledException)
@@ -346,11 +356,13 @@ public sealed class ChatService : IChatService
         {
             result = NodeExecutionResult.Fail($"[chat-error] {ex.Message}");
         }
-
-        // Every path out of the adapter lands here — the catches above swallow
-        // whatever it threw — so this is where the turn's copies stop existing.
-        // The database keeps the attachment; the disk does not.
-        RemoveMaterialized(materialized);
+        finally
+        {
+            // However the turn ended — including when materializing was itself
+            // what failed — the turn's copies stop existing here. The database
+            // keeps the attachment; the disk does not.
+            RemoveMaterialized(materialized);
+        }
 
         var interrupted = ct.IsCancellationRequested;
         string content;
@@ -658,7 +670,7 @@ public sealed class ChatService : IChatService
     /// fetched one at a time by the download endpoint.
     /// </summary>
     private static AttachmentView ToView(ChatAttachment a)
-        => new(a.Id.ToString(), a.FileName, a.ContentType, a.Content.LongLength);
+        => new(a.Id.ToString(), a.FileName, a.ContentType, a.SizeBytes);
 
     private static ChatSessionView ToView(ChatSession session, IReadOnlyList<ChatMessage> messages)
         => new(

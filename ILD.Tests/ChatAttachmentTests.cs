@@ -24,6 +24,7 @@ namespace ILD.Tests;
 public sealed class ChatAttachmentTests : IDisposable
 {
     private readonly TestDb _db = new();
+    private readonly RecordingNotifier _notifier = new();
     private readonly ChatLoopScratchpad _loopScratchpad = new();
     private readonly string _scratchRoot = Path.Combine(
         Path.GetTempPath(), "ild-chat-attachment-tests", Guid.NewGuid().ToString("N"));
@@ -56,11 +57,30 @@ public sealed class ChatAttachmentTests : IDisposable
         }
     }
 
-    private sealed class NoopNotifier : IChatNotifier
+    /// <summary>
+    /// Records what the client would have been sent. A turn that ends without a
+    /// completion leaves the chat bubble waiting on a reply that never arrives, so
+    /// the failure cases below assert the completion actually goes out.
+    /// </summary>
+    private sealed class RecordingNotifier : IChatNotifier
     {
-        public Task MessageAppendedAsync(Guid id, ChatMessageView m) => Task.CompletedTask;
+        public List<ChatMessageView> Appended { get; } = new();
+        public int Completions { get; private set; }
+
+        public Task MessageAppendedAsync(Guid id, ChatMessageView m)
+        {
+            Appended.Add(m);
+            return Task.CompletedTask;
+        }
+
         public Task TurnProgressAsync(Guid id, string delta) => Task.CompletedTask;
-        public Task TurnCompletedAsync(Guid id, bool interrupted) => Task.CompletedTask;
+
+        public Task TurnCompletedAsync(Guid id, bool interrupted)
+        {
+            Completions++;
+            return Task.CompletedTask;
+        }
+
         public Task LoopUpdateRequestedAsync(Guid id, string document) => Task.CompletedTask;
     }
 
@@ -84,7 +104,7 @@ public sealed class ChatAttachmentTests : IDisposable
             r.ResolveForProvider(It.IsAny<AiProvider>()) == (Func<IAgentAdapter>)(() => adapter));
 
         var service = new ChatService(
-            _db.Context, _db.Providers, registry, new NoopNotifier(),
+            _db.Context, _db.Providers, registry, _notifier,
             new ChatOptions { ScratchRoot = _scratchRoot }, _db.LoopRuns, _loopScratchpad);
 
         var session = await service.StartAsync("alice", provider.Id, ["ild", "read"]);
@@ -186,6 +206,21 @@ public sealed class ChatAttachmentTests : IDisposable
     }
 
     [Fact]
+    public async Task A_reopened_transcript_reports_the_size_rather_than_zero()
+    {
+        var (service, _, session) = await StartChatAsync();
+        var saved = await service.SaveAttachmentsAsync("alice", session.Id, [Upload("sketch.png", "pixels")]);
+        await RunTurnAsync(service, session.Id, "look", saved);
+
+        var reopened = await service.GetByIdAsync("alice", session.Id);
+        var attachment = Assert.Single(reopened!.Messages.Single(m => m.Role == "user").Attachments!);
+
+        // The transcript deliberately loads no blobs, so a size measured off the
+        // loaded bytes is zero here and every past attachment renders as "0 B".
+        Assert.Equal(6, attachment.SizeBytes);
+    }
+
+    [Fact]
     public async Task An_attachment_is_served_from_the_database_to_its_owner_and_nobody_else()
     {
         var (service, _, session) = await StartChatAsync();
@@ -214,9 +249,16 @@ public sealed class ChatAttachmentTests : IDisposable
     /// governs renaming the entry, so the agent can move the directory aside and
     /// leave a link. The exclusive create only refuses an existing final
     /// component; it walks a symlinked directory component happily.
+    ///
+    /// <para>
+    /// The refusal has to reach the human as a finished turn. Materializing runs
+    /// after the user's message is persisted and announced, so an exception
+    /// escaping instead would end the turn with no completion ever sent, leaving
+    /// the chat waiting on a reply that cannot arrive.
+    /// </para>
     /// </summary>
     [Fact]
-    public async Task A_turn_is_refused_when_the_uploads_directory_was_swapped_for_a_link()
+    public async Task A_turn_whose_uploads_directory_was_swapped_for_a_link_fails_without_stranding_the_chat()
     {
         var (service, _, session) = await StartChatAsync();
         var saved = await service.SaveAttachmentsAsync("alice", session.Id, [Upload("sketch.png", "pixels")]);
@@ -227,8 +269,14 @@ public sealed class ChatAttachmentTests : IDisposable
         Directory.Delete(uploads, recursive: true);
         Directory.CreateSymbolicLink(uploads, victim);
 
-        await Assert.ThrowsAsync<IOException>(() => RunTurnAsync(service, session.Id, "look", saved));
+        await RunTurnAsync(service, session.Id, "look", saved);
 
+        Assert.Equal(1, _notifier.Completions);
+        var reply = _notifier.Appended.Last();
+        Assert.Equal("assistant", reply.Role);
+        Assert.Contains("[chat-error]", reply.Content);
+
+        // And nothing was written through the link.
         Assert.Empty(Directory.GetFileSystemEntries(victim));
     }
 

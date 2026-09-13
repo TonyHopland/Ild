@@ -53,6 +53,13 @@ public class ChatAttachment
     [Required]
     public byte[] Content { get; set; } = Array.Empty<byte>();
 
+    /// <summary>
+    /// The size of <see cref="Content"/>, stored rather than measured. A transcript
+    /// lists what every turn carried without loading a single blob, so the only
+    /// figure it could derive from <see cref="Content"/> on that path is zero.
+    /// </summary>
+    public long SizeBytes { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     public ChatSession ChatSession { get; set; } = null!;
