@@ -394,6 +394,27 @@ describe("useWorkItemDetail feedback attachments", () => {
     expect(edge).toHaveBeenCalledWith("wi-1", "Needs work", "Attached to this work item: run.log");
   });
 
+  test("a partly-failed upload leaves only the files that did not land", async () => {
+    const { result } = await mountParked();
+    const ok = png("landed.png");
+    const bad = png("failed.png");
+    vi.spyOn(workItemService, "uploadAttachment").mockImplementation((_id, file) =>
+      file === ok
+        ? Promise.resolve({ id: "a1", fileName: "landed.png", contentType: null, sizeBytes: 6 })
+        : Promise.reject(new Error("network")),
+    );
+    const respond = vi.spyOn(workItemService, "humanFeedbackInput").mockResolvedValue(undefined);
+
+    act(() => result.current.addFeedbackFiles([ok, bad]));
+    await act(async () => {
+      await result.current.handleApprove();
+    });
+
+    // Retrying must not attach the one that already landed a second time.
+    expect(respond).not.toHaveBeenCalled();
+    expect(result.current.feedbackFiles).toEqual([bad]);
+  });
+
   test("an oversized file is refused before it is staged", async () => {
     const { result } = await mountParked();
     const huge = new File(["x"], "huge.bin");

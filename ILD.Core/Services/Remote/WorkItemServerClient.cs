@@ -214,8 +214,12 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
         var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/attachments");
         var form = new MultipartFormDataContent();
         var part = new StreamContent(content);
-        if (!string.IsNullOrWhiteSpace(contentType))
-            part.Headers.ContentType = new MediaTypeHeaderValue(contentType);
+        // Parsed rather than constructed: the value came off a client's multipart
+        // request, and the constructor throws on a malformed media type — which
+        // would turn a bad header into a 500 on the way out. An unusable one is
+        // simply not forwarded; the server falls back to its own default.
+        if (MediaTypeHeaderValue.TryParse(contentType, out var parsedContentType))
+            part.Headers.ContentType = parsedContentType;
         form.Add(part, "file", fileName);
         msg.Content = form;
 

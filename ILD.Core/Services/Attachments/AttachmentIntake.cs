@@ -1,4 +1,5 @@
 using System.Text;
+using ILD.Core.Services.Implementations;
 using ILD.Data.DTOs;
 
 namespace ILD.Core.Services.Attachments;
@@ -110,23 +111,89 @@ public static class AttachmentIntake
     }
 
     /// <summary>
-    /// A name not already taken in <paramref name="directory"/>, derived from
-    /// <paramref name="fileName"/> by suffixing the stem. Callers materializing
-    /// files the human named share this so a second <c>screenshot.png</c> does
-    /// not overwrite the first.
+    /// The names a file is offered, in order: the one the human gave it, then the
+    /// stem suffixed, so a second <c>screenshot.png</c> does not land on the
+    /// first. Which one it actually takes is decided by the create below, not by
+    /// looking first.
     /// </summary>
-    public static string UniqueFileNameIn(string directory, string fileName)
+    private static IEnumerable<string> NameCandidates(string fileName)
     {
-        if (!File.Exists(Path.Combine(directory, fileName))) return fileName;
+        yield return fileName;
 
         var stem = Path.GetFileNameWithoutExtension(fileName);
         var ext = Path.GetExtension(fileName);
-        for (var n = 2; n < 1000; n++)
+        for (var n = 2; n < 1000; n++) yield return $"{stem}-{n}{ext}";
+        yield return $"{stem}-{Guid.NewGuid():N}{ext}";
+    }
+
+    /// <summary>
+    /// Take the first free name and write the upload to it, returning where it
+    /// landed.
+    ///
+    /// <para>
+    /// The create is <see cref="FileMode.CreateNew"/> — <c>O_CREAT|O_EXCL</c> —
+    /// which is doing two jobs. It reserves the name <em>atomically</em>, so two
+    /// uploads racing on one name cannot both believe they have it and write the
+    /// same path. And it refuses to open a path that already exists rather than
+    /// following it, so a symlink the agent planted in this directory cannot turn
+    /// an upload into an overwrite of a file the orchestrator can reach. Checking
+    /// with <c>File.Exists</c> first and then creating would lose both properties.
+    /// </para>
+    /// </summary>
+    private static async Task<string> WriteToFreeNameAsync(
+        string root, string fileName, Stream content, CancellationToken ct)
+    {
+        foreach (var candidate in NameCandidates(fileName))
         {
-            var candidate = $"{stem}-{n}{ext}";
-            if (!File.Exists(Path.Combine(directory, candidate))) return candidate;
+            var path = Path.GetFullPath(Path.Combine(root, candidate));
+
+            // Belt and braces over SanitizeFileName: the invariant that matters is
+            // that a stored path never escapes the directory it was destined for,
+            // and that is worth asserting on the resolved path rather than
+            // inferring it from the filter above.
+            if (!path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                throw new AttachmentRejectedException($"'{fileName}' is not a valid file name.");
+
+            FileStream target;
+            try
+            {
+                target = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            }
+            catch (IOException)
+            {
+                continue;   // taken, or a planted link: try the next name
+            }
+
+            try
+            {
+                await using (target)
+                {
+                    await content.CopyToAsync(target, ct);
+                }
+            }
+            catch
+            {
+                // Nothing references this path yet, so a half-written upload would
+                // just sit on disk forever.
+                TryDelete(path);
+                throw;
+            }
+
+            // The agent reads these files but must never be able to rewrite one:
+            // writing an existing file is governed by that file's own mode, not by
+            // the directory's (ADR-0014).
+            AgentIsolation.ProtectFromAgentWrites(path);
+            return path;
         }
-        return $"{stem}-{Guid.NewGuid():N}{ext}";
+
+        throw new AttachmentRejectedException($"Could not find a free name for '{fileName}'.");
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { File.Delete(path); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 
     /// <summary>
@@ -151,37 +218,43 @@ public static class AttachmentIntake
                     $"'{SanitizeFileName(file.FileName)}' is larger than the {MaxBytesPerFile / (1024 * 1024)} MB limit.");
         }
 
-        Directory.CreateDirectory(directory);
-        var root = Path.GetFullPath(directory);
+        var root = PrepareDirectory(directory);
 
         var saved = new List<AttachmentRef>(files.Count);
         foreach (var file in files)
         {
-            var fileName = UniqueFileNameIn(root, SanitizeFileName(file.FileName));
-            var path = Path.GetFullPath(Path.Combine(root, fileName));
-
-            // Belt and braces over SanitizeFileName: the invariant that matters is
-            // that a stored path never escapes the directory it was destined for,
-            // and that is worth asserting on the resolved path rather than
-            // inferring it from the filter above.
-            if (!path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
-                throw new AttachmentRejectedException($"'{file.FileName}' is not a valid file name.");
-
-            await using (var target = File.Create(path))
-            {
-                await file.Content.CopyToAsync(target, ct);
-            }
-
-            var written = new FileInfo(path).Length;
+            var path = await WriteToFreeNameAsync(root, SanitizeFileName(file.FileName), file.Content, ct);
             saved.Add(new AttachmentRef(
                 Guid.NewGuid().ToString("N"),
-                fileName,
+                Path.GetFileName(path),
                 path,
                 NormalizeContentType(file.ContentType),
-                written));
+                new FileInfo(path).Length));
         }
 
         return saved;
+    }
+
+    /// <summary>
+    /// Create the upload directory and close it to the agent.
+    ///
+    /// <para>
+    /// These files live inside a tree the agent can reach — that is the whole
+    /// point, it has to read them — but it must never be able to <em>replace</em>
+    /// an entry here. The orchestrator writes this directory and serves it back
+    /// to the attachment's owner, so an agent that could swap a file for a
+    /// symlink would be choosing what the orchestrator overwrites and what it
+    /// hands out. Stripping group write is what makes that impossible; the
+    /// <c>O_EXCL</c> create is the other half, covering the window before a
+    /// directory has been protected. See ADR-0014.
+    /// </para>
+    /// </summary>
+    private static string PrepareDirectory(string directory)
+    {
+        Directory.CreateDirectory(directory);
+        var root = Path.GetFullPath(directory);
+        AgentIsolation.ProtectFromAgentWrites(root);
+        return root;
     }
 
     private static string? NormalizeContentType(string? contentType)

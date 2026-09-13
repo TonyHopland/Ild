@@ -91,11 +91,68 @@ public sealed class WorkItemService : IWorkItemService
         _attachments = attachments;
     }
 
+    /// <summary>
+    /// How many times a losing writer re-reads and re-applies its attachment
+    /// change before giving up. Mirrors <see cref="RecordPullRequestAttempts"/>;
+    /// contention is a handful of requests at most.
+    /// </summary>
+    private const int AttachmentAttempts = 5;
+
+    /// <summary>
+    /// Apply <paramref name="mutate"/> to the item's attachment list as a
+    /// compare-and-swap against the column it read, retrying against the winner's
+    /// list when another writer got there first.
+    ///
+    /// <para>
+    /// Same reasoning as <see cref="RecordPullRequestAsync"/>, and the same
+    /// mechanism: this is a read-modify-write of a whole JSON list, so two
+    /// requests arriving together would otherwise each save their own snapshot
+    /// and the second would erase the first's entry — while still answering its
+    /// caller that the attachment was stored. Retrying is safe because each
+    /// change is independent of the others: an add appends its own entry, a
+    /// remove drops its own id.
+    /// </para>
+    /// </summary>
+    /// <returns>
+    /// Null when there is no such work item, false when the mutation found
+    /// nothing to do, true when it was committed.
+    /// </returns>
+    private async Task<bool?> MutateAttachmentsAsync(
+        string id, Func<List<WorkItemAttachment>, bool> mutate, CancellationToken ct)
+    {
+        for (var attempt = 0; attempt < AttachmentAttempts; attempt++)
+        {
+            var w = await _db.WorkItems.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, ct);
+            if (w == null) return null;
+
+            var seen = w.AttachmentsJson;
+            var attachments = WorkItemMapper.ReadAttachments(w);
+            if (!mutate(attachments)) return false;
+
+            var now = _clock.GetUtcNow().UtcDateTime;
+            var json = WorkItemMapper.SerializeAttachments(attachments);
+            var rows = await _db.WorkItems
+                .Where(x => x.Id == id && x.AttachmentsJson == seen)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(x => x.AttachmentsJson, json)
+                    .SetProperty(x => x.UpdatedAt, now), ct);
+            if (rows == 0) continue;
+
+            // The write went straight to the column, so a copy this scope was
+            // already tracking still holds the old list — refresh it, or a later
+            // read in the same request would answer from it.
+            var tracked = _db.ChangeTracker.Entries<WorkItem>().FirstOrDefault(e => e.Entity.Id == id);
+            if (tracked is not null) await tracked.ReloadAsync(ct);
+            return true;
+        }
+
+        throw new AttachmentConflictException(id);
+    }
+
     public async Task<WorkItemAttachment?> AddAttachmentAsync(
         string id, string fileName, string? contentType, Stream content, CancellationToken ct = default)
     {
-        var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
-        if (w == null) return null;
+        if (!await _db.WorkItems.AsNoTracking().AnyAsync(x => x.Id == id, ct)) return null;
 
         var attachmentId = Guid.NewGuid().ToString("N");
         var size = await _attachments.SaveAsync(id, attachmentId, content, ct);
@@ -107,11 +164,24 @@ public sealed class WorkItemService : IWorkItemService
             size,
             _clock.GetUtcNow().UtcDateTime);
 
-        var attachments = WorkItemMapper.ReadAttachments(w);
-        attachments.Add(attachment);
-        WorkItemMapper.WriteAttachments(w, attachments);
-        w.UpdatedAt = _clock.GetUtcNow().UtcDateTime;
-        await _db.SaveChangesAsync(ct);
+        bool? applied;
+        try
+        {
+            applied = await MutateAttachmentsAsync(id, list => { list.Add(attachment); return true; }, ct);
+        }
+        catch
+        {
+            // The bytes are written but nothing will ever point at them.
+            _attachments.Delete(id, attachmentId);
+            throw;
+        }
+
+        // The work item was deleted while the bytes were being written.
+        if (applied is not true)
+        {
+            _attachments.Delete(id, attachmentId);
+            return null;
+        }
 
         return attachment;
     }
@@ -131,15 +201,9 @@ public sealed class WorkItemService : IWorkItemService
 
     public async Task<bool> DeleteAttachmentAsync(string id, string attachmentId, CancellationToken ct = default)
     {
-        var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
-        if (w == null) return false;
-
-        var attachments = WorkItemMapper.ReadAttachments(w);
-        if (attachments.RemoveAll(a => a.Id == attachmentId) == 0) return false;
-
-        WorkItemMapper.WriteAttachments(w, attachments);
-        w.UpdatedAt = _clock.GetUtcNow().UtcDateTime;
-        await _db.SaveChangesAsync(ct);
+        var applied = await MutateAttachmentsAsync(
+            id, list => list.RemoveAll(a => a.Id == attachmentId) > 0, ct);
+        if (applied is not true) return false;
 
         // Bytes go after the metadata write commits: an orphaned file wastes
         // space, whereas metadata pointing at a file that is already gone is a

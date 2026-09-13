@@ -97,9 +97,19 @@ public sealed class WorkItemAttachmentStore : IWorkItemAttachmentStore
         var path = PathFor(workItemId, attachmentId);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
 
-        await using (var target = File.Create(path))
+        try
         {
-            await content.CopyToAsync(target, ct);
+            await using (var target = File.Create(path))
+            {
+                await content.CopyToAsync(target, ct);
+            }
+        }
+        catch
+        {
+            // Metadata is only written once this returns, so a half-written file
+            // would be referenced by nothing and never cleaned up.
+            try { File.Delete(path); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            throw;
         }
 
         return new FileInfo(path).Length;
@@ -108,8 +118,16 @@ public sealed class WorkItemAttachmentStore : IWorkItemAttachmentStore
     public Stream? Open(string workItemId, string attachmentId)
     {
         if (!IsSafeSegment(workItemId) || !IsSafeSegment(attachmentId)) return null;
-        var path = PathFor(workItemId, attachmentId);
-        return File.Exists(path) ? File.OpenRead(path) : null;
+
+        // Opened directly rather than checked first: a delete commits the metadata
+        // removal before unlinking the bytes, so a download racing it would pass an
+        // existence check and then throw — a 500 where the caller documents null.
+        try
+        {
+            return File.OpenRead(PathFor(workItemId, attachmentId));
+        }
+        catch (FileNotFoundException) { return null; }
+        catch (DirectoryNotFoundException) { return null; }
     }
 
     public void Delete(string workItemId, string attachmentId)

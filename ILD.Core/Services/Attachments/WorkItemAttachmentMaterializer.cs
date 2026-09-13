@@ -58,7 +58,15 @@ public sealed class WorkItemAttachmentMaterializer : IWorkItemAttachmentMaterial
         // mode fixing of our own. The AI node grants the directory to the agent as
         // an extra allowed directory, the same mechanism the chat uses for a
         // worktree it does not live in (ADR-0011).
-        var directory = AgentIsolation.CreateScratchDirectory("workitem-attachments", runId.ToString("N"));
+        var directory = RunDirectory(runId);
+
+        // Readable by the agent, writable only by us: the agent is handed these
+        // paths, so if it could replace one with a symlink it would be choosing
+        // what the orchestrator writes over on the next node (ADR-0014). The
+        // parent is closed too — otherwise a run directory could be planted
+        // before it is created.
+        AgentIsolation.ProtectFromAgentWrites(Path.GetDirectoryName(directory)!);
+        AgentIsolation.ProtectFromAgentWrites(directory);
 
         var files = new List<AttachmentRef>(workItem.Attachments.Count);
         foreach (var attachment in workItem.Attachments)
@@ -72,8 +80,7 @@ public sealed class WorkItemAttachmentMaterializer : IWorkItemAttachmentMaterial
                 var content = await Download(workItem.Id, attachment.Id, ct);
                 if (content is null) continue;
 
-                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                await File.WriteAllBytesAsync(path, content.Bytes, ct);
+                await WriteAsync(path, content.Bytes, ct);
             }
 
             files.Add(new AttachmentRef(
@@ -83,10 +90,36 @@ public sealed class WorkItemAttachmentMaterializer : IWorkItemAttachmentMaterial
         return files.Count == 0 ? MaterializedAttachments.None : new MaterializedAttachments(directory, files);
     }
 
+    /// <summary>
+    /// Where a run's attachments are materialized. Derived from the run id alone
+    /// so run cleanup can find and remove them without the run having to record
+    /// the path.
+    /// </summary>
+    public static string RunDirectory(Guid runId)
+        => AgentIsolation.CreateScratchDirectory("workitem-attachments", runId.ToString("N"));
+
     private static bool IsAlreadyLocal(string path, long expectedSize)
     {
         var info = new FileInfo(path);
         return info.Exists && info.Length == expectedSize;
+    }
+
+    private static async Task WriteAsync(string path, byte[] bytes, CancellationToken ct)
+    {
+        var directory = Path.GetDirectoryName(path)!;
+        Directory.CreateDirectory(directory);
+        AgentIsolation.ProtectFromAgentWrites(directory);
+
+        // Replaced rather than truncated in place: CreateNew refuses to follow an
+        // existing path, so a re-download cannot be redirected through a symlink,
+        // and a stale file is removed first so the name is genuinely free.
+        File.Delete(path);
+        await using (var target = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        {
+            await target.WriteAsync(bytes, ct);
+        }
+
+        AgentIsolation.ProtectFromAgentWrites(path);
     }
 
     private async Task<RemoteAttachmentContent?> Download(string workItemId, string attachmentId, CancellationToken ct)
@@ -94,6 +127,12 @@ public sealed class WorkItemAttachmentMaterializer : IWorkItemAttachmentMaterial
         try
         {
             return await _workItems.GetAttachmentAsync(workItemId, attachmentId, ct);
+        }
+        // A cancelled run is not a failed download: swallowing it here would let
+        // the node carry on and report success without the file it asked for.
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {

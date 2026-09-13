@@ -20,6 +20,7 @@ namespace ILD.Tests;
 /// read but git will not see, so the path is covered end to end against a real
 /// <c>WorkItemService</c> rather than a mock of it.
 /// </summary>
+[Collection("EnvironmentPath")]
 public sealed class WorkItemAttachmentTests : IDisposable
 {
     private readonly FakeWorkItemServerHarness _server = new();
@@ -156,6 +157,26 @@ public sealed class WorkItemAttachmentTests : IDisposable
 
         Assert.Equal(first.Files[0].StoredPath, second.Files[0].StoredPath);
         Assert.Equal(writtenAt, File.GetLastWriteTimeUtc(second.Files[0].StoredPath));
+    }
+
+    [Fact]
+    public async Task A_cancelled_download_stops_the_node_rather_than_losing_the_file_quietly()
+    {
+        var item = await CreateItemAsync();
+        await AttachAsync(item.Id, "sketch.png", "pixels");
+        var remote = (await _server.Client.GetAsync(Opts, item.Id))!;
+        var view = new WorkItemView { Id = item.Id, Title = "WI", Attachments = remote.Attachments };
+
+        var manager = new Mock<IWorkItemManager>();
+        manager.Setup(m => m.GetAttachmentAsync(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OperationCanceledException());
+
+        // Treating cancellation as an ordinary download failure would let the node
+        // carry on and report success without the file the human attached.
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => new WorkItemAttachmentMaterializer(manager.Object)
+                .EnsureLocalAsync(view, Guid.NewGuid(), CancellationToken.None));
     }
 
     [Fact]

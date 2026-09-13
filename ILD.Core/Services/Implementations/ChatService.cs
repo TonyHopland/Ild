@@ -101,6 +101,13 @@ public sealed class ChatService : IChatService
         var scratchPath = Path.GetFullPath(Path.Combine(_options.ScratchRoot, id.ToString("N")));
         Directory.CreateDirectory(scratchPath);
 
+        // Created and closed to the agent now, before the agent has ever run in
+        // this session, so it cannot get there first and leave a symlink where
+        // the uploads directory should be. The agent's own working directory
+        // stays writable — only this subdirectory is taken away from it.
+        Directory.CreateDirectory(UploadsDirectory(scratchPath));
+        AgentIsolation.ProtectFromAgentWrites(UploadsDirectory(scratchPath));
+
         var session = new ChatSession
         {
             Id = id,
@@ -157,7 +164,14 @@ public sealed class ChatService : IChatService
             .SelectMany(ReadAttachments)
             .FirstOrDefault(a => a.Id == attachmentId);
 
-        return match is not null && File.Exists(match.StoredPath) ? match : null;
+        if (match is null) return null;
+
+        // The uploads directory is agent-unwritable, which is what stops the
+        // agent substituting a symlink here between this check and the download
+        // opening the path. Refusing a link as well keeps the guarantee from
+        // resting on file modes alone.
+        var info = new FileInfo(match.StoredPath);
+        return info.Exists && info.LinkTarget is null ? match : null;
     }
 
     public async Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, string? openLoopDocument, IReadOnlyList<AttachmentRef>? attachments, CancellationToken ct)

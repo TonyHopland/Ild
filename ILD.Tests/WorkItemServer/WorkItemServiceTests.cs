@@ -320,6 +320,74 @@ public class WorkItemServiceTests : IAsyncLifetime
     private WorkItemServerDbContext NewContext()
         => new(new DbContextOptionsBuilder<WorkItemServerDbContext>().UseSqlite(_conn).Options);
 
+    /// <summary>
+    /// Attaching is a read-modify-write of one JSON list, so two uploads landing
+    /// together must not have the second save its own stale snapshot over the
+    /// first — least of all while telling its caller the attachment was stored.
+    /// Both contexts read the item before either writes, which is the shape that
+    /// used to lose one.
+    /// </summary>
+    [Fact]
+    public async Task Concurrent_uploads_both_survive_on_the_work_item()
+    {
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "attachments" });
+
+        await using var clientA = NewContext();
+        await using var clientB = NewContext();
+        await clientA.WorkItems.FirstAsync(w => w.Id == dto.Id);
+        await clientB.WorkItems.FirstAsync(w => w.Id == dto.Id);
+
+        var first = await NewService(clientA)
+            .AddAttachmentAsync(dto.Id, "a.png", "image/png", new MemoryStream([1]));
+        var second = await NewService(clientB)
+            .AddAttachmentAsync(dto.Id, "b.png", "image/png", new MemoryStream([2]));
+
+        Assert.NotNull(first);
+        Assert.NotNull(second);
+        // Read through a context that has never seen this item: _svc has had it
+        // tracked since CreateAsync and would answer from that stale copy rather
+        // than from what the two writers actually committed.
+        await using var reader = NewContext();
+        Assert.Equal(
+            new[] { "a.png", "b.png" },
+            (await NewService(reader).GetAsync(dto.Id))!.Attachments.Select(a => a.FileName).OrderBy(n => n));
+    }
+
+    [Fact]
+    public async Task Concurrent_removal_does_not_resurrect_another_upload()
+    {
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "attachments" });
+        var doomed = await _svc.AddAttachmentAsync(dto.Id, "old.png", "image/png", new MemoryStream([1]));
+
+        await using var clientA = NewContext();
+        await using var clientB = NewContext();
+        await clientA.WorkItems.FirstAsync(w => w.Id == dto.Id);
+        await clientB.WorkItems.FirstAsync(w => w.Id == dto.Id);
+
+        await NewService(clientA).AddAttachmentAsync(dto.Id, "new.png", "image/png", new MemoryStream([2]));
+        Assert.True(await NewService(clientB).DeleteAttachmentAsync(dto.Id, doomed!.Id));
+
+        // The delete re-applied itself against the winner's list rather than
+        // writing back a snapshot that predates the upload.
+        await using var reader = NewContext();
+        Assert.Equal(
+            new[] { "new.png" },
+            (await NewService(reader).GetAsync(dto.Id))!.Attachments.Select(a => a.FileName));
+    }
+
+    [Fact]
+    public async Task An_attachment_whose_bytes_vanished_reads_as_missing_rather_than_throwing()
+    {
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "attachments" });
+        var attachment = await _svc.AddAttachmentAsync(dto.Id, "gone.png", "image/png", new MemoryStream([1]));
+
+        // What a download racing a delete sees: metadata still there, bytes gone.
+        foreach (var file in Directory.GetFiles(_attachmentRoot, "*", SearchOption.AllDirectories))
+            File.Delete(file);
+
+        Assert.Null(await _svc.OpenAttachmentAsync(dto.Id, attachment!.Id));
+    }
+
     [Fact]
     public async Task Transition_to_Running_fails_when_dependency_not_done()
     {

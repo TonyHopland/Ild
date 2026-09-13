@@ -316,6 +316,23 @@ describe("ChatBubble", () => {
     expect(chatService.sendMessage).not.toHaveBeenCalled();
   });
 
+  test("staged files do not follow the user out of the chat they were picked in", async () => {
+    chatService.sendMessage.mockResolvedValue(undefined);
+    await openResumed(chatSession());
+
+    const file = new File(["pixels"], "sketch.png", { type: "image/png" });
+    fireEvent.change(screen.getByLabelText("Attach files"), { target: { files: [file] } });
+    expect(await screen.findByLabelText("Remove sketch.png")).toBeTruthy();
+
+    // The bubble is mounted globally, so leaving the chat must not leave the
+    // draft attached to whatever is opened next.
+    fireEvent.click(screen.getByText("← Back"));
+    fireEvent.click(await screen.findByText("Past chat"));
+    await screen.findByLabelText("Chat message");
+
+    expect(screen.queryByLabelText("Remove sketch.png")).toBeNull();
+  });
+
   test("a past turn's attachments are listed in the transcript", async () => {
     await openResumed(
       chatSession({

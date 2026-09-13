@@ -82,6 +82,11 @@ export default function EditPanel({
   const [keptAttachments, setKeptAttachments] = useState<Attachment[]>(baseAttachments);
   const [newFiles, setNewFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // What a failed save already got through, so a retry resumes rather than
+  // repeats: deletes that landed are not replayed into a 404, and the item a
+  // create produced is edited rather than created again.
+  const appliedDeletesRef = useRef<Set<string>>(new Set());
+  const createdIdRef = useRef<string | null>(null);
 
   const overridesProvider = aiProviderOverride !== AiProviderOverrideMode.None;
 
@@ -137,16 +142,22 @@ export default function EditPanel({
    * changed, so only a save that touched attachments pays for a re-read.
    */
   const applyAttachmentsAsync = async (id: string): Promise<boolean> => {
-    const removed = baseAttachments.filter((a) => !keptAttachments.some((k) => k.id === a.id));
+    const removed = baseAttachments.filter(
+      (a) => !keptAttachments.some((k) => k.id === a.id) && !appliedDeletesRef.current.has(a.id),
+    );
     if (removed.length === 0 && newFiles.length === 0) return false;
 
+    // Each step is retired as it succeeds, so a save that fails partway through
+    // can be retried: a delete that already happened is not replayed into a 404
+    // that aborts the save, and a file that already landed is not attached twice.
     for (const attachment of removed) {
       await workItemService.deleteAttachment(id, attachment.id);
+      appliedDeletesRef.current.add(attachment.id);
     }
     for (const file of newFiles) {
       await workItemService.uploadAttachment(id, file);
+      setNewFiles((prev) => prev.filter((f) => f !== file));
     }
-    setNewFiles([]);
     return true;
   };
 
@@ -216,8 +227,13 @@ export default function EditPanel({
             );
           }
         }
+      } else if (createdIdRef.current) {
+        // An earlier submit created the item and then failed applying its
+        // attachments; creating again would leave the first one orphaned.
+        saved = await workItemService.update(createdIdRef.current, data as Partial<WorkItem>);
       } else {
         saved = await workItemService.create(data as Partial<WorkItem>);
+        createdIdRef.current = saved.id;
       }
 
       if (await applyAttachmentsAsync(saved.id)) {

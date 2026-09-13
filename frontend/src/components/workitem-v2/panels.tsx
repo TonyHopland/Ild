@@ -803,6 +803,7 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
  */
 export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: WorkItemDetail }) {
   const [showLinkPr, setShowLinkPr] = useState(false);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [prUrlInput, setPrUrlInput] = useState("");
   const [showAddDep, setShowAddDep] = useState(false);
   const [selectedDepId, setSelectedDepId] = useState("");
@@ -938,12 +939,15 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
                   type="button"
                   className="wiv2-attachment-name"
                   title={`Download ${a.fileName}`}
-                  onClick={() =>
+                  onClick={() => {
+                    setAttachmentError(null);
+                    // A dropped promise here would be an unhandled rejection and
+                    // leave the click looking like it simply did nothing.
                     void downloadAttachment(
                       () => workItemService.getAttachment(workItem.id, a.id),
                       a.fileName,
-                    )
-                  }
+                    ).catch(() => setAttachmentError(`Could not download ${a.fileName}.`));
+                  }}
                 >
                   📎 {a.fileName}
                 </button>
@@ -953,6 +957,11 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
           </ul>
         ) : (
           <span className="detail-value">None</span>
+        )}
+        {attachmentError && (
+          <div role="alert" className="preview-message preview-error">
+            {attachmentError}
+          </div>
         )}
       </div>
       <div className="wiv2-meta-row wiv2-meta-col">

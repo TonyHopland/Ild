@@ -604,11 +604,13 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const attachFeedbackFilesAsync = async (id: string, text: string): Promise<string> => {
     if (feedbackFiles.length === 0) return text;
 
+    const names = feedbackFiles.map((f) => f.name).join(", ");
     for (const file of feedbackFiles) {
       await workItemService.uploadAttachment(id, file);
+      // Dropped as each one lands, so a response that fails partway through can
+      // be retried without attaching the earlier files a second time.
+      setFeedbackFiles((prev) => prev.filter((f) => f !== file));
     }
-    const names = feedbackFiles.map((f) => f.name).join(", ");
-    setFeedbackFiles([]);
     return text
       ? `${text}\n\nAttached to this work item: ${names}`
       : `Attached to this work item: ${names}`;

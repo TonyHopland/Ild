@@ -115,8 +115,17 @@ public sealed class WorkItemsController : ControllerBase
             return BadRequest($"Files must be {WorkItemAttachmentStore.MaxBytesPerFile / (1024 * 1024)} MB or smaller");
 
         await using var content = file.OpenReadStream();
-        var attachment = await _svc.AddAttachmentAsync(id, file.FileName, file.ContentType, content, ct);
-        return attachment == null ? NotFound() : Ok(attachment);
+        try
+        {
+            var attachment = await _svc.AddAttachmentAsync(id, file.FileName, file.ContentType, content, ct);
+            return attachment == null ? NotFound() : Ok(attachment);
+        }
+        catch (AttachmentConflictException ex)
+        {
+            // Lost every race for the item's list. Nothing was stored and nothing
+            // was lost, so this is a retry — not a missing work item.
+            return Conflict(ex.Message);
+        }
     }
 
     [HttpGet("{id}/attachments/{attachmentId}")]
@@ -131,7 +140,16 @@ public sealed class WorkItemsController : ControllerBase
 
     [HttpDelete("{id}/attachments/{attachmentId}")]
     public async Task<IActionResult> DeleteAttachment(string id, string attachmentId, CancellationToken ct)
-        => await _svc.DeleteAttachmentAsync(id, attachmentId, ct) ? NoContent() : NotFound();
+    {
+        try
+        {
+            return await _svc.DeleteAttachmentAsync(id, attachmentId, ct) ? NoContent() : NotFound();
+        }
+        catch (AttachmentConflictException ex)
+        {
+            return Conflict(ex.Message);
+        }
+    }
 
     [HttpPost("{id}/pull-requests")]
     public async Task<IActionResult> RecordPullRequest(string id, [FromBody] RecordPullRequestRequest req, CancellationToken ct)

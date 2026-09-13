@@ -101,6 +101,61 @@ public class AttachmentIntakeTests : IDisposable
         Assert.Equal("second", await File.ReadAllTextAsync(saved[1].StoredPath));
     }
 
+    /// <summary>
+    /// The upload directory sits inside a tree the agent can reach, so it could
+    /// plant a symlink where an upload is about to land. Following it would let
+    /// the agent choose a file for the orchestrator to overwrite, which is why
+    /// the create is <c>O_CREAT|O_EXCL</c> rather than a check followed by a
+    /// truncating open.
+    /// </summary>
+    [Fact]
+    public async Task An_upload_does_not_follow_a_symlink_planted_at_its_name()
+    {
+        Directory.CreateDirectory(_dir);
+        var elsewhere = Path.Combine(Path.GetTempPath(), $"ild-attachment-target-{Guid.NewGuid():N}.txt");
+        await File.WriteAllTextAsync(elsewhere, "do not overwrite me");
+        File.CreateSymbolicLink(Path.Combine(_dir, "sketch.png"), elsewhere);
+
+        try
+        {
+            var saved = await AttachmentIntake.SaveAsync(_dir, [Upload("sketch.png", "pixels")]);
+
+            Assert.Equal("do not overwrite me", await File.ReadAllTextAsync(elsewhere));
+            var attachment = Assert.Single(saved);
+            Assert.NotEqual(Path.Combine(_dir, "sketch.png"), attachment.StoredPath);
+            Assert.Equal("pixels", await File.ReadAllTextAsync(attachment.StoredPath));
+        }
+        finally
+        {
+            File.Delete(elsewhere);
+        }
+    }
+
+    [Fact]
+    public async Task A_failed_write_leaves_no_half_upload_behind()
+    {
+        var failing = new UploadedFile("broken.bin", "application/octet-stream", 8, new ThrowingStream());
+
+        await Assert.ThrowsAsync<IOException>(() => AttachmentIntake.SaveAsync(_dir, [failing]));
+
+        // Nothing references a partial file, so it would sit there forever.
+        Assert.Empty(Directory.GetFiles(_dir));
+    }
+
+    private sealed class ThrowingStream : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => 0; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new IOException("boom");
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
     [Fact]
     public async Task Save_records_size_and_content_type()
     {

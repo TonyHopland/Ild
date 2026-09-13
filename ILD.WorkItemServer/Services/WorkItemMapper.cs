@@ -77,7 +77,15 @@ internal static class WorkItemMapper
     }
 
     public static void WriteAttachments(WorkItem w, IReadOnlyList<WorkItemAttachment> attachments)
-        => w.AttachmentsJson = JsonSerializer.Serialize(attachments, JsonOpts);
+        => w.AttachmentsJson = SerializeAttachments(attachments);
+
+    /// <summary>
+    /// The serialized column value, for the compare-and-swap write in
+    /// <c>WorkItemService</c> — which sets the column directly rather than
+    /// through a tracked entity, exactly as the pull-request recorder does.
+    /// </summary>
+    public static string SerializeAttachments(IReadOnlyList<WorkItemAttachment> attachments)
+        => JsonSerializer.Serialize(attachments, JsonOpts);
 
     public static void WriteTags(WorkItem w, IReadOnlyList<string> tags)
         => w.TagsJson = JsonSerializer.Serialize(tags, JsonOpts);

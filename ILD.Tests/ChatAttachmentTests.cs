@@ -105,8 +105,11 @@ public sealed class ChatAttachmentTests : IDisposable
         var saved = await service.SaveAttachmentsAsync("mallory", session.Id, [Upload("sketch.png", "pixels")]);
 
         Assert.Null(saved);
+        // The directory itself exists from the moment the session is created — it
+        // is taken away from the agent before the agent can plant anything there —
+        // so what matters is that nothing was written into it.
         var scratchPath = _db.Context.ChatSessions.Single().ScratchPath;
-        Assert.False(Directory.Exists(Path.Combine(scratchPath, "uploads")));
+        Assert.Empty(Directory.GetFileSystemEntries(Path.Combine(scratchPath, "uploads")));
     }
 
     [Fact]

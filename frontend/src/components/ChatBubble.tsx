@@ -355,6 +355,13 @@ export default function ChatBubble() {
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // The bubble is mounted globally and outlives any one chat, so a draft left
+  // staged in one chat would otherwise still be attached when the user backs out
+  // and opens another — sending the first chat's files to the second.
+  useEffect(() => {
+    setPendingFiles([]);
+  }, [session?.id]);
+
   const addFiles = useCallback((incoming: FileList | File[] | null) => {
     const list = Array.from(incoming ?? []);
     if (list.length === 0) return;
