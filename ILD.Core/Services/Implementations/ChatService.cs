@@ -101,13 +101,17 @@ public sealed class ChatService : IChatService
         var scratchPath = Path.GetFullPath(Path.Combine(_options.ScratchRoot, id.ToString("N")));
         Directory.CreateDirectory(scratchPath);
 
-        // Created up front and closed to the agent, so the agent cannot be the one
-        // that creates it. Its own working directory stays writable — only this
-        // subdirectory is taken away from it. That protects the contents, not the
-        // entry: the agent can still swap the directory itself, which is why every
-        // use re-checks with RequireUnredirectedPath.
-        Directory.CreateDirectory(UploadsDirectory(scratchPath));
-        AgentIsolation.ProtectFromAgentWrites(UploadsDirectory(scratchPath));
+        // Validated before being created, exactly as the save path does: without
+        // this, a redirected component would have ProtectFromAgentWrites chmod a
+        // directory outside the trusted root before any later check could refuse
+        // it. Created up front and closed to the agent so the agent is not the one
+        // that creates it; its own working directory stays writable, only this
+        // subdirectory is taken away. That protects the contents, not the entry —
+        // the entry is re-checked on every use.
+        var uploads = UploadsDirectory(scratchPath);
+        AgentIsolation.RequireUnredirectedPath(_options.ScratchRoot, uploads);
+        Directory.CreateDirectory(uploads);
+        AgentIsolation.ProtectFromAgentWrites(uploads);
 
         var session = new ChatSession
         {

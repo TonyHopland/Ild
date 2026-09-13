@@ -216,6 +216,30 @@ public sealed class WorkItemService : IWorkItemService
         _attachments.Delete(id, attachmentId);
     }
 
+    /// <summary>
+    /// Drop every attachment of a work item once its row is genuinely gone. Used
+    /// on the delete path, where cancellation can surface after the commit: the
+    /// row's absence, not the save's return, is what says the bytes are unwanted.
+    /// </summary>
+    private async Task DeleteAllBytesIfRowIsGoneAsync(string id)
+    {
+        try
+        {
+            // Not the caller's token: the usual way to get here is that it was
+            // cancelled, and the question still has to be asked.
+            if (await _db.WorkItems.AsNoTracking()
+                    .AnyAsync(x => x.Id == id, CancellationToken.None))
+                return;
+        }
+        catch
+        {
+            // Could not find out. Keeping the bytes is the recoverable side.
+            return;
+        }
+
+        _attachments.DeleteAll(id);
+    }
+
     public async Task<(WorkItemAttachment Meta, Stream Content)?> OpenAttachmentAsync(
         string id, string attachmentId, CancellationToken ct = default)
     {
@@ -231,8 +255,22 @@ public sealed class WorkItemService : IWorkItemService
 
     public async Task<bool> DeleteAttachmentAsync(string id, string attachmentId, CancellationToken ct = default)
     {
-        var applied = await MutateAttachmentsAsync(
-            id, list => list.RemoveAll(a => a.Id == attachmentId) > 0, ct);
+        bool? applied;
+        try
+        {
+            applied = await MutateAttachmentsAsync(
+                id, list => list.RemoveAll(a => a.Id == attachmentId) > 0, ct);
+        }
+        catch
+        {
+            // Mirrors the add path: the removal may have committed before this
+            // threw — cancellation observed during the post-commit reload gets
+            // here — and the bytes would then be orphaned with the metadata
+            // already gone. The committed list decides, as it does there.
+            await DeleteBytesIfUnreferencedAsync(id, attachmentId);
+            throw;
+        }
+
         if (applied is not true) return false;
 
         // Bytes go after the metadata write commits: an orphaned file wastes
@@ -333,8 +371,18 @@ public sealed class WorkItemService : IWorkItemService
         var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
         if (w == null) return false;
         _db.WorkItems.Remove(w);
-        await _db.SaveChangesAsync(ct);
-        _attachments.DeleteAll(id);
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+        }
+        finally
+        {
+            // Reached whether or not the save reported success: cancellation can
+            // be observed after the row deletion has already committed, and
+            // returning early there would strand every one of the item's files
+            // permanently. Asking whether the row is actually gone is what decides.
+            await DeleteAllBytesIfRowIsGoneAsync(id);
+        }
 
         // Scrub the deleted id from every other item's dependency list. A
         // dangling reference would otherwise wedge a dependent forever: a

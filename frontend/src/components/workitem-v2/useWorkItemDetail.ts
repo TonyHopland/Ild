@@ -39,6 +39,10 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   // respond, so an abandoned draft leaves nothing on the item.
   const [feedbackFiles, setFeedbackFiles] = useState<File[]>([]);
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
+  // Names of files already attached for this response, as the server stored
+  // them. Kept across a failed submit — the files are on the item by then, so a
+  // retry must still name them — and cleared once the response lands.
+  const attachedNamesRef = useRef<string[]>([]);
   const [prCommentsLoading, setPrCommentsLoading] = useState(false);
   const [progressText, setProgressText] = useState("");
   const [preview, setPreview] = useState<WorktreePreview | null>(null);
@@ -137,6 +141,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     setFeedbackInput("");
     setFeedbackFiles([]);
     setFeedbackError(null);
+    attachedNamesRef.current = [];
   }, [workItem?.id, workItem?.status]);
 
   useEffect(() => {
@@ -602,15 +607,27 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
    * attachment block carries them.
    */
   const attachFeedbackFilesAsync = async (id: string, text: string): Promise<string> => {
-    if (feedbackFiles.length === 0) return text;
+    // Not just "nothing staged": a retry after a failed submit has already
+    // uploaded its files and cleared them from the staging list, and it still
+    // has to name them — they are on the item whether or not this attempt put
+    // them there.
+    if (feedbackFiles.length === 0 && attachedNamesRef.current.length === 0) return text;
 
-    const names = feedbackFiles.map((f) => f.name).join(", ");
     for (const file of feedbackFiles) {
-      await workItemService.uploadAttachment(id, file);
+      const stored = await workItemService.uploadAttachment(id, file);
+      // Named as the server stored it, not as the browser offered it: the server
+      // sanitizes, so the raw name could describe something other than what the
+      // agent is handed — and could push its own formatting into the note.
+      attachedNamesRef.current.push(stored.fileName);
       // Dropped as each one lands, so a response that fails partway through can
-      // be retried without attaching the earlier files a second time.
+      // be retried without attaching the earlier files a second time. The names
+      // outlive that retry, held until the response itself succeeds — otherwise
+      // a second attempt would promise nothing while the files were already on
+      // the item.
       setFeedbackFiles((prev) => prev.filter((f) => f !== file));
     }
+
+    const names = attachedNamesRef.current.join(", ");
     return text
       ? `${text}\n\nAttached to this work item: ${names}`
       : `Attached to this work item: ${names}`;
@@ -631,7 +648,11 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
         );
         throw error;
       }
-      return submit(id, text);
+      const result = await submit(id, text);
+      // Only now: until the response lands, a retry still has to be able to name
+      // the files it already attached.
+      attachedNamesRef.current = [];
+      return result;
     }, errorLabel);
 
   const handleApprove = () =>

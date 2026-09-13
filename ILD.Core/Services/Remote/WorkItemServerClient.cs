@@ -258,7 +258,12 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
         // caller reports the attachment missing — sending the user looking for
         // something that is still there.
         if (resp.StatusCode == HttpStatusCode.Conflict) throw new RemoteAttachmentConflictException(id);
-        return resp.IsSuccessStatusCode;
+        // Only a 404 means "no such attachment". Letting every other failure fall
+        // through as false would have the caller report a server error as a
+        // missing attachment, and abort an edit on the wrong diagnosis.
+        if (resp.StatusCode == HttpStatusCode.NotFound) return false;
+        EnsureSuccess(resp, msg);
+        return true;
     }
 
     public async Task<RemotePollResponse> PollAsync(WorkItemServerOptions opts, IReadOnlyList<string> activeIds, CancellationToken ct = default)

@@ -52,8 +52,16 @@ public static class AttachmentIntake
     /// the headroom a file of exactly <see cref="MaxBytesPerFile"/> — one the UI
     /// accepts and the size check below calls legal — is cut off by ASP.NET's
     /// generic "Request body too large" before any of our own checks run.
+    ///
+    /// <para>
+    /// Sized for the largest non-file passenger rather than for framing alone: the
+    /// loop document a chat turn carries is accepted up to a million characters,
+    /// which is several MB once it is UTF-8 on the wire. At 1 MB a full-size
+    /// upload sent from an open Loop Editor would have been refused by ASP.NET
+    /// before reaching the check that could explain why.
+    /// </para>
     /// </summary>
-    public const long MultipartOverheadAllowance = 1L * 1024 * 1024;
+    public const long MultipartOverheadAllowance = 8L * 1024 * 1024;
 
     /// <summary>
     /// The most a multi-file upload request may weigh. Endpoints declare this as

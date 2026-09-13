@@ -43,6 +43,21 @@ public sealed class WorkItemServerClientConflictTests
         Assert.False(await ClientAnswering(HttpStatusCode.NotFound).DeleteAttachmentAsync(Opts, "47", "a1"));
     }
 
+    /// <summary>
+    /// Only 404 means "no such attachment". A removal that returned false for
+    /// every unsuccessful status told the caller the attachment was already gone
+    /// whenever the server had merely failed — a wrong diagnosis that aborts an
+    /// edit and sends the user looking for something still there.
+    /// </summary>
+    [Fact]
+    public async Task A_removal_the_server_could_not_process_is_not_reported_as_already_gone()
+        => await Assert.ThrowsAsync<HttpRequestException>(
+            () => ClientAnswering(HttpStatusCode.InternalServerError).DeleteAttachmentAsync(Opts, "47", "a1"));
+
+    [Fact]
+    public async Task A_removal_the_server_accepted_reads_as_removed()
+        => Assert.True(await ClientAnswering(HttpStatusCode.NoContent).DeleteAttachmentAsync(Opts, "47", "a1"));
+
     private sealed class StubHandler(HttpStatusCode status) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)

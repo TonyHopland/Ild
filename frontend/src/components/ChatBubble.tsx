@@ -391,7 +391,10 @@ export default function ChatBubble() {
       // and only the files are ours to intercept.
       const files = Array.from(e.clipboardData?.files ?? []);
       if (files.length === 0) return;
-      e.preventDefault();
+      // A clipboard holding both a caption and an image is one paste, not two:
+      // suppressing the default unconditionally staged the image and silently
+      // swallowed the words that came with it. The text is left to paste itself.
+      if (!e.clipboardData?.getData("text/plain")) e.preventDefault();
       addFiles(files);
     },
     [addFiles],

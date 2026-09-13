@@ -394,6 +394,53 @@ describe("useWorkItemDetail feedback attachments", () => {
     expect(edge).toHaveBeenCalledWith("wi-1", "Needs work", "Attached to this work item: run.log");
   });
 
+  test("the note names files as the server stored them, not as the browser offered them", async () => {
+    const { result } = await mountParked();
+    vi.spyOn(workItemService, "uploadAttachment").mockResolvedValue({
+      id: "a1",
+      fileName: "etc_passwd.png", // sanitized on the way in
+      contentType: "image/png",
+      sizeBytes: 6,
+    });
+    const respond = vi.spyOn(workItemService, "humanFeedbackInput").mockResolvedValue(undefined);
+    vi.spyOn(workItemService, "getById").mockResolvedValue(makeWorkItem());
+
+    act(() => result.current.addFeedbackFiles([png("../../etc/passwd.png")]));
+    await act(async () => {
+      await result.current.handleApprove();
+    });
+
+    // The agent is handed the stored name, so the note has to agree with it.
+    expect(respond).toHaveBeenCalledWith("wi-1", "Attached to this work item: etc_passwd.png");
+  });
+
+  test("a response retried after a failed submit still names the files already attached", async () => {
+    const { result } = await mountParked();
+    const upload = vi.spyOn(workItemService, "uploadAttachment").mockResolvedValue({
+      id: "a1",
+      fileName: "sketch.png",
+      contentType: "image/png",
+      sizeBytes: 6,
+    });
+    const respond = vi
+      .spyOn(workItemService, "humanFeedbackInput")
+      .mockRejectedValueOnce(new Error("network"))
+      .mockResolvedValue(undefined);
+    vi.spyOn(workItemService, "getById").mockResolvedValue(makeWorkItem());
+
+    act(() => result.current.addFeedbackFiles([png()]));
+    await act(async () => {
+      await result.current.handleApprove();
+    });
+    await act(async () => {
+      await result.current.handleApprove();
+    });
+
+    // Uploaded once, and the second attempt still promises what is on the item.
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(respond).toHaveBeenLastCalledWith("wi-1", "Attached to this work item: sketch.png");
+  });
+
   test("a partly-failed upload leaves only the files that did not land", async () => {
     const { result } = await mountParked();
     const ok = png("landed.png");
