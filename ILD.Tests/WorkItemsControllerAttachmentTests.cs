@@ -64,6 +64,40 @@ public class WorkItemsControllerAttachmentTests
             "47", expected, "image/png", It.IsAny<Stream>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    /// <summary>
+    /// Losing every retry for the item's attachment list is worth retrying, so it
+    /// has to survive the hop from the WorkItem server to this API. Left to
+    /// itself the client's failure path turns the server's 409 into an opaque
+    /// 500, and a conflicted delete into a 404 — telling the caller an attachment
+    /// that is still there has gone.
+    /// </summary>
+    [Fact]
+    public async Task A_conflicted_upload_is_reported_as_retryable_rather_than_as_a_server_error()
+    {
+        var (controller, manager) = Build();
+        manager.Setup(m => m.AddAttachmentAsync(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<Stream>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new RemoteAttachmentConflictException("47"));
+
+        var result = await controller.AddAttachment("47", File("sketch.png"), CancellationToken.None);
+
+        var conflict = Assert.IsType<ConflictObjectResult>(result);
+        Assert.Contains("Retry", conflict.Value!.ToString());
+    }
+
+    [Fact]
+    public async Task A_conflicted_removal_is_not_reported_as_a_missing_attachment()
+    {
+        var (controller, manager) = Build();
+        manager.Setup(m => m.DeleteAttachmentAsync(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new RemoteAttachmentConflictException("47"));
+
+        var result = await controller.DeleteAttachment("47", "a1", CancellationToken.None);
+
+        Assert.IsType<ConflictObjectResult>(result);
+    }
+
     [Fact]
     public async Task A_file_at_exactly_the_per_file_limit_is_accepted()
     {

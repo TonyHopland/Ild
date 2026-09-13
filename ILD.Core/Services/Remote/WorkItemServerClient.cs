@@ -225,6 +225,10 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
 
         using var resp = await _http.SendAsync(msg, ct);
         if (resp.StatusCode == HttpStatusCode.NotFound) return null;
+        // Distinguished before EnsureSuccess, which would otherwise turn a
+        // retryable conflict into the same opaque failure as an unreachable
+        // server — and, with nothing catching it, into an empty 500.
+        if (resp.StatusCode == HttpStatusCode.Conflict) throw new RemoteAttachmentConflictException(id);
         EnsureSuccess(resp, msg);
         return await resp.Content.ReadFromJsonAsync<RemoteWorkItemAttachment>(JsonOpts, ct);
     }
@@ -250,6 +254,10 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
     {
         var msg = Build(opts, HttpMethod.Delete, $"/workitems/{id}/attachments/{attachmentId}");
         using var resp = await _http.SendAsync(msg, ct);
+        // Without this a conflicted delete reads as an ordinary failure, and the
+        // caller reports the attachment missing — sending the user looking for
+        // something that is still there.
+        if (resp.StatusCode == HttpStatusCode.Conflict) throw new RemoteAttachmentConflictException(id);
         return resp.IsSuccessStatusCode;
     }
 

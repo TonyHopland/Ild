@@ -154,8 +154,17 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
     public async Task<RemoteWorkItemAttachment?> AddAttachmentAsync(
         WorkItemServerOptions opts, string id, string fileName, string? contentType, Stream content, CancellationToken ct = default)
     {
-        var saved = await _svc.AddAttachmentAsync(id, fileName, contentType, content, ct);
-        return saved is null ? null : ToRemote(saved);
+        // The real client reaches the server over HTTP and turns its 409 into
+        // this; translating here keeps the fake's contract the same.
+        try
+        {
+            var saved = await _svc.AddAttachmentAsync(id, fileName, contentType, content, ct);
+            return saved is null ? null : ToRemote(saved);
+        }
+        catch (AttachmentConflictException)
+        {
+            throw new RemoteAttachmentConflictException(id);
+        }
     }
 
     public async Task<RemoteAttachmentContent?> GetAttachmentAsync(
@@ -173,9 +182,18 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         }
     }
 
-    public Task<bool> DeleteAttachmentAsync(
+    public async Task<bool> DeleteAttachmentAsync(
         WorkItemServerOptions opts, string id, string attachmentId, CancellationToken ct = default)
-        => _svc.DeleteAttachmentAsync(id, attachmentId, ct);
+    {
+        try
+        {
+            return await _svc.DeleteAttachmentAsync(id, attachmentId, ct);
+        }
+        catch (AttachmentConflictException)
+        {
+            throw new RemoteAttachmentConflictException(id);
+        }
+    }
 }
 
 /// <summary>

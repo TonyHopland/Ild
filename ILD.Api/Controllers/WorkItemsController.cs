@@ -239,9 +239,18 @@ public class WorkItemsController : ControllerBase
         // server as a multipart part name, and a quote or backslash in it makes an
         // invalid Content-Disposition header rather than an odd file name.
         await using var content = file.OpenReadStream();
-        var attachment = await _workItemManager.AddAttachmentAsync(
-            id, AttachmentIntake.SanitizeFileName(file.FileName), file.ContentType, content, cancellationToken);
-        return attachment is null ? NotFound() : Ok(attachment);
+        try
+        {
+            var attachment = await _workItemManager.AddAttachmentAsync(
+                id, AttachmentIntake.SanitizeFileName(file.FileName), file.ContentType, content, cancellationToken);
+            return attachment is null ? NotFound() : Ok(attachment);
+        }
+        catch (RemoteAttachmentConflictException ex)
+        {
+            // Nothing was stored and nothing was lost — worth retrying, which an
+            // opaque 500 would not tell the caller.
+            return Conflict(new { error = ex.Message });
+        }
     }
 
     [HttpGet("{id}/attachments/{attachmentId}")]
@@ -255,7 +264,18 @@ public class WorkItemsController : ControllerBase
 
     [HttpDelete("{id}/attachments/{attachmentId}")]
     public async Task<IActionResult> DeleteAttachment(string id, string attachmentId, CancellationToken cancellationToken)
-        => await _workItemManager.DeleteAttachmentAsync(id, attachmentId, cancellationToken) ? NoContent() : NotFound();
+    {
+        try
+        {
+            return await _workItemManager.DeleteAttachmentAsync(id, attachmentId, cancellationToken)
+                ? NoContent()
+                : NotFound();
+        }
+        catch (RemoteAttachmentConflictException ex)
+        {
+            return Conflict(new { error = ex.Message });
+        }
+    }
 
     /// <summary>
     /// Advice on a custom branch name while it is being typed: whether it is
