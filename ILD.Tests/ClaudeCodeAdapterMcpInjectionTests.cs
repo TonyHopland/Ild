@@ -11,6 +11,7 @@ namespace ILD.Tests;
 /// discover the ILD MCP — the user's <c>~/.claude</c> config is irrelevant
 /// when the agent runs inside an isolated worktree without prior setup.
 /// </summary>
+[Collection("EnvironmentPath")]
 public class ClaudeCodeAdapterMcpInjectionTests : IDisposable
 {
     private readonly string _tempDir;

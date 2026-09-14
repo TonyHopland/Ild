@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
@@ -267,7 +268,7 @@ public class PiAdapterTests
             Assert.Contains("--session-dir", result.Output);
             Assert.Contains("--session", result.Output);
             Assert.Contains("--tools", result.Output);
-            Assert.Contains("read,grep,find,ls,edit,write,bash,ild_list_workitems,ild_get_workitem,ild_create_workitem,ild_list_repositories,ild_list_loop_templates,ild_list_loop_runs,ild_pull_branch,ild_get_preview,ild_start_preview,ild_stop_preview,ild_start_preview_service,ild_stop_preview_service,ild_get_preview_service_config,ild_update_preview_service_config,ild_get_preview_logs", result.Output);
+            Assert.Contains("read,grep,find,ls,edit,write,bash,ild_", result.Output);
             Assert.Contains("openai/gpt-5", result.Output);
             Assert.Contains("sk-test", result.Output);
             Assert.DoesNotContain("\n--\n", result.Output);
@@ -452,79 +453,170 @@ public class PiAdapterTests
 
 
     [Fact]
-    public void ExecuteAsync_escapes_control_characters_in_ild_extension_strings()
+    public async Task ExecuteAsync_loads_the_ild_mcp_extension_for_a_run_even_without_an_absolute_base_url()
     {
-        var extensionContent = GeneratePiExtension(
-            "http://localhost:1234/v1",
-            "sk-local\r\nnext-line",
-            Guid.NewGuid().ToString());
+        var runId = Guid.NewGuid();
+        var worktreeDir = NewWorktree("ild-pi-mcp-run");
+        var scriptPath = WriteRecordingPi(worktreeDir);
 
-        Assert.Contains("const API_TOKEN = \"sk-local\\r\\nnext-line\";", extensionContent);
-        Assert.DoesNotContain("sk-local\r\nnext-line", extensionContent);
+        try
+        {
+            var result = await new PiAdapter().ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                worktreePath: worktreeDir,
+                runId: runId,
+                executionCount: 1));
+
+            Assert.True(result.Success, result.Error);
+            var extension = ExtensionArgument(worktreeDir);
+            Assert.Equal(Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-ext", runId.ToString("N"), "ild.ts"), extension);
+            Assert.True(File.Exists(Path.Combine(Path.GetDirectoryName(extension)!, "ild-mcp-bridge.js")));
+
+            var ildTs = File.ReadAllText(extension);
+            Assert.Contains("./ild-mcp-bridge.js", ildTs);
+            Assert.Contains("ild-mcp-server.dll", ildTs);
+            Assert.Contains("ILD_LOOP_RUN_ID", ildTs);
+            Assert.Contains(runId.ToString(), ildTs);
+            Assert.DoesNotContain("ILD_CHAT_SESSION_ID", ildTs);
+
+            // The agent dir (and its models.json) stays tied to an absolute BaseUrl.
+            Assert.Equal(string.Empty, File.ReadAllText(Path.Combine(worktreeDir, "agent-dir.txt")));
+            Assert.False(Directory.Exists(Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-agent", runId.ToString("N"))));
+        }
+        finally
+        {
+            CleanUpRunScratch(runId);
+            Directory.Delete(worktreeDir, true);
+        }
     }
 
     [Fact]
-    public void ExecuteAsync_generates_query_parameter_code_without_embedded_newlines()
+    public async Task ExecuteAsync_scopes_the_ild_mcp_extension_to_the_chat_session_for_a_chat_turn()
     {
-        var extensionContent = GeneratePiExtension(
-            "http://localhost:1234/v1",
-            "Local",
-            Guid.NewGuid().ToString());
+        var chatSessionId = Guid.NewGuid();
+        var worktreeDir = NewWorktree("ild-pi-mcp-chat");
+        var scriptPath = WriteRecordingPi(worktreeDir);
 
-        Assert.Contains("function joinApiUrl(base: string, path: string): string {", extensionContent);
-        Assert.Contains("const url = joinApiUrl(API_BASE, path);", extensionContent);
-        Assert.DoesNotContain("const url = API_BASE + path;", extensionContent);
-        Assert.Contains("if (params.status != null) qs.set(\"status\", String(params.status));", extensionContent);
-        Assert.Contains("if (params.skip !== undefined) qs.set(\"skip\", String(params.skip));", extensionContent);
-        Assert.Contains("let path = \"api/v1/agent/workitems\";", extensionContent);
-        Assert.Contains("const url = qs.toString() ? `${path}?${qs.toString()}` : path;", extensionContent);
-        Assert.DoesNotContain("qs.set(\"\nstatus", extensionContent);
+        try
+        {
+            var result = await new PiAdapter().ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                worktreePath: worktreeDir,
+                runId: chatSessionId,
+                executionCount: 1) with { ChatSessionId = chatSessionId });
+
+            Assert.True(result.Success, result.Error);
+            var extension = ExtensionArgument(worktreeDir);
+            Assert.StartsWith(Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-ext") + Path.DirectorySeparatorChar, extension);
+
+            var ildTs = File.ReadAllText(extension);
+            Assert.Contains("ILD_CHAT_SESSION_ID", ildTs);
+            Assert.Contains(chatSessionId.ToString(), ildTs);
+            Assert.DoesNotContain("ILD_LOOP_RUN_ID", ildTs);
+        }
+        finally
+        {
+            CleanUpRunScratch(chatSessionId);
+            Directory.Delete(worktreeDir, true);
+        }
     }
 
     [Fact]
-    public void ExecuteAsync_generates_path_params_query_and_put_for_preview_tools()
+    public async Task ExecuteAsync_with_ild_off_loads_no_extension_and_lists_no_ild_tools()
     {
-        var extensionContent = GeneratePiExtension(
-            "http://localhost:1234/v1",
-            "Local",
-            Guid.NewGuid().ToString());
+        var runId = Guid.NewGuid();
+        var worktreeDir = NewWorktree("ild-pi-mcp-off");
+        var scriptPath = WriteRecordingPi(worktreeDir);
 
-        // A PUT helper exists and the config-update tool calls it after
-        // substituting both {workItemId} and {service} path placeholders.
-        Assert.Contains("async function ildPut(path: string, body: object): Promise<string> {", extensionContent);
-        Assert.Contains("let path = \"api/v1/agent/workitems/{workItemId}/preview/services/{service}/config\";", extensionContent);
-        Assert.Contains("path = path.replace(\"{workItemId}\", encodeURIComponent(String(params.workItemId)));", extensionContent);
-        Assert.Contains("path = path.replace(\"{service}\", encodeURIComponent(String(params.service)));", extensionContent);
-        Assert.Contains("await ildPut(url, body)", extensionContent);
+        try
+        {
+            var result = await new PiAdapter().ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                worktreePath: worktreeDir,
+                runId: runId,
+                executionCount: 1) with { ToolAllowlist = new[] { "read", "write", "execute" } });
 
-        // The logs tool keeps {workItemId} as a path param but passes `service`
-        // as a query param (it is not a placeholder in that endpoint).
-        Assert.Contains("let path = \"api/v1/agent/workitems/{workItemId}/preview/logs\";", extensionContent);
-        Assert.Contains("if (params.service != null) qs.set(\"service\", String(params.service));", extensionContent);
+            Assert.True(result.Success, result.Error);
+            var argv = File.ReadAllLines(Path.Combine(worktreeDir, "argv.txt"));
+            Assert.DoesNotContain("-e", argv);
+            Assert.Equal("read,grep,find,ls,edit,write,bash", argv[Array.IndexOf(argv, "--tools") + 1]);
+            Assert.False(Directory.Exists(Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-ext", runId.ToString("N"))));
+        }
+        finally
+        {
+            CleanUpRunScratch(runId);
+            Directory.Delete(worktreeDir, true);
+        }
     }
 
     [Fact]
-    public void ExecuteAsync_filters_ild_extension_tools_when_requested()
+    public async Task ExecuteAsync_allows_exactly_the_mcp_servers_tools_alongside_the_built_ins()
     {
-        var generatorType = typeof(PiAdapter).Assembly
-            .GetType("ILD.Core.Services.Implementations.Adapters.PiExtensionGenerator", throwOnError: true)!;
-        var generateMethod = generatorType.GetMethod(
-            "Generate",
-            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public,
-            binder: null,
-            types: [typeof(string), typeof(string), typeof(string), typeof(IReadOnlyCollection<string>)],
-            modifiers: null)!;
+        var runId = Guid.NewGuid();
+        var worktreeDir = NewWorktree("ild-pi-mcp-tools");
+        var scriptPath = WriteRecordingPi(worktreeDir);
 
-        var extensionContent = (string)generateMethod.Invoke(null, [
-            "http://localhost:1234/v1",
-            "Local",
-            Guid.NewGuid().ToString(),
-            new[] { "ild_get_workitem" }
-        ])!;
+        try
+        {
+            var result = await new PiAdapter().ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                worktreePath: worktreeDir,
+                runId: runId,
+                executionCount: 1));
 
-        Assert.Contains("ild_get_workitem", extensionContent);
-        Assert.DoesNotContain("ild_list_workitems", extensionContent);
-        Assert.DoesNotContain("ild_create_workitem", extensionContent);
+            Assert.True(result.Success, result.Error);
+            var argv = File.ReadAllLines(Path.Combine(worktreeDir, "argv.txt"));
+            var tools = argv[Array.IndexOf(argv, "--tools") + 1].Split(',');
+
+            var expected = new[] { "read", "grep", "find", "ls", "edit", "write", "bash" }
+                .Concat(McpServerToolReflection.Names().Select(n => "ild_" + n));
+            Assert.Equal(expected.OrderBy(n => n, StringComparer.Ordinal), tools.OrderBy(n => n, StringComparer.Ordinal));
+        }
+        finally
+        {
+            CleanUpRunScratch(runId);
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_with_an_absolute_base_url_keeps_models_json_and_loads_the_extension_from_scratch()
+    {
+        var runId = Guid.NewGuid();
+        var worktreeDir = NewWorktree("ild-pi-mcp-baseurl");
+        var scriptPath = WriteRecordingPi(worktreeDir);
+
+        try
+        {
+            var result = await new PiAdapter().ExecuteAsync(new AgentExecutionContext(
+                Provider: new AiProvider
+                {
+                    Name = "vllm-provider",
+                    Type = "pi",
+                    BaseUrl = "http://localhost:8000/v1",
+                    Model = "openai/my-model",
+                    Config = JsonSerializer.Serialize(new { binaryPath = scriptPath }),
+                },
+                Prompt: "test prompt",
+                RunContext: new LoopRunContext(runId, "wi", "t", "d", worktreeDir, "main", new List<string>(), null),
+                ExecutionCount: 1,
+                Cancel: CancellationToken.None));
+
+            Assert.True(result.Success, result.Error);
+            var agentDir = Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-agent", runId.ToString("N"));
+            Assert.Equal(agentDir, File.ReadAllText(Path.Combine(worktreeDir, "agent-dir.txt")));
+            Assert.True(File.Exists(Path.Combine(agentDir, "models.json")));
+            Assert.False(File.Exists(Path.Combine(agentDir, "extensions", "ild.ts")));
+
+            Assert.Equal(
+                Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-ext", runId.ToString("N"), "ild.ts"),
+                ExtensionArgument(worktreeDir));
+        }
+        finally
+        {
+            CleanUpRunScratch(runId);
+            Directory.Delete(worktreeDir, true);
+        }
     }
 
     [Fact]
@@ -683,18 +775,46 @@ public class PiAdapterTests
             OnSessionId: onSessionId);
     }
 
-    private static string GeneratePiExtension(string apiUrl, string apiToken, string loopRunId)
+    private static string NewWorktree(string prefix)
     {
-        var generatorType = typeof(PiAdapter).Assembly
-            .GetType("ILD.Core.Services.Implementations.Adapters.PiExtensionGenerator", throwOnError: true)!;
-        var generateMethod = generatorType.GetMethod(
-            "Generate",
-            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public,
-            binder: null,
-            types: [typeof(string), typeof(string), typeof(string)],
-            modifiers: null)!;
+        var path = Path.Combine(Path.GetTempPath(), $"{prefix}-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(path);
+        return path;
+    }
 
-        return (string)generateMethod.Invoke(null, [apiUrl, apiToken, loopRunId])!;
+    /// <summary>
+    /// A stand-in pi that records its argv (one per line) and the agent dir it
+    /// was given, then completes a turn so the adapter reports success.
+    /// </summary>
+    private static string WriteRecordingPi(string worktreeDir)
+    {
+        var scriptPath = Path.Combine(worktreeDir, "pi.sh");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            $"printf '%s\\n' \"$@\" > '{worktreeDir}/argv.txt'\n" +
+            $"printf '%s' \"$PI_CODING_AGENT_DIR\" > '{worktreeDir}/agent-dir.txt'\n" +
+            "cat >/dev/null\n" +
+            "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-session-ild\",\"cwd\":\"/w\"}'\n" +
+            "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ok\"}]}}'\n");
+        MakeExecutable(scriptPath);
+        return scriptPath;
+    }
+
+    private static string ExtensionArgument(string worktreeDir)
+    {
+        var argv = File.ReadAllLines(Path.Combine(worktreeDir, "argv.txt"));
+        var flag = Array.IndexOf(argv, "-e");
+        Assert.True(flag >= 0, "pi was not given -e <ild extension>");
+        return argv[flag + 1];
+    }
+
+    private static void CleanUpRunScratch(Guid runId)
+    {
+        foreach (var segment in new[] { "ild-pi-ext", "ild-pi-agent", "ild-pi-sessions" })
+        {
+            var dir = Path.Combine(AgentIsolation.ScratchRoot, segment, runId.ToString("N"));
+            try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { /* best effort */ }
+        }
     }
 
     private static async Task<SessionHarness> CreateSessionHarnessAsync()
