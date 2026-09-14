@@ -9,9 +9,8 @@ namespace ILD.McpServer.Tools;
 /// agent gets from that summary to the actual error, without the forge
 /// credentials being anywhere near it — the server does the authenticated fetch.
 ///
-/// Drift warning: this name and shape must stay in lockstep with the Pi surface
-/// (<see cref="ILD.Data.ToolDescriptors"/>) and the agent-API endpoint
-/// (<c>AgentController</c>) so the behaviour is the same whichever CLI backs it.
+/// Drift warning: this shape must stay in lockstep with the agent-API endpoint
+/// (<c>AgentController</c>) it calls.
 /// </summary>
 [McpServerToolType]
 public sealed class CiTools

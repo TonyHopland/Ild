@@ -35,8 +35,9 @@ public interface IChatService
     /// life. A user may hold many retained chats (ADR-0013), so this no longer
     /// rejects a second session. Throws <see cref="InvalidOperationException"/>
     /// when the provider is unknown or no adapter handles the provider type.
+    /// Null <paramref name="tools"/> means the provider's default tools.
     /// </summary>
-    Task<ChatSessionView> StartAsync(string userId, Guid aiProviderId, IReadOnlyList<string> tools, CancellationToken ct = default);
+    Task<ChatSessionView> StartAsync(string userId, Guid aiProviderId, IReadOnlyList<string>? tools, CancellationToken ct = default);
 
     /// <summary>
     /// Run one turn: append the user message, invoke the bound adapter session

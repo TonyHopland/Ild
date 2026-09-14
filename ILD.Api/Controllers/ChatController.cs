@@ -49,7 +49,7 @@ public class ChatController : ControllerBase
 
         try
         {
-            var session = await _chat.StartAsync(userId, providerId, request.Tools ?? Array.Empty<string>(), ct);
+            var session = await _chat.StartAsync(userId, providerId, request.Tools, ct);
             return Ok(session);
         }
         catch (InvalidOperationException ex)

@@ -85,7 +85,7 @@ public sealed class ChatService : IChatService
     public Task<bool> ExistsForUserAsync(string userId, Guid sessionId, CancellationToken ct = default)
         => _db.ChatSessions.AsNoTracking().AnyAsync(c => c.Id == sessionId && c.UserId == userId, ct);
 
-    public async Task<ChatSessionView> StartAsync(string userId, Guid aiProviderId, IReadOnlyList<string> tools, CancellationToken ct = default)
+    public async Task<ChatSessionView> StartAsync(string userId, Guid aiProviderId, IReadOnlyList<string>? tools, CancellationToken ct = default)
     {
         var provider = await _providers.GetAiProviderByIdAsync(aiProviderId)
             ?? throw new InvalidOperationException($"AiProvider {aiProviderId} not found");
