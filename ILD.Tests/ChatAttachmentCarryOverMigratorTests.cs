@@ -17,6 +17,11 @@ public sealed class ChatAttachmentCarryOverMigratorTests : IDisposable
     private readonly string _scratchRoot = Path.Combine(
         Path.GetTempPath(), "ild-attachment-carryover-tests", Guid.NewGuid().ToString("N"));
 
+    /// <summary>Stands in for the real redirected-path check, which lives in ILD.Core.</summary>
+    private static readonly Func<string, bool> Trusted = _ => true;
+
+    private static readonly Func<string, bool> Redirected = _ => false;
+
     public void Dispose()
     {
         try { if (Directory.Exists(_scratchRoot)) Directory.Delete(_scratchRoot, recursive: true); }
@@ -38,6 +43,7 @@ public sealed class ChatAttachmentCarryOverMigratorTests : IDisposable
         Assert.Equal("sketch.png", row.FileName);
         Assert.Equal("image/png", row.ContentType);
         Assert.Equal("pixels", Encoding.UTF8.GetString(row.Content));
+        Assert.Equal(6, row.SizeBytes);
         Assert.Equal(message.Id, row.ChatMessageId);
         Assert.Equal(session.Id, row.ChatSessionId);
 
@@ -69,11 +75,11 @@ public sealed class ChatAttachmentCarryOverMigratorTests : IDisposable
         await SeedLegacyColumnAsync(db, message, Reference(stored, "sketch.png", "image/png"));
 
         var captured = await ChatAttachmentCarryOverMigrator.CaptureAsync(db.Context);
-        Assert.Equal(1, (await ChatAttachmentCarryOverMigrator.ApplyAsync(db.Context, captured)).Carried);
+        Assert.Equal(1, (await ChatAttachmentCarryOverMigrator.ApplyAsync(db.Context, captured, Trusted)).Carried);
 
         // The second pass has no file left to read, so idempotency has to come
         // from the id already being present rather than from the read failing.
-        var second = await ChatAttachmentCarryOverMigrator.ApplyAsync(db.Context, captured);
+        var second = await ChatAttachmentCarryOverMigrator.ApplyAsync(db.Context, captured, Trusted);
         Assert.Equal(0, second.Carried);
         Assert.Equal(0, second.Missing);
         Assert.Equal(1, await db.Context.ChatAttachments.CountAsync());
@@ -119,6 +125,24 @@ public sealed class ChatAttachmentCarryOverMigratorTests : IDisposable
     }
 
     [Fact]
+    public async Task A_redirected_path_is_neither_read_nor_swept()
+    {
+        using var db = new TestDb();
+        var (session, message) = await SeedChatAsync(db);
+        var stored = WriteUpload(session, "sketch.png", "pixels");
+        await SeedLegacyColumnAsync(db, message, Reference(stored, "sketch.png", "image/png"));
+
+        var captured = await ChatAttachmentCarryOverMigrator.CaptureAsync(db.Context);
+        var result = await ChatAttachmentCarryOverMigrator.ApplyAsync(db.Context, captured, Redirected);
+
+        // A redirected component means these deletes would land somewhere other
+        // than where they were aimed, so none of them happen.
+        Assert.Equal(0, result.Carried);
+        Assert.Equal(0, result.Swept);
+        Assert.True(File.Exists(stored));
+    }
+
+    [Fact]
     public async Task Bytes_referenced_by_nothing_are_swept_off_disk_too()
     {
         using var db = new TestDb();
@@ -126,8 +150,7 @@ public sealed class ChatAttachmentCarryOverMigratorTests : IDisposable
         var orphan = WriteUpload(session, "orphan.png", "pixels");
 
         // No legacy column at all: nothing to carry, but the residue still goes.
-        var result = await ChatAttachmentCarryOverMigrator.ApplyAsync(
-            db.Context, await ChatAttachmentCarryOverMigrator.CaptureAsync(db.Context));
+        var result = await CarryOverAsync(db);
 
         Assert.Equal(0, result.Carried);
         Assert.Equal(1, result.Swept);
@@ -135,17 +158,41 @@ public sealed class ChatAttachmentCarryOverMigratorTests : IDisposable
     }
 
     [Fact]
-    public async Task Capture_is_empty_when_the_legacy_column_is_gone()
+    public async Task Capture_is_empty_but_complete_when_the_legacy_column_is_gone()
     {
         using var db = new TestDb();
         await SeedChatAsync(db);
 
-        Assert.Empty(await ChatAttachmentCarryOverMigrator.CaptureAsync(db.Context));
+        var captured = await ChatAttachmentCarryOverMigrator.CaptureAsync(db.Context);
+
+        Assert.Empty(captured.Messages);
+        // Complete, because "there is no such column" is an answer rather than a
+        // failure — this is the state every boot after the first one is in.
+        Assert.True(captured.Complete);
+    }
+
+    /// <summary>
+    /// The one that matters most. A read that fails is not a chat with no
+    /// attachments: the files it would have described are still on disk, and
+    /// sweeping them would destroy exactly what this migration exists to rescue.
+    /// </summary>
+    [Fact]
+    public async Task A_capture_that_could_not_be_read_sweeps_nothing()
+    {
+        using var db = new TestDb();
+        var (session, _) = await SeedChatAsync(db);
+        var stranded = WriteUpload(session, "sketch.png", "pixels");
+
+        var result = await ChatAttachmentCarryOverMigrator.ApplyAsync(
+            db.Context, ChatAttachmentCarryOverMigrator.LegacyCapture.Unreadable, Trusted);
+
+        Assert.Equal(0, result.Swept);
+        Assert.True(File.Exists(stranded));
     }
 
     private static async Task<ChatAttachmentCarryOverMigrator.CarryOverResult> CarryOverAsync(TestDb db)
         => await ChatAttachmentCarryOverMigrator.ApplyAsync(
-            db.Context, await ChatAttachmentCarryOverMigrator.CaptureAsync(db.Context));
+            db.Context, await ChatAttachmentCarryOverMigrator.CaptureAsync(db.Context), Trusted);
 
     private string UploadsOf(ChatSession session) => Path.Combine(session.ScratchPath, "uploads");
 

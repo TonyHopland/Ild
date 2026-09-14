@@ -184,8 +184,19 @@ try
 
             // Move chat attachments off disk into rows and clear what is left
             // behind, so no attachment bytes stay durably readable by the agent uid.
+            // The scratch tree is the agent's working directory, so every path is
+            // checked for a redirected component first; with no chat options to say
+            // where that tree is, nothing on disk is read or deleted at all.
+            var chatOptions = scope.ServiceProvider.GetService<ILD.Core.Services.Implementations.ChatOptions>();
+            var scratchRoot = chatOptions is null ? null : Path.GetFullPath(chatOptions.ScratchRoot);
             var attachments = await ILD.Data.Migrations.ChatAttachmentCarryOverMigrator.ApplyAsync(
-                dbContext, carriedAttachments);
+                dbContext,
+                carriedAttachments,
+                path => scratchRoot is not null
+                    && ILD.Core.Services.Implementations.AgentIsolation.IsUnredirectedPath(scratchRoot, path));
+            if (!carriedAttachments.Complete)
+                Log.Warning(
+                    "The legacy chat attachment metadata could not be read; nothing was carried across and nothing on disk was removed. The files are still there — retry before the column is needed again.");
             if (attachments.Carried > 0)
                 Log.Information("Carried {Count} chat attachment(s) into the database", attachments.Carried);
             if (attachments.Missing > 0)
