@@ -97,13 +97,29 @@ public static class ChatAttachmentCarryOverMigrator
             return LegacyCapture.Unreadable;
         }
 
-        // Asking the schema a question the connection is already known to answer:
-        // whichever of these two fails, it failed because of the shape of the
-        // schema and not because the database went away mid-migration.
+        return await CaptureFromAsync(connection, ct);
+    }
+
+    /// <summary>
+    /// The read itself, against a connection that is already open. Separate
+    /// because the context is consulted for nothing else, and because the
+    /// distinction drawn here — between a schema that lacks the column and a
+    /// database that has stopped answering — is the one worth testing directly.
+    /// </summary>
+    public static async Task<LegacyCapture> CaptureFromAsync(
+        DbConnection connection,
+        CancellationToken ct = default)
+    {
+        // A failed probe means nothing on its own. The column may be absent, or
+        // the connection may have died since it was opened, and only the first of
+        // those makes it safe to conclude there is nothing to carry. The second
+        // would hand back a clean bill of health and let the caller sweep the
+        // files away, which is the loss this whole split exists to prevent — so a
+        // failed probe is believed only from a connection that still answers.
         if (!await QuerySucceedsAsync(connection, @"SELECT 1 FROM ""ChatMessages"" WHERE 1 = 0", ct))
-            return LegacyCapture.Nothing;
+            return await NothingIfLiveAsync(connection, ct);
         if (!await QuerySucceedsAsync(connection, @"SELECT ""AttachmentsJson"" FROM ""ChatMessages"" WHERE 1 = 0", ct))
-            return LegacyCapture.Nothing;
+            return await NothingIfLiveAsync(connection, ct);
 
         var carried = new List<CarriedMessage>();
         try
@@ -144,6 +160,16 @@ public static class ChatAttachmentCarryOverMigrator
             return false;
         }
     }
+
+    /// <summary>
+    /// <see cref="LegacyCapture.Nothing"/>, but only on a connection that still
+    /// answers a question of its own. <c>SELECT 1</c> names no table, so there is
+    /// only one thing its failure can mean.
+    /// </summary>
+    private static async Task<LegacyCapture> NothingIfLiveAsync(DbConnection connection, CancellationToken ct)
+        => await QuerySucceedsAsync(connection, "SELECT 1", ct)
+            ? LegacyCapture.Nothing
+            : LegacyCapture.Unreadable;
 
     /// <summary>
     /// Writes each captured attachment's bytes into a row, then clears what the

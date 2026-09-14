@@ -1,3 +1,5 @@
+using System.Data;
+using System.Data.Common;
 using System.Text;
 using System.Text.Json;
 using ILD.Data.Entities;
@@ -188,6 +190,65 @@ public sealed class ChatAttachmentCarryOverMigratorTests : IDisposable
 
         Assert.Equal(0, result.Swept);
         Assert.True(File.Exists(stranded));
+    }
+
+    /// <summary>
+    /// Reports itself open and answers nothing at all. Stands in for a database
+    /// that went away between being opened and being read — the one window in
+    /// which a failed probe is indistinguishable from a schema that simply has no
+    /// such column, and a real connection cannot be coaxed into it, since an open
+    /// one always answers <c>SELECT 1</c>.
+    /// </summary>
+    private sealed class DeadConnection : DbConnection
+    {
+        [System.Diagnostics.CodeAnalysis.AllowNull]
+        public override string ConnectionString { get; set; } = string.Empty;
+        public override string Database => string.Empty;
+        public override string DataSource => string.Empty;
+        public override string ServerVersion => string.Empty;
+        public override ConnectionState State => ConnectionState.Open;
+
+        public override void ChangeDatabase(string databaseName) => throw new InvalidOperationException();
+        public override void Close() { }
+        public override void Open() => throw new InvalidOperationException("connection lost");
+
+        protected override DbTransaction BeginDbTransaction(IsolationLevel isolationLevel)
+            => throw new InvalidOperationException();
+
+        protected override DbCommand CreateDbCommand() => throw new InvalidOperationException("connection lost");
+    }
+
+    [Fact]
+    public async Task A_connection_that_died_after_opening_is_unreadable_not_empty()
+    {
+        using var db = new TestDb();
+        var (session, _) = await SeedChatAsync(db);
+        var stranded = WriteUpload(session, "sketch.png", "pixels");
+
+        var captured = await ChatAttachmentCarryOverMigrator.CaptureFromAsync(new DeadConnection());
+
+        // Emphatically not "there is nothing to carry": that answer is what
+        // licences the sweep, and the files are still out there.
+        Assert.False(captured.Complete);
+        Assert.Empty(captured.Messages);
+
+        var result = await ChatAttachmentCarryOverMigrator.ApplyAsync(db.Context, captured, Trusted);
+        Assert.Equal(0, result.Swept);
+        Assert.True(File.Exists(stranded));
+    }
+
+    [Fact]
+    public async Task A_live_connection_without_the_table_is_nothing_to_carry()
+    {
+        using var db = new TestDb();
+        await db.Context.Database.ExecuteSqlRawAsync(@"DROP TABLE ""ChatMessages""");
+
+        var captured = await ChatAttachmentCarryOverMigrator.CaptureAsync(db.Context);
+
+        // The liveness gate must not over-trigger either: a healthy database that
+        // simply has no such table is an answer, and the sweep stays available.
+        Assert.True(captured.Complete);
+        Assert.Empty(captured.Messages);
     }
 
     private static async Task<ChatAttachmentCarryOverMigrator.CarryOverResult> CarryOverAsync(TestDb db)
