@@ -1,3 +1,4 @@
+using ILD.Core.Services.Attachments;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
@@ -10,6 +11,48 @@ namespace ILD.Tests;
 public class RunReclaimerTests : IDisposable
 {
     private readonly List<string> _tempDirs = new();
+
+    [Fact]
+    public async Task Reclaim_removes_the_attachments_materialized_for_the_run()
+    {
+        var worktree = NewTempDir();
+        var repo = new Mock<IRepositoryManager>();
+        repo.Setup(r => r.ResolveBaseRepoPathAsync(worktree)).ReturnsAsync("/repos/x");
+        repo.Setup(r => r.DestroyWorktreeAsync(worktree))
+            .Callback(() => Directory.Delete(worktree, recursive: true))
+            .Returns(Task.CompletedTask);
+
+        var run = Run(worktree, "ild/wi-a-run-1");
+        // A run's work-item attachments are materialized outside the worktree on
+        // purpose, so destroying the worktree does not take them with it — without
+        // this they would sit on the scratch disk until the container is replaced.
+        var attachments = WorkItemAttachmentMaterializer.RunDirectory(run.Id);
+        Directory.CreateDirectory(attachments);
+        await File.WriteAllTextAsync(Path.Combine(attachments, "sketch.png"), "pixels");
+
+        await Build(repo).ReclaimLocalStateAsync(run);
+
+        Assert.False(Directory.Exists(attachments));
+    }
+
+    [Fact]
+    public async Task Reclaim_leaves_no_scratch_directory_behind_for_a_run_that_had_no_attachments()
+    {
+        var worktree = NewTempDir();
+        var repo = new Mock<IRepositoryManager>();
+        repo.Setup(r => r.ResolveBaseRepoPathAsync(worktree)).ReturnsAsync("/repos/x");
+        repo.Setup(r => r.DestroyWorktreeAsync(worktree))
+            .Callback(() => Directory.Delete(worktree, recursive: true))
+            .Returns(Task.CompletedTask);
+
+        var run = Run(worktree, "ild/wi-a-run-1");
+
+        await Build(repo).ReclaimLocalStateAsync(run);
+
+        // Asking where a run's attachments would go must not bring the directory
+        // into being — most runs never have any, and cleanup asks about all of them.
+        Assert.False(Directory.Exists(WorkItemAttachmentMaterializer.RunDirectory(run.Id)));
+    }
 
     [Fact]
     public async Task Reclaim_destroys_worktree_then_deletes_branch_via_base_repo()

@@ -1,4 +1,5 @@
 using ILD.Api.Contracts;
+using ILD.Core.Services.Attachments;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
@@ -215,6 +216,65 @@ public class WorkItemsController : ControllerBase
         if (!ok) return NotFound();
         var wi = await _workItemManager.GetWorkItemAsync(id);
         return Ok(wi);
+    }
+
+    /// <summary>
+    /// Attach a file to a work item. Stored on the WorkItem server beside the
+    /// item's description rather than here, so it outlives this instance's runs
+    /// and reaches whichever instance picks the item up (ADR-0001); an AI node
+    /// materializes it into a run-scoped directory and gives the agent its path.
+    /// </summary>
+    [HttpPost("{id}/attachments")]
+    [RequestSizeLimit(AttachmentIntake.MaxSingleFileRequestBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = AttachmentIntake.MaxSingleFileRequestBytes)]
+    public async Task<IActionResult> AddAttachment(string id, IFormFile? file, CancellationToken cancellationToken)
+    {
+        if (file is null || file.Length == 0)
+            return BadRequest(new { error = "A file is required." });
+        if (file.Length > AttachmentIntake.MaxBytesPerFile)
+            return BadRequest(new { error = $"Files must be {AttachmentIntake.MaxBytesPerFile / (1024 * 1024)} MB or smaller." });
+
+        // Sanitized here, at the trust boundary, the way the chat path's intake
+        // sanitizes on the way to disk — this leg hands the name to the WorkItem
+        // server as a multipart part name, and a quote or backslash in it makes an
+        // invalid Content-Disposition header rather than an odd file name.
+        await using var content = file.OpenReadStream();
+        try
+        {
+            var attachment = await _workItemManager.AddAttachmentAsync(
+                id, AttachmentIntake.SanitizeFileName(file.FileName), file.ContentType, content, cancellationToken);
+            return attachment is null ? NotFound() : Ok(attachment);
+        }
+        catch (RemoteAttachmentConflictException ex)
+        {
+            // Nothing was stored and nothing was lost — worth retrying, which an
+            // opaque 500 would not tell the caller.
+            return Conflict(new { error = ex.Message });
+        }
+    }
+
+    [HttpGet("{id}/attachments/{attachmentId}")]
+    public async Task<IActionResult> GetAttachment(string id, string attachmentId, CancellationToken cancellationToken)
+    {
+        var attachment = await _workItemManager.GetAttachmentAsync(id, attachmentId, cancellationToken);
+        return attachment is null
+            ? NotFound()
+            : File(attachment.Bytes, attachment.ContentType ?? "application/octet-stream", attachment.FileName);
+    }
+
+    [HttpDelete("{id}/attachments/{attachmentId}")]
+    public async Task<IActionResult> DeleteAttachment(string id, string attachmentId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _workItemManager.DeleteAttachmentAsync(id, attachmentId, cancellationToken)
+                ? NoContent()
+                : NotFound();
+        }
+        catch (RemoteAttachmentConflictException ex)
+        {
+            return Conflict(new { error = ex.Message });
+        }
     }
 
     /// <summary>

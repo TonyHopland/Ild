@@ -4,11 +4,15 @@ const API_BASE: string = (import.meta.env?.VITE_API_BASE as string | undefined) 
 
 export const AUTH_UNAUTHORIZED_EVENT = "auth:unauthorized";
 
-async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+async function send(endpoint: string, options: RequestInit = {}): Promise<Response> {
   const token = localStorage.getItem("auth_token");
 
+  // A FormData body must set its own Content-Type: the browser appends the
+  // multipart boundary, which we could not know here.
+  const isMultipart = options.body instanceof FormData;
+
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+    ...(isMultipart ? {} : { "Content-Type": "application/json" }),
     ...(options.headers as Record<string, string>),
   };
 
@@ -40,6 +44,12 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     throw error;
   }
 
+  return response;
+}
+
+async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  const response = await send(endpoint, options);
+
   const text = await response.text();
   if (!text) {
     return undefined as T;
@@ -50,6 +60,14 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 
 export const api = {
   get: <T>(endpoint: string) => request<T>(endpoint, { method: "GET" }),
+
+  /** A binary response (an attachment's bytes), for download or object-URL display. */
+  getBlob: async (endpoint: string): Promise<Blob> =>
+    (await send(endpoint, { method: "GET" })).blob(),
+
+  /** A multipart upload. The caller assembles the FormData; auth and error handling are shared. */
+  postForm: <T>(endpoint: string, form: FormData) =>
+    request<T>(endpoint, { method: "POST", body: form }),
   post: <T>(endpoint: string, body: unknown) =>
     request<T>(endpoint, {
       method: "POST",

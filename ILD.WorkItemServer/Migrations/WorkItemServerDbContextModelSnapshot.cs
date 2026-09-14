@@ -36,6 +36,12 @@ namespace ILD.WorkItemServer.Migrations
                     b.Property<Guid?>("AiProviderOverrideId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("AttachmentsJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasDefaultValue("[]");
+
                     b.Property<string>("BaseBranchOverride")
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");

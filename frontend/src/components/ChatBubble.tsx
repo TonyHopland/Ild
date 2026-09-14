@@ -5,6 +5,7 @@ import { useChatEnabled } from "../hooks/useChatEnabled";
 import { aiProviderService, chatService } from "../services/auth";
 import type {
   AiProvider,
+  Attachment,
   ChatMessage,
   ChatSession,
   ChatSessionSummary,
@@ -29,6 +30,13 @@ import {
 import MarkdownRenderer from "./MarkdownRenderer";
 import { getOpenLoopDocument } from "../utils/openLoopDocument";
 import { setCurrentChatSessionId } from "../services/chatSessionStore";
+import {
+  downloadAttachment,
+  formatBytes,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENT_MB,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+} from "../utils/attachments";
 import "./ChatBubble.css";
 
 // Treat tiny pointer movements as a click, not a drag, so the icon still opens
@@ -341,11 +349,64 @@ export default function ChatBubble() {
     }
   };
 
+  // Files staged for the next turn. They are uploaded with the message rather
+  // than up front, so an abandoned draft leaves nothing on the server.
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // The bubble is mounted globally and outlives any one chat, so a draft left
+  // staged in one chat would otherwise still be attached when the user backs out
+  // and opens another — sending the first chat's files to the second.
+  useEffect(() => {
+    setPendingFiles([]);
+  }, [session?.id]);
+
+  const addFiles = useCallback((incoming: FileList | File[] | null) => {
+    const list = Array.from(incoming ?? []);
+    if (list.length === 0) return;
+    const tooBig = list.filter((f) => f.size > MAX_ATTACHMENT_BYTES);
+    if (tooBig.length > 0) {
+      setError(
+        `${tooBig.map((f) => f.name).join(", ")} exceeds the ${MAX_ATTACHMENT_MB} MB limit.`,
+      );
+    }
+    const accepted = list.filter((f) => f.size <= MAX_ATTACHMENT_BYTES);
+    if (accepted.length > 0) {
+      setPendingFiles((prev) => {
+        const next = [...prev, ...accepted];
+        // Say so rather than silently keeping the first ten: a file that is
+        // dropped without a word looks attached until the agent never mentions it.
+        if (next.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+          setError(`Only ${MAX_ATTACHMENTS_PER_MESSAGE} files can be attached to one message.`);
+        }
+        return next.slice(0, MAX_ATTACHMENTS_PER_MESSAGE);
+      });
+    }
+  }, []);
+
+  const onPaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      // Pasting a screenshot: the clipboard carries files alongside the text,
+      // and only the files are ours to intercept.
+      const files = Array.from(e.clipboardData?.files ?? []);
+      if (files.length === 0) return;
+      // A clipboard holding both a caption and an image is one paste, not two:
+      // suppressing the default unconditionally staged the image and silently
+      // swallowed the words that came with it. The text is left to paste itself.
+      if (!e.clipboardData?.getData("text/plain")) e.preventDefault();
+      addFiles(files);
+    },
+    [addFiles],
+  );
+
   const [input, setInput] = useState("");
   const send = async () => {
     const content = input.trim();
-    if (!content || !session) return;
+    if ((!content && pendingFiles.length === 0) || !session) return;
+    const files = pendingFiles;
     setInput("");
+    setPendingFiles([]);
     setBusy(true);
     try {
       // The open Loop Editor's live, possibly-unsaved document travels with each
@@ -358,9 +419,12 @@ export default function ChatBubble() {
         content,
         openWorkItemIdRef.current,
         openLoopDocument,
+        files,
       );
     } catch (e) {
       setBusy(false);
+      // Hand the files back so a failed send can be retried without re-picking.
+      setPendingFiles(files);
       setError((e as { message?: string })?.message ?? "Could not send message.");
     }
   };
@@ -409,6 +473,18 @@ export default function ChatBubble() {
       sessionIdRef.current = resumed.id;
     } catch (e) {
       setError((e as { message?: string })?.message ?? "Could not open chat.");
+    }
+  };
+
+  const saveAttachment = async (attachment: Attachment) => {
+    if (!session) return;
+    try {
+      await downloadAttachment(
+        () => chatService.getAttachment(session.id, attachment.id),
+        attachment.fileName,
+      );
+    } catch {
+      setError(`Could not open ${attachment.fileName}.`);
     }
   };
 
@@ -593,6 +669,22 @@ export default function ChatBubble() {
             {messages.map((m) => (
               <div key={m.id} className={`chat-msg chat-msg-${m.role}`}>
                 <MarkdownRenderer content={m.content} className="chat-msg-content" />
+                {m.attachments && m.attachments.length > 0 && (
+                  <ul className="chat-attachments">
+                    {m.attachments.map((a) => (
+                      <li key={a.id}>
+                        <button
+                          type="button"
+                          className="chat-attachment"
+                          onClick={() => void saveAttachment(a)}
+                        >
+                          📎 {a.fileName}
+                          <span className="chat-attachment-size">{formatBytes(a.sizeBytes)}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 {m.interrupted && <span className="chat-interrupted">interrupted</span>}
               </div>
             ))}
@@ -611,18 +703,72 @@ export default function ChatBubble() {
             )}
           </div>
 
+          {pendingFiles.length > 0 && (
+            <ul className="chat-attachments chat-attachments-pending">
+              {pendingFiles.map((f, i) => (
+                <li key={`${f.name}-${i}`}>
+                  <span className="chat-attachment">
+                    📎 {f.name}
+                    <span className="chat-attachment-size">{formatBytes(f.size)}</span>
+                  </span>
+                  <button
+                    type="button"
+                    className="chat-link-btn chat-danger"
+                    aria-label={`Remove ${f.name}`}
+                    onClick={() => setPendingFiles((prev) => prev.filter((_, j) => j !== i))}
+                  >
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
           <form
-            className="chat-input-row"
+            className={dragging ? "chat-input-row is-dragging" : "chat-input-row"}
             onSubmit={(e) => {
               e.preventDefault();
               void send();
             }}
+            // preventDefault on every dragover is what makes the drop fire at
+            // all; the highlight is set on enter instead, so dragging across the
+            // form does not re-set state on every tick.
+            onDragOver={(e) => e.preventDefault()}
+            onDragEnter={() => setDragging(true)}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragging(false);
+              addFiles(e.dataTransfer?.files ?? null);
+            }}
           >
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="chat-file-input"
+              aria-label="Attach files"
+              onChange={(e) => {
+                addFiles(e.target.files);
+                // Clear the picker so re-choosing the same file fires change again.
+                e.target.value = "";
+              }}
+            />
+            <button
+              type="button"
+              className="chat-attach-btn"
+              aria-label="Attach a file"
+              title="Attach a file"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              📎
+            </button>
             <input
               className="chat-input"
               placeholder="Message…"
               value={input}
               onChange={(e) => setInput(e.target.value)}
+              onPaste={onPaste}
               aria-label="Chat message"
             />
             {/* Only offered while a turn is in flight — the same window the
@@ -640,7 +786,11 @@ export default function ChatBubble() {
                 </svg>
               </button>
             )}
-            <button type="submit" className="chat-primary-btn" disabled={!input.trim()}>
+            <button
+              type="submit"
+              className="chat-primary-btn"
+              disabled={!input.trim() && pendingFiles.length === 0}
+            >
               Send
             </button>
           </form>

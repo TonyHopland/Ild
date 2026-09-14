@@ -1,3 +1,4 @@
+using ILD.Core.Services.Attachments;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using ILD.Data.Stores.Interfaces;
@@ -35,6 +36,22 @@ public sealed class RunReclaimer : IRunReclaimer
     public async Task<bool> ReclaimLocalStateAsync(LoopRun run)
     {
         await StopPreviewIfRunningAsync(run);
+
+        // Work-item attachments materialized for this run live outside the
+        // worktree (deliberately — see WorkItemAttachmentMaterializer), so
+        // destroying the worktree does not take them with it. Reclaimed here so
+        // an attachment-bearing run does not leave its downloaded bytes on the
+        // scratch disk until the container is replaced. Best-effort: leftover
+        // scratch must never hold the run row hostage.
+        try
+        {
+            var attachments = WorkItemAttachmentMaterializer.RunDirectory(run.Id);
+            if (Directory.Exists(attachments)) Directory.Delete(attachments, recursive: true);
+        }
+        catch (Exception ex)
+        {
+            _log?.LogDebug(ex, "Could not remove materialized attachments for run {RunId}", run.Id);
+        }
 
         // Resolve the base repo before destroying the worktree — afterwards
         // the branch can no longer be located through it.

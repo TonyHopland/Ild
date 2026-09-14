@@ -148,6 +148,48 @@ namespace ILD.Data.Migrations
                     b.ToTable("AppSettings");
                 });
 
+            modelBuilder.Entity("ILD.Data.Entities.ChatAttachment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("ChatMessageId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ChatSessionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<byte[]>("Content")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.Property<string>("ContentType")
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasMaxLength(260)
+                        .HasColumnType("character varying(260)");
+
+                    b.Property<long>("SizeBytes")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ChatMessageId");
+
+                    b.HasIndex("ChatSessionId");
+
+                    b.ToTable("ChatAttachments");
+                });
+
             modelBuilder.Entity("ILD.Data.Entities.ChatMessage", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1044,6 +1086,24 @@ namespace ILD.Data.Migrations
                     b.Navigation("LoopRun");
                 });
 
+            modelBuilder.Entity("ILD.Data.Entities.ChatAttachment", b =>
+                {
+                    b.HasOne("ILD.Data.Entities.ChatMessage", "ChatMessage")
+                        .WithMany("Attachments")
+                        .HasForeignKey("ChatMessageId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("ILD.Data.Entities.ChatSession", "ChatSession")
+                        .WithMany()
+                        .HasForeignKey("ChatSessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ChatMessage");
+
+                    b.Navigation("ChatSession");
+                });
+
             modelBuilder.Entity("ILD.Data.Entities.ChatMessage", b =>
                 {
                     b.HasOne("ILD.Data.Entities.ChatSession", "ChatSession")
@@ -1187,6 +1247,11 @@ namespace ILD.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("ILD.Data.Entities.ChatMessage", b =>
+                {
+                    b.Navigation("Attachments");
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.ChatSession", b =>

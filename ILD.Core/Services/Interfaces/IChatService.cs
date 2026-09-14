@@ -1,3 +1,4 @@
+using ILD.Core.Services.Attachments;
 using ILD.Data.DTOs;
 
 namespace ILD.Core.Services.Interfaces;
@@ -58,6 +59,49 @@ public interface IChatService
     /// A null/empty work item and document run a context-free turn.
     /// </summary>
     Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, string? openLoopDocument, CancellationToken ct);
+
+    /// <inheritdoc cref="ExecuteTurnAsync(Guid, string, string?, string?, CancellationToken)"/>
+    /// <param name="attachmentIds">
+    /// Attachments already stored by <see cref="SaveAttachmentsAsync"/>. The turn
+    /// links them to the transcript entry it creates, writes them into the
+    /// session's scratch directory for the agent to open, and removes those files
+    /// once the turn is over.
+    /// </param>
+    Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, string? openLoopDocument, IReadOnlyList<Guid>? attachmentIds, CancellationToken ct);
+
+    /// <summary>
+    /// Store files uploaded with a chat message and return their ids, to hand to
+    /// <see cref="ExecuteTurnAsync(Guid, string, string?, string?, IReadOnlyList{Guid}?, CancellationToken)"/>.
+    ///
+    /// <para>
+    /// The bytes go into the database, not onto disk: a chat's scratch directory
+    /// is readable by the agent uid, and one uid serves every chat, so anything
+    /// left there for the life of a chat is readable by every later agent. The
+    /// database is out of that uid's reach entirely.
+    /// </para>
+    ///
+    /// Scoped by <paramref name="userId"/>; returns null when the chat does not
+    /// exist or belongs to another user. Throws
+    /// <see cref="AttachmentRejectedException"/> for an upload that exceeds the
+    /// size or count limits.
+    /// </summary>
+    Task<IReadOnlyList<AttachmentView>?> SaveAttachmentsAsync(
+        string userId, Guid sessionId, IReadOnlyList<UploadedFile> files, CancellationToken ct = default);
+
+    /// <summary>
+    /// One attachment of one of the user's chats, by id, with its bytes, so the
+    /// transcript can offer it back for download. Null when the chat is not the
+    /// user's or the id is unknown. The caller owns the stream.
+    ///
+    /// <para>
+    /// Read from the database, so showing an attachment to a human never touches
+    /// the filesystem. That is what removes the confused deputy this used to be:
+    /// there is no path to validate, and nothing the agent could swap underneath
+    /// it between the check and the read.
+    /// </para>
+    /// </summary>
+    Task<(AttachmentView Meta, Stream Content)?> OpenAttachmentAsync(
+        string userId, Guid sessionId, Guid attachmentId, CancellationToken ct = default);
 
     /// <summary>
     /// Hard-delete one of the user's chats — the session row, its adapter snapshots

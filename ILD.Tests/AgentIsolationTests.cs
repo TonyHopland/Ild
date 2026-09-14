@@ -3,6 +3,7 @@ using ILD.Core.Services.Implementations;
 
 namespace ILD.Tests;
 
+[Collection("EnvironmentPath")]
 public class AgentIsolationTests
 {
     private static ProcessStartInfo BuildPsi()

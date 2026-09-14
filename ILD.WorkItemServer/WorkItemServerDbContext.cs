@@ -27,6 +27,7 @@ public sealed class WorkItemServerDbContext : DbContext
             // Items that predate the column read as "no PRs recorded yet"
             // rather than as an empty string the JSON reader has to special-case.
             b.Property(w => w.PullRequestsJson).HasDefaultValue("[]");
+            b.Property(w => w.AttachmentsJson).HasDefaultValue("[]");
         });
     }
 }

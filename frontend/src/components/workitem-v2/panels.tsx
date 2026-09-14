@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import {
   Repository,
@@ -8,8 +8,9 @@ import {
   WorkItemStatus,
   WorktreePreviewService,
 } from "../../types";
-import { repositoryService } from "../../services/auth";
+import { repositoryService, workItemService } from "../../services/auth";
 import { useStoredPreviewEnv } from "../../hooks/useStoredPreviewEnv";
+import { downloadAttachment, formatBytes } from "../../utils/attachments";
 import { makeLoopTagMatcher, parseConversation, parseTags } from "../../utils/workItemJson";
 import { prStatusBadges } from "../../utils/prStatusBadges";
 import MarkdownRenderer from "../MarkdownRenderer";
@@ -81,6 +82,7 @@ export function FeedbackBanner({
         }
         rows={isPr ? 5 : 3}
       />
+      <FeedbackAttachments detail={detail} />
       <FeedbackActions
         actions={workItem.humanFeedbackActions}
         onApprove={detail.handleApprove}
@@ -93,6 +95,65 @@ export function FeedbackBanner({
       )}
       {isPr && !detail.mergeError && detail.mergeMessage && (
         <div className="preview-message">{detail.mergeMessage}</div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * File picker for a human's response to a parked node — a sketch, a screenshot,
+ * a log the agent should look at before it carries on. Sits under the response
+ * box because the two travel together: whatever is staged here is attached to
+ * the work item when the human responds, and the next AI node materializes it
+ * and gets its path, exactly as it does for a file attached when the item was
+ * written.
+ */
+function FeedbackAttachments({ detail }: { detail: WorkItemDetail }) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  return (
+    <div className="wiv2-feedback-attach">
+      <input
+        ref={inputRef}
+        type="file"
+        multiple
+        className="wiv2-feedback-file-input"
+        aria-label="Attach files to your response"
+        onChange={(e) => {
+          detail.addFeedbackFiles(e.target.files);
+          // Clear the picker so re-choosing the same file fires change again.
+          e.target.value = "";
+        }}
+      />
+      <button
+        type="button"
+        className="btn btn-sm btn-secondary"
+        onClick={() => inputRef.current?.click()}
+      >
+        📎 Attach files
+      </button>
+      {detail.feedbackFiles.length > 0 && (
+        <ul className="wiv2-attachment-list">
+          {detail.feedbackFiles.map((f, i) => (
+            <li key={`${f.name}-${i}`}>
+              <span className="wiv2-attachment-name">📎 {f.name}</span>
+              <span className="wiv2-attachment-size">{formatBytes(f.size)} — on respond</span>
+              <button
+                type="button"
+                className="btn btn-sm btn-danger"
+                aria-label={`Remove ${f.name}`}
+                onClick={() => detail.removeFeedbackFile(i)}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {detail.feedbackError && (
+        <div role="alert" className="preview-message preview-error">
+          {detail.feedbackError}
+        </div>
       )}
     </div>
   );
@@ -742,6 +803,7 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
  */
 export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: WorkItemDetail }) {
   const [showLinkPr, setShowLinkPr] = useState(false);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [prUrlInput, setPrUrlInput] = useState("");
   const [showAddDep, setShowAddDep] = useState(false);
   const [selectedDepId, setSelectedDepId] = useState("");
@@ -756,6 +818,7 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
   // prUrl — which only ever holds the *current* run's PR, so it empties out the
   // moment the run finishes and could never show more than one (WI-203).
   const prHistory: WorkItemPullRequest[] = workItem.pullRequests ?? [];
+  const attachments = workItem.attachments ?? [];
 
   // While the item is mid run, surface the pinned loop's name and the node the
   // engine is currently on. Both come from the current run's detail.
@@ -864,6 +927,41 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
           >
             Link PR
           </button>
+        )}
+      </div>
+      <div className="wiv2-meta-row wiv2-meta-col">
+        <span className="detail-label">Attachments</span>
+        {attachments.length > 0 ? (
+          <ul className="wiv2-attachment-list">
+            {attachments.map((a) => (
+              <li key={a.id}>
+                <button
+                  type="button"
+                  className="wiv2-attachment-name"
+                  title={`Download ${a.fileName}`}
+                  onClick={() => {
+                    setAttachmentError(null);
+                    // A dropped promise here would be an unhandled rejection and
+                    // leave the click looking like it simply did nothing.
+                    void downloadAttachment(
+                      () => workItemService.getAttachment(workItem.id, a.id),
+                      a.fileName,
+                    ).catch(() => setAttachmentError(`Could not download ${a.fileName}.`));
+                  }}
+                >
+                  📎 {a.fileName}
+                </button>
+                <span className="wiv2-attachment-size">{formatBytes(a.sizeBytes)}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <span className="detail-value">None</span>
+        )}
+        {attachmentError && (
+          <div role="alert" className="preview-message preview-error">
+            {attachmentError}
+          </div>
         )}
       </div>
       <div className="wiv2-meta-row wiv2-meta-col">

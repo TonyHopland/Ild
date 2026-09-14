@@ -45,6 +45,25 @@ public interface IWorkItemService
     /// </returns>
     Task<RecordPullRequestOutcome> RecordPullRequestAsync(string id, RecordPullRequestRequest req, CancellationToken ct = default);
 
+    /// <summary>
+    /// Store an attached file against a work item: bytes on this server's data
+    /// volume, metadata on the item. Null when there is no such work item, in
+    /// which case nothing is written.
+    /// </summary>
+    Task<WorkItemAttachment?> AddAttachmentAsync(
+        string id, string fileName, string? contentType, Stream content, CancellationToken ct = default);
+
+    /// <summary>
+    /// One attachment's metadata and an open read stream over its bytes, or null
+    /// when the item, the attachment or the file is gone. The caller owns the
+    /// stream.
+    /// </summary>
+    Task<(WorkItemAttachment Meta, Stream Content)?> OpenAttachmentAsync(
+        string id, string attachmentId, CancellationToken ct = default);
+
+    /// <summary>Detach a file and delete its bytes. False when either is unknown.</summary>
+    Task<bool> DeleteAttachmentAsync(string id, string attachmentId, CancellationToken ct = default);
+
     Task<PollResponse> PollAsync(IReadOnlyList<string> activeIds, CancellationToken ct = default);
     Task<int> ReclaimStaleAsync(TimeSpan timeout, CancellationToken ct = default);
 
@@ -63,11 +82,202 @@ public sealed class WorkItemService : IWorkItemService
 {
     private readonly WorkItemServerDbContext _db;
     private readonly TimeProvider _clock;
+    private readonly IWorkItemAttachmentStore _attachments;
 
-    public WorkItemService(WorkItemServerDbContext db, TimeProvider clock)
+    public WorkItemService(WorkItemServerDbContext db, TimeProvider clock, IWorkItemAttachmentStore attachments)
     {
         _db = db;
         _clock = clock;
+        _attachments = attachments;
+    }
+
+    /// <summary>
+    /// How many times a losing writer re-reads and re-applies its attachment
+    /// change before giving up. Mirrors <see cref="RecordPullRequestAttempts"/>;
+    /// contention is a handful of requests at most.
+    /// </summary>
+    private const int AttachmentAttempts = 5;
+
+    /// <summary>
+    /// Apply <paramref name="mutate"/> to the item's attachment list as a
+    /// compare-and-swap against the column it read, retrying against the winner's
+    /// list when another writer got there first.
+    ///
+    /// <para>
+    /// Same reasoning as <see cref="RecordPullRequestAsync"/>, and the same
+    /// mechanism: this is a read-modify-write of a whole JSON list, so two
+    /// requests arriving together would otherwise each save their own snapshot
+    /// and the second would erase the first's entry — while still answering its
+    /// caller that the attachment was stored. Retrying is safe because each
+    /// change is independent of the others: an add appends its own entry, a
+    /// remove drops its own id.
+    /// </para>
+    /// </summary>
+    /// <returns>
+    /// Null when there is no such work item, false when the mutation found
+    /// nothing to do, true when it was committed.
+    /// </returns>
+    private async Task<bool?> MutateAttachmentsAsync(
+        string id, Func<List<WorkItemAttachment>, bool> mutate, CancellationToken ct)
+    {
+        for (var attempt = 0; attempt < AttachmentAttempts; attempt++)
+        {
+            var w = await _db.WorkItems.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, ct);
+            if (w == null) return null;
+
+            var seen = w.AttachmentsJson;
+            var attachments = WorkItemMapper.ReadAttachments(w);
+            if (!mutate(attachments)) return false;
+
+            var now = _clock.GetUtcNow().UtcDateTime;
+            var json = WorkItemMapper.SerializeAttachments(attachments);
+            var rows = await _db.WorkItems
+                .Where(x => x.Id == id && x.AttachmentsJson == seen)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(x => x.AttachmentsJson, json)
+                    .SetProperty(x => x.UpdatedAt, now), ct);
+            if (rows == 0) continue;
+
+            // The write went straight to the column, so a copy this scope was
+            // already tracking still holds the old list — refresh it, or a later
+            // read in the same request would answer from it.
+            var tracked = _db.ChangeTracker.Entries<WorkItem>().FirstOrDefault(e => e.Entity.Id == id);
+            if (tracked is not null) await tracked.ReloadAsync(ct);
+            return true;
+        }
+
+        throw new AttachmentConflictException(id);
+    }
+
+    public async Task<WorkItemAttachment?> AddAttachmentAsync(
+        string id, string fileName, string? contentType, Stream content, CancellationToken ct = default)
+    {
+        if (!await _db.WorkItems.AsNoTracking().AnyAsync(x => x.Id == id, ct)) return null;
+
+        var attachmentId = Guid.NewGuid().ToString("N");
+        var size = await _attachments.SaveAsync(id, attachmentId, content, ct);
+
+        var attachment = new WorkItemAttachment(
+            attachmentId,
+            WorkItemAttachmentStore.SanitizeFileName(fileName),
+            string.IsNullOrWhiteSpace(contentType) ? null : contentType.Trim(),
+            size,
+            _clock.GetUtcNow().UtcDateTime);
+
+        bool? applied;
+        try
+        {
+            applied = await MutateAttachmentsAsync(id, list => { list.Add(attachment); return true; }, ct);
+        }
+        catch
+        {
+            // Whether the metadata committed is genuinely unknown here:
+            // cancellation, and the reload that follows a successful update, can
+            // both surface after the write went through. Reclaiming the bytes
+            // unconditionally would leave an attachment that is listed but can
+            // never be downloaded, so the list decides.
+            await DeleteBytesIfUnreferencedAsync(id, attachmentId);
+            throw;
+        }
+
+        // The work item was deleted while the bytes were being written.
+        if (applied is not true)
+        {
+            _attachments.Delete(id, attachmentId);
+            return null;
+        }
+
+        return attachment;
+    }
+
+    /// <summary>
+    /// Drop an attachment's bytes only if the item's committed list does not name
+    /// it. Used on the failure path, where the write may or may not have landed;
+    /// orphaned bytes cost disk, whereas deleting bytes something still points at
+    /// costs the attachment.
+    /// </summary>
+    private async Task DeleteBytesIfUnreferencedAsync(string id, string attachmentId)
+    {
+        try
+        {
+            // Not the caller's token: the usual way to reach here is that it was
+            // cancelled, and this check still has to run.
+            var w = await _db.WorkItems.AsNoTracking()
+                .FirstOrDefaultAsync(x => x.Id == id, CancellationToken.None);
+            if (w is not null && WorkItemMapper.ReadAttachments(w).Any(a => a.Id == attachmentId))
+                return;
+        }
+        catch
+        {
+            // Could not find out. Keeping the bytes is the recoverable side.
+            return;
+        }
+
+        _attachments.Delete(id, attachmentId);
+    }
+
+    /// <summary>
+    /// Drop every attachment of a work item once its row is genuinely gone. Used
+    /// on the delete path, where cancellation can surface after the commit: the
+    /// row's absence, not the save's return, is what says the bytes are unwanted.
+    /// </summary>
+    private async Task DeleteAllBytesIfRowIsGoneAsync(string id)
+    {
+        try
+        {
+            // Not the caller's token: the usual way to get here is that it was
+            // cancelled, and the question still has to be asked.
+            if (await _db.WorkItems.AsNoTracking()
+                    .AnyAsync(x => x.Id == id, CancellationToken.None))
+                return;
+        }
+        catch
+        {
+            // Could not find out. Keeping the bytes is the recoverable side.
+            return;
+        }
+
+        _attachments.DeleteAll(id);
+    }
+
+    public async Task<(WorkItemAttachment Meta, Stream Content)?> OpenAttachmentAsync(
+        string id, string attachmentId, CancellationToken ct = default)
+    {
+        var w = await _db.WorkItems.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (w == null) return null;
+
+        var meta = WorkItemMapper.ReadAttachments(w).FirstOrDefault(a => a.Id == attachmentId);
+        if (meta == null) return null;
+
+        var content = _attachments.Open(id, attachmentId);
+        return content == null ? null : (meta, content);
+    }
+
+    public async Task<bool> DeleteAttachmentAsync(string id, string attachmentId, CancellationToken ct = default)
+    {
+        bool? applied;
+        try
+        {
+            applied = await MutateAttachmentsAsync(
+                id, list => list.RemoveAll(a => a.Id == attachmentId) > 0, ct);
+        }
+        catch
+        {
+            // Mirrors the add path: the removal may have committed before this
+            // threw — cancellation observed during the post-commit reload gets
+            // here — and the bytes would then be orphaned with the metadata
+            // already gone. The committed list decides, as it does there.
+            await DeleteBytesIfUnreferencedAsync(id, attachmentId);
+            throw;
+        }
+
+        if (applied is not true) return false;
+
+        // Bytes go after the metadata write commits: an orphaned file wastes
+        // space, whereas metadata pointing at a file that is already gone is a
+        // broken download.
+        _attachments.Delete(id, attachmentId);
+        return true;
     }
 
     public async Task<WorkItemDto> CreateAsync(CreateWorkItemRequest req, CancellationToken ct = default)
@@ -161,7 +371,18 @@ public sealed class WorkItemService : IWorkItemService
         var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
         if (w == null) return false;
         _db.WorkItems.Remove(w);
-        await _db.SaveChangesAsync(ct);
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+        }
+        finally
+        {
+            // Reached whether or not the save reported success: cancellation can
+            // be observed after the row deletion has already committed, and
+            // returning early there would strand every one of the item's files
+            // permanently. Asking whether the row is actually gone is what decides.
+            await DeleteAllBytesIfRowIsGoneAsync(id);
+        }
 
         // Scrub the deleted id from every other item's dependency list. A
         // dangling reference would otherwise wedge a dependent forever: a

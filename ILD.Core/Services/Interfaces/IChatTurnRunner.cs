@@ -1,3 +1,5 @@
+using ILD.Data.DTOs;
+
 namespace ILD.Core.Services.Interfaces;
 
 /// <summary>
@@ -16,9 +18,10 @@ public interface IChatTurnRunner
     /// <paramref name="openWorkItemId"/> and <paramref name="openLoopDocument"/> are
     /// the ambient per-turn Chat Context (ADR-0011): the work item the user has open
     /// and the live loop document of the open Loop Editor, or null when neither is
-    /// open.
+    /// open. <paramref name="attachments"/> are files already stored for this turn,
+    /// whose absolute paths ride the prompt.
     /// </summary>
-    Task SubmitAsync(Guid chatSessionId, string userMessage, string? openWorkItemId = null, string? openLoopDocument = null);
+    Task SubmitAsync(Guid chatSessionId, string userMessage, string? openWorkItemId = null, string? openLoopDocument = null, IReadOnlyList<Guid>? attachmentIds = null);
 
     /// <summary>Cancel any in-flight turn for the session and await its finalization.</summary>
     Task InterruptAsync(Guid chatSessionId);

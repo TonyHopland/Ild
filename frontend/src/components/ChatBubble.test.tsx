@@ -76,6 +76,7 @@ function msg(partial: Partial<ChatMessage>): ChatMessage {
     interrupted: partial.interrupted ?? false,
     sequence: partial.sequence ?? 0,
     createdAt: "2026-01-01T00:00:00Z",
+    attachments: partial.attachments ?? null,
   };
 }
 
@@ -178,7 +179,7 @@ describe("ChatBubble", () => {
     fireEvent.click(screen.getByText("Send"));
 
     await waitFor(() =>
-      expect(chatService.sendMessage).toHaveBeenCalledWith("s1", "look at this", "wi-77", null),
+      expect(chatService.sendMessage).toHaveBeenCalledWith("s1", "look at this", "wi-77", null, []),
     );
   });
 
@@ -199,6 +200,7 @@ describe("ChatBubble", () => {
         "edit the loop",
         null,
         JSON.stringify(liveLoop),
+        [],
       ),
     );
   });
@@ -212,8 +214,159 @@ describe("ChatBubble", () => {
     fireEvent.click(screen.getByText("Send"));
 
     await waitFor(() =>
-      expect(chatService.sendMessage).toHaveBeenCalledWith("s1", "general question", null, null),
+      expect(chatService.sendMessage).toHaveBeenCalledWith(
+        "s1",
+        "general question",
+        null,
+        null,
+        [],
+      ),
     );
+  });
+
+  test("attaches picked files to the turn and clears the tray afterwards", async () => {
+    chatService.sendMessage.mockResolvedValue(undefined);
+    await openResumed(chatSession());
+
+    const file = new File(["pixels"], "sketch.png", { type: "image/png" });
+    fireEvent.change(screen.getByLabelText("Attach files"), { target: { files: [file] } });
+
+    // The staged file is shown before it is sent, so the human can see what
+    // they are about to attach — and drop it again.
+    expect(await screen.findByLabelText("Remove sketch.png")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Chat message"), { target: { value: "look at this" } });
+    fireEvent.click(screen.getByText("Send"));
+
+    await waitFor(() =>
+      expect(chatService.sendMessage).toHaveBeenCalledWith("s1", "look at this", null, null, [
+        file,
+      ]),
+    );
+    await waitFor(() => expect(screen.queryByLabelText("Remove sketch.png")).toBeNull());
+  });
+
+  test("a staged file can be removed before sending", async () => {
+    chatService.sendMessage.mockResolvedValue(undefined);
+    await openResumed(chatSession());
+
+    const file = new File(["pixels"], "sketch.png", { type: "image/png" });
+    fireEvent.change(screen.getByLabelText("Attach files"), { target: { files: [file] } });
+    fireEvent.click(await screen.findByLabelText("Remove sketch.png"));
+
+    fireEvent.change(screen.getByLabelText("Chat message"), { target: { value: "never mind" } });
+    fireEvent.click(screen.getByText("Send"));
+
+    await waitFor(() =>
+      expect(chatService.sendMessage).toHaveBeenCalledWith("s1", "never mind", null, null, []),
+    );
+  });
+
+  test("a pasted image is attached without being typed into the message", async () => {
+    chatService.sendMessage.mockResolvedValue(undefined);
+    await openResumed(chatSession());
+
+    const file = new File(["pixels"], "clipboard.png", { type: "image/png" });
+    const input = screen.getByLabelText("Chat message") as HTMLInputElement;
+    fireEvent.paste(input, { clipboardData: { files: [file], getData: () => "" } });
+
+    expect(await screen.findByLabelText("Remove clipboard.png")).toBeTruthy();
+    expect(input.value).toBe("");
+  });
+
+  test("a dropped file is attached", async () => {
+    chatService.sendMessage.mockResolvedValue(undefined);
+    await openResumed(chatSession());
+
+    const file = new File(["boom"], "run.log", { type: "text/plain" });
+    const form = screen.getByLabelText("Chat message").closest("form")!;
+    fireEvent.drop(form, { dataTransfer: { files: [file] } });
+
+    expect(await screen.findByLabelText("Remove run.log")).toBeTruthy();
+  });
+
+  test("files alone can be sent with no message text", async () => {
+    chatService.sendMessage.mockResolvedValue(undefined);
+    await openResumed(chatSession());
+
+    const send = screen.getByText("Send") as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+
+    const file = new File(["pixels"], "sketch.png", { type: "image/png" });
+    fireEvent.change(screen.getByLabelText("Attach files"), { target: { files: [file] } });
+
+    await waitFor(() => expect(send.disabled).toBe(false));
+    fireEvent.click(send);
+
+    await waitFor(() =>
+      expect(chatService.sendMessage).toHaveBeenCalledWith("s1", "", null, null, [file]),
+    );
+  });
+
+  test("attaching more files than a message allows says so instead of dropping them quietly", async () => {
+    chatService.sendMessage.mockResolvedValue(undefined);
+    await openResumed(chatSession());
+
+    // Eleven against a cap of ten: the extras used to vanish with no explanation.
+    const many = Array.from(
+      { length: 11 },
+      (_, i) => new File(["pixels"], `shot-${i}.png`, { type: "image/png" }),
+    );
+    fireEvent.change(screen.getByLabelText("Attach files"), { target: { files: many } });
+
+    expect(await screen.findByText(/Only 10 files can be attached/)).toBeTruthy();
+    expect(screen.queryByLabelText("Remove shot-10.png")).toBeNull();
+    expect(await screen.findByLabelText("Remove shot-9.png")).toBeTruthy();
+  });
+
+  test("an oversized file is refused before it is uploaded", async () => {
+    chatService.sendMessage.mockResolvedValue(undefined);
+    await openResumed(chatSession());
+
+    const huge = new File(["x"], "huge.bin");
+    Object.defineProperty(huge, "size", { value: 26 * 1024 * 1024 });
+    fireEvent.change(screen.getByLabelText("Attach files"), { target: { files: [huge] } });
+
+    expect(await screen.findByText(/exceeds the 25 MB limit/)).toBeTruthy();
+    expect(screen.queryByLabelText("Remove huge.bin")).toBeNull();
+    expect(chatService.sendMessage).not.toHaveBeenCalled();
+  });
+
+  test("staged files do not follow the user out of the chat they were picked in", async () => {
+    chatService.sendMessage.mockResolvedValue(undefined);
+    await openResumed(chatSession());
+
+    const file = new File(["pixels"], "sketch.png", { type: "image/png" });
+    fireEvent.change(screen.getByLabelText("Attach files"), { target: { files: [file] } });
+    expect(await screen.findByLabelText("Remove sketch.png")).toBeTruthy();
+
+    // The bubble is mounted globally, so leaving the chat must not leave the
+    // draft attached to whatever is opened next.
+    fireEvent.click(screen.getByText("← Back"));
+    fireEvent.click(await screen.findByText("Past chat"));
+    await screen.findByLabelText("Chat message");
+
+    expect(screen.queryByLabelText("Remove sketch.png")).toBeNull();
+  });
+
+  test("a past turn's attachments are listed in the transcript", async () => {
+    await openResumed(
+      chatSession({
+        messages: [
+          msg({
+            id: "m1",
+            role: "user",
+            content: "look",
+            attachments: [
+              { id: "a1", fileName: "sketch.png", contentType: "image/png", sizeBytes: 2048 },
+            ],
+          }),
+        ],
+      }),
+    );
+
+    expect(await screen.findByText(/sketch\.png/)).toBeTruthy();
+    expect(screen.getByText("2 KB")).toBeTruthy();
   });
 
   test("starting a chat locks in the session and reveals the input box", async () => {

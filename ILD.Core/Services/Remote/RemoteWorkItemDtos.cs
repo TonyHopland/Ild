@@ -48,6 +48,21 @@ public sealed record RemoteConversationMessage(string Role, string Content, Date
 /// </summary>
 public sealed record RemoteWorkItemPullRequest(string Url, Guid? LoopRunId, bool Merged, DateTime CreatedAt);
 
+/// <summary>
+/// One file attached to a work item, as the server holds it. Metadata only —
+/// the bytes are fetched by id and materialized into a run-scoped directory
+/// when an AI node needs them.
+/// </summary>
+public sealed record RemoteWorkItemAttachment(
+    string Id,
+    string FileName,
+    string? ContentType,
+    long SizeBytes,
+    DateTime CreatedAt);
+
+/// <summary>An attachment's bytes, as downloaded from the WorkItem server.</summary>
+public sealed record RemoteAttachmentContent(string FileName, string? ContentType, byte[] Bytes);
+
 public sealed class RemoteWorkItem
 {
     public string Id { get; set; } = string.Empty;
@@ -64,6 +79,9 @@ public sealed class RemoteWorkItem
 
     /// <summary>Every PR opened against this item, newest first.</summary>
     public IReadOnlyList<RemoteWorkItemPullRequest> PullRequests { get; set; } = Array.Empty<RemoteWorkItemPullRequest>();
+
+    /// <summary>Files attached to this item, oldest first.</summary>
+    public IReadOnlyList<RemoteWorkItemAttachment> Attachments { get; set; } = Array.Empty<RemoteWorkItemAttachment>();
     public string? HumanFeedbackActions { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? CreatedByChatSessionId { get; set; }

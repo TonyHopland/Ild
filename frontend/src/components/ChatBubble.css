@@ -294,6 +294,81 @@
   flex: 1;
 }
 
+.chat-input-row.is-dragging {
+  outline: 2px dashed #6366f1;
+  outline-offset: -4px;
+}
+
+/* Driven by the paperclip button; the native control has no styling worth keeping. */
+.chat-file-input {
+  display: none;
+}
+
+.chat-attach-btn {
+  background: #2a2a40;
+  border: 1px solid #3a3a5c;
+  border-radius: 0.35rem;
+  color: #e0e0e0;
+  padding: 0.45rem 0.6rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.chat-attach-btn:hover {
+  background: #33334d;
+}
+
+.chat-attach-btn:focus-visible {
+  outline: 2px solid #6366f1;
+  outline-offset: 1px;
+}
+
+.chat-attachments {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.chat-attachments-pending {
+  margin: 0;
+  padding: 0.4rem 0.6rem 0;
+}
+
+.chat-attachments li {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+
+.chat-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: #2a2a40;
+  border: 1px solid #3a3a5c;
+  border-radius: 999px;
+  color: #e0e0e0;
+  padding: 0.15rem 0.6rem;
+  font-size: 0.78rem;
+  cursor: pointer;
+  max-width: 100%;
+}
+
+span.chat-attachment {
+  cursor: default;
+}
+
+button.chat-attachment:hover {
+  background: #33334d;
+}
+
+.chat-attachment-size {
+  color: #9a9ab5;
+}
+
 /* Retained chat history (ADR-0013): the list of past chats under Start chat. */
 .chat-history {
   display: flex;

@@ -31,6 +31,13 @@ public class ChatMessage
     /// <summary>True when this assistant reply was cut short by a mid-turn interrupt.</summary>
     public bool Interrupted { get; set; }
 
+    /// <summary>
+    /// Files the human attached to this turn. A row per file rather than a JSON
+    /// column, because each carries its bytes — see <see cref="ChatAttachment"/>
+    /// for why they are in the database and not on disk.
+    /// </summary>
+    public List<ChatAttachment> Attachments { get; set; } = new();
+
     /// <summary>Monotonic per-session ordering key.</summary>
     public int Sequence { get; set; }
 

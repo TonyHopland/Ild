@@ -62,7 +62,7 @@ public sealed class ListingTools
     }
 
     [McpServerTool(Name = "get_workitem")]
-    [Description("Get a single work item's full record: full description body, dependencies and reverse 'blocks' edges resolved to {id,title,status}. The conversation is excluded by default (it is the largest field); pass includeConversation=true to include it.")]
+    [Description("Get a single work item's full record: full description body, dependencies and reverse 'blocks' edges resolved to {id,title,status}, and the names of any files a human attached. The conversation is excluded by default (it is the largest field); pass includeConversation=true to include it.")]
     public Task<string> GetWorkItem(
         [Description("Work item GUID.")] string id,
         [Description("Include the conversation thread (large; default false).")] bool includeConversation = false)

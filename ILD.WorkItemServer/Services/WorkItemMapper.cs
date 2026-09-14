@@ -57,6 +57,36 @@ internal static class WorkItemMapper
         return prs;
     }
 
+    /// <summary>
+    /// The item's attachments, oldest first so the list reads in the order the
+    /// human added them. Unreadable or absent JSON reads as empty for the same
+    /// reason <see cref="ReadPullRequests"/> does: one bad blob must not take
+    /// every read of the work item down with it.
+    /// </summary>
+    public static List<WorkItemAttachment> ReadAttachments(WorkItem w)
+    {
+        if (string.IsNullOrEmpty(w.AttachmentsJson)) return new();
+        try
+        {
+            return JsonSerializer.Deserialize<List<WorkItemAttachment>>(w.AttachmentsJson, JsonOpts) ?? new();
+        }
+        catch (JsonException)
+        {
+            return new();
+        }
+    }
+
+    public static void WriteAttachments(WorkItem w, IReadOnlyList<WorkItemAttachment> attachments)
+        => w.AttachmentsJson = SerializeAttachments(attachments);
+
+    /// <summary>
+    /// The serialized column value, for the compare-and-swap write in
+    /// <c>WorkItemService</c> — which sets the column directly rather than
+    /// through a tracked entity, exactly as the pull-request recorder does.
+    /// </summary>
+    public static string SerializeAttachments(IReadOnlyList<WorkItemAttachment> attachments)
+        => JsonSerializer.Serialize(attachments, JsonOpts);
+
     public static void WriteTags(WorkItem w, IReadOnlyList<string> tags)
         => w.TagsJson = JsonSerializer.Serialize(tags, JsonOpts);
 
@@ -91,6 +121,7 @@ internal static class WorkItemMapper
         Dependencies = ReadDependencies(w),
         Conversation = ReadConversation(w),
         PullRequests = ReadPullRequests(w),
+        Attachments = ReadAttachments(w),
         HumanFeedbackActions = w.HumanFeedbackActions,
         CreatedByLoopRunId = w.CreatedByLoopRunId,
         CreatedByChatSessionId = w.CreatedByChatSessionId,

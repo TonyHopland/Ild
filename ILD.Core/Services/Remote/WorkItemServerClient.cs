@@ -40,6 +40,31 @@ public interface IWorkItemServerClient
     Task<bool> RecordPullRequestAsync(WorkItemServerOptions opts, string id, string url, Guid? loopRunId, bool merged, DateTime? createdAt, CancellationToken ct = default);
 
     Task<RemotePollResponse> PollAsync(WorkItemServerOptions opts, IReadOnlyList<string> activeIds, CancellationToken ct = default);
+
+    /// <summary>
+    /// Attach a file to a work item on the server, which is where a work item's
+    /// attachments live — an ILD instance's worktrees and runs are throwaway
+    /// local state, but the file is part of the item's specification and must
+    /// reach whichever instance later runs it (ADR-0001). Null when the server
+    /// does not know the work item.
+    ///
+    /// <para>
+    /// <paramref name="fileName"/> must already be a bare file name
+    /// (<c>AttachmentIntake.SanitizeFileName</c>): it becomes a multipart part
+    /// name, so a quote or backslash in it does not make an odd file name but an
+    /// invalid Content-Disposition header, which throws rather than uploading.
+    /// Callers sanitize at their trust boundary.
+    /// </para>
+    /// </summary>
+    Task<RemoteWorkItemAttachment?> AddAttachmentAsync(
+        WorkItemServerOptions opts, string id, string fileName, string? contentType, Stream content, CancellationToken ct = default);
+
+    /// <summary>An attachment's bytes, or null when the item or attachment is unknown.</summary>
+    Task<RemoteAttachmentContent?> GetAttachmentAsync(
+        WorkItemServerOptions opts, string id, string attachmentId, CancellationToken ct = default);
+
+    Task<bool> DeleteAttachmentAsync(
+        WorkItemServerOptions opts, string id, string attachmentId, CancellationToken ct = default);
 }
 
 public sealed class WorkItemServerClient : IWorkItemServerClient
@@ -181,6 +206,64 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
         msg.Content = JsonContent.Create(new { url, loopRunId, merged, createdAt }, options: JsonOpts);
         using var resp = await _http.SendAsync(msg, ct);
         return resp.IsSuccessStatusCode;
+    }
+
+    public async Task<RemoteWorkItemAttachment?> AddAttachmentAsync(
+        WorkItemServerOptions opts, string id, string fileName, string? contentType, Stream content, CancellationToken ct = default)
+    {
+        var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/attachments");
+        var form = new MultipartFormDataContent();
+        var part = new StreamContent(content);
+        // Parsed rather than constructed: the value came off a client's multipart
+        // request, and the constructor throws on a malformed media type — which
+        // would turn a bad header into a 500 on the way out. An unusable one is
+        // simply not forwarded; the server falls back to its own default.
+        if (MediaTypeHeaderValue.TryParse(contentType, out var parsedContentType))
+            part.Headers.ContentType = parsedContentType;
+        form.Add(part, "file", fileName);
+        msg.Content = form;
+
+        using var resp = await _http.SendAsync(msg, ct);
+        if (resp.StatusCode == HttpStatusCode.NotFound) return null;
+        // Distinguished before EnsureSuccess, which would otherwise turn a
+        // retryable conflict into the same opaque failure as an unreachable
+        // server — and, with nothing catching it, into an empty 500.
+        if (resp.StatusCode == HttpStatusCode.Conflict) throw new RemoteAttachmentConflictException(id);
+        EnsureSuccess(resp, msg);
+        return await resp.Content.ReadFromJsonAsync<RemoteWorkItemAttachment>(JsonOpts, ct);
+    }
+
+    public async Task<RemoteAttachmentContent?> GetAttachmentAsync(
+        WorkItemServerOptions opts, string id, string attachmentId, CancellationToken ct = default)
+    {
+        var msg = Build(opts, HttpMethod.Get, $"/workitems/{id}/attachments/{attachmentId}");
+        using var resp = await _http.SendAsync(msg, ct);
+        if (resp.StatusCode == HttpStatusCode.NotFound) return null;
+        EnsureSuccess(resp, msg);
+
+        return new RemoteAttachmentContent(
+            resp.Content.Headers.ContentDisposition?.FileNameStar
+                ?? resp.Content.Headers.ContentDisposition?.FileName?.Trim('"')
+                ?? attachmentId,
+            resp.Content.Headers.ContentType?.MediaType,
+            await resp.Content.ReadAsByteArrayAsync(ct));
+    }
+
+    public async Task<bool> DeleteAttachmentAsync(
+        WorkItemServerOptions opts, string id, string attachmentId, CancellationToken ct = default)
+    {
+        var msg = Build(opts, HttpMethod.Delete, $"/workitems/{id}/attachments/{attachmentId}");
+        using var resp = await _http.SendAsync(msg, ct);
+        // Without this a conflicted delete reads as an ordinary failure, and the
+        // caller reports the attachment missing — sending the user looking for
+        // something that is still there.
+        if (resp.StatusCode == HttpStatusCode.Conflict) throw new RemoteAttachmentConflictException(id);
+        // Only a 404 means "no such attachment". Letting every other failure fall
+        // through as false would have the caller report a server error as a
+        // missing attachment, and abort an edit on the wrong diagnosis.
+        if (resp.StatusCode == HttpStatusCode.NotFound) return false;
+        EnsureSuccess(resp, msg);
+        return true;
     }
 
     public async Task<RemotePollResponse> PollAsync(WorkItemServerOptions opts, IReadOnlyList<string> activeIds, CancellationToken ct = default)

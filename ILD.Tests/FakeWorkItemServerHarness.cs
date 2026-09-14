@@ -16,6 +16,7 @@ namespace ILD.Tests;
 public sealed class FakeWorkItemServerHarness : IDisposable
 {
     private readonly SqliteConnection _connection;
+    private readonly string _attachmentRoot = Path.Combine(Path.GetTempPath(), "ild-test-wi-attachments", Guid.NewGuid().ToString("N"));
     public WorkItemServerDbContext ServerDb { get; }
     public IWorkItemService Service { get; }
     public IWorkItemServerClient Client { get; }
@@ -30,7 +31,8 @@ public sealed class FakeWorkItemServerHarness : IDisposable
             .Options;
         ServerDb = new WorkItemServerDbContext(opts);
         ServerDb.Database.EnsureCreated();
-        Service = new WorkItemService(ServerDb, clock ?? TimeProvider.System);
+        Service = new WorkItemService(
+            ServerDb, clock ?? TimeProvider.System, new WorkItemAttachmentStore(_attachmentRoot));
         Client = new FakeWorkItemServerClient(Service);
     }
 
@@ -38,5 +40,7 @@ public sealed class FakeWorkItemServerHarness : IDisposable
     {
         ServerDb.Dispose();
         _connection.Dispose();
+        try { if (Directory.Exists(_attachmentRoot)) Directory.Delete(_attachmentRoot, recursive: true); }
+        catch (IOException) { }
     }
 }

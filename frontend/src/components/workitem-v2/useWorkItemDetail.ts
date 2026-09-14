@@ -9,6 +9,7 @@ import {
   AiProvider,
 } from "../../types";
 import type { TypedSignalRMessage } from "../../types/signalr";
+import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_MB } from "../../utils/attachments";
 import {
   workItemService,
   repositoryService,
@@ -34,6 +35,14 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const [templates, setTemplates] = useState<LoopTemplate[]>([]);
   const [aiProviders, setAiProviders] = useState<AiProvider[]>([]);
   const [feedbackInput, setFeedbackInput] = useState("");
+  // Files staged alongside a human's response. Uploaded when they actually
+  // respond, so an abandoned draft leaves nothing on the item.
+  const [feedbackFiles, setFeedbackFiles] = useState<File[]>([]);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
+  // Names of files already attached for this response, as the server stored
+  // them. Kept across a failed submit — the files are on the item by then, so a
+  // retry must still name them — and cleared once the response lands.
+  const attachedNamesRef = useRef<string[]>([]);
   const [prCommentsLoading, setPrCommentsLoading] = useState(false);
   const [progressText, setProgressText] = useState("");
   const [preview, setPreview] = useState<WorktreePreview | null>(null);
@@ -130,6 +139,9 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
 
   useEffect(() => {
     setFeedbackInput("");
+    setFeedbackFiles([]);
+    setFeedbackError(null);
+    attachedNamesRef.current = [];
   }, [workItem?.id, workItem?.status]);
 
   useEffect(() => {
@@ -565,22 +577,94 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     [workItem?.id, onSave],
   );
 
+  const addFeedbackFiles = useCallback((incoming: FileList | File[] | null) => {
+    const list = Array.from(incoming ?? []);
+    const tooBig = list.filter((f) => f.size > MAX_ATTACHMENT_BYTES);
+    if (tooBig.length > 0) {
+      setFeedbackError(
+        `${tooBig.map((f) => f.name).join(", ")} exceeds the ${MAX_ATTACHMENT_MB} MB limit.`,
+      );
+    }
+    const accepted = list.filter((f) => f.size <= MAX_ATTACHMENT_BYTES);
+    if (accepted.length > 0) setFeedbackFiles((prev) => [...prev, ...accepted]);
+  }, []);
+
+  const removeFeedbackFile = useCallback(
+    (index: number) => setFeedbackFiles((prev) => prev.filter((_, i) => i !== index)),
+    [],
+  );
+
+  /**
+   * Attach the staged files to the work item and return the response text with a
+   * line naming them.
+   *
+   * They become work-item attachments rather than something run-scoped, which is
+   * what makes them reach the agent at all: the next AI node re-reads the item
+   * and materializes its attachments through the path that already exists, so a
+   * file handed over at a Human node is picked up exactly like one attached when
+   * the item was written. The note names the files but not their paths — those
+   * are assigned per run when that node materializes them, and the node's own
+   * attachment block carries them.
+   */
+  const attachFeedbackFilesAsync = async (id: string, text: string): Promise<string> => {
+    // Not just "nothing staged": a retry after a failed submit has already
+    // uploaded its files and cleared them from the staging list, and it still
+    // has to name them — they are on the item whether or not this attempt put
+    // them there.
+    if (feedbackFiles.length === 0 && attachedNamesRef.current.length === 0) return text;
+
+    for (const file of feedbackFiles) {
+      const stored = await workItemService.uploadAttachment(id, file);
+      // Named as the server stored it, not as the browser offered it: the server
+      // sanitizes, so the raw name could describe something other than what the
+      // agent is handed — and could push its own formatting into the note.
+      attachedNamesRef.current.push(stored.fileName);
+      // Dropped as each one lands, so a response that fails partway through can
+      // be retried without attaching the earlier files a second time. The names
+      // outlive that retry, held until the response itself succeeds — otherwise
+      // a second attempt would promise nothing while the files were already on
+      // the item.
+      setFeedbackFiles((prev) => prev.filter((f) => f !== file));
+    }
+
+    const names = attachedNamesRef.current.join(", ");
+    return text
+      ? `${text}\n\nAttached to this work item: ${names}`
+      : `Attached to this work item: ${names}`;
+  };
+
+  // Every response shares the shape: upload whatever was staged, then submit the
+  // text the upload may have extended. A failed upload stops the response rather
+  // than advancing the loop past a file the human meant the agent to see.
+  const respond = (submit: (id: string, text: string) => Promise<unknown>, errorLabel: string) =>
+    runAction(async (id) => {
+      setFeedbackError(null);
+      let text: string;
+      try {
+        text = await attachFeedbackFilesAsync(id, feedbackInput || "");
+      } catch (error) {
+        setFeedbackError(
+          (error as { message?: string })?.message ?? "Could not upload the attached files.",
+        );
+        throw error;
+      }
+      const result = await submit(id, text);
+      // Only now: until the response lands, a retry still has to be able to name
+      // the files it already attached.
+      attachedNamesRef.current = [];
+      return result;
+    }, errorLabel);
+
   const handleApprove = () =>
-    runAction(
-      (id) => workItemService.humanFeedbackInput(id, feedbackInput || ""),
-      "submit feedback",
-    );
+    respond((id, text) => workItemService.humanFeedbackInput(id, text), "submit feedback");
 
   // Pass any typed feedback through to the OnFailure successor as {{PreviousNode.Output}}.
   const handleReject = () =>
-    runAction(
-      (id) => workItemService.humanFeedbackReject(id, feedbackInput || undefined),
-      "reject",
-    );
+    respond((id, text) => workItemService.humanFeedbackReject(id, text || undefined), "reject");
 
   // Route the parked node to one of its named custom edges (a Human/PR button).
   const handleEdge = (name: string) =>
-    runAction((id) => workItemService.humanFeedbackEdge(id, name, feedbackInput || ""), "respond");
+    respond((id, text) => workItemService.humanFeedbackEdge(id, name, text), "respond");
 
   // Merge the linked PR on the remote (and optionally delete the branch), then
   // continue the loop along OnSuccess. A merge failure leaves the item parked,
@@ -675,6 +759,10 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     aiProviders,
     feedbackInput,
     setFeedbackInput,
+    feedbackFiles,
+    addFeedbackFiles,
+    removeFeedbackFile,
+    feedbackError,
     prCommentsLoading,
     progressText,
     shouldStream,
