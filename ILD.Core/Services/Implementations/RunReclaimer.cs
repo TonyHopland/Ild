@@ -37,10 +37,13 @@ public sealed class RunReclaimer : IRunReclaimer
     {
         await StopPreviewIfRunningAsync(run);
 
+        // The extension holds the ILD API token and nothing else can find it once
+        // the run row is gone, so a failure keeps the run for a later retry.
         try { PiAdapter.DeleteIldExtension(run.Id); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             _log?.LogWarning(ex, "Failed to remove the pi ILD extension of run {RunId}", run.Id);
+            return false;
         }
 
         // Resolve the base repo before destroying the worktree — afterwards

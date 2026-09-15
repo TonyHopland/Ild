@@ -424,6 +424,11 @@ public sealed class ChatService : IChatService
 
     private async Task DeleteSessionAsync(ChatSession session, CancellationToken ct)
     {
+        // The pi extension holds the ILD API token and nothing can find it once the
+        // row is gone, so it goes first: a failure throws and keeps the chat, and
+        // deleting it again retries.
+        PiAdapter.DeleteIldExtension(session.Id);
+
         // Messages and adapter snapshots cascade-delete via their FKs; the loop
         // scratchpad is in-memory only, so drop its entry explicitly.
         _loopScratchpad.Clear(session.Id);
@@ -437,10 +442,6 @@ public sealed class ChatService : IChatService
             if (!string.IsNullOrEmpty(session.ScratchPath) && Directory.Exists(session.ScratchPath))
                 Directory.Delete(session.ScratchPath, recursive: true);
         }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
-
-        try { PiAdapter.DeleteIldExtension(session.Id); }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
     }

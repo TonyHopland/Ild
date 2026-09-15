@@ -28,7 +28,8 @@ export function resolveToolSelection(
     : [];
 
   if (explicitTools.length > 0) return explicitTools;
-  if (provider?.type === "copilot" && Array.isArray(configuredTools)) return explicitTools;
+  const isCopilot = provider?.type.trim().toLowerCase() === "copilot";
+  if (isCopilot && Array.isArray(configuredTools)) return explicitTools;
 
   return supportedTools.filter((tool) => tool.defaultEnabled).map((tool) => tool.key);
 }

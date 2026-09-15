@@ -204,8 +204,10 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
     }
 
     /// <summary>
-    /// Serialize the MCP config to a temp JSON file the caller can pass to
-    /// <c>copilot --additional-mcp-config @&lt;file&gt;</c>. Merges the built-in
+    /// Write the MCP config to a JSON file the caller can pass to
+    /// <c>copilot --additional-mcp-config @&lt;file&gt;</c>. It carries the ILD API
+    /// token and custom-server env, so it goes into shared scratch, readable by
+    /// the agent group only (ADR-0014), rather than a world-readable temp file. Merges the built-in
     /// <c>ild</c> server (only when that tool is selected) with any
     /// provider-scoped custom MCP servers, which are written even when <c>ild</c>
     /// is off. Entries take the Claude Code shape plus Copilot's
@@ -227,22 +229,21 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
 
         if (servers.Count == 0) return null;
 
-        var json = JsonSerializer.Serialize(new Dictionary<string, object?> { ["mcpServers"] = servers });
-        var path = Path.Combine(Path.GetTempPath(), $"ild-copilot-mcp-{Guid.NewGuid():N}.json");
+        var json = JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, object?> { ["mcpServers"] = servers });
         try
         {
-            File.WriteAllText(path, json);
+            var path = Path.Combine(
+                AgentIsolation.CreateScratchDirectory(McpConfigDirSegment), $"ild-copilot-mcp-{Guid.NewGuid():N}.json");
+            AgentIsolation.WriteSharedFile(path, file => file.Write(json));
             return path;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // A write that failed part-way can still leave the token on disk.
-            try { File.Delete(path); }
-            catch (IOException) { /* best effort */ }
-            catch (UnauthorizedAccessException) { /* best effort */ }
             return null;
         }
     }
+
+    private const string McpConfigDirSegment = "ild-copilot-mcp";
 
     private static Dictionary<string, object?> WithCopilotKeys(Dictionary<string, object?> entry)
     {

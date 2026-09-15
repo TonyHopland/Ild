@@ -194,6 +194,34 @@ public class RunReclaimerTests : IDisposable
         Assert.False(Directory.Exists(extension), "the run's ild.ts, which holds the API token, was left behind");
     }
 
+    [Fact]
+    public async Task Reclaim_keeps_the_run_when_its_pi_ild_extension_cannot_be_removed()
+    {
+        // root can delete a read-only tree, so the failure cannot be staged there.
+        if (!OperatingSystem.IsLinux() || Environment.UserName == "root") return;
+
+        var worktree = NewTempDir();
+        var run = Run(worktree, "ild/wi-a-run-1");
+        var extension = Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-ext", run.Id.ToString("N"));
+        var locked = Path.Combine(extension, "locked");
+        Directory.CreateDirectory(locked);
+        File.WriteAllText(Path.Combine(locked, "ild.ts"), "token");
+        File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        var repo = new Mock<IRepositoryManager>();
+        try
+        {
+            Assert.False(await Build(repo).ReclaimLocalStateAsync(run));
+
+            repo.Verify(r => r.DestroyWorktreeAsync(It.IsAny<string>()), Times.Never);
+            Assert.True(File.Exists(Path.Combine(locked, "ild.ts")));
+        }
+        finally
+        {
+            File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            Directory.Delete(extension, recursive: true);
+        }
+    }
+
     private static RunReclaimer Build(
         Mock<IRepositoryManager> repo,
         Mock<IWorktreePreviewService>? preview = null,
