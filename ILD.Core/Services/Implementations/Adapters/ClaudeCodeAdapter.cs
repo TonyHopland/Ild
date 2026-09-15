@@ -447,8 +447,11 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     {
         if (ScopeFactory is null) return;
 
+        // Claude keeps its session files in the shared credential store, which the
+        // agent can write, so they are only checked, written and read as the agent
+        // (see AgentWritableFiles), never by the orchestrator through a link.
         var path = GetSessionFilePath(worktreePath, sessionId);
-        if (path is null || File.Exists(path)) return;
+        if (path is null || await AgentWritableFiles.FileExistsAsync(path, ctx.Cancel)) return;
 
         AdapterSessionSnapshot? snapshot;
         try
@@ -467,12 +470,10 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
 
         try
         {
-            var dir = Path.GetDirectoryName(path);
-            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            await File.WriteAllTextAsync(path, jsonl, ctx.Cancel);
+            await AgentWritableFiles.CreateDirectoryAsync(Path.GetDirectoryName(path)!, ctx.Cancel);
+            await AgentWritableFiles.WriteFileAsync(path, jsonl, ctx.Cancel);
         }
         catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
     }
 
     private async Task TryPersistSessionJsonlAsync(AgentExecutionContext ctx, string sessionId, string worktreePath)
@@ -480,15 +481,10 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         if (ScopeFactory is null) return;
 
         var path = GetSessionFilePath(worktreePath, sessionId);
-        if (path is null || !File.Exists(path)) return;
+        if (path is null) return;
 
-        string jsonl;
-        try
-        {
-            jsonl = await File.ReadAllTextAsync(path, ctx.Cancel);
-        }
-        catch (IOException) { return; }
-        catch (UnauthorizedAccessException) { return; }
+        var jsonl = await AgentWritableFiles.ReadFileAsync(path, ctx.Cancel);
+        if (jsonl is null) return;
 
         var wrapped = WrapJsonl(sessionId, jsonl);
 

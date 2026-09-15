@@ -80,6 +80,21 @@ public sealed class AgentWritableFilesTests : IDisposable
     }
 
     [Fact]
+    public async Task FileExistsAsync_is_true_only_for_a_regular_file()
+    {
+        var file = Path.Combine(_dir, "session.jsonl");
+        File.WriteAllText(file, "x");
+        var link = Path.Combine(_dir, "link.jsonl");
+        File.CreateSymbolicLink(link, file);
+        var directory = Directory.CreateDirectory(Path.Combine(_dir, "folder.jsonl")).FullName;
+
+        Assert.True(await AgentWritableFiles.FileExistsAsync(file));
+        Assert.False(await AgentWritableFiles.FileExistsAsync(link));
+        Assert.False(await AgentWritableFiles.FileExistsAsync(directory));
+        Assert.False(await AgentWritableFiles.FileExistsAsync(Path.Combine(_dir, "missing.jsonl")));
+    }
+
+    [Fact]
     public async Task ReadFileAsync_reads_a_regular_file_but_never_through_a_link()
     {
         var file = Path.Combine(_dir, "session.jsonl");

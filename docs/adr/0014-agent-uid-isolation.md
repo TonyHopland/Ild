@@ -173,7 +173,8 @@ safe.directory '*'` in the image, every git command the agent runs (the review
   container instead of growing on a volume.
 
 - **The orchestrator touches agent-writable paths only as the agent.** Anything in
-  shared scratch may be a link or a directory the agent planted, and a check
+  shared scratch, and the Claude session transcripts ILD saves and restores in the
+  shared credential store, may be a link or a directory the agent planted, and a check
   before a write or delete by path can never be atomic with it. So the
   orchestrator does not open, write, list or delete there itself: those operations
   run as a short shell command crossed to the agent uid (`AgentWritableFiles`), and
@@ -206,7 +207,8 @@ rather than overlooked:
   against those as `ild` on every worktree add/fetch.
 - **The shared credential store is writable by the agent**, so it can write e.g.
   `.claude/settings.json` hooks, which then execute as `ild` when a human opens
-  the provider login terminal.
+  the provider login terminal. ILD's own handling of the session transcripts kept
+  there does not add to this: it runs as the agent uid and never follows a link.
 - **All runs share the `ild-agents` group**, so one run's agent can reach another
   run's worktree and any repo in the store.
 
