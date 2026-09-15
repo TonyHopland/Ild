@@ -536,10 +536,6 @@ public sealed class PiAdapter : CliAgentAdapterBase
     /// token of its day, in every pi agent directory, including those of runs and
     /// chats that will never launch again. Returns whether they are all gone.
     /// </summary>
-    public static Task<bool> SweepLegacyExtensionsAsync(CancellationToken ct = default)
-        => SweepLegacyExtensionsAsync(AgentIsolation.ScratchRoot, ct);
-
-    /// <inheritdoc cref="SweepLegacyExtensionsAsync(CancellationToken)"/>
     internal static Task<bool> SweepLegacyExtensionsAsync(string scratchRoot, CancellationToken ct)
         => AgentWritableFiles.DeleteInSubdirectoriesAsync(
             Path.Combine(scratchRoot, AgentDirSegment), LegacyExtensionPath(string.Empty), ct);

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text.Json;
 using ILD.Data.DTOs;
 
@@ -23,7 +22,8 @@ public static class IldMcpServer
     /// agent group, changeable by the orchestrator only. The caller deletes it once
     /// the CLI exits; its name carries <paramref name="loopRunId"/> (the session id
     /// for a chat turn) so <see cref="DeleteConfigFiles"/> can clear a run's files,
-    /// and <see cref="SweepConfigFiles()"/> clears the ones a dead process left.
+    /// and <see cref="AgentRunFiles.SweepAtStartupAsync(IReadOnlySet{Guid}, CancellationToken)"/>
+    /// clears the ones a dead process left.
     /// </summary>
     public static string? TryWriteConfigFile(string namePrefix, Guid loopRunId, object config)
     {
@@ -55,14 +55,11 @@ public static class IldMcpServer
     }
 
     /// <summary>
-    /// Delete the MCP config files written before this process started: those of
-    /// runs killed with an earlier process. A file this process wrote belongs to a
-    /// CLI that may still be reading it, so it is left for its caller to delete.
+    /// Delete the MCP config files written before <paramref name="writtenBeforeUtc"/>,
+    /// this process's start: those of runs killed with an earlier process. A file
+    /// this process wrote belongs to a CLI that may still be reading it, so it is
+    /// left for its caller to delete.
     /// </summary>
-    public static void SweepConfigFiles()
-        => SweepConfigFiles(AgentIsolation.AgentReadRoot, Process.GetCurrentProcess().StartTime.ToUniversalTime());
-
-    /// <inheritdoc cref="SweepConfigFiles()"/>
     internal static void SweepConfigFiles(string agentReadRoot, DateTime writtenBeforeUtc)
     {
         var directory = Path.Combine(agentReadRoot, ConfigDirectorySegment);
