@@ -192,6 +192,13 @@ rather than overlooked:
   the provider login terminal.
 - **All runs share the `ild-agents` group**, so one run's agent can reach another
   run's worktree and any repo in the store.
+- **Orchestrator writes and deletes in shared scratch race the agent.** The scratch
+  root is agent-writable, so the agent can swap any path component for a symlink.
+  Orchestrator writes and deletes there (pi's ILD extension, Copilot's MCP config)
+  refuse any symlinked component below the root, but the check and the operation
+  are not atomic (.NET has no `openat`/`unlinkat`), so an agent that wins a narrow
+  race could redirect one of them. The pattern predates those checks — pi's
+  `models.json` and session restore write there by path too.
 
 Narrowing these is follow-up work: per-run uids/groups, and treating the shared
 git/credential state as attacker-controlled input on the orchestrator side.
