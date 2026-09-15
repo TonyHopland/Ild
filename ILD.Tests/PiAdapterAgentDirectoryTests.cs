@@ -14,8 +14,11 @@ namespace ILD.Tests;
 /// the MCP server, that file was an HTTP-calling extension carrying the token of
 /// its day, and pi loads it before any <c>-e</c> path, keeping the first tool of a
 /// name. Nothing left there may fail a turn, the old extension must go, and the
-/// ones of runs that never launch again are swept.
+/// ones of runs that never launch again are swept. One test briefly replaces the
+/// shared scratch segments with links, so this runs with every class that uses
+/// them in the non-parallel environment collection.
 /// </summary>
+[Collection("EnvironmentPath")]
 public sealed class PiAdapterAgentDirectoryTests : IDisposable
 {
     private readonly Guid _runId = Guid.NewGuid();
@@ -62,6 +65,57 @@ public sealed class PiAdapterAgentDirectoryTests : IDisposable
         Assert.True(Directory.Exists(AgentDirectory));
         Assert.True(Directory.Exists(SessionDirectory));
         Assert.True(File.Exists(Path.Combine(AgentDirectory, "models.json")));
+    }
+
+    [Fact]
+    public async Task A_link_to_a_directory_the_agent_cannot_write_at_the_pi_directories_never_fails_the_turn()
+    {
+        // /usr stands in for a directory the agent cannot write; root could write it.
+        if (!OperatingSystem.IsLinux() || Environment.UserName == "root") return;
+
+        foreach (var directory in new[] { AgentDirectory, SessionDirectory })
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(directory)!);
+            Directory.CreateSymbolicLink(directory, "/usr");
+        }
+
+        await RunAsync();
+
+        Assert.Null(new DirectoryInfo(AgentDirectory).LinkTarget);
+        Assert.Null(new DirectoryInfo(SessionDirectory).LinkTarget);
+        Assert.True(File.Exists(Path.Combine(AgentDirectory, "models.json")));
+    }
+
+    [Fact]
+    public async Task A_link_to_a_directory_the_agent_cannot_write_at_the_shared_segments_never_fails_the_turn()
+    {
+        if (!OperatingSystem.IsLinux() || Environment.UserName == "root") return;
+
+        var segments = new[] { Path.GetDirectoryName(AgentDirectory)!, Path.GetDirectoryName(SessionDirectory)! };
+        var aside = segments.ToDictionary(s => s, s => $"{s}.aside-{Guid.NewGuid():N}");
+        foreach (var segment in segments)
+        {
+            if (Directory.Exists(segment)) Directory.Move(segment, aside[segment]);
+            Directory.CreateSymbolicLink(segment, "/usr");
+        }
+
+        try
+        {
+            await RunAsync();
+
+            foreach (var segment in segments)
+                Assert.Null(new DirectoryInfo(segment).LinkTarget);
+            Assert.True(File.Exists(Path.Combine(AgentDirectory, "models.json")));
+        }
+        finally
+        {
+            foreach (var segment in segments)
+            {
+                if (new DirectoryInfo(segment).LinkTarget is not null) File.Delete(segment);
+                else if (Directory.Exists(segment)) Directory.Delete(segment, recursive: true);
+                if (Directory.Exists(aside[segment])) Directory.Move(aside[segment], segment);
+            }
+        }
     }
 
     [Fact]

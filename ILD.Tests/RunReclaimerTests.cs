@@ -7,6 +7,9 @@ using Moq;
 
 namespace ILD.Tests;
 
+// Creates directories under the shared pi scratch segments, which
+// PiAdapterAgentDirectoryTests briefly replaces with links.
+[Collection("EnvironmentPath")]
 public class RunReclaimerTests : IDisposable
 {
     private readonly List<string> _tempDirs = new();

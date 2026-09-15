@@ -19,18 +19,22 @@ public static class AgentWritableFiles
     private const string Remove =
         """rm -rf -- "$p" 2>/dev/null || { chmod -R u+w -- "$p" 2>/dev/null; rm -rf -- "$p"; }""";
 
-    // Anything that is not a directory at the path or on the way to it (a planted
-    // file, a dangling link) is removed first, and a read-only directory there is
-    // made writable again, so what the agent left never stops a turn. A link to a
-    // directory is kept: the path may legitimately run through one ($HOME/.claude).
+    // Walks the path from the root so that what the agent left never stops a turn:
+    // a directory on the way is made writable if it is not, and anything that is
+    // still not a writable directory — a planted file, a dangling link, a link to
+    // a directory the agent cannot write — is removed, but only where the agent
+    // could have planted it, i.e. in a directory it can write. So a link it cannot
+    // have made, like the path through $HOME/.claude, is always kept.
     private const string CreateDirectory = """
         target="$1"; set --; d="$target"
         while [ "$d" != / ] && [ "$d" != . ]; do set -- "$d" "$@"; d=$(dirname -- "$d"); done
         for p; do
           if [ -d "$p" ]; then
             [ -w "$p" ] || chmod u+w -- "$p" 2>/dev/null
-          elif [ -L "$p" ] || [ -e "$p" ]; then
-            chmod u+w -- "$(dirname -- "$p")" 2>/dev/null
+            { [ -w "$p" ] || [ ! -L "$p" ]; } && continue
+          fi
+          if [ -L "$p" ] || [ -e "$p" ]; then
+            [ -w "$(dirname -- "$p")" ] || continue
             rm -f -- "$p" || exit 1
           fi
         done

@@ -100,6 +100,26 @@ public sealed class AgentWritableFilesTests : IDisposable
     }
 
     [Fact]
+    public async Task CreateDirectoryAsync_replaces_a_link_to_a_directory_the_agent_cannot_write()
+    {
+        // /usr stands in for a directory the agent cannot write; root could write it.
+        if (!OperatingSystem.IsLinux() || Environment.UserName == "root") return;
+
+        var atPath = Path.Combine(_dir, "ild-pi-agent-run");
+        Directory.CreateSymbolicLink(atPath, "/usr");
+        var onTheWay = Path.Combine(_dir, "ild-pi-sessions");
+        Directory.CreateSymbolicLink(onTheWay, "/usr");
+
+        await AgentWritableFiles.CreateDirectoryAsync(atPath);
+        await AgentWritableFiles.CreateDirectoryAsync(Path.Combine(onTheWay, "run"));
+
+        Assert.Null(new DirectoryInfo(atPath).LinkTarget);
+        Assert.True(Directory.Exists(atPath));
+        Assert.Null(new DirectoryInfo(onTheWay).LinkTarget);
+        Assert.True(Directory.Exists(Path.Combine(onTheWay, "run")));
+    }
+
+    [Fact]
     public async Task CreateDirectoryAsync_keeps_a_link_to_a_directory_on_the_way()
     {
         var real = Directory.CreateDirectory(Path.Combine(_dir, "store")).FullName;
