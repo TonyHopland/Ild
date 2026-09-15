@@ -181,28 +181,32 @@ public class RunReclaimerTests : IDisposable
     }
 
     [Fact]
-    public async Task Reclaim_removes_the_pi_ild_extension_written_for_the_run()
+    public async Task Reclaim_removes_the_pi_extension_and_directories_of_the_run()
     {
         var run = Run(worktree: null, branch: null);
-        var extension = Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-ext", run.Id.ToString("N"));
-        Directory.CreateDirectory(extension);
+        var id = run.Id.ToString("N");
+        var extension = AgentIsolation.CreateAgentReadDirectory("ild-pi-ext", id);
         File.WriteAllText(Path.Combine(extension, "ild.ts"), "const CONFIG = { env: { ILD_API_TOKEN: \"t\" } };");
-        _tempDirs.Add(extension);
+        var agentDir = Directory.CreateDirectory(Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-agent", id)).FullName;
+        var sessionDir = Directory.CreateDirectory(Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-sessions", id)).FullName;
+        _tempDirs.AddRange([extension, agentDir, sessionDir]);
 
         Assert.True(await Build(new Mock<IRepositoryManager>()).ReclaimLocalStateAsync(run));
 
         Assert.False(Directory.Exists(extension), "the run's ild.ts, which holds the API token, was left behind");
+        Assert.False(Directory.Exists(agentDir));
+        Assert.False(Directory.Exists(sessionDir));
     }
 
     [Fact]
-    public async Task Reclaim_keeps_the_run_when_its_pi_ild_extension_cannot_be_removed()
+    public async Task Reclaim_keeps_the_run_when_its_pi_extension_cannot_be_removed()
     {
         // root can delete a read-only tree, so the failure cannot be staged there.
         if (!OperatingSystem.IsLinux() || Environment.UserName == "root") return;
 
         var worktree = NewTempDir();
         var run = Run(worktree, "ild/wi-a-run-1");
-        var extension = Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-ext", run.Id.ToString("N"));
+        var extension = AgentIsolation.CreateAgentReadDirectory("ild-pi-ext", run.Id.ToString("N"));
         var locked = Path.Combine(extension, "locked");
         Directory.CreateDirectory(locked);
         File.WriteAllText(Path.Combine(locked, "ild.ts"), "token");
@@ -220,6 +224,22 @@ public class RunReclaimerTests : IDisposable
             File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             Directory.Delete(extension, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task A_read_only_folder_the_agent_planted_in_its_pi_directories_never_holds_the_reclaim_up()
+    {
+        var run = Run(worktree: null, branch: null);
+        var agentDir = Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-agent", run.Id.ToString("N"));
+        var locked = Directory.CreateDirectory(Path.Combine(agentDir, "extensions", "ild.ts", "locked")).FullName;
+        File.WriteAllText(Path.Combine(locked, "file"), "x");
+        if (OperatingSystem.IsLinux())
+            File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        _tempDirs.Add(agentDir);
+
+        Assert.True(await Build(new Mock<IRepositoryManager>()).ReclaimLocalStateAsync(run));
+
+        Assert.False(Directory.Exists(agentDir));
     }
 
     private static RunReclaimer Build(

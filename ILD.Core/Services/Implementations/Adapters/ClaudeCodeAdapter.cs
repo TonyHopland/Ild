@@ -271,7 +271,8 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     }
 
     /// <summary>
-    /// Serialize the MCP config to a temp JSON file the caller can pass to
+    /// Write the MCP config, which carries the ILD API token, to a JSON file (see
+    /// <see cref="IldMcpServer.TryWriteConfigFile"/>) the caller can pass to
     /// <c>claude --mcp-config</c>. Merges the built-in <c>ild</c> server (only
     /// when that tool is in the allowlist) with any provider-scoped custom MCP
     /// servers, which apply for every repo this provider runs in and are written
@@ -296,22 +297,9 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         foreach (var server in CustomMcpServers.Parse(AiProviderConfig.Parse(provider.Config).CustomMcpServersJson))
             servers[server.Name] = BuildCustomMcpEntry(server);
 
-        if (servers.Count == 0) return null;
-
-        var config = new Dictionary<string, object?>
-        {
-            ["mcpServers"] = servers,
-        };
-
-        var json = JsonSerializer.Serialize(config);
-        var path = Path.Combine(Path.GetTempPath(), $"ild-claude-mcp-{Guid.NewGuid():N}.json");
-        try
-        {
-            File.WriteAllText(path, json);
-            return path;
-        }
-        catch (IOException) { return null; }
-        catch (UnauthorizedAccessException) { return null; }
+        return servers.Count == 0
+            ? null
+            : IldMcpServer.TryWriteConfigFile("ild-claude-mcp", new Dictionary<string, object?> { ["mcpServers"] = servers });
     }
 
     private static async Task<ClaudeStreamOutput> ReadStreamJsonAsync(

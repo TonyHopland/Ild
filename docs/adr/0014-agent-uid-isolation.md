@@ -163,17 +163,34 @@ safe.directory '*'` in the image, every git command the agent runs (the review
   relative root would resolve inside the worktree and break every authenticated
   fetch and push.
 
-- **Shared scratch is a setgid tree, not a per-directory grant.** The orchestrator
-  regularly _seeds a file the agent then keeps writing_ — Pi's restored session
-  transcript is written by the orchestrator and appended to by pi for the rest of
-  the turn. Granting the directory cannot express that: create/unlink/rename are
-  governed by the directory, but writing an existing file is governed by that
-  file's own mode. So this scratch is rooted at `AGENT_SCRATCH_DIR`
-  (`/tmp/ild-agent-scratch`, set up like the other shared trees), and the seeded
-  file inherits the shared group and `umask 002` on its own. It is the same
-  mechanism that already made the equivalent claude path work, whose transcripts
-  live in the shared config store. It sits under `/tmp` so it is discarded with
-  the container instead of growing on a volume.
+- **Shared scratch is a setgid tree, not a per-directory grant.** Pi's agent and
+  session directories are seeded for the agent and then written by it for the rest
+  of the turn — a restored session transcript is appended to by pi. Granting the
+  directory cannot express that: create/unlink/rename are governed by the
+  directory, but writing an existing file is governed by that file's own mode. So
+  this scratch is rooted at `AGENT_SCRATCH_DIR` (`/tmp/ild-agent-scratch`, set up
+  like the other shared trees). It sits under `/tmp` so it is discarded with the
+  container instead of growing on a volume.
+
+- **The orchestrator touches agent-writable paths only as the agent.** Anything in
+  shared scratch may be a link or a directory the agent planted, and a check
+  before a write or delete by path can never be atomic with it. So the
+  orchestrator does not open, write, list or delete there itself: those operations
+  run as a short shell command crossed to the agent uid (`AgentWritableFiles`), and
+  a planted link then only leads where the agent could already go. A planted
+  read-only folder is the agent's own, so that command can always clear it, and
+  nothing the agent leaves there can fail a run or block a cleanup.
+
+- **Files the agent reads but must not change live in a root it cannot write.**
+  Pi's ILD extension and the MCP configs handed to the agent CLIs carry the ILD API
+  token. The entrypoint creates `AGENT_READ_DIR` (`/tmp/ild-agent-read`) before any
+  agent-uid process runs, owned by the orchestrator with the shared group and no
+  group write (`2750`), and exports it as `ILD_AGENT_READ_ROOT`. Every directory
+  below it is `0750` and every file `0640`, so the agent can read them but cannot
+  create, rename or delete anything there, and the orchestrator writes and deletes
+  there by path with nothing to defend against. The configs a killed process left
+  behind, and the extensions older builds wrote into pi's agent directories, are
+  swept at startup, before any run can resume.
 
 ## What this does not close
 
@@ -192,13 +209,6 @@ rather than overlooked:
   the provider login terminal.
 - **All runs share the `ild-agents` group**, so one run's agent can reach another
   run's worktree and any repo in the store.
-- **Orchestrator writes and deletes in shared scratch race the agent.** The scratch
-  root is agent-writable, so the agent can swap any path component for a symlink.
-  Orchestrator writes and deletes there (pi's ILD extension, Copilot's MCP config)
-  refuse any symlinked component below the root, but the check and the operation
-  are not atomic (.NET has no `openat`/`unlinkat`), so an agent that wins a narrow
-  race could redirect one of them. The pattern predates those checks — pi's
-  `models.json` and session restore write there by path too.
 
 Narrowing these is follow-up work: per-run uids/groups, and treating the shared
 git/credential state as attacker-controlled input on the orchestrator side.

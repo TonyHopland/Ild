@@ -12,6 +12,10 @@ const PROTOCOL_VERSION = "2025-06-18";
 // default), so a tool call still unanswered after this is a wedged server.
 const DEFAULT_CALL_TIMEOUT_MS = 120_000;
 
+// The server answers initialize and tools/list in about half a second from cold,
+// so this only bounds how long a stalled server holds up pi's start.
+const DEFAULT_STARTUP_TIMEOUT_MS = 10_000;
+
 /**
  * Start the MCP server, list its tools and register each with pi as
  * `toolPrefix + name`. When the server cannot be started or does not answer
@@ -30,7 +34,7 @@ export async function registerIldMcpTools(
     env = {},
     toolPrefix = "",
     truncate,
-    startupTimeoutMs = 30000,
+    startupTimeoutMs = DEFAULT_STARTUP_TIMEOUT_MS,
     callTimeoutMs = DEFAULT_CALL_TIMEOUT_MS,
   },
 ) {
@@ -272,18 +276,28 @@ function textOf(content) {
 }
 
 function toPiContent(content, truncate) {
-  const items = content.map((item) => toPiItem(item, truncate));
+  const texts = [];
+  const images = [];
+  for (const item of content) {
+    const mapped = toPiItem(item, truncate.formatSize);
+    if (mapped.type === "image") images.push(mapped);
+    else texts.push(mapped.text);
+  }
+  // pi's output limit is for the whole result, so the text parts are truncated
+  // together rather than each on its own.
+  const items =
+    texts.length > 0 ? [text(truncated(texts.join("\n\n"), truncate)), ...images] : images;
   return items.length > 0 ? items : [text("(no output)")];
 }
 
-function toPiItem(item, truncate) {
+function toPiItem(item, formatSize) {
   switch (item?.type) {
     case "text":
-      return text(truncated(item.text ?? "", truncate));
+      return text(item.text ?? "");
     case "image":
       return { type: "image", data: item.data, mimeType: item.mimeType };
     case "resource":
-      return resourceItem(item.resource ?? {}, truncate);
+      return resourceItem(item.resource ?? {}, formatSize);
     case "resource_link":
       return text(`[Resource link: ${item.uri}]`);
     case "audio":
@@ -295,9 +309,9 @@ function toPiItem(item, truncate) {
   }
 }
 
-function resourceItem(resource, truncate) {
+function resourceItem(resource, formatSize) {
   if (typeof resource.text === "string") {
-    return text(truncated(`[Resource: ${resource.uri}]\n${resource.text}`, truncate));
+    return text(`[Resource: ${resource.uri}]\n${resource.text}`);
   }
 
   const mimeType = resource.mimeType ?? "application/octet-stream";
@@ -306,9 +320,7 @@ function resourceItem(resource, truncate) {
   }
 
   const size = Buffer.byteLength(resource.blob ?? "", "base64");
-  return text(
-    `[Binary resource: ${resource.uri} (${mimeType}, ${truncate.formatSize(size)}) not shown]`,
-  );
+  return text(`[Binary resource: ${resource.uri} (${mimeType}, ${formatSize(size)}) not shown]`);
 }
 
 function truncated(value, { truncateHead, formatSize, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES }) {

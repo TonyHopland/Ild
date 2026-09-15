@@ -338,9 +338,9 @@ Three things follow that are worth knowing when you write a profile:
   environment before your command runs: both of its database connection strings,
   `ILD_SECRET_KEY`, `ILD_SESSION_TOKEN_PEPPER`, `ILD_PASSWORD`, `ILD_USERNAME`,
   the API tokens it uses to reach itself and the WorkItem Server, and anything
-  you have named in `ILD_AGENT_ENV_DENYLIST`. It also removes the five variables
+  you have named in `ILD_AGENT_ENV_DENYLIST`. It also removes the six variables
   describing its own uid topology (`ILD_AGENT_USER`, `ILD_AGENT_GROUP`, `ILD_AGENT_HOME`,
-  `ILD_AGENT_SCRATCH_ROOT`, `ILD_ORCHESTRATOR_PRIVATE_ROOT`), which describe the
+  `ILD_AGENT_SCRATCH_ROOT`, `ILD_ORCHESTRATOR_PRIVATE_ROOT`, `ILD_AGENT_READ_ROOT`), which describe the
   ILD process and are wrong for anything else. Everything else is inherited as
   before. This matters even if your app reads none of those names, because your
   _shell command_ still ran with them in `env` — one debug `printenv`, a crash

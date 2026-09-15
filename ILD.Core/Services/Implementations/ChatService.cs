@@ -426,8 +426,9 @@ public sealed class ChatService : IChatService
     {
         // The pi extension holds the ILD API token and nothing can find it once the
         // row is gone, so it goes first: a failure throws and keeps the chat, and
-        // deleting it again retries.
-        PiAdapter.DeleteIldExtension(session.Id);
+        // deleting it again retries. What the agent left in its own pi directories
+        // is cleared too, but never holds the delete up.
+        await PiAdapter.DeleteRunFilesAsync(session.Id, ct);
 
         // Messages and adapter snapshots cascade-delete via their FKs; the loop
         // scratchpad is in-memory only, so drop its entry explicitly.

@@ -621,7 +621,7 @@ public class AgentIsolationTests
     }
 
     [Fact]
-    public void StripOrchestratorEnvironment_names_the_five_topology_variables()
+    public void StripOrchestratorEnvironment_names_the_six_topology_variables()
     {
         Assert.Equal(new[]
         {
@@ -630,6 +630,7 @@ public class AgentIsolationTests
             AgentIsolation.AgentHomeEnvVar,
             AgentIsolation.ScratchRootEnvVar,
             AgentIsolation.PrivateRootEnvVar,
+            AgentIsolation.AgentReadRootEnvVar,
         }.OrderBy(k => k, StringComparer.Ordinal),
         AgentIsolation.OrchestratorTopologyEnvKeys.OrderBy(k => k, StringComparer.Ordinal));
     }

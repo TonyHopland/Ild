@@ -70,8 +70,8 @@ tree is the cause; one uid removes the class.
   run inline as the current user — the single-uid escape hatch ADR-0014 documents,
   which local development and the unit-test suite depend on, is preserved exactly.
 - **The child's environment is constructed, not inherited.** A named helper,
-  `AgentIsolation.StripOrchestratorEnvironment`, removes the secrets and the five
-  topology variables. It is deliberately **not** folded into
+  `AgentIsolation.StripOrchestratorEnvironment`, removes the secrets and the
+  topology variables (since joined by `ILD_AGENT_READ_ROOT`, ADR-0014). It is deliberately **not** folded into
   `DropInheritedCapabilities`, which `ProcessRunner` (git, npm) and
   `AIProviderService.RunShellAsync` (Cmd nodes) also use and where a user's command
   may legitimately rely on the inherited environment; scrubbing there would change

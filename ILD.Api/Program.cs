@@ -193,6 +193,20 @@ try
             else
                 Log.Warning("ILD_SESSION_TOKEN_PEPPER is not set — session tokens are hashed unkeyed, so anyone who can write the UserSessions table can mint a sign-in. Set it (setting it signs every device out once).");
 
+            // Before any run can start again: the MCP config files and stale pi
+            // extensions of runs killed with the previous process still hold the
+            // ILD API token.
+            try
+            {
+                ILD.Core.Services.Implementations.Adapters.IldMcpServer.SweepConfigFiles();
+                if (!await ILD.Core.Services.Implementations.Adapters.PiAdapter.SweepLegacyExtensionsAsync())
+                    Log.Warning("Could not remove every stale pi ILD extension from the pi agent directories");
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Log.Warning(ex, "Could not sweep the ILD MCP config files the previous process left behind");
+            }
+
             var templateStore = scope.ServiceProvider.GetRequiredService<ILD.Data.Stores.Interfaces.ILoopTemplateStore>();
             var mgr = scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Interfaces.ILoopTemplateManager>();
             await ILD.Api.Configuration.TemplateSeeder.SeedAsync(templateStore, mgr);

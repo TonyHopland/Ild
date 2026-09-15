@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Text;
-using System.Text.Json;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
@@ -206,8 +205,8 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
     /// <summary>
     /// Write the MCP config to a JSON file the caller can pass to
     /// <c>copilot --additional-mcp-config @&lt;file&gt;</c>. It carries the ILD API
-    /// token and custom-server env, so it goes into shared scratch, readable by
-    /// the agent group only (ADR-0014), rather than a world-readable temp file. Merges the built-in
+    /// token and custom-server env, so it is written by
+    /// <see cref="IldMcpServer.TryWriteConfigFile"/>. Merges the built-in
     /// <c>ild</c> server (only when that tool is selected) with any
     /// provider-scoped custom MCP servers, which are written even when <c>ild</c>
     /// is off. Entries take the Claude Code shape plus Copilot's
@@ -227,23 +226,10 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
         foreach (var server in CustomMcpServers.Parse(AiProviderConfig.Parse(provider.Config).CustomMcpServersJson))
             servers[server.Name] = WithCopilotKeys(ClaudeCodeAdapter.BuildCustomMcpEntry(server));
 
-        if (servers.Count == 0) return null;
-
-        var json = JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, object?> { ["mcpServers"] = servers });
-        try
-        {
-            var path = Path.Combine(
-                AgentIsolation.CreateScratchDirectory(McpConfigDirSegment), $"ild-copilot-mcp-{Guid.NewGuid():N}.json");
-            AgentIsolation.WriteSharedFile(path, file => file.Write(json));
-            return path;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return null;
-        }
+        return servers.Count == 0
+            ? null
+            : IldMcpServer.TryWriteConfigFile("ild-copilot-mcp", new Dictionary<string, object?> { ["mcpServers"] = servers });
     }
-
-    private const string McpConfigDirSegment = "ild-copilot-mcp";
 
     private static Dictionary<string, object?> WithCopilotKeys(Dictionary<string, object?> entry)
     {

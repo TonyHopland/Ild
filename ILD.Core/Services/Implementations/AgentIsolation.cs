@@ -77,6 +77,13 @@ public static class AgentIsolation
     public const string PrivateRootEnvVar = "ILD_ORCHESTRATOR_PRIVATE_ROOT";
 
     /// <summary>
+    /// Root for files the agent reads but cannot change. Set by the entrypoint to a
+    /// directory it created <c>2750</c> with the shared group; unset means a fixed
+    /// absolute path under the process <c>TMPDIR</c> (see <see cref="AgentReadRoot"/>).
+    /// </summary>
+    public const string AgentReadRootEnvVar = "ILD_AGENT_READ_ROOT";
+
+    /// <summary>
     /// Extra, deployment-specific environment variable names (comma-separated) to
     /// strip from the agent's environment on top of <see cref="DefaultSecretEnvKeys"/>.
     /// </summary>
@@ -304,6 +311,7 @@ public static class AgentIsolation
         AgentHomeEnvVar,
         ScratchRootEnvVar,
         PrivateRootEnvVar,
+        AgentReadRootEnvVar,
     ];
 
     /// <summary>
@@ -580,64 +588,65 @@ public static class AgentIsolation
     }
 
     /// <summary>
-    /// Whether <paramref name="path"/>, which must lie under <see cref="ScratchRoot"/>,
-    /// is reached without passing through a symlink below the root. Scratch is
-    /// group-writable, so the agent can swap any of those components for a link to
-    /// somewhere only the orchestrator may write; code about to write or delete by
-    /// path checks this first. The check is not atomic with what follows it, so it
-    /// narrows that window rather than closing it.
+    /// Where the orchestrator puts files the agent must read but must never be
+    /// able to change: pi's ILD extension and the MCP configs handed to the agent
+    /// CLIs, which carry the ILD API token. The entrypoint creates it before any
+    /// agent-uid process runs, owned by the orchestrator with the shared group and
+    /// no group write (<c>2750</c>), so the agent can read what is there but cannot
+    /// create, rename or delete anything in it — which is what lets the
+    /// orchestrator write and delete there by path without guarding against
+    /// planted links. Unset means a fixed absolute path under the process
+    /// <c>TMPDIR</c>, which is what local development and unit tests get.
     /// </summary>
-    public static bool HasNoLinkBelowScratchRoot(string path)
-    {
-        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(ScratchRoot));
-        var full = Path.GetFullPath(path);
-        if (!full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
-            throw new ArgumentException($"{path} is not under the scratch root {root}.", nameof(path));
+    public static string AgentReadRoot => ResolveAgentReadRoot(Environment.GetEnvironmentVariable(AgentReadRootEnvVar));
 
-        var current = root;
-        foreach (var segment in full[(root.Length + 1)..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+    /// <inheritdoc cref="AgentReadRoot"/>
+    /// <param name="configured">The configured root, or null/blank for the default.</param>
+    public static string ResolveAgentReadRoot(string? configured)
+        => Path.GetFullPath(NonEmpty(configured) ?? Path.Combine(Path.GetTempPath(), "ild-agent-read"));
+
+    /// <summary>
+    /// Create a directory under <see cref="AgentReadRoot"/> and return its path.
+    /// Every level created here is <c>0750</c> (keeping the setgid bit its parent
+    /// passes down, so the shared group carries through), the same rule as the root.
+    /// </summary>
+    public static string CreateAgentReadDirectory(params string[] segments)
+    {
+        var path = AgentReadRoot;
+        EnsureAgentReadDirectory(path);
+        foreach (var segment in segments)
         {
-            current = Path.Combine(current, segment);
-            if (new FileInfo(current).LinkTarget is not null)
-                return false;
-            if (!Path.Exists(current))
-                return true;
+            path = Path.Combine(path, segment);
+            EnsureAgentReadDirectory(path);
         }
-        return true;
+        return path;
     }
 
-    /// <summary>
-    /// Recursively delete a directory under <see cref="ScratchRoot"/>. Throws
-    /// <see cref="IOException"/> rather than delete when the path passes through a
-    /// symlink (see <see cref="HasNoLinkBelowScratchRoot"/>); links inside the tree
-    /// are removed, never followed. A missing directory is not an error.
-    /// </summary>
-    public static void DeleteScratchDirectory(params string[] segments)
+    private static void EnsureAgentReadDirectory(string path)
     {
-        var path = Path.Combine(new[] { ScratchRoot }.Concat(segments).ToArray());
-        if (!HasNoLinkBelowScratchRoot(path))
-            throw new IOException($"Refusing to delete {path}: it is reached through a symlink.");
         if (Directory.Exists(path))
-            Directory.Delete(path, recursive: true);
+            return;
+
+        Directory.CreateDirectory(path);
+        if (!OperatingSystem.IsWindows())
+        {
+            var inherited = File.GetUnixFileMode(Path.GetDirectoryName(path)!) & UnixFileMode.SetGroup;
+            File.SetUnixFileMode(path, AgentReadDirectoryMode | inherited);
+        }
     }
 
-    /// <summary>
-    /// Write a file into shared scratch for the agent to read, never writing
-    /// through a link the agent planted. Throws <see cref="IOException"/> when the
-    /// target's directory is reached through a symlink (see
-    /// <see cref="HasNoLinkBelowScratchRoot"/>). At the target itself the content
-    /// goes to a fresh, exclusively created name beside it and is then renamed over
-    /// it (or moved to it without overwrite when nothing is there yet), so a symlink
-    /// planted at the target is replaced, not written through. The file is created
-    /// without group or other write, and readers only ever see it whole.
-    /// </summary>
-    public static void WriteSharedFile(string path, Action<Stream> write)
-    {
-        var directory = Path.GetDirectoryName(Path.GetFullPath(path))!;
-        if (!HasNoLinkBelowScratchRoot(directory))
-            throw new IOException($"Refusing to write {path}: its directory is reached through a symlink.");
+    private const UnixFileMode AgentReadDirectoryMode =
+        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+        | UnixFileMode.GroupRead | UnixFileMode.GroupExecute;
 
-        var temp = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+    /// <summary>
+    /// Write a file in a <see cref="CreateAgentReadDirectory"/> tree: <c>0640</c>,
+    /// and moved into place whole, so a reader (pi nodes of one run start in
+    /// parallel) never sees it half-written.
+    /// </summary>
+    public static void WriteAgentReadableFile(string path, byte[] content)
+    {
+        var temp = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(path))!, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
         var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write };
         if (!OperatingSystem.IsWindows())
             options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead;
@@ -645,12 +654,8 @@ public static class AgentIsolation
         try
         {
             using (var file = new FileStream(temp, options))
-                write(file);
-
-            if (File.Exists(path))
-                File.Replace(temp, path, destinationBackupFileName: null);
-            else
-                File.Move(temp, path);
+                file.Write(content);
+            File.Move(temp, path, overwrite: true);
         }
         catch
         {

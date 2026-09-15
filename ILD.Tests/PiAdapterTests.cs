@@ -469,8 +469,12 @@ public class PiAdapterTests
 
             Assert.True(result.Success, result.Error);
             var extension = ExtensionArgument(worktreeDir);
-            Assert.Equal(Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-ext", runId.ToString("N"), "ild.ts"), extension);
+            Assert.Equal(Path.Combine(AgentIsolation.AgentReadRoot, "ild-pi-ext", runId.ToString("N"), "ild.ts"), extension);
             Assert.True(File.Exists(Path.Combine(Path.GetDirectoryName(extension)!, "ild-mcp-bridge.js")));
+            UnixOwnership.AssertOrchestratorOwned(Path.GetDirectoryName(extension)!, UnixOwnership.AgentReadDirectory);
+            UnixOwnership.AssertOrchestratorOwned(extension, UnixOwnership.AgentReadFile);
+            UnixOwnership.AssertOrchestratorOwned(
+                Path.Combine(Path.GetDirectoryName(extension)!, "ild-mcp-bridge.js"), UnixOwnership.AgentReadFile);
 
             var ildTs = File.ReadAllText(extension);
             Assert.Contains("./ild-mcp-bridge.js", ildTs);
@@ -507,7 +511,9 @@ public class PiAdapterTests
 
             Assert.True(result.Success, result.Error);
             var extension = ExtensionArgument(worktreeDir);
-            Assert.StartsWith(Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-ext") + Path.DirectorySeparatorChar, extension);
+            Assert.StartsWith(Path.Combine(AgentIsolation.AgentReadRoot, "ild-pi-ext") + Path.DirectorySeparatorChar, extension);
+            UnixOwnership.AssertOrchestratorOwned(Path.GetDirectoryName(extension)!, UnixOwnership.AgentReadDirectory);
+            UnixOwnership.AssertOrchestratorOwned(extension, UnixOwnership.AgentReadFile);
 
             var ildTs = File.ReadAllText(extension);
             Assert.Contains("ILD_CHAT_SESSION_ID", ildTs);
@@ -540,7 +546,7 @@ public class PiAdapterTests
             var argv = File.ReadAllLines(Path.Combine(worktreeDir, "argv.txt"));
             Assert.DoesNotContain("-e", argv);
             Assert.Equal("read,grep,find,ls,edit,write,bash", argv[Array.IndexOf(argv, "--tools") + 1]);
-            Assert.False(Directory.Exists(Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-ext", runId.ToString("N"))));
+            Assert.False(Directory.Exists(Path.Combine(AgentIsolation.AgentReadRoot, "ild-pi-ext", runId.ToString("N"))));
         }
         finally
         {
@@ -609,7 +615,7 @@ public class PiAdapterTests
             Assert.False(File.Exists(Path.Combine(agentDir, "extensions", "ild.ts")));
 
             Assert.Equal(
-                Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-ext", runId.ToString("N"), "ild.ts"),
+                Path.Combine(AgentIsolation.AgentReadRoot, "ild-pi-ext", runId.ToString("N"), "ild.ts"),
                 ExtensionArgument(worktreeDir));
         }
         finally
@@ -810,9 +816,13 @@ public class PiAdapterTests
 
     private static void CleanUpRunScratch(Guid runId)
     {
-        foreach (var segment in new[] { "ild-pi-ext", "ild-pi-agent", "ild-pi-sessions" })
+        foreach (var dir in new[]
         {
-            var dir = Path.Combine(AgentIsolation.ScratchRoot, segment, runId.ToString("N"));
+            Path.Combine(AgentIsolation.AgentReadRoot, "ild-pi-ext", runId.ToString("N")),
+            Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-agent", runId.ToString("N")),
+            Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-sessions", runId.ToString("N")),
+        })
+        {
             try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { /* best effort */ }
         }
     }

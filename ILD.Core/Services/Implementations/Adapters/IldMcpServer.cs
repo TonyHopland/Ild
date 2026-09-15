@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ILD.Data.DTOs;
 
 namespace ILD.Core.Services.Implementations.Adapters;
@@ -12,6 +13,47 @@ namespace ILD.Core.Services.Implementations.Adapters;
 public static class IldMcpServer
 {
     private const string DllName = "ild-mcp-server.dll";
+    private const string ConfigDirectorySegment = "ild-mcp-config";
+
+    /// <summary>
+    /// Write an MCP config file for an agent CLI to read and return its path, or
+    /// <c>null</c> when it cannot be written. The config carries the ILD API token,
+    /// so it goes into <see cref="AgentIsolation.AgentReadRoot"/>: readable by the
+    /// agent group, changeable by the orchestrator only. The caller deletes it once
+    /// the CLI exits; <see cref="SweepConfigFiles"/> clears the ones a dead process
+    /// left behind.
+    /// </summary>
+    public static string? TryWriteConfigFile(string namePrefix, object config)
+    {
+        try
+        {
+            var path = Path.Combine(
+                AgentIsolation.CreateAgentReadDirectory(ConfigDirectorySegment), $"{namePrefix}-{Guid.NewGuid():N}.json");
+            AgentIsolation.WriteAgentReadableFile(path, JsonSerializer.SerializeToUtf8Bytes(config));
+            return path;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Delete every MCP config file. Only safe before any agent CLI can be running,
+    /// i.e. at startup, when all that is left are the files of runs killed with the
+    /// previous process.
+    /// </summary>
+    public static void SweepConfigFiles() => SweepConfigFiles(AgentIsolation.AgentReadRoot);
+
+    /// <inheritdoc cref="SweepConfigFiles()"/>
+    internal static void SweepConfigFiles(string agentReadRoot)
+    {
+        var directory = Path.Combine(agentReadRoot, ConfigDirectorySegment);
+        if (!Directory.Exists(directory))
+            return;
+        foreach (var file in Directory.EnumerateFiles(directory))
+            File.Delete(file);
+    }
 
     /// <summary>
     /// Build the environment variables the MCP server needs: the ILD API URL,

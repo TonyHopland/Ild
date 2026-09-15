@@ -7,7 +7,9 @@ namespace ILD.Tests;
 /// <summary>
 /// The parts of the MCP conversation <see cref="PiMcpBridgeTests"/> does not
 /// reach: a server that pings the bridge before it will answer, a call pi aborts
-/// or the server never answers, and content whose MIME type is not lower case.
+/// or the server never answers, content whose MIME type is not lower case, a
+/// result whose text parts are only too long together, and the default bound on
+/// a stalled server holding up pi's start.
 /// </summary>
 public sealed class PiMcpBridgeProtocolTests : IDisposable
 {
@@ -42,17 +44,17 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
     public void A_ping_from_the_server_during_startup_is_answered()
     {
         // The server withholds its initialize reply until its ping is answered.
-        var result = Run(new JsonObject { ["tool"] = "none" });
+        var (result, _) = Run(new JsonObject { ["tool"] = "none" });
 
         Assert.Equal(
-            new[] { "ild_hang", "ild_upper_case_image" },
+            new[] { "ild_hang", "ild_upper_case_image", "ild_two_texts" },
             result["registered"]!.AsArray().Select(n => (string?)n).ToArray());
     }
 
     [Fact]
     public void Aborting_a_call_rejects_it_and_tells_the_server()
     {
-        var result = Run(new JsonObject { ["tool"] = "hang", ["abortAfterMs"] = 200 });
+        var (result, _) = Run(new JsonObject { ["tool"] = "hang", ["abortAfterMs"] = 200 });
 
         Assert.Contains("aborted", (string?)result["error"]);
         Assert.True((bool)result["serverSawCancel"]!, "the server was not sent notifications/cancelled");
@@ -61,7 +63,7 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
     [Fact]
     public void A_call_the_server_never_answers_times_out_and_tells_the_server()
     {
-        var result = Run(new JsonObject { ["tool"] = "hang", ["callTimeoutMs"] = 300 });
+        var (result, _) = Run(new JsonObject { ["tool"] = "hang", ["callTimeoutMs"] = 300 });
 
         Assert.Contains("timed out", (string?)result["error"]);
         Assert.True((bool)result["serverSawCancel"]!, "the server was not sent notifications/cancelled");
@@ -70,14 +72,37 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
     [Fact]
     public void An_image_blob_with_an_upper_case_mime_type_reaches_pi_as_an_image()
     {
-        var result = Run(new JsonObject { ["tool"] = "upper_case_image" });
+        var (result, _) = Run(new JsonObject { ["tool"] = "upper_case_image" });
 
         var image = Assert.Single(result["content"]!.AsArray())!;
         Assert.Equal("image", (string?)image["type"]);
         Assert.Equal(Png, (string?)image["data"]);
     }
 
-    private JsonObject Run(JsonObject spec)
+    [Fact]
+    public void Text_parts_are_truncated_together_as_one_result()
+    {
+        // Two parts of four lines each, against the harness's five-line limit: each
+        // fits on its own, the whole result does not.
+        var (result, _) = Run(new JsonObject { ["tool"] = "two_texts" });
+
+        var text = (string?)Assert.Single(result["content"]!.AsArray())!["text"];
+        Assert.Contains("A4", text);
+        Assert.DoesNotContain("B2", text);
+        Assert.Contains("truncat", text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void A_stalled_server_holds_up_pis_start_for_ten_seconds_at_most_by_default()
+    {
+        var (result, stderr) = Run(new JsonObject { ["tool"] = "none", ["serverMode"] = "stall" });
+
+        Assert.Empty(result["registered"]!.AsArray());
+        Assert.Contains("no reply within 10000ms", stderr);
+        Assert.InRange((double)result["startupMs"]!, 9000, 15000);
+    }
+
+    private (JsonObject Result, string Stderr) Run(JsonObject spec)
     {
         var resultFile = Path.Combine(_dir, $"result-{Guid.NewGuid():N}.json");
         var psi = new ProcessStartInfo("node")
@@ -107,7 +132,7 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
         Assert.True(process.ExitCode == 0 && File.Exists(resultFile),
             $"the harness exited {process.ExitCode} without finishing. stderr: {stderr.Result}");
         Assert.Equal(string.Empty, stdout.Result);
-        return JsonNode.Parse(File.ReadAllText(resultFile))!.AsObject();
+        return (JsonNode.Parse(File.ReadAllText(resultFile))!.AsObject(), stderr.Result);
     }
 
     private const string HarnessScript = """
@@ -124,22 +149,37 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
           registerTool(definition) { registered.push(definition); },
           on(event, handler) { if (event === "session_shutdown") shutdownHandlers.push(handler); },
         };
-        const truncate = {
-          truncateHead: (content) => ({ content, truncated: false }),
-          formatSize: (bytes) => `${bytes}B`,
-          DEFAULT_MAX_BYTES: 50 * 1024,
-          DEFAULT_MAX_LINES: 2000,
-        };
 
+        // Stand-ins for pi's exported truncation utilities, with a 5-line limit.
+        const DEFAULT_MAX_LINES = 5;
+        const DEFAULT_MAX_BYTES = 50 * 1024;
+        function truncateHead(content, options = {}) {
+          const maxLines = options.maxLines ?? DEFAULT_MAX_LINES;
+          const lines = content.split("\n");
+          const totalBytes = Buffer.byteLength(content, "utf-8");
+          if (lines.length <= maxLines)
+            return { content, truncated: false, outputLines: lines.length, totalLines: lines.length, outputBytes: totalBytes, totalBytes };
+          const kept = lines.slice(0, maxLines).join("\n");
+          return { content: kept, truncated: true, outputLines: maxLines, totalLines: lines.length, outputBytes: Buffer.byteLength(kept, "utf-8"), totalBytes };
+        }
+        const formatSize = (bytes) => `${bytes}B`;
+
+        const started = Date.now();
         await registerIldMcpTools(pi, {
           command: "node",
-          args: [serverScript, logFile],
+          args: [serverScript, logFile, spec.serverMode ?? "normal"],
           toolPrefix: "ild_",
-          truncate,
-          startupTimeoutMs: 10000,
+          truncate: { truncateHead, formatSize, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES },
+          startupTimeoutMs: spec.startupTimeoutMs,
           callTimeoutMs: spec.callTimeoutMs,
         });
-        const result = { registered: registered.map((t) => t.name), content: null, error: null, serverSawCancel: false };
+        const result = {
+          registered: registered.map((t) => t.name),
+          startupMs: Date.now() - started,
+          content: null,
+          error: null,
+          serverSawCancel: false,
+        };
 
         const tool = registered.find((t) => t.name === `ild_${spec.tool}`);
         if (tool) {
@@ -162,13 +202,15 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
     private const string ServerScript = $$"""
         import { appendFileSync } from "node:fs";
 
-        const logFile = process.argv[2];
+        const [, , logFile, mode] = process.argv;
         const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n");
         const empty = { type: "object", properties: {} };
+        const lines = (prefix) => [1, 2, 3, 4].map((n) => `${prefix}${n}`).join("\n");
         let initializeId;
 
         function handle(message) {
           appendFileSync(logFile, JSON.stringify(message) + "\n");
+          if (mode === "stall") return;
           if (message.method === "initialize") {
             initializeId = message.id;
             return send({ id: "server-ping", method: "ping" });
@@ -180,10 +222,14 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
             return send({ id: message.id, result: { tools: [
               { name: "hang", description: "Never answers.", inputSchema: empty },
               { name: "upper_case_image", description: "Returns an image blob typed IMAGE/PNG.", inputSchema: empty },
+              { name: "two_texts", description: "Returns two four-line text parts.", inputSchema: empty },
             ] } });
           }
           if (message.method === "tools/call" && message.params.name === "upper_case_image") {
             return send({ id: message.id, result: { content: [{ type: "resource", resource: { uri: "ild://shot", mimeType: "IMAGE/PNG", blob: "{{Png}}" } }] } });
+          }
+          if (message.method === "tools/call" && message.params.name === "two_texts") {
+            return send({ id: message.id, result: { content: [{ type: "text", text: lines("A") }, { type: "text", text: lines("B") }] } });
           }
           // "hang" is never answered: only an abort or the call timeout ends it.
         }
