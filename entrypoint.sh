@@ -589,8 +589,14 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
     [ -n "$ORCHESTRATOR_PRIVATE_DIR" ] && ensure_private "$ORCHESTRATOR_PRIVATE_DIR"
     # Files the agent reads but must not be able to change (pi's ILD extension,
     # the agent CLIs' MCP configs, all carrying the ILD API token): created here,
-    # before any agent-uid process runs, so it is the orchestrator's from the start.
-    [ -n "$AGENT_READ_DIR" ] && ensure_shared_ro "$AGENT_READ_DIR"
+    # before any agent-uid process runs, so they are the orchestrator's from the
+    # start. The app's fixed folders are made the same way, so the app only ever
+    # creates per-run folders, inside folders the agent cannot write.
+    if [ -n "$AGENT_READ_DIR" ]; then
+      for path in "$AGENT_READ_DIR" "$AGENT_READ_DIR/ild-pi-ext" "$AGENT_READ_DIR/ild-mcp-config"; do
+        ensure_shared_ro "$path"
+      done
+    fi
   else
     for path in $RUNTIME_DIRS; do
       ensure_owned_by_runtime_user "$path"

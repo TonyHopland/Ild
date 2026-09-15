@@ -120,6 +120,21 @@ public sealed class AgentWritableFilesTests : IDisposable
     }
 
     [Fact]
+    public async Task CreateDirectoryAsync_replaces_a_link_to_another_writable_directory_at_the_target()
+    {
+        var otherRun = Directory.CreateDirectory(Path.Combine(_dir, "other-run")).FullName;
+        var target = Path.Combine(_dir, "run", "session");
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        Directory.CreateSymbolicLink(target, otherRun);
+
+        await AgentWritableFiles.CreateDirectoryAsync(target);
+
+        Assert.Null(new DirectoryInfo(target).LinkTarget);
+        Assert.True(Directory.Exists(target));
+        Assert.Empty(Directory.GetFileSystemEntries(otherRun));
+    }
+
+    [Fact]
     public async Task CreateDirectoryAsync_keeps_a_link_to_a_directory_on_the_way()
     {
         var real = Directory.CreateDirectory(Path.Combine(_dir, "store")).FullName;

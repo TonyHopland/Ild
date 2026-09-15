@@ -110,6 +110,67 @@ public sealed class AgentReadRootTests : IDisposable
         Assert.Equal(UnixOwnership.AgentReadDirectory, UnixOwnership.PermissionsOf(child));
     }
 
+    [Theory]
+    [InlineData(0, "link")]
+    [InlineData(0, "group-writable")]
+    [InlineData(1, "link")]
+    [InlineData(1, "group-writable")]
+    [InlineData(2, "link")]
+    [InlineData(2, "group-writable")]
+    public void A_planted_link_or_group_writable_folder_at_any_level_is_refused(int level, string planted)
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        var dir = Directory.CreateTempSubdirectory("ild-read-levels-").FullName;
+        try
+        {
+            // root, the fixed folder, the per-run folder.
+            var levels = new[] { Path.Combine(dir, "root"), Path.Combine(dir, "root", "ild-pi-ext"), Path.Combine(dir, "root", "ild-pi-ext", "run") };
+            for (var i = 0; i < level; i++)
+                Directory.CreateDirectory(levels[i], UnixOwnership.AgentReadDirectory);
+            var elsewhere = Directory.CreateDirectory(Path.Combine(dir, "elsewhere"), UnixOwnership.AgentReadDirectory).FullName;
+            if (planted == "link")
+            {
+                Directory.CreateSymbolicLink(levels[level], elsewhere);
+            }
+            else
+            {
+                Directory.CreateDirectory(levels[level]);
+                File.SetUnixFileMode(levels[level], UnixOwnership.AgentReadDirectory | UnixFileMode.GroupWrite);
+            }
+
+            Assert.Throws<InvalidOperationException>(() =>
+                AgentIsolation.CreateAgentReadDirectoryUnder(levels[0], "agent", "ild-pi-ext", "run"));
+
+            Assert.Empty(Directory.GetFileSystemEntries(elsewhere));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Missing_levels_below_a_trusted_root_are_created_0750()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        var dir = Directory.CreateTempSubdirectory("ild-read-levels-").FullName;
+        try
+        {
+            var root = Directory.CreateDirectory(Path.Combine(dir, "root"), UnixOwnership.AgentReadDirectory).FullName;
+
+            var run = AgentIsolation.CreateAgentReadDirectoryUnder(root, "agent", "ild-pi-ext", "run");
+
+            Assert.Equal(UnixOwnership.AgentReadDirectory, UnixOwnership.PermissionsOf(Path.GetDirectoryName(run)!));
+            Assert.Equal(UnixOwnership.AgentReadDirectory, UnixOwnership.PermissionsOf(run));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Fact]
     public void Files_are_written_0640_and_replace_what_was_there_whole()
     {

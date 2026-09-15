@@ -631,64 +631,81 @@ public static class AgentIsolation
     /// </summary>
     internal static void EnsureTrustedAgentReadRoot(string root, string? agentUser)
     {
-        var entry = new DirectoryInfo(root);
-        if (entry.LinkTarget is null && !entry.Exists)
+        if (IsMissing(root))
         {
             if (NonEmpty(agentUser) is not null)
-                throw UntrustedAgentReadRoot(root, "does not exist; the entrypoint creates it");
-            Directory.CreateDirectory(root);
-            if (!OperatingSystem.IsWindows())
-                File.SetUnixFileMode(root, AgentReadDirectoryMode);
+                throw UntrustedAgentReadDirectory(root, "does not exist; the entrypoint creates it");
+            CreateAgentReadLevel(root);
             return;
         }
 
-        if (entry.LinkTarget is not null)
-            throw UntrustedAgentReadRoot(root, "is a symlink");
+        VerifyTrustedAgentReadDirectory(root);
+    }
+
+    // Refuses a directory the agent could have made or could change: a link, one
+    // writable by group or others, or one this process's user does not own.
+    private static void VerifyTrustedAgentReadDirectory(string path)
+    {
+        if (new DirectoryInfo(path).LinkTarget is not null)
+            throw UntrustedAgentReadDirectory(path, "is a symlink");
         if (OperatingSystem.IsWindows())
             return;
 
-        var mode = File.GetUnixFileMode(root);
+        var mode = File.GetUnixFileMode(path);
         if ((mode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0)
-            throw UntrustedAgentReadRoot(root, "is writable by others than its owner");
+            throw UntrustedAgentReadDirectory(path, "is writable by others than its owner");
 
         // Only the owner may chmod (the orchestrator holds no CAP_FOWNER), so
-        // re-applying the root's own mode proves ownership without a stat call.
-        try { File.SetUnixFileMode(root, mode); }
-        catch (UnauthorizedAccessException) { throw UntrustedAgentReadRoot(root, "is not owned by this process's user"); }
+        // re-applying the directory's own mode proves ownership without a stat call.
+        try { File.SetUnixFileMode(path, mode); }
+        catch (UnauthorizedAccessException) { throw UntrustedAgentReadDirectory(path, "is not owned by this process's user"); }
     }
 
-    private static InvalidOperationException UntrustedAgentReadRoot(string root, string reason)
-        => new($"The agent read root {root} {reason}, so it cannot hold files carrying the ILD API token.");
+    private static bool IsMissing(string path)
+    {
+        var entry = new DirectoryInfo(path);
+        return entry.LinkTarget is null && !entry.Exists;
+    }
+
+    // Created with its final mode in one step, so it is never group-writable, not
+    // even for a moment; a setgid parent passes its bit on by itself.
+    private static void CreateAgentReadLevel(string path)
+    {
+        if (OperatingSystem.IsWindows())
+            Directory.CreateDirectory(path);
+        else
+            Directory.CreateDirectory(path, AgentReadDirectoryMode);
+    }
+
+    private static InvalidOperationException UntrustedAgentReadDirectory(string path, string reason)
+        => new($"The agent read directory {path} {reason}, so it cannot hold files carrying the ILD API token.");
 
     /// <summary>
-    /// Create a directory under <see cref="AgentReadRoot"/> and return its path,
-    /// after checking the root can be trusted. Every level created here is
-    /// <c>0750</c> (keeping the setgid bit its parent passes down, so the shared
-    /// group carries through), the same rule as the root.
+    /// Create a directory under <see cref="AgentReadRoot"/> and return its path.
+    /// The root and every level that already exists must pass the same check (see
+    /// <see cref="EnsureTrustedAgentReadRoot"/>); every level created here is made
+    /// <c>0750</c> in one step (keeping the setgid bit its parent passes down, so
+    /// the shared group carries through), the same rule as the root.
     /// </summary>
     public static string CreateAgentReadDirectory(params string[] segments)
+        => CreateAgentReadDirectoryUnder(AgentReadRoot, AgentUser, segments);
+
+    /// <inheritdoc cref="CreateAgentReadDirectory(string[])"/>
+    internal static string CreateAgentReadDirectoryUnder(string root, string? agentUser, params string[] segments)
     {
-        var path = AgentReadRoot;
-        EnsureTrustedAgentReadRoot(path, AgentUser);
+        EnsureTrustedAgentReadRoot(root, agentUser);
+        var path = root;
         foreach (var segment in segments)
         {
             path = Path.Combine(path, segment);
-            EnsureAgentReadDirectory(path);
+            // The level above is trusted, so only this process can create or
+            // replace this one; an existing one still gets the same check.
+            if (IsMissing(path))
+                CreateAgentReadLevel(path);
+            else
+                VerifyTrustedAgentReadDirectory(path);
         }
         return path;
-    }
-
-    private static void EnsureAgentReadDirectory(string path)
-    {
-        if (Directory.Exists(path))
-            return;
-
-        Directory.CreateDirectory(path);
-        if (!OperatingSystem.IsWindows())
-        {
-            var inherited = File.GetUnixFileMode(Path.GetDirectoryName(path)!) & UnixFileMode.SetGroup;
-            File.SetUnixFileMode(path, AgentReadDirectoryMode | inherited);
-        }
     }
 
     private const UnixFileMode AgentReadDirectoryMode =

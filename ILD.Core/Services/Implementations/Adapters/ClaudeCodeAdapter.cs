@@ -500,10 +500,16 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         }
     }
 
+    // Claude keeps its sessions under the HOME it runs with, which under uid
+    // isolation is the agent's (AgentIsolation.ResolveChildHome), not ours.
     public static string? GetSessionFilePath(string worktreePath, string sessionId)
+        => GetSessionFilePath(worktreePath, sessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome);
+
+    /// <inheritdoc cref="GetSessionFilePath(string, string)"/>
+    internal static string? GetSessionFilePath(string worktreePath, string sessionId, string? agentUser, string? agentHome)
     {
         if (string.IsNullOrEmpty(worktreePath) || string.IsNullOrEmpty(sessionId)) return null;
-        var home = Environment.GetEnvironmentVariable("HOME");
+        var home = AgentIsolation.ResolveChildHome(agentUser, agentHome) ?? Environment.GetEnvironmentVariable("HOME");
         if (string.IsNullOrEmpty(home))
             home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (string.IsNullOrEmpty(home)) return null;

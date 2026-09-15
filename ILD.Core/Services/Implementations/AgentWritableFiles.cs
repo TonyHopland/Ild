@@ -24,11 +24,16 @@ public static class AgentWritableFiles
     // still not a writable directory — a planted file, a dangling link, a link to
     // a directory the agent cannot write — is removed, but only where the agent
     // could have planted it, i.e. in a directory it can write. So a link it cannot
-    // have made, like the path through $HOME/.claude, is always kept.
+    // have made, like the path through $HOME/.claude, is kept on the way; a link at
+    // the target itself never is, since it would redirect the whole directory.
     private const string CreateDirectory = """
         target="$1"; set --; d="$target"
         while [ "$d" != / ] && [ "$d" != . ]; do set -- "$d" "$@"; d=$(dirname -- "$d"); done
         for p; do
+          if [ "$p" = "$target" ] && [ -L "$p" ]; then
+            rm -f -- "$p" || exit 1
+            continue
+          fi
           if [ -d "$p" ]; then
             [ -w "$p" ] || chmod u+w -- "$p" 2>/dev/null
             { [ -w "$p" ] || [ ! -L "$p" ]; } && continue

@@ -80,6 +80,19 @@ public sealed class ClaudeCodeSessionFileTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Session_files_live_under_the_home_the_claude_child_runs_with()
+    {
+        var agentHome = Path.Combine(_home, "agent-home");
+        var agentProjects = Path.Combine(agentHome, ".claude", "projects") + Path.DirectorySeparatorChar;
+        var ownProjects = Path.Combine(_home, ".claude", "projects") + Path.DirectorySeparatorChar;
+
+        Assert.StartsWith(agentProjects, ClaudeCodeAdapter.GetSessionFilePath(_worktree, SessionId, "agent", agentHome));
+        // Isolation off, or no agent home configured: the crossing leaves HOME alone.
+        Assert.StartsWith(ownProjects, ClaudeCodeAdapter.GetSessionFilePath(_worktree, SessionId, agentUser: null, agentHome));
+        Assert.StartsWith(ownProjects, ClaudeCodeAdapter.GetSessionFilePath(_worktree, SessionId, "agent", agentHome: null));
+    }
+
+    [Fact]
     public async Task Restore_replaces_a_planted_link_without_touching_its_target()
     {
         await SeedSnapshotAsync("{\"session_id\":\"claude-sess\",\"type\":\"assistant\",\"text\":\"restored\"}\n");
