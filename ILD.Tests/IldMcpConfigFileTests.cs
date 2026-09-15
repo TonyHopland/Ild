@@ -38,16 +38,23 @@ public sealed class IldMcpConfigFileTests : IDisposable
     }
 
     [Fact]
-    public void The_startup_sweep_removes_every_config_left_behind()
+    public void The_startup_sweep_removes_the_configs_an_earlier_process_left_and_keeps_this_ones()
     {
+        var started = DateTime.UtcNow;
         var directory = Directory.CreateDirectory(Path.Combine(_root, "ild-mcp-config")).FullName;
-        File.WriteAllText(Path.Combine(directory, "ild-copilot-mcp-1.json"), "{\"token\":\"t\"}");
-        File.WriteAllText(Path.Combine(directory, "ild-claude-mcp-2.json"), "{\"token\":\"t\"}");
+        var copilot = Path.Combine(directory, "ild-copilot-mcp-1.json");
+        var claude = Path.Combine(directory, "ild-claude-mcp-2.json");
+        var current = Path.Combine(directory, "ild-copilot-mcp-3.json");
+        foreach (var file in new[] { copilot, claude, current })
+            File.WriteAllText(file, "{\"token\":\"t\"}");
+        File.SetLastWriteTimeUtc(copilot, started.AddMinutes(-5));
+        File.SetLastWriteTimeUtc(claude, started.AddHours(-1));
+        File.SetLastWriteTimeUtc(current, started.AddSeconds(1));
 
-        IldMcpServer.SweepConfigFiles(_root);
-        IldMcpServer.SweepConfigFiles(Path.Combine(_root, "missing"));
+        IldMcpServer.SweepConfigFiles(_root, started);
+        IldMcpServer.SweepConfigFiles(Path.Combine(_root, "missing"), started);
 
-        Assert.Empty(Directory.GetFileSystemEntries(directory));
+        Assert.Equal(new[] { current }, Directory.GetFiles(directory));
     }
 
     private static void AssertAgentReadOnly(string? path)

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using ILD.Data.DTOs;
 
@@ -39,20 +40,24 @@ public static class IldMcpServer
     }
 
     /// <summary>
-    /// Delete every MCP config file. Only safe before any agent CLI can be running,
-    /// i.e. at startup, when all that is left are the files of runs killed with the
-    /// previous process.
+    /// Delete the MCP config files written before this process started: those of
+    /// runs killed with an earlier process. A file this process wrote belongs to a
+    /// CLI that may still be reading it, so it is left for its caller to delete.
     /// </summary>
-    public static void SweepConfigFiles() => SweepConfigFiles(AgentIsolation.AgentReadRoot);
+    public static void SweepConfigFiles()
+        => SweepConfigFiles(AgentIsolation.AgentReadRoot, Process.GetCurrentProcess().StartTime.ToUniversalTime());
 
     /// <inheritdoc cref="SweepConfigFiles()"/>
-    internal static void SweepConfigFiles(string agentReadRoot)
+    internal static void SweepConfigFiles(string agentReadRoot, DateTime writtenBeforeUtc)
     {
         var directory = Path.Combine(agentReadRoot, ConfigDirectorySegment);
         if (!Directory.Exists(directory))
             return;
         foreach (var file in Directory.EnumerateFiles(directory))
-            File.Delete(file);
+        {
+            if (File.GetLastWriteTimeUtc(file) < writtenBeforeUtc)
+                File.Delete(file);
+        }
     }
 
     /// <summary>

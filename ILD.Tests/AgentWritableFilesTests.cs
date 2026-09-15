@@ -80,6 +80,56 @@ public sealed class AgentWritableFilesTests : IDisposable
     }
 
     [Fact]
+    public async Task CreateDirectoryAsync_replaces_a_planted_file_or_dangling_link_at_the_path_or_on_the_way()
+    {
+        var fileAtPath = Path.Combine(_dir, "file-at-path");
+        File.WriteAllText(fileAtPath, "x");
+        var linkAtPath = Path.Combine(_dir, "link-at-path");
+        File.CreateSymbolicLink(linkAtPath, Path.Combine(_dir, "nowhere"));
+        var fileOnTheWay = Path.Combine(_dir, "file-on-the-way");
+        File.WriteAllText(fileOnTheWay, "x");
+
+        await AgentWritableFiles.CreateDirectoryAsync(fileAtPath);
+        await AgentWritableFiles.CreateDirectoryAsync(linkAtPath);
+        await AgentWritableFiles.CreateDirectoryAsync(Path.Combine(fileOnTheWay, "run"));
+
+        Assert.True(Directory.Exists(fileAtPath));
+        Assert.Null(new DirectoryInfo(linkAtPath).LinkTarget);
+        Assert.True(Directory.Exists(linkAtPath));
+        Assert.True(Directory.Exists(Path.Combine(fileOnTheWay, "run")));
+    }
+
+    [Fact]
+    public async Task CreateDirectoryAsync_keeps_a_link_to_a_directory_on_the_way()
+    {
+        var real = Directory.CreateDirectory(Path.Combine(_dir, "store")).FullName;
+        var link = Path.Combine(_dir, ".claude");
+        Directory.CreateSymbolicLink(link, real);
+
+        await AgentWritableFiles.CreateDirectoryAsync(Path.Combine(link, "projects", "wt"));
+
+        Assert.Equal(real, new DirectoryInfo(link).LinkTarget);
+        Assert.True(Directory.Exists(Path.Combine(real, "projects", "wt")));
+    }
+
+    [Fact]
+    public async Task CreateDirectoryAsync_leaves_a_read_only_directory_on_the_way_writable()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        var parent = Directory.CreateDirectory(Path.Combine(_dir, "ild-pi-agent")).FullName;
+        var existing = Directory.CreateDirectory(Path.Combine(parent, "run-1")).FullName;
+        File.SetUnixFileMode(existing, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        File.SetUnixFileMode(parent, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+        await AgentWritableFiles.CreateDirectoryAsync(existing);
+        await AgentWritableFiles.CreateDirectoryAsync(Path.Combine(parent, "run-2"));
+
+        Assert.True(File.GetUnixFileMode(existing).HasFlag(UnixFileMode.UserWrite));
+        Assert.True(Directory.Exists(Path.Combine(parent, "run-2")));
+    }
+
+    [Fact]
     public async Task FileExistsAsync_is_true_only_for_a_regular_file()
     {
         var file = Path.Combine(_dir, "session.jsonl");

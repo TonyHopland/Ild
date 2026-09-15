@@ -78,8 +78,8 @@ public static class AgentIsolation
 
     /// <summary>
     /// Root for files the agent reads but cannot change. Set by the entrypoint to a
-    /// directory it created <c>2750</c> with the shared group; unset means a fixed
-    /// absolute path under the process <c>TMPDIR</c> (see <see cref="AgentReadRoot"/>).
+    /// directory it created <c>2750</c> with the shared group; unset means a
+    /// per-user path under the process <c>TMPDIR</c> (see <see cref="AgentReadRoot"/>).
     /// </summary>
     public const string AgentReadRootEnvVar = "ILD_AGENT_READ_ROOT";
 
@@ -538,24 +538,20 @@ public static class AgentIsolation
     }
 
     /// <summary>
-    /// Where scratch that both uids touch must live: per-run agent session state,
-    /// the interactive terminal's cwd. Under uid isolation this is a directory the
-    /// entrypoint set up like the other shared trees — owned by the orchestrator,
-    /// group-owned by the shared group, <c>setgid</c>, with a default ACL — so
-    /// anything created beneath it inherits the shared group and (via the
+    /// Where scratch that both uids touch must live: pi's per-run agent and session
+    /// directories, the interactive terminal's cwd. Under uid isolation this is a
+    /// directory the entrypoint set up like the other shared trees — owned by the
+    /// orchestrator, group-owned by the shared group, <c>setgid</c>, with a default
+    /// ACL — so anything created beneath it inherits the shared group and (via the
     /// container's <c>umask 002</c>) stays group-writable.
     ///
     /// <para>
-    /// That inheritance is the whole mechanism, and it is why there is no
-    /// per-directory permission call here any more. The orchestrator frequently
-    /// <em>seeds a file the agent must then keep writing</em> — Pi's restored
-    /// session transcript is created by the orchestrator and appended to by pi for
-    /// the rest of the turn. Granting the directory alone cannot express that:
-    /// create/unlink/rename are governed by the directory, but writing an existing
-    /// file is governed by that file's own mode. Placing the tree under a setgid
-    /// shared-group root makes the seeded file come out group-writable on its own,
-    /// which is exactly why the equivalent claude path (whose transcripts sit in
-    /// the shared config store) already worked.
+    /// The agent can write anything here, including links and directories in place
+    /// of what the orchestrator expects, so the orchestrator does not open, write
+    /// or delete paths under it itself: pi's directories are created, seeded (the
+    /// restored session transcript pi then appends to) and cleared as the agent,
+    /// through <see cref="AgentWritableFiles"/>. Files the agent must read but never
+    /// change go to <see cref="AgentReadRoot"/> instead.
     /// </para>
     ///
     /// <para>
@@ -595,15 +591,19 @@ public static class AgentIsolation
     /// no group write (<c>2750</c>), so the agent can read what is there but cannot
     /// create, rename or delete anything in it — which is what lets the
     /// orchestrator write and delete there by path without guarding against
-    /// planted links. Unset means a fixed absolute path under the process
-    /// <c>TMPDIR</c>, which is what local development and unit tests get.
+    /// planted links. Unset means a per-user path under the process <c>TMPDIR</c>,
+    /// which is what local development and unit tests get. It is per user because
+    /// an ILD previewed inside ILD runs as the agent without the outer instance's
+    /// variables, and must not land on the outer instance's root, which it can
+    /// read but not write.
     /// </summary>
     public static string AgentReadRoot => ResolveAgentReadRoot(Environment.GetEnvironmentVariable(AgentReadRootEnvVar));
 
     /// <inheritdoc cref="AgentReadRoot"/>
     /// <param name="configured">The configured root, or null/blank for the default.</param>
     public static string ResolveAgentReadRoot(string? configured)
-        => Path.GetFullPath(NonEmpty(configured) ?? Path.Combine(Path.GetTempPath(), "ild-agent-read"));
+        => Path.GetFullPath(NonEmpty(configured)
+            ?? Path.Combine(Path.GetTempPath(), $"ild-agent-read-{Environment.UserName}"));
 
     /// <summary>
     /// Create a directory under <see cref="AgentReadRoot"/> and return its path.

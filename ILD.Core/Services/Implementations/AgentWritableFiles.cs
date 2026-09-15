@@ -19,8 +19,26 @@ public static class AgentWritableFiles
     private const string Remove =
         """rm -rf -- "$p" 2>/dev/null || { chmod -R u+w -- "$p" 2>/dev/null; rm -rf -- "$p"; }""";
 
+    // Anything that is not a directory at the path or on the way to it (a planted
+    // file, a dangling link) is removed first, and a read-only directory there is
+    // made writable again, so what the agent left never stops a turn. A link to a
+    // directory is kept: the path may legitimately run through one ($HOME/.claude).
+    private const string CreateDirectory = """
+        target="$1"; set --; d="$target"
+        while [ "$d" != / ] && [ "$d" != . ]; do set -- "$d" "$@"; d=$(dirname -- "$d"); done
+        for p; do
+          if [ -d "$p" ]; then
+            [ -w "$p" ] || chmod u+w -- "$p" 2>/dev/null
+          elif [ -L "$p" ] || [ -e "$p" ]; then
+            chmod u+w -- "$(dirname -- "$p")" 2>/dev/null
+            rm -f -- "$p" || exit 1
+          fi
+        done
+        mkdir -p -- "$target"
+        """;
+
     public static Task CreateDirectoryAsync(string path, CancellationToken ct = default)
-        => RunCheckedAsync("""mkdir -p -- "$1" """, [path], stdin: null, ct);
+        => RunCheckedAsync(CreateDirectory, [path], stdin: null, ct);
 
     /// <summary>
     /// Replace whatever is at <paramref name="path"/> with a new file holding

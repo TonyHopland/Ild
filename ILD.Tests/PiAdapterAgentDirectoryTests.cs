@@ -8,34 +8,60 @@ using ILD.Data.Entities;
 namespace ILD.Tests;
 
 /// <summary>
-/// Before ILD tools came from the MCP server, pi's ILD extension was written to
-/// <c>&lt;agent dir&gt;/extensions/ild.ts</c>, and that agent dir is reused by later
-/// turns of the same run or chat. pi loads it before any <c>-e</c> path and keeps
-/// the first tool of a name, so a leftover would shadow the MCP tools, and it still
-/// holds the token of its day. Whatever sits there must go without ever failing the
-/// launch, and the ones of runs that never launch again are swept.
+/// Pi's agent and session directories sit in shared scratch, where the agent can
+/// leave anything: a file or a dangling link where a directory belongs, or a
+/// directory where the old <c>extensions/ild.ts</c> was. Before ILD tools came from
+/// the MCP server, that file was an HTTP-calling extension carrying the token of
+/// its day, and pi loads it before any <c>-e</c> path, keeping the first tool of a
+/// name. Nothing left there may fail a turn, the old extension must go, and the
+/// ones of runs that never launch again are swept.
 /// </summary>
-public sealed class PiAdapterLegacyExtensionTests : IDisposable
+public sealed class PiAdapterAgentDirectoryTests : IDisposable
 {
     private readonly Guid _runId = Guid.NewGuid();
-    private readonly string _worktree = Directory.CreateTempSubdirectory("ild-pi-legacy-ext-").FullName;
+    private readonly string _worktree = Directory.CreateTempSubdirectory("ild-pi-agent-dir-").FullName;
 
     private string AgentDirectory => Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-agent", _runId.ToString("N"));
+
+    private string SessionDirectory => Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-sessions", _runId.ToString("N"));
 
     private string LegacyExtension => Path.Combine(AgentDirectory, "extensions", "ild.ts");
 
     public void Dispose()
     {
-        foreach (var dir in new[]
+        foreach (var path in new[]
         {
             Path.Combine(AgentIsolation.AgentReadRoot, "ild-pi-ext", _runId.ToString("N")),
             AgentDirectory,
-            Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-sessions", _runId.ToString("N")),
+            SessionDirectory,
             _worktree,
         })
         {
-            try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch { /* best effort */ }
+            try
+            {
+                if (new FileInfo(path).LinkTarget is not null || File.Exists(path)) File.Delete(path);
+                else if (Directory.Exists(path)) Directory.Delete(path, true);
+            }
+            catch { /* best effort */ }
         }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_file_or_dangling_link_where_a_pi_directory_belongs_never_fails_the_turn(bool linkAtAgentDirectory)
+    {
+        var (link, file) = linkAtAgentDirectory ? (AgentDirectory, SessionDirectory) : (SessionDirectory, AgentDirectory);
+        Directory.CreateDirectory(Path.GetDirectoryName(link)!);
+        File.CreateSymbolicLink(link, Path.Combine(_worktree, "nowhere"));
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        File.WriteAllText(file, "planted");
+
+        await RunAsync();
+
+        Assert.True(Directory.Exists(AgentDirectory));
+        Assert.True(Directory.Exists(SessionDirectory));
+        Assert.True(File.Exists(Path.Combine(AgentDirectory, "models.json")));
     }
 
     [Fact]
@@ -120,7 +146,7 @@ public sealed class PiAdapterLegacyExtensionTests : IDisposable
             "if [ -e \"$PI_CODING_AGENT_DIR/extensions/ild.ts\" ]; then state=present; else state=absent; fi\n" +
             $"echo \"$state\" > '{_worktree}/legacy-at-launch.txt'\n" +
             "cat >/dev/null\n" +
-            "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-session-legacy\",\"cwd\":\"/w\"}'\n" +
+            "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-session-agent-dir\",\"cwd\":\"/w\"}'\n" +
             "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ok\"}]}}'\n");
         var chmod = new ProcessStartInfo("chmod") { UseShellExecute = false };
         chmod.ArgumentList.Add("+x");

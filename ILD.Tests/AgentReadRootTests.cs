@@ -17,11 +17,15 @@ public sealed class AgentReadRootTests : IDisposable
     }
 
     [Fact]
-    public void The_root_is_the_configured_path_or_a_fixed_one_under_TMPDIR()
+    public void The_root_is_the_configured_path_or_a_per_user_one_under_TMPDIR()
     {
+        // Per user: an ILD previewed inside ILD runs as the agent without the outer
+        // instance's variables and must not land on the root it cannot write.
+        var fallback = Path.Combine(Path.GetTempPath(), $"ild-agent-read-{Environment.UserName}");
+
         Assert.Equal("/configured/read", AgentIsolation.ResolveAgentReadRoot("/configured/read"));
-        Assert.Equal(Path.Combine(Path.GetTempPath(), "ild-agent-read"), AgentIsolation.ResolveAgentReadRoot(null));
-        Assert.Equal(Path.Combine(Path.GetTempPath(), "ild-agent-read"), AgentIsolation.ResolveAgentReadRoot("  "));
+        Assert.Equal(fallback, AgentIsolation.ResolveAgentReadRoot(null));
+        Assert.Equal(fallback, AgentIsolation.ResolveAgentReadRoot("  "));
     }
 
     [Fact]
