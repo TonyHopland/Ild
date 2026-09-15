@@ -91,6 +91,23 @@ public sealed class ChatServiceIldExtensionTests : IDisposable
     }
 
     [Fact]
+    public async Task Deleting_a_chat_clears_its_scratch_folder_as_the_agent_without_following_links()
+    {
+        var svc = NewService();
+        var chatId = await StartChatAsync(svc);
+        var scratch = _db.Context.ChatSessions.Single(c => c.Id == chatId).ScratchPath!;
+        LockFolderIn(scratch);
+        var outside = Directory.CreateDirectory(Path.Combine(_scratchRoot, "outside")).FullName;
+        File.WriteAllText(Path.Combine(outside, "keep"), "x");
+        Directory.CreateSymbolicLink(Path.Combine(scratch, "link"), outside);
+
+        Assert.True(await svc.DeleteAsync("alice", chatId));
+
+        Assert.False(Directory.Exists(scratch), "a read-only folder the agent left kept the chat's scratch folder");
+        Assert.True(File.Exists(Path.Combine(outside, "keep")), "the delete followed a link out of the scratch folder");
+    }
+
+    [Fact]
     public async Task A_message_sent_while_the_chat_is_being_deleted_never_recreates_its_pi_extension()
     {
         // The stand-in pi writes the extension only once the delete has finished,

@@ -1,4 +1,6 @@
 using ILD.Core.Services.Implementations;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ILD.Tests;
 
@@ -18,6 +20,13 @@ public sealed class AgentRunFilesTests : IDisposable
     {
         foreach (var dir in new[] { _readRoot, _scratchRoot })
         {
+            if (OperatingSystem.IsLinux())
+            {
+                foreach (var nested in Directory.GetDirectories(dir, "*", SearchOption.AllDirectories))
+                {
+                    try { File.SetUnixFileMode(nested, File.GetUnixFileMode(nested) | UnixFileMode.UserWrite); } catch { /* best effort */ }
+                }
+            }
             try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
         }
     }
@@ -46,7 +55,7 @@ public sealed class AgentRunFilesTests : IDisposable
         File.WriteAllText(Path.Combine(legacy, "ild.ts"), "const API_TOKEN = \"old-token\";");
 
         Assert.True(await AgentRunFiles.SweepAtStartupAsync(
-            new HashSet<Guid> { active }, _readRoot, _scratchRoot, started, CancellationToken.None));
+            new HashSet<Guid> { active }, _readRoot, _scratchRoot, started, NullLogger.Instance, CancellationToken.None));
 
         Assert.Equal(new[] { liveConfig }, Directory.GetFiles(configs));
         Assert.True(Directory.Exists(activeExtension), "an active run's extension was swept");
@@ -55,9 +64,57 @@ public sealed class AgentRunFilesTests : IDisposable
     }
 
     [Fact]
+    public async Task A_file_the_sweep_cannot_remove_is_logged_and_everything_after_it_is_still_swept()
+    {
+        // root can delete a read-only tree, so the failure cannot be staged there.
+        if (!OperatingSystem.IsLinux() || Environment.UserName == "root") return;
+
+        var started = DateTime.UtcNow;
+        var configs = Directory.CreateDirectory(Path.Combine(_readRoot, "ild-mcp-config")).FullName;
+        var stuckConfig = Path.Combine(configs, $"ild-copilot-mcp-{Guid.NewGuid():N}-1.json");
+        File.WriteAllText(stuckConfig, "{\"token\":\"t\"}");
+        File.SetLastWriteTimeUtc(stuckConfig, started.AddMinutes(-5));
+        File.SetUnixFileMode(configs, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+        var stuckExtension = Directory.CreateDirectory(Path.Combine(_readRoot, "ild-pi-ext", Guid.NewGuid().ToString("N"))).FullName;
+        var locked = Directory.CreateDirectory(Path.Combine(stuckExtension, "locked")).FullName;
+        File.WriteAllText(Path.Combine(locked, "ild.ts"), "token");
+        File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        var sweptExtension = Directory.CreateDirectory(Path.Combine(_readRoot, "ild-pi-ext", Guid.NewGuid().ToString("N"))).FullName;
+        File.WriteAllText(Path.Combine(sweptExtension, "ild.ts"), "token");
+
+        var legacy = Directory.CreateDirectory(Path.Combine(_scratchRoot, "ild-pi-agent", Guid.NewGuid().ToString("N"), "extensions")).FullName;
+        File.WriteAllText(Path.Combine(legacy, "ild.ts"), "const API_TOKEN = \"old-token\";");
+
+        var logger = new RecordingLogger();
+        Assert.False(await AgentRunFiles.SweepAtStartupAsync(
+            new HashSet<Guid>(), _readRoot, _scratchRoot, started, logger, CancellationToken.None));
+
+        Assert.False(Directory.Exists(sweptExtension), "a file the sweep could not remove kept the next extension");
+        Assert.False(File.Exists(Path.Combine(legacy, "ild.ts")), "a file the sweep could not remove kept the legacy extension");
+        Assert.Contains(logger.Warnings, w => w.Contains(stuckConfig));
+        Assert.Contains(logger.Warnings, w => w.Contains(stuckExtension));
+    }
+
+    [Fact]
     public async Task The_startup_sweep_is_fine_with_nothing_to_sweep()
     {
         Assert.True(await AgentRunFiles.SweepAtStartupAsync(
-            new HashSet<Guid>(), _readRoot, _scratchRoot, DateTime.UtcNow, CancellationToken.None));
+            new HashSet<Guid>(), _readRoot, _scratchRoot, DateTime.UtcNow, NullLogger.Instance, CancellationToken.None));
+    }
+
+    private sealed class RecordingLogger : ILogger
+    {
+        public List<string> Warnings { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning)
+                Warnings.Add(formatter(state, exception));
+        }
     }
 }

@@ -84,7 +84,9 @@ public class RepositoryManager : IRepositoryManager
         await RunAsync(repoPath, "worktree", "remove", "--force", worktreePath);
         if (Directory.Exists(worktreePath))
         {
-            try { Directory.Delete(worktreePath, recursive: true); } catch { /* best effort */ }
+            // The agent writes the worktree, so what git left is cleared as the agent:
+            // its read-only folders are opened first, and a link is unlinked, never followed.
+            try { await AgentWritableFiles.DeleteAsync([worktreePath]); } catch { /* best effort */ }
             // The fallback delete leaves the worktree registration behind in the
             // base repo; prune it so the branch isn't pinned as "checked out"
             // by a ghost worktree (that would block `git branch -D` later).

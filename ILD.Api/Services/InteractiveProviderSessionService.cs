@@ -82,7 +82,9 @@ public sealed class InteractiveProviderSessionService
         }
         finally
         {
-            try { Directory.Delete(sessionRoot, recursive: true); } catch { }
+            // The TUI ran as the agent, which can write here: cleared as the agent,
+            // so a link it planted is unlinked rather than followed.
+            try { await AgentWritableFiles.DeleteAsync([sessionRoot], CancellationToken.None); } catch { }
         }
     }
 

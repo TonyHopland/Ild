@@ -22,7 +22,7 @@ public static class IldMcpServer
     /// agent group, changeable by the orchestrator only. The caller deletes it once
     /// the CLI exits; its name carries <paramref name="loopRunId"/> (the session id
     /// for a chat turn) so <see cref="DeleteConfigFiles"/> can clear a run's files,
-    /// and <see cref="AgentRunFiles.SweepAtStartupAsync(IReadOnlySet{Guid}, CancellationToken)"/>
+    /// and <see cref="AgentRunFiles.SweepAtStartupAsync(IReadOnlySet{Guid}, Microsoft.Extensions.Logging.ILogger, CancellationToken)"/>
     /// clears the ones a dead process left.
     /// </summary>
     public static string? TryWriteConfigFile(string namePrefix, Guid loopRunId, object config)
@@ -55,21 +55,17 @@ public static class IldMcpServer
     }
 
     /// <summary>
-    /// Delete the MCP config files written before <paramref name="writtenBeforeUtc"/>,
-    /// this process's start: those of runs killed with an earlier process. A file
-    /// this process wrote belongs to a CLI that may still be reading it, so it is
-    /// left for its caller to delete.
+    /// The MCP config files written before <paramref name="writtenBeforeUtc"/>,
+    /// this process's start: those of runs killed with an earlier process, for the
+    /// startup sweep to delete. A file this process wrote belongs to a CLI that may
+    /// still be reading it, so it is left for its caller to delete.
     /// </summary>
-    internal static void SweepConfigFiles(string agentReadRoot, DateTime writtenBeforeUtc)
+    internal static IEnumerable<string> StaleConfigFiles(string agentReadRoot, DateTime writtenBeforeUtc)
     {
         var directory = Path.Combine(agentReadRoot, ConfigDirectorySegment);
-        if (!Directory.Exists(directory))
-            return;
-        foreach (var file in Directory.EnumerateFiles(directory))
-        {
-            if (File.GetLastWriteTimeUtc(file) < writtenBeforeUtc)
-                File.Delete(file);
-        }
+        return Directory.Exists(directory)
+            ? Directory.EnumerateFiles(directory).Where(file => File.GetLastWriteTimeUtc(file) < writtenBeforeUtc)
+            : [];
     }
 
     /// <summary>

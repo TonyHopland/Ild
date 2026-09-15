@@ -87,6 +87,58 @@ public sealed class AgentReadRootTests : IDisposable
     }
 
     [Fact]
+    public void A_root_that_is_not_a_directory_is_refused()
+    {
+        var dir = Directory.CreateTempSubdirectory("ild-read-root-file-").FullName;
+        try
+        {
+            var file = Path.Combine(dir, "root");
+            File.WriteAllText(file, "");
+
+            var error = Assert.Throws<InvalidOperationException>(() => AgentIsolation.EnsureTrustedAgentReadRoot(file, "agent"));
+            Assert.Contains("not a directory", error.Message);
+            Assert.Throws<InvalidOperationException>(() => AgentIsolation.EnsureTrustedAgentReadRoot(file, agentUser: null));
+            Assert.True(File.Exists(file));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void A_root_under_a_folder_others_can_write_is_refused_unless_that_folder_is_sticky()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        var dir = Directory.CreateTempSubdirectory("ild-read-root-parent-").FullName;
+        try
+        {
+            var parent = Directory.CreateDirectory(Path.Combine(dir, "parent")).FullName;
+            var root = Directory.CreateDirectory(Path.Combine(parent, "root"), UnixOwnership.AgentReadDirectory).FullName;
+            var groupWritable = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                | UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute;
+
+            File.SetUnixFileMode(parent, groupWritable);
+            var error = Assert.Throws<InvalidOperationException>(() => AgentIsolation.EnsureTrustedAgentReadRoot(root, "agent"));
+            Assert.Contains(parent, error.Message);
+
+            // Reached through a link, the folder the link resolves into is checked too.
+            var link = Path.Combine(dir, "link");
+            Directory.CreateSymbolicLink(link, parent);
+            Assert.Throws<InvalidOperationException>(() => AgentIsolation.EnsureTrustedAgentReadRoot(Path.Combine(link, "root"), "agent"));
+
+            // Sticky, like /tmp: no one else may move the root aside.
+            File.SetUnixFileMode(parent, groupWritable | UnixFileMode.StickyBit);
+            AgentIsolation.EnsureTrustedAgentReadRoot(root, "agent");
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Every_level_it_creates_is_orchestrator_owned_and_not_group_writable()
     {
         var run = AgentIsolation.CreateAgentReadDirectory(_segment, "run");

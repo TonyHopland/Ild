@@ -437,14 +437,15 @@ public sealed class ChatService : IChatService
         await _db.SaveChangesAsync(ct);
 
         // Best-effort scratch-dir removal: nothing chat-local should remain, but a
-        // leftover directory must never fail the hard-delete.
+        // leftover directory must never fail the hard-delete. The agent writes the
+        // scratch dir, so it is cleared as the agent: a link it planted is unlinked,
+        // never followed, and its read-only folders are opened first.
         try
         {
-            if (!string.IsNullOrEmpty(session.ScratchPath) && Directory.Exists(session.ScratchPath))
-                Directory.Delete(session.ScratchPath, recursive: true);
+            if (!string.IsNullOrEmpty(session.ScratchPath))
+                await AgentWritableFiles.DeleteAsync([session.ScratchPath], CancellationToken.None);
         }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception) { }
     }
 
     private async Task FinalizeAssistantAsync(

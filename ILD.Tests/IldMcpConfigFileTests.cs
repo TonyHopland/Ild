@@ -51,10 +51,10 @@ public sealed class IldMcpConfigFileTests : IDisposable
         File.SetLastWriteTimeUtc(claude, started.AddHours(-1));
         File.SetLastWriteTimeUtc(current, started.AddSeconds(1));
 
-        IldMcpServer.SweepConfigFiles(_root, started);
-        IldMcpServer.SweepConfigFiles(Path.Combine(_root, "missing"), started);
-
-        Assert.Equal(new[] { current }, Directory.GetFiles(directory));
+        Assert.Equal(
+            new[] { claude, copilot },
+            IldMcpServer.StaleConfigFiles(_root, started).Order(StringComparer.Ordinal));
+        Assert.Empty(IldMcpServer.StaleConfigFiles(Path.Combine(_root, "missing"), started));
     }
 
     [Fact]

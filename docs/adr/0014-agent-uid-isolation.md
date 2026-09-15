@@ -187,7 +187,10 @@ safe.directory '*'` in the image, every git command the agent runs (the review
   token. The entrypoint creates `AGENT_READ_DIR` (`/tmp/ild-agent-read`) before any
   agent-uid process runs, owned by the orchestrator with the shared group and no
   group write (`2750`), and exports it as `ILD_AGENT_READ_ROOT`, along with the
-  app's fixed folders inside it. Every directory below it is `0750`, created in one
+  app's fixed folders inside it; the entrypoint refuses to start if any of the three
+  is a symlink. The app refuses a root that is not a directory, and one with a
+  folder above it that anyone but root or the orchestrator can write, unless that
+  folder is sticky like `/tmp`. Every directory below it is `0750`, created in one
   step and refused if it is a link or otherwise not the orchestrator's alone, and
   every file `0640`, so the agent can read them but cannot
   create, rename or delete anything there, and the orchestrator writes and deletes

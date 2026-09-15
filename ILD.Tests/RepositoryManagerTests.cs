@@ -162,6 +162,27 @@ public class RepositoryManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task DestroyWorktree_clears_a_read_only_folder_the_agent_left_without_following_links()
+    {
+        // root can delete a read-only tree, so the failure cannot be staged there.
+        if (!OperatingSystem.IsLinux() || Environment.UserName == "root") return;
+
+        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var path = await mgr.CreateWorktreeAsync(_repo, "feature-locked");
+        var locked = Directory.CreateDirectory(Path.Combine(path, "locked")).FullName;
+        File.WriteAllText(Path.Combine(locked, "file"), "x");
+        File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        var outside = Directory.CreateDirectory(Path.Combine(_tmp, "outside")).FullName;
+        File.WriteAllText(Path.Combine(outside, "keep"), "x");
+        Directory.CreateSymbolicLink(Path.Combine(path, "link"), outside);
+
+        await mgr.DestroyWorktreeAsync(path);
+
+        Assert.False(Directory.Exists(path));
+        Assert.True(File.Exists(Path.Combine(outside, "keep")));
+    }
+
+    [Fact]
     public async Task CreateWorktree_recreates_stale_non_repo_directory()
     {
         var root = Path.Combine(_tmp, "wt");

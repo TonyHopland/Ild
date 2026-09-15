@@ -125,6 +125,21 @@ ensure_shared_rw() {
 # orchestrator runs the same binaries as itself (version checks, the provider
 # terminal), so letting the agent rewrite them would hand it a way back across
 # the boundary. The owner (orchestrator) still writes, so installs/updates work.
+ensure_agent_read_dirs() {
+  read_root="$1"
+  # ensure_shared_ro would chown and chmod whatever a link points at, and the app
+  # refuses a linked root anyway: stop here, where the operator sees why.
+  for read_dir in "$read_root" "$read_root/ild-pi-ext" "$read_root/ild-mcp-config"; do
+    if [ -L "$read_dir" ]; then
+      echo "entrypoint: $read_dir is a symlink; AGENT_READ_DIR and its ild-pi-ext and ild-mcp-config folders must be real directories" >&2
+      exit 1
+    fi
+  done
+  for read_dir in "$read_root" "$read_root/ild-pi-ext" "$read_root/ild-mcp-config"; do
+    ensure_shared_ro "$read_dir"
+  done
+}
+
 ensure_shared_ro() {
   path="$1"
 
@@ -593,9 +608,7 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
     # start. The app's fixed folders are made the same way, so the app only ever
     # creates per-run folders, inside folders the agent cannot write.
     if [ -n "$AGENT_READ_DIR" ]; then
-      for path in "$AGENT_READ_DIR" "$AGENT_READ_DIR/ild-pi-ext" "$AGENT_READ_DIR/ild-mcp-config"; do
-        ensure_shared_ro "$path"
-      done
+      ensure_agent_read_dirs "$AGENT_READ_DIR"
     fi
   else
     for path in $RUNTIME_DIRS; do

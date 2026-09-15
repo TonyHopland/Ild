@@ -541,21 +541,17 @@ public sealed class PiAdapter : CliAgentAdapterBase
             Path.Combine(scratchRoot, AgentDirSegment), LegacyExtensionPath(string.Empty), ct);
 
     /// <summary>
-    /// Delete the ILD extension of every run and chat not in <paramref name="keep"/>.
-    /// The extension lives in the agent read root, where only the orchestrator
-    /// writes, so this deletes by path.
+    /// The ILD extension directory of every run and chat not in <paramref name="keep"/>,
+    /// for the startup sweep to delete. The extensions live in the agent read root,
+    /// where only the orchestrator writes, so they are deleted by path.
     /// </summary>
-    internal static void SweepExtensions(string agentReadRoot, IReadOnlySet<Guid> keep)
+    internal static IEnumerable<string> StaleExtensions(string agentReadRoot, IReadOnlySet<Guid> keep)
     {
         var extensions = Path.Combine(agentReadRoot, ExtensionDirSegment);
-        if (!Directory.Exists(extensions))
-            return;
-        foreach (var directory in Directory.EnumerateDirectories(extensions))
-        {
-            if (Guid.TryParseExact(Path.GetFileName(directory), "N", out var id) && keep.Contains(id))
-                continue;
-            Directory.Delete(directory, recursive: true);
-        }
+        return Directory.Exists(extensions)
+            ? Directory.EnumerateDirectories(extensions)
+                .Where(directory => !(Guid.TryParseExact(Path.GetFileName(directory), "N", out var id) && keep.Contains(id)))
+            : [];
     }
 
     private static PiAdapterSettings ResolveSettings(AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? selectedToolKeys, Guid? chatSessionId = null)

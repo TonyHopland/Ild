@@ -631,6 +631,7 @@ public static class AgentIsolation
     /// </summary>
     internal static void EnsureTrustedAgentReadRoot(string root, string? agentUser)
     {
+        VerifyTrustedAgentReadAncestors(root);
         if (IsMissing(root))
         {
             if (NonEmpty(agentUser) is not null)
@@ -648,6 +649,8 @@ public static class AgentIsolation
     {
         if (new DirectoryInfo(path).LinkTarget is not null)
             throw UntrustedAgentReadDirectory(path, "is a symlink");
+        if (!Directory.Exists(path))
+            throw UntrustedAgentReadDirectory(path, "is not a directory");
         if (OperatingSystem.IsWindows())
             return;
 
@@ -664,7 +667,60 @@ public static class AgentIsolation
     private static bool IsMissing(string path)
     {
         var entry = new DirectoryInfo(path);
-        return entry.LinkTarget is null && !entry.Exists;
+        return entry.LinkTarget is null && !entry.Exists && !File.Exists(path);
+    }
+
+    // Whoever can write a folder above the root can move the root aside and put
+    // their own in its place. So every folder above it, on the path as configured
+    // (its links followed) and on the path those links resolve to, must be owned by
+    // root or this process's user and writable by no one else, unless it is sticky
+    // like /tmp, where no one else may rename what this user owns.
+    private const string AncestorScript = """
+        id -u || exit 1
+        walk() {
+          d=$(dirname -- "$1")
+          while :; do
+            if [ -e "$d" ]; then stat -L -c '%u %a %n' -- "$d" || exit 1; fi
+            [ "$d" = / ] && break
+            d=$(dirname -- "$d")
+          done
+        }
+        walk "$1"
+        walk "$(realpath -m -- "$1")"
+        """;
+
+    private static void VerifyTrustedAgentReadAncestors(string root)
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+
+        var start = new ProcessStartInfo("/bin/sh")
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (var argument in new[] { "-c", AncestorScript, "sh", root })
+            start.ArgumentList.Add(argument);
+
+        using var process = Process.Start(start)
+            ?? throw UntrustedAgentReadDirectory(root, "has folders above it that could not be checked");
+        var error = process.StandardError.ReadToEndAsync();
+        var lines = process.StandardOutput.ReadToEnd().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        process.WaitForExit();
+        if (process.ExitCode != 0 || lines.Length == 0)
+            throw UntrustedAgentReadDirectory(root, $"has folders above it that could not be checked: {error.GetAwaiter().GetResult().Trim()}");
+
+        var self = lines[0].Trim();
+        foreach (var line in lines.Skip(1))
+        {
+            var fields = line.Split(' ', 3);
+            var mode = (UnixFileMode)Convert.ToInt32(fields[1], 8);
+            if (fields[0] != "0" && fields[0] != self)
+                throw UntrustedAgentReadDirectory(root, $"sits in {fields[2]}, which uid {fields[0]} owns and could replace it in");
+            if ((mode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0 && !mode.HasFlag(UnixFileMode.StickyBit))
+                throw UntrustedAgentReadDirectory(root, $"sits in {fields[2]}, which others than its owner can write and which is not sticky");
+        }
     }
 
     // Created with its final mode in one step, so it is never group-writable, not

@@ -209,8 +209,10 @@ try
                         .ToListAsync())
                     .Concat(await dbContext.ChatSessions.Select(c => c.Id).ToListAsync())
                     .ToHashSet();
-                if (!await ILD.Core.Services.Implementations.AgentRunFiles.SweepAtStartupAsync(active))
-                    Log.Warning("Could not remove every stale pi ILD extension from the pi agent directories");
+                var sweepLogger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>()
+                    .CreateLogger(typeof(ILD.Core.Services.Implementations.AgentRunFiles));
+                if (!await ILD.Core.Services.Implementations.AgentRunFiles.SweepAtStartupAsync(active, sweepLogger))
+                    Log.Warning("Could not remove every token-bearing agent file the previous process left behind; see the warnings above");
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
