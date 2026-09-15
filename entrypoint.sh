@@ -120,15 +120,13 @@ ensure_shared_rw() {
   chmod 2770 "$path"
 }
 
-# Like ensure_shared_rw, but the group only gets read/execute. Used for the
-# managed agent installs: the agent must be able to exec those CLIs, but the
-# orchestrator runs the same binaries as itself (version checks, the provider
-# terminal), so letting the agent rewrite them would hand it a way back across
-# the boundary. The owner (orchestrator) still writes, so installs/updates work.
+# The agent read root (AGENT_READ_DIR) and the app's fixed folders in it, which
+# hold the files carrying the ILD API token, provisioned like ensure_shared_ro.
+# None may be a symlink: ensure_shared_ro would chown and chmod whatever a link
+# points at, and the app refuses a linked root anyway, so stop here, where the
+# operator sees why.
 ensure_agent_read_dirs() {
   read_root="$1"
-  # ensure_shared_ro would chown and chmod whatever a link points at, and the app
-  # refuses a linked root anyway: stop here, where the operator sees why.
   for read_dir in "$read_root" "$read_root/ild-pi-ext" "$read_root/ild-mcp-config"; do
     if [ -L "$read_dir" ]; then
       echo "entrypoint: $read_dir is a symlink; AGENT_READ_DIR and its ild-pi-ext and ild-mcp-config folders must be real directories" >&2
@@ -140,6 +138,11 @@ ensure_agent_read_dirs() {
   done
 }
 
+# Like ensure_shared_rw, but the group only gets read/execute. Used for the
+# managed agent installs: the agent must be able to exec those CLIs, but the
+# orchestrator runs the same binaries as itself (version checks, the provider
+# terminal), so letting the agent rewrite them would hand it a way back across
+# the boundary. The owner (orchestrator) still writes, so installs/updates work.
 ensure_shared_ro() {
   path="$1"
 
