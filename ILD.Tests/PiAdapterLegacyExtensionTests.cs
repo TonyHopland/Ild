@@ -11,7 +11,9 @@ namespace ILD.Tests;
 /// Before ILD tools came from the MCP server, pi's ILD extension was written to
 /// <c>&lt;agent dir&gt;/extensions/ild.ts</c>, and that agent dir is reused by later
 /// turns of the same run or chat. pi loads it before any <c>-e</c> path and keeps
-/// the first tool of a name, so a leftover would shadow the MCP tools.
+/// the first tool of a name, so a leftover would shadow the MCP tools. The agent
+/// dir is agent-writable scratch, so whatever else sits there must neither be
+/// followed nor block the launch.
 /// </summary>
 public sealed class PiAdapterLegacyExtensionTests : IDisposable
 {
@@ -19,6 +21,8 @@ public sealed class PiAdapterLegacyExtensionTests : IDisposable
     private readonly string _worktree = Directory.CreateTempSubdirectory("ild-pi-legacy-ext-").FullName;
 
     private string AgentDirectory => Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-agent", _runId.ToString("N"));
+
+    private string LegacyExtension => Path.Combine(AgentDirectory, "extensions", "ild.ts");
 
     public void Dispose()
     {
@@ -33,10 +37,41 @@ public sealed class PiAdapterLegacyExtensionTests : IDisposable
     [Fact]
     public async Task A_resumed_run_no_longer_loads_the_old_http_extension_from_its_agent_dir()
     {
-        var legacy = Path.Combine(AgentDirectory, "extensions", "ild.ts");
-        Directory.CreateDirectory(Path.GetDirectoryName(legacy)!);
-        File.WriteAllText(legacy, "const API_TOKEN = \"old-token\";");
+        Directory.CreateDirectory(Path.GetDirectoryName(LegacyExtension)!);
+        File.WriteAllText(LegacyExtension, "const API_TOKEN = \"old-token\";");
 
+        await RunAsync();
+
+        Assert.Equal("absent", File.ReadAllText(Path.Combine(_worktree, "legacy-at-launch.txt")).Trim());
+        Assert.False(File.Exists(LegacyExtension), "the old ild.ts, with its token, was left in the agent dir");
+        Assert.True(File.Exists(Path.Combine(AgentDirectory, "models.json")), "the agent dir itself must stay in use");
+    }
+
+    [Fact]
+    public async Task A_directory_in_place_of_the_old_extension_does_not_block_the_launch()
+    {
+        Directory.CreateDirectory(LegacyExtension);
+
+        await RunAsync();
+
+        Assert.True(Directory.Exists(LegacyExtension));
+    }
+
+    [Fact]
+    public async Task A_symlinked_extensions_folder_is_not_followed()
+    {
+        var victim = Directory.CreateDirectory(Path.Combine(_worktree, "orchestrator-owned")).FullName;
+        File.WriteAllText(Path.Combine(victim, "ild.ts"), "keep");
+        Directory.CreateDirectory(AgentDirectory);
+        Directory.CreateSymbolicLink(Path.Combine(AgentDirectory, "extensions"), victim);
+
+        await RunAsync();
+
+        Assert.True(File.Exists(Path.Combine(victim, "ild.ts")), "the cleanup deleted through the planted link");
+    }
+
+    private async Task RunAsync()
+    {
         var result = await new PiAdapter().ExecuteAsync(new AgentExecutionContext(
             Provider: new AiProvider
             {
@@ -52,9 +87,6 @@ public sealed class PiAdapterLegacyExtensionTests : IDisposable
             Cancel: CancellationToken.None));
 
         Assert.True(result.Success, result.Error);
-        Assert.Equal("absent", File.ReadAllText(Path.Combine(_worktree, "legacy-at-launch.txt")).Trim());
-        Assert.False(File.Exists(legacy), "the old ild.ts, with its token, was left in the agent dir");
-        Assert.True(File.Exists(Path.Combine(AgentDirectory, "models.json")), "the agent dir itself must stay in use");
     }
 
     /// <summary>A stand-in pi that records whether the old extension was there when it started.</summary>
@@ -63,7 +95,7 @@ public sealed class PiAdapterLegacyExtensionTests : IDisposable
         var script = Path.Combine(_worktree, "pi.sh");
         File.WriteAllText(script,
             "#!/bin/sh\n" +
-            "if [ -e \"$PI_CODING_AGENT_DIR/extensions/ild.ts\" ]; then state=present; else state=absent; fi\n" +
+            "if [ -f \"$PI_CODING_AGENT_DIR/extensions/ild.ts\" ]; then state=present; else state=absent; fi\n" +
             $"echo \"$state\" > '{_worktree}/legacy-at-launch.txt'\n" +
             "cat >/dev/null\n" +
             "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-session-legacy\",\"cwd\":\"/w\"}'\n" +

@@ -580,18 +580,63 @@ public static class AgentIsolation
     }
 
     /// <summary>
+    /// Whether <paramref name="path"/>, which must lie under <see cref="ScratchRoot"/>,
+    /// is reached without passing through a symlink below the root. Scratch is
+    /// group-writable, so the agent can swap any of those components for a link to
+    /// somewhere only the orchestrator may write; code about to write or delete by
+    /// path checks this first. The check is not atomic with what follows it, so it
+    /// narrows that window rather than closing it.
+    /// </summary>
+    public static bool HasNoLinkBelowScratchRoot(string path)
+    {
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(ScratchRoot));
+        var full = Path.GetFullPath(path);
+        if (!full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            throw new ArgumentException($"{path} is not under the scratch root {root}.", nameof(path));
+
+        var current = root;
+        foreach (var segment in full[(root.Length + 1)..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            if (new FileInfo(current).LinkTarget is not null)
+                return false;
+            if (!Path.Exists(current))
+                return true;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Recursively delete a directory under <see cref="ScratchRoot"/>. Throws
+    /// <see cref="IOException"/> rather than delete when the path passes through a
+    /// symlink (see <see cref="HasNoLinkBelowScratchRoot"/>); links inside the tree
+    /// are removed, never followed. A missing directory is not an error.
+    /// </summary>
+    public static void DeleteScratchDirectory(params string[] segments)
+    {
+        var path = Path.Combine(new[] { ScratchRoot }.Concat(segments).ToArray());
+        if (!HasNoLinkBelowScratchRoot(path))
+            throw new IOException($"Refusing to delete {path}: it is reached through a symlink.");
+        if (Directory.Exists(path))
+            Directory.Delete(path, recursive: true);
+    }
+
+    /// <summary>
     /// Write a file into shared scratch for the agent to read, never writing
-    /// through a name the agent planted. Scratch is group-writable, so the agent
-    /// can put a symlink at <paramref name="path"/> first, and a plain write would
-    /// follow it and overwrite whatever it names as the orchestrator. Instead the
-    /// content goes to a fresh, exclusively created name beside the target and is
-    /// then renamed over it (or moved to it without overwrite when nothing is
-    /// there yet); neither step writes through a symlink at the target. The file is
-    /// created without group or other write, and readers only ever see it whole.
+    /// through a link the agent planted. Throws <see cref="IOException"/> when the
+    /// target's directory is reached through a symlink (see
+    /// <see cref="HasNoLinkBelowScratchRoot"/>). At the target itself the content
+    /// goes to a fresh, exclusively created name beside it and is then renamed over
+    /// it (or moved to it without overwrite when nothing is there yet), so a symlink
+    /// planted at the target is replaced, not written through. The file is created
+    /// without group or other write, and readers only ever see it whole.
     /// </summary>
     public static void WriteSharedFile(string path, Action<Stream> write)
     {
         var directory = Path.GetDirectoryName(Path.GetFullPath(path))!;
+        if (!HasNoLinkBelowScratchRoot(directory))
+            throw new IOException($"Refusing to write {path}: its directory is reached through a symlink.");
+
         var temp = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
         var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write };
         if (!OperatingSystem.IsWindows())

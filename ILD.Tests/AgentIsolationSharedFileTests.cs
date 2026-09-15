@@ -4,12 +4,20 @@ using ILD.Core.Services.Implementations;
 namespace ILD.Tests;
 
 /// <summary>
-/// <see cref="AgentIsolation.WriteSharedFile"/> writes into scratch the agent can
-/// also write, so the agent may have planted something at the target first.
+/// <see cref="AgentIsolation.WriteSharedFile"/> and
+/// <see cref="AgentIsolation.DeleteScratchDirectory"/> work by path inside scratch
+/// the agent can also write, so the agent may have planted a symlink at the
+/// target or swapped one in for a directory on the way to it.
 /// </summary>
 public sealed class AgentIsolationSharedFileTests : IDisposable
 {
-    private readonly string _dir = Directory.CreateTempSubdirectory("ild-shared-file-").FullName;
+    private readonly string _dir;
+
+    public AgentIsolationSharedFileTests()
+    {
+        _dir = Path.Combine(AgentIsolation.ScratchRoot, $"ild-shared-file-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_dir);
+    }
 
     public void Dispose()
     {
@@ -76,6 +84,18 @@ public sealed class AgentIsolationSharedFileTests : IDisposable
     }
 
     [Fact]
+    public void Refuses_to_write_through_a_symlinked_directory()
+    {
+        var victim = Directory.CreateDirectory(Path.Combine(_dir, "orchestrator-owned")).FullName;
+        var link = Path.Combine(_dir, "ild-pi-ext");
+        Directory.CreateSymbolicLink(link, victim);
+
+        Assert.ThrowsAny<IOException>(() => AgentIsolation.WriteSharedFile(Path.Combine(link, "ild.ts"), Write("ours")));
+
+        Assert.Empty(Directory.GetFileSystemEntries(victim));
+    }
+
+    [Fact]
     public void A_failed_write_leaves_the_target_untouched_and_no_temp_file()
     {
         var path = Path.Combine(_dir, "ild.ts");
@@ -87,6 +107,49 @@ public sealed class AgentIsolationSharedFileTests : IDisposable
         Assert.Equal("old", File.ReadAllText(path));
         AssertNoTempFileLeft();
     }
+
+    [Fact]
+    public void DeleteScratchDirectory_removes_a_plain_tree_and_ignores_a_missing_one()
+    {
+        var tree = Path.Combine(_dir, "ild-pi-ext", "run");
+        Directory.CreateDirectory(tree);
+        File.WriteAllText(Path.Combine(tree, "ild.ts"), "token");
+
+        AgentIsolation.DeleteScratchDirectory(ScratchSegments(tree));
+        AgentIsolation.DeleteScratchDirectory(ScratchSegments(tree));
+
+        Assert.False(Directory.Exists(tree));
+    }
+
+    [Fact]
+    public void DeleteScratchDirectory_refuses_to_delete_through_a_symlinked_directory()
+    {
+        var victim = Path.Combine(_dir, "orchestrator-owned", "run");
+        Directory.CreateDirectory(victim);
+        File.WriteAllText(Path.Combine(victim, "keep.txt"), "keep");
+        Directory.CreateSymbolicLink(Path.Combine(_dir, "ild-pi-ext"), Path.Combine(_dir, "orchestrator-owned"));
+
+        Assert.ThrowsAny<IOException>(() =>
+            AgentIsolation.DeleteScratchDirectory(ScratchSegments(Path.Combine(_dir, "ild-pi-ext", "run"))));
+
+        Assert.True(File.Exists(Path.Combine(victim, "keep.txt")), "the delete followed the planted link");
+    }
+
+    [Fact]
+    public void HasNoLinkBelowScratchRoot_rejects_a_link_anywhere_on_the_path_and_paths_outside_scratch()
+    {
+        var real = Directory.CreateDirectory(Path.Combine(_dir, "real")).FullName;
+        Directory.CreateSymbolicLink(Path.Combine(_dir, "link"), real);
+
+        Assert.True(AgentIsolation.HasNoLinkBelowScratchRoot(Path.Combine(real, "ild.ts")));
+        Assert.True(AgentIsolation.HasNoLinkBelowScratchRoot(Path.Combine(_dir, "missing", "ild.ts")));
+        Assert.False(AgentIsolation.HasNoLinkBelowScratchRoot(Path.Combine(_dir, "link", "ild.ts")));
+        Assert.False(AgentIsolation.HasNoLinkBelowScratchRoot(Path.Combine(_dir, "link")));
+        Assert.Throws<ArgumentException>(() => AgentIsolation.HasNoLinkBelowScratchRoot("/definitely/not/scratch/ild.ts"));
+    }
+
+    private static string[] ScratchSegments(string path)
+        => Path.GetRelativePath(AgentIsolation.ScratchRoot, path).Split(Path.DirectorySeparatorChar);
 
     private static Action<Stream> Write(string content)
         => stream => stream.Write(Encoding.UTF8.GetBytes(content));

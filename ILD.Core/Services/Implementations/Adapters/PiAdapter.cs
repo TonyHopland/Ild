@@ -494,10 +494,13 @@ public sealed class PiAdapter : CliAgentAdapterBase
             // Older builds wrote an HTTP-calling ild.ts here, and the agent dir is
             // reused by later turns of the same run or chat. pi loads it before any
             // `-e` path and keeps the first tool of a name, so a leftover would
-            // shadow the MCP tools; it also still holds the token of its day.
-            var legacyExtensions = Path.Combine(settings.AgentDirectory, "extensions");
-            if (Directory.Exists(legacyExtensions))
-                File.Delete(Path.Combine(legacyExtensions, "ild.ts"));
+            // shadow the MCP tools; it also still holds the token of its day. Only a
+            // plain file reached without links can be that leftover: anything else
+            // is the agent's own doing, and failing the launch over it would let a
+            // model block later turns.
+            var legacyExtension = Path.Combine(settings.AgentDirectory, "extensions", "ild.ts");
+            if (File.Exists(legacyExtension) && AgentIsolation.HasNoLinkBelowScratchRoot(legacyExtension))
+                File.Delete(legacyExtension);
 
             if (!string.IsNullOrWhiteSpace(settings.ModelsJsonContent))
                 File.WriteAllText(Path.Combine(settings.AgentDirectory, "models.json"), settings.ModelsJsonContent);
@@ -523,15 +526,12 @@ public sealed class PiAdapter : CliAgentAdapterBase
     /// <summary>
     /// Remove the ILD extension written for a loop run or chat session (chat turns
     /// run under the session id). <c>ild.ts</c> carries the ILD API token, so it
-    /// must not outlive the run. Throws on IO failure; callers treat it as
-    /// best-effort cleanup.
+    /// must not outlive the run. Throws <see cref="IOException"/> or
+    /// <see cref="UnauthorizedAccessException"/> when it cannot be removed, including
+    /// when its path runs through a symlink; callers keep their run or chat then.
     /// </summary>
     public static void DeleteIldExtension(Guid loopRunId)
-    {
-        var directory = Path.Combine(AgentIsolation.ScratchRoot, ExtensionDirSegment, loopRunId.ToString("N"));
-        if (Directory.Exists(directory))
-            Directory.Delete(directory, recursive: true);
-    }
+        => AgentIsolation.DeleteScratchDirectory(ExtensionDirSegment, loopRunId.ToString("N"));
 
     private static PiAdapterSettings ResolveSettings(AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? selectedToolKeys, Guid? chatSessionId = null)
     {
