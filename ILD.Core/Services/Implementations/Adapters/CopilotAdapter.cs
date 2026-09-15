@@ -234,8 +234,14 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
             File.WriteAllText(path, json);
             return path;
         }
-        catch (IOException) { return null; }
-        catch (UnauthorizedAccessException) { return null; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // A write that failed part-way can still leave the token on disk.
+            try { File.Delete(path); }
+            catch (IOException) { /* best effort */ }
+            catch (UnauthorizedAccessException) { /* best effort */ }
+            return null;
+        }
     }
 
     private static Dictionary<string, object?> WithCopilotKeys(Dictionary<string, object?> entry)

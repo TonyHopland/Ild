@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using ILD.Data.Stores.Interfaces;
@@ -35,6 +36,12 @@ public sealed class RunReclaimer : IRunReclaimer
     public async Task<bool> ReclaimLocalStateAsync(LoopRun run)
     {
         await StopPreviewIfRunningAsync(run);
+
+        try { PiAdapter.DeleteIldExtension(run.Id); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _log?.LogWarning(ex, "Failed to remove the pi ILD extension of run {RunId}", run.Id);
+        }
 
         // Resolve the base repo before destroying the worktree — afterwards
         // the branch can no longer be located through it.

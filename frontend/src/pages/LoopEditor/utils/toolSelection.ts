@@ -13,11 +13,18 @@ export function resolveToolSelection(
   const supportedTools = provider?.supportedTools ?? [];
   if (supportedTools.length === 0) return [];
 
-  const supportedToolKeys = new Set(supportedTools.map((tool) => tool.key));
+  // The backend matches saved keys case-insensitively, so "ILD" must tick ILD here too.
+  const canonicalKeys = new Map(supportedTools.map((tool) => [tool.key.toLowerCase(), tool.key]));
   const explicitTools = Array.isArray(configuredTools)
-    ? configuredTools.filter(
-        (tool): tool is string => typeof tool === "string" && supportedToolKeys.has(tool),
-      )
+    ? [
+        ...new Set(
+          configuredTools.flatMap((tool) => {
+            const key =
+              typeof tool === "string" ? canonicalKeys.get(tool.toLowerCase()) : undefined;
+            return key ? [key] : [];
+          }),
+        ),
+      ]
     : [];
 
   if (explicitTools.length > 0) return explicitTools;

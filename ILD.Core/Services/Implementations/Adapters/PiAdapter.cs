@@ -496,17 +496,31 @@ public sealed class PiAdapter : CliAgentAdapterBase
         if (!string.IsNullOrWhiteSpace(settings.IldExtensionPath)
             && !string.IsNullOrWhiteSpace(settings.IldExtensionContent))
         {
-            File.WriteAllText(settings.IldExtensionPath, settings.IldExtensionContent);
-            WriteBridge(Path.Combine(Path.GetDirectoryName(settings.IldExtensionPath)!, BridgeFileName));
+            var content = Encoding.UTF8.GetBytes(settings.IldExtensionContent);
+            AgentIsolation.WriteSharedFile(settings.IldExtensionPath, file => file.Write(content));
+            AgentIsolation.WriteSharedFile(
+                Path.Combine(Path.GetDirectoryName(settings.IldExtensionPath)!, BridgeFileName), WriteBridge);
         }
     }
 
-    private static void WriteBridge(string path)
+    private static void WriteBridge(Stream destination)
     {
         using var resource = typeof(PiAdapter).Assembly.GetManifestResourceStream(BridgeResourceName)
             ?? throw new InvalidOperationException($"{BridgeResourceName} is not embedded in ILD.Core");
-        using var file = File.Create(path);
-        resource.CopyTo(file);
+        resource.CopyTo(destination);
+    }
+
+    /// <summary>
+    /// Remove the ILD extension written for a loop run or chat session (chat turns
+    /// run under the session id). <c>ild.ts</c> carries the ILD API token, so it
+    /// must not outlive the run. Throws on IO failure; callers treat it as
+    /// best-effort cleanup.
+    /// </summary>
+    public static void DeleteIldExtension(Guid loopRunId)
+    {
+        var directory = Path.Combine(AgentIsolation.ScratchRoot, ExtensionDirSegment, loopRunId.ToString("N"));
+        if (Directory.Exists(directory))
+            Directory.Delete(directory, recursive: true);
     }
 
     private static PiAdapterSettings ResolveSettings(AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? selectedToolKeys, Guid? chatSessionId = null)

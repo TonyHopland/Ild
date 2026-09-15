@@ -6,11 +6,14 @@ namespace ILD.Tests;
 
 /// <summary>
 /// The parts of the MCP conversation <see cref="PiMcpBridgeTests"/> does not
-/// reach: a server that pings the bridge before it will answer, and a call pi
-/// aborts while the server is still working on it.
+/// reach: a server that pings the bridge before it will answer, a call pi aborts
+/// or the server never answers, and content whose MIME type is not lower case.
 /// </summary>
 public sealed class PiMcpBridgeProtocolTests : IDisposable
 {
+    private const string Png =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
     private static readonly TimeSpan Guard = TimeSpan.FromSeconds(30);
 
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "ild-pi-bridge-protocol-" + Guid.NewGuid().ToString("N"));
@@ -39,21 +42,42 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
     public void A_ping_from_the_server_during_startup_is_answered()
     {
         // The server withholds its initialize reply until its ping is answered.
-        var result = Run();
+        var result = Run(new JsonObject { ["tool"] = "none" });
 
-        Assert.Equal(new[] { "ild_hang" }, result["registered"]!.AsArray().Select(n => (string?)n).ToArray());
+        Assert.Equal(
+            new[] { "ild_hang", "ild_upper_case_image" },
+            result["registered"]!.AsArray().Select(n => (string?)n).ToArray());
     }
 
     [Fact]
     public void Aborting_a_call_rejects_it_and_tells_the_server()
     {
-        var result = Run();
+        var result = Run(new JsonObject { ["tool"] = "hang", ["abortAfterMs"] = 200 });
 
         Assert.Contains("aborted", (string?)result["error"]);
         Assert.True((bool)result["serverSawCancel"]!, "the server was not sent notifications/cancelled");
     }
 
-    private JsonObject Run()
+    [Fact]
+    public void A_call_the_server_never_answers_times_out_and_tells_the_server()
+    {
+        var result = Run(new JsonObject { ["tool"] = "hang", ["callTimeoutMs"] = 300 });
+
+        Assert.Contains("timed out", (string?)result["error"]);
+        Assert.True((bool)result["serverSawCancel"]!, "the server was not sent notifications/cancelled");
+    }
+
+    [Fact]
+    public void An_image_blob_with_an_upper_case_mime_type_reaches_pi_as_an_image()
+    {
+        var result = Run(new JsonObject { ["tool"] = "upper_case_image" });
+
+        var image = Assert.Single(result["content"]!.AsArray())!;
+        Assert.Equal("image", (string?)image["type"]);
+        Assert.Equal(Png, (string?)image["data"]);
+    }
+
+    private JsonObject Run(JsonObject spec)
     {
         var resultFile = Path.Combine(_dir, $"result-{Guid.NewGuid():N}.json");
         var psi = new ProcessStartInfo("node")
@@ -67,6 +91,7 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
         psi.ArgumentList.Add(Path.Combine(_dir, "server.mjs"));
         psi.ArgumentList.Add(Path.Combine(_dir, $"server-{Guid.NewGuid():N}.log"));
         psi.ArgumentList.Add(resultFile);
+        psi.ArgumentList.Add(spec.ToJsonString());
 
         using var process = Process.Start(psi) ?? throw new InvalidOperationException("could not start node");
         var stdout = process.StandardOutput.ReadToEndAsync();
@@ -89,7 +114,8 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
         import { existsSync, readFileSync, writeFileSync } from "node:fs";
         import { registerIldMcpTools } from "./ild-mcp-bridge.js";
 
-        const [, , serverScript, logFile, resultFile] = process.argv;
+        const [, , serverScript, logFile, resultFile, specJson] = process.argv;
+        const spec = JSON.parse(specJson);
         const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
         const registered = [];
@@ -105,18 +131,25 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
           DEFAULT_MAX_LINES: 2000,
         };
 
-        await registerIldMcpTools(pi, { command: "node", args: [serverScript, logFile], toolPrefix: "ild_", truncate, startupTimeoutMs: 10000 });
-        const result = { registered: registered.map((t) => t.name), error: null, serverSawCancel: false };
+        await registerIldMcpTools(pi, {
+          command: "node",
+          args: [serverScript, logFile],
+          toolPrefix: "ild_",
+          truncate,
+          startupTimeoutMs: 10000,
+          callTimeoutMs: spec.callTimeoutMs,
+        });
+        const result = { registered: registered.map((t) => t.name), content: null, error: null, serverSawCancel: false };
 
-        const hang = registered.find((t) => t.name === "ild_hang");
-        if (hang) {
+        const tool = registered.find((t) => t.name === `ild_${spec.tool}`);
+        if (tool) {
           const controller = new AbortController();
-          setTimeout(() => controller.abort(), 200);
-          try { await hang.execute("call-0", {}, controller.signal, () => {}, {}); }
+          if (spec.abortAfterMs !== undefined) setTimeout(() => controller.abort(), spec.abortAfterMs);
+          try { result.content = (await tool.execute("call-0", {}, controller.signal, () => {}, {})).content; }
           catch (err) { result.error = String(err?.message ?? err); }
 
           const log = () => (existsSync(logFile) ? readFileSync(logFile, "utf8") : "");
-          for (let i = 0; i < 100 && !result.serverSawCancel; i++) {
+          for (let i = 0; spec.tool === "hang" && i < 100 && !result.serverSawCancel; i++) {
             result.serverSawCancel = log().includes("notifications/cancelled");
             if (!result.serverSawCancel) await sleep(50);
           }
@@ -126,11 +159,12 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
         writeFileSync(resultFile, JSON.stringify(result));
         """;
 
-    private const string ServerScript = """
+    private const string ServerScript = $$"""
         import { appendFileSync } from "node:fs";
 
         const logFile = process.argv[2];
         const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n");
+        const empty = { type: "object", properties: {} };
         let initializeId;
 
         function handle(message) {
@@ -143,9 +177,15 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
             return send({ id: initializeId, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "fake", version: "1.0.0" } } });
           }
           if (message.method === "tools/list") {
-            return send({ id: message.id, result: { tools: [{ name: "hang", description: "Never answers.", inputSchema: { type: "object", properties: {} } }] } });
+            return send({ id: message.id, result: { tools: [
+              { name: "hang", description: "Never answers.", inputSchema: empty },
+              { name: "upper_case_image", description: "Returns an image blob typed IMAGE/PNG.", inputSchema: empty },
+            ] } });
           }
-          // tools/call is never answered: only an abort ends it.
+          if (message.method === "tools/call" && message.params.name === "upper_case_image") {
+            return send({ id: message.id, result: { content: [{ type: "resource", resource: { uri: "ild://shot", mimeType: "IMAGE/PNG", blob: "{{Png}}" } }] } });
+          }
+          // "hang" is never answered: only an abort or the call timeout ends it.
         }
 
         let buffer = "";

@@ -580,6 +580,43 @@ public static class AgentIsolation
     }
 
     /// <summary>
+    /// Write a file into shared scratch for the agent to read, never writing
+    /// through a name the agent planted. Scratch is group-writable, so the agent
+    /// can put a symlink at <paramref name="path"/> first, and a plain write would
+    /// follow it and overwrite whatever it names as the orchestrator. Instead the
+    /// content goes to a fresh, exclusively created name beside the target and is
+    /// then renamed over it (or moved to it without overwrite when nothing is
+    /// there yet); neither step writes through a symlink at the target. The file is
+    /// created without group or other write, and readers only ever see it whole.
+    /// </summary>
+    public static void WriteSharedFile(string path, Action<Stream> write)
+    {
+        var directory = Path.GetDirectoryName(Path.GetFullPath(path))!;
+        var temp = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write };
+        if (!OperatingSystem.IsWindows())
+            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead;
+
+        try
+        {
+            using (var file = new FileStream(temp, options))
+                write(file);
+
+            if (File.Exists(path))
+                File.Replace(temp, path, destinationBackupFileName: null);
+            else
+                File.Move(temp, path);
+        }
+        catch
+        {
+            try { File.Delete(temp); }
+            catch (IOException) { /* best effort */ }
+            catch (UnauthorizedAccessException) { /* best effort */ }
+            throw;
+        }
+    }
+
+    /// <summary>
     /// Where orchestrator-only state goes — the counterpart to
     /// <see cref="ScratchRoot"/>, and provisioned the same way: the entrypoint
     /// creates it owner-only (<c>0700</c>) before anything else runs and exports

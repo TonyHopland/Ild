@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
@@ -436,6 +437,10 @@ public sealed class ChatService : IChatService
             if (!string.IsNullOrEmpty(session.ScratchPath) && Directory.Exists(session.ScratchPath))
                 Directory.Delete(session.ScratchPath, recursive: true);
         }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+
+        try { PiAdapter.DeleteIldExtension(session.Id); }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
     }

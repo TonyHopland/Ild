@@ -180,6 +180,20 @@ public class RunReclaimerTests : IDisposable
         Assert.True(await Build(repo, preview).ReclaimLocalStateAsync(Run(worktree, "ild/wi-a-run-1")));
     }
 
+    [Fact]
+    public async Task Reclaim_removes_the_pi_ild_extension_written_for_the_run()
+    {
+        var run = Run(worktree: null, branch: null);
+        var extension = Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-ext", run.Id.ToString("N"));
+        Directory.CreateDirectory(extension);
+        File.WriteAllText(Path.Combine(extension, "ild.ts"), "const CONFIG = { env: { ILD_API_TOKEN: \"t\" } };");
+        _tempDirs.Add(extension);
+
+        Assert.True(await Build(new Mock<IRepositoryManager>()).ReclaimLocalStateAsync(run));
+
+        Assert.False(Directory.Exists(extension), "the run's ild.ts, which holds the API token, was left behind");
+    }
+
     private static RunReclaimer Build(
         Mock<IRepositoryManager> repo,
         Mock<IWorktreePreviewService>? preview = null,

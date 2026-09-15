@@ -592,7 +592,7 @@ the config lives on the provider, not in a target repo.
 
 ### Custom MCP servers (JSON)
 
-The **OpenCode** and **Claude Code** adapters expose a `customMcpServersJson`
+The **OpenCode**, **Claude Code** and **GitHub Copilot** adapters expose a `customMcpServersJson`
 field that attaches arbitrary [MCP](https://modelcontextprotocol.io) servers to
 the agent, on top of the built-in `ild` server. This lets you create provider
 variants that differ only by the tools they carry — e.g. a plain **OpenCode**
@@ -633,8 +633,8 @@ Each adapter translates this into its own native shape (OpenCode's
 `{ "type": "local", "command": ..., "args": [...], "env": {...}, "tools": ["*"] }`)
 and merges it alongside the `ild` entry. The name `ild` is reserved and any
 custom server using it is ignored, so it can never clobber the built-in server.
-For Claude Code and Copilot the custom servers are injected even when the `ild`
-tool is disabled for the node.
+The custom servers are injected even when the `ild` tool is disabled for the
+node.
 
 Invalid or partially-malformed JSON is ignored and **never fails an AI node
 run** — the parser fails open, keeping whatever well-formed servers it can and

@@ -8,18 +8,31 @@ import { spawn } from "node:child_process";
 
 const PROTOCOL_VERSION = "2025-06-18";
 
+// The server's own calls to the ILD API give up after 100 s (HttpClient's
+// default), so a tool call still unanswered after this is a wedged server.
+const DEFAULT_CALL_TIMEOUT_MS = 120_000;
+
 /**
  * Start the MCP server, list its tools and register each with pi as
  * `toolPrefix + name`. When the server cannot be started or does not answer
  * within `startupTimeoutMs`, registers nothing and reports on stderr, so pi
- * still runs without ILD tools.
+ * still runs without ILD tools. A tool call with no answer within
+ * `callTimeoutMs` fails.
  *
  * `truncate` carries pi's `{ truncateHead, formatSize, DEFAULT_MAX_BYTES,
  * DEFAULT_MAX_LINES }`, which only the extension itself can import.
  */
 export async function registerIldMcpTools(
   pi,
-  { command, args = [], env = {}, toolPrefix = "", truncate, startupTimeoutMs = 30000 },
+  {
+    command,
+    args = [],
+    env = {},
+    toolPrefix = "",
+    truncate,
+    startupTimeoutMs = 30000,
+    callTimeoutMs = DEFAULT_CALL_TIMEOUT_MS,
+  },
 ) {
   const server = new McpServer(command, args, env);
   pi.on("session_shutdown", () => server.close());
@@ -49,7 +62,7 @@ export async function registerIldMcpTools(
         const result = await server.request(
           "tools/call",
           { name: tool.name, arguments: params ?? {} },
-          signal,
+          { signal, timeoutMs: callTimeoutMs },
         );
         const content = result?.content ?? [];
         if (result?.isError) throw new Error(textOf(content) || `${tool.name} failed`);
@@ -96,29 +109,41 @@ class McpServer {
     return tools;
   }
 
-  request(method, params, signal) {
+  request(method, params, { signal, timeoutMs } = {}) {
     if (this.#failure) return Promise.reject(this.#failure);
     if (signal?.aborted) return Promise.reject(new Error(`${method} aborted`));
 
     const id = this.#nextId++;
     return new Promise((resolve, reject) => {
-      const onAbort = () => {
+      let timer;
+      const finish = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+      };
+      const cancel = (reason) => {
+        finish();
         this.#settle(id);
         this.#send({
           jsonrpc: "2.0",
           method: "notifications/cancelled",
-          params: { requestId: id, reason: "aborted" },
+          params: { requestId: id, reason },
         });
-        reject(new Error(`${method} aborted`));
+        reject(new Error(`${method} ${reason}`));
       };
+      const onAbort = () => cancel("aborted");
       signal?.addEventListener("abort", onAbort, { once: true });
+      if (timeoutMs !== undefined) {
+        // Unref'd: the pending request's own ref (#updateRef) is what holds pi open.
+        timer = setTimeout(() => cancel(`timed out after ${timeoutMs}ms`), timeoutMs);
+        timer.unref();
+      }
       this.#pending.set(id, {
         resolve: (value) => {
-          signal?.removeEventListener("abort", onAbort);
+          finish();
           resolve(value);
         },
         reject: (err) => {
-          signal?.removeEventListener("abort", onAbort);
+          finish();
           reject(err);
         },
       });
@@ -276,7 +301,9 @@ function resourceItem(resource, truncate) {
   }
 
   const mimeType = resource.mimeType ?? "application/octet-stream";
-  if (mimeType.startsWith("image/")) return { type: "image", data: resource.blob, mimeType };
+  if (mimeType.toLowerCase().startsWith("image/")) {
+    return { type: "image", data: resource.blob, mimeType };
+  }
 
   const size = Buffer.byteLength(resource.blob ?? "", "base64");
   return text(
