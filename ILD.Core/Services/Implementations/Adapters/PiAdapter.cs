@@ -489,9 +489,19 @@ public sealed class PiAdapter : CliAgentAdapterBase
 
     private static void PrepareRuntimeFiles(PiAdapterSettings settings)
     {
-        if (!string.IsNullOrWhiteSpace(settings.AgentDirectory)
-            && !string.IsNullOrWhiteSpace(settings.ModelsJsonContent))
-            File.WriteAllText(Path.Combine(settings.AgentDirectory, "models.json"), settings.ModelsJsonContent);
+        if (!string.IsNullOrWhiteSpace(settings.AgentDirectory))
+        {
+            // Older builds wrote an HTTP-calling ild.ts here, and the agent dir is
+            // reused by later turns of the same run or chat. pi loads it before any
+            // `-e` path and keeps the first tool of a name, so a leftover would
+            // shadow the MCP tools; it also still holds the token of its day.
+            var legacyExtensions = Path.Combine(settings.AgentDirectory, "extensions");
+            if (Directory.Exists(legacyExtensions))
+                File.Delete(Path.Combine(legacyExtensions, "ild.ts"));
+
+            if (!string.IsNullOrWhiteSpace(settings.ModelsJsonContent))
+                File.WriteAllText(Path.Combine(settings.AgentDirectory, "models.json"), settings.ModelsJsonContent);
+        }
 
         if (!string.IsNullOrWhiteSpace(settings.IldExtensionPath)
             && !string.IsNullOrWhiteSpace(settings.IldExtensionContent))
