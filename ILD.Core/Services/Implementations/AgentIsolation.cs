@@ -703,7 +703,7 @@ public static class AgentIsolation
         foreach (var argument in new[] { "-c", AncestorScript, "sh", root })
             start.ArgumentList.Add(argument);
 
-        using var process = Process.Start(start)
+        using var process = Process.Start(AgentIsolation.DropInheritedCapabilities(start))
             ?? throw UntrustedAgentReadDirectory(root, "has folders above it that could not be checked");
         var error = process.StandardError.ReadToEndAsync();
         var lines = process.StandardOutput.ReadToEnd().Split('\n', StringSplitOptions.RemoveEmptyEntries);
