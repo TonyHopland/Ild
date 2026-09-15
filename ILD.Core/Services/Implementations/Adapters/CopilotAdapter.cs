@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.Text;
 using ILD.Core.Services.Interfaces;
+using ILD.Data;
 using ILD.Data.DTOs;
+using ILD.Data.Entities;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Core.Services.Implementations.Adapters;
@@ -22,6 +24,10 @@ namespace ILD.Core.Services.Implementations.Adapters;
 /// Default output is plain text on stdout, which becomes the node's output.
 /// See https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference.
 ///
+/// The ILD MCP server and any provider-scoped custom MCP servers are handed to
+/// the CLI for the session only via <c>--additional-mcp-config @&lt;file&gt;</c>
+/// (see <see cref="TryWriteMcpConfig"/>).
+///
 /// Two deliberate limitations versus <see cref="ClaudeCodeAdapter"/>:
 /// <list type="bullet">
 ///   <item><b>Single-turn.</b> Each run is an independent one-shot; the CLI's
@@ -29,9 +35,9 @@ namespace ILD.Core.Services.Implementations.Adapters;
 ///   cannot persist/restore a session the way it does for claude-code/opencode/pi.
 ///   Multi-turn loops re-send context via the prompt rather than resuming.</item>
 ///   <item><b>Always all-tools.</b> <c>--allow-all-tools</c> is mandatory for
-///   headless use, so a Copilot provider runs unrestricted; the per-node tool
-///   allowlist (read/write/execute/ild) is not applied (Copilot is excluded from
-///   <see cref="ILD.Data.AiToolCatalog"/>'s default-agent set).</item>
+///   headless use, so a Copilot provider runs its built-in tools unrestricted;
+///   of the per-node tool allowlist only <c>ild</c> applies, gating the ILD MCP
+///   server (see <see cref="ILD.Data.AiToolCatalog"/>).</item>
 /// </list>
 /// </summary>
 public sealed class CopilotAdapter : CliAgentAdapterBase
@@ -48,8 +54,11 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
     public override string Name => "Copilot";
     public override string[] SupportedProviderTypes => ["copilot"];
 
+    public override ConfigFieldDescriptor[] ConfigSchema => [CustomMcpServersField];
+
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
+        string? mcpConfigPath = null;
         try
         {
             var binaryPath = AiProviderConfig.Parse(ctx.Provider.Config)
@@ -60,11 +69,13 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
                 return NodeExecutionResult.Fail(
                     "[copilot-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
 
+            mcpConfigPath = TryWriteMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId);
+
             Process? proc;
             try
             {
                 proc = StartAgentProcess(
-                    BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.AdditionalAllowedDirectories),
+                    BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.AdditionalAllowedDirectories, mcpConfigPath),
                     ctx.Provider.Id);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
@@ -126,13 +137,21 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
         {
             return NodeExecutionResult.Fail($"[copilot-error] {ex.Message}");
         }
+        finally
+        {
+            if (!string.IsNullOrEmpty(mcpConfigPath))
+            {
+                try { File.Delete(mcpConfigPath); } catch { /* best effort */ }
+            }
+        }
     }
 
     public static ProcessStartInfo BuildRunProcessStartInfo(
         string binaryPath,
         string worktreePath,
         string prompt,
-        IReadOnlyList<string>? additionalAllowedDirectories = null)
+        IReadOnlyList<string>? additionalAllowedDirectories = null,
+        string? mcpConfigPath = null)
     {
         var psi = new ProcessStartInfo(binaryPath)
         {
@@ -168,11 +187,56 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
             }
         }
 
+        // Passed as `@file`, never inline JSON, so the server's API token stays
+        // out of argv (ADR-0014).
+        if (!string.IsNullOrWhiteSpace(mcpConfigPath))
+        {
+            psi.ArgumentList.Add("--additional-mcp-config");
+            psi.ArgumentList.Add("@" + mcpConfigPath);
+        }
+
         // `-p` runs a single turn non-interactively and exits. Keep it last so
         // the prompt text is unambiguously the option's value.
         psi.ArgumentList.Add("-p");
         psi.ArgumentList.Add(prompt);
         return psi;
+    }
+
+    /// <summary>
+    /// Write the MCP config to a JSON file the caller can pass to
+    /// <c>copilot --additional-mcp-config @&lt;file&gt;</c>. It carries the ILD API
+    /// token and custom-server env, so it is written by
+    /// <see cref="IldMcpServer.TryWriteConfigFile"/>. Merges the built-in
+    /// <c>ild</c> server (only when that tool is selected) with any
+    /// provider-scoped custom MCP servers, which are written even when <c>ild</c>
+    /// is off. Entries take the Claude Code shape plus Copilot's
+    /// <c>type: "local"</c> and <c>tools: ["*"]</c>. Returns <c>null</c> when
+    /// there is nothing to write or the temp file can't be written.
+    /// </summary>
+    public static string? TryWriteMcpConfig(AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? allowlist, Guid? chatSessionId = null)
+    {
+        var servers = new Dictionary<string, object?>();
+
+        var enabledKeys = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, allowlist);
+        if (enabledKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase)
+            && ClaudeCodeAdapter.BuildIldMcpEntry(runContext, chatSessionId) is { } ild)
+            servers["ild"] = WithCopilotKeys(ild);
+
+        // The parser reserves the "ild" name, so these can never clobber it.
+        foreach (var server in CustomMcpServers.Parse(AiProviderConfig.Parse(provider.Config).CustomMcpServersJson))
+            servers[server.Name] = WithCopilotKeys(ClaudeCodeAdapter.BuildCustomMcpEntry(server));
+
+        return servers.Count == 0
+            ? null
+            : IldMcpServer.TryWriteConfigFile(
+                "ild-copilot-mcp", runContext.LoopRunId, new Dictionary<string, object?> { ["mcpServers"] = servers });
+    }
+
+    private static Dictionary<string, object?> WithCopilotKeys(Dictionary<string, object?> entry)
+    {
+        entry["type"] = "local";
+        entry["tools"] = new[] { "*" };
+        return entry;
     }
 
     /// <summary>

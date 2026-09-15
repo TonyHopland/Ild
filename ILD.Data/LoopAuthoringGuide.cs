@@ -6,12 +6,11 @@ namespace ILD.Data;
 /// CONTEXT.md and the config fields the editor reads/writes.
 ///
 /// <para>
-/// It lives here, beside <see cref="ToolDescriptors"/>, because it has two
-/// consumers and must not drift between them: the chat's Chat Context delivers it
-/// once per agent session when a Loop Editor is open (ADR-0011), and the guide tool
-/// serves the same bytes on demand for the rest of that session — named
-/// <c>get_loop_authoring_guide</c> on the MCP surface and
-/// <c>ild_get_loop_authoring_guide</c> on the Pi one, as every ILD tool is.
+/// It lives in one place because it has two consumers and must not drift between
+/// them: the chat's Chat Context delivers it once per agent session when a Loop
+/// Editor is open (ADR-0011), and the guide tool serves the same bytes on demand
+/// for the rest of that session — <c>get_loop_authoring_guide</c> on the ILD MCP
+/// server, which Pi sees as <c>ild_get_loop_authoring_guide</c>, as every ILD tool is.
 /// The pull path is what makes the once-per-session push safe —
 /// an agent that has lost the guide from effective context can fetch it back
 /// instead of going without, so the guidance stays reachable without being re-sent
@@ -37,7 +36,7 @@ public static class LoopAuthoringGuide
         Field semantics you cannot infer from the name:
         - id: yours to choose, and only internal consistency matters — saving mints fresh GUIDs and remaps every reference. An edge whose sourceNodeId or targetNodeId names no node in the same document is silently dropped, with no error and no validation failure. After any structural edit, re-read the document and confirm each edge you added is still there.
         - aiProviderId: omit it unless a GUID was handed to you — you have no way to list providers. Unset or non-GUID falls back to the default provider; a GUID that no longer exists fails the run outright.
-        - toolAllowlist: exactly four keys exist — "read", "write", "execute", "ild" — and only opencode/pi/claude-code providers honour them. Unknown keys are filtered out, and an empty, omitted or fully-filtered list means the PROVIDER DEFAULTS, not "no tools"; you cannot express "no tools" here.
+        - toolAllowlist: exactly four keys exist — "read", "write", "execute", "ild". opencode/pi/claude-code providers honour all four; for them unknown keys are filtered out, and an empty, omitted or fully-filtered list means the PROVIDER DEFAULTS, not "no tools", so you cannot express "no tools" there. Copilot honours only "ild": an omitted list turns ILD on, while an explicit empty list, or one without "ild", turns ILD off.
         - Condition subject and output: template strings rendered through the placeholder pipeline before matching, both defaulting to {{Node.Input}}.
         - Precedence, and they differ: for AI matchRules the rule matching LAST in the output wins, so a closing verdict beats a word mentioned earlier; for Condition cases the FIRST matching case wins. Both match case-insensitively with no other regex options, each against a whole string — the AI node's output, or the Condition case's rendered subject — so ^ and $ bind to that whole string rather than to a line, and . does not cross newlines; write (?m) or (?s) inline when you need otherwise.
         - Only AI matchRules are pattern-checked at save (invalid, zero-width — x*, \b, (?=...) — and catastrophically slow patterns are rejected). A Condition case pattern is only compile-checked, so a zero-width one saves cleanly and then matches everything: being the first case, it wins forever and no later case or defaultEdge is ever reached. Make every Condition pattern require real characters yourself.

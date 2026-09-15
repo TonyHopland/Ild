@@ -158,6 +158,49 @@ public sealed class ChatServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task StartAsync_for_copilot_with_omitted_tools_turns_ild_on()
+    {
+        var provider = await SeedProviderAsync("copilot");
+        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok())));
+
+        var view = await svc.StartAsync("alice", provider.Id, null);
+
+        Assert.Equal(new[] { "ild" }, view.Tools);
+        Assert.Equal("ild", _db.Context.ChatSessions.Single().ToolAllowlistCsv);
+    }
+
+    [Fact]
+    public async Task StartAsync_for_copilot_with_ild_ticked_hands_every_turn_ild()
+    {
+        var provider = await SeedProviderAsync("copilot");
+        var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
+        var svc = NewService(adapter);
+
+        var view = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        await svc.ExecuteTurnAsync(view.Id, "hi", openWorkItemId: null, openLoopDocument: null, CancellationToken.None);
+
+        Assert.Equal(new[] { "ild" }, view.Tools);
+        Assert.Equal(new[] { "ild" }, adapter.LastContext!.ToolAllowlist);
+    }
+
+    [Fact]
+    public async Task StartAsync_for_copilot_with_an_empty_selection_keeps_ild_off_for_every_turn()
+    {
+        var provider = await SeedProviderAsync("copilot");
+        var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
+        var svc = NewService(adapter);
+
+        var view = await svc.StartAsync("alice", provider.Id, Array.Empty<string>());
+        await svc.ExecuteTurnAsync(view.Id, "hi", openWorkItemId: null, openLoopDocument: null, CancellationToken.None);
+
+        Assert.Empty(view.Tools);
+        Assert.Equal(string.Empty, _db.Context.ChatSessions.Single().ToolAllowlistCsv);
+        // An explicit empty list, not null: null would mean "defaults" (ILD on).
+        Assert.NotNull(adapter.LastContext!.ToolAllowlist);
+        Assert.Empty(adapter.LastContext.ToolAllowlist!);
+    }
+
+    [Fact]
     public async Task StartAsync_allows_many_retained_chats_for_the_same_user()
     {
         var provider = await SeedProviderAsync();

@@ -13,6 +13,7 @@ namespace ILD.Tests;
 /// child opencode process never reads the user's <c>~/.config/opencode</c>,
 /// so we have to inject the entry ourselves.
 /// </summary>
+[Collection("EnvironmentPath")]
 public class OpenCodeAdapterMcpInjectionTests : IDisposable
 {
     private readonly string _tempDir;

@@ -163,17 +163,41 @@ safe.directory '*'` in the image, every git command the agent runs (the review
   relative root would resolve inside the worktree and break every authenticated
   fetch and push.
 
-- **Shared scratch is a setgid tree, not a per-directory grant.** The orchestrator
-  regularly _seeds a file the agent then keeps writing_ — Pi's restored session
-  transcript is written by the orchestrator and appended to by pi for the rest of
-  the turn. Granting the directory cannot express that: create/unlink/rename are
-  governed by the directory, but writing an existing file is governed by that
-  file's own mode. So this scratch is rooted at `AGENT_SCRATCH_DIR`
-  (`/tmp/ild-agent-scratch`, set up like the other shared trees), and the seeded
-  file inherits the shared group and `umask 002` on its own. It is the same
-  mechanism that already made the equivalent claude path work, whose transcripts
-  live in the shared config store. It sits under `/tmp` so it is discarded with
-  the container instead of growing on a volume.
+- **Shared scratch is a setgid tree, not a per-directory grant.** Pi's agent and
+  session directories are seeded for the agent and then written by it for the rest
+  of the turn — a restored session transcript is appended to by pi. Granting the
+  directory cannot express that: create/unlink/rename are governed by the
+  directory, but writing an existing file is governed by that file's own mode. So
+  this scratch is rooted at `AGENT_SCRATCH_DIR` (`/tmp/ild-agent-scratch`, set up
+  like the other shared trees). It sits under `/tmp` so it is discarded with the
+  container instead of growing on a volume.
+
+- **The orchestrator touches agent-writable paths only as the agent.** Anything in
+  shared scratch, and the Claude session transcripts ILD saves and restores in the
+  shared credential store, may be a link or a directory the agent planted, and a check
+  before a write or delete by path can never be atomic with it. So the
+  orchestrator does not open, write, list or delete there itself: those operations
+  run as a short shell command crossed to the agent uid (`AgentWritableFiles`), and
+  a planted link then only leads where the agent could already go. A planted
+  read-only folder is the agent's own, so that command can always clear it, and
+  nothing the agent leaves there can fail a run or block a cleanup.
+
+- **Files the agent reads but must not change live in a root it cannot write.**
+  Pi's ILD extension and the MCP configs handed to the agent CLIs carry the ILD API
+  token. The entrypoint creates `AGENT_READ_DIR` (`/tmp/ild-agent-read`) before any
+  agent-uid process runs, owned by the orchestrator with the shared group and no
+  group write (`2750`), and exports it as `ILD_AGENT_READ_ROOT`, along with the
+  app's fixed folders inside it. Every directory below it is `0750`, created in one
+  step and refused if it is a link or otherwise not the orchestrator's alone, and
+  every file `0640`, so the agent can read them but cannot
+  create, rename or delete anything there, and the orchestrator writes and deletes
+  there by path with nothing to defend against. With uid isolation on,
+  `ILD_AGENT_READ_ROOT` is required and the app refuses to start unless the root is
+  a real directory it owns that no one else can write; a predictable default in
+  `/tmp` would be one the agent could create first. Run reclaim and chat delete
+  remove a run's extension and configs; at startup, before any run can resume, the
+  configs a killed process left, the extensions of runs and chats no longer open,
+  and the extensions older builds wrote into pi's agent directories are swept.
 
 ## What this does not close
 
@@ -189,7 +213,8 @@ rather than overlooked:
   against those as `ild` on every worktree add/fetch.
 - **The shared credential store is writable by the agent**, so it can write e.g.
   `.claude/settings.json` hooks, which then execute as `ild` when a human opens
-  the provider login terminal.
+  the provider login terminal. ILD's own handling of the session transcripts kept
+  there does not add to this: it runs as the agent uid and never follows a link.
 - **All runs share the `ild-agents` group**, so one run's agent can reach another
   run's worktree and any repo in the store.
 

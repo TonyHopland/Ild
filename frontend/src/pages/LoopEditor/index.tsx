@@ -74,6 +74,7 @@ import type {
 } from "./types";
 import { validateLoopGraphLocally } from "./utils/loopGraphValidation";
 import { isTemplatedSessionName, sessionPlaceholderError } from "./utils/sessionPlaceholder";
+import { resolveToolSelection } from "./utils/toolSelection";
 
 function loadErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message) return error.message;
@@ -164,22 +165,6 @@ function resolveActiveAiProvider(
     providers[0] ??
     null
   );
-}
-
-function resolveToolSelection(provider: AiProvider | null, configuredTools: unknown): string[] {
-  const supportedTools = provider?.supportedTools ?? [];
-  if (supportedTools.length === 0) return [];
-
-  const supportedToolKeys = new Set(supportedTools.map((tool) => tool.key));
-  const explicitTools = Array.isArray(configuredTools)
-    ? configuredTools.filter(
-        (tool): tool is string => typeof tool === "string" && supportedToolKeys.has(tool),
-      )
-    : [];
-
-  if (explicitTools.length > 0) return explicitTools;
-
-  return supportedTools.filter((tool) => tool.defaultEnabled).map((tool) => tool.key);
 }
 
 /** Reads an AI node's ordered output-match rules from its config. */
@@ -1208,7 +1193,7 @@ export default function LoopEditor() {
   const handleAiProviderChange = useCallback(
     (providerId: string) => {
       setAiProvider(providerId);
-      setAiTools(resolveToolSelection(resolveActiveAiProvider(aiProviders, providerId), []));
+      setAiTools(resolveToolSelection(resolveActiveAiProvider(aiProviders, providerId), undefined));
       void loadAdapterSchema(providerId);
     },
     [aiProviders, loadAdapterSchema],

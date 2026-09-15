@@ -38,13 +38,13 @@ public class AdapterConfigSchemaTests
     }
 
     [Fact]
-    public void CopilotAdapter_schema_does_not_expose_custom_mcp_servers_field()
+    public void CopilotAdapter_schema_exposes_custom_mcp_servers_field()
     {
-        // Copilot has no MCP wiring; it must not advertise the field.
         var adapter = new CopilotAdapter();
 
-        var names = adapter.ConfigSchema.Select(f => f.Name).ToList();
-        Assert.DoesNotContain("customMcpServersJson", names);
+        var field = Assert.Single(adapter.ConfigSchema);
+        Assert.Equal("customMcpServersJson", field.Name);
+        Assert.Equal(ConfigFieldType.Textarea, field.Type);
     }
 
     [Fact]
@@ -62,8 +62,8 @@ public class AdapterConfigSchemaTests
     [Fact]
     public void PiAdapter_schema_is_empty()
     {
-        // Pi has no MCP support by design, so it must never expose the custom
-        // MCP servers field (or any other config field).
+        // Pi reaches the ILD MCP server through its extension bridge, but custom
+        // MCP servers are not wired for pi, so it exposes no config field.
         var adapter = new PiAdapter();
 
         Assert.Empty(adapter.ConfigSchema);

@@ -61,6 +61,21 @@ public sealed class ChatTurnRunner : IChatTurnRunner
         }
     }
 
+    public async Task DeleteAsync(Guid chatSessionId, Func<Task> delete)
+    {
+        var gate = _gates.GetOrAdd(chatSessionId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await CancelActiveAsync(chatSessionId).ConfigureAwait(false);
+            await delete().ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
     private async Task CancelActiveAsync(Guid chatSessionId)
     {
         if (!_active.TryRemove(chatSessionId, out var prev)) return;

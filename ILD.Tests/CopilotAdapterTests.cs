@@ -14,7 +14,8 @@ public class CopilotAdapterTests
 
         Assert.Equal("Copilot", adapter.Name);
         Assert.Contains("copilot", adapter.SupportedProviderTypes);
-        Assert.Empty(adapter.ConfigSchema);
+        var field = Assert.Single(adapter.ConfigSchema);
+        Assert.Equal("customMcpServersJson", field.Name);
     }
 
     [Fact]

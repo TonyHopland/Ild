@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ILD.Data.DTOs;
 
 namespace ILD.Core.Services.Implementations.Adapters;
@@ -12,6 +13,64 @@ namespace ILD.Core.Services.Implementations.Adapters;
 public static class IldMcpServer
 {
     private const string DllName = "ild-mcp-server.dll";
+    private const string ConfigDirectorySegment = "ild-mcp-config";
+
+    /// <summary>
+    /// Write an MCP config file for an agent CLI to read and return its path, or
+    /// <c>null</c> when it cannot be written. The config carries the ILD API token,
+    /// so it goes into <see cref="AgentIsolation.AgentReadRoot"/>: readable by the
+    /// agent group, changeable by the orchestrator only. The caller deletes it once
+    /// the CLI exits; its name carries <paramref name="loopRunId"/> (the session id
+    /// for a chat turn) so <see cref="DeleteConfigFiles"/> can clear a run's files,
+    /// and <see cref="AgentRunFiles.SweepAtStartupAsync(IReadOnlySet{Guid}, CancellationToken)"/>
+    /// clears the ones a dead process left.
+    /// </summary>
+    public static string? TryWriteConfigFile(string namePrefix, Guid loopRunId, object config)
+    {
+        try
+        {
+            var path = Path.Combine(
+                AgentIsolation.CreateAgentReadDirectory(ConfigDirectorySegment),
+                $"{namePrefix}-{loopRunId:N}-{Guid.NewGuid():N}.json");
+            AgentIsolation.WriteAgentReadableFile(path, JsonSerializer.SerializeToUtf8Bytes(config));
+            return path;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Delete every MCP config file written for a loop run or chat session.</summary>
+    public static void DeleteConfigFiles(Guid loopRunId) => DeleteConfigFiles(AgentIsolation.AgentReadRoot, loopRunId);
+
+    /// <inheritdoc cref="DeleteConfigFiles(Guid)"/>
+    internal static void DeleteConfigFiles(string agentReadRoot, Guid loopRunId)
+    {
+        var directory = Path.Combine(agentReadRoot, ConfigDirectorySegment);
+        if (!Directory.Exists(directory))
+            return;
+        foreach (var file in Directory.EnumerateFiles(directory, $"*-{loopRunId:N}-*.json"))
+            File.Delete(file);
+    }
+
+    /// <summary>
+    /// Delete the MCP config files written before <paramref name="writtenBeforeUtc"/>,
+    /// this process's start: those of runs killed with an earlier process. A file
+    /// this process wrote belongs to a CLI that may still be reading it, so it is
+    /// left for its caller to delete.
+    /// </summary>
+    internal static void SweepConfigFiles(string agentReadRoot, DateTime writtenBeforeUtc)
+    {
+        var directory = Path.Combine(agentReadRoot, ConfigDirectorySegment);
+        if (!Directory.Exists(directory))
+            return;
+        foreach (var file in Directory.EnumerateFiles(directory))
+        {
+            if (File.GetLastWriteTimeUtc(file) < writtenBeforeUtc)
+                File.Delete(file);
+        }
+    }
 
     /// <summary>
     /// Build the environment variables the MCP server needs: the ILD API URL,

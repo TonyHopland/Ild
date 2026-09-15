@@ -271,7 +271,8 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     }
 
     /// <summary>
-    /// Serialize the MCP config to a temp JSON file the caller can pass to
+    /// Write the MCP config, which carries the ILD API token, to a JSON file (see
+    /// <see cref="IldMcpServer.TryWriteConfigFile"/>) the caller can pass to
     /// <c>claude --mcp-config</c>. Merges the built-in <c>ild</c> server (only
     /// when that tool is in the allowlist) with any provider-scoped custom MCP
     /// servers, which apply for every repo this provider runs in and are written
@@ -296,22 +297,10 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         foreach (var server in CustomMcpServers.Parse(AiProviderConfig.Parse(provider.Config).CustomMcpServersJson))
             servers[server.Name] = BuildCustomMcpEntry(server);
 
-        if (servers.Count == 0) return null;
-
-        var config = new Dictionary<string, object?>
-        {
-            ["mcpServers"] = servers,
-        };
-
-        var json = JsonSerializer.Serialize(config);
-        var path = Path.Combine(Path.GetTempPath(), $"ild-claude-mcp-{Guid.NewGuid():N}.json");
-        try
-        {
-            File.WriteAllText(path, json);
-            return path;
-        }
-        catch (IOException) { return null; }
-        catch (UnauthorizedAccessException) { return null; }
+        return servers.Count == 0
+            ? null
+            : IldMcpServer.TryWriteConfigFile(
+                "ild-claude-mcp", runContext.LoopRunId, new Dictionary<string, object?> { ["mcpServers"] = servers });
     }
 
     private static async Task<ClaudeStreamOutput> ReadStreamJsonAsync(
@@ -459,8 +448,11 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     {
         if (ScopeFactory is null) return;
 
+        // Claude keeps its session files in the shared credential store, which the
+        // agent can write, so they are only checked, written and read as the agent
+        // (see AgentWritableFiles), never by the orchestrator through a link.
         var path = GetSessionFilePath(worktreePath, sessionId);
-        if (path is null || File.Exists(path)) return;
+        if (path is null || await AgentWritableFiles.FileExistsAsync(path, ctx.Cancel)) return;
 
         AdapterSessionSnapshot? snapshot;
         try
@@ -479,12 +471,10 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
 
         try
         {
-            var dir = Path.GetDirectoryName(path);
-            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            await File.WriteAllTextAsync(path, jsonl, ctx.Cancel);
+            await AgentWritableFiles.CreateDirectoryAsync(Path.GetDirectoryName(path)!, ctx.Cancel);
+            await AgentWritableFiles.WriteFileAsync(path, jsonl, ctx.Cancel);
         }
         catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
     }
 
     private async Task TryPersistSessionJsonlAsync(AgentExecutionContext ctx, string sessionId, string worktreePath)
@@ -492,15 +482,10 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         if (ScopeFactory is null) return;
 
         var path = GetSessionFilePath(worktreePath, sessionId);
-        if (path is null || !File.Exists(path)) return;
+        if (path is null) return;
 
-        string jsonl;
-        try
-        {
-            jsonl = await File.ReadAllTextAsync(path, ctx.Cancel);
-        }
-        catch (IOException) { return; }
-        catch (UnauthorizedAccessException) { return; }
+        var jsonl = await AgentWritableFiles.ReadFileAsync(path, ctx.Cancel);
+        if (jsonl is null) return;
 
         var wrapped = WrapJsonl(sessionId, jsonl);
 
@@ -515,10 +500,16 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         }
     }
 
+    // Claude keeps its sessions under the HOME it runs with, which under uid
+    // isolation is the agent's (AgentIsolation.ResolveChildHome), not ours.
     public static string? GetSessionFilePath(string worktreePath, string sessionId)
+        => GetSessionFilePath(worktreePath, sessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome);
+
+    /// <inheritdoc cref="GetSessionFilePath(string, string)"/>
+    internal static string? GetSessionFilePath(string worktreePath, string sessionId, string? agentUser, string? agentHome)
     {
         if (string.IsNullOrEmpty(worktreePath) || string.IsNullOrEmpty(sessionId)) return null;
-        var home = Environment.GetEnvironmentVariable("HOME");
+        var home = AgentIsolation.ResolveChildHome(agentUser, agentHome) ?? Environment.GetEnvironmentVariable("HOME");
         if (string.IsNullOrEmpty(home))
             home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (string.IsNullOrEmpty(home)) return null;

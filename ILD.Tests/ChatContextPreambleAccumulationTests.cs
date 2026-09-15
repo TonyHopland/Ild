@@ -510,20 +510,13 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
     /// pushes are served by a tool the agent is told about on every turn the editor
     /// is open.
     ///
-    /// The three surfaces are asserted together because LoopTools' own doc comment
-    /// names them as the drift risk: the MCP tool, the Pi-side descriptor and the
-    /// agent-API route have to agree or the tool exists for one CLI only.
+    /// The surfaces are asserted together because they are the drift risk: every
+    /// adapter reaches the guide through the MCP tool, which calls the agent-API
+    /// route, so the two have to agree or the tool exists for no CLI at all.
     /// </summary>
     [Fact]
     public void The_authoring_guide_is_pullable_on_demand_from_every_agent_surface()
     {
-        var descriptor = Assert.Single(
-            ToolDescriptors.All.Where(t => t.Name == "ild_get_loop_authoring_guide"));
-        Assert.Equal("api/v1/agent/loop-authoring-guide", descriptor.EndpointPath);
-        Assert.Equal(HttpMethod.Get, descriptor.HttpMethod);
-        Assert.Empty(descriptor.Parameters);
-
-        // The MCP surface names the same tool.
         var mcpTool = typeof(ILD.McpServer.Tools.LoopTools)
             .GetMethods()
             .Single(m => m.CustomAttributes.Any(a =>

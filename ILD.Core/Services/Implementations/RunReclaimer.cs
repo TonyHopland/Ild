@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using ILD.Data.Stores.Interfaces;
@@ -35,6 +36,20 @@ public sealed class RunReclaimer : IRunReclaimer
     public async Task<bool> ReclaimLocalStateAsync(LoopRun run)
     {
         await StopPreviewIfRunningAsync(run);
+
+        // The ILD extension holds the API token and nothing else can find it once
+        // the run row is gone, so failing to remove it keeps the run for a retry.
+        // What the agent left in its own pi directories never holds the reclaim up.
+        try
+        {
+            if (!await AgentRunFiles.DeleteAsync(run.Id))
+                _log?.LogWarning("Could not fully clear the pi agent directories of run {RunId}", run.Id);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _log?.LogWarning(ex, "Failed to remove the pi ILD extension of run {RunId}", run.Id);
+            return false;
+        }
 
         // Resolve the base repo before destroying the worktree — afterwards
         // the branch can no longer be located through it.

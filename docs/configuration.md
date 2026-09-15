@@ -338,9 +338,9 @@ Three things follow that are worth knowing when you write a profile:
   environment before your command runs: both of its database connection strings,
   `ILD_SECRET_KEY`, `ILD_SESSION_TOKEN_PEPPER`, `ILD_PASSWORD`, `ILD_USERNAME`,
   the API tokens it uses to reach itself and the WorkItem Server, and anything
-  you have named in `ILD_AGENT_ENV_DENYLIST`. It also removes the five variables
+  you have named in `ILD_AGENT_ENV_DENYLIST`. It also removes the six variables
   describing its own uid topology (`ILD_AGENT_USER`, `ILD_AGENT_GROUP`, `ILD_AGENT_HOME`,
-  `ILD_AGENT_SCRATCH_ROOT`, `ILD_ORCHESTRATOR_PRIVATE_ROOT`), which describe the
+  `ILD_AGENT_SCRATCH_ROOT`, `ILD_ORCHESTRATOR_PRIVATE_ROOT`, `ILD_AGENT_READ_ROOT`), which describe the
   ILD process and are wrong for anything else. Everything else is inherited as
   before. This matters even if your app reads none of those names, because your
   _shell command_ still ran with them in `env` — one debug `printenv`, a crash
@@ -592,15 +592,15 @@ the config lives on the provider, not in a target repo.
 
 ### Custom MCP servers (JSON)
 
-The **OpenCode** and **Claude Code** adapters expose a `customMcpServersJson`
+The **OpenCode**, **Claude Code** and **GitHub Copilot** adapters expose a `customMcpServersJson`
 field that attaches arbitrary [MCP](https://modelcontextprotocol.io) servers to
 the agent, on top of the built-in `ild` server. This lets you create provider
 variants that differ only by the tools they carry — e.g. a plain **OpenCode**
 provider and an **OpenCode w/chrome** provider whose agents can drive a headless
 browser for debugging and screenshots.
 
-Set it on the **AI Providers** page: create or edit an OpenCode or Claude Code
-provider and fill in the **Custom MCP servers (JSON)** field. The value is stored
+Set it on the **AI Providers** page: create or edit an OpenCode, Claude Code or
+GitHub Copilot provider and fill in the **Custom MCP servers (JSON)** field. The value is stored
 on the provider (`AiProvider.Config`) and applies to every run that uses it. It
 is _not_ a per-loop-node setting — the Loop Editor's node settings do not carry
 provider config.
@@ -628,19 +628,29 @@ The value is a JSON object mapping a server name to its definition:
 - `env` (optional object) becomes the server process's environment.
 
 Each adapter translates this into its own native shape (OpenCode's
-`{ "type": "local", "command": [...], "environment": {...} }` and Claude Code's
-`{ "command": ..., "args": [...], "env": {...} }`) and merges it alongside the
-`ild` entry. The name `ild` is reserved and any custom server using it is
-ignored, so it can never clobber the built-in server. For Claude Code the custom
-servers are injected even when the `ild` tool is disabled for the node.
+`{ "type": "local", "command": [...], "environment": {...} }`, Claude Code's
+`{ "command": ..., "args": [...], "env": {...} }` and Copilot's
+`{ "type": "local", "command": ..., "args": [...], "env": {...}, "tools": ["*"] }`)
+and merges it alongside the `ild` entry. The name `ild` is reserved and any
+custom server using it is ignored, so it can never clobber the built-in server.
+The custom servers are injected even when the `ild` tool is disabled for the
+node.
 
 Invalid or partially-malformed JSON is ignored and **never fails an AI node
 run** — the parser fails open, keeping whatever well-formed servers it can and
 skipping the rest.
 
-The **Pi** adapter has no MCP support by design and does not expose this field.
-**GitHub Copilot** is not currently wired for MCP in ILD, so it does not expose
-it either.
+**GitHub Copilot** receives the servers through `--additional-mcp-config`, for
+that run only. Its **ILD** tool box is its only tool switch: the built-in `ild`
+server is attached when it is ticked, which it is by default for new loop steps
+and chats. Unlike the other providers, an explicit selection without `ild` — an
+empty list, or one like `["read"]` whose keys Copilot does not honour — turns ILD
+off rather than falling back to the defaults, so Copilot loop steps and chats
+saved before Copilot had an ILD box stay without ILD until you tick it.
+
+The **Pi** adapter reaches the built-in `ild` server through a generated pi
+extension that bridges the server's tools into pi, but it does not attach custom
+MCP servers and does not expose this field.
 
 > The `chrome-devtools` example above requires Chrome in the ILD image
 > (`WITH_CHROME`) and Node/npm (`WITH_NODE`). `--no-sandbox` is required because

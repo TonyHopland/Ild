@@ -77,6 +77,13 @@ public static class AgentIsolation
     public const string PrivateRootEnvVar = "ILD_ORCHESTRATOR_PRIVATE_ROOT";
 
     /// <summary>
+    /// Root for files the agent reads but cannot change. Set by the entrypoint to a
+    /// directory it created <c>2750</c> with the shared group; unset means a
+    /// per-user path under the process <c>TMPDIR</c> (see <see cref="AgentReadRoot"/>).
+    /// </summary>
+    public const string AgentReadRootEnvVar = "ILD_AGENT_READ_ROOT";
+
+    /// <summary>
     /// Extra, deployment-specific environment variable names (comma-separated) to
     /// strip from the agent's environment on top of <see cref="DefaultSecretEnvKeys"/>.
     /// </summary>
@@ -304,6 +311,7 @@ public static class AgentIsolation
         AgentHomeEnvVar,
         ScratchRootEnvVar,
         PrivateRootEnvVar,
+        AgentReadRootEnvVar,
     ];
 
     /// <summary>
@@ -530,24 +538,20 @@ public static class AgentIsolation
     }
 
     /// <summary>
-    /// Where scratch that both uids touch must live: per-run agent session state,
-    /// the interactive terminal's cwd. Under uid isolation this is a directory the
-    /// entrypoint set up like the other shared trees — owned by the orchestrator,
-    /// group-owned by the shared group, <c>setgid</c>, with a default ACL — so
-    /// anything created beneath it inherits the shared group and (via the
+    /// Where scratch that both uids touch must live: pi's per-run agent and session
+    /// directories, the interactive terminal's cwd. Under uid isolation this is a
+    /// directory the entrypoint set up like the other shared trees — owned by the
+    /// orchestrator, group-owned by the shared group, <c>setgid</c>, with a default
+    /// ACL — so anything created beneath it inherits the shared group and (via the
     /// container's <c>umask 002</c>) stays group-writable.
     ///
     /// <para>
-    /// That inheritance is the whole mechanism, and it is why there is no
-    /// per-directory permission call here any more. The orchestrator frequently
-    /// <em>seeds a file the agent must then keep writing</em> — Pi's restored
-    /// session transcript is created by the orchestrator and appended to by pi for
-    /// the rest of the turn. Granting the directory alone cannot express that:
-    /// create/unlink/rename are governed by the directory, but writing an existing
-    /// file is governed by that file's own mode. Placing the tree under a setgid
-    /// shared-group root makes the seeded file come out group-writable on its own,
-    /// which is exactly why the equivalent claude path (whose transcripts sit in
-    /// the shared config store) already worked.
+    /// The agent can write anything here, including links and directories in place
+    /// of what the orchestrator expects, so the orchestrator does not open, write
+    /// or delete paths under it itself: pi's directories are created, seeded (the
+    /// restored session transcript pi then appends to) and cleared as the agent,
+    /// through <see cref="AgentWritableFiles"/>. Files the agent must read but never
+    /// change go to <see cref="AgentReadRoot"/> instead.
     /// </para>
     ///
     /// <para>
@@ -577,6 +581,162 @@ public static class AgentIsolation
         var path = Path.Combine(new[] { ScratchRoot }.Concat(segments).ToArray());
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    /// <summary>
+    /// Where the orchestrator puts files the agent must read but must never be
+    /// able to change: pi's ILD extension and the MCP configs handed to the agent
+    /// CLIs, which carry the ILD API token. The entrypoint creates it before any
+    /// agent-uid process runs, owned by the orchestrator with the shared group and
+    /// no group write (<c>2750</c>), so the agent can read what is there but cannot
+    /// create, rename or delete anything in it — which is what lets the
+    /// orchestrator write and delete there by path without guarding against
+    /// planted links. Unset means a per-user path under the process <c>TMPDIR</c>,
+    /// which is what local development and unit tests get. It is per user because
+    /// an ILD previewed inside ILD runs as the agent without the outer instance's
+    /// variables, and must not land on the outer instance's root, which it can
+    /// read but not write.
+    /// </summary>
+    public static string AgentReadRoot => ResolveAgentReadRoot(Environment.GetEnvironmentVariable(AgentReadRootEnvVar), AgentUser);
+
+    /// <inheritdoc cref="AgentReadRoot"/>
+    /// <param name="configured">The configured root, or null/blank for the default.</param>
+    /// <param name="agentUser">
+    /// The agent user, when uid isolation is on. The default is then refused: a
+    /// predictable path in shared <c>/tmp</c> is one the agent could create first.
+    /// </param>
+    public static string ResolveAgentReadRoot(string? configured, string? agentUser)
+    {
+        if (NonEmpty(configured) is { } root)
+            return Path.GetFullPath(root);
+        if (NonEmpty(agentUser) is not null)
+            throw new InvalidOperationException(
+                $"{AgentReadRootEnvVar} must be set when {AgentUserEnvVar} is: the entrypoint creates that root before any agent-uid process can run.");
+        return Path.GetFullPath(Path.Combine(Path.GetTempPath(), $"ild-agent-read-{Environment.UserName}"));
+    }
+
+    /// <summary>
+    /// Refuse to start with an agent read root that cannot be trusted (see
+    /// <see cref="EnsureTrustedAgentReadRoot"/>), rather than at the first agent launch.
+    /// </summary>
+    public static void EnsureAgentReadRoot() => EnsureTrustedAgentReadRoot(AgentReadRoot, AgentUser);
+
+    /// <summary>
+    /// The agent read root is only trusted as a real directory owned by this
+    /// process's user that no one else can write; otherwise the agent could have
+    /// made it, and the token-bearing files written there would be its to read and
+    /// replace. Throws <see cref="InvalidOperationException"/> when it is not. A
+    /// missing root is created <c>0750</c> only without uid isolation; with it, the
+    /// entrypoint must have created it, with the shared group the agent reads through.
+    /// </summary>
+    internal static void EnsureTrustedAgentReadRoot(string root, string? agentUser)
+    {
+        if (IsMissing(root))
+        {
+            if (NonEmpty(agentUser) is not null)
+                throw UntrustedAgentReadDirectory(root, "does not exist; the entrypoint creates it");
+            CreateAgentReadLevel(root);
+            return;
+        }
+
+        VerifyTrustedAgentReadDirectory(root);
+    }
+
+    // Refuses a directory the agent could have made or could change: a link, one
+    // writable by group or others, or one this process's user does not own.
+    private static void VerifyTrustedAgentReadDirectory(string path)
+    {
+        if (new DirectoryInfo(path).LinkTarget is not null)
+            throw UntrustedAgentReadDirectory(path, "is a symlink");
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var mode = File.GetUnixFileMode(path);
+        if ((mode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0)
+            throw UntrustedAgentReadDirectory(path, "is writable by others than its owner");
+
+        // Only the owner may chmod (the orchestrator holds no CAP_FOWNER), so
+        // re-applying the directory's own mode proves ownership without a stat call.
+        try { File.SetUnixFileMode(path, mode); }
+        catch (UnauthorizedAccessException) { throw UntrustedAgentReadDirectory(path, "is not owned by this process's user"); }
+    }
+
+    private static bool IsMissing(string path)
+    {
+        var entry = new DirectoryInfo(path);
+        return entry.LinkTarget is null && !entry.Exists;
+    }
+
+    // Created with its final mode in one step, so it is never group-writable, not
+    // even for a moment; a setgid parent passes its bit on by itself.
+    private static void CreateAgentReadLevel(string path)
+    {
+        if (OperatingSystem.IsWindows())
+            Directory.CreateDirectory(path);
+        else
+            Directory.CreateDirectory(path, AgentReadDirectoryMode);
+    }
+
+    private static InvalidOperationException UntrustedAgentReadDirectory(string path, string reason)
+        => new($"The agent read directory {path} {reason}, so it cannot hold files carrying the ILD API token.");
+
+    /// <summary>
+    /// Create a directory under <see cref="AgentReadRoot"/> and return its path.
+    /// The root and every level that already exists must pass the same check (see
+    /// <see cref="EnsureTrustedAgentReadRoot"/>); every level created here is made
+    /// <c>0750</c> in one step (keeping the setgid bit its parent passes down, so
+    /// the shared group carries through), the same rule as the root.
+    /// </summary>
+    public static string CreateAgentReadDirectory(params string[] segments)
+        => CreateAgentReadDirectoryUnder(AgentReadRoot, AgentUser, segments);
+
+    /// <inheritdoc cref="CreateAgentReadDirectory(string[])"/>
+    internal static string CreateAgentReadDirectoryUnder(string root, string? agentUser, params string[] segments)
+    {
+        EnsureTrustedAgentReadRoot(root, agentUser);
+        var path = root;
+        foreach (var segment in segments)
+        {
+            path = Path.Combine(path, segment);
+            // The level above is trusted, so only this process can create or
+            // replace this one; an existing one still gets the same check.
+            if (IsMissing(path))
+                CreateAgentReadLevel(path);
+            else
+                VerifyTrustedAgentReadDirectory(path);
+        }
+        return path;
+    }
+
+    private const UnixFileMode AgentReadDirectoryMode =
+        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+        | UnixFileMode.GroupRead | UnixFileMode.GroupExecute;
+
+    /// <summary>
+    /// Write a file in a <see cref="CreateAgentReadDirectory"/> tree: <c>0640</c>,
+    /// and moved into place whole, so a reader (pi nodes of one run start in
+    /// parallel) never sees it half-written.
+    /// </summary>
+    public static void WriteAgentReadableFile(string path, byte[] content)
+    {
+        var temp = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(path))!, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write };
+        if (!OperatingSystem.IsWindows())
+            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead;
+
+        try
+        {
+            using (var file = new FileStream(temp, options))
+                file.Write(content);
+            File.Move(temp, path, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(temp); }
+            catch (IOException) { /* best effort */ }
+            catch (UnauthorizedAccessException) { /* best effort */ }
+            throw;
+        }
     }
 
     /// <summary>

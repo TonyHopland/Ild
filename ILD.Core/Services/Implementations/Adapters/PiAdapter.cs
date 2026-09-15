@@ -29,7 +29,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
     {
         try
         {
-            var settings = ResolveSettings(ctx.Provider, ctx.RunContext.LoopRunId, ctx.ToolAllowlist, ctx.ChatSessionId);
+            var settings = ResolveSettings(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId);
 
             if (string.IsNullOrWhiteSpace(settings.BinaryPath))
                 return NodeExecutionResult.Fail("[pi-error] binaryPath is not configured");
@@ -47,8 +47,9 @@ public sealed class PiAdapter : CliAgentAdapterBase
             // turn's Chat Context preamble is already reachable — there is no
             // per-directory config to set for ctx.AdditionalAllowedDirectories.
 
-            var sessionDirectory = AgentIsolation.CreateScratchDirectory(SessionDirSegment, ctx.RunContext.LoopRunId.ToString("N"));
-            PrepareRuntimeFiles(settings);
+            var sessionDirectory = Path.Combine(AgentIsolation.ScratchRoot, SessionDirSegment, ctx.RunContext.LoopRunId.ToString("N"));
+            await AgentWritableFiles.CreateDirectoryAsync(sessionDirectory, ctx.Cancel);
+            await PrepareRuntimeFilesAsync(settings, ctx.Cancel);
 
             string? sessionIdToUse = ctx.SessionId;
             string? sessionPathToUse = null;
@@ -202,6 +203,12 @@ public sealed class PiAdapter : CliAgentAdapterBase
             psi.ArgumentList.Add(string.Join(',', settings.ToolNames));
         }
 
+        if (!string.IsNullOrWhiteSpace(settings.IldExtensionPath))
+        {
+            psi.ArgumentList.Add("-e");
+            psi.ArgumentList.Add(settings.IldExtensionPath);
+        }
+
         if (!string.IsNullOrWhiteSpace(settings.Provider))
         {
             psi.ArgumentList.Add("--provider");
@@ -236,8 +243,8 @@ public sealed class PiAdapter : CliAgentAdapterBase
 
     private async Task<ManagedSessionRestoreResult> RestoreManagedSessionAsync(string sessionDirectory, AgentExecutionContext ctx, string sessionId)
     {
-        var localSessionPath = FindSessionFile(sessionDirectory, sessionId);
-        if (!string.IsNullOrWhiteSpace(localSessionPath))
+        var localSessionPath = await FindSessionFileAsync(sessionDirectory, sessionId, ctx.Cancel);
+        if (localSessionPath is not null)
             return ManagedSessionRestoreResult.Use(sessionId, localSessionPath);
 
         if (ScopeFactory is null)
@@ -248,8 +255,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
             return ManagedSessionRestoreResult.StartFresh();
 
         var restoredPath = BuildSnapshotPath(sessionDirectory, sessionId);
-        Directory.CreateDirectory(Path.GetDirectoryName(restoredPath)!);
-        await File.WriteAllTextAsync(restoredPath, snapshot.SessionJson, ctx.Cancel);
+        await AgentWritableFiles.WriteFileAsync(restoredPath, snapshot.SessionJson, ctx.Cancel);
         return ManagedSessionRestoreResult.Use(sessionId, restoredPath);
     }
 
@@ -258,11 +264,13 @@ public sealed class PiAdapter : CliAgentAdapterBase
         if (ScopeFactory is null)
             return;
 
-        var sessionPath = FindSessionFile(sessionDirectory, sessionId);
-        if (string.IsNullOrWhiteSpace(sessionPath) || !File.Exists(sessionPath))
+        var sessionPath = await FindSessionFileAsync(sessionDirectory, sessionId, ctx.Cancel);
+        if (sessionPath is null)
             return;
 
-        var sessionJson = await File.ReadAllTextAsync(sessionPath, ctx.Cancel);
+        var sessionJson = await AgentWritableFiles.ReadFileAsync(sessionPath, ctx.Cancel);
+        if (sessionJson is null)
+            return;
 
         await UpsertSnapshotAsync(ctx, sessionId, sessionJson, ctx.Cancel);
     }
@@ -409,53 +417,47 @@ public sealed class PiAdapter : CliAgentAdapterBase
 
     private const string SessionDirSegment = "ild-pi-sessions";
     private const string AgentDirSegment = "ild-pi-agent";
+    private const string ExtensionDirSegment = "ild-pi-ext";
+    private const string IldToolPrefix = "ild_";
+    private const string BridgeFileName = "ild-mcp-bridge.js";
+    private const string BridgeResourceName = "ILD.Core.PiExtension.ild-mcp-bridge.js";
 
     private static string BuildSnapshotPath(string sessionDirectory, string sessionId)
         => Path.Combine(sessionDirectory, $"{SanitizeFileName(sessionId)}.jsonl");
 
-    private static string? FindSessionFile(string sessionDirectory, string sessionId)
+    // The session dir is the agent's to write, so it is listed and read as the
+    // agent (see AgentWritableFiles), never by the orchestrator through a link.
+    private static async Task<string?> FindSessionFileAsync(string sessionDirectory, string sessionId, CancellationToken ct)
     {
-        if (!Directory.Exists(sessionDirectory))
-            return null;
+        var files = await AgentWritableFiles.ListFilesAsync(sessionDirectory, "*.jsonl", ct);
 
         var exactPath = BuildSnapshotPath(sessionDirectory, sessionId);
-        if (File.Exists(exactPath))
+        if (files.Any(file => file.Path == exactPath))
             return exactPath;
 
-        foreach (var path in Directory.EnumerateFiles(sessionDirectory, "*.jsonl", SearchOption.AllDirectories))
+        foreach (var (path, firstLine) in files)
         {
-            var fileName = Path.GetFileNameWithoutExtension(path);
-            if (string.Equals(fileName, sessionId, StringComparison.OrdinalIgnoreCase)
-                || fileName.Contains(sessionId, StringComparison.OrdinalIgnoreCase))
-                return path;
-
-            if (SessionFileHeaderMatches(path, sessionId))
+            if (Path.GetFileNameWithoutExtension(path).Contains(sessionId, StringComparison.OrdinalIgnoreCase)
+                || SessionHeaderMatches(firstLine, sessionId))
                 return path;
         }
 
         return null;
     }
 
-    private static bool SessionFileHeaderMatches(string path, string sessionId)
+    private static bool SessionHeaderMatches(string firstLine, string sessionId)
     {
-        try
-        {
-            using var stream = File.OpenRead(path);
-            using var reader = new StreamReader(stream);
-            var firstLine = reader.ReadLine();
-            if (string.IsNullOrWhiteSpace(firstLine))
-                return false;
+        if (!TryParseJson(firstLine, out var doc))
+            return false;
 
-            using var doc = JsonDocument.Parse(firstLine);
-            var root = doc.RootElement;
-            return TryGetString(root, "type", out var type)
+        using (doc!)
+        {
+            var root = doc!.RootElement;
+            return root.ValueKind == JsonValueKind.Object
+                && TryGetString(root, "type", out var type)
                 && string.Equals(type, "session", StringComparison.OrdinalIgnoreCase)
                 && TryGetString(root, "id", out var id)
                 && string.Equals(id, sessionId, StringComparison.OrdinalIgnoreCase);
-        }
-        catch
-        {
-            return false;
         }
     }
 
@@ -471,31 +473,94 @@ public sealed class PiAdapter : CliAgentAdapterBase
         return sb.ToString();
     }
 
-    // Created here rather than by the caller so that, like the session dir above,
-    // naming this tree and rooting it in the shared setgid scratch root are one
-    // act — the invariant has a single expression instead of one per call site.
-    private static string CreateAgentDirectory(Guid loopRunId)
-        => AgentIsolation.CreateScratchDirectory(AgentDirSegment, loopRunId.ToString("N"));
-
-    private static void PrepareRuntimeFiles(PiAdapterSettings settings)
+    private static async Task PrepareRuntimeFilesAsync(PiAdapterSettings settings, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(settings.AgentDirectory)
-            || string.IsNullOrWhiteSpace(settings.ModelsJsonContent))
-            return;
-
-        File.WriteAllText(Path.Combine(settings.AgentDirectory, "models.json"), settings.ModelsJsonContent);
-
-        // Write the ILD extension so Pi can list/create work items via its tool system.
-        if (!string.IsNullOrWhiteSpace(settings.IldExtensionContent))
+        if (!string.IsNullOrWhiteSpace(settings.AgentDirectory))
         {
-            var extensionsDir = Path.Combine(settings.AgentDirectory, "extensions");
-            Directory.CreateDirectory(extensionsDir);
-            File.WriteAllText(Path.Combine(extensionsDir, "ild.ts"), settings.IldExtensionContent);
+            await AgentWritableFiles.CreateDirectoryAsync(settings.AgentDirectory, ct);
+
+            // Older builds wrote an HTTP-calling ild.ts here, and the agent dir is
+            // reused by later turns of the same run or chat. pi loads it before any
+            // `-e` path and keeps the first tool of a name, so a leftover would
+            // shadow the MCP tools; it also still holds the token of its day.
+            // Whatever is there goes, and what cannot go never holds up the launch.
+            await AgentWritableFiles.DeleteAsync([LegacyExtensionPath(settings.AgentDirectory)], ct);
+
+            if (!string.IsNullOrWhiteSpace(settings.ModelsJsonContent))
+                await AgentWritableFiles.WriteFileAsync(
+                    Path.Combine(settings.AgentDirectory, "models.json"), settings.ModelsJsonContent, ct);
+        }
+
+        if (!string.IsNullOrWhiteSpace(settings.IldExtensionPath)
+            && !string.IsNullOrWhiteSpace(settings.IldExtensionContent))
+        {
+            AgentIsolation.WriteAgentReadableFile(settings.IldExtensionPath, Encoding.UTF8.GetBytes(settings.IldExtensionContent));
+            AgentIsolation.WriteAgentReadableFile(
+                Path.Combine(Path.GetDirectoryName(settings.IldExtensionPath)!, BridgeFileName), Bridge.Value);
         }
     }
 
-    private static PiAdapterSettings ResolveSettings(AiProvider provider, Guid loopRunId, IReadOnlyList<string>? selectedToolKeys, Guid? chatSessionId = null)
+    private static readonly Lazy<byte[]> Bridge = new(() =>
     {
+        using var resource = typeof(PiAdapter).Assembly.GetManifestResourceStream(BridgeResourceName)
+            ?? throw new InvalidOperationException($"{BridgeResourceName} is not embedded in ILD.Core");
+        using var copy = new MemoryStream();
+        resource.CopyTo(copy);
+        return copy.ToArray();
+    });
+
+    private static string LegacyExtensionPath(string agentDirectory) => Path.Combine(agentDirectory, "extensions", "ild.ts");
+
+    /// <summary>
+    /// Remove what pi keeps for a loop run or chat session (chat turns run under the
+    /// session id). The ILD extension holds the API token and lives where only the
+    /// orchestrator can write, so failing to remove it throws, for the caller to keep
+    /// its run or chat and retry. The agent and session directories are the agent's
+    /// and may hold anything it planted; they are cleared as the agent and never fail
+    /// the caller. Returns whether those are fully gone.
+    /// </summary>
+    public static async Task<bool> DeleteRunFilesAsync(Guid loopRunId, CancellationToken ct = default)
+    {
+        var id = loopRunId.ToString("N");
+        var extension = Path.Combine(AgentIsolation.AgentReadRoot, ExtensionDirSegment, id);
+        if (Directory.Exists(extension))
+            Directory.Delete(extension, recursive: true);
+
+        return await AgentWritableFiles.DeleteAsync(
+            [Path.Combine(AgentIsolation.ScratchRoot, AgentDirSegment, id), Path.Combine(AgentIsolation.ScratchRoot, SessionDirSegment, id)],
+            ct);
+    }
+
+    /// <summary>
+    /// Delete the HTTP-calling <c>extensions/ild.ts</c> older builds left, with the
+    /// token of its day, in every pi agent directory, including those of runs and
+    /// chats that will never launch again. Returns whether they are all gone.
+    /// </summary>
+    internal static Task<bool> SweepLegacyExtensionsAsync(string scratchRoot, CancellationToken ct)
+        => AgentWritableFiles.DeleteInSubdirectoriesAsync(
+            Path.Combine(scratchRoot, AgentDirSegment), LegacyExtensionPath(string.Empty), ct);
+
+    /// <summary>
+    /// Delete the ILD extension of every run and chat not in <paramref name="keep"/>.
+    /// The extension lives in the agent read root, where only the orchestrator
+    /// writes, so this deletes by path.
+    /// </summary>
+    internal static void SweepExtensions(string agentReadRoot, IReadOnlySet<Guid> keep)
+    {
+        var extensions = Path.Combine(agentReadRoot, ExtensionDirSegment);
+        if (!Directory.Exists(extensions))
+            return;
+        foreach (var directory in Directory.EnumerateDirectories(extensions))
+        {
+            if (Guid.TryParseExact(Path.GetFileName(directory), "N", out var id) && keep.Contains(id))
+                continue;
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static PiAdapterSettings ResolveSettings(AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? selectedToolKeys, Guid? chatSessionId = null)
+    {
+        var loopRunId = runContext.LoopRunId;
         var config = AiProviderConfig.Parse(provider.Config);
         var binaryPath = config.BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.Pi));
         var apiKey = config.ApiKey ?? provider.ApiKey;
@@ -504,7 +569,22 @@ public sealed class PiAdapter : CliAgentAdapterBase
         var api = config.Api ?? "openai-completions";
         var hasAbsoluteBaseUrl = Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out _);
         var enabledToolKeys = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, selectedToolKeys);
-        var toolNames = BuildPiToolNames(enabledToolKeys);
+        var ildServer = enabledToolKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase)
+            ? ClaudeCodeAdapter.BuildIldMcpEntry(runContext, chatSessionId)
+            : null;
+        var ildServerDll = (ildServer?["args"] as string[])?.FirstOrDefault();
+        var toolNames = BuildPiToolNames(enabledToolKeys, ildServerDll);
+
+        // Loaded with `-e` from its own directory rather than from the agent dir,
+        // which only exists for an absolute BaseUrl: ILD tools must not depend on it.
+        string? ildExtensionPath = null;
+        string? ildExtensionContent = null;
+        if (ildServer is not null)
+        {
+            ildExtensionPath = Path.Combine(
+                AgentIsolation.CreateAgentReadDirectory(ExtensionDirSegment, loopRunId.ToString("N")), "ild.ts");
+            ildExtensionContent = BuildIldExtensionContent(ildServer);
+        }
 
         if (!string.IsNullOrWhiteSpace(provider.BaseUrl)
             && !Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out _)
@@ -523,7 +603,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
             providerName ??= BuildSyntheticProviderName(provider);
             model = StripProviderPrefix(model, providerName);
 
-            agentDirectory = CreateAgentDirectory(loopRunId);
+            agentDirectory = Path.Combine(AgentIsolation.ScratchRoot, AgentDirSegment, loopRunId.ToString("N"));
             apiKeyEnvironmentVariableName = "ILD_PI_PROVIDER_API_KEY";
             modelsJsonContent = BuildModelsJson(provider, providerName!, model, api, apiKeyEnvironmentVariableName, apiKey);
             passApiKeyViaCli = false;
@@ -540,11 +620,12 @@ public sealed class PiAdapter : CliAgentAdapterBase
             agentDirectory,
             modelsJsonContent,
             apiKeyEnvironmentVariableName,
-            BuildIldExtensionContent(hasAbsoluteBaseUrl, loopRunId, enabledToolKeys, chatSessionId),
+            ildExtensionPath,
+            ildExtensionContent,
             toolNames);
     }
 
-    private static IReadOnlyList<string> BuildPiToolNames(IReadOnlyList<string> enabledToolKeys)
+    private static IReadOnlyList<string> BuildPiToolNames(IReadOnlyList<string> enabledToolKeys, string? ildServerDll)
     {
         var enabled = new HashSet<string>(enabledToolKeys, StringComparer.OrdinalIgnoreCase);
         var toolNames = new List<string>();
@@ -558,8 +639,8 @@ public sealed class PiAdapter : CliAgentAdapterBase
         if (enabled.Contains(AiToolCatalog.Execute))
             toolNames.Add("bash");
 
-        if (enabled.Contains(AiToolCatalog.Ild))
-            toolNames.AddRange(ToolDescriptors.All.Select(tool => tool.Name));
+        if (ildServerDll is not null)
+            toolNames.AddRange(IldMcpToolNames.Read(ildServerDll).Select(name => IldToolPrefix + name));
 
         return toolNames
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -634,29 +715,31 @@ public sealed class PiAdapter : CliAgentAdapterBase
     }
 
     /// <summary>
-    /// Build the TypeScript content for the ILD Pi extension that registers
-    /// tools for interacting with the ILD platform API.
-    /// Delegates to <see cref="PiExtensionGenerator"/> which reads from the shared
-    /// <see cref="ILD.Data.ToolDescriptors"/> to avoid duplicating tool definitions.
+    /// Build the <c>ild.ts</c> pi extension: it hands the ILD MCP server's launch
+    /// entry (<see cref="ClaudeCodeAdapter.BuildIldMcpEntry"/>) to
+    /// <c>ild-mcp-bridge.js</c> (written beside it), which registers every tool the
+    /// server lists as <c>ild_&lt;name&gt;</c>. The truncation utilities are passed
+    /// in because only an extension can import them from pi.
     /// </summary>
-    private static string? BuildIldExtensionContent(bool shouldGenerate, Guid loopRunId, IReadOnlyList<string> enabledToolKeys, Guid? chatSessionId = null)
+    private static string BuildIldExtensionContent(Dictionary<string, object?> ildServer)
     {
-        if (!shouldGenerate || !enabledToolKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase))
-            return null;
+        var config = JsonSerializer.Serialize(new Dictionary<string, object?>(ildServer) { ["toolPrefix"] = IldToolPrefix });
 
-        var apiUrl = Environment.GetEnvironmentVariable("ILD_API_URL")
-            ?? "http://localhost:5000";
-        var apiToken = Environment.GetEnvironmentVariable("ILD_API_TOKEN")
-            ?? string.Empty;
+        return $$"""
+            import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "@earendil-works/pi-coding-agent";
+            import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+            import { registerIldMcpTools } from "./{{BridgeFileName}}";
 
-        var contextId = chatSessionId?.ToString() ?? loopRunId.ToString();
+            const CONFIG = {{config}};
 
-        return PiExtensionGenerator.Generate(
-            apiUrl,
-            apiToken,
-            contextId,
-            ToolDescriptors.All.Select(tool => tool.Name).ToArray(),
-            isChatSession: chatSessionId is not null);
+            export default async function (pi: ExtensionAPI) {
+                await registerIldMcpTools(pi, {
+                    ...CONFIG,
+                    truncate: { truncateHead, formatSize, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES },
+                });
+            }
+
+            """;
     }
 
     internal sealed record PiAdapterSettings(
@@ -668,6 +751,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
         string? AgentDirectory,
         string? ModelsJsonContent,
         string? ApiKeyEnvironmentVariableName,
+        string? IldExtensionPath,
         string? IldExtensionContent,
         IReadOnlyList<string> ToolNames);
 
