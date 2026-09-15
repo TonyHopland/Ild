@@ -124,6 +124,10 @@ try
     var logNotifier = app.Services.GetRequiredService<ILD.Api.Configuration.SignalRLogNotifier>();
     logBuffer.Appended = entry => _ = logNotifier.LogEntryAppendedAsync(entry);
 
+    // Refuse to start, rather than fail the first agent launch, when the files
+    // carrying the ILD API token would have no root the agent cannot write.
+    ILD.Core.Services.Implementations.AgentIsolation.EnsureAgentReadRoot();
+
     using (var scope = app.Services.CreateScope())
     {
         var dbContext = scope.ServiceProvider.GetService<AppDbContext>();
@@ -193,18 +197,24 @@ try
             else
                 Log.Warning("ILD_SESSION_TOKEN_PEPPER is not set — session tokens are hashed unkeyed, so anyone who can write the UserSessions table can mint a sign-in. Set it (setting it signs every device out once).");
 
-            // Before any run can start again: the MCP config files and stale pi
-            // extensions of runs killed with the previous process still hold the
-            // ILD API token.
+            // Before any run can start again: the token-bearing files of runs killed
+            // with the previous process (see AgentRunFiles). Open runs and existing
+            // chats keep their pi extension.
             try
             {
-                ILD.Core.Services.Implementations.Adapters.IldMcpServer.SweepConfigFiles();
-                if (!await ILD.Core.Services.Implementations.Adapters.PiAdapter.SweepLegacyExtensionsAsync())
+                var active = (await dbContext.LoopRuns
+                        .Where(r => r.Status == ILD.Data.Enums.LoopRunStatus.Running
+                            || r.Status == ILD.Data.Enums.LoopRunStatus.WaitingHuman)
+                        .Select(r => r.Id)
+                        .ToListAsync())
+                    .Concat(await dbContext.ChatSessions.Select(c => c.Id).ToListAsync())
+                    .ToHashSet();
+                if (!await ILD.Core.Services.Implementations.AgentRunFiles.SweepAtStartupAsync(active))
                     Log.Warning("Could not remove every stale pi ILD extension from the pi agent directories");
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                Log.Warning(ex, "Could not sweep the ILD MCP config files the previous process left behind");
+                Log.Warning(ex, "Could not sweep the token-bearing agent files the previous process left behind");
             }
 
             var templateStore = scope.ServiceProvider.GetRequiredService<ILD.Data.Stores.Interfaces.ILoopTemplateStore>();

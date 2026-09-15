@@ -544,6 +544,24 @@ public sealed class PiAdapter : CliAgentAdapterBase
         => AgentWritableFiles.DeleteInSubdirectoriesAsync(
             Path.Combine(scratchRoot, AgentDirSegment), LegacyExtensionPath(string.Empty), ct);
 
+    /// <summary>
+    /// Delete the ILD extension of every run and chat not in <paramref name="keep"/>.
+    /// The extension lives in the agent read root, where only the orchestrator
+    /// writes, so this deletes by path.
+    /// </summary>
+    internal static void SweepExtensions(string agentReadRoot, IReadOnlySet<Guid> keep)
+    {
+        var extensions = Path.Combine(agentReadRoot, ExtensionDirSegment);
+        if (!Directory.Exists(extensions))
+            return;
+        foreach (var directory in Directory.EnumerateDirectories(extensions))
+        {
+            if (Guid.TryParseExact(Path.GetFileName(directory), "N", out var id) && keep.Contains(id))
+                continue;
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static PiAdapterSettings ResolveSettings(AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? selectedToolKeys, Guid? chatSessionId = null)
     {
         var loopRunId = runContext.LoopRunId;

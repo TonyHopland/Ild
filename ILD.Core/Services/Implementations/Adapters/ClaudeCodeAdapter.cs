@@ -299,7 +299,8 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
 
         return servers.Count == 0
             ? null
-            : IldMcpServer.TryWriteConfigFile("ild-claude-mcp", new Dictionary<string, object?> { ["mcpServers"] = servers });
+            : IldMcpServer.TryWriteConfigFile(
+                "ild-claude-mcp", runContext.LoopRunId, new Dictionary<string, object?> { ["mcpServers"] = servers });
     }
 
     private static async Task<ClaudeStreamOutput> ReadStreamJsonAsync(

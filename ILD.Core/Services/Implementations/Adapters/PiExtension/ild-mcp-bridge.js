@@ -56,6 +56,12 @@ export async function registerIldMcpTools(
     return;
   }
 
+  if (!server.alive) {
+    process.stderr.write("[ild] ILD MCP server exited during startup, no ILD tools registered\n");
+    server.close();
+    return;
+  }
+
   for (const tool of tools) {
     pi.registerTool({
       name: toolPrefix + tool.name,
@@ -110,7 +116,18 @@ class McpServer {
       tools.push(...(page?.tools ?? []));
       cursor = page?.nextCursor;
     } while (cursor);
+
+    // A server that answered and then exited must not leave pi with tools whose
+    // every call fails, and its exit can land after the last answer: one more
+    // round trip shows it is still there. Any answer, even an error, will do.
+    await this.request("ping", {}).catch((err) => {
+      if (this.#failure) throw err;
+    });
     return tools;
+  }
+
+  get alive() {
+    return this.#failure === null;
   }
 
   request(method, params, { signal, timeoutMs } = {}) {

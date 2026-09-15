@@ -597,23 +597,79 @@ public static class AgentIsolation
     /// variables, and must not land on the outer instance's root, which it can
     /// read but not write.
     /// </summary>
-    public static string AgentReadRoot => ResolveAgentReadRoot(Environment.GetEnvironmentVariable(AgentReadRootEnvVar));
+    public static string AgentReadRoot => ResolveAgentReadRoot(Environment.GetEnvironmentVariable(AgentReadRootEnvVar), AgentUser);
 
     /// <inheritdoc cref="AgentReadRoot"/>
     /// <param name="configured">The configured root, or null/blank for the default.</param>
-    public static string ResolveAgentReadRoot(string? configured)
-        => Path.GetFullPath(NonEmpty(configured)
-            ?? Path.Combine(Path.GetTempPath(), $"ild-agent-read-{Environment.UserName}"));
+    /// <param name="agentUser">
+    /// The agent user, when uid isolation is on. The default is then refused: a
+    /// predictable path in shared <c>/tmp</c> is one the agent could create first.
+    /// </param>
+    public static string ResolveAgentReadRoot(string? configured, string? agentUser)
+    {
+        if (NonEmpty(configured) is { } root)
+            return Path.GetFullPath(root);
+        if (NonEmpty(agentUser) is not null)
+            throw new InvalidOperationException(
+                $"{AgentReadRootEnvVar} must be set when {AgentUserEnvVar} is: the entrypoint creates that root before any agent-uid process can run.");
+        return Path.GetFullPath(Path.Combine(Path.GetTempPath(), $"ild-agent-read-{Environment.UserName}"));
+    }
 
     /// <summary>
-    /// Create a directory under <see cref="AgentReadRoot"/> and return its path.
-    /// Every level created here is <c>0750</c> (keeping the setgid bit its parent
-    /// passes down, so the shared group carries through), the same rule as the root.
+    /// Refuse to start with an agent read root that cannot be trusted (see
+    /// <see cref="EnsureTrustedAgentReadRoot"/>), rather than at the first agent launch.
+    /// </summary>
+    public static void EnsureAgentReadRoot() => EnsureTrustedAgentReadRoot(AgentReadRoot, AgentUser);
+
+    /// <summary>
+    /// The agent read root is only trusted as a real directory owned by this
+    /// process's user that no one else can write; otherwise the agent could have
+    /// made it, and the token-bearing files written there would be its to read and
+    /// replace. Throws <see cref="InvalidOperationException"/> when it is not. A
+    /// missing root is created <c>0750</c> only without uid isolation; with it, the
+    /// entrypoint must have created it, with the shared group the agent reads through.
+    /// </summary>
+    internal static void EnsureTrustedAgentReadRoot(string root, string? agentUser)
+    {
+        var entry = new DirectoryInfo(root);
+        if (entry.LinkTarget is null && !entry.Exists)
+        {
+            if (NonEmpty(agentUser) is not null)
+                throw UntrustedAgentReadRoot(root, "does not exist; the entrypoint creates it");
+            Directory.CreateDirectory(root);
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(root, AgentReadDirectoryMode);
+            return;
+        }
+
+        if (entry.LinkTarget is not null)
+            throw UntrustedAgentReadRoot(root, "is a symlink");
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var mode = File.GetUnixFileMode(root);
+        if ((mode & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0)
+            throw UntrustedAgentReadRoot(root, "is writable by others than its owner");
+
+        // Only the owner may chmod (the orchestrator holds no CAP_FOWNER), so
+        // re-applying the root's own mode proves ownership without a stat call.
+        try { File.SetUnixFileMode(root, mode); }
+        catch (UnauthorizedAccessException) { throw UntrustedAgentReadRoot(root, "is not owned by this process's user"); }
+    }
+
+    private static InvalidOperationException UntrustedAgentReadRoot(string root, string reason)
+        => new($"The agent read root {root} {reason}, so it cannot hold files carrying the ILD API token.");
+
+    /// <summary>
+    /// Create a directory under <see cref="AgentReadRoot"/> and return its path,
+    /// after checking the root can be trusted. Every level created here is
+    /// <c>0750</c> (keeping the setgid bit its parent passes down, so the shared
+    /// group carries through), the same rule as the root.
     /// </summary>
     public static string CreateAgentReadDirectory(params string[] segments)
     {
         var path = AgentReadRoot;
-        EnsureAgentReadDirectory(path);
+        EnsureTrustedAgentReadRoot(path, AgentUser);
         foreach (var segment in segments)
         {
             path = Path.Combine(path, segment);

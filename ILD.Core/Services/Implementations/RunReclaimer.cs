@@ -42,7 +42,7 @@ public sealed class RunReclaimer : IRunReclaimer
         // What the agent left in its own pi directories never holds the reclaim up.
         try
         {
-            if (!await PiAdapter.DeleteRunFilesAsync(run.Id))
+            if (!await AgentRunFiles.DeleteAsync(run.Id))
                 _log?.LogWarning("Could not fully clear the pi agent directories of run {RunId}", run.Id);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

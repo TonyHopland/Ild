@@ -93,6 +93,15 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
     }
 
     [Fact]
+    public void A_server_that_exits_right_after_listing_its_tools_registers_nothing()
+    {
+        var (result, stderr) = Run(new JsonObject { ["tool"] = "none", ["serverMode"] = "exit-after-list" });
+
+        Assert.Empty(result["registered"]!.AsArray());
+        Assert.False(string.IsNullOrWhiteSpace(stderr), "the startup failure was not reported on stderr");
+    }
+
+    [Fact]
     public void A_stalled_server_holds_up_pis_start_for_ten_seconds_at_most_by_default()
     {
         var (result, stderr) = Run(new JsonObject { ["tool"] = "none", ["serverMode"] = "stall" });
@@ -211,6 +220,7 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
         function handle(message) {
           appendFileSync(logFile, JSON.stringify(message) + "\n");
           if (mode === "stall") return;
+          if (message.method === "ping") return send({ id: message.id, result: {} });
           if (message.method === "initialize") {
             initializeId = message.id;
             return send({ id: "server-ping", method: "ping" });
@@ -219,6 +229,7 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
             return send({ id: initializeId, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "fake", version: "1.0.0" } } });
           }
           if (message.method === "tools/list") {
+            if (mode === "exit-after-list") setImmediate(() => process.exit(0));
             return send({ id: message.id, result: { tools: [
               { name: "hang", description: "Never answers.", inputSchema: empty },
               { name: "upper_case_image", description: "Returns an image blob typed IMAGE/PNG.", inputSchema: empty },

@@ -21,15 +21,17 @@ public static class IldMcpServer
     /// <c>null</c> when it cannot be written. The config carries the ILD API token,
     /// so it goes into <see cref="AgentIsolation.AgentReadRoot"/>: readable by the
     /// agent group, changeable by the orchestrator only. The caller deletes it once
-    /// the CLI exits; <see cref="SweepConfigFiles"/> clears the ones a dead process
-    /// left behind.
+    /// the CLI exits; its name carries <paramref name="loopRunId"/> (the session id
+    /// for a chat turn) so <see cref="DeleteConfigFiles"/> can clear a run's files,
+    /// and <see cref="SweepConfigFiles()"/> clears the ones a dead process left.
     /// </summary>
-    public static string? TryWriteConfigFile(string namePrefix, object config)
+    public static string? TryWriteConfigFile(string namePrefix, Guid loopRunId, object config)
     {
         try
         {
             var path = Path.Combine(
-                AgentIsolation.CreateAgentReadDirectory(ConfigDirectorySegment), $"{namePrefix}-{Guid.NewGuid():N}.json");
+                AgentIsolation.CreateAgentReadDirectory(ConfigDirectorySegment),
+                $"{namePrefix}-{loopRunId:N}-{Guid.NewGuid():N}.json");
             AgentIsolation.WriteAgentReadableFile(path, JsonSerializer.SerializeToUtf8Bytes(config));
             return path;
         }
@@ -37,6 +39,19 @@ public static class IldMcpServer
         {
             return null;
         }
+    }
+
+    /// <summary>Delete every MCP config file written for a loop run or chat session.</summary>
+    public static void DeleteConfigFiles(Guid loopRunId) => DeleteConfigFiles(AgentIsolation.AgentReadRoot, loopRunId);
+
+    /// <inheritdoc cref="DeleteConfigFiles(Guid)"/>
+    internal static void DeleteConfigFiles(string agentReadRoot, Guid loopRunId)
+    {
+        var directory = Path.Combine(agentReadRoot, ConfigDirectorySegment);
+        if (!Directory.Exists(directory))
+            return;
+        foreach (var file in Directory.EnumerateFiles(directory, $"*-{loopRunId:N}-*.json"))
+            File.Delete(file);
     }
 
     /// <summary>

@@ -57,6 +57,42 @@ public sealed class IldMcpConfigFileTests : IDisposable
         Assert.Equal(new[] { current }, Directory.GetFiles(directory));
     }
 
+    [Fact]
+    public void A_runs_configs_are_deleted_with_it_and_no_other_runs()
+    {
+        var directory = Directory.CreateDirectory(Path.Combine(_root, "ild-mcp-config")).FullName;
+        var run = Guid.NewGuid();
+        var other = Guid.NewGuid();
+        var mine = new[] { $"ild-copilot-mcp-{run:N}-1.json", $"ild-claude-mcp-{run:N}-2.json" };
+        var theirs = Path.Combine(directory, $"ild-copilot-mcp-{other:N}-3.json");
+        foreach (var name in mine)
+            File.WriteAllText(Path.Combine(directory, name), "{\"token\":\"t\"}");
+        File.WriteAllText(theirs, "{\"token\":\"t\"}");
+
+        IldMcpServer.DeleteConfigFiles(_root, run);
+        IldMcpServer.DeleteConfigFiles(Path.Combine(_root, "missing"), run);
+
+        Assert.Equal(new[] { theirs }, Directory.GetFiles(directory));
+    }
+
+    [Fact]
+    public void A_config_is_named_after_its_run()
+    {
+        var runContext = RunContext();
+
+        var path = CopilotAdapter.TryWriteMcpConfig(Provider("copilot"), runContext, allowlist: Array.Empty<string>());
+
+        Assert.NotNull(path);
+        try
+        {
+            Assert.Contains($"-{runContext.LoopRunId:N}-", Path.GetFileName(path));
+        }
+        finally
+        {
+            File.Delete(path!);
+        }
+    }
+
     private static void AssertAgentReadOnly(string? path)
     {
         Assert.NotNull(path);

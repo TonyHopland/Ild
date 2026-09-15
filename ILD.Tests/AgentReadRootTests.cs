@@ -17,15 +17,73 @@ public sealed class AgentReadRootTests : IDisposable
     }
 
     [Fact]
-    public void The_root_is_the_configured_path_or_a_per_user_one_under_TMPDIR()
+    public void Without_uid_isolation_the_root_is_the_configured_path_or_a_per_user_one_under_TMPDIR()
     {
         // Per user: an ILD previewed inside ILD runs as the agent without the outer
         // instance's variables and must not land on the root it cannot write.
         var fallback = Path.Combine(Path.GetTempPath(), $"ild-agent-read-{Environment.UserName}");
 
-        Assert.Equal("/configured/read", AgentIsolation.ResolveAgentReadRoot("/configured/read"));
-        Assert.Equal(fallback, AgentIsolation.ResolveAgentReadRoot(null));
-        Assert.Equal(fallback, AgentIsolation.ResolveAgentReadRoot("  "));
+        Assert.Equal("/configured/read", AgentIsolation.ResolveAgentReadRoot("/configured/read", agentUser: null));
+        Assert.Equal(fallback, AgentIsolation.ResolveAgentReadRoot(null, agentUser: null));
+        Assert.Equal(fallback, AgentIsolation.ResolveAgentReadRoot("  ", agentUser: null));
+    }
+
+    [Fact]
+    public void With_uid_isolation_the_root_must_be_configured()
+    {
+        Assert.Equal("/configured/read", AgentIsolation.ResolveAgentReadRoot("/configured/read", "agent"));
+        var error = Assert.Throws<InvalidOperationException>(() => AgentIsolation.ResolveAgentReadRoot(null, "agent"));
+        Assert.Contains(AgentIsolation.AgentReadRootEnvVar, error.Message);
+    }
+
+    [Fact]
+    public void A_missing_root_is_created_0750_only_without_uid_isolation()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"ild-read-root-missing-{Guid.NewGuid():N}");
+        try
+        {
+            Assert.Throws<InvalidOperationException>(() => AgentIsolation.EnsureTrustedAgentReadRoot(root, "agent"));
+            Assert.False(Directory.Exists(root));
+
+            AgentIsolation.EnsureTrustedAgentReadRoot(root, agentUser: null);
+
+            if (OperatingSystem.IsLinux())
+                Assert.Equal(UnixOwnership.AgentReadDirectory, UnixOwnership.PermissionsOf(root));
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root);
+        }
+    }
+
+    [Fact]
+    public void A_root_that_is_a_link_writable_by_others_or_owned_by_someone_else_is_refused()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        var dir = Directory.CreateTempSubdirectory("ild-read-root-untrusted-").FullName;
+        try
+        {
+            var owned = Directory.CreateDirectory(Path.Combine(dir, "owned")).FullName;
+            File.SetUnixFileMode(owned, UnixOwnership.AgentReadDirectory);
+            AgentIsolation.EnsureTrustedAgentReadRoot(owned, "agent");
+
+            var link = Path.Combine(dir, "link");
+            Directory.CreateSymbolicLink(link, owned);
+            Assert.Throws<InvalidOperationException>(() => AgentIsolation.EnsureTrustedAgentReadRoot(link, "agent"));
+
+            var groupWritable = Directory.CreateDirectory(Path.Combine(dir, "group-writable")).FullName;
+            File.SetUnixFileMode(groupWritable, UnixOwnership.AgentReadDirectory | UnixFileMode.GroupWrite);
+            Assert.Throws<InvalidOperationException>(() => AgentIsolation.EnsureTrustedAgentReadRoot(groupWritable, "agent"));
+
+            // /usr stands in for a root someone else owns; root owns everything it can chmod.
+            if (Environment.UserName != "root")
+                Assert.Throws<InvalidOperationException>(() => AgentIsolation.EnsureTrustedAgentReadRoot("/usr", "agent"));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
     }
 
     [Fact]

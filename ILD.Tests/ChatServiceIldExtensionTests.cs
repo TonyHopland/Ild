@@ -1,6 +1,9 @@
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
+using ILD.Data.DTOs;
 using ILD.Data.Entities;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
 namespace ILD.Tests;
@@ -87,9 +90,52 @@ public sealed class ChatServiceIldExtensionTests : IDisposable
         Assert.False(Directory.Exists(secondFiles.SessionDir));
     }
 
-    private ChatService NewService()
+    [Fact]
+    public async Task A_message_sent_while_the_chat_is_being_deleted_never_recreates_its_pi_extension()
     {
-        var adapter = Mock.Of<IAgentAdapter>();
+        // The stand-in pi writes the extension only once the delete has finished,
+        // which is when a turn that slipped past the delete would get to it.
+        var deleted = new TaskCompletionSource();
+        var adapter = new Mock<IAgentAdapter>();
+        adapter.Setup(a => a.ExecuteAsync(It.IsAny<AgentExecutionContext>()))
+            .Returns(async (AgentExecutionContext ctx) =>
+            {
+                await deleted.Task;
+                _cleanup.Add(AgentIsolation.CreateAgentReadDirectory("ild-pi-ext", ctx.RunContext.LoopRunId.ToString("N")));
+                return NodeExecutionResult.Ok("ok");
+            });
+        var svc = NewService(adapter.Object);
+        var chatId = await StartChatAsync(svc);
+        var services = new ServiceCollection().AddScoped<IChatService>(_ => svc).BuildServiceProvider();
+        var runner = new ChatTurnRunner(services.GetRequiredService<IServiceScopeFactory>(), NullLogger<ChatTurnRunner>.Instance);
+
+        var deleting = new TaskCompletionSource();
+        var release = new TaskCompletionSource();
+        var delete = runner.DeleteAsync(chatId, async () =>
+        {
+            deleting.SetResult();
+            await release.Task;
+            await svc.DeleteAsync("alice", chatId);
+            deleted.SetResult();
+        });
+        await deleting.Task;
+
+        var send = runner.SubmitAsync(chatId, "sent while the delete runs");
+        Assert.False(send.IsCompleted, "the message started a turn while the chat was being deleted");
+        release.SetResult();
+        await delete;
+        await send;
+        await runner.InterruptAsync(chatId);
+
+        Assert.Empty(_db.Context.ChatSessions);
+        Assert.False(Directory.Exists(Path.Combine(AgentIsolation.AgentReadRoot, "ild-pi-ext", chatId.ToString("N"))));
+        adapter.Verify(a => a.ExecuteAsync(It.IsAny<AgentExecutionContext>()), Times.Never);
+    }
+
+    private ChatService NewService() => NewService(Mock.Of<IAgentAdapter>());
+
+    private ChatService NewService(IAgentAdapter adapter)
+    {
         var registry = Mock.Of<IAgentAdapterRegistry>(r =>
             r.ResolveForProvider(It.IsAny<AiProvider>()) == (Func<IAgentAdapter>)(() => adapter));
         return new ChatService(

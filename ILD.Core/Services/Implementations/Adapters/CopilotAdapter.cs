@@ -228,7 +228,8 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
 
         return servers.Count == 0
             ? null
-            : IldMcpServer.TryWriteConfigFile("ild-copilot-mcp", new Dictionary<string, object?> { ["mcpServers"] = servers });
+            : IldMcpServer.TryWriteConfigFile(
+                "ild-copilot-mcp", runContext.LoopRunId, new Dictionary<string, object?> { ["mcpServers"] = servers });
     }
 
     private static Dictionary<string, object?> WithCopilotKeys(Dictionary<string, object?> entry)

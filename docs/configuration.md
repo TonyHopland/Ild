@@ -643,7 +643,8 @@ skipping the rest.
 **GitHub Copilot** receives the servers through `--additional-mcp-config`, for
 that run only. Its **ILD** tool box is its only tool switch: the built-in `ild`
 server is attached when it is ticked, which it is by default for new loop steps
-and chats. Unlike the other providers, an explicitly empty selection turns ILD
+and chats. Unlike the other providers, an explicit selection without `ild` — an
+empty list, or one like `["read"]` whose keys Copilot does not honour — turns ILD
 off rather than falling back to the defaults, so Copilot loop steps and chats
 saved before Copilot had an ILD box stay without ILD until you tick it.
 

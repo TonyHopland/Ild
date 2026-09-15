@@ -100,8 +100,9 @@ public class ChatController : ControllerBase
         if (!await _chat.ExistsForUserAsync(userId, id, ct))
             return NotFound();
 
-        await _runner.InterruptAsync(id);
-        await _chat.DeleteAsync(userId, id, ct);
+        // Deleted while holding the chat's turn gate, so a message sent meanwhile
+        // cannot start a turn that recreates what the delete removes.
+        await _runner.DeleteAsync(id, () => _chat.DeleteAsync(userId, id, ct));
         return NoContent();
     }
 
@@ -110,12 +111,11 @@ public class ChatController : ControllerBase
     {
         if (!TryResolveUser(out var userId, out var error)) return error;
 
-        // Cancel any in-flight turns first so a delete can't race a streaming reply.
+        // Each chat is deleted while holding its turn gate (see Delete), so neither a
+        // streaming reply nor a message sent meanwhile outlives it.
         var chats = await _chat.ListForUserAsync(userId, ct);
         foreach (var chat in chats)
-            await _runner.InterruptAsync(chat.Id);
-
-        await _chat.DeleteAllForUserAsync(userId, ct);
+            await _runner.DeleteAsync(chat.Id, () => _chat.DeleteAsync(userId, chat.Id, ct));
         return NoContent();
     }
 

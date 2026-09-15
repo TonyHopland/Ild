@@ -189,9 +189,13 @@ safe.directory '*'` in the image, every git command the agent runs (the review
   group write (`2750`), and exports it as `ILD_AGENT_READ_ROOT`. Every directory
   below it is `0750` and every file `0640`, so the agent can read them but cannot
   create, rename or delete anything there, and the orchestrator writes and deletes
-  there by path with nothing to defend against. The configs a killed process left
-  behind, and the extensions older builds wrote into pi's agent directories, are
-  swept at startup, before any run can resume.
+  there by path with nothing to defend against. With uid isolation on,
+  `ILD_AGENT_READ_ROOT` is required and the app refuses to start unless the root is
+  a real directory it owns that no one else can write; a predictable default in
+  `/tmp` would be one the agent could create first. Run reclaim and chat delete
+  remove a run's extension and configs; at startup, before any run can resume, the
+  configs a killed process left, the extensions of runs and chats no longer open,
+  and the extensions older builds wrote into pi's agent directories are swept.
 
 ## What this does not close
 

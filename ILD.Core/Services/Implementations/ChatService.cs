@@ -428,7 +428,7 @@ public sealed class ChatService : IChatService
         // row is gone, so it goes first: a failure throws and keeps the chat, and
         // deleting it again retries. What the agent left in its own pi directories
         // is cleared too, but never holds the delete up.
-        await PiAdapter.DeleteRunFilesAsync(session.Id, ct);
+        await AgentRunFiles.DeleteAsync(session.Id, ct);
 
         // Messages and adapter snapshots cascade-delete via their FKs; the loop
         // scratchpad is in-memory only, so drop its entry explicitly.
