@@ -100,14 +100,23 @@ public static class AgentWritableFiles
     }
 
     /// <summary>
+    /// Whether anything is at <paramref name="path"/>: a file, a directory, or a
+    /// link, dangling or not. The entry is never followed, so a link the agent
+    /// planted counts as something that is there, not as whatever it points at.
+    /// </summary>
+    public static bool EntryExists(string path)
+        => File.Exists(path) || Directory.Exists(path) || new FileInfo(path).LinkTarget is not null;
+
+    /// <summary>
     /// Delete <paramref name="relativePath"/> inside every directory directly below
-    /// <paramref name="directory"/>, whatever it is. Never throws for what it finds
-    /// there; returns whether every one is gone.
+    /// <paramref name="directory"/>, whatever it is. A symlinked entry is skipped
+    /// rather than descended into, so nothing is built onto a path that leads out.
+    /// Never throws for what it finds there; returns whether every one is gone.
     /// </summary>
     public static async Task<bool> DeleteInSubdirectoriesAsync(string directory, string relativePath, CancellationToken ct = default)
     {
         var result = await RunAsync(
-            $$"""status=0; for d in "$1"/*/; do p="$d$2"; { {{Remove}}; } || status=1; done; exit $status""",
+            $$"""status=0; for d in "$1"/*/; do [ -L "${d%/}" ] && continue; p="$d$2"; { {{Remove}}; } || status=1; done; exit $status""",
             [directory, relativePath.TrimStart('/')],
             stdin: null,
             ct);

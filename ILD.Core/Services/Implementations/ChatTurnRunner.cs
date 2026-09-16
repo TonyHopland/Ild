@@ -16,7 +16,15 @@ public sealed class ChatTurnRunner : IChatTurnRunner
     private readonly IServiceScopeFactory _scopes;
     private readonly ILogger<ChatTurnRunner> _log;
 
-    private sealed record ActiveTurn(CancellationTokenSource Cts, Task Task);
+    private sealed class ActiveTurn(CancellationTokenSource cts)
+    {
+        public CancellationTokenSource Cts { get; } = cts;
+
+        // Assigned right after the turn is put in the map, under the session's gate,
+        // so the only reader — CancelActiveAsync, also under that gate — never sees
+        // the gap between the two.
+        public Task Task { get; set; } = Task.CompletedTask;
+    }
 
     private readonly ConcurrentDictionary<Guid, ActiveTurn> _active = new();
     // One gate per session serializes the cancel-previous-then-start-new sequence
@@ -46,9 +54,19 @@ public sealed class ChatTurnRunner : IChatTurnRunner
         {
             await CancelActiveAsync(chatSessionId).ConfigureAwait(false);
 
-            var cts = new CancellationTokenSource();
-            var task = Task.Run(() => RunTurnAsync(chatSessionId, userMessage, openWorkItemId, openLoopDocument, cts.Token));
-            _active[chatSessionId] = new ActiveTurn(cts, task);
+            var turn = new ActiveTurn(new CancellationTokenSource());
+            _active[chatSessionId] = turn;
+            turn.Task = Task.Run(async () =>
+            {
+                try
+                {
+                    await RunTurnAsync(chatSessionId, userMessage, openWorkItemId, openLoopDocument, turn.Cts.Token).ConfigureAwait(false);
+                }
+                finally
+                {
+                    Retire(chatSessionId, turn);
+                }
+            });
         }
         finally
         {
@@ -85,6 +103,19 @@ public sealed class ChatTurnRunner : IChatTurnRunner
 
     /// <summary>The gates currently held; for the test that they do not pile up.</summary>
     internal int GateCount => _gates.Count;
+
+    /// <summary>The turns still tracked; for the test that finished ones do not pile up.</summary>
+    internal int ActiveTurnCount => _active.Count;
+
+    // A finished turn has nothing left to cancel, so it drops itself rather than
+    // waiting for a next submit that may never come. Removed by identity, so a
+    // newer turn for the same chat is never the one that goes, and whoever takes
+    // the entry out is the one that disposes its CancellationTokenSource.
+    private void Retire(Guid chatSessionId, ActiveTurn turn)
+    {
+        if (_active.TryRemove(new KeyValuePair<Guid, ActiveTurn>(chatSessionId, turn)))
+            turn.Cts.Dispose();
+    }
 
     private async Task<Gate> EnterAsync(Guid chatSessionId)
     {
@@ -134,9 +165,8 @@ public sealed class ChatTurnRunner : IChatTurnRunner
 
     private async Task RunTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, string? openLoopDocument, CancellationToken ct)
     {
-        // A completed turn is left in the active map until the next submit/interrupt
-        // clears it; cancelling an already-finished task is a harmless no-op, so the
-        // serializing gate is the only state that needs explicit upkeep.
+        // The caller retires this turn when it ends, whether it finished or threw,
+        // so nothing is left behind for a chat that is never used again.
         try
         {
             using var scope = _scopes.CreateScope();

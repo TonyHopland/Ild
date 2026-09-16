@@ -79,10 +79,20 @@ public class RepositoryManager : IRepositoryManager
 
     public async Task DestroyWorktreeAsync(string worktreePath)
     {
-        if (!Directory.Exists(worktreePath)) return;
-        var repoPath = await ResolveMainRepoPathAsync(worktreePath) ?? worktreePath;
-        await RunAsync(repoPath, "worktree", "remove", "--force", worktreePath);
-        if (Directory.Exists(worktreePath))
+        // Whatever is at the path, not just a directory: a file or a link left where
+        // the worktree was is still disk nobody else will clear, and following it to
+        // decide would be following exactly what the agent could have planted.
+        if (!AgentWritableFiles.EntryExists(worktreePath)) return;
+
+        string? repoPath = null;
+        if (Directory.Exists(worktreePath) && new DirectoryInfo(worktreePath).LinkTarget is null)
+        {
+            // Only a real directory can be a worktree; anything else here just goes.
+            repoPath = await ResolveMainRepoPathAsync(worktreePath) ?? worktreePath;
+            await RunAsync(repoPath, "worktree", "remove", "--force", worktreePath);
+        }
+
+        if (AgentWritableFiles.EntryExists(worktreePath))
         {
             // The agent writes the worktree, so what git left is cleared as the agent:
             // its read-only folders are opened first, and a link is unlinked, never
@@ -103,10 +113,11 @@ public class RepositoryManager : IRepositoryManager
 
             if (failure is not null)
                 _logger?.LogWarning("Could not remove the worktree {Worktree}: {Reason}. It is left behind and has to be removed by hand.", worktreePath, failure);
-            // The fallback delete leaves the worktree registration behind in the
-            // base repo; prune it so the branch isn't pinned as "checked out"
-            // by a ghost worktree (that would block `git branch -D` later).
-            if (repoPath != worktreePath)
+
+            // Removing the directory ourselves leaves the worktree registration
+            // behind in the base repo; prune it so the branch isn't pinned as
+            // "checked out" by a ghost worktree (that would block `git branch -D`).
+            if (repoPath is not null && repoPath != worktreePath)
                 await RunAsync(repoPath, "worktree", "prune");
         }
     }

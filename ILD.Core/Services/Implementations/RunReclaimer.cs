@@ -54,7 +54,9 @@ public sealed class RunReclaimer : IRunReclaimer
         // Resolve the base repo before destroying the worktree — afterwards
         // the branch can no longer be located through it.
         string? baseRepoPath = null;
-        if (!string.IsNullOrEmpty(run.WorktreePath) && Directory.Exists(run.WorktreePath))
+        // Anything at the path, not just a directory: a file or a link left there is
+        // still the run's disk, and it is checked without being followed.
+        if (!string.IsNullOrEmpty(run.WorktreePath) && AgentWritableFiles.EntryExists(run.WorktreePath))
         {
             try { baseRepoPath = await _repo.ResolveBaseRepoPathAsync(run.WorktreePath); }
             catch (Exception ex) { _log?.LogDebug(ex, "Could not resolve base repo for run {RunId}", run.Id); }
@@ -62,10 +64,10 @@ public sealed class RunReclaimer : IRunReclaimer
             try { await _repo.DestroyWorktreeAsync(run.WorktreePath); }
             catch (Exception ex) { _log?.LogWarning(ex, "Failed to destroy worktree for run {RunId} at {Path}", run.Id, run.WorktreePath); }
 
-            // The worktree survived the destroy attempt: report failure so the
-            // caller keeps the run row and a later sweep retries, instead of
-            // deleting the row and stranding the directory as untracked disk.
-            if (Directory.Exists(run.WorktreePath))
+            // Something survived the destroy attempt: report failure so the caller
+            // keeps the run row and a later sweep retries, instead of deleting the
+            // row and stranding what is there as untracked disk.
+            if (AgentWritableFiles.EntryExists(run.WorktreePath))
                 return false;
         }
 

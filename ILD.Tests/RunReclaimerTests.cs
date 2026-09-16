@@ -48,6 +48,22 @@ public class RunReclaimerTests : IDisposable
     }
 
     [Fact]
+    public async Task Reclaim_reports_failure_when_something_other_than_a_directory_is_left()
+    {
+        // A file where the worktree was: a Directory.Exists check walked straight
+        // past it, so the run row went while the file stayed, belonging to nobody.
+        var file = Path.Combine(NewTempDir(), "worktree");
+        File.WriteAllText(file, "left behind");
+        var repo = new Mock<IRepositoryManager>(); // DestroyWorktreeAsync is a no-op
+
+        var ok = await Build(repo).ReclaimLocalStateAsync(Run(file, "ild/wi-a-run-1"));
+
+        Assert.False(ok);
+        repo.Verify(r => r.DestroyWorktreeAsync(file), Times.Once);
+        repo.Verify(r => r.DeleteLocalBranchAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
     public async Task Reclaim_falls_back_to_repository_path_when_worktree_already_gone()
     {
         // Simulates CleanupToDone (worktree destroyed, branch left) or a manually

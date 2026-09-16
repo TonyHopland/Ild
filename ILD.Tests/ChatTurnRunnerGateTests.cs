@@ -39,6 +39,24 @@ public sealed class ChatTurnRunnerGateTests
     }
 
     [Fact]
+    public async Task Turns_that_finished_leave_no_entry_behind()
+    {
+        var runner = NewRunner();
+
+        for (var i = 0; i < 200; i++)
+            await runner.SubmitAsync(Guid.NewGuid(), "hello");
+
+        // The turns run in the background, so give them a moment to end on their own:
+        // nothing here interrupts or deletes, which is what used to clear the map.
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (runner.ActiveTurnCount > 0 && DateTime.UtcNow < deadline)
+            await Task.Delay(25);
+
+        Assert.Equal(0, runner.ActiveTurnCount);
+        Assert.Equal(0, runner.GateCount);
+    }
+
+    [Fact]
     public async Task A_delete_still_waits_for_a_submit_that_holds_the_gate()
     {
         var runner = NewRunner();

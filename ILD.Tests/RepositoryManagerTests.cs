@@ -183,6 +183,27 @@ public class RepositoryManagerTests : IDisposable
         Assert.True(File.Exists(Path.Combine(outside, "keep")));
     }
 
+    [Theory]
+    [InlineData("file")]
+    [InlineData("dangling-link")]
+    public async Task DestroyWorktree_removes_whatever_is_left_where_the_worktree_was(string kind)
+    {
+        // Neither is a directory, so a Directory.Exists check would walk past both
+        // and leave them on disk; a link must go as the link, not as its target.
+        if (!OperatingSystem.IsLinux() && kind == "dangling-link") return;
+
+        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var path = Path.Combine(_tmp, "leftover-" + kind);
+        if (kind == "file")
+            File.WriteAllText(path, "left behind");
+        else
+            File.CreateSymbolicLink(path, Path.Combine(_tmp, "nowhere"));
+
+        await mgr.DestroyWorktreeAsync(path);
+
+        Assert.False(AgentWritableFiles.EntryExists(path));
+    }
+
     [Fact]
     public async Task DestroyWorktree_reports_a_worktree_it_could_not_remove()
     {

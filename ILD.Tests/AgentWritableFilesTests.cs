@@ -120,6 +120,22 @@ public sealed class AgentWritableFilesTests : IDisposable
     }
 
     [Fact]
+    public async Task DeleteInSubdirectoriesAsync_skips_a_subdirectory_that_is_a_link()
+    {
+        var root = Directory.CreateDirectory(Path.Combine(_dir, "agents")).FullName;
+        var real = Directory.CreateDirectory(Path.Combine(root, "real", "extensions")).FullName;
+        File.WriteAllText(Path.Combine(real, "ild.ts"), "token");
+        var outside = Directory.CreateDirectory(Path.Combine(_dir, "outside", "extensions")).FullName;
+        File.WriteAllText(Path.Combine(outside, "ild.ts"), "not ours");
+        Directory.CreateSymbolicLink(Path.Combine(root, "linked"), Path.GetDirectoryName(outside)!);
+
+        Assert.True(await AgentWritableFiles.DeleteInSubdirectoriesAsync(root, "extensions/ild.ts"));
+
+        Assert.False(File.Exists(Path.Combine(real, "ild.ts")));
+        Assert.True(File.Exists(Path.Combine(outside, "ild.ts")), "the sweep built a path through a linked subdirectory");
+    }
+
+    [Fact]
     public async Task CreateDirectoryAsync_replaces_a_link_to_another_writable_directory_at_the_target()
     {
         var otherRun = Directory.CreateDirectory(Path.Combine(_dir, "other-run")).FullName;
