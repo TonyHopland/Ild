@@ -92,18 +92,26 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
         Assert.Contains("truncat", text, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public void A_result_that_is_one_long_line_reaches_the_model_instead_of_being_dropped()
+    // The byte the cut falls on, as the count of bytes of a four-byte character
+    // that are left behind it: every way a character can be split, and one cut
+    // that lands exactly between two, where nothing may be dropped.
+    [Theory]
+    [InlineData(0, 2)]
+    [InlineData(1, 1)]
+    [InlineData(2, 0)]
+    [InlineData(3, 3)]
+    public void A_result_that_is_one_long_line_reaches_the_model_instead_of_being_dropped(int pad, int splitBytes)
     {
         // Every ILD tool answers with single-line JSON, and pi's truncation never
         // returns a partial line: without a prefix of its own the model would be
         // handed the notice alone, which tells it nothing about what it asked for.
-        var (result, _) = Run(new JsonObject { ["tool"] = "one_long_line" });
+        var (result, _) = Run(new JsonObject { ["tool"] = "one_long_line", ["pad"] = pad });
 
         var text = (string?)Assert.Single(result["content"]!.AsArray())!["text"]!;
-        Assert.StartsWith("[{\"name\":\"éé", text);
-        Assert.DoesNotContain('�', text); // never cut a character in two
-        Assert.InRange(System.Text.Encoding.UTF8.GetByteCount(text.Split("\n\n[Output truncated")[0]), 50 * 1024 - 4, 50 * 1024);
+        var kept = text.Split("\n\n[Output truncated")[0];
+        Assert.StartsWith("[{\"name\":\"" + new string('x', pad) + "𝄞", kept);
+        Assert.DoesNotContain('�', kept); // never cut a character in two
+        Assert.Equal(50 * 1024 - splitBytes, System.Text.Encoding.UTF8.GetByteCount(kept));
         Assert.Contains("truncat", text, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -196,7 +204,7 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
         const started = Date.now();
         await registerIldMcpTools(pi, {
           command: "node",
-          args: [serverScript, logFile, spec.serverMode ?? "normal"],
+          args: [serverScript, logFile, spec.serverMode ?? "normal", String(spec.pad ?? 0)],
           toolPrefix: "ild_",
           truncate: { truncateHead, formatSize, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES },
           startupTimeoutMs: spec.startupTimeoutMs,
@@ -231,7 +239,7 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
     private const string ServerScript = $$"""
         import { appendFileSync } from "node:fs";
 
-        const [, , logFile, mode] = process.argv;
+        const [, , logFile, mode, pad] = process.argv;
         const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n");
         const empty = { type: "object", properties: {} };
         const lines = (prefix) => [1, 2, 3, 4].map((n) => `${prefix}${n}`).join("\n");
@@ -262,8 +270,10 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
           }
           if (message.method === "tools/call" && message.params.name === "one_long_line") {
             // Single-line JSON, like every ILD tool, and past the byte limit. The
-            // two-byte character makes a byte-wise cut land mid-character.
-            return send({ id: message.id, result: { content: [{ type: "text", text: `[{"name":"${"é".repeat(40000)}"}]` }] } });
+            // characters are four bytes each and `pad` shifts where the cut falls
+            // inside one: 10 + pad bytes of prefix, so the cut leaves (51190 - pad)
+            // mod 4 bytes of a character behind.
+            return send({ id: message.id, result: { content: [{ type: "text", text: `[{"name":"${"x".repeat(Number(pad))}${"𝄞".repeat(20000)}"}]` }] } });
           }
           if (message.method === "tools/call" && message.params.name === "two_texts") {
             return send({ id: message.id, result: { content: [{ type: "text", text: lines("A") }, { type: "text", text: lines("B") }] } });
