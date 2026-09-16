@@ -47,7 +47,7 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
         var (result, _) = Run(new JsonObject { ["tool"] = "none" });
 
         Assert.Equal(
-            new[] { "ild_hang", "ild_upper_case_image", "ild_two_texts" },
+            new[] { "ild_hang", "ild_upper_case_image", "ild_two_texts", "ild_one_long_line" },
             result["registered"]!.AsArray().Select(n => (string?)n).ToArray());
     }
 
@@ -89,6 +89,21 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
         var text = (string?)Assert.Single(result["content"]!.AsArray())!["text"];
         Assert.Contains("A4", text);
         Assert.DoesNotContain("B2", text);
+        Assert.Contains("truncat", text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void A_result_that_is_one_long_line_reaches_the_model_instead_of_being_dropped()
+    {
+        // Every ILD tool answers with single-line JSON, and pi's truncation never
+        // returns a partial line: without a prefix of its own the model would be
+        // handed the notice alone, which tells it nothing about what it asked for.
+        var (result, _) = Run(new JsonObject { ["tool"] = "one_long_line" });
+
+        var text = (string?)Assert.Single(result["content"]!.AsArray())!["text"]!;
+        Assert.StartsWith("[{\"name\":\"éé", text);
+        Assert.DoesNotContain('�', text); // never cut a character in two
+        Assert.InRange(System.Text.Encoding.UTF8.GetByteCount(text.Split("\n\n[Output truncated")[0]), 50 * 1024 - 4, 50 * 1024);
         Assert.Contains("truncat", text, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -159,17 +174,22 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
           on(event, handler) { if (event === "session_shutdown") shutdownHandlers.push(handler); },
         };
 
-        // Stand-ins for pi's exported truncation utilities, with a 5-line limit.
+        // Stand-ins for pi's exported truncation utilities, with a 5-line limit,
+        // following pi's own rule that a partial line is never returned: when the
+        // first line alone passes maxBytes it keeps nothing and says so.
         const DEFAULT_MAX_LINES = 5;
         const DEFAULT_MAX_BYTES = 50 * 1024;
         function truncateHead(content, options = {}) {
           const maxLines = options.maxLines ?? DEFAULT_MAX_LINES;
+          const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
           const lines = content.split("\n");
           const totalBytes = Buffer.byteLength(content, "utf-8");
-          if (lines.length <= maxLines)
-            return { content, truncated: false, outputLines: lines.length, totalLines: lines.length, outputBytes: totalBytes, totalBytes };
+          if (lines.length <= maxLines && totalBytes <= maxBytes)
+            return { content, truncated: false, outputLines: lines.length, totalLines: lines.length, outputBytes: totalBytes, totalBytes, firstLineExceedsLimit: false, maxBytes };
+          if (Buffer.byteLength(lines[0], "utf-8") > maxBytes)
+            return { content: "", truncated: true, outputLines: 0, totalLines: lines.length, outputBytes: 0, totalBytes, firstLineExceedsLimit: true, maxBytes };
           const kept = lines.slice(0, maxLines).join("\n");
-          return { content: kept, truncated: true, outputLines: maxLines, totalLines: lines.length, outputBytes: Buffer.byteLength(kept, "utf-8"), totalBytes };
+          return { content: kept, truncated: true, outputLines: maxLines, totalLines: lines.length, outputBytes: Buffer.byteLength(kept, "utf-8"), totalBytes, firstLineExceedsLimit: false, maxBytes };
         }
         const formatSize = (bytes) => `${bytes}B`;
 
@@ -234,10 +254,16 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
               { name: "hang", description: "Never answers.", inputSchema: empty },
               { name: "upper_case_image", description: "Returns an image blob typed IMAGE/PNG.", inputSchema: empty },
               { name: "two_texts", description: "Returns two four-line text parts.", inputSchema: empty },
+              { name: "one_long_line", description: "Returns one line past the byte limit, as ILD tools do.", inputSchema: empty },
             ] } });
           }
           if (message.method === "tools/call" && message.params.name === "upper_case_image") {
             return send({ id: message.id, result: { content: [{ type: "resource", resource: { uri: "ild://shot", mimeType: "IMAGE/PNG", blob: "{{Png}}" } }] } });
+          }
+          if (message.method === "tools/call" && message.params.name === "one_long_line") {
+            // Single-line JSON, like every ILD tool, and past the byte limit. The
+            // two-byte character makes a byte-wise cut land mid-character.
+            return send({ id: message.id, result: { content: [{ type: "text", text: `[{"name":"${"é".repeat(40000)}"}]` }] } });
           }
           if (message.method === "tools/call" && message.params.name === "two_texts") {
             return send({ id: message.id, result: { content: [{ type: "text", text: lines("A") }, { type: "text", text: lines("B") }] } });

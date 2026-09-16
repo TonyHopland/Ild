@@ -343,10 +343,41 @@ function resourceItem(resource, formatSize) {
 function truncated(value, { truncateHead, formatSize, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES }) {
   const result = truncateHead(value, { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES });
   if (!result.truncated) return result.content;
+
+  // pi never returns a partial line, so a result that is one long line — every
+  // ILD tool answers with single-line JSON — truncates to nothing, and the model
+  // is told only that something was dropped. Keep the first maxBytes of it
+  // instead: a prefix of the JSON still tells the model what it asked for.
+  const content = result.firstLineExceedsLimit
+    ? headBytes(value, result.maxBytes ?? DEFAULT_MAX_BYTES)
+    : result.content;
+  const outputBytes = Buffer.byteLength(content, "utf-8");
+  const outputLines = result.firstLineExceedsLimit ? 1 : result.outputLines;
+
   return (
-    `${result.content}\n\n[Output truncated: ${result.outputLines} of ${result.totalLines} lines` +
-    ` (${formatSize(result.outputBytes)} of ${formatSize(result.totalBytes)}).]`
+    `${content}\n\n[Output truncated: ${outputLines} of ${result.totalLines} lines` +
+    ` (${formatSize(outputBytes)} of ${formatSize(result.totalBytes)}).]`
   );
+}
+
+// The first `maxBytes` bytes of `value`, without splitting a character in two.
+function headBytes(value, maxBytes) {
+  const head = Buffer.from(value, "utf-8").subarray(0, maxBytes);
+  return new TextDecoder("utf-8", { ignoreBOM: true }).decode(
+    head.subarray(0, trimPartialCharacter(head)),
+  );
+}
+
+function trimPartialCharacter(head) {
+  for (let length = head.length; length > 0 && length > head.length - 4; length--) {
+    const byte = head[length - 1];
+    // Not a continuation byte: it starts a character, so keep it only if whole.
+    if ((byte & 0b1100_0000) !== 0b1000_0000) {
+      const expected = byte < 0x80 ? 1 : byte >= 0xf0 ? 4 : byte >= 0xe0 ? 3 : 2;
+      return head.length - length + 1 === expected ? head.length : length - 1;
+    }
+  }
+  return head.length;
 }
 
 function text(value) {

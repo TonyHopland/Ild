@@ -20,8 +20,18 @@ public sealed class ChatTurnRunner : IChatTurnRunner
 
     private readonly ConcurrentDictionary<Guid, ActiveTurn> _active = new();
     // One gate per session serializes the cancel-previous-then-start-new sequence
-    // so two near-simultaneous submits can't both think they are first.
-    private readonly ConcurrentDictionary<Guid, SemaphoreSlim> _gates = new();
+    // so two near-simultaneous submits can't both think they are first. A gate is
+    // held only for that sequence, so it is dropped again as soon as no one is in
+    // or waiting for it — otherwise every chat id ever used would keep one for the
+    // lifetime of the process.
+    private readonly ConcurrentDictionary<Guid, Gate> _gates = new();
+
+    private sealed class Gate
+    {
+        public readonly SemaphoreSlim Semaphore = new(1, 1);
+        public int Holders;
+        public bool Dropped;
+    }
 
     public ChatTurnRunner(IServiceScopeFactory scopes, ILogger<ChatTurnRunner> log)
     {
@@ -31,8 +41,7 @@ public sealed class ChatTurnRunner : IChatTurnRunner
 
     public async Task SubmitAsync(Guid chatSessionId, string userMessage, string? openWorkItemId = null, string? openLoopDocument = null)
     {
-        var gate = _gates.GetOrAdd(chatSessionId, _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync().ConfigureAwait(false);
+        var gate = await EnterAsync(chatSessionId).ConfigureAwait(false);
         try
         {
             await CancelActiveAsync(chatSessionId).ConfigureAwait(false);
@@ -43,28 +52,26 @@ public sealed class ChatTurnRunner : IChatTurnRunner
         }
         finally
         {
-            gate.Release();
+            Leave(chatSessionId, gate);
         }
     }
 
     public async Task InterruptAsync(Guid chatSessionId)
     {
-        var gate = _gates.GetOrAdd(chatSessionId, _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync().ConfigureAwait(false);
+        var gate = await EnterAsync(chatSessionId).ConfigureAwait(false);
         try
         {
             await CancelActiveAsync(chatSessionId).ConfigureAwait(false);
         }
         finally
         {
-            gate.Release();
+            Leave(chatSessionId, gate);
         }
     }
 
     public async Task DeleteAsync(Guid chatSessionId, Func<Task> delete)
     {
-        var gate = _gates.GetOrAdd(chatSessionId, _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync().ConfigureAwait(false);
+        var gate = await EnterAsync(chatSessionId).ConfigureAwait(false);
         try
         {
             await CancelActiveAsync(chatSessionId).ConfigureAwait(false);
@@ -72,7 +79,38 @@ public sealed class ChatTurnRunner : IChatTurnRunner
         }
         finally
         {
-            gate.Release();
+            Leave(chatSessionId, gate);
+        }
+    }
+
+    /// <summary>The gates currently held; for the test that they do not pile up.</summary>
+    internal int GateCount => _gates.Count;
+
+    private async Task<Gate> EnterAsync(Guid chatSessionId)
+    {
+        while (true)
+        {
+            var gate = _gates.GetOrAdd(chatSessionId, _ => new Gate());
+            lock (gate)
+            {
+                // Dropped between the lookup and here: that one is gone, take the next.
+                if (gate.Dropped) continue;
+                gate.Holders++;
+            }
+
+            await gate.Semaphore.WaitAsync().ConfigureAwait(false);
+            return gate;
+        }
+    }
+
+    private void Leave(Guid chatSessionId, Gate gate)
+    {
+        gate.Semaphore.Release();
+        lock (gate)
+        {
+            if (--gate.Holders > 0) return;
+            gate.Dropped = true;
+            _gates.TryRemove(chatSessionId, out _);
         }
     }
 
