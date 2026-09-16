@@ -220,9 +220,18 @@ rather than overlooked:
   there does not add to this: it runs as the agent uid and never follows a link.
 - **All runs share the `ild-agents` group**, so one run's agent can reach another
   run's worktree and any repo in the store.
+- **All runs share one agent user and one ILD API token**, so run-to-run isolation
+  does not exist: any run can read another run's config files — including the pi
+  extension and MCP configs this ADR's read root holds — and act as that run
+  against the ILD API. The read root keeps those files out of the agent's _write_
+  reach, which is what it is for; it does not separate one run from another, and
+  the files added for it fall under this same limit rather than adding a new one.
 
 Narrowing these is follow-up work: per-run uids/groups, and treating the shared
 git/credential state as attacker-controlled input on the orchestrator side.
+Per-run user ids are the real fix for the shared-user limit — file modes would
+then enforce run-to-run separation the way they now enforce the agent/orchestrator
+split — and they are deliberately not planned now.
 
 The agent uid's _network_ reach is a separate matter and is now constrained:
 [ADR-0019](./0019-agent-egress-through-in-container-proxy.md) funnels it through

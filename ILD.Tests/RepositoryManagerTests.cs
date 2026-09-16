@@ -2,6 +2,7 @@ using System.Diagnostics;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
+using Microsoft.Extensions.Logging;
 
 namespace ILD.Tests;
 
@@ -180,6 +181,47 @@ public class RepositoryManagerTests : IDisposable
 
         Assert.False(Directory.Exists(path));
         Assert.True(File.Exists(Path.Combine(outside, "keep")));
+    }
+
+    [Fact]
+    public async Task DestroyWorktree_reports_a_worktree_it_could_not_remove()
+    {
+        // Nothing can unlink an entry in a directory it cannot write, so this is a
+        // delete that fails for both git and the agent. root is exempt from that.
+        if (!OperatingSystem.IsLinux() || Environment.UserName == "root") return;
+
+        var logger = new RecordingLogger();
+        var mgr = new RepositoryManager(logger, worktreesRoot: Path.Combine(_tmp, "wt"));
+        var path = await mgr.CreateWorktreeAsync(_repo, "feature-stuck");
+        var parent = Path.GetDirectoryName(path)!;
+        File.SetUnixFileMode(parent, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+        try
+        {
+            await mgr.DestroyWorktreeAsync(path);
+
+            Assert.True(Directory.Exists(path), "the test did not manage to stage a failing delete");
+            Assert.Contains(logger.Warnings, warning => warning.Contains(path));
+        }
+        finally
+        {
+            File.SetUnixFileMode(parent, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    private sealed class RecordingLogger : ILogger<RepositoryManager>
+    {
+        public List<string> Warnings { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning)
+                Warnings.Add(formatter(state, exception));
+        }
     }
 
     [Fact]

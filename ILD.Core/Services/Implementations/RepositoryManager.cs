@@ -85,8 +85,24 @@ public class RepositoryManager : IRepositoryManager
         if (Directory.Exists(worktreePath))
         {
             // The agent writes the worktree, so what git left is cleared as the agent:
-            // its read-only folders are opened first, and a link is unlinked, never followed.
-            try { await AgentWritableFiles.DeleteAsync([worktreePath]); } catch { /* best effort */ }
+            // its read-only folders are opened first, and a link is unlinked, never
+            // followed. Nothing falls back to deleting it as the orchestrator: that
+            // fails on exactly what this exists for — what the agent owns and left
+            // read-only — so it would only bury the reason. What is left instead is
+            // reported, since a worktree nobody removes holds its disk forever.
+            string? failure = null;
+            try
+            {
+                if (!await AgentWritableFiles.DeleteAsync([worktreePath]))
+                    failure = "the agent could not clear everything in it";
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+            {
+                failure = ex.Message;
+            }
+
+            if (failure is not null)
+                _logger?.LogWarning("Could not remove the worktree {Worktree}: {Reason}. It is left behind and has to be removed by hand.", worktreePath, failure);
             // The fallback delete leaves the worktree registration behind in the
             // base repo; prune it so the branch isn't pinned as "checked out"
             // by a ghost worktree (that would block `git branch -D` later).
