@@ -1,4 +1,5 @@
 using ILD.Api.Contracts;
+using ILD.Core.Services.Attachments;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
@@ -7,6 +8,7 @@ using ILD.Data.Enums;
 using ILD.Data.Entities;
 using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ILD.Api.Controllers;
@@ -15,6 +17,9 @@ namespace ILD.Api.Controllers;
 [Route("api/v1/[controller]")]
 public class WorkItemsController : ControllerBase
 {
+    /// <summary>The form field every attachment upload arrives under.</summary>
+    private const string AttachmentFieldName = "files";
+
     private readonly IWorkItemManager _workItemManager;
     private readonly ILoopEngine _engine;
     private readonly IWorktreePreviewService _worktreePreviewService;
@@ -25,8 +30,9 @@ public class WorkItemsController : ControllerBase
     private readonly IRemoteProvider? _remoteProvider;
     private readonly IProviderStore _providerStore;
     private readonly IBranchNameOverrideService _branchNames;
+    private readonly AttachmentLimits _attachmentLimits;
 
-    public WorkItemsController(IWorkItemManager workItemManager, ILoopEngine engine, IWorktreePreviewService worktreePreviewService, IRepositoryManager repositoryManager, ILoopRunStore loopRunStore, IProviderStore providerStore, IBranchNameOverrideService branchNames, ILogger<WorkItemsController> logger, IWorkItemNotifier? notifier = null, IRemoteProvider? remoteProvider = null)
+    public WorkItemsController(IWorkItemManager workItemManager, ILoopEngine engine, IWorktreePreviewService worktreePreviewService, IRepositoryManager repositoryManager, ILoopRunStore loopRunStore, IProviderStore providerStore, IBranchNameOverrideService branchNames, AttachmentLimits attachmentLimits, ILogger<WorkItemsController> logger, IWorkItemNotifier? notifier = null, IRemoteProvider? remoteProvider = null)
     {
         _workItemManager = workItemManager;
         _engine = engine;
@@ -38,6 +44,7 @@ public class WorkItemsController : ControllerBase
         _notifier = notifier ?? new NoopWorkItemNotifier();
         _remoteProvider = remoteProvider;
         _branchNames = branchNames;
+        _attachmentLimits = attachmentLimits;
     }
 
     // The branch the worktree diff forks from — resolved here rather than left
@@ -498,6 +505,84 @@ public class WorkItemsController : ControllerBase
         return PullBranchHttpResult.ToActionResult(
             await _workItemManager.PullBranchAsync(id, cancellationToken));
     }
+
+    // -- Attachments -----------------------------------------------------------
+    //
+    // The bytes live only in the WorkItem server's database; these routes proxy
+    // to it. The per-file and per-request limits are re-checked here so an
+    // oversized upload is refused before it is forwarded, and the per-item total
+    // — which only the server can know — comes back as its own 400.
+
+    [HttpGet("{id}/attachments")]
+    public async Task<IActionResult> ListAttachments(string id, CancellationToken cancellationToken)
+    {
+        var attachments = await _workItemManager.ListAttachmentsAsync(id, cancellationToken);
+        return attachments == null ? NotFound() : Ok(attachments);
+    }
+
+    /// <summary>
+    /// Takes no <c>[FromForm]</c> parameter on purpose: model binding would read
+    /// the body before the action ran, and the request-body cap cannot be raised
+    /// once reading has begun. The cap is raised here, on this endpoint alone, so
+    /// every other route keeps the host's default.
+    /// </summary>
+    [HttpPost("{id}/attachments")]
+    public async Task<IActionResult> UploadAttachments(string id, CancellationToken cancellationToken)
+    {
+        var bodySize = HttpContext.Features.Get<IHttpMaxRequestBodySizeFeature>();
+        if (bodySize is { IsReadOnly: false })
+            bodySize.MaxRequestBodySize = _attachmentLimits.MaxRequestBytes;
+
+        if (!Request.HasFormContentType)
+            return BadRequest(new { error = "Attachments are uploaded as multipart/form-data under the field 'files'." });
+
+        var form = await Request.ReadFormAsync(cancellationToken);
+        var files = form.Files.GetFiles(AttachmentFieldName);
+
+        if (files.Count == 0)
+            return BadRequest(new { error = "The request carried no files." });
+        if (files.Count > _attachmentLimits.MaxFilesPerRequest)
+            return BadRequest(new
+            {
+                error = $"One upload may carry at most {_attachmentLimits.MaxFilesPerRequest} files; "
+                    + $"this one carried {files.Count}.",
+            });
+        foreach (var file in files)
+        {
+            if (file.Length > _attachmentLimits.MaxBytesPerFile)
+                return BadRequest(new
+                {
+                    error = $"'{file.FileName}' is larger than the "
+                        + $"{_attachmentLimits.MaxBytesPerFile / AttachmentLimits.Megabyte} MB allowed per file.",
+                });
+        }
+
+        var uploads = new List<RemoteAttachmentUpload>(files.Count);
+        foreach (var file in files)
+        {
+            using var buffer = new MemoryStream();
+            await file.CopyToAsync(buffer, cancellationToken);
+            uploads.Add(new RemoteAttachmentUpload(file.FileName, file.ContentType, buffer.ToArray()));
+        }
+
+        return AttachmentHttpResult.ToActionResult(
+            await _workItemManager.AddAttachmentsAsync(id, uploads, cancellationToken));
+    }
+
+    [HttpGet("{id}/attachments/{attachmentId:guid}")]
+    public async Task<IActionResult> DownloadAttachment(string id, Guid attachmentId, CancellationToken cancellationToken)
+    {
+        var attachment = await _workItemManager.GetAttachmentAsync(id, attachmentId, cancellationToken);
+        // Served as an attachment so an uploaded page cannot run on ILD's
+        // origin; nosniff comes from the security-headers middleware.
+        return attachment == null
+            ? NotFound()
+            : File(attachment.Value.Content, attachment.Value.ContentType, attachment.Value.FileName);
+    }
+
+    [HttpDelete("{id}/attachments/{attachmentId:guid}")]
+    public async Task<IActionResult> DeleteAttachment(string id, Guid attachmentId, CancellationToken cancellationToken)
+        => await _workItemManager.DeleteAttachmentAsync(id, attachmentId, cancellationToken) ? NoContent() : NotFound();
 
     [HttpPost("{id}/transition")]
     public async Task<IActionResult> Transition(string id, [FromBody] WorkItemTransitionRequest request)

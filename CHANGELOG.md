@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **GitHub Copilot and Pi agents now get every ILD tool, and a Copilot provider can add its own MCP servers.**
 
+- **Files can be attached to a work item, and the agent working on it can open them — a screenshot arrives as a picture it can see.**
+
 ### Changed
 
 - **The form for adding a forward now labels each box, so it is clear which is the name, which is the destination, and which port a client connects to on `127.0.0.1`.**

@@ -222,6 +222,7 @@ public class WorkItemsControllerBranchNameTests
             db.LoopRuns,
             db.Providers,
             branchNames.Object,
+            ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(),
             NullLogger<WorkItemsController>.Instance);
 
         return (controller, mgr, db, repo.Id);

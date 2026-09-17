@@ -40,6 +40,22 @@ public interface IWorkItemServerClient
     Task<bool> RecordPullRequestAsync(WorkItemServerOptions opts, string id, string url, Guid? loopRunId, bool merged, DateTime? createdAt, CancellationToken ct = default);
 
     Task<RemotePollResponse> PollAsync(WorkItemServerOptions opts, IReadOnlyList<string> activeIds, CancellationToken ct = default);
+
+    /// <summary>The work item's attachments, metadata only. Null when there is no such work item.</summary>
+    Task<IReadOnlyList<RemoteWorkItemAttachment>?> ListAttachmentsAsync(WorkItemServerOptions opts, string workItemId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Store files against a work item. The server enforces the size, count and
+    /// per-item total limits, so a refusal comes back as an outcome carrying its
+    /// message rather than as the exception every other call here throws — see
+    /// <see cref="AttachmentUploadResult"/>.
+    /// </summary>
+    Task<AttachmentUploadResult> UploadAttachmentsAsync(WorkItemServerOptions opts, string workItemId, IReadOnlyList<RemoteAttachmentUpload> files, CancellationToken ct = default);
+
+    /// <summary>The bytes of one attachment, with the content type to serve it as. Null when either id is unknown.</summary>
+    Task<(byte[] Content, string ContentType, string FileName)?> GetAttachmentAsync(WorkItemServerOptions opts, string workItemId, Guid attachmentId, CancellationToken ct = default);
+
+    Task<bool> DeleteAttachmentAsync(WorkItemServerOptions opts, string workItemId, Guid attachmentId, CancellationToken ct = default);
 }
 
 public sealed class WorkItemServerClient : IWorkItemServerClient
@@ -192,5 +208,90 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
         using var resp = await _http.SendAsync(msg, ct);
         EnsureSuccess(resp, msg);
         return (await resp.Content.ReadFromJsonAsync<RemotePollResponse>(JsonOpts, ct))!;
+    }
+
+    public async Task<IReadOnlyList<RemoteWorkItemAttachment>?> ListAttachmentsAsync(WorkItemServerOptions opts, string workItemId, CancellationToken ct = default)
+    {
+        var msg = Build(opts, HttpMethod.Get, AttachmentsPath(workItemId));
+        using var resp = await _http.SendAsync(msg, ct);
+        if (resp.StatusCode == HttpStatusCode.NotFound) return null;
+        EnsureSuccess(resp, msg);
+        return (await resp.Content.ReadFromJsonAsync<List<RemoteWorkItemAttachment>>(JsonOpts, ct))!;
+    }
+
+    public async Task<AttachmentUploadResult> UploadAttachmentsAsync(WorkItemServerOptions opts, string workItemId, IReadOnlyList<RemoteAttachmentUpload> files, CancellationToken ct = default)
+    {
+        var msg = Build(opts, HttpMethod.Post, AttachmentsPath(workItemId));
+        using var body = new MultipartFormDataContent();
+        foreach (var file in files)
+        {
+            var part = new ByteArrayContent(file.Content);
+            // Without validation: the server is the one that decides what a
+            // usable content type is, and it answers for an unusable one by
+            // storing application/octet-stream.
+            if (!string.IsNullOrWhiteSpace(file.ContentType))
+                part.Headers.TryAddWithoutValidation("Content-Type", file.ContentType);
+            body.Add(part, AttachmentFieldName, file.FileName);
+        }
+        msg.Content = body;
+
+        using var resp = await _http.SendAsync(msg, ct);
+        if (resp.StatusCode == HttpStatusCode.NotFound)
+            return new AttachmentUploadResult(AttachmentUploadOutcome.NotFound, "No such work item.", Array.Empty<RemoteWorkItemAttachment>());
+        if (resp.StatusCode == HttpStatusCode.BadRequest)
+            return new AttachmentUploadResult(
+                AttachmentUploadOutcome.Rejected, await ReadErrorAsync(resp, ct), Array.Empty<RemoteWorkItemAttachment>());
+
+        EnsureSuccess(resp, msg);
+        return new AttachmentUploadResult(
+            AttachmentUploadOutcome.Created,
+            null,
+            (await resp.Content.ReadFromJsonAsync<List<RemoteWorkItemAttachment>>(JsonOpts, ct))!);
+    }
+
+    public async Task<(byte[] Content, string ContentType, string FileName)?> GetAttachmentAsync(WorkItemServerOptions opts, string workItemId, Guid attachmentId, CancellationToken ct = default)
+    {
+        var msg = Build(opts, HttpMethod.Get, $"{AttachmentsPath(workItemId)}/{attachmentId}");
+        using var resp = await _http.SendAsync(msg, ct);
+        if (resp.StatusCode == HttpStatusCode.NotFound) return null;
+        EnsureSuccess(resp, msg);
+
+        var content = await resp.Content.ReadAsByteArrayAsync(ct);
+        var contentType = resp.Content.Headers.ContentType?.MediaType ?? "application/octet-stream";
+        var fileName = resp.Content.Headers.ContentDisposition?.FileNameStar
+            ?? resp.Content.Headers.ContentDisposition?.FileName?.Trim('"')
+            ?? attachmentId.ToString();
+        return (content, contentType, fileName);
+    }
+
+    public async Task<bool> DeleteAttachmentAsync(WorkItemServerOptions opts, string workItemId, Guid attachmentId, CancellationToken ct = default)
+    {
+        var msg = Build(opts, HttpMethod.Delete, $"{AttachmentsPath(workItemId)}/{attachmentId}");
+        using var resp = await _http.SendAsync(msg, ct);
+        return resp.IsSuccessStatusCode;
+    }
+
+    /// <summary>The form field the server's attachment endpoint reads files from.</summary>
+    private const string AttachmentFieldName = "files";
+
+    private static string AttachmentsPath(string workItemId)
+        => $"/workitems/{Uri.EscapeDataString(workItemId)}/attachments";
+
+    /// <summary>
+    /// The <c>{ error }</c> a refusal carries, so the reason a file was turned
+    /// away survives the trip back to whoever tried to upload it. Falls back to
+    /// the raw body, which is all an older server might send.
+    /// </summary>
+    private static async Task<string> ReadErrorAsync(HttpResponseMessage resp, CancellationToken ct)
+    {
+        var raw = await resp.Content.ReadAsStringAsync(ct);
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            if (doc.RootElement.TryGetProperty("error", out var error) && error.GetString() is { Length: > 0 } message)
+                return message;
+        }
+        catch (JsonException) { /* not JSON — the raw body is the best answer there is */ }
+        return string.IsNullOrWhiteSpace(raw) ? "The upload was refused." : raw;
     }
 }

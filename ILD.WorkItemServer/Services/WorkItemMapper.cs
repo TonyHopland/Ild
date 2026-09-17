@@ -102,6 +102,18 @@ internal static class WorkItemMapper
     };
 
     /// <summary>
+    /// The item with its attachment metadata, for the reads a human or an agent
+    /// asks for. An overload rather than a parameter on <see cref="ToDto(WorkItem)"/>
+    /// so the poll heartbeat keeps answering without a second query per item.
+    /// </summary>
+    public static WorkItemDto ToDto(WorkItem w, IReadOnlyList<WorkItemAttachmentDto> attachments)
+    {
+        var dto = ToDto(w);
+        dto.Attachments = attachments;
+        return dto;
+    }
+
+    /// <summary>
     /// A branch ref as it is stored: trimmed, with blank collapsed to null so
     /// "no override" has exactly one representation and readers never have to
     /// ask whether an empty string means "use the empty branch name". Shared by

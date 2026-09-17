@@ -44,6 +44,11 @@ services:
       - "WORKITEM_DB_CONNECTION_STRING=Host=postgres;Port=5432;Database=IldWorkitems;Username=ild_workitems;Password=${WORKITEM_DB_PASSWORD:?Set WORKITEM_DB_PASSWORD in your .env (generate one with: openssl rand -hex 32)}"
       - "WORKITEM_API_KEYS=${WORKITEM_API_KEYS:?Set WORKITEM_API_KEYS in your .env (generate one with: openssl rand -hex 32)}"
       - WORKITEM_LOG_LEVEL=${WORKITEM_LOG_LEVEL:-${ILD_LOG_LEVEL:-Information}}
+      # Attachment sizes, in whole MB. Set on this service as well as on `ild`:
+      # this server holds the bytes and is reachable with nothing but an API key,
+      # so it enforces the limits itself. See docs/configuration.md.
+      - ILD_MAX_ATTACHMENT_MB=${ILD_MAX_ATTACHMENT_MB:-25}
+      - ILD_MAX_ATTACHMENTS_TOTAL_MB=${ILD_MAX_ATTACHMENTS_TOTAL_MB:-250}
       - ASPNETCORE_URLS=http://+:8081
     volumes:
       - workitem-data:/data
@@ -115,6 +120,10 @@ services:
       - ILD_PREVIEW_PROXY_BASE=${ILD_PREVIEW_PROXY_BASE-http://ild.localhost:8080}
       - ILD_WORKITEM_SERVER_URL=${ILD_WORKITEM_SERVER_URL:-http://workitem-server:8081}
       - "ILD_WORKITEM_SERVER_API_KEY=${ILD_WORKITEM_SERVER_API_KEY:-${WORKITEM_API_KEYS:?Set WORKITEM_API_KEYS in your .env (generate one with: openssl rand -hex 32)}}"
+      # Attachment sizes, in whole MB. The same values reach workitem-server
+      # above, which enforces them again on its own. See docs/configuration.md.
+      - ILD_MAX_ATTACHMENT_MB=${ILD_MAX_ATTACHMENT_MB:-25}
+      - ILD_MAX_ATTACHMENTS_TOTAL_MB=${ILD_MAX_ATTACHMENTS_TOTAL_MB:-250}
       - ASPNETCORE_URLS=http://+:8080
       # Asks the coding-agent CLIs not to send telemetry. Each CLI decides for
       # itself whether to honour it; setting it is all this can do.

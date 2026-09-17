@@ -14,8 +14,13 @@ namespace ILD.Tests;
 public sealed class FakeWorkItemServerClient : IWorkItemServerClient
 {
     private readonly IWorkItemService _svc;
+    private readonly IWorkItemAttachmentService _attachments;
 
-    public FakeWorkItemServerClient(IWorkItemService svc) => _svc = svc;
+    public FakeWorkItemServerClient(IWorkItemService svc, IWorkItemAttachmentService attachments)
+    {
+        _svc = svc;
+        _attachments = attachments;
+    }
 
     private static ILD.WorkItemServer.Domain.WorkItemStatus Map(RemoteWorkItemStatus s) => (ILD.WorkItemServer.Domain.WorkItemStatus)(int)s;
     private static RemoteWorkItemStatus MapBack(ILD.WorkItemServer.Domain.WorkItemStatus s) => (RemoteWorkItemStatus)(int)s;
@@ -39,6 +44,9 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             .ToList(),
         PullRequests = dto.PullRequests
             .Select(p => new RemoteWorkItemPullRequest(p.Url, p.LoopRunId, p.Merged, p.CreatedAt))
+            .ToList(),
+        Attachments = dto.Attachments
+            .Select(a => new RemoteWorkItemAttachment(a.Id, a.FileName, a.ContentType, a.SizeBytes, a.CreatedAt))
             .ToList(),
         HumanFeedbackActions = dto.HumanFeedbackActions,
         CreatedByLoopRunId = dto.CreatedByLoopRunId,
@@ -136,6 +144,44 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             Merged = merged,
             CreatedAt = createdAt,
         }, ct) == RecordPullRequestOutcome.Recorded;
+
+    public async Task<IReadOnlyList<RemoteWorkItemAttachment>?> ListAttachmentsAsync(WorkItemServerOptions opts, string workItemId, CancellationToken ct = default)
+    {
+        var listed = await _attachments.ListAsync(workItemId, ct);
+        return listed?.Select(ToRemote).ToList();
+    }
+
+    /// <summary>
+    /// Mirrors the HTTP client's mapping of the server's answers: 404 for an
+    /// unknown work item, and a 400 whose message says which limit was broken.
+    /// </summary>
+    public async Task<AttachmentUploadResult> UploadAttachmentsAsync(WorkItemServerOptions opts, string workItemId, IReadOnlyList<RemoteAttachmentUpload> files, CancellationToken ct = default)
+    {
+        var result = await _attachments.AddAsync(
+            workItemId,
+            files.Select(f => new IncomingAttachment(f.FileName, f.ContentType, f.Content)).ToList(),
+            ct);
+
+        var outcome = result.Outcome switch
+        {
+            AddAttachmentsOutcome.Created => AttachmentUploadOutcome.Created,
+            AddAttachmentsOutcome.NotFound => AttachmentUploadOutcome.NotFound,
+            _ => AttachmentUploadOutcome.Rejected,
+        };
+        return new AttachmentUploadResult(outcome, result.Error, result.Created.Select(ToRemote).ToList());
+    }
+
+    public async Task<(byte[] Content, string ContentType, string FileName)?> GetAttachmentAsync(WorkItemServerOptions opts, string workItemId, Guid attachmentId, CancellationToken ct = default)
+    {
+        var stored = await _attachments.GetContentAsync(workItemId, attachmentId, ct);
+        return stored == null ? null : (stored.Content, stored.ContentType, stored.FileName);
+    }
+
+    public Task<bool> DeleteAttachmentAsync(WorkItemServerOptions opts, string workItemId, Guid attachmentId, CancellationToken ct = default)
+        => _attachments.DeleteAsync(workItemId, attachmentId, ct);
+
+    private static RemoteWorkItemAttachment ToRemote(WorkItemAttachmentDto dto)
+        => new(dto.Id, dto.FileName, dto.ContentType, dto.SizeBytes, dto.CreatedAt);
 
     public async Task<RemotePollResponse> PollAsync(WorkItemServerOptions opts, IReadOnlyList<string> activeIds, CancellationToken ct = default)
     {
