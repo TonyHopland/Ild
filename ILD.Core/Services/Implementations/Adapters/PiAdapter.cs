@@ -541,16 +541,24 @@ public sealed class PiAdapter : CliAgentAdapterBase
             Path.Combine(scratchRoot, AgentDirSegment), LegacyExtensionPath(string.Empty), ct);
 
     /// <summary>
-    /// The ILD extension directory of every run and chat not in <paramref name="keep"/>,
-    /// for the startup sweep to delete. The extensions live in the agent read root,
-    /// where only the orchestrator writes, so they are deleted by path.
+    /// The ILD extension directory of every run and chat not in <paramref name="keep"/>
+    /// that was written before <paramref name="writtenBeforeUtc"/>, for the startup
+    /// sweep to delete. The extensions live in the agent read root, where only the
+    /// orchestrator writes, so they are deleted by path.
+    ///
+    /// The age is half the test, exactly as it is for the MCP configs
+    /// (<see cref="IldMcpServer.StaleConfigFiles"/>): what the sweep exists to
+    /// collect is what a killed process left, and a directory written since this
+    /// process started belongs to a launch happening right now — one whose id no
+    /// database knew when the active set was read.
     /// </summary>
-    internal static IEnumerable<string> StaleExtensions(string agentReadRoot, IReadOnlySet<Guid> keep)
+    internal static IEnumerable<string> StaleExtensions(string agentReadRoot, IReadOnlySet<Guid> keep, DateTime writtenBeforeUtc)
     {
         var extensions = Path.Combine(agentReadRoot, ExtensionDirSegment);
         return Directory.Exists(extensions)
             ? Directory.EnumerateDirectories(extensions)
-                .Where(directory => !(Guid.TryParseExact(Path.GetFileName(directory), "N", out var id) && keep.Contains(id)))
+                .Where(directory => !(Guid.TryParseExact(Path.GetFileName(directory), "N", out var id) && keep.Contains(id))
+                    && Directory.GetLastWriteTimeUtc(directory) < writtenBeforeUtc)
             : [];
     }
 
