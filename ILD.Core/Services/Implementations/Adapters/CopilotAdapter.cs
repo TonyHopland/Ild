@@ -5,6 +5,8 @@ using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ILD.Core.Services.Implementations.Adapters;
 
@@ -42,13 +44,17 @@ namespace ILD.Core.Services.Implementations.Adapters;
 /// </summary>
 public sealed class CopilotAdapter : CliAgentAdapterBase
 {
-    public CopilotAdapter()
+    private readonly ILogger _logger;
+
+    public CopilotAdapter(ILogger<CopilotAdapter>? logger = null)
     {
+        _logger = logger ?? NullLogger<CopilotAdapter>.Instance;
     }
 
-    public CopilotAdapter(IServiceScopeFactory scopeFactory)
+    public CopilotAdapter(IServiceScopeFactory scopeFactory, ILogger<CopilotAdapter>? logger = null)
         : base(scopeFactory)
     {
+        _logger = logger ?? NullLogger<CopilotAdapter>.Instance;
     }
 
     public override string Name => "Copilot";
@@ -69,7 +75,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
                 return NodeExecutionResult.Fail(
                     "[copilot-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
 
-            mcpConfigPath = TryWriteMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId);
+            mcpConfigPath = TryWriteMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger);
 
             Process? proc;
             try
@@ -211,9 +217,10 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
     /// provider-scoped custom MCP servers, which are written even when <c>ild</c>
     /// is off. Entries take the Claude Code shape plus Copilot's
     /// <c>type: "local"</c> and <c>tools: ["*"]</c>. Returns <c>null</c> when
-    /// there is nothing to write or the temp file can't be written.
+    /// there is nothing to write, which is not logged, or the temp file can't be
+    /// written, which is logged to <paramref name="logger"/>.
     /// </summary>
-    public static string? TryWriteMcpConfig(AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? allowlist, Guid? chatSessionId = null)
+    public static string? TryWriteMcpConfig(AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? allowlist, Guid? chatSessionId = null, ILogger? logger = null)
     {
         var servers = new Dictionary<string, object?>();
 
@@ -229,7 +236,8 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
         return servers.Count == 0
             ? null
             : IldMcpServer.TryWriteConfigFile(
-                "ild-copilot-mcp", runContext.LoopRunId, new Dictionary<string, object?> { ["mcpServers"] = servers });
+                "ild-copilot-mcp", runContext.LoopRunId, new Dictionary<string, object?> { ["mcpServers"] = servers },
+                logger ?? NullLogger.Instance);
     }
 
     private static Dictionary<string, object?> WithCopilotKeys(Dictionary<string, object?> entry)
