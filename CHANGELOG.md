@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **GitHub Copilot and Pi agents now get every ILD tool, and a Copilot provider can add its own MCP servers.**
 
-- **Files can be attached to a work item, and the agent working on it can open them — a screenshot arrives as a picture it can see.**
+- **An agent can now open the files attached to its work item — a screenshot arrives as a picture it can see.**
 
 ### Changed
 

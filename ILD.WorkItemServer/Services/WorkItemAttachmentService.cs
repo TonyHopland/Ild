@@ -150,8 +150,13 @@ public sealed class WorkItemAttachmentService : IWorkItemAttachmentService
         var key = await ResolveKeyAsync(workItemId, ct);
         if (key is null) return null;
 
+        // Projected and untracked: the file is served once, and a tracked entity
+        // would leave the change tracker holding a second copy of every byte.
         var row = await _db.WorkItemAttachments
-            .FirstOrDefaultAsync(a => a.Id == attachmentId && a.WorkItemId == key.Value, ct);
+            .AsNoTracking()
+            .Where(a => a.Id == attachmentId && a.WorkItemId == key.Value)
+            .Select(a => new { a.Content, a.ContentType, a.FileName })
+            .FirstOrDefaultAsync(ct);
         return row == null
             ? null
             // Normalised again on the way out: a row stored before this rule, or
@@ -165,13 +170,10 @@ public sealed class WorkItemAttachmentService : IWorkItemAttachmentService
         var key = await ResolveKeyAsync(workItemId, ct);
         if (key is null) return false;
 
-        var row = await _db.WorkItemAttachments
-            .FirstOrDefaultAsync(a => a.Id == attachmentId && a.WorkItemId == key.Value, ct);
-        if (row == null) return false;
-
-        _db.WorkItemAttachments.Remove(row);
-        await _db.SaveChangesAsync(ct);
-        return true;
+        // Deleted by key, so the bytes are never read to throw them away.
+        return await _db.WorkItemAttachments
+            .Where(a => a.Id == attachmentId && a.WorkItemId == key.Value)
+            .ExecuteDeleteAsync(ct) > 0;
     }
 
     private Task<int?> ResolveKeyAsync(string workItemId, CancellationToken ct)
