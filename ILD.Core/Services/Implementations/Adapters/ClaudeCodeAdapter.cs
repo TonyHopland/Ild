@@ -8,6 +8,8 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ILD.Core.Services.Implementations.Adapters;
 
@@ -21,13 +23,17 @@ namespace ILD.Core.Services.Implementations.Adapters;
 /// </summary>
 public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
 {
-    public ClaudeCodeAdapter()
+    private readonly ILogger _logger;
+
+    public ClaudeCodeAdapter(ILogger<ClaudeCodeAdapter>? logger = null)
     {
+        _logger = logger ?? NullLogger<ClaudeCodeAdapter>.Instance;
     }
 
-    public ClaudeCodeAdapter(IServiceScopeFactory scopeFactory)
+    public ClaudeCodeAdapter(IServiceScopeFactory scopeFactory, ILogger<ClaudeCodeAdapter>? logger = null)
         : base(scopeFactory)
     {
+        _logger = logger ?? NullLogger<ClaudeCodeAdapter>.Instance;
     }
 
     public override string Name => "ClaudeCode";
@@ -52,7 +58,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             // accepts a JSON config via `--mcp-config <file>`, which we merge
             // with whatever the user has installed in their config — there is
             // no replace-only mode required here.
-            mcpConfigPath = TryWriteIldMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId);
+            mcpConfigPath = TryWriteIldMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger);
 
             // Fork: seed a copy of the source session's transcript under the
             // destination id (leaving the source file untouched) so the restore
@@ -277,10 +283,10 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     /// when that tool is in the allowlist) with any provider-scoped custom MCP
     /// servers, which apply for every repo this provider runs in and are written
     /// even when <c>ild</c> is disabled. Returns <c>null</c> when there is nothing
-    /// to write (no ild entry and no custom servers) or the temp file can't be
-    /// written.
+    /// to write (no ild entry and no custom servers), which is not logged, or the
+    /// temp file can't be written, which is logged to <paramref name="logger"/>.
     /// </summary>
-    public static string? TryWriteIldMcpConfig(AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? toolAllowlist, Guid? chatSessionId = null)
+    public static string? TryWriteIldMcpConfig(AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? toolAllowlist, Guid? chatSessionId = null, ILogger? logger = null)
     {
         var servers = new Dictionary<string, object?>();
 
@@ -300,7 +306,8 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         return servers.Count == 0
             ? null
             : IldMcpServer.TryWriteConfigFile(
-                "ild-claude-mcp", runContext.LoopRunId, new Dictionary<string, object?> { ["mcpServers"] = servers });
+                "ild-claude-mcp", runContext.LoopRunId, new Dictionary<string, object?> { ["mcpServers"] = servers },
+                logger ?? NullLogger.Instance);
     }
 
     private static async Task<ClaudeStreamOutput> ReadStreamJsonAsync(

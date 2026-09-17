@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ILD.Data.DTOs;
+using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations.Adapters;
 
@@ -17,19 +18,22 @@ public static class IldMcpServer
 
     /// <summary>
     /// Write an MCP config file for an agent CLI to read and return its path, or
-    /// <c>null</c> when it cannot be written. The config carries the ILD API token,
+    /// <c>null</c> when it cannot be written, in which case the agent runs without
+    /// its MCP servers and <paramref name="logger"/> gets a warning naming the path
+    /// and the reason. The config carries the ILD API token,
     /// so it goes into <see cref="AgentIsolation.AgentReadRoot"/>: readable by the
     /// agent group, changeable by the orchestrator only. The caller deletes it once
     /// the CLI exits; its name carries <paramref name="loopRunId"/> (the session id
     /// for a chat turn) so <see cref="DeleteConfigFiles"/> can clear a run's files,
-    /// and <see cref="AgentRunFiles.SweepAtStartupAsync(IReadOnlySet{Guid}, Microsoft.Extensions.Logging.ILogger, CancellationToken)"/>
+    /// and <see cref="AgentRunFiles.SweepAtStartupAsync(IReadOnlySet{Guid}, ILogger, CancellationToken)"/>
     /// clears the ones a dead process left.
     /// </summary>
-    public static string? TryWriteConfigFile(string namePrefix, Guid loopRunId, object config)
+    public static string? TryWriteConfigFile(string namePrefix, Guid loopRunId, object config, ILogger logger)
     {
+        string? path = null;
         try
         {
-            var path = Path.Combine(
+            path = Path.Combine(
                 AgentIsolation.CreateAgentReadDirectory(ConfigDirectorySegment),
                 $"{namePrefix}-{loopRunId:N}-{Guid.NewGuid():N}.json");
             AgentIsolation.WriteAgentReadableFile(path, JsonSerializer.SerializeToUtf8Bytes(config));
@@ -37,6 +41,9 @@ public static class IldMcpServer
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            logger.LogWarning(ex,
+                "Could not write the MCP config {Path}, so the agent runs without its MCP servers: {Reason}",
+                path ?? Path.Combine(AgentIsolation.AgentReadRoot, ConfigDirectorySegment), ex.Message);
             return null;
         }
     }
