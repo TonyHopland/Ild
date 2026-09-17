@@ -255,3 +255,235 @@ describe("parseUnifiedDiff — one alignment budget per patch", () => {
     expect(del[5].segments).toBeUndefined();
   });
 });
+
+/** Each row's [original, current] line numbers, `undefined` where a column is blank. */
+const numbers = (rows: DiffRow[]) => rows.map((r) => [r.oldLine, r.newLine]);
+
+describe("parseUnifiedDiff — line numbers", () => {
+  test("numbers context, removed and added lines from the hunk header", () => {
+    const rows = parseUnifiedDiff(
+      patch("@@ -3,4 +3,4 @@", " before", "-gone", "+new", " after", " last"),
+    );
+
+    expect(numbers(rows)).toEqual([
+      [undefined, undefined],
+      [3, 3],
+      [4, undefined],
+      [undefined, 4],
+      [5, 5],
+      [6, 6],
+    ]);
+  });
+
+  test("advances only the side a removal or addition belongs to", () => {
+    const rows = parseUnifiedDiff(
+      patch("@@ -10,4 +20,3 @@", "-one", "-two", "+uno", " same", "-three", " end"),
+    );
+
+    expect(numbers(rows)).toEqual([
+      [undefined, undefined],
+      [10, undefined],
+      [11, undefined],
+      [undefined, 20],
+      [12, 21],
+      [13, undefined],
+      [14, 22],
+    ]);
+  });
+
+  test("restarts both counters at every hunk header", () => {
+    const rows = parseUnifiedDiff(
+      patch("@@ -1,2 +1,3 @@", " a", "+b", " c", "@@ -10,3 +12,4 @@", " x", "+y", " z", " w"),
+    );
+
+    expect(numbers(rows)).toEqual([
+      [undefined, undefined],
+      [1, 1],
+      [undefined, 2],
+      [2, 3],
+      [undefined, undefined],
+      [10, 12],
+      [undefined, 13],
+      [11, 14],
+      [12, 15],
+    ]);
+  });
+
+  test("treats an omitted count as 1 and ignores the function context after @@", () => {
+    const rows = parseUnifiedDiff(
+      patch(
+        "@@ -7 +9 @@ function f(a = 99) {",
+        "-old",
+        "+new",
+        "@@ -40,2 +42 @@ class C@@ -1,1 +1,1 @@",
+        " keep",
+        "-drop",
+      ),
+    );
+
+    expect(numbers(rows)).toEqual([
+      [undefined, undefined],
+      [7, undefined],
+      [undefined, 9],
+      [undefined, undefined],
+      [40, 42],
+      [41, undefined],
+    ]);
+  });
+
+  test("leaves the patch preamble unnumbered, --- and +++ headers included", () => {
+    const rows = parseUnifiedDiff(
+      patch(
+        "diff --git a/a.ts b/a.ts",
+        "new file mode 100644",
+        "index 0000000..2222222",
+        "--- /dev/null",
+        "+++ b/a.ts",
+        "@@ -0,0 +1,2 @@",
+        "+first",
+        "+second",
+      ),
+    );
+
+    expect(numbers(rows)).toEqual([
+      [undefined, undefined],
+      [undefined, undefined],
+      [undefined, undefined],
+      [undefined, undefined],
+      [undefined, undefined],
+      [undefined, undefined],
+      [undefined, 1],
+      [undefined, 2],
+    ]);
+  });
+
+  test("numbers a content line that starts with --- or +++ inside a hunk", () => {
+    const rows = parseUnifiedDiff(
+      patch("@@ -4,2 +4,2 @@", "--- a note", "+++ b note", " --- context"),
+    );
+
+    expect(numbers(rows)).toEqual([
+      [undefined, undefined],
+      [4, undefined],
+      [undefined, 4],
+      [5, 5],
+    ]);
+  });
+
+  test("leaves a no-newline-at-end-of-file marker unnumbered and uncounted", () => {
+    const rows = parseUnifiedDiff(
+      patch(
+        "@@ -1,2 +1,2 @@",
+        " kept",
+        "-const timeout = 30;",
+        "\\ No newline at end of file",
+        "+const timeout = 60;",
+        "\\ No newline at end of file",
+      ),
+    );
+
+    expect(numbers(rows)).toEqual([
+      [undefined, undefined],
+      [1, 1],
+      [2, undefined],
+      [undefined, undefined],
+      [undefined, 2],
+      [undefined, undefined],
+    ]);
+  });
+
+  test("numbers nothing in a diff that is not a patch", () => {
+    const rows = parseUnifiedDiff(
+      patch("diff --git a/logo.png b/logo.png", "Binary files a/logo.png and b/logo.png differ"),
+    );
+
+    expect(numbers(rows)).toEqual([
+      [undefined, undefined],
+      [undefined, undefined],
+    ]);
+  });
+
+  test("numbers a brand-new file 1..N in the current column", () => {
+    const rows = parseUnifiedDiff(patch("@@ -0,0 +1,3 @@", "+a", "+b", "+c"));
+
+    expect(numbers(rows.slice(1))).toEqual([
+      [undefined, 1],
+      [undefined, 2],
+      [undefined, 3],
+    ]);
+  });
+
+  test("numbers a deleted file 1..N in the original column", () => {
+    const rows = parseUnifiedDiff(patch("@@ -1,3 +0,0 @@", "-a", "-b", "-c"));
+
+    expect(numbers(rows.slice(1))).toEqual([
+      [1, undefined],
+      [2, undefined],
+      [3, undefined],
+    ]);
+  });
+
+  test("numbers a pure insertion and a pure deletion from their headers", () => {
+    const rows = parseUnifiedDiff(
+      patch("@@ -5,0 +6,2 @@", "+six", "+seven", "@@ -6,2 +5,0 @@", "-six", "-seven"),
+    );
+
+    expect(numbers(rows)).toEqual([
+      [undefined, undefined],
+      [undefined, 6],
+      [undefined, 7],
+      [undefined, undefined],
+      [6, undefined],
+      [7, undefined],
+    ]);
+  });
+
+  test("shows no numbers under a header it cannot parse, until the next valid one", () => {
+    const rows = parseUnifiedDiff(
+      patch("@@ -1,2 +1,2 @@", " a", "@@ nonsense @@", " b", "-c", "+d", "@@ -30,1 +31,1 @@", " e"),
+    );
+
+    expect(rows.map((r) => r.text)).toHaveLength(8);
+    expect(numbers(rows)).toEqual([
+      [undefined, undefined],
+      [1, 1],
+      [undefined, undefined],
+      [undefined, undefined],
+      [undefined, undefined],
+      [undefined, undefined],
+      [undefined, undefined],
+      [30, 31],
+    ]);
+  });
+
+  test("numbers every line even once the word-diff budget is spent", () => {
+    // Past the 200-pair cap the pairing walk stops; numbering must not stop with it.
+    const n = 250;
+    const dels = Array.from({ length: n }, (_, i) => `-const timeout${i} = 30;`);
+    const adds = Array.from({ length: n }, (_, i) => `+const timeout${i} = 60;`);
+
+    const rows = parseUnifiedDiff(
+      patch(`@@ -100,${n + 1} +500,${n + 1} @@`, ...dels, ...adds, " tail"),
+    );
+    const del = rows.filter((r) => r.kind === "del");
+    const add = rows.filter((r) => r.kind === "add");
+
+    expect(del[n - 1].segments).toBeUndefined();
+    expect(del.map((r) => r.oldLine)).toEqual(Array.from({ length: n }, (_, i) => 100 + i));
+    expect(add.map((r) => r.newLine)).toEqual(Array.from({ length: n }, (_, i) => 500 + i));
+    expect(del.every((r) => r.newLine === undefined)).toBeTruthy();
+    expect(add.every((r) => r.oldLine === undefined)).toBeTruthy();
+    expect(numbers(rows.slice(-1))).toEqual([[100 + n, 500 + n]]);
+  });
+
+  test("numbers a pair it declined to segment", () => {
+    const rows = parseUnifiedDiff(patch("@@ -8 +8 @@", "-hello", "+world"));
+
+    expect(rows[1].segments).toBeUndefined();
+    expect(numbers(rows)).toEqual([
+      [undefined, undefined],
+      [8, undefined],
+      [undefined, 8],
+    ]);
+  });
+});

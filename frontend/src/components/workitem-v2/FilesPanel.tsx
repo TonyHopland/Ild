@@ -1,4 +1,4 @@
-import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CSSProperties, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   WorkItem,
   WorkItemStatus,
@@ -689,32 +689,50 @@ function CodeEditor({
  * {@link parseUnifiedDiff} could pair a removed line with the added one that
  * replaced it. Same two-tier treatment the Loop Editor's save-time review gives
  * its own diff, over a patch git produced rather than one computed here.
+ *
+ * Each line is numbered in the original and the current file, in two gutter
+ * columns sized to the widest number in the patch so every row's text starts
+ * in the same place.
  */
 function DiffView({ diff }: { diff: string }) {
-  const rows = useMemo(() => parseUnifiedDiff(diff), [diff]);
+  const { rows, gutterDigits } = useMemo(() => {
+    const parsed = parseUnifiedDiff(diff);
+    const widest = parsed.reduce(
+      (max, row) => Math.max(max, row.oldLine ?? 0, row.newLine ?? 0),
+      0,
+    );
+    return { rows: parsed, gutterDigits: String(widest).length };
+  }, [diff]);
   return (
-    <pre className="wiv2-diff">
+    <pre
+      className="wiv2-diff"
+      style={{ "--wiv2-diff-gutter-digits": gutterDigits } as CSSProperties}
+    >
       {rows.map((row, i) => (
         <div key={i} className={`wiv2-diff-line wiv2-diff-${row.kind}`}>
-          {row.segments ? (
-            <>
-              {/* The marker stays outside the segments so it never reads as a
-                  changed word, and the line still copies as raw patch text. */}
-              {row.text.slice(0, 1)}
-              {row.segments.map((segment, segIdx) => (
-                <span
-                  key={segIdx}
-                  className={segment.changed ? `wiv2-diff-seg-${row.kind}` : undefined}
-                >
-                  {segment.text}
-                </span>
-              ))}
-            </>
-          ) : row.text.length === 0 ? (
-            " "
-          ) : (
-            row.text
-          )}
+          <span className="wiv2-diff-gutter">{row.oldLine}</span>
+          <span className="wiv2-diff-gutter">{row.newLine}</span>
+          <span className="wiv2-diff-text">
+            {row.segments ? (
+              <>
+                {/* The marker stays outside the segments so it never reads as a
+                    changed word, and the line still copies as raw patch text. */}
+                {row.text.slice(0, 1)}
+                {row.segments.map((segment, segIdx) => (
+                  <span
+                    key={segIdx}
+                    className={segment.changed ? `wiv2-diff-seg-${row.kind}` : undefined}
+                  >
+                    {segment.text}
+                  </span>
+                ))}
+              </>
+            ) : row.text.length === 0 ? (
+              " "
+            ) : (
+              row.text
+            )}
+          </span>
         </div>
       ))}
     </pre>

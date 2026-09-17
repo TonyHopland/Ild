@@ -1061,10 +1061,26 @@
 }
 
 .wiv2-diff-line {
+  display: flex;
   white-space: pre;
   padding: 0 0.75rem;
   width: max-content;
   min-width: 100%;
+}
+
+/* DiffView sets --wiv2-diff-gutter-digits to the widest number in the patch, so
+   both columns keep one width on every row, blank ones included. */
+.wiv2-diff-gutter {
+  flex-shrink: 0;
+  width: calc(var(--wiv2-diff-gutter-digits, 1) * 1ch + 0.75rem);
+  padding-right: 0.75rem;
+  text-align: right;
+  color: #606080;
+  user-select: none;
+}
+
+.wiv2-diff-text {
+  white-space: pre;
 }
 
 /* Light tier: the whole changed line, so the changed region stays visible in
