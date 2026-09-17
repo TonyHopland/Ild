@@ -151,46 +151,63 @@ public class AiToolCatalogTests
     }
 
     [Fact]
-    public void ToolDescriptors_All_includes_variable_tools()
+    public void GetSupportedToolsForProviderType_offers_copilot_only_ild_on_by_default()
     {
-        var all = ToolDescriptors.All;
-        var names = all.Select(t => t.Name).ToArray();
+        var tool = Assert.Single(AiToolCatalog.GetSupportedToolsForProviderType("copilot"));
 
-        Assert.Contains("ild_get_loop_variables", names);
-        Assert.Contains("ild_set_loop_variable", names);
+        Assert.Equal(AiToolCatalog.Ild, tool.Key);
+        Assert.True(tool.DefaultEnabled);
+        Assert.Equal(new[] { AiToolCatalog.Ild }, AiToolCatalog.GetDefaultToolKeysForProviderType("copilot"));
     }
 
     [Fact]
-    public void ToolDescriptors_ci_log_tool_matches_the_mcp_and_api_surface()
+    public void NormalizeSelectedToolKeys_for_copilot_treats_an_omitted_selection_as_ild_on()
     {
-        // The MCP tool (CiTools.get_ci_log), this descriptor and the agent-API
-        // route are three spellings of one tool; a drift here is a tool that
-        // works on one CLI and 404s on the other.
-        var ciLog = ToolDescriptors.All.First(t => t.Name == "ild_get_ci_log");
-
-        Assert.Equal("api/v1/agent/workitems/{workItemId}/ci-log", ciLog.EndpointPath);
-        Assert.Equal(HttpMethod.Get, ciLog.HttpMethod);
-        Assert.Contains(ciLog.Parameters, p => p.Name == "workItemId" && !p.IsOptional);
-        Assert.Contains(ciLog.Parameters, p => p.Name == "checkId" && !p.IsOptional);
-        Assert.Contains(ciLog.Parameters, p => p.Name == "tailLines" && p.IsOptional);
-        Assert.Contains(ciLog.Parameters, p => p.Name == "offset" && p.IsOptional);
+        Assert.Equal(new[] { AiToolCatalog.Ild }, AiToolCatalog.NormalizeSelectedToolKeys("copilot", null));
     }
 
     [Fact]
-    public void ToolDescriptors_variable_tools_have_correct_endpoints()
+    public void NormalizeSelectedToolKeys_for_copilot_treats_an_explicit_empty_selection_as_ild_off()
     {
-        var all = ToolDescriptors.All;
+        Assert.Empty(AiToolCatalog.NormalizeSelectedToolKeys("copilot", Array.Empty<string>()));
+    }
 
-        var getVars = all.First(t => t.Name == "ild_get_loop_variables");
-        Assert.Equal("api/v1/agent/variables", getVars.EndpointPath);
-        Assert.Equal(HttpMethod.Get, getVars.HttpMethod);
-        Assert.Empty(getVars.Parameters);
+    [Fact]
+    public void NormalizeSelectedToolKeys_for_copilot_treats_a_fully_filtered_selection_as_ild_off()
+    {
+        Assert.Empty(AiToolCatalog.NormalizeSelectedToolKeys("copilot", new[] { "read" }));
+        Assert.Empty(AiToolCatalog.NormalizeSelectedToolKeys("copilot", new[] { "read", "write", "execute" }));
+    }
 
-        var setVar = all.First(t => t.Name == "ild_set_loop_variable");
-        Assert.Equal("api/v1/agent/variables/{name}", setVar.EndpointPath);
-        Assert.Equal(HttpMethod.Put, setVar.HttpMethod);
-        Assert.Equal(2, setVar.Parameters.Length);
-        Assert.Contains(setVar.Parameters, p => p.Name == "name" && !p.IsBodyParam);
-        Assert.Contains(setVar.Parameters, p => p.Name == "value" && p.IsBodyParam);
+    [Fact]
+    public void NormalizeSelectedToolKeys_for_copilot_keeps_ild_and_drops_unsupported_keys()
+    {
+        Assert.Equal(new[] { AiToolCatalog.Ild }, AiToolCatalog.NormalizeSelectedToolKeys("copilot", new[] { "ild" }));
+        Assert.Equal(new[] { AiToolCatalog.Ild }, AiToolCatalog.NormalizeSelectedToolKeys("copilot", new[] { "ild", "read" }));
+    }
+
+    [Theory]
+    [InlineData("opencode")]
+    [InlineData("pi")]
+    [InlineData("claude-code")]
+    public void NormalizeSelectedToolKeys_for_the_default_agents_still_treats_empty_and_filtered_as_defaults(string providerType)
+    {
+        var defaults = AiToolCatalog.GetDefaultToolKeysForProviderType(providerType);
+        Assert.Equal(4, defaults.Count);
+
+        Assert.Equal(defaults, AiToolCatalog.NormalizeSelectedToolKeys(providerType, null));
+        Assert.Equal(defaults, AiToolCatalog.NormalizeSelectedToolKeys(providerType, Array.Empty<string>()));
+        Assert.Equal(defaults, AiToolCatalog.NormalizeSelectedToolKeys(providerType, new[] { "unsupported-tool" }));
+    }
+
+    [Fact]
+    public void LoopAuthoringGuide_toolAllowlist_rule_names_the_copilot_exception()
+    {
+        var line = Assert.Single(
+            LoopAuthoringGuide.Text.Split('\n'),
+            l => l.TrimStart().StartsWith("- toolAllowlist:", StringComparison.Ordinal));
+
+        Assert.Contains("Copilot", line, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("\"ild\"", line);
     }
 }

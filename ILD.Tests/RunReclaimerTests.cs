@@ -7,6 +7,9 @@ using Moq;
 
 namespace ILD.Tests;
 
+// Creates directories under the shared pi scratch segments, which
+// PiAdapterAgentDirectoryTests briefly replaces with links.
+[Collection("EnvironmentPath")]
 public class RunReclaimerTests : IDisposable
 {
     private readonly List<string> _tempDirs = new();
@@ -41,6 +44,22 @@ public class RunReclaimerTests : IDisposable
 
         Assert.False(ok);
         // Branch deletion must not run while the worktree still holds the branch.
+        repo.Verify(r => r.DeleteLocalBranchAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Reclaim_reports_failure_when_something_other_than_a_directory_is_left()
+    {
+        // A file where the worktree was: a Directory.Exists check walked straight
+        // past it, so the run row went while the file stayed, belonging to nobody.
+        var file = Path.Combine(NewTempDir(), "worktree");
+        File.WriteAllText(file, "left behind");
+        var repo = new Mock<IRepositoryManager>(); // DestroyWorktreeAsync is a no-op
+
+        var ok = await Build(repo).ReclaimLocalStateAsync(Run(file, "ild/wi-a-run-1"));
+
+        Assert.False(ok);
+        repo.Verify(r => r.DestroyWorktreeAsync(file), Times.Once);
         repo.Verify(r => r.DeleteLocalBranchAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
     }
 
@@ -178,6 +197,68 @@ public class RunReclaimerTests : IDisposable
         preview.Setup(p => p.IsPreviewRunning(worktree)).Returns(false);
 
         Assert.True(await Build(repo, preview).ReclaimLocalStateAsync(Run(worktree, "ild/wi-a-run-1")));
+    }
+
+    [Fact]
+    public async Task Reclaim_removes_the_pi_extension_and_directories_of_the_run()
+    {
+        var run = Run(worktree: null, branch: null);
+        var id = run.Id.ToString("N");
+        var extension = AgentIsolation.CreateAgentReadDirectory("ild-pi-ext", id);
+        File.WriteAllText(Path.Combine(extension, "ild.ts"), "const CONFIG = { env: { ILD_API_TOKEN: \"t\" } };");
+        var agentDir = Directory.CreateDirectory(Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-agent", id)).FullName;
+        var sessionDir = Directory.CreateDirectory(Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-sessions", id)).FullName;
+        _tempDirs.AddRange([extension, agentDir, sessionDir]);
+
+        Assert.True(await Build(new Mock<IRepositoryManager>()).ReclaimLocalStateAsync(run));
+
+        Assert.False(Directory.Exists(extension), "the run's ild.ts, which holds the API token, was left behind");
+        Assert.False(Directory.Exists(agentDir));
+        Assert.False(Directory.Exists(sessionDir));
+    }
+
+    [Fact]
+    public async Task Reclaim_keeps_the_run_when_its_pi_extension_cannot_be_removed()
+    {
+        // root can delete a read-only tree, so the failure cannot be staged there.
+        if (!OperatingSystem.IsLinux() || Environment.UserName == "root") return;
+
+        var worktree = NewTempDir();
+        var run = Run(worktree, "ild/wi-a-run-1");
+        var extension = AgentIsolation.CreateAgentReadDirectory("ild-pi-ext", run.Id.ToString("N"));
+        var locked = Path.Combine(extension, "locked");
+        Directory.CreateDirectory(locked);
+        File.WriteAllText(Path.Combine(locked, "ild.ts"), "token");
+        File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        var repo = new Mock<IRepositoryManager>();
+        try
+        {
+            Assert.False(await Build(repo).ReclaimLocalStateAsync(run));
+
+            repo.Verify(r => r.DestroyWorktreeAsync(It.IsAny<string>()), Times.Never);
+            Assert.True(File.Exists(Path.Combine(locked, "ild.ts")));
+        }
+        finally
+        {
+            File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            Directory.Delete(extension, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task A_read_only_folder_the_agent_planted_in_its_pi_directories_never_holds_the_reclaim_up()
+    {
+        var run = Run(worktree: null, branch: null);
+        var agentDir = Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-agent", run.Id.ToString("N"));
+        var locked = Directory.CreateDirectory(Path.Combine(agentDir, "extensions", "ild.ts", "locked")).FullName;
+        File.WriteAllText(Path.Combine(locked, "file"), "x");
+        if (OperatingSystem.IsLinux())
+            File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        _tempDirs.Add(agentDir);
+
+        Assert.True(await Build(new Mock<IRepositoryManager>()).ReclaimLocalStateAsync(run));
+
+        Assert.False(Directory.Exists(agentDir));
     }
 
     private static RunReclaimer Build(

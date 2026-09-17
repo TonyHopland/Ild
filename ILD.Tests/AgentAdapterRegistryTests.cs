@@ -66,6 +66,30 @@ public class AgentAdapterRegistryTests
         Assert.IsType<TestCustomAdapter>(registry.ResolveForProvider(new AiProvider { Type = "custom" })());
     }
 
+    private sealed class TestCopilotAdapter : IAgentAdapter
+    {
+        public string Name => "TestCopilot";
+        public string[] SupportedProviderTypes => ["copilot"];
+        public ConfigFieldDescriptor[] ConfigSchema => [];
+        public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
+            => Task.FromResult(NodeExecutionResult.Ok("copilot"));
+    }
+
+    [Fact]
+    public void ResolveForProvider_ignores_the_case_of_the_saved_provider_type()
+    {
+        var sp = BuildServiceProvider(s =>
+        {
+            s.AddSingleton<IAgentAdapter, TestOpenCodeAdapter>();
+            s.AddSingleton<IAgentAdapter, TestCopilotAdapter>();
+        });
+
+        var registry = sp.GetRequiredService<IAgentAdapterRegistry>();
+
+        Assert.IsType<TestCopilotAdapter>(registry.ResolveForProvider(new AiProvider { Type = "COPILOT" })());
+        Assert.IsType<TestCopilotAdapter>(registry.ResolveForProvider(new AiProvider { Type = "Copilot" })());
+    }
+
     [Fact]
     public void ResolveForProvider_throws_when_no_adapter_matches()
     {

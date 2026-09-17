@@ -22,9 +22,8 @@ namespace ILD.McpServer.Tools;
 /// the editor's human-only Save.
 /// </para>
 ///
-/// Drift warning: these names and shapes must stay in lockstep with the Pi
-/// surface (<see cref="ILD.Data.ToolDescriptors"/>) and the agent-API endpoints
-/// (<c>AgentController</c>) so the chat behaves the same whichever CLI backs it.
+/// Drift warning: these shapes must stay in lockstep with the agent-API endpoints
+/// (<c>AgentController</c>) they call.
 /// </summary>
 [McpServerToolType]
 public sealed class LoopTools

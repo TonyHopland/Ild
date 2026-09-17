@@ -22,4 +22,12 @@ public interface IChatTurnRunner
 
     /// <summary>Cancel any in-flight turn for the session and await its finalization.</summary>
     Task InterruptAsync(Guid chatSessionId);
+
+    /// <summary>
+    /// Cancel any in-flight turn for the session, then run <paramref name="delete"/>
+    /// while still holding the session's turn gate, so a message submitted in the
+    /// meantime cannot start a turn until the session is gone. That turn then finds
+    /// no session and does nothing, so it cannot recreate what the delete removed.
+    /// </summary>
+    Task DeleteAsync(Guid chatSessionId, Func<Task> delete);
 }

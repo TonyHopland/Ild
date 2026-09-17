@@ -35,8 +35,9 @@ public interface IChatService
     /// life. A user may hold many retained chats (ADR-0013), so this no longer
     /// rejects a second session. Throws <see cref="InvalidOperationException"/>
     /// when the provider is unknown or no adapter handles the provider type.
+    /// Null <paramref name="tools"/> means the provider's default tools.
     /// </summary>
-    Task<ChatSessionView> StartAsync(string userId, Guid aiProviderId, IReadOnlyList<string> tools, CancellationToken ct = default);
+    Task<ChatSessionView> StartAsync(string userId, Guid aiProviderId, IReadOnlyList<string>? tools, CancellationToken ct = default);
 
     /// <summary>
     /// Run one turn: append the user message, invoke the bound adapter session
@@ -64,13 +65,17 @@ public interface IChatService
     /// (cascade), its messages (cascade), and its scratch directory. Scoped by
     /// <paramref name="userId"/>; returns false when the chat does not exist or
     /// belongs to another user. Work items the chat created persist with their
-    /// orphaned stamp.
+    /// orphaned stamp. Throws <see cref="IOException"/> or
+    /// <see cref="UnauthorizedAccessException"/> when the chat's pi ILD extension
+    /// (which holds the API token) cannot be removed; the chat is then kept so the
+    /// delete can be retried.
     /// </summary>
     Task<bool> DeleteAsync(string userId, Guid sessionId, CancellationToken ct = default);
 
     /// <summary>
     /// Hard-delete every chat the user owns (the "delete all" action). Returns the
-    /// count removed.
+    /// count removed. Throws like <see cref="DeleteAsync"/>, keeping the chat that
+    /// failed and any not yet reached.
     /// </summary>
     Task<int> DeleteAllForUserAsync(string userId, CancellationToken ct = default);
 }

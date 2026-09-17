@@ -2,6 +2,7 @@ using System.Diagnostics;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
+using Microsoft.Extensions.Logging;
 
 namespace ILD.Tests;
 
@@ -159,6 +160,89 @@ public class RepositoryManagerTests : IDisposable
 
         await mgr.DestroyWorktreeAsync(path);
         Assert.False(Directory.Exists(path));
+    }
+
+    [Fact]
+    public async Task DestroyWorktree_clears_a_read_only_folder_the_agent_left_without_following_links()
+    {
+        // root can delete a read-only tree, so the failure cannot be staged there.
+        if (!OperatingSystem.IsLinux() || Environment.UserName == "root") return;
+
+        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var path = await mgr.CreateWorktreeAsync(_repo, "feature-locked");
+        var locked = Directory.CreateDirectory(Path.Combine(path, "locked")).FullName;
+        File.WriteAllText(Path.Combine(locked, "file"), "x");
+        File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        var outside = Directory.CreateDirectory(Path.Combine(_tmp, "outside")).FullName;
+        File.WriteAllText(Path.Combine(outside, "keep"), "x");
+        Directory.CreateSymbolicLink(Path.Combine(path, "link"), outside);
+
+        await mgr.DestroyWorktreeAsync(path);
+
+        Assert.False(Directory.Exists(path));
+        Assert.True(File.Exists(Path.Combine(outside, "keep")));
+    }
+
+    [Theory]
+    [InlineData("file")]
+    [InlineData("dangling-link")]
+    public async Task DestroyWorktree_removes_whatever_is_left_where_the_worktree_was(string kind)
+    {
+        // Neither is a directory, so a Directory.Exists check would walk past both
+        // and leave them on disk; a link must go as the link, not as its target.
+        if (!OperatingSystem.IsLinux() && kind == "dangling-link") return;
+
+        var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
+        var path = Path.Combine(_tmp, "leftover-" + kind);
+        if (kind == "file")
+            File.WriteAllText(path, "left behind");
+        else
+            File.CreateSymbolicLink(path, Path.Combine(_tmp, "nowhere"));
+
+        await mgr.DestroyWorktreeAsync(path);
+
+        Assert.False(AgentWritableFiles.EntryExists(path));
+    }
+
+    [Fact]
+    public async Task DestroyWorktree_reports_a_worktree_it_could_not_remove()
+    {
+        // Nothing can unlink an entry in a directory it cannot write, so this is a
+        // delete that fails for both git and the agent. root is exempt from that.
+        if (!OperatingSystem.IsLinux() || Environment.UserName == "root") return;
+
+        var logger = new RecordingLogger();
+        var mgr = new RepositoryManager(logger, worktreesRoot: Path.Combine(_tmp, "wt"));
+        var path = await mgr.CreateWorktreeAsync(_repo, "feature-stuck");
+        var parent = Path.GetDirectoryName(path)!;
+        File.SetUnixFileMode(parent, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+        try
+        {
+            await mgr.DestroyWorktreeAsync(path);
+
+            Assert.True(Directory.Exists(path), "the test did not manage to stage a failing delete");
+            Assert.Contains(logger.Warnings, warning => warning.Contains(path));
+        }
+        finally
+        {
+            File.SetUnixFileMode(parent, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    private sealed class RecordingLogger : ILogger<RepositoryManager>
+    {
+        public List<string> Warnings { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning)
+                Warnings.Add(formatter(state, exception));
+        }
     }
 
     [Fact]

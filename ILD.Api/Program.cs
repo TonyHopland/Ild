@@ -124,6 +124,10 @@ try
     var logNotifier = app.Services.GetRequiredService<ILD.Api.Configuration.SignalRLogNotifier>();
     logBuffer.Appended = entry => _ = logNotifier.LogEntryAppendedAsync(entry);
 
+    // Refuse to start, rather than fail the first agent launch, when the files
+    // carrying the ILD API token would have no root the agent cannot write.
+    ILD.Core.Services.Implementations.AgentIsolation.EnsureAgentReadRoot();
+
     using (var scope = app.Services.CreateScope())
     {
         var dbContext = scope.ServiceProvider.GetService<AppDbContext>();
@@ -192,6 +196,28 @@ try
                 Log.Information("Session tokens are hashed with a keyed pepper (ILD_SESSION_TOKEN_PEPPER set)");
             else
                 Log.Warning("ILD_SESSION_TOKEN_PEPPER is not set — session tokens are hashed unkeyed, so anyone who can write the UserSessions table can mint a sign-in. Set it (setting it signs every device out once).");
+
+            // Before any run can start again: the token-bearing files of runs killed
+            // with the previous process (see AgentRunFiles). Open runs and existing
+            // chats keep their pi extension.
+            try
+            {
+                var active = (await dbContext.LoopRuns
+                        .Where(r => r.Status == ILD.Data.Enums.LoopRunStatus.Running
+                            || r.Status == ILD.Data.Enums.LoopRunStatus.WaitingHuman)
+                        .Select(r => r.Id)
+                        .ToListAsync())
+                    .Concat(await dbContext.ChatSessions.Select(c => c.Id).ToListAsync())
+                    .ToHashSet();
+                var sweepLogger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>()
+                    .CreateLogger(typeof(ILD.Core.Services.Implementations.AgentRunFiles));
+                if (!await ILD.Core.Services.Implementations.AgentRunFiles.SweepAtStartupAsync(active, sweepLogger))
+                    Log.Warning("Could not remove every token-bearing agent file the previous process left behind; see the warnings above");
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Log.Warning(ex, "Could not sweep the token-bearing agent files the previous process left behind");
+            }
 
             var templateStore = scope.ServiceProvider.GetRequiredService<ILD.Data.Stores.Interfaces.ILoopTemplateStore>();
             var mgr = scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Interfaces.ILoopTemplateManager>();

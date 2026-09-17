@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
@@ -85,7 +86,7 @@ public sealed class ChatService : IChatService
     public Task<bool> ExistsForUserAsync(string userId, Guid sessionId, CancellationToken ct = default)
         => _db.ChatSessions.AsNoTracking().AnyAsync(c => c.Id == sessionId && c.UserId == userId, ct);
 
-    public async Task<ChatSessionView> StartAsync(string userId, Guid aiProviderId, IReadOnlyList<string> tools, CancellationToken ct = default)
+    public async Task<ChatSessionView> StartAsync(string userId, Guid aiProviderId, IReadOnlyList<string>? tools, CancellationToken ct = default)
     {
         var provider = await _providers.GetAiProviderByIdAsync(aiProviderId)
             ?? throw new InvalidOperationException($"AiProvider {aiProviderId} not found");
@@ -423,6 +424,12 @@ public sealed class ChatService : IChatService
 
     private async Task DeleteSessionAsync(ChatSession session, CancellationToken ct)
     {
+        // The pi extension holds the ILD API token and nothing can find it once the
+        // row is gone, so it goes first: a failure throws and keeps the chat, and
+        // deleting it again retries. What the agent left in its own pi directories
+        // is cleared too, but never holds the delete up.
+        await AgentRunFiles.DeleteAsync(session.Id, ct);
+
         // Messages and adapter snapshots cascade-delete via their FKs; the loop
         // scratchpad is in-memory only, so drop its entry explicitly.
         _loopScratchpad.Clear(session.Id);
@@ -430,14 +437,15 @@ public sealed class ChatService : IChatService
         await _db.SaveChangesAsync(ct);
 
         // Best-effort scratch-dir removal: nothing chat-local should remain, but a
-        // leftover directory must never fail the hard-delete.
+        // leftover directory must never fail the hard-delete. The agent writes the
+        // scratch dir, so it is cleared as the agent: a link it planted is unlinked,
+        // never followed, and its read-only folders are opened first.
         try
         {
-            if (!string.IsNullOrEmpty(session.ScratchPath) && Directory.Exists(session.ScratchPath))
-                Directory.Delete(session.ScratchPath, recursive: true);
+            if (!string.IsNullOrEmpty(session.ScratchPath))
+                await AgentWritableFiles.DeleteAsync([session.ScratchPath], CancellationToken.None);
         }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception) { }
     }
 
     private async Task FinalizeAssistantAsync(

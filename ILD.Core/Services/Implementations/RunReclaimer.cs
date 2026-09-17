@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using ILD.Data.Stores.Interfaces;
@@ -36,10 +37,26 @@ public sealed class RunReclaimer : IRunReclaimer
     {
         await StopPreviewIfRunningAsync(run);
 
+        // The ILD extension holds the API token and nothing else can find it once
+        // the run row is gone, so failing to remove it keeps the run for a retry.
+        // What the agent left in its own pi directories never holds the reclaim up.
+        try
+        {
+            if (!await AgentRunFiles.DeleteAsync(run.Id))
+                _log?.LogWarning("Could not fully clear the pi agent directories of run {RunId}", run.Id);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _log?.LogWarning(ex, "Failed to remove the pi ILD extension of run {RunId}", run.Id);
+            return false;
+        }
+
         // Resolve the base repo before destroying the worktree — afterwards
         // the branch can no longer be located through it.
         string? baseRepoPath = null;
-        if (!string.IsNullOrEmpty(run.WorktreePath) && Directory.Exists(run.WorktreePath))
+        // Anything at the path, not just a directory: a file or a link left there is
+        // still the run's disk, and it is checked without being followed.
+        if (!string.IsNullOrEmpty(run.WorktreePath) && AgentWritableFiles.EntryExists(run.WorktreePath))
         {
             try { baseRepoPath = await _repo.ResolveBaseRepoPathAsync(run.WorktreePath); }
             catch (Exception ex) { _log?.LogDebug(ex, "Could not resolve base repo for run {RunId}", run.Id); }
@@ -47,10 +64,10 @@ public sealed class RunReclaimer : IRunReclaimer
             try { await _repo.DestroyWorktreeAsync(run.WorktreePath); }
             catch (Exception ex) { _log?.LogWarning(ex, "Failed to destroy worktree for run {RunId} at {Path}", run.Id, run.WorktreePath); }
 
-            // The worktree survived the destroy attempt: report failure so the
-            // caller keeps the run row and a later sweep retries, instead of
-            // deleting the row and stranding the directory as untracked disk.
-            if (Directory.Exists(run.WorktreePath))
+            // Something survived the destroy attempt: report failure so the caller
+            // keeps the run row and a later sweep retries, instead of deleting the
+            // row and stranding what is there as untracked disk.
+            if (AgentWritableFiles.EntryExists(run.WorktreePath))
                 return false;
         }
 

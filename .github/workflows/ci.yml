@@ -21,6 +21,9 @@ jobs:
       - name: Entrypoint config-store linking tests
         run: .github/scripts/entrypoint-link-stores.test.sh
 
+      - name: Entrypoint agent read dir tests
+        run: .github/scripts/entrypoint-agent-read-dirs.test.sh
+
       - name: Entrypoint egress-rule tests
         run: .github/scripts/entrypoint-egress-rules.test.sh
 

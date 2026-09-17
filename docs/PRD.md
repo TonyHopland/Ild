@@ -60,7 +60,7 @@ The product should let a developer:
 - The adapter, not the node executor, owns the provider-specific execution lifecycle.
 - Prompt templates remain single-field per AI node and support ILD placeholder expansion.
 - Session-aware adapters may persist and restore session snapshots across node visits. `copilot` is an exception: its headless mode surfaces no resumable session id, so it runs single-turn (no persist/restore).
-- Agent-facing work-item tools are exposed through ILD's local MCP server integration, and the per-node tool allowlist (read/write/execute/ild) gates each adapter. `copilot` is an exception: GitHub's CLI requires `--allow-all-tools` for programmatic use, so a Copilot provider always runs unrestricted and the allowlist is not applied to it.
+- Agent-facing work-item tools are exposed through ILD's local MCP server integration, and the per-node tool allowlist (read/write/execute/ild) gates each adapter. `copilot` is an exception: GitHub's CLI requires `--allow-all-tools` for programmatic use, so a Copilot provider always runs its built-in tools unrestricted, and only the `ild` key applies to it, turning the ILD MCP server on or off. For Copilot an omitted allowlist means ILD on, and an explicit empty list, or one without `ild`, means ILD off; for the other providers an empty list means their defaults.
 
 ### Human Review and PR Flow
 

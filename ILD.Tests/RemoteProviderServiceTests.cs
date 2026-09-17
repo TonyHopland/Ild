@@ -332,36 +332,6 @@ public class RemoteProviderServiceTests
     }
 
     [Fact]
-    public async Task GetCheckLogAsync_holds_only_the_window_of_a_huge_log_not_the_log()
-    {
-        // A CI log runs to tens of megabytes. Reducing it to a 16k window must
-        // not cost several times its size in strings first, so the reader
-        // streams and keeps only the lines the window could still need.
-        using var db = new TestDb();
-        AddGitHub(db);
-
-        // ~24 MB of log, streamed from a generator so the test itself does not
-        // hold it either — anything the reader retains shows up as growth here.
-        var handler = new StreamingLogHandler(lineCount: 200_000, lineLength: 120);
-
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
-        var before = GC.GetTotalMemory(true);
-
-        var window = await CreateService(db, handler)
-            .GetCheckLogAsync("https://github.com/team/repo", "67890", tailLines: 10, offset: 0);
-
-        var retained = GC.GetTotalMemory(true) - before;
-
-        Assert.True(window.Available);
-        Assert.Equal(200_000, window.TotalLines);
-        Assert.Equal(10, window.Lines);
-        Assert.EndsWith("line 200000", window.Text!.TrimEnd());
-        // Buffering the body would leave tens of MB live at this point.
-        Assert.True(retained < 8_000_000, $"reading the log retained {retained / 1_000_000.0:F1} MB");
-    }
-
-    [Fact]
     public async Task GetCheckLogAsync_says_so_when_the_offset_is_past_the_start_of_the_log()
     {
         using var db = new TestDb();
@@ -1261,5 +1231,45 @@ public class RemoteProviderServiceTests
 
         Assert.True(snapshot!.Mergeable);
         Assert.True(prCalls >= 2, $"expected a retry while the merge status was queued; PR fetched {prCalls} time(s)");
+    }
+
+    /// <summary>
+    /// What the log reader holds is measured as process-wide memory, so whatever
+    /// another test allocates while this one runs counts as retained here. Nested
+    /// to reach the helpers above, and in its own non-parallel collection so the
+    /// measurement is about the reader rather than about the rest of the suite.
+    /// </summary>
+    [Collection("LogWindowMemory")]
+    public class LogWindowMemory
+    {
+        [Fact]
+        public async Task GetCheckLogAsync_holds_only_the_window_of_a_huge_log_not_the_log()
+        {
+            // A CI log runs to tens of megabytes. Reducing it to a 16k window must
+            // not cost several times its size in strings first, so the reader
+            // streams and keeps only the lines the window could still need.
+            using var db = new TestDb();
+            AddGitHub(db);
+
+            // ~24 MB of log, streamed from a generator so the test itself does not
+            // hold it either — anything the reader retains shows up as growth here.
+            var handler = new StreamingLogHandler(lineCount: 200_000, lineLength: 120);
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            var before = GC.GetTotalMemory(true);
+
+            var window = await CreateService(db, handler)
+                .GetCheckLogAsync("https://github.com/team/repo", "67890", tailLines: 10, offset: 0);
+
+            var retained = GC.GetTotalMemory(true) - before;
+
+            Assert.True(window.Available);
+            Assert.Equal(200_000, window.TotalLines);
+            Assert.Equal(10, window.Lines);
+            Assert.EndsWith("line 200000", window.Text!.TrimEnd());
+            // Buffering the body would leave tens of MB live at this point.
+            Assert.True(retained < 8_000_000, $"reading the log retained {retained / 1_000_000.0:F1} MB");
+        }
     }
 }

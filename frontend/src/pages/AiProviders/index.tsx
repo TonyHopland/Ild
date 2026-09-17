@@ -43,8 +43,8 @@ export default function AiProviders() {
   }, []);
 
   // Load the adapter config schema for the selected provider type so its fields
-  // render on the modal. The endpoint returns an empty schema for MCP-incapable
-  // types (pi/copilot), which naturally hides the section for them. We keep only
+  // render on the modal. The endpoint returns an empty schema for types without
+  // custom MCP servers (pi), which naturally hides the section for them. We keep only
   // the fields the save path actually persists (currently just the Custom MCP
   // servers value) so what renders is always what gets saved — if the backend
   // adds more schema fields later, they won't silently no-op here.
@@ -168,9 +168,9 @@ export default function AiProviders() {
     };
 
     // Send the Custom MCP servers value whenever the selected type exposes it
-    // (opencode, claude-code — including CLI-auth claude-code). An empty string
-    // clears it. The server folds it into AiProvider.Config, preserving any other
-    // stored keys. Types without the field (pi, copilot) send nothing, so their
+    // (opencode, claude-code, copilot — including the CLI-auth ones). An empty
+    // string clears it. The server folds it into AiProvider.Config, preserving any
+    // other stored keys. Types without the field (pi) send nothing, so their
     // config is left untouched.
     if (configSchema.some((field) => field.name === CUSTOM_MCP_SERVERS_FIELD)) {
       data.customMcpServersJson = String(configValues[CUSTOM_MCP_SERVERS_FIELD] ?? "");

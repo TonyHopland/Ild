@@ -61,9 +61,9 @@ public sealed record LoopEditResult(
 /// break the graph is rejected up front and the canvas stays as it was.
 /// </para>
 ///
-/// This class is the single engine behind all of <c>LoopTools</c> (MCP),
-/// <c>ToolDescriptors</c> (Pi) and <c>AgentController</c> — the three surfaces
-/// ADR-0009 requires to stay in lockstep.
+/// This class is the single engine behind both <c>LoopTools</c> (MCP, which every
+/// adapter reaches) and <c>AgentController</c> — the surfaces ADR-0009 requires to
+/// stay in lockstep.
 /// </summary>
 public static class LoopDocumentEditor
 {

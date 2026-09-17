@@ -22,6 +22,7 @@ AGENT_GROUP="${AGENT_GROUP:-${AGENT_USER}}"
 AGENT_HOME="${AGENT_HOME:-}"
 AGENT_SCRATCH_DIR="${AGENT_SCRATCH_DIR:-}"
 ORCHESTRATOR_PRIVATE_DIR="${ORCHESTRATOR_PRIVATE_DIR:-}"
+AGENT_READ_DIR="${AGENT_READ_DIR:-}"
 SHARED_GROUP="${SHARED_GROUP:-}"
 RUNTIME_AMBIENT_CAPS="${RUNTIME_AMBIENT_CAPS:-}"
 # Agent egress funnel (docs/adr/0019-agent-egress-through-in-container-proxy.md).
@@ -117,6 +118,24 @@ ensure_shared_rw() {
   # the grant group-only, whatever the modes on individual entries beneath say.
   chown "$RUNTIME_USER:$SHARED_GROUP" "$path"
   chmod 2770 "$path"
+}
+
+# The agent read root (AGENT_READ_DIR) and the app's fixed folders in it, which
+# hold the files carrying the ILD API token, provisioned like ensure_shared_ro.
+# None may be a symlink: ensure_shared_ro would chown and chmod whatever a link
+# points at, and the app refuses a linked root anyway, so stop here, where the
+# operator sees why.
+ensure_agent_read_dirs() {
+  read_root="$1"
+  for read_dir in "$read_root" "$read_root/ild-pi-ext" "$read_root/ild-mcp-config"; do
+    if [ -L "$read_dir" ]; then
+      echo "entrypoint: $read_dir is a symlink; AGENT_READ_DIR and its ild-pi-ext and ild-mcp-config folders must be real directories" >&2
+      exit 1
+    fi
+  done
+  for read_dir in "$read_root" "$read_root/ild-pi-ext" "$read_root/ild-mcp-config"; do
+    ensure_shared_ro "$read_dir"
+  done
 }
 
 # Like ensure_shared_rw, but the group only gets read/execute. Used for the
@@ -570,6 +589,7 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
     export ILD_AGENT_HOME="$AGENT_HOME"
     export ILD_AGENT_SCRATCH_ROOT="$AGENT_SCRATCH_DIR"
     export ILD_ORCHESTRATOR_PRIVATE_ROOT="$ORCHESTRATOR_PRIVATE_DIR"
+    export ILD_AGENT_READ_ROOT="$AGENT_READ_DIR"
 
     # Two-uid mode. Order matters: the private roots (/data) are created and
     # locked to traverse-only FIRST, so that the shared subtrees created beneath
@@ -585,6 +605,14 @@ if [ "$(id -u)" -eq 0 ] && id "$RUNTIME_USER" >/dev/null 2>&1; then
       ensure_shared_ro "$path"
     done
     [ -n "$ORCHESTRATOR_PRIVATE_DIR" ] && ensure_private "$ORCHESTRATOR_PRIVATE_DIR"
+    # Files the agent reads but must not be able to change (pi's ILD extension,
+    # the agent CLIs' MCP configs, all carrying the ILD API token): created here,
+    # before any agent-uid process runs, so they are the orchestrator's from the
+    # start. The app's fixed folders are made the same way, so the app only ever
+    # creates per-run folders, inside folders the agent cannot write.
+    if [ -n "$AGENT_READ_DIR" ]; then
+      ensure_agent_read_dirs "$AGENT_READ_DIR"
+    fi
   else
     for path in $RUNTIME_DIRS; do
       ensure_owned_by_runtime_user "$path"

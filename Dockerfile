@@ -261,6 +261,11 @@ ENV AGENT_SCRATCH_DIR=/tmp/ild-agent-scratch
 # file — or a symlink — the orchestrator would then write or execute as itself.
 # On /tmp so it stays ephemeral instead of growing on the data volume.
 ENV ORCHESTRATOR_PRIVATE_DIR=/tmp/ild-orchestrator-private
+# Files the orchestrator hands the agent to read (pi's ILD extension, the MCP
+# configs given to the agent CLIs — all carrying the ILD API token). Owned by the
+# orchestrator with the shared group and no group write, so the agent can read
+# them but cannot create, rename or delete anything there. Ephemeral on /tmp.
+ENV AGENT_READ_DIR=/tmp/ild-agent-read
 ENV SHARED_RW_DIRS="/worktrees /home/ild/.agent-config /data/repos /data/chat-sessions /tmp/ild-agent-scratch"
 # Shared read-only: the agent execs the npm-installed CLIs but must not be able
 # to rewrite them — the orchestrator runs those same binaries as ild (version

@@ -7,7 +7,9 @@ namespace ILD.Core.Services.Implementations;
 public class AgentAdapterRegistry : IAgentAdapterRegistry
 {
     private readonly IServiceProvider _sp;
-    private readonly Dictionary<string, Type> _adapterTypes = new();
+    // Case-insensitive like the providers API and the tool catalog, so a provider
+    // saved as "COPILOT" still reaches the Copilot adapter.
+    private readonly Dictionary<string, Type> _adapterTypes = new(StringComparer.OrdinalIgnoreCase);
 
     public AgentAdapterRegistry(IServiceProvider sp, IEnumerable<IAgentAdapter> adapters)
     {
