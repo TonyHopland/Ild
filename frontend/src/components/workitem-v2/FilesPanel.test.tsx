@@ -589,6 +589,18 @@ describe("FilesPanel diff rendering", () => {
     return Array.from(document.querySelectorAll(".wiv2-diff-line"));
   }
 
+  /** The part of a row that holds the patch line itself, apart from its line numbers. */
+  function textCell(row: Element) {
+    const cell = row.querySelector(".wiv2-diff-text");
+    expect(cell).not.toBeNull();
+    return cell!;
+  }
+
+  /** A row's [original, current] line-number cells as shown, "" where blank. */
+  function gutters(row: Element) {
+    return Array.from(row.querySelectorAll(".wiv2-diff-gutter")).map((g) => g.textContent);
+  }
+
   test("renders a paired line as its marker plus strongly shaded word spans", async () => {
     const [hunk, del, add] = await showDiff(
       ["@@ -1 +1 @@", "-const timeout = 30;", "+const timeout = 60;"].join("\n"),
@@ -603,16 +615,16 @@ describe("FilesPanel diff rendering", () => {
 
     // Splitting a line into spans must not change what it reads or copies as:
     // the marker stays outside them and the payload is reproduced in full.
-    expect(del.textContent).toBe("-const timeout = 30;");
-    expect(add.textContent).toBe("+const timeout = 60;");
+    expect(textCell(del).textContent).toBe("-const timeout = 30;");
+    expect(textCell(add).textContent).toBe("+const timeout = 60;");
     // The marker is a bare leading text node, not part of any segment span, so
     // it can never pick up the strong tier.
     for (const [row, marker] of [
       [del, "-"],
       [add, "+"],
     ] as const) {
-      expect(row.firstChild?.nodeType).toBe(Node.TEXT_NODE);
-      expect(row.firstChild?.textContent).toBe(marker);
+      expect(textCell(row).firstChild?.nodeType).toBe(Node.TEXT_NODE);
+      expect(textCell(row).firstChild?.textContent).toBe(marker);
     }
 
     // The light tier still comes from the row, so both tiers stack.
@@ -634,6 +646,67 @@ describe("FilesPanel diff rendering", () => {
     ]);
     expect(screen.getByText("-hello")).toBeTruthy();
     expect(screen.getByText("+world")).toBeTruthy();
+  });
+
+  test("shows original and current line numbers beside each line, blank where absent", async () => {
+    const lines = [
+      "diff --git a/a.ts b/a.ts",
+      "--- a/a.ts",
+      "+++ b/a.ts",
+      "@@ -9,3 +9,3 @@ function f() {",
+      " before",
+      "-const timeout = 30;",
+      "\\ No newline at end of file",
+      "+const timeout = 60;",
+      " after",
+      "@@ -120,1 +120,2 @@",
+      " kept",
+      "+added",
+    ];
+    const rows = await showDiff(lines.join("\n"));
+
+    // Every row, file line or not, carries both columns so the text lines up.
+    expect(rows.map(gutters)).toEqual([
+      ["", ""],
+      ["", ""],
+      ["", ""],
+      ["", ""],
+      ["9", "9"],
+      ["10", ""],
+      ["", ""],
+      ["", "10"],
+      ["11", "11"],
+      ["", ""],
+      ["120", "120"],
+      ["", "121"],
+    ]);
+    // The numbers sit before the text, not inside it: the text cell is still
+    // exactly the patch line.
+    for (const row of rows) {
+      const [oldCol, newCol] = Array.from(row.querySelectorAll(".wiv2-diff-gutter"));
+      const text = textCell(row);
+      expect(
+        oldCol.compareDocumentPosition(newCol) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(newCol.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(text.querySelector(".wiv2-diff-gutter")).toBeNull();
+    }
+    expect(rows.map((row) => textCell(row).textContent)).toEqual(lines);
+    // Shading still comes from the row's kind.
+    expect(rows.map((row) => row.className)).toEqual([
+      "wiv2-diff-line wiv2-diff-ctx",
+      "wiv2-diff-line wiv2-diff-del",
+      "wiv2-diff-line wiv2-diff-add",
+      "wiv2-diff-line wiv2-diff-hunk",
+      "wiv2-diff-line wiv2-diff-ctx",
+      "wiv2-diff-line wiv2-diff-del",
+      "wiv2-diff-line wiv2-diff-ctx",
+      "wiv2-diff-line wiv2-diff-add",
+      "wiv2-diff-line wiv2-diff-ctx",
+      "wiv2-diff-line wiv2-diff-hunk",
+      "wiv2-diff-line wiv2-diff-ctx",
+      "wiv2-diff-line wiv2-diff-add",
+    ]);
   });
 });
 
