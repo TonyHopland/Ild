@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A file's diff in the Files tab now shows line numbers for both the original and the changed file.**
+
 - **GitHub Copilot and Pi agents now get every ILD tool, and a Copilot provider can add its own MCP servers.**
 
 ### Changed

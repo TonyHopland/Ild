@@ -26,6 +26,10 @@ export interface DiffRow {
    * ordinary, and both leave the line to the whole-line treatment.
    */
   segments?: DiffSegment[];
+  /** The line's number in the original file; absent on a row that is not an original line. */
+  oldLine?: number;
+  /** The line's number in the current file; absent on a row that is not a current line. */
+  newLine?: number;
 }
 
 /**
@@ -40,6 +44,9 @@ export interface DiffRow {
  * declines — too dissimilar to be worth splitting, or too expensive under the
  * caps below — simply keeps no segments.
  *
+ * Each content line also carries its number in the original and the current
+ * file, counted from its hunk header by {@link numberLines}.
+ *
  * Assumes a single-file patch, which is what this viewer is fed: `git diff
  * <base> -- <path>`. A multi-file patch would let a second file's `--- a/x`
  * arrive with a hunk still open and pair as content.
@@ -49,6 +56,7 @@ export function parseUnifiedDiff(diff: string): DiffRow[] {
     .replace(/\n$/, "")
     .split("\n")
     .map((text) => ({ text, kind: rowKind(text) }));
+  numberLines(rows);
 
   // One allowance for the whole patch, spent the way the save-diff path spends
   // it. This placement is the load-bearing part: the caps exist to keep the
@@ -93,6 +101,35 @@ export function parseUnifiedDiff(diff: string): DiffRow[] {
   }
 
   return rows;
+}
+
+const HUNK_HEADER = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+
+/**
+ * Number each content line from the `@@ -A[,B] +C[,D] @@` header of its hunk: a
+ * removal takes the next original number, an addition the next current one, and
+ * context both. This is a walk of its own because the pairing walk stops once
+ * its budget is spent, and every line still needs its numbers. Under a header
+ * that does not parse, lines stay unnumbered until the next one that does — a
+ * guessed number would send the reader to the wrong place.
+ */
+function numberLines(rows: DiffRow[]): void {
+  let inHunk = false;
+  let oldLine = 0;
+  let newLine = 0;
+  for (const row of rows) {
+    if (row.kind === "hunk") {
+      const header = HUNK_HEADER.exec(row.text);
+      inHunk = header !== null;
+      if (header) {
+        oldLine = Number(header[1]);
+        newLine = Number(header[2]);
+      }
+    } else if (inHunk && !row.text.startsWith("\\")) {
+      if (row.kind !== "add") row.oldLine = oldLine++;
+      if (row.kind !== "del") row.newLine = newLine++;
+    }
+  }
 }
 
 /**
