@@ -40,6 +40,9 @@ public class OpenCodeAdapterTests
         Assert.Contains("opencode", adapter.SupportedProviderTypes);
         var field = Assert.Single(adapter.ConfigSchema);
         Assert.Equal("customMcpServersJson", field.Name);
+        // opencode folds the model into its generated config and always passes
+        // --model, so blanking it stays a validation error.
+        Assert.Equal(AdapterModelSupport.Required, adapter.ModelSupport);
     }
 
     [Fact]

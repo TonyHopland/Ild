@@ -17,9 +17,12 @@ namespace ILD.Core.Services.Implementations.Adapters;
 /// Runs Anthropic's <c>claude</c> CLI in headless mode. Authentication is
 /// expected to be set up out-of-band (e.g. <c>claude /login</c> for a Max
 /// subscription, which writes credentials to <c>~/.claude</c>). The adapter
-/// intentionally ignores <see cref="AiProvider.BaseUrl"/>,
-/// <see cref="AiProvider.ApiKey"/> and <see cref="AiProvider.Model"/> — those
-/// fields are not meaningful for subscription-based auth.
+/// intentionally ignores <see cref="AiProvider.BaseUrl"/> and
+/// <see cref="AiProvider.ApiKey"/> — those fields are not meaningful for
+/// subscription-based auth. <see cref="AiProvider.Model"/> is honoured, since
+/// choosing Opus over Sonnet is exactly a choice a subscription user makes: it
+/// is passed as <c>--model</c> when set, and omitted when blank so the CLI picks
+/// its own default.
 /// </summary>
 public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
 {
@@ -39,6 +42,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     public override string Name => "ClaudeCode";
     public override string[] SupportedProviderTypes => ["claude-code"];
     public override ConfigFieldDescriptor[] ConfigSchema => [CustomMcpServersField];
+    public override AdapterModelSupport ModelSupport => AdapterModelSupport.Optional;
 
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
@@ -77,7 +81,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             try
             {
                 proc = StartAgentProcess(
-                    BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.SessionId, mcpConfigPath, ctx.AdditionalAllowedDirectories),
+                    BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.SessionId, mcpConfigPath, ctx.AdditionalAllowedDirectories, ctx.Provider.Model),
                     ctx.Provider.Id);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
@@ -168,7 +172,8 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         string prompt,
         string? sessionId,
         string? mcpConfigPath = null,
-        IReadOnlyList<string>? additionalAllowedDirectories = null)
+        IReadOnlyList<string>? additionalAllowedDirectories = null,
+        string? model = null)
     {
         var psi = new ProcessStartInfo(binaryPath)
         {
@@ -205,6 +210,12 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
 
         psi.ArgumentList.Add("--permission-mode");
         psi.ArgumentList.Add("bypassPermissions");
+
+        if (!string.IsNullOrWhiteSpace(model))
+        {
+            psi.ArgumentList.Add("--model");
+            psi.ArgumentList.Add(model);
+        }
 
         if (!string.IsNullOrWhiteSpace(mcpConfigPath))
         {

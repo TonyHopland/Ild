@@ -17,6 +17,7 @@ namespace ILD.Api.Controllers;
 public class AiProvidersController : ControllerBase
 {
     private readonly IAIProviderService _aiProviderService;
+    private readonly IAgentAdapterRegistry _adapterRegistry;
     private readonly HashSet<string> _supportedProviderTypes;
     private readonly AppDbContext _db;
     private readonly IProviderStore _providerStore;
@@ -32,6 +33,7 @@ public class AiProvidersController : ControllerBase
         IManagedAgentProvisioner agentProvisioner)
     {
         _aiProviderService = aiProviderService;
+        _adapterRegistry = adapterRegistry;
         _supportedProviderTypes = adapterRegistry.GetAllSupportedProviderTypes()
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         _db = db;
@@ -44,22 +46,26 @@ public class AiProvidersController : ControllerBase
     /// Provider types whose authentication is handled by the CLI itself
     /// (e.g. <c>claude-code</c> uses the Max-subscription session stored in
     /// <c>~/.claude</c>, and <c>copilot</c> uses the GitHub Copilot session
-    /// stored in <c>~/.copilot</c>). For these we do not require BaseUrl, ApiKey
-    /// or Model on the AiProvider record.
+    /// stored in <c>~/.copilot</c>). For these we do not require BaseUrl or
+    /// ApiKey on the AiProvider record. Whether a Model is required is a
+    /// separate question, answered by the adapter's declared
+    /// <see cref="AdapterModelSupport"/>.
     /// </summary>
     private static readonly HashSet<string> CliAuthProviderTypes =
         new(StringComparer.OrdinalIgnoreCase) { "claude-code", "copilot" };
 
-    private static string? ValidateConnectionFields(AiProviderDto request)
+    private string? ValidateConnectionFields(AiProviderDto request)
     {
-        if (CliAuthProviderTypes.Contains(request.Type))
-            return null;
+        if (!CliAuthProviderTypes.Contains(request.Type))
+        {
+            if (string.IsNullOrWhiteSpace(request.BaseUrl))
+                return "BaseUrl is required for this provider type.";
+            if (!Uri.TryCreate(request.BaseUrl, UriKind.Absolute, out _))
+                return "BaseUrl must be an absolute URL.";
+        }
 
-        if (string.IsNullOrWhiteSpace(request.BaseUrl))
-            return "BaseUrl is required for this provider type.";
-        if (!Uri.TryCreate(request.BaseUrl, UriKind.Absolute, out _))
-            return "BaseUrl must be an absolute URL.";
-        if (string.IsNullOrWhiteSpace(request.Model))
+        if (_adapterRegistry.GetModelSupport(request.Type) == AdapterModelSupport.Required
+            && string.IsNullOrWhiteSpace(request.Model))
             return "Model is required for this provider type.";
 
         return null;

@@ -157,5 +157,8 @@ internal static class TestHostServiceCollectionExtensions
 
         public string[] GetAllSupportedProviderTypes()
             => throw Unexpected(nameof(IAgentAdapterRegistry));
+
+        public AdapterModelSupport GetModelSupport(string providerType)
+            => throw Unexpected(nameof(IAgentAdapterRegistry));
     }
 }

@@ -39,6 +39,7 @@ public class AINodeExecutorThrottleParkTests
         public string Name => "Scripted";
         public string[] SupportedProviderTypes => ["claude-code"];
         public ConfigFieldDescriptor[] ConfigSchema => Array.Empty<ConfigFieldDescriptor>();
+        public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
 
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
         {
@@ -55,6 +56,7 @@ public class AINodeExecutorThrottleParkTests
         public FakeRegistry(IAgentAdapter adapter) => _adapter = adapter;
         public Func<IAgentAdapter> ResolveForProvider(AiProvider provider) => () => _adapter;
         public string[] GetAllSupportedProviderTypes() => ["claude-code"];
+        public AdapterModelSupport GetModelSupport(string providerType) => _adapter.ModelSupport;
     }
 
     private static IServiceProvider BuildServices(TestDb db, IAgentAdapter adapter)

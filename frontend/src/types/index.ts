@@ -578,6 +578,19 @@ export interface AiProvider {
   createdAt: string;
 }
 
+/**
+ * What a provider type's adapter declares about a model selector: `Required` is
+ * part of its connection details and may not be blank, `Optional` means blank
+ * falls back to whatever the CLI picks itself, and `Unsupported` means the
+ * adapter's CLI takes no model and the field is not offered.
+ */
+export type AdapterModelSupport = "Unsupported" | "Optional" | "Required";
+
+export interface AgentAdapterDescriptor {
+  type: string;
+  modelSupport: AdapterModelSupport;
+}
+
 export interface AiToolDefinition {
   key: string;
   label: string;
