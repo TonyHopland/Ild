@@ -590,7 +590,10 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     setRespondError(null);
     try {
       let storedNames: string[] = [];
-      if (attachments.staged.length > 0) {
+      // Like the save, this asks the staging list rather than the render the
+      // press came from, and keeps asking until nothing is pending: a file
+      // dropped while an upload was in flight is part of the answer too.
+      while (attachments.hasPending()) {
         const outcome = await attachments.uploadAll(workItem.id);
         if (!outcome.ok) {
           setRespondError(outcome.errors.join(" "));
@@ -604,7 +607,9 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
         setRespondError((error as { message?: string })?.message ?? "Failed to submit the answer.");
         return;
       }
-      attachments.clear();
+      // Only the files this answer named are done with; one staged while the
+      // answer was being submitted is not on the item and stays for the next.
+      attachments.clearUploaded();
       refetchWorkItem();
     } finally {
       responding.current = false;

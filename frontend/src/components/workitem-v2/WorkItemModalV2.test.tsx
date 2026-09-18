@@ -1091,6 +1091,49 @@ describe("WorkItemModalV2", () => {
     expect(screen.queryByText(/Failed to save/)).toBeNull();
   });
 
+  test("a file staged while the save is in flight is uploaded, not discarded", async () => {
+    mockServices();
+    const item = makeWorkItem();
+    let releaseUpdate!: (value: WorkItem) => void;
+    const updating = new Promise<WorkItem>((resolve) => {
+      releaseUpdate = resolve;
+    });
+    vi.spyOn(authServices.workItemService, "update").mockReturnValue(updating);
+    vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(item);
+    const upload = vi.spyOn(authServices.workItemService, "uploadAttachment").mockResolvedValue([]);
+    await renderDialog(item);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Changed title" } });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Update" }));
+      await Promise.resolve();
+    });
+
+    // Nothing was staged when Update was pressed; this file arrives while the
+    // save request is still out, and the close must not throw it away.
+    await act(async () => {
+      fireEvent.change(document.querySelector('input[type="file"]') as HTMLInputElement, {
+        target: { files: [new File(["x"], "late.png", { type: "image/png" })] },
+      });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      releaseUpdate(item);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(1));
+    expect((upload.mock.calls[0][1] as File).name).toBe("late.png");
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Update" })).toBeNull());
+  });
+
   test("expanded run node survives a tab switch (panels stay mounted)", async () => {
     mockServices();
     await renderDialog(makeWorkItem());

@@ -176,7 +176,13 @@ export default function EditPanel({
       }
       onSave(saved);
 
-      if (attachments.staged.length > 0) {
+      // What this save carries is whatever the staging list holds by the time
+      // the save returns, never what it held when the button was pressed: the
+      // human can drop a file while the request is in flight, and a form that
+      // closed on the older answer would discard it without a word. The reread
+      // is inside the drain for the same reason — a file staged while it runs
+      // is still this save's to send.
+      while (attachments.hasPending()) {
         const outcome = await attachments.uploadAll(saved.id);
         if (!outcome.ok) {
           // The item is saved and some files are on it; the form stays open with
@@ -184,7 +190,6 @@ export default function EditPanel({
           setSubmitError(outcome.errors.join(" "));
           return;
         }
-        attachments.clear();
         // The parent gets the copy that carries the uploads. A reread that fails
         // makes the save no less done, so it keeps the one it already has.
         onSave(await workItemService.getById(saved.id).catch(() => saved));

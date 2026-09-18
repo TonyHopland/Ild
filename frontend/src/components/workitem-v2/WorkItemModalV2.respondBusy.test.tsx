@@ -153,6 +153,33 @@ describe("answering while an answer is already in flight", () => {
   });
 });
 
+describe("staging a file while the answer is being submitted", () => {
+  test("keeps it staged instead of clearing it away with the answer", async () => {
+    mockServices();
+    const submitted = deferred<void>();
+    vi.spyOn(authServices.workItemService, "humanFeedbackInput").mockReturnValue(submitted.promise);
+    const upload = vi.spyOn(authServices.workItemService, "uploadAttachment").mockResolvedValue([]);
+    await renderDialog();
+    await waitForLimits();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      await Promise.resolve();
+    });
+
+    // The answer is on its way with nothing attached; the file dropped now
+    // belongs to whatever the human does next, not to the answer just sent.
+    await stage(new File(["x"], "late.png", { type: "image/png" }));
+    await act(async () => {
+      submitted.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(feedback().textContent).toContain("late.png"));
+    expect(upload).not.toHaveBeenCalled();
+  });
+});
+
 describe("closing with a file staged in the feedback pane", () => {
   test("Escape asks before discarding it", async () => {
     mockServices();

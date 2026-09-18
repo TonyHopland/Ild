@@ -31,6 +31,14 @@ export interface AttachmentStaging {
   add: (files: FileList | File[] | null | undefined) => void;
   remove: (key: string) => void;
   clear: () => void;
+  /**
+   * Whether anything is still waiting to be uploaded, read from the staging list
+   * itself rather than from a render — a caller that has awaited a request since
+   * it was clicked would otherwise decide on a list that has moved on.
+   */
+  hasPending: () => boolean;
+  /** Drops what an upload has landed, leaving anything staged since untouched. */
+  clearUploaded: () => void;
   handlePaste: (event: React.ClipboardEvent) => void;
   uploadAll: (workItemId: string) => Promise<UploadOutcome>;
 }
@@ -126,6 +134,16 @@ export function useAttachmentStaging(workItemId: string | undefined): Attachment
     setStagingError(null);
   }, [applyStaged]);
 
+  const hasPending = useCallback(
+    () => stagedRef.current.some((entry) => entry.status === "pending"),
+    [],
+  );
+
+  const clearUploaded = useCallback(
+    () => applyStaged((prev) => prev.filter((entry) => entry.status !== "uploaded")),
+    [applyStaged],
+  );
+
   // Wired to the form and the feedback pane, not to the picker: the textareas a
   // screenshot is pasted into are siblings of it, so a handler inside the picker
   // would never see the event. A paste carrying no file is left alone.
@@ -185,5 +203,17 @@ export function useAttachmentStaging(workItemId: string | undefined): Attachment
     [applyStaged],
   );
 
-  return { staged, limits, stagingError, uploading, add, remove, clear, handlePaste, uploadAll };
+  return {
+    staged,
+    limits,
+    stagingError,
+    uploading,
+    add,
+    remove,
+    clear,
+    hasPending,
+    clearUploaded,
+    handlePaste,
+    uploadAll,
+  };
 }
