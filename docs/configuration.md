@@ -76,6 +76,14 @@ derived from the per-file maximum, so raising it is all that is needed — nothi
 else has a size of its own to keep in step. Clients read the effective numbers
 from `GET /api/v1/settings/attachments`.
 
+`ILD_MAX_ATTACHMENT_MB` is the setting to lower on a small machine. An upload is
+held in memory rather than spooled to disk, so at the defaults a full request —
+ten files of 25 MB — costs about 500 MB on the `ild` container and again on
+`workitem-server` as it passes through, and nothing limits how many uploads run
+at once. On a Raspberry Pi or anything else with a gigabyte or two to spare, set
+`ILD_MAX_ATTACHMENT_MB=5` on both containers: the derived ceilings follow it
+down.
+
 ## Session expiry
 
 How long a sign-in lasts is a preference, not a secret, so it lives in the database and is edited under **Settings → Signed-in devices** — no restart, and it takes effect on the next request.
