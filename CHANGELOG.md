@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **An agent can now open the files attached to its work item — a screenshot arrives as a picture it can see.**
 
-- **Attach images and files to a work item** — when you create or edit it, or when you answer a run that is waiting for you. The work item lists what it carries, and each file can be downloaded or removed.
+- **You can now attach images and files to a work item — when you create or edit it, or when you answer a run waiting for you — and download or remove them from the work item.**
 
 ### Changed
 

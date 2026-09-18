@@ -47,7 +47,7 @@ export default function AttachmentPicker({ staging, inputId }: AttachmentPickerP
         </small>
       </div>
       {stagingError && (
-        <div role="alert" className="form-error wiv2-attach-error">
+        <div role="alert" className="form-error">
           {stagingError}
         </div>
       )}

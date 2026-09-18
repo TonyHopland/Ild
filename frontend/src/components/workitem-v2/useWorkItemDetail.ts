@@ -51,6 +51,11 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [mergeMessage, setMergeMessage] = useState<string | null>(null);
   const [respondError, setRespondError] = useState<string | null>(null);
+  const [respondLoading, setRespondLoading] = useState(false);
+  // The answer buttons render disabled while one is in flight, but only once
+  // this render has happened. The guard is a ref because "each staged file is
+  // uploaded once" must not depend on how soon React gets to re-render.
+  const responding = useRef(false);
 
   // Staged on the work item, not on the view that staged them: the edit form and
   // the feedback pane attach to the same item and share one list.
@@ -579,25 +584,32 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   // land — which is also why this does not go through runAction, where a failure
   // would reach no further than the console.
   const submitAnswer = async (submit: (id: string, input: string) => Promise<unknown>) => {
-    if (!workItem) return;
+    if (!workItem || responding.current) return;
+    responding.current = true;
+    setRespondLoading(true);
     setRespondError(null);
-    let storedNames: string[] = [];
-    if (attachments.staged.length > 0) {
-      const outcome = await attachments.uploadAll(workItem.id);
-      if (!outcome.ok) {
-        setRespondError(outcome.errors.join(" "));
+    try {
+      let storedNames: string[] = [];
+      if (attachments.staged.length > 0) {
+        const outcome = await attachments.uploadAll(workItem.id);
+        if (!outcome.ok) {
+          setRespondError(outcome.errors.join(" "));
+          return;
+        }
+        storedNames = outcome.storedNames;
+      }
+      try {
+        await submit(workItem.id, attachedNote(feedbackInput, storedNames));
+      } catch (error) {
+        setRespondError((error as { message?: string })?.message ?? "Failed to submit the answer.");
         return;
       }
-      storedNames = outcome.storedNames;
+      attachments.clear();
+      refetchWorkItem();
+    } finally {
+      responding.current = false;
+      setRespondLoading(false);
     }
-    try {
-      await submit(workItem.id, attachedNote(feedbackInput, storedNames));
-    } catch (error) {
-      setRespondError((error as { message?: string })?.message ?? "Failed to submit the answer.");
-      return;
-    }
-    attachments.clear();
-    refetchWorkItem();
   };
 
   const handleApprove = () =>
@@ -730,6 +742,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     handleReject,
     handleEdge,
     respondError,
+    respondLoading,
     attachments,
     refetchWorkItem,
     mergeLoading,

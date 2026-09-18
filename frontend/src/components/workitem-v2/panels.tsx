@@ -94,6 +94,7 @@ export function FeedbackBanner({
         onReject={detail.handleReject}
         onEdge={detail.handleEdge}
         onMerge={isPr ? detail.handleMerge : undefined}
+        busy={detail.respondLoading}
       />
       {detail.respondError && (
         <div className="preview-message preview-error">{detail.respondError}</div>
