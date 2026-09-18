@@ -1035,6 +1035,30 @@ describe("WorkItemModalV2", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  test("Escape with a file staged in the edit prompts to discard", async () => {
+    mockServices();
+    const onClose = vi.fn();
+    await renderDialog(makeWorkItem(), { onClose });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.change(document.querySelector('input[type="file"]') as HTMLInputElement, {
+        target: { files: [new File(["x"], "shot.png", { type: "image/png" })] },
+      });
+      await Promise.resolve();
+    });
+
+    // A staged file is an unsaved change like any typed one — closing must ask
+    // before throwing it away.
+    await pressEscapeUntil(() => {
+      expect(screen.getByText(/Discard unsaved changes/)).toBeTruthy();
+    });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   test("expanded run node survives a tab switch (panels stay mounted)", async () => {
     mockServices();
     await renderDialog(makeWorkItem());
