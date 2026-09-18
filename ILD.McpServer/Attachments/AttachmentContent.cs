@@ -1,3 +1,4 @@
+using System.Buffers.Text;
 using System.Text;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Protocol;
@@ -29,7 +30,7 @@ public static class AttachmentContent
             {
                 // Base64 text as UTF-8 bytes, which is what the protocol carries;
                 // the raw file here serialises to mojibake instead of a picture.
-                Data = Encoding.UTF8.GetBytes(Convert.ToBase64String(bytes)),
+                Data = Base64Utf8(bytes),
                 MimeType = mediaType,
                 Meta = meta,
             };
@@ -48,10 +49,24 @@ public static class AttachmentContent
             {
                 Uri = uri,
                 MimeType = mediaType,
-                Blob = Encoding.UTF8.GetBytes(Convert.ToBase64String(bytes)),
+                Blob = Base64Utf8(bytes),
             },
             Meta = meta,
         };
+    }
+
+    /// <summary>
+    /// The base64 text of the file as UTF-8 bytes, which is what the protocol
+    /// carries — the raw file in these fields serialises to mojibake rather than
+    /// to the picture. Encoded straight into one buffer: going through a string
+    /// would hold a 25 MB image three times over, once as itself and twice more
+    /// as its base64.
+    /// </summary>
+    private static ReadOnlyMemory<byte> Base64Utf8(byte[] bytes)
+    {
+        var encoded = new byte[Base64.GetMaxEncodedToUtf8Length(bytes.Length)];
+        Base64.EncodeToUtf8(bytes, encoded, out _, out var written);
+        return encoded.AsMemory(0, written);
     }
 
     private static bool IsTextLike(string mediaType)

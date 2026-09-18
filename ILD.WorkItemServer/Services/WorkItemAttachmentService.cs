@@ -5,8 +5,17 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ILD.WorkItemServer.Services;
 
-/// <summary>One file on its way in, exactly as the caller sent it.</summary>
-public sealed record IncomingAttachment(string FileName, string? ContentType, byte[] Content);
+/// <summary>
+/// One file on its way in: what the request says about it, and a reader that
+/// materialises the bytes. Every limit is answerable from
+/// <paramref name="SizeBytes"/> alone, so a refused upload never allocates a byte
+/// of what it was sent, and an accepted one allocates each file exactly once.
+/// </summary>
+public sealed record IncomingAttachment(
+    string FileName,
+    string? ContentType,
+    long SizeBytes,
+    Func<CancellationToken, Task<byte[]>> ReadAsync);
 
 /// <summary>A stored file on its way out, with the content type it will be served as.</summary>
 public sealed record StoredAttachment(byte[] Content, string ContentType, string FileName);
@@ -101,13 +110,24 @@ public sealed class WorkItemAttachmentService : IWorkItemAttachmentService
                 return AddAttachmentsResult.Refused(
                     AddAttachmentsOutcome.InvalidFileName,
                     $"A file name may be at most {MaxFileNameLength} characters.");
-            if (file.Content.LongLength > _limits.MaxBytesPerFile)
+            if (file.SizeBytes > _limits.MaxBytesPerFile)
                 return AddAttachmentsResult.Refused(
                     AddAttachmentsOutcome.FileTooLarge,
                     $"'{name}' is larger than the {Megabytes(_limits.MaxBytesPerFile)} MB allowed per file.");
         }
 
-        var incoming = files.Sum(f => f.Content.LongLength);
+        // The total is a read-then-write, so two uploads to the same work item
+        // could each see room for themselves and together go over it. They are
+        // serialised by claiming the owning row first: Postgres holds that row for
+        // the transaction, SQLite takes its write lock, and the loser re-reads a
+        // total that now includes the winner's files.
+        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+        // Claiming nothing means the work item was deleted while this upload was
+        // being read; its files would fail the foreign key a moment later.
+        if (await ClaimWorkItemAsync(key.Value, ct) == 0)
+            return AddAttachmentsResult.Refused(AddAttachmentsOutcome.NotFound, "No such work item.");
+
+        var incoming = files.Sum(f => f.SizeBytes);
         var alreadyStored = await _db.WorkItemAttachments
             .Where(a => a.WorkItemId == key.Value)
             .SumAsync(a => (long?)a.SizeBytes, ct) ?? 0;
@@ -118,19 +138,25 @@ public sealed class WorkItemAttachmentService : IWorkItemAttachmentService
                 + $"{Megabytes(_limits.MaxTotalBytesPerWorkItem)} MB allowed per work item.");
 
         var now = _clock.GetUtcNow().UtcDateTime;
-        var rows = files.Select(file => new WorkItemAttachment
+        var rows = new List<WorkItemAttachment>(files.Count);
+        foreach (var file in files)
         {
-            Id = Guid.NewGuid(),
-            WorkItemId = key.Value,
-            FileName = FileNameOf(file.FileName),
-            ContentType = StoredContentType(file.ContentType),
-            SizeBytes = file.Content.LongLength,
-            Content = file.Content,
-            CreatedAt = now,
-        }).ToList();
+            var content = await file.ReadAsync(ct);
+            rows.Add(new WorkItemAttachment
+            {
+                Id = Guid.NewGuid(),
+                WorkItemId = key.Value,
+                FileName = FileNameOf(file.FileName),
+                ContentType = StoredContentType(file.ContentType),
+                Content = content,
+                SizeBytes = content.LongLength,
+                CreatedAt = now,
+            });
+        }
 
         _db.WorkItemAttachments.AddRange(rows);
         await _db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
 
         return new AddAttachmentsResult(
             AddAttachmentsOutcome.Created,
@@ -175,6 +201,17 @@ public sealed class WorkItemAttachmentService : IWorkItemAttachmentService
             .Where(a => a.Id == attachmentId && a.WorkItemId == key.Value)
             .ExecuteDeleteAsync(ct) > 0;
     }
+
+    /// <summary>
+    /// Take the owning work item's row for the rest of the transaction, so the
+    /// total check and the insert that follows it cannot interleave with another
+    /// upload to the same item. Written as an update to the row's own value: it
+    /// changes nothing, and it is the one lock both Postgres and SQLite take.
+    /// </summary>
+    private Task<int> ClaimWorkItemAsync(int workItemKey, CancellationToken ct)
+        => _db.WorkItems
+            .Where(w => w.InternalId == workItemKey)
+            .ExecuteUpdateAsync(s => s.SetProperty(w => w.UpdatedAt, w => w.UpdatedAt), ct);
 
     private Task<int?> ResolveKeyAsync(string workItemId, CancellationToken ct)
         => _db.WorkItems

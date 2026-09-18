@@ -559,11 +559,8 @@ public class WorkItemsController : ControllerBase
 
         var uploads = new List<RemoteAttachmentUpload>(files.Count);
         foreach (var file in files)
-        {
-            using var buffer = new MemoryStream();
-            await file.CopyToAsync(buffer, cancellationToken);
-            uploads.Add(new RemoteAttachmentUpload(file.FileName, file.ContentType, buffer.ToArray()));
-        }
+            uploads.Add(new RemoteAttachmentUpload(
+                file.FileName, file.ContentType, await ReadExactlyAsync(file, cancellationToken)));
 
         return AttachmentHttpResult.ToActionResult(
             await _workItemManager.AddAttachmentsAsync(id, uploads, cancellationToken));
@@ -583,6 +580,20 @@ public class WorkItemsController : ControllerBase
     [HttpDelete("{id}/attachments/{attachmentId:guid}")]
     public async Task<IActionResult> DeleteAttachment(string id, Guid attachmentId, CancellationToken cancellationToken)
         => await _workItemManager.DeleteAttachmentAsync(id, attachmentId, cancellationToken) ? NoContent() : NotFound();
+
+    /// <summary>
+    /// The file as one array of exactly its length. A <see cref="MemoryStream"/>
+    /// would hold the bytes twice over — its own doubling buffer and the copy
+    /// <c>ToArray</c> takes — which at ten files of the maximum size is the
+    /// difference between one payload in memory and two.
+    /// </summary>
+    private static async Task<byte[]> ReadExactlyAsync(IFormFile file, CancellationToken cancellationToken)
+    {
+        var content = new byte[file.Length];
+        await using var stream = file.OpenReadStream();
+        await stream.ReadExactlyAsync(content, cancellationToken);
+        return content;
+    }
 
     [HttpPost("{id}/transition")]
     public async Task<IActionResult> Transition(string id, [FromBody] WorkItemTransitionRequest request)

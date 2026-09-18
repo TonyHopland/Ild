@@ -56,7 +56,15 @@ public sealed class AttachmentLimits
         };
     }
 
+    /// <summary>
+    /// The configured megabytes as bytes, never beyond what one attachment can be:
+    /// a file is a <c>byte[]</c> from the request to the <c>bytea</c> column, so a
+    /// maximum above <see cref="Array.MaxLength"/> would promise a size nothing on
+    /// the path could hold.
+    /// </summary>
     private static long Megabytes(string? raw, int fallbackMb)
-        => (int.TryParse(raw, System.Globalization.NumberStyles.Integer,
-            System.Globalization.CultureInfo.InvariantCulture, out var mb) && mb > 0 ? mb : fallbackMb) * Megabyte;
+        => Math.Min(
+            (int.TryParse(raw, System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out var mb) && mb > 0 ? mb : fallbackMb) * Megabyte,
+            Array.MaxLength);
 }

@@ -51,13 +51,12 @@ public sealed class WorkItemAttachmentsController : ControllerBase
             return BadRequest(new { error = "Attachments are uploaded as multipart/form-data under the field 'files'." });
 
         var form = await Request.ReadFormAsync(ct);
-        var files = new List<IncomingAttachment>();
-        foreach (var file in form.Files.GetFiles(AttachmentFieldName))
-        {
-            using var buffer = new MemoryStream();
-            await file.CopyToAsync(buffer, ct);
-            files.Add(new IncomingAttachment(file.FileName, file.ContentType, buffer.ToArray()));
-        }
+        // Size now, bytes only if the service accepts them: a refused upload
+        // copies nothing, and an accepted one is copied once per file.
+        var files = form.Files.GetFiles(AttachmentFieldName)
+            .Select(file => new IncomingAttachment(
+                file.FileName, file.ContentType, file.Length, token => ReadExactlyAsync(file, token)))
+            .ToList();
 
         var result = await _attachments.AddAsync(id, files, ct);
         return result.Outcome switch
@@ -83,4 +82,18 @@ public sealed class WorkItemAttachmentsController : ControllerBase
     [HttpDelete("{attachmentId:guid}")]
     public async Task<IActionResult> Delete(string id, Guid attachmentId, CancellationToken ct)
         => await _attachments.DeleteAsync(id, attachmentId, ct) ? NoContent() : NotFound();
+
+    /// <summary>
+    /// The file as one array of exactly its length. A <see cref="MemoryStream"/>
+    /// would hold the bytes twice over — its own doubling buffer and the copy
+    /// <c>ToArray</c> takes — which at ten files of the maximum size is the
+    /// difference between one payload in memory and two.
+    /// </summary>
+    private static async Task<byte[]> ReadExactlyAsync(IFormFile file, CancellationToken ct)
+    {
+        var content = new byte[file.Length];
+        await using var stream = file.OpenReadStream();
+        await stream.ReadExactlyAsync(content, ct);
+        return content;
+    }
 }

@@ -159,7 +159,8 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
     {
         var result = await _attachments.AddAsync(
             workItemId,
-            files.Select(f => new IncomingAttachment(f.FileName, f.ContentType, f.Content)).ToList(),
+            files.Select(f => new IncomingAttachment(
+                f.FileName, f.ContentType, f.Content.LongLength, _ => Task.FromResult(f.Content))).ToList(),
             ct);
 
         var outcome = result.Outcome switch
