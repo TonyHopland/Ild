@@ -142,9 +142,17 @@ export function useAttachmentStaging(workItemId: string | undefined): Attachment
   const uploadAll = useCallback(
     async (targetWorkItemId: string): Promise<UploadOutcome> => {
       setUploading(true);
+      // A file dropped while the batch is in flight belongs to this save too, so
+      // the walk takes the list as it stands rather than the snapshot it started
+      // with. Each entry is attempted once, which is what ends the walk.
+      const attempted = new Set<string>();
       try {
-        for (const entry of stagedRef.current) {
-          if (entry.status === "uploaded") continue;
+        for (;;) {
+          const entry = stagedRef.current.find(
+            (candidate) => candidate.status === "pending" && !attempted.has(candidate.key),
+          );
+          if (!entry) break;
+          attempted.add(entry.key);
           try {
             await workItemService.uploadAttachment(targetWorkItemId, entry.file);
             applyStaged((prev) =>
