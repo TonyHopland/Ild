@@ -169,8 +169,6 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         // Mirrors what the real adapters declare, so the providers API validates
         // a model the same way here as it does in the app.
         public AdapterModelSupport GetModelSupport(string providerType)
-            => providerType is "opencode" or "pi"
-                ? AdapterModelSupport.Required
-                : AdapterModelSupport.Optional;
+            => DeclaredModelSupport.For(providerType);
     }
 }

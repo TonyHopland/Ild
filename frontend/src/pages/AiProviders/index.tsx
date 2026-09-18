@@ -154,10 +154,14 @@ export default function AiProviders() {
   // creds under ~/.claude / ~/.copilot), so the BaseUrl / API key fields are not
   // applicable. This says nothing about the model, which every adapter declares
   // for itself — a CLI-auth provider can still choose one.
-  const isCliAuthProvider = (t: string) => t === "claude-code" || t === "copilot";
+  // Compared case-insensitively, the way the API resolves a provider type: it
+  // accepts and stores "Claude-Code" verbatim but reaches the same adapter.
+  const isCliAuthProvider = (t: string) =>
+    t.toLowerCase() === "claude-code" || t.toLowerCase() === "copilot";
 
   // Human-facing CLI name for a CLI-auth provider type, used in the login note.
-  const cliAuthLabel = (t: string) => (t === "copilot" ? "GitHub Copilot" : "Claude Code");
+  const cliAuthLabel = (t: string) =>
+    t.toLowerCase() === "copilot" ? "GitHub Copilot" : "Claude Code";
 
   // What the selected type's adapter says about a model, straight from the API.
   // Matched case-insensitively: the API accepts and stores a type verbatim but

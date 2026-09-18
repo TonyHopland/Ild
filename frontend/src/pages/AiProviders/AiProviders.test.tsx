@@ -1201,6 +1201,61 @@ describe("AI Providers page", () => {
     expect((putReq!.body as { model?: string }).model).toBe("opus");
   });
 
+  test("a CLI-auth type stored in a different case still hides the fields its CLI owns", async () => {
+    // "COPILOT" is the copilot provider type as far as the API is concerned, so
+    // the form must not offer Base URL / API key for it — and must not send a
+    // Base URL back on save.
+    const providers = [
+      {
+        id: "ai-1",
+        name: "Copilot",
+        type: "COPILOT",
+        baseUrl: "http://stale.local",
+        apiKey: "",
+        model: "gpt-5",
+        isDefault: true,
+        createdAt: "2025-01-01T00:00:00Z",
+      },
+    ];
+
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    renderRouted(
+      routingFetch({
+        providers,
+        types: ["copilot"],
+        schema: [],
+        onWrite: () => providers[0],
+        requests,
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText("AI Providers")).toBeTruthy());
+
+    // The list row does not offer an API Key line for a CLI-auth provider.
+    expect(screen.queryByText("API Key")).toBeFalsy();
+
+    fireEvent.click(screen.getByText("Edit"));
+    await waitFor(() => expect(screen.getByText("Edit Provider")).toBeTruthy());
+
+    expect(screen.queryByLabelText("Base URL")).toBeFalsy();
+    expect(screen.queryByLabelText("API Key")).toBeFalsy();
+    expect(screen.getByLabelText("Model (optional)")).toBeTruthy();
+    // The label still resolves to the Copilot wording, not the Claude Code one.
+    const note = screen.getByText(
+      (_, element) =>
+        element?.className === "ap-cli-note" &&
+        (element.textContent ?? "").includes("GitHub Copilot"),
+    );
+    expect(note).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Update"));
+    await waitFor(() => expect(screen.queryByText("Edit Provider")).toBeFalsy());
+
+    const putReq = requests.find((r) => r.method === "PUT" && r.url.includes("/aiproviders/ai-1"));
+    expect((putReq!.body as { baseUrl?: string }).baseUrl).toBe("");
+    expect((putReq!.body as { model?: string }).model).toBe("gpt-5");
+  });
+
   test("a type no adapter declared keeps its stored model instead of losing it", async () => {
     // Nothing came back for this type — an unregistered one, or a list that
     // failed to load. That is not the same as an adapter saying Unsupported, so

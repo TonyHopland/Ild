@@ -29,9 +29,7 @@ public class AiProvidersControllerTests : IDisposable
         _db.Database.EnsureCreated();
         _registry.Setup(r => r.GetAllSupportedProviderTypes()).Returns(["opencode", "pi", "claude-code", "copilot"]);
         _registry.Setup(r => r.GetModelSupport(It.IsAny<string>()))
-            .Returns((string type) => type is "opencode" or "pi"
-                ? AdapterModelSupport.Required
-                : AdapterModelSupport.Optional);
+            .Returns((string type) => DeclaredModelSupport.For(type));
     }
 
     public void Dispose()
@@ -214,6 +212,11 @@ public class AiProvidersControllerTests : IDisposable
     [Theory]
     [InlineData("pi")]
     [InlineData("opencode")]
+    // The API accepts a type in any case, so a mixed-case one still has to be
+    // held to its adapter's Required declaration rather than slipping through.
+    [InlineData("Pi")]
+    [InlineData("OpenCode")]
+    [InlineData("OPENCODE")]
     public async Task Create_rejects_a_required_model_adapter_without_a_model(string type)
     {
         var controller = CreateController();
