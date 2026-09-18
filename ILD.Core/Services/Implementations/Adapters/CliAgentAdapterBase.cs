@@ -44,6 +44,14 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     public virtual ConfigFieldDescriptor[] ConfigSchema => Array.Empty<ConfigFieldDescriptor>();
 
     /// <summary>
+    /// Defaults to <see cref="AdapterModelSupport.Unsupported"/>: an adapter whose
+    /// CLI model flag nobody has verified declares nothing and is left as it was.
+    /// Overriding this is what wires the provider's model through, so the override
+    /// and the flag in the arg list are added together (ADR-0009).
+    /// </summary>
+    public virtual AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
+
+    /// <summary>
     /// The generic "Custom MCP servers (JSON)" field shared by every MCP-capable
     /// adapter (opencode, claude-code, copilot). Each such adapter surfaces it from
     /// its own <see cref="ConfigSchema"/> so the value is persisted into

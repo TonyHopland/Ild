@@ -2,8 +2,26 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { AuthContext } from "../../hooks/useAuth";
-import { ConfigFieldType } from "../../types";
+import { AdapterModelSupport, ConfigFieldType } from "../../types";
 import AiProviders from "./index";
+
+// What each adapter declares about a model, mirroring the real backend:
+// the BYO-endpoint types require one, the CLI-auth types treat it as optional,
+// and anything else declares nothing.
+const DECLARED_MODEL_SUPPORT: Record<string, AdapterModelSupport> = {
+  opencode: "Required",
+  pi: "Required",
+  "claude-code": "Optional",
+  copilot: "Optional",
+};
+
+/** The `GET /AgentAdapters` payload for a set of provider types. */
+function adapterList(types: string[]) {
+  return types.map((type) => ({
+    type,
+    modelSupport: DECLARED_MODEL_SUPPORT[type] ?? "Unsupported",
+  }));
+}
 
 afterEach(() => {
   cleanup();
@@ -47,7 +65,7 @@ function routingFetch(options: {
     });
 
     if (method === "GET" && url.includes("config-schema")) return ok(schema);
-    if (method === "GET" && url.includes("AgentAdapters")) return ok(types);
+    if (method === "GET" && url.includes("AgentAdapters")) return ok(adapterList(types));
     if (method === "GET" && url.includes("managedagents")) return ok(agents);
     if (method === "GET" && url.includes("aiproviders")) return ok(providers);
     if (method === "POST" || method === "PUT") return ok(onWrite?.(url, init!) ?? {});
@@ -99,7 +117,7 @@ function queueInitialLoad(
 ) {
   fetchMock
     .mockReturnValueOnce(jsonResponse(providers))
-    .mockReturnValueOnce(jsonResponse(["opencode", "pi"]))
+    .mockReturnValueOnce(jsonResponse(adapterList(["opencode", "pi"])))
     .mockReturnValueOnce(jsonResponse(agents));
 }
 
@@ -169,7 +187,7 @@ describe("AI Providers page", () => {
       Promise.resolve({
         ok: true,
         status: 200,
-        text: () => Promise.resolve(JSON.stringify(["opencode", "pi"])),
+        text: () => Promise.resolve(JSON.stringify(adapterList(["opencode", "pi"]))),
       }),
     );
 
@@ -210,7 +228,7 @@ describe("AI Providers page", () => {
       Promise.resolve({
         ok: true,
         status: 200,
-        text: () => Promise.resolve(JSON.stringify(["opencode", "pi"])),
+        text: () => Promise.resolve(JSON.stringify(adapterList(["opencode", "pi"]))),
       }),
     );
 
@@ -250,7 +268,7 @@ describe("AI Providers page", () => {
       Promise.resolve({
         ok: true,
         status: 200,
-        text: () => Promise.resolve(JSON.stringify(["opencode", "pi"])),
+        text: () => Promise.resolve(JSON.stringify(adapterList(["opencode", "pi"]))),
       }),
     );
 
@@ -304,7 +322,7 @@ describe("AI Providers page", () => {
         Promise.resolve({
           ok: true,
           status: 200,
-          text: () => Promise.resolve(JSON.stringify(["opencode", "pi"])),
+          text: () => Promise.resolve(JSON.stringify(adapterList(["opencode", "pi"]))),
         }),
       );
 
@@ -321,12 +339,12 @@ describe("AI Providers page", () => {
     );
   });
 
-  test("selecting the copilot CLI-auth type hides connection fields and shows the login note", async () => {
+  test("selecting the copilot CLI-auth type hides the auth fields but keeps the model", async () => {
     const fetchMock = mockFetch(null);
     // Initial load order: providers, supported types (incl. copilot), agents.
     fetchMock
       .mockReturnValueOnce(jsonResponse([]))
-      .mockReturnValueOnce(jsonResponse(["opencode", "pi", "claude-code", "copilot"]))
+      .mockReturnValueOnce(jsonResponse(adapterList(["opencode", "pi", "claude-code", "copilot"])))
       .mockReturnValueOnce(jsonResponse([]));
 
     renderPage(fetchMock);
@@ -347,10 +365,13 @@ describe("AI Providers page", () => {
       target: { value: "copilot" },
     });
 
-    // CLI-auth: connection fields disappear, the login note takes their place.
+    // CLI-auth: the fields the CLI owns disappear and the login note takes
+    // their place. The model is not one of them — copilot's adapter declares it
+    // optional, so the field stays and says what blank means.
     expect(screen.queryByLabelText("Base URL")).toBeFalsy();
-    expect(screen.queryByLabelText("Model")).toBeFalsy();
     expect(screen.queryByLabelText("API Key")).toBeFalsy();
+    expect(screen.getByLabelText("Model (optional)")).toBeTruthy();
+    expect(screen.getByText(/Leave blank to use the CLI/)).toBeTruthy();
     expect(screen.getByText("/login")).toBeTruthy();
     // The note is Copilot-specific rather than the Claude Code wording.
     const note = screen.getByText(
@@ -392,7 +413,7 @@ describe("AI Providers page", () => {
       Promise.resolve({
         ok: true,
         status: 200,
-        text: () => Promise.resolve(JSON.stringify(["opencode", "pi"])),
+        text: () => Promise.resolve(JSON.stringify(adapterList(["opencode", "pi"]))),
       }),
     );
 
@@ -437,7 +458,7 @@ describe("AI Providers page", () => {
         Promise.resolve({
           ok: true,
           status: 200,
-          text: () => Promise.resolve(JSON.stringify(["opencode", "pi"])),
+          text: () => Promise.resolve(JSON.stringify(adapterList(["opencode", "pi"]))),
         }),
       );
 
@@ -490,7 +511,7 @@ describe("AI Providers page", () => {
       Promise.resolve({
         ok: true,
         status: 200,
-        text: () => Promise.resolve(JSON.stringify(["opencode", "pi"])),
+        text: () => Promise.resolve(JSON.stringify(adapterList(["opencode", "pi"]))),
       }),
     );
 
@@ -526,7 +547,7 @@ describe("AI Providers page", () => {
         Promise.resolve({
           ok: true,
           status: 200,
-          text: () => Promise.resolve(JSON.stringify(["opencode", "pi"])),
+          text: () => Promise.resolve(JSON.stringify(adapterList(["opencode", "pi"]))),
         }),
       );
 
@@ -858,7 +879,7 @@ describe("AI Providers page", () => {
       Promise.resolve({
         ok: true,
         status: 200,
-        text: () => Promise.resolve(JSON.stringify(["opencode", "pi"])),
+        text: () => Promise.resolve(JSON.stringify(adapterList(["opencode", "pi"]))),
       }),
     );
 
@@ -1023,5 +1044,119 @@ describe("AI Providers page", () => {
     // The edited value rides on the dedicated, non-secret field; the server folds
     // it into AiProvider.Config, preserving any other stored keys.
     expect((putReq!.body as { customMcpServersJson?: string }).customMcpServersJson).toBe(newValue);
+  });
+
+  test("saving a claude-code provider keeps its model instead of wiping it", async () => {
+    const providers = [
+      {
+        id: "ai-1",
+        name: "Claude Max",
+        type: "claude-code",
+        baseUrl: "",
+        apiKey: "",
+        model: "opus",
+        isDefault: true,
+        createdAt: "2025-01-01T00:00:00Z",
+      },
+    ];
+
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    renderRouted(
+      routingFetch({
+        providers,
+        types: ["claude-code", "pi"],
+        schema: customMcpSchema,
+        onWrite: () => providers[0],
+        requests,
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText("AI Providers")).toBeTruthy());
+
+    fireEvent.click(screen.getByText("Edit"));
+
+    // The stored model seeds the field rather than being hidden and blanked.
+    const input = (await screen.findByLabelText("Model (optional)")) as HTMLInputElement;
+    expect(input.value).toBe("opus");
+    expect(input.required).toBe(false);
+
+    fireEvent.change(input, { target: { value: "sonnet" } });
+    fireEvent.click(screen.getByText("Update"));
+
+    await waitFor(() => expect(screen.queryByText("Edit Provider")).toBeFalsy());
+
+    const putReq = requests.find((r) => r.method === "PUT" && r.url.includes("/aiproviders/ai-1"));
+    expect((putReq!.body as { model?: string }).model).toBe("sonnet");
+    // Base URL is still the CLI's to own, so it keeps being blanked on save.
+    expect((putReq!.body as { baseUrl?: string }).baseUrl).toBe("");
+  });
+
+  test("a provider type whose adapter declares no model support shows no model input", async () => {
+    const providers = [
+      {
+        id: "ai-1",
+        name: "Mystery",
+        type: "mystery",
+        baseUrl: "http://mystery.local",
+        apiKey: "key",
+        model: "",
+        isDefault: true,
+        createdAt: "2025-01-01T00:00:00Z",
+      },
+    ];
+
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    renderRouted(routingFetch({ providers, types: ["mystery"], schema: [], requests }));
+
+    await waitFor(() => expect(screen.getByText("AI Providers")).toBeTruthy());
+
+    fireEvent.click(screen.getByText("Edit"));
+    await waitFor(() => expect(screen.getByText("Edit Provider")).toBeTruthy());
+
+    expect(screen.getByLabelText("Base URL")).toBeTruthy();
+    expect(screen.queryByLabelText("Model")).toBeFalsy();
+    expect(screen.queryByLabelText("Model (optional)")).toBeFalsy();
+  });
+
+  test("a required-model provider marks the field required and sends the edited value", async () => {
+    const providers = [
+      {
+        id: "ai-1",
+        name: "Pi",
+        type: "pi",
+        baseUrl: "http://pi.local",
+        apiKey: "key",
+        model: "gpt-4",
+        isDefault: true,
+        createdAt: "2025-01-01T00:00:00Z",
+      },
+    ];
+
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    renderRouted(
+      routingFetch({
+        providers,
+        types: ["pi"],
+        schema: [],
+        onWrite: () => providers[0],
+        requests,
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText("AI Providers")).toBeTruthy());
+
+    fireEvent.click(screen.getByText("Edit"));
+
+    const input = (await screen.findByLabelText("Model")) as HTMLInputElement;
+    expect(input.required).toBe(true);
+    expect(screen.queryByText(/Leave blank to use the CLI/)).toBeFalsy();
+
+    fireEvent.change(input, { target: { value: "gpt-5" } });
+    fireEvent.click(screen.getByText("Update"));
+
+    await waitFor(() => expect(screen.queryByText("Edit Provider")).toBeFalsy());
+
+    const putReq = requests.find((r) => r.method === "PUT" && r.url.includes("/aiproviders/ai-1"));
+    expect((putReq!.body as { model?: string }).model).toBe("gpt-5");
   });
 });

@@ -28,6 +28,10 @@ public class AiProvidersControllerTests : IDisposable
         _db = new AppDbContext(options);
         _db.Database.EnsureCreated();
         _registry.Setup(r => r.GetAllSupportedProviderTypes()).Returns(["opencode", "pi", "claude-code", "copilot"]);
+        _registry.Setup(r => r.GetModelSupport(It.IsAny<string>()))
+            .Returns((string type) => type is "opencode" or "pi"
+                ? AdapterModelSupport.Required
+                : AdapterModelSupport.Optional);
     }
 
     public void Dispose()
@@ -205,6 +209,50 @@ public class AiProvidersControllerTests : IDisposable
         var badRequest = Assert.IsType<BadRequestObjectResult>(result);
         var json = System.Text.Json.JsonSerializer.Serialize(badRequest.Value);
         Assert.Contains("BaseUrl", json);
+    }
+
+    [Theory]
+    [InlineData("pi")]
+    [InlineData("opencode")]
+    public async Task Create_rejects_a_required_model_adapter_without_a_model(string type)
+    {
+        var controller = CreateController();
+
+        var result = await controller.Create(new AiProviderDto
+        {
+            Name = $"{type}-no-model",
+            Type = type,
+            BaseUrl = "https://api.example.com",
+            Model = string.Empty,
+        });
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Contains("Model is required", System.Text.Json.JsonSerializer.Serialize(badRequest.Value));
+    }
+
+    [Fact]
+    public async Task Create_then_Update_keeps_a_claude_code_providers_model()
+    {
+        var controller = CreateController();
+
+        var created = Assert.IsType<CreatedAtActionResult>(await controller.Create(new AiProviderDto
+        {
+            Name = "claude-opus",
+            Type = "claude-code",
+            BaseUrl = string.Empty,
+            Model = "opus",
+        }));
+        var id = (Guid)created.Value!.GetType().GetProperty("id")!.GetValue(created.Value)!;
+
+        await controller.Update(id.ToString(), new AiProviderDto
+        {
+            Name = "claude-opus renamed",
+            Type = "claude-code",
+            BaseUrl = string.Empty,
+            Model = "sonnet",
+        });
+
+        Assert.Equal("sonnet", (await _db.AiProviders.FindAsync(id))!.Model);
     }
 
     [Fact]

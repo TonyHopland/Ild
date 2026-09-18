@@ -24,6 +24,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
 
     public override string Name => "Pi";
     public override string[] SupportedProviderTypes => ["pi"];
+    public override AdapterModelSupport ModelSupport => AdapterModelSupport.Required;
 
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {

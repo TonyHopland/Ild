@@ -15,9 +15,11 @@ namespace ILD.Core.Services.Implementations.Adapters;
 /// Authentication is handled by the CLI itself: the user signs in once via the
 /// interactive <c>/login</c> command (a GitHub Copilot subscription), which
 /// stores credentials under <c>~/.copilot</c>. Like <see cref="ClaudeCodeAdapter"/>
-/// this adapter intentionally ignores <see cref="AiProvider.BaseUrl"/>,
-/// <see cref="AiProvider.ApiKey"/> and <see cref="AiProvider.Model"/> — those
-/// fields are not meaningful for subscription-based CLI auth.
+/// this adapter intentionally ignores <see cref="AiProvider.BaseUrl"/> and
+/// <see cref="AiProvider.ApiKey"/> — those fields are not meaningful for
+/// subscription-based CLI auth. <see cref="AiProvider.Model"/> is honoured and
+/// passed as <c>--model</c> when set; blank omits the flag so the CLI applies
+/// its own routing (its <c>auto</c> default).
 ///
 /// The invocation follows GitHub's documented headless form
 /// (<c>copilot --allow-all-tools -p "…"</c>): <c>--allow-all-tools</c> is
@@ -61,6 +63,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
     public override string[] SupportedProviderTypes => ["copilot"];
 
     public override ConfigFieldDescriptor[] ConfigSchema => [CustomMcpServersField];
+    public override AdapterModelSupport ModelSupport => AdapterModelSupport.Optional;
 
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
@@ -81,7 +84,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
             try
             {
                 proc = StartAgentProcess(
-                    BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.AdditionalAllowedDirectories, mcpConfigPath),
+                    BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.AdditionalAllowedDirectories, mcpConfigPath, ctx.Provider.Model),
                     ctx.Provider.Id);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
@@ -157,7 +160,8 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
         string worktreePath,
         string prompt,
         IReadOnlyList<string>? additionalAllowedDirectories = null,
-        string? mcpConfigPath = null)
+        string? mcpConfigPath = null,
+        string? model = null)
     {
         var psi = new ProcessStartInfo(binaryPath)
         {
@@ -191,6 +195,12 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
                 psi.ArgumentList.Add("--add-dir");
                 psi.ArgumentList.Add(dir);
             }
+        }
+
+        if (!string.IsNullOrWhiteSpace(model))
+        {
+            psi.ArgumentList.Add("--model");
+            psi.ArgumentList.Add(model);
         }
 
         // Passed as `@file`, never inline JSON, so the server's API token stays

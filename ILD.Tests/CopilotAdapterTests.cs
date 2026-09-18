@@ -58,6 +58,31 @@ public class CopilotAdapterTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_launches_with_the_providers_model()
+    {
+        var worktreeDir = CreateWorktree();
+        var scriptPath = Path.Combine(worktreeDir, "args.sh");
+        File.WriteAllText(scriptPath, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var withModel = await new CopilotAdapter().ExecuteAsync(
+                BuildContext(binaryPath: scriptPath, worktreePath: worktreeDir, model: "claude-sonnet-5"));
+            var withoutModel = await new CopilotAdapter().ExecuteAsync(
+                BuildContext(binaryPath: scriptPath, worktreePath: worktreeDir, model: ""));
+
+            var args = withModel.Output!.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal("claude-sonnet-5", args[Array.IndexOf(args, "--model") + 1]);
+            Assert.DoesNotContain("--model", withoutModel.Output!.Split('\n'));
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_fails_without_worktree()
     {
         var adapter = new CopilotAdapter();
@@ -236,6 +261,42 @@ public class CopilotAdapterTests
     }
 
     [Fact]
+    public void BuildRunProcessStartInfo_passes_the_model_verbatim()
+    {
+        var psi = CopilotAdapter.BuildRunProcessStartInfo(
+            binaryPath: "copilot",
+            worktreePath: "/tmp/wt",
+            prompt: "fix it",
+            model: "gpt-5.4");
+
+        var args = psi.ArgumentList.ToList();
+        Assert.Equal("gpt-5.4", args[args.IndexOf("--model") + 1]);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void BuildRunProcessStartInfo_omits_model_when_blank(string? model)
+    {
+        // Blank leaves the CLI on its own routing (its `auto` default): the flag
+        // has to be absent entirely, never present with an empty value.
+        var psi = CopilotAdapter.BuildRunProcessStartInfo(
+            binaryPath: "copilot",
+            worktreePath: "/tmp/wt",
+            prompt: "fix it",
+            model: model);
+
+        Assert.DoesNotContain("--model", psi.ArgumentList);
+    }
+
+    [Fact]
+    public void Copilot_declares_model_support_as_optional()
+    {
+        Assert.Equal(AdapterModelSupport.Optional, new CopilotAdapter().ModelSupport);
+    }
+
+    [Fact]
     public void BuildRunProcessStartInfo_grants_extra_allowed_directories_as_add_dir()
     {
         // ADR-0011: the Chat Context's open work item active-run worktree is
@@ -267,7 +328,8 @@ public class CopilotAdapterTests
         string worktreePath,
         string prompt = "test prompt",
         string? config = null,
-        Func<string, Task>? progressCallback = null)
+        Func<string, Task>? progressCallback = null,
+        string model = "")
     {
         var mergedConfig = config;
         if (string.IsNullOrEmpty(mergedConfig))
@@ -280,7 +342,7 @@ public class CopilotAdapterTests
                 Type = "copilot",
                 BaseUrl = string.Empty,
                 ApiKey = null,
-                Model = string.Empty,
+                Model = model,
                 Config = mergedConfig,
             },
             Prompt: prompt,

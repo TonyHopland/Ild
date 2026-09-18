@@ -24,6 +24,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
     public override string Name => "OpenCode";
     public override string[] SupportedProviderTypes => ["opencode"];
     public override ConfigFieldDescriptor[] ConfigSchema => [CustomMcpServersField];
+    public override AdapterModelSupport ModelSupport => AdapterModelSupport.Required;
 
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {

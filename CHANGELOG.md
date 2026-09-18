@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **GitHub Copilot and Pi agents now get every ILD tool, and a Copilot provider can add its own MCP servers.**
 
+- **A Claude Code or GitHub Copilot provider can now pick its model, so one provider runs Opus and another Sonnet. Leave it blank to keep the CLI's own default.**
+
 ### Changed
 
 - **The form for adding a forward now labels each box, so it is clear which is the name, which is the destination, and which port a client connects to on `127.0.0.1`.**

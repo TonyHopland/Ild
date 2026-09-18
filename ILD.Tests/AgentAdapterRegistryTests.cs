@@ -13,6 +13,7 @@ public class AgentAdapterRegistryTests
         public string Name => "TestOpenCode";
         public string[] SupportedProviderTypes => ["opencode"];
         public ConfigFieldDescriptor[] ConfigSchema => [];
+        public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
             => Task.FromResult(NodeExecutionResult.Ok("opencode"));
     }
@@ -22,6 +23,7 @@ public class AgentAdapterRegistryTests
         public string Name => "TestCustom";
         public string[] SupportedProviderTypes => ["custom"];
         public ConfigFieldDescriptor[] ConfigSchema => [];
+        public AdapterModelSupport ModelSupport => AdapterModelSupport.Required;
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
             => Task.FromResult(NodeExecutionResult.Ok("custom"));
     }
@@ -71,6 +73,7 @@ public class AgentAdapterRegistryTests
         public string Name => "TestCopilot";
         public string[] SupportedProviderTypes => ["copilot"];
         public ConfigFieldDescriptor[] ConfigSchema => [];
+        public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
             => Task.FromResult(NodeExecutionResult.Ok("copilot"));
     }
@@ -88,6 +91,24 @@ public class AgentAdapterRegistryTests
 
         Assert.IsType<TestCopilotAdapter>(registry.ResolveForProvider(new AiProvider { Type = "COPILOT" })());
         Assert.IsType<TestCopilotAdapter>(registry.ResolveForProvider(new AiProvider { Type = "Copilot" })());
+    }
+
+    [Fact]
+    public void GetModelSupport_reports_what_each_adapter_declared()
+    {
+        var sp = BuildServiceProvider(s =>
+        {
+            s.AddSingleton<IAgentAdapter, TestOpenCodeAdapter>();
+            s.AddSingleton<IAgentAdapter, TestCustomAdapter>();
+        });
+
+        var registry = sp.GetRequiredService<IAgentAdapterRegistry>();
+
+        Assert.Equal(AdapterModelSupport.Required, registry.GetModelSupport("custom"));
+        Assert.Equal(AdapterModelSupport.Required, registry.GetModelSupport("CUSTOM"));
+        Assert.Equal(AdapterModelSupport.Unsupported, registry.GetModelSupport("opencode"));
+        // An unregistered type has nothing to declare, and is not an error to ask about.
+        Assert.Equal(AdapterModelSupport.Unsupported, registry.GetModelSupport("unknown-type"));
     }
 
     [Fact]

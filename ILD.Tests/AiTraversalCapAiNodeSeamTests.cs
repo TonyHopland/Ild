@@ -28,6 +28,7 @@ public class AiTraversalCapAiNodeSeamTests
         public string Name => "Capturing";
         public string[] SupportedProviderTypes => ["claude-code"];
         public ConfigFieldDescriptor[] ConfigSchema => Array.Empty<ConfigFieldDescriptor>();
+        public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
 
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
         {
@@ -46,6 +47,7 @@ public class AiTraversalCapAiNodeSeamTests
         public FakeRegistry(IAgentAdapter adapter) => _adapter = adapter;
         public Func<IAgentAdapter> ResolveForProvider(AiProvider provider) => () => _adapter;
         public string[] GetAllSupportedProviderTypes() => ["claude-code"];
+        public AdapterModelSupport GetModelSupport(string providerType) => _adapter.ModelSupport;
     }
 
     /// <summary>A provider that is always full, so the AI node defers before it runs.</summary>
