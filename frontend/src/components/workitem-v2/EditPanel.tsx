@@ -184,8 +184,10 @@ export default function EditPanel({
           setSubmitError(outcome.errors.join(" "));
           return;
         }
-        onSave(await workItemService.getById(saved.id));
         attachments.clear();
+        // The parent gets the copy that carries the uploads. A reread that fails
+        // makes the save no less done, so it keeps the one it already has.
+        onSave(await workItemService.getById(saved.id).catch(() => saved));
       }
       onDone();
     } catch (error) {
