@@ -25,6 +25,8 @@ Remote providers, the WorkItem Server connection, repositories, AI providers, an
 | `ILD_PREVIEW_PROXY_BASE`                     | Origin worktree previews are served under, e.g. `http://ild.localhost:8080`. Unset ⇒ preview proxying is off               |
 | `ILD_PREVIEW_PUBLIC_HOST`                    | Host used to build direct preview URLs when no proxy base is set (default `127.0.0.1`)                                     |
 | `ILD_SHUTDOWN_DRAIN_SECONDS`                 | Seconds the shutdown drain may spend parking in-flight runs (default `20`; see below)                                      |
+| `ILD_MAX_ATTACHMENT_MB`                      | Largest single work-item attachment, in MB (default `25`; set on both containers — see below)                              |
+| `ILD_MAX_ATTACHMENTS_TOTAL_MB`               | Largest total of attachments one work item may hold, in MB (default `250`; set on both containers)                         |
 | `ILD_NETWORK_PROXY_PORT`                     | Loopback port of the agent egress proxy (image default `3128`). Empty ⇒ no proxy, agent launches are not funnelled         |
 | `ILD_NETWORK_ENFORCEMENT`                    | Set by the container entrypoint, not by you: `enforced` or `advisory`, with the reason in `ILD_NETWORK_ENFORCEMENT_REASON` |
 | `DO_NOT_TRACK`                               | Asks the agent CLIs not to send telemetry; compose defaults it to `1`. Opting back in has caveats (see below)              |
@@ -55,6 +57,32 @@ including `0`, as "do not track". Blanking it (`DO_NOT_TRACK=` in your `.env`)
 passes an empty value through, which most CLIs treat as unset, and is as far as
 `.env` alone can take you. To be certain, drop the `DO_NOT_TRACK` line from the
 `ild` service in `docker-compose.yml`.
+
+## Work item attachments
+
+Files attached to a work item are stored in the WorkItem Server's database, so
+both processes have a say in how big they may get and both have to be told:
+`ILD_MAX_ATTACHMENT_MB` and `ILD_MAX_ATTACHMENTS_TOTAL_MB` belong on the `ild`
+container **and** on the `workitem-server` container, with the same values. An
+API key is enough to reach the WorkItem Server without an ILD instance in front
+of it, which is why it enforces the limits itself rather than trusting the
+caller; ILD checks first only so an oversized file is refused before it is
+forwarded.
+
+Both are whole megabytes of 1024 × 1024 bytes, and anything malformed or
+non-positive falls back to the default (`25` and `250`). One upload may carry at
+most 10 files, which is fixed. The multipart and request-body ceilings are
+derived from the per-file maximum, so raising it is all that is needed — nothing
+else has a size of its own to keep in step. Clients read the effective numbers
+from `GET /api/v1/settings/attachments`.
+
+`ILD_MAX_ATTACHMENT_MB` is the setting to lower on a small machine. An upload is
+held in memory rather than spooled to disk, so at the defaults a full request —
+ten files of 25 MB — costs about 500 MB on the `ild` container and again on
+`workitem-server` as it passes through, and nothing limits how many uploads run
+at once. On a Raspberry Pi or anything else with a gigabyte or two to spare, set
+`ILD_MAX_ATTACHMENT_MB=5` on both containers: the derived ceilings follow it
+down.
 
 ## Session expiry
 

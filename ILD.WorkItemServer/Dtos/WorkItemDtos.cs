@@ -18,6 +18,13 @@ public sealed class WorkItemDto
 
     /// <summary>Every PR opened against this item, newest first.</summary>
     public IReadOnlyList<WorkItemPullRequest> PullRequests { get; set; } = Array.Empty<WorkItemPullRequest>();
+
+    /// <summary>
+    /// The item's attachments, metadata only — never the bytes, which are served
+    /// one file at a time from the attachment routes. Empty on the poll
+    /// response, which stays bodiless.
+    /// </summary>
+    public IReadOnlyList<WorkItemAttachmentDto> Attachments { get; set; } = Array.Empty<WorkItemAttachmentDto>();
     public string? HumanFeedbackActions { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? CreatedByChatSessionId { get; set; }
@@ -30,6 +37,15 @@ public sealed class WorkItemDto
 
     /// <summary>The ref every run of this item branches from. Null = the repository's default branch.</summary>
     public string? BaseBranchOverride { get; set; }
+}
+
+public sealed class WorkItemAttachmentDto
+{
+    public Guid Id { get; set; }
+    public string FileName { get; set; } = string.Empty;
+    public string ContentType { get; set; } = string.Empty;
+    public long SizeBytes { get; set; }
+    public DateTime CreatedAt { get; set; }
 }
 
 public sealed class CreateWorkItemRequest

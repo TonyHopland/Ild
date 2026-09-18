@@ -10,6 +10,8 @@ public sealed class WorkItemServerDbContext : DbContext
 
     public DbSet<WorkItem> WorkItems => Set<WorkItem>();
 
+    public DbSet<WorkItemAttachment> WorkItemAttachments => Set<WorkItemAttachment>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<WorkItem>(b =>
@@ -27,6 +29,18 @@ public sealed class WorkItemServerDbContext : DbContext
             // Items that predate the column read as "no PRs recorded yet"
             // rather than as an empty string the JSON reader has to special-case.
             b.Property(w => w.PullRequestsJson).HasDefaultValue("[]");
+        });
+
+        modelBuilder.Entity<WorkItemAttachment>(b =>
+        {
+            b.HasKey(a => a.Id);
+            b.HasIndex(a => a.WorkItemId);
+            // Deleting a work item never loads its attachments, so the database's
+            // own cascade is the only thing that collects them.
+            b.HasOne<WorkItem>()
+                .WithMany()
+                .HasForeignKey(a => a.WorkItemId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

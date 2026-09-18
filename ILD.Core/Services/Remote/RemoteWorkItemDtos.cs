@@ -48,6 +48,38 @@ public sealed record RemoteConversationMessage(string Role, string Content, Date
 /// </summary>
 public sealed record RemoteWorkItemPullRequest(string Url, Guid? LoopRunId, bool Merged, DateTime CreatedAt);
 
+/// <summary>
+/// One file the WorkItem server holds against a work item — metadata only. The
+/// bytes are fetched one attachment at a time, so a work item read never carries
+/// them.
+/// </summary>
+public sealed record RemoteWorkItemAttachment(Guid Id, string FileName, string ContentType, long SizeBytes, DateTime CreatedAt);
+
+/// <summary>One file on its way to the WorkItem server.</summary>
+public sealed record RemoteAttachmentUpload(string FileName, string? ContentType, byte[] Content);
+
+/// <summary>
+/// What the WorkItem server made of an upload. A refusal is <em>not</em> an
+/// outage: the per-work-item total is only knowable there, so its 400 has to
+/// reach the user with the server's own message instead of collapsing into the
+/// "WorkItemServer unreachable" every other failure of this client maps to.
+/// </summary>
+public enum AttachmentUploadOutcome
+{
+    Created = 0,
+
+    /// <summary>No such work item.</summary>
+    NotFound = 1,
+
+    /// <summary>A limit was broken; <c>Error</c> says which.</summary>
+    Rejected = 2,
+}
+
+public sealed record AttachmentUploadResult(
+    AttachmentUploadOutcome Outcome,
+    string? Error,
+    IReadOnlyList<RemoteWorkItemAttachment> Created);
+
 public sealed class RemoteWorkItem
 {
     public string Id { get; set; } = string.Empty;
@@ -64,6 +96,9 @@ public sealed class RemoteWorkItem
 
     /// <summary>Every PR opened against this item, newest first.</summary>
     public IReadOnlyList<RemoteWorkItemPullRequest> PullRequests { get; set; } = Array.Empty<RemoteWorkItemPullRequest>();
+
+    /// <summary>The item's attachments, metadata only — never the bytes.</summary>
+    public IReadOnlyList<RemoteWorkItemAttachment> Attachments { get; set; } = Array.Empty<RemoteWorkItemAttachment>();
     public string? HumanFeedbackActions { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? CreatedByChatSessionId { get; set; }

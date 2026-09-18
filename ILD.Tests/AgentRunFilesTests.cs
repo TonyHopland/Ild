@@ -50,6 +50,8 @@ public sealed class AgentRunFilesTests : IDisposable
         var finishedExtension = Directory.CreateDirectory(Path.Combine(_readRoot, "ild-pi-ext", finished.ToString("N"))).FullName;
         File.WriteAllText(Path.Combine(activeExtension, "ild.ts"), "token");
         File.WriteAllText(Path.Combine(finishedExtension, "ild.ts"), "token");
+        Directory.SetLastWriteTimeUtc(activeExtension, started.AddMinutes(-5));
+        Directory.SetLastWriteTimeUtc(finishedExtension, started.AddMinutes(-5));
 
         var legacy = Directory.CreateDirectory(Path.Combine(_scratchRoot, "ild-pi-agent", active.ToString("N"), "extensions")).FullName;
         File.WriteAllText(Path.Combine(legacy, "ild.ts"), "const API_TOKEN = \"old-token\";");
@@ -82,6 +84,8 @@ public sealed class AgentRunFilesTests : IDisposable
         File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserExecute);
         var sweptExtension = Directory.CreateDirectory(Path.Combine(_readRoot, "ild-pi-ext", Guid.NewGuid().ToString("N"))).FullName;
         File.WriteAllText(Path.Combine(sweptExtension, "ild.ts"), "token");
+        Directory.SetLastWriteTimeUtc(stuckExtension, started.AddMinutes(-5));
+        Directory.SetLastWriteTimeUtc(sweptExtension, started.AddMinutes(-5));
 
         var legacy = Directory.CreateDirectory(Path.Combine(_scratchRoot, "ild-pi-agent", Guid.NewGuid().ToString("N"), "extensions")).FullName;
         File.WriteAllText(Path.Combine(legacy, "ild.ts"), "const API_TOKEN = \"old-token\";");
@@ -94,6 +98,23 @@ public sealed class AgentRunFilesTests : IDisposable
         Assert.False(File.Exists(Path.Combine(legacy, "ild.ts")), "a file the sweep could not remove kept the legacy extension");
         Assert.Contains(logger.Warnings, w => w.Contains(stuckConfig));
         Assert.Contains(logger.Warnings, w => w.Contains(stuckExtension));
+    }
+
+    [Fact]
+    public async Task An_extension_written_since_this_process_started_is_left_alone()
+    {
+        // Written by a launch happening right now, so no database knew its id when
+        // the active set was read — and a sweep that goes by id alone deletes the
+        // token file out from under the agent that is starting with it.
+        var started = DateTime.UtcNow.AddMinutes(-1);
+        var launching = Directory.CreateDirectory(
+            Path.Combine(_readRoot, "ild-pi-ext", Guid.NewGuid().ToString("N"))).FullName;
+        File.WriteAllText(Path.Combine(launching, "ild.ts"), "token");
+
+        Assert.True(await AgentRunFiles.SweepAtStartupAsync(
+            new HashSet<Guid>(), _readRoot, _scratchRoot, started, NullLogger.Instance, CancellationToken.None));
+
+        Assert.True(Directory.Exists(launching), "the sweep took the extension of a launch that had just written it");
     }
 
     [Fact]

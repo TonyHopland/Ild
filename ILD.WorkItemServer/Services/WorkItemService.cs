@@ -102,7 +102,19 @@ public sealed class WorkItemService : IWorkItemService
     public async Task<WorkItemDto?> GetAsync(string id, CancellationToken ct = default)
     {
         var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
-        return w == null ? null : WorkItemMapper.ToDto(w);
+        return w == null ? null : await WithAttachmentsAsync(w, ct);
+    }
+
+    /// <summary>
+    /// The item as a single read answers it: one extra projected query for the
+    /// attachment metadata, never the bytes. Deliberately not used by
+    /// <see cref="PollAsync"/>, whose heartbeat carries every active and ready
+    /// item and must not grow a query per item.
+    /// </summary>
+    private async Task<WorkItemDto> WithAttachmentsAsync(WorkItem w, CancellationToken ct)
+    {
+        var attachments = await AttachmentMetadata.ReadAsync(_db, new[] { w.InternalId }, ct);
+        return WorkItemMapper.ToDto(w, attachments[w.InternalId].ToList());
     }
 
     public async Task<IReadOnlyList<WorkItemDto>> ListAsync(WorkItemStatus? status, IReadOnlyList<string>? tags, CancellationToken ct = default)
@@ -121,7 +133,8 @@ public sealed class WorkItemService : IWorkItemService
             }).ToList();
         }
 
-        return items.Select(WorkItemMapper.ToDto).ToList();
+        var attachments = await AttachmentMetadata.ReadAsync(_db, items.Select(w => w.InternalId).ToList(), ct);
+        return items.Select(w => WorkItemMapper.ToDto(w, attachments[w.InternalId].ToList())).ToList();
     }
 
     public async Task<WorkItemDto?> UpdateAsync(string id, UpdateWorkItemRequest req, CancellationToken ct = default)
@@ -153,7 +166,7 @@ public sealed class WorkItemService : IWorkItemService
             w.BaseBranchOverride = WorkItemMapper.NormalizeBranchRef(req.BaseBranchOverride);
         w.UpdatedAt = _clock.GetUtcNow().UtcDateTime;
         await _db.SaveChangesAsync(ct);
-        return WorkItemMapper.ToDto(w);
+        return await WithAttachmentsAsync(w, ct);
     }
 
     public async Task<bool> DeleteAsync(string id, CancellationToken ct = default)

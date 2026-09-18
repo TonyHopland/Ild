@@ -33,11 +33,12 @@ public static class AgentRunFiles
 
     /// <summary>
     /// Clear what a killed process left behind. Run at startup, before any run can
-    /// resume: MCP configs written before this process started, the pi extensions
-    /// of runs and chats not in <paramref name="activeRunAndChatIds"/>, and every
-    /// legacy <c>extensions/ild.ts</c>. Each is handled on its own: one that cannot
-    /// be removed is logged and the sweep carries on, so it never leaves the rest,
-    /// and their tokens, behind. Returns whether everything is gone.
+    /// resume: MCP configs and pi extensions written before this process started —
+    /// the extensions also only for runs and chats not in
+    /// <paramref name="activeRunAndChatIds"/> — and every legacy
+    /// <c>extensions/ild.ts</c>. Each is handled on its own: one that cannot be
+    /// removed is logged and the sweep carries on, so it never leaves the rest, and
+    /// their tokens, behind. Returns whether everything is gone.
     /// </summary>
     public static Task<bool> SweepAtStartupAsync(IReadOnlySet<Guid> activeRunAndChatIds, ILogger logger, CancellationToken ct = default)
         => SweepAtStartupAsync(
@@ -53,7 +54,7 @@ public static class AgentRunFiles
         IReadOnlySet<Guid> activeRunAndChatIds, string agentReadRoot, string scratchRoot, DateTime startedUtc, ILogger logger, CancellationToken ct)
     {
         var clean = DeleteEach(() => IldMcpServer.StaleConfigFiles(agentReadRoot, startedUtc), File.Delete, logger);
-        clean &= DeleteEach(() => PiAdapter.StaleExtensions(agentReadRoot, activeRunAndChatIds), path => Directory.Delete(path, recursive: true), logger);
+        clean &= DeleteEach(() => PiAdapter.StaleExtensions(agentReadRoot, activeRunAndChatIds, startedUtc), path => Directory.Delete(path, recursive: true), logger);
 
         try
         {

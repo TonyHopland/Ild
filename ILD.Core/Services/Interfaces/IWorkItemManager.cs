@@ -151,6 +151,26 @@ public interface IWorkItemManager
     /// </summary>
     Task<MergePullRequestResult?> MergePullRequestAsync(string workItemId, bool deleteBranch);
     Task<bool> DeleteAsync(string workItemId);
+
+    /// <summary>
+    /// The files attached to a work item, metadata only. Null when there is no
+    /// such work item. The bytes live in the WorkItem server's database and come
+    /// back one at a time from <see cref="GetAttachmentAsync"/>.
+    /// </summary>
+    Task<IReadOnlyList<RemoteWorkItemAttachment>?> ListAttachmentsAsync(string workItemId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Store files against a work item. The WorkItem server has the last word on
+    /// every limit — it is reachable without an ILD instance — so its refusal
+    /// travels back as an outcome carrying the reason rather than as an
+    /// exception a caller would report as an outage.
+    /// </summary>
+    Task<AttachmentUploadResult> AddAttachmentsAsync(string workItemId, IReadOnlyList<RemoteAttachmentUpload> files, CancellationToken ct = default);
+
+    /// <summary>One attachment's bytes, with the content type to serve them as. Null when either id is unknown.</summary>
+    Task<(byte[] Content, string ContentType, string FileName)?> GetAttachmentAsync(string workItemId, Guid attachmentId, CancellationToken ct = default);
+
+    Task<bool> DeleteAttachmentAsync(string workItemId, Guid attachmentId, CancellationToken ct = default);
 }
 
 /// <summary>

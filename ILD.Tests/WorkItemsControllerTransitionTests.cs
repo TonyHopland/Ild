@@ -70,6 +70,7 @@ public class WorkItemsControllerTransitionTests
             db.LoopRuns,
             db.Providers,
             new Mock<IBranchNameOverrideService>().Object,
+            ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(),
             NullLogger<WorkItemsController>.Instance);
 
         return (controller, mgr, db, repo.Id);
