@@ -1,7 +1,6 @@
 using ILD.WorkItemServer.Attachments;
 using ILD.WorkItemServer.Dtos;
 using ILD.WorkItemServer.Services;
-using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ILD.WorkItemServer.Controllers;
@@ -19,13 +18,8 @@ public sealed class WorkItemAttachmentsController : ControllerBase
     private const string AttachmentFieldName = "files";
 
     private readonly IWorkItemAttachmentService _attachments;
-    private readonly AttachmentLimits _limits;
 
-    public WorkItemAttachmentsController(IWorkItemAttachmentService attachments, AttachmentLimits limits)
-    {
-        _attachments = attachments;
-        _limits = limits;
-    }
+    public WorkItemAttachmentsController(IWorkItemAttachmentService attachments) => _attachments = attachments;
 
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<WorkItemAttachmentDto>>> List(string id, CancellationToken ct)
@@ -35,18 +29,14 @@ public sealed class WorkItemAttachmentsController : ControllerBase
     }
 
     /// <summary>
-    /// Takes no <c>[FromForm]</c> parameter on purpose: model binding would read
-    /// the body before the action ran, and the request-body cap cannot be raised
-    /// once reading has begun. The cap is raised here, on this endpoint alone, so
-    /// every other route keeps the host's default.
+    /// The files arrive as a form this action reads itself, and the cap on how
+    /// much body it may read is raised by the filter, which runs before anything
+    /// touches the body.
     /// </summary>
     [HttpPost]
+    [RaiseAttachmentBodyLimit]
     public async Task<IActionResult> Upload(string id, CancellationToken ct)
     {
-        var bodySize = HttpContext.Features.Get<IHttpMaxRequestBodySizeFeature>();
-        if (bodySize is { IsReadOnly: false })
-            bodySize.MaxRequestBodySize = _limits.MaxRequestBytes;
-
         if (!Request.HasFormContentType)
             return BadRequest(new { error = "Attachments are uploaded as multipart/form-data under the field 'files'." });
 

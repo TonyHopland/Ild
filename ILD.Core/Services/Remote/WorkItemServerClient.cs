@@ -231,7 +231,7 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
             // storing application/octet-stream.
             if (!string.IsNullOrWhiteSpace(file.ContentType))
                 part.Headers.TryAddWithoutValidation("Content-Type", file.ContentType);
-            body.Add(part, AttachmentFieldName, file.FileName);
+            body.Add(part, AttachmentFieldName, HeaderSafeFileName(file.FileName));
         }
         msg.Content = body;
 
@@ -273,6 +273,21 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
 
     /// <summary>The form field the server's attachment endpoint reads files from.</summary>
     private const string AttachmentFieldName = "files";
+
+    /// <summary>
+    /// A name <see cref="MultipartFormDataContent"/> will put in a header. It
+    /// refuses a blank one and one holding a quote or a newline, and the name is
+    /// the user's — <c>my "photo".png</c> is an ordinary file, not a bad request —
+    /// so those characters are replaced rather than the upload refused.
+    /// </summary>
+    private static string HeaderSafeFileName(string? fileName)
+    {
+        var trimmed = (fileName ?? string.Empty).Trim();
+        if (trimmed.Length == 0) return "attachment";
+
+        var safe = new string(trimmed.Select(c => c == '"' || char.IsControl(c) ? '_' : c).ToArray());
+        return string.IsNullOrWhiteSpace(safe) ? "attachment" : safe;
+    }
 
     private static string AttachmentsPath(string workItemId)
         => $"/workitems/{Uri.EscapeDataString(workItemId)}/attachments";

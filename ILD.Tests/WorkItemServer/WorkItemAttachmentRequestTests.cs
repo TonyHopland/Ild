@@ -2,7 +2,11 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using ILD.WorkItemServer.Attachments;
 using ILD.WorkItemServer.Dtos;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Tests.WorkItemServer;
 
@@ -63,6 +67,46 @@ public sealed class WorkItemAttachmentRequestTests : IAsyncLifetime
 
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
         Assert.Contains("files", (await ErrorAsync(resp))!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_request_with_more_parts_than_the_form_reader_will_take_is_refused_and_stores_nothing()
+    {
+        var id = await CreateWorkItemAsync();
+
+        // Far past the ten this server accepts, and past the 1024 parts the form
+        // reader will parse at all: the refusal then comes from the framework
+        // rather than from the limit check, and it still has to be the caller's
+        // answer — a 400 saying why, with nothing stored.
+        var files = Enumerable.Range(0, 1200)
+            .Select(i => ($"f{i}.bin", (string?)"application/octet-stream", new byte[] { (byte)i }))
+            .ToArray();
+
+        using var body = AttachmentUpload.Of(files);
+        var resp = await _client.PostAsync($"/workitems/{id}/attachments", body);
+
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+        Assert.Contains("form", await resp.Content.ReadAsStringAsync(), StringComparison.OrdinalIgnoreCase);
+
+        var listed = await _client.GetFromJsonAsync<JsonElement>($"/workitems/{id}/attachments");
+        Assert.Empty(listed.EnumerateArray().ToList());
+    }
+
+    [Fact]
+    public void Only_the_upload_endpoint_raises_its_body_cap_and_it_does_so_before_the_body_is_read()
+    {
+        // MVC parses a form request for its value providers before the action
+        // runs, so a cap raised inside the action arrives after the host default
+        // has already decided. It has to be a filter, and only here.
+        var endpoints = _factory.Services.GetRequiredService<EndpointDataSource>().Endpoints
+            .OfType<RouteEndpoint>()
+            .ToList();
+        var raising = endpoints
+            .Where(e => e.Metadata.GetMetadata<RaiseAttachmentBodyLimitAttribute>() != null)
+            .Select(e => $"{string.Join('|', e.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods ?? [])} {e.RoutePattern.RawText}")
+            .ToList();
+
+        Assert.Equal(new[] { "POST workitems/{id}/attachments" }, raising);
     }
 
     [Fact]

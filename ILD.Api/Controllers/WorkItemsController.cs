@@ -1,4 +1,5 @@
 using ILD.Api.Contracts;
+using ILD.Api.Filters;
 using ILD.Core.Services.Attachments;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
@@ -8,7 +9,6 @@ using ILD.Data.Enums;
 using ILD.Data.Entities;
 using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
-using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ILD.Api.Controllers;
@@ -521,18 +521,14 @@ public class WorkItemsController : ControllerBase
     }
 
     /// <summary>
-    /// Takes no <c>[FromForm]</c> parameter on purpose: model binding would read
-    /// the body before the action ran, and the request-body cap cannot be raised
-    /// once reading has begun. The cap is raised here, on this endpoint alone, so
-    /// every other route keeps the host's default.
+    /// The files arrive as a form this action reads itself, and the cap on how
+    /// much body it may read is raised by the filter, which runs before anything
+    /// touches the body.
     /// </summary>
     [HttpPost("{id}/attachments")]
+    [RaiseAttachmentBodyLimit]
     public async Task<IActionResult> UploadAttachments(string id, CancellationToken cancellationToken)
     {
-        var bodySize = HttpContext.Features.Get<IHttpMaxRequestBodySizeFeature>();
-        if (bodySize is { IsReadOnly: false })
-            bodySize.MaxRequestBodySize = _attachmentLimits.MaxRequestBytes;
-
         if (!Request.HasFormContentType)
             return BadRequest(new { error = "Attachments are uploaded as multipart/form-data under the field 'files'." });
 
