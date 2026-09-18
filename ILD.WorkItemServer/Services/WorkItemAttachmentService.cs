@@ -35,6 +35,9 @@ public enum AddAttachmentsOutcome
     FileTooLarge = 4,
     InvalidFileName = 5,
     TotalExceeded = 6,
+
+    /// <summary>The file read is not the size the request said it was, so no limit answered for it.</summary>
+    SizeMismatch = 7,
 }
 
 public sealed record AddAttachmentsResult(
@@ -142,6 +145,21 @@ public sealed class WorkItemAttachmentService : IWorkItemAttachmentService
         foreach (var file in files)
         {
             var content = await file.ReadAsync(ct);
+
+            // Every limit above answered for the size the request declared; what
+            // was read is what would actually be stored. A reader that disagrees
+            // with its own declaration has been measured by nothing, so it is
+            // refused rather than written.
+            if (content.LongLength > _limits.MaxBytesPerFile)
+                return AddAttachmentsResult.Refused(
+                    AddAttachmentsOutcome.FileTooLarge,
+                    $"'{FileNameOf(file.FileName)}' is larger than the {Megabytes(_limits.MaxBytesPerFile)} MB allowed per file.");
+            if (content.LongLength != file.SizeBytes)
+                return AddAttachmentsResult.Refused(
+                    AddAttachmentsOutcome.SizeMismatch,
+                    $"'{FileNameOf(file.FileName)}' is {content.LongLength} bytes, "
+                    + $"not the {file.SizeBytes} the request declared.");
+
             rows.Add(new WorkItemAttachment
             {
                 Id = Guid.NewGuid(),
