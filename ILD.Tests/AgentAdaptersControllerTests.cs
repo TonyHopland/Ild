@@ -16,6 +16,7 @@ public class AgentAdaptersControllerTests
         {
             new("model", ConfigFieldType.Text, "Model", true, "gpt-4", null),
         };
+        public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
             => Task.FromResult(NodeExecutionResult.Ok("ok"));
     }
@@ -51,21 +52,39 @@ public class AgentAdaptersControllerTests
         Assert.IsType<NotFoundObjectResult>(result);
     }
 
-    [Fact]
-    public void GetSupportedProviderTypes_returns_all_registered_types()
+    private static AgentAdapterDescriptor[] ListAdapters(params (string Type, AdapterModelSupport Support)[] adapters)
     {
         var registry = new Mock<IAgentAdapterRegistry>();
         registry.Setup(r => r.GetAllSupportedProviderTypes())
-            .Returns(new[] { "opencode", "pi" });
+            .Returns(adapters.Select(a => a.Type).ToArray());
+        foreach (var (type, support) in adapters)
+            registry.Setup(r => r.GetModelSupport(type)).Returns(support);
 
-        var controller = new AgentAdaptersController(registry.Object);
+        var result = new AgentAdaptersController(registry.Object).GetSupportedProviderTypes();
 
-        var result = controller.GetSupportedProviderTypes();
+        return (AgentAdapterDescriptor[])Assert.IsType<OkObjectResult>(result).Value!;
+    }
 
-        Assert.IsType<OkObjectResult>(result);
-        var okResult = (Microsoft.AspNetCore.Mvc.OkObjectResult)result;
-        var types = (string[])okResult.Value!;
-        Assert.Contains("opencode", types);
-        Assert.Contains("pi", types);
+    [Fact]
+    public void GetSupportedProviderTypes_returns_all_registered_types()
+    {
+        var adapters = ListAdapters(
+            ("opencode", AdapterModelSupport.Required),
+            ("pi", AdapterModelSupport.Required));
+
+        Assert.Equal(["opencode", "pi"], adapters.Select(a => a.Type));
+    }
+
+    [Fact]
+    public void GetSupportedProviderTypes_carries_each_adapters_declared_model_support()
+    {
+        var adapters = ListAdapters(
+            ("pi", AdapterModelSupport.Required),
+            ("claude-code", AdapterModelSupport.Optional),
+            ("mock", AdapterModelSupport.Unsupported));
+
+        Assert.Equal(AdapterModelSupport.Required, adapters.Single(a => a.Type == "pi").ModelSupport);
+        Assert.Equal(AdapterModelSupport.Optional, adapters.Single(a => a.Type == "claude-code").ModelSupport);
+        Assert.Equal(AdapterModelSupport.Unsupported, adapters.Single(a => a.Type == "mock").ModelSupport);
     }
 }

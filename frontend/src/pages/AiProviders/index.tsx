@@ -1,5 +1,12 @@
 import { useState, useEffect } from "react";
-import { AiProvider, ManagedAgentStatus, ApiError, ConfigFieldDescriptor } from "../../types";
+import {
+  AdapterModelSupport,
+  AgentAdapterDescriptor,
+  AiProvider,
+  ManagedAgentStatus,
+  ApiError,
+  ConfigFieldDescriptor,
+} from "../../types";
 import { aiProviderService, agentAdapterService, managedAgentService } from "../../services/auth";
 import AdapterConfigFields from "../../components/AdapterConfigFields";
 import ProviderTerminal from "../../components/ProviderTerminal";
@@ -18,7 +25,7 @@ const hasPendingUpdate = (agent: ManagedAgentStatus) => isInstalled(agent) && ag
 
 export default function AiProviders() {
   const [providers, setProviders] = useState<AiProvider[]>([]);
-  const [providerTypes, setProviderTypes] = useState<string[]>([]);
+  const [adapters, setAdapters] = useState<AgentAdapterDescriptor[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingProvider, setEditingProvider] = useState<AiProvider | null>(null);
@@ -73,12 +80,12 @@ export default function AiProviders() {
 
   const loadData = async () => {
     try {
-      const [providersResult, typesResult] = await Promise.all([
+      const [providersResult, adaptersResult] = await Promise.all([
         aiProviderService.getAll(),
-        agentAdapterService.getSupportedProviderTypes(),
+        agentAdapterService.getAdapters(),
       ]);
       setProviders(providersResult);
-      setProviderTypes(typesResult);
+      setAdapters(adaptersResult);
     } catch (error) {
       console.error("Failed to load AI providers:", error);
     } finally {
@@ -144,12 +151,27 @@ export default function AiProviders() {
 
   // Provider types whose auth is handled by the CLI itself (e.g. claude-code
   // and copilot log in via the `/login` slash command inside their TUI and store
-  // creds under ~/.claude / ~/.copilot), so the BaseUrl / API key / model fields
-  // are not applicable.
-  const isCliAuthProvider = (t: string) => t === "claude-code" || t === "copilot";
+  // creds under ~/.claude / ~/.copilot), so the BaseUrl / API key fields are not
+  // applicable. This says nothing about the model, which every adapter declares
+  // for itself — a CLI-auth provider can still choose one.
+  // Compared case-insensitively, the way the API resolves a provider type: it
+  // accepts and stores "Claude-Code" verbatim but reaches the same adapter.
+  const isCliAuthProvider = (t: string) =>
+    t.toLowerCase() === "claude-code" || t.toLowerCase() === "copilot";
 
   // Human-facing CLI name for a CLI-auth provider type, used in the login note.
-  const cliAuthLabel = (t: string) => (t === "copilot" ? "GitHub Copilot" : "Claude Code");
+  const cliAuthLabel = (t: string) =>
+    t.toLowerCase() === "copilot" ? "GitHub Copilot" : "Claude Code";
+
+  // What the selected type's adapter says about a model, straight from the API.
+  // Matched case-insensitively: the API accepts and stores a type verbatim but
+  // resolves its adapter ignoring case, so "Claude-Code" is the same provider
+  // type as "claude-code". Undefined means no adapter declared anything — an
+  // unregistered type, or a list that failed to load.
+  const modelSupport: AdapterModelSupport | undefined = adapters.find(
+    (a) => a.type.toLowerCase() === type.toLowerCase(),
+  )?.modelSupport;
+  const supportsModel = modelSupport === "Required" || modelSupport === "Optional";
 
   const handleSetDefault = async (provider: AiProvider) => {
     await aiProviderService.setDefault(provider.id);
@@ -162,7 +184,10 @@ export default function AiProviders() {
       name,
       type,
       baseUrl: cliAuth ? "" : baseUrl,
-      model: cliAuth ? "" : model,
+      // Only an adapter that actually declares Unsupported means "this type has
+      // no model". A type nothing was declared for keeps whatever is stored,
+      // rather than silently losing it to an edit that never showed the field.
+      model: modelSupport === "Unsupported" ? "" : model,
       isDefault,
       parallelism,
     };
@@ -404,9 +429,9 @@ export default function AiProviders() {
                 <label htmlFor="apType">Type</label>
                 <select id="apType" value={type} onChange={(e) => setType(e.target.value)} required>
                   <option value="">Select type...</option>
-                  {providerTypes.map((t) => (
-                    <option key={t} value={t}>
-                      {t}
+                  {adapters.map((a) => (
+                    <option key={a.type} value={a.type}>
+                      {a.type}
                     </option>
                   ))}
                 </select>
@@ -418,41 +443,49 @@ export default function AiProviders() {
                   <strong>Open terminal</strong> to launch the {cliAuthLabel(type)} TUI. Inside it,
                   run the <code>/login</code> slash command to sign in (with an active{" "}
                   {cliAuthLabel(type)} subscription). Until you complete that one-time login, this
-                  provider will not work. Base URL, API key and model are configured by the CLI
-                  itself and are not needed here.
+                  provider will not work. Base URL and API key are configured by the CLI itself and
+                  are not needed here.
                 </div>
               ) : (
-                <>
-                  <div className="form-group">
-                    <label htmlFor="apBaseUrl">Base URL</label>
-                    <input
-                      id="apBaseUrl"
-                      type="text"
-                      value={baseUrl}
-                      onChange={(e) => setBaseUrl(e.target.value)}
-                      required
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label htmlFor="apModel">Model</label>
-                    <input
-                      id="apModel"
-                      type="text"
-                      value={model}
-                      onChange={(e) => setModel(e.target.value)}
-                      required
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label htmlFor="apApiKey">API Key</label>
-                    <input
-                      id="apApiKey"
-                      type="password"
-                      value={apiKey}
-                      onChange={(e) => setApiKey(e.target.value)}
-                    />
-                  </div>
-                </>
+                <div className="form-group">
+                  <label htmlFor="apBaseUrl">Base URL</label>
+                  <input
+                    id="apBaseUrl"
+                    type="text"
+                    value={baseUrl}
+                    onChange={(e) => setBaseUrl(e.target.value)}
+                    required
+                  />
+                </div>
+              )}
+              {supportsModel && (
+                <div className="form-group">
+                  <label htmlFor="apModel">
+                    Model{modelSupport === "Optional" ? " (optional)" : ""}
+                  </label>
+                  <input
+                    id="apModel"
+                    type="text"
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    placeholder="An alias like opus or sonnet, or a full model id"
+                    required={modelSupport === "Required"}
+                  />
+                  {modelSupport === "Optional" && (
+                    <small>Leave blank to use the CLI&rsquo;s own default model.</small>
+                  )}
+                </div>
+              )}
+              {!isCliAuthProvider(type) && (
+                <div className="form-group">
+                  <label htmlFor="apApiKey">API Key</label>
+                  <input
+                    id="apApiKey"
+                    type="password"
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                  />
+                </div>
               )}
               {configSchema.length > 0 && (
                 <AdapterConfigFields

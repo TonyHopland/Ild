@@ -18,6 +18,7 @@ public class AgentAdapterConfigSchemaTests
             new("systemPrompt", ConfigFieldType.Textarea, "System Prompt", false, null, "A system prompt"),
             new("region", ConfigFieldType.Select, "Region", false, "us-east-1", "Deployment region", new[] { "us-east-1", "eu-west-1" }),
         };
+        public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
             => Task.FromResult(NodeExecutionResult.Ok("ok"));
     }

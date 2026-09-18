@@ -24,6 +24,7 @@ public class AINodeExecutorForkTests
         public string Name => "stub";
         public string[] SupportedProviderTypes => ["stub"];
         public ConfigFieldDescriptor[] ConfigSchema => [];
+        public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
 
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
         {

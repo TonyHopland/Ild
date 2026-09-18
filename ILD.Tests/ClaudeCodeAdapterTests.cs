@@ -261,6 +261,56 @@ public class ClaudeCodeAdapterTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_launches_with_the_providers_model()
+    {
+        var worktreeDir = CreateWorktree();
+        var scriptPath = WriteArgvEcho(worktreeDir);
+
+        try
+        {
+            var result = await new ClaudeCodeAdapter().ExecuteAsync(
+                BuildContext(binaryPath: scriptPath, worktreePath: worktreeDir, model: "opus"));
+
+            Assert.True(result.Success);
+            var args = result.Output!.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal("opus", args[Array.IndexOf(args, "--model") + 1]);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_launches_without_a_model_flag_when_the_provider_has_none()
+    {
+        var worktreeDir = CreateWorktree();
+        var scriptPath = WriteArgvEcho(worktreeDir);
+
+        try
+        {
+            var result = await new ClaudeCodeAdapter().ExecuteAsync(
+                BuildContext(binaryPath: scriptPath, worktreePath: worktreeDir, model: ""));
+
+            Assert.True(result.Success);
+            Assert.DoesNotContain("--model", result.Output!.Split('\n'));
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    /// <summary>A stand-in for the claude binary that prints the argv it was launched with, one token per line.</summary>
+    private static string WriteArgvEcho(string worktreeDir)
+    {
+        var scriptPath = Path.Combine(worktreeDir, "args.sh");
+        File.WriteAllText(scriptPath, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n");
+        Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        return scriptPath;
+    }
+
+    [Fact]
     public void BuildRunProcessStartInfo_emits_expected_arguments()
     {
         var psi = ClaudeCodeAdapter.BuildRunProcessStartInfo(
@@ -285,6 +335,44 @@ public class ClaudeCodeAdapterTests
             "--",
             "fix it",
         }, psi.ArgumentList);
+    }
+
+    [Fact]
+    public void BuildRunProcessStartInfo_passes_the_model_verbatim()
+    {
+        var psi = ClaudeCodeAdapter.BuildRunProcessStartInfo(
+            binaryPath: "claude",
+            worktreePath: "/tmp/wt",
+            prompt: "fix it",
+            sessionId: null,
+            model: "claude-opus-5");
+
+        var args = psi.ArgumentList.ToList();
+        Assert.Equal("claude-opus-5", args[args.IndexOf("--model") + 1]);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void BuildRunProcessStartInfo_omits_model_when_blank(string? model)
+    {
+        // Blank means "let the CLI pick its own default": the flag has to be
+        // absent entirely, never present with an empty value.
+        var psi = ClaudeCodeAdapter.BuildRunProcessStartInfo(
+            binaryPath: "claude",
+            worktreePath: "/tmp/wt",
+            prompt: "fix it",
+            sessionId: null,
+            model: model);
+
+        Assert.DoesNotContain("--model", psi.ArgumentList);
+    }
+
+    [Fact]
+    public void ClaudeCode_declares_model_support_as_optional()
+    {
+        Assert.Equal(AdapterModelSupport.Optional, new ClaudeCodeAdapter().ModelSupport);
     }
 
     [Fact]
@@ -448,7 +536,8 @@ public class ClaudeCodeAdapterTests
         string? config = null,
         string? sessionId = null,
         Func<string, Task>? progressCallback = null,
-        Action<string>? onSessionId = null)
+        Action<string>? onSessionId = null,
+        string model = "")
     {
         var mergedConfig = config;
         if (string.IsNullOrEmpty(mergedConfig))
@@ -461,7 +550,7 @@ public class ClaudeCodeAdapterTests
                 Type = "claude-code",
                 BaseUrl = string.Empty,
                 ApiKey = null,
-                Model = string.Empty,
+                Model = model,
                 Config = mergedConfig,
             },
             Prompt: prompt,

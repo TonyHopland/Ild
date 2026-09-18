@@ -14,6 +14,7 @@ import {
   ChatSessionSummary,
   LoopTemplateVersion,
   EventLogPage,
+  AgentAdapterDescriptor,
   ConfigFieldDescriptor,
   ManagedAgentStatus,
   LoopNode,
@@ -674,8 +675,9 @@ export const loggingService = {
 };
 
 export const agentAdapterService = {
-  getSupportedProviderTypes: async (): Promise<string[]> => {
-    return api.get<string[]>("/AgentAdapters");
+  /** Every registered provider type with the model capability its adapter declares. */
+  getAdapters: async (): Promise<AgentAdapterDescriptor[]> => {
+    return api.get<AgentAdapterDescriptor[]>("/AgentAdapters");
   },
   getConfigSchema: async (providerType: string): Promise<ConfigFieldDescriptor[]> => {
     return api.get<ConfigFieldDescriptor[]>(`/AgentAdapters/${providerType}/config-schema`);

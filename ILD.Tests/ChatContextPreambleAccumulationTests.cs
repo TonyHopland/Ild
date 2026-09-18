@@ -686,6 +686,7 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         public string Name => "fake";
         public string[] SupportedProviderTypes => ["fake"];
         public ConfigFieldDescriptor[] ConfigSchema => [];
+        public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
 
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
         {

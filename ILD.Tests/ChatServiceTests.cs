@@ -41,6 +41,7 @@ public sealed class ChatServiceTests : IDisposable
         public string Name => "fake";
         public string[] SupportedProviderTypes => ["fake"];
         public ConfigFieldDescriptor[] ConfigSchema => [];
+        public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
 
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
         {

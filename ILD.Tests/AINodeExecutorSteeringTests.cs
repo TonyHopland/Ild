@@ -23,6 +23,7 @@ public class AINodeExecutorSteeringTests
         public string Name => "Capturing";
         public string[] SupportedProviderTypes => ["claude-code"];
         public ConfigFieldDescriptor[] ConfigSchema => Array.Empty<ConfigFieldDescriptor>();
+        public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
 
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
         {
@@ -37,6 +38,7 @@ public class AINodeExecutorSteeringTests
         public FakeRegistry(IAgentAdapter adapter) => _adapter = adapter;
         public Func<IAgentAdapter> ResolveForProvider(AiProvider provider) => () => _adapter;
         public string[] GetAllSupportedProviderTypes() => ["claude-code"];
+        public AdapterModelSupport GetModelSupport(string providerType) => _adapter.ModelSupport;
     }
 
     private static (IServiceProvider sp, CapturingAdapter adapter) BuildServices(TestDb db, string workItemTitle = "")

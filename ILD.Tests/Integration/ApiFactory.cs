@@ -1,6 +1,7 @@
 using ILD.Core.Services.Remote;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
+using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -164,5 +165,10 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
 
         public string[] GetAllSupportedProviderTypes()
             => ["opencode", "pi", "claude-code"];
+
+        // Mirrors what the real adapters declare, so the providers API validates
+        // a model the same way here as it does in the app.
+        public AdapterModelSupport GetModelSupport(string providerType)
+            => DeclaredModelSupport.For(providerType);
     }
 }

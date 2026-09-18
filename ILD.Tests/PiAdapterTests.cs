@@ -23,6 +23,9 @@ public class PiAdapterTests
         Assert.Equal("Pi", adapter.Name);
         Assert.Contains("pi", adapter.SupportedProviderTypes);
         Assert.Empty(adapter.ConfigSchema);
+        // A BYO-endpoint provider's model is part of its connection details, so
+        // blanking it stays a validation error.
+        Assert.Equal(AdapterModelSupport.Required, adapter.ModelSupport);
     }
 
     [Fact]

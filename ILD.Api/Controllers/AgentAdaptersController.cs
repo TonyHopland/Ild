@@ -1,4 +1,5 @@
 using ILD.Core.Services.Interfaces;
+using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using Microsoft.AspNetCore.Mvc;
 
@@ -15,11 +16,19 @@ public class AgentAdaptersController : ControllerBase
         _registry = registry;
     }
 
+    /// <summary>
+    /// Every registered provider type with what its adapter declares about a
+    /// model selector, so the AI Providers form can offer the Model field — and
+    /// mark it required or optional — for a type no provider has been created
+    /// for yet.
+    /// </summary>
     [HttpGet]
     public IActionResult GetSupportedProviderTypes()
     {
-        var types = _registry.GetAllSupportedProviderTypes();
-        return Ok(types);
+        var adapters = _registry.GetAllSupportedProviderTypes()
+            .Select(type => new AgentAdapterDescriptor(type, _registry.GetModelSupport(type)))
+            .ToArray();
+        return Ok(adapters);
     }
 
     [HttpGet("{providerType}/config-schema")]
