@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using ILD.Core.Services.Attachments;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
@@ -23,6 +24,7 @@ public class SettingsController : ControllerBase
     private readonly ILD.Core.Services.Remote.IPrStatusPoller _prPoller;
     private readonly IEgressPolicy _egressPolicy;
     private readonly INetworkNotifier _networkNotifier;
+    private readonly AttachmentLimits _attachmentLimits;
 
     private static readonly HashSet<string> KnownKeys = new(StringComparer.Ordinal)
     {
@@ -47,7 +49,8 @@ public class SettingsController : ControllerBase
         ISchedulerSettingsService schedulerSettings,
         ILD.Core.Services.Remote.IPrStatusPoller prPoller,
         IEgressPolicy egressPolicy,
-        INetworkNotifier networkNotifier)
+        INetworkNotifier networkNotifier,
+        AttachmentLimits attachmentLimits)
     {
         _store = store;
         _notifier = notifier;
@@ -56,6 +59,7 @@ public class SettingsController : ControllerBase
         _prPoller = prPoller;
         _egressPolicy = egressPolicy;
         _networkNotifier = networkNotifier;
+        _attachmentLimits = attachmentLimits;
     }
 
     public sealed class UpdateSettingRequest
@@ -97,6 +101,20 @@ public class SettingsController : ControllerBase
             map[AppSettingKeys.NetworkLogRetentionDays] = AppSettingKeys.DefaultNetworkLogRetentionDays.ToString();
         return Ok(map.Select(kv => new { key = kv.Key, value = kv.Value }));
     }
+
+    /// <summary>
+    /// The attachment limits a client has to enforce before it starts uploading.
+    /// Read-only and not part of <see cref="KnownKeys"/>: they come from the
+    /// environment of both containers, not from the settings store, so there is
+    /// nothing here to write.
+    /// </summary>
+    [HttpGet("attachments")]
+    public IActionResult GetAttachmentLimits() => Ok(new
+    {
+        maxBytesPerFile = _attachmentLimits.MaxBytesPerFile,
+        maxFilesPerRequest = _attachmentLimits.MaxFilesPerRequest,
+        maxTotalBytesPerWorkItem = _attachmentLimits.MaxTotalBytesPerWorkItem,
+    });
 
     [HttpGet("{key}")]
     public async Task<IActionResult> Get(string key, CancellationToken ct)

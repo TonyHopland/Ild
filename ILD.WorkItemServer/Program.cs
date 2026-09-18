@@ -1,7 +1,9 @@
 using System.Reflection;
+using ILD.WorkItemServer.Attachments;
 using ILD.WorkItemServer.Auth;
 using ILD.WorkItemServer.Hosting;
 using ILD.WorkItemServer.Services;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
 using Serilog.Events;
@@ -60,6 +62,19 @@ public sealed class WorkItemServerProgram
 
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddScoped<IWorkItemService, WorkItemService>();
+        builder.Services.AddScoped<IWorkItemAttachmentService, WorkItemAttachmentService>();
+
+        // Attachment sizes are read once, here: the same variables are set on the
+        // ILD container, and both processes enforce them independently.
+        var attachmentLimits = AttachmentLimits.FromEnvironment();
+        builder.Services.AddSingleton(attachmentLimits);
+        builder.Services.Configure<FormOptions>(form =>
+        {
+            form.MultipartBodyLengthLimit = attachmentLimits.MaxRequestBytes;
+            // A file within the limit is buffered in memory, so an accepted
+            // upload never reaches a temp file.
+            form.MemoryBufferThreshold = (int)Math.Min(attachmentLimits.MaxBytesPerFile, int.MaxValue);
+        });
 
         builder.Services.Configure<ApiKeyOptions>(opts =>
         {

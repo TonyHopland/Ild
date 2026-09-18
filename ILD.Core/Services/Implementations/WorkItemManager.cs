@@ -396,6 +396,7 @@ public class WorkItemManager : IWorkItemManager
             IsPreviewRunning = isPreviewRunning,
             PrStatus = ResolvePrStatus(run?.PrSnapshot),
             PullRequests = BuildPrHistory(remote, runs),
+            Attachments = remote.Attachments,
         };
     }
 
@@ -1313,6 +1314,22 @@ public class WorkItemManager : IWorkItemManager
         }
         return true;
     }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Attachments
+    // ──────────────────────────────────────────────────────────────────
+
+    public async Task<IReadOnlyList<RemoteWorkItemAttachment>?> ListAttachmentsAsync(string workItemId, CancellationToken ct = default)
+        => await _server.ListAttachmentsAsync(await _options.ResolveForWorkItemAsync(workItemId, ct), workItemId, ct);
+
+    public async Task<AttachmentUploadResult> AddAttachmentsAsync(string workItemId, IReadOnlyList<RemoteAttachmentUpload> files, CancellationToken ct = default)
+        => await _server.UploadAttachmentsAsync(await _options.ResolveForWorkItemAsync(workItemId, ct), workItemId, files, ct);
+
+    public async Task<(byte[] Content, string ContentType, string FileName)?> GetAttachmentAsync(string workItemId, Guid attachmentId, CancellationToken ct = default)
+        => await _server.GetAttachmentAsync(await _options.ResolveForWorkItemAsync(workItemId, ct), workItemId, attachmentId, ct);
+
+    public async Task<bool> DeleteAttachmentAsync(string workItemId, Guid attachmentId, CancellationToken ct = default)
+        => await _server.DeleteAttachmentAsync(await _options.ResolveForWorkItemAsync(workItemId, ct), workItemId, attachmentId, ct);
 
     // ──────────────────────────────────────────────────────────────────
     // Mapping helpers

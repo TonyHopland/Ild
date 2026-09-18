@@ -191,6 +191,9 @@ public static class ServiceCollectionExtensions
         // holds this line, since a comment cannot).
         services.AddSingleton<IShutdownState, ShutdownState>();
         services.AddSingleton(_ => ShutdownOptions.FromEnvironment());
+        // The WorkItem server reads the same two variables and enforces the same
+        // numbers; both boundaries check independently.
+        services.AddSingleton(_ => ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment());
         services.AddHostedService<GracefulRunDrainService>();
 
         return services;

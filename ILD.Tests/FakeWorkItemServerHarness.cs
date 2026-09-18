@@ -1,6 +1,7 @@
 using ILD.Core.Services.Remote;
 
 using ILD.WorkItemServer;
+using ILD.WorkItemServer.Attachments;
 using ILD.WorkItemServer.Services;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -18,6 +19,7 @@ public sealed class FakeWorkItemServerHarness : IDisposable
     private readonly SqliteConnection _connection;
     public WorkItemServerDbContext ServerDb { get; }
     public IWorkItemService Service { get; }
+    public IWorkItemAttachmentService Attachments { get; }
     public IWorkItemServerClient Client { get; }
     public IWorkItemServerOptionsResolver Options { get; } = new StubWorkItemServerOptionsResolver();
 
@@ -31,7 +33,11 @@ public sealed class FakeWorkItemServerHarness : IDisposable
         ServerDb = new WorkItemServerDbContext(opts);
         ServerDb.Database.EnsureCreated();
         Service = new WorkItemService(ServerDb, clock ?? TimeProvider.System);
-        Client = new FakeWorkItemServerClient(Service);
+        // The real attachment service, reading the same environment the server
+        // would, so the limits it enforces are the ones the test set before it.
+        Attachments = new WorkItemAttachmentService(
+            ServerDb, AttachmentLimits.FromEnvironment(), clock ?? TimeProvider.System);
+        Client = new FakeWorkItemServerClient(Service, Attachments);
     }
 
     public void Dispose()

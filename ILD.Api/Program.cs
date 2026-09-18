@@ -76,6 +76,17 @@ try
         .Configure<ILD.Api.Services.ShutdownOptions>((host, shutdown) =>
             host.ShutdownTimeout = shutdown.HostShutdownTimeout);
 
+    // Multipart limits follow the configured per-file attachment maximum rather
+    // than a constant of their own. Form limits only bite where a form is read,
+    // and the attachment upload is the only one; the request-body cap is raised
+    // by that endpoint alone, so no other route sees either.
+    builder.Services.AddOptions<Microsoft.AspNetCore.Http.Features.FormOptions>()
+        .Configure<ILD.Core.Services.Attachments.AttachmentLimits>((form, attachments) =>
+        {
+            form.MultipartBodyLengthLimit = attachments.MaxRequestBytes;
+            form.MemoryBufferThreshold = (int)Math.Min(attachments.MaxBytesPerFile, int.MaxValue);
+        });
+
     builder.Services.AddSingleton<LoggingLevelSwitch>(loggingLevelSwitch);
     builder.Services.AddSingleton(new ILD.Api.Configuration.StartupLogLevel(initialLogLevel));
     builder.Services.AddSingleton(logBuffer);

@@ -89,6 +89,13 @@ public sealed class WorkItemView
     /// meaning for existing clients.
     /// </summary>
     public IReadOnlyList<WorkItemPullRequest> PullRequests { get; set; } = Array.Empty<WorkItemPullRequest>();
+
+    /// <summary>
+    /// The files attached to this work item, metadata only. The bytes live in
+    /// the WorkItem server's database and are fetched one attachment at a time
+    /// from the attachment routes, so no read of the item ever carries them.
+    /// </summary>
+    public IReadOnlyList<RemoteWorkItemAttachment> Attachments { get; set; } = Array.Empty<RemoteWorkItemAttachment>();
 }
 
 /// <summary>

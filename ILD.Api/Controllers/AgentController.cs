@@ -268,12 +268,47 @@ public class AgentController : ControllerBase
             updatedAt = wi.UpdatedAt,
             dependencies = deps.Select(d => new { id = d.Id, title = d.Title, status = d.Status.ToString() }),
             blocks = blocks.Select(b => new { id = b.Id, title = b.Title, status = b.Status.ToString() }),
+            // Metadata only. The bytes come from get_workitem_attachment, one
+            // file at a time, so an item with a screenshot on it stays readable.
+            attachments = wi.Attachments.Select(a => new
+            {
+                id = a.Id,
+                fileName = a.FileName,
+                contentType = a.ContentType,
+                sizeBytes = a.SizeBytes,
+            }),
             // The conversation is the largest field and rarely needed for
             // planning, so it is gated behind an explicit flag (ADR scope note).
             conversation = includeConversation
                 ? wi.Conversation.Select(m => new { role = m.Role, content = m.Content, timestamp = m.Timestamp, name = m.Name })
                 : null,
         });
+    }
+
+    /// <summary>
+    /// The bytes of one attachment an agent saw on <c>get_workitem</c>. Read-only
+    /// by design: attachments are a human's, and nothing on this surface adds or
+    /// removes one.
+    /// </summary>
+    [HttpGet("workitems/{id}/attachments/{attachmentId:guid}")]
+    public async Task<IActionResult> GetWorkItemAttachment(string id, Guid attachmentId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var attachment = await _workItems.GetAttachmentAsync(id, attachmentId, cancellationToken);
+            // Served as an attachment so an uploaded page cannot run on ILD's
+            // origin; nosniff comes from the security-headers middleware.
+            return attachment == null
+                ? NotFound()
+                : File(attachment.Value.Content, attachment.Value.ContentType, attachment.Value.FileName);
+        }
+        catch (HttpRequestException ex)
+        {
+            // The same shape this surface answers every other WorkItem-server
+            // outage with, so an agent can tell a missing file from an
+            // unreachable one.
+            return StatusCode(503, new { error = "WorkItemServer unreachable", detail = ex.Message });
+        }
     }
 
     // -- Branch sync (ADR-0014) ------------------------------------------------
