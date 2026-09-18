@@ -607,6 +607,9 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
       while (outcome.ok && attachments.hasPending()) {
         outcome = await attachments.uploadAll(workItem.id);
       }
+      // The dialog moved to another work item while the files were going up, so
+      // there is no longer an answer to this one being composed here.
+      if (outcome.abandoned) return;
       if (!outcome.ok) {
         setRespondError(outcome.errors.join(" "));
         return;

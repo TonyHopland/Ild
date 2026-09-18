@@ -249,6 +249,46 @@ describe("staging a file while the answer is being submitted", () => {
   });
 });
 
+describe("closing while an upload is on its way", () => {
+  test("waits for the batch instead of discarding over it", async () => {
+    mockServices();
+    const upload = deferred<never[]>();
+    vi.spyOn(authServices.workItemService, "uploadAttachment").mockReturnValue(upload.promise);
+    vi.spyOn(authServices.workItemService, "humanFeedbackInput").mockResolvedValue(undefined);
+    const onClose = vi.fn();
+    await renderDialog({ onClose });
+    await waitForLimits();
+    await stage(new File(["x"], "shot.png", { type: "image/png" }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      await Promise.resolve();
+    });
+
+    // The file is in the air: it cannot be called back, so the dialog neither
+    // closes nor offers to throw it away.
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Escape" });
+      await Promise.resolve();
+    });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Discard unsaved changes/)).toBeNull();
+
+    await act(async () => {
+      upload.resolve([]);
+      await Promise.resolve();
+    });
+
+    // Once the batch is done the dialog answers Escape again.
+    await waitFor(() => expect(feedback()).toBeTruthy());
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Escape" });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+});
+
 describe("closing with a file staged in the feedback pane", () => {
   test("Escape asks before discarding it", async () => {
     mockServices();

@@ -16,6 +16,12 @@ export interface UploadOutcome {
   /** Every staged file is on the work item. */
   ok: boolean;
   /**
+   * The batch stopped because the dialog moved to another work item. Whatever is
+   * staged now belongs to that one, so this attempt has nothing left to say —
+   * the view that started it is gone.
+   */
+  abandoned: boolean;
+  /**
    * The names of every file now stored on the item — including ones an earlier
    * attempt already landed, not just the ones this attempt sent.
    */
@@ -73,7 +79,23 @@ export function useAttachmentStaging(workItemId: string | undefined): Attachment
     settingsService
       .getAttachmentLimits()
       .then((result) => {
-        if (!cancelled) setLimits(result);
+        if (cancelled) return;
+        setLimits(result);
+        // A file staged before the limits arrived was never weighed against
+        // them. It is weighed now, while it is still only staged: the work item
+        // asks that no request carrying an oversize file is ever sent, and
+        // until this runs the gate has nothing to gate on.
+        const refusals: string[] = [];
+        applyStaged((prev) =>
+          prev.filter((entry) => {
+            if (entry.status === "uploaded" || entry.file.size <= result.maxBytesPerFile) {
+              return true;
+            }
+            refusals.push(oversizeMessage(entry.file.name, result.maxBytesPerFile));
+            return false;
+          }),
+        );
+        if (refusals.length > 0) setStagingError(refusals.join(" "));
       })
       .catch(() => {
         // Without the limits there is nothing to check against, and inventing
@@ -83,9 +105,15 @@ export function useAttachmentStaging(workItemId: string | undefined): Attachment
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [applyStaged]);
+
+  // Every reset starts a new generation. An upload batch that began under an
+  // older one has to stop: the files it would find now were staged for the work
+  // item the human has since opened, and its own target id is the previous one.
+  const generation = useRef(0);
 
   useEffect(() => {
+    generation.current += 1;
     applyStaged(() => []);
     setStagingError(null);
   }, [workItemId, applyStaged]);
@@ -164,8 +192,10 @@ export function useAttachmentStaging(workItemId: string | undefined): Attachment
       // the walk takes the list as it stands rather than the snapshot it started
       // with. Each entry is attempted once, which is what ends the walk.
       const attempted = new Set<string>();
+      const batch = generation.current;
       try {
         for (;;) {
+          if (generation.current !== batch) break;
           const entry = stagedRef.current.find(
             (candidate) => candidate.status === "pending" && !attempted.has(candidate.key),
           );
@@ -191,9 +221,14 @@ export function useAttachmentStaging(workItemId: string | undefined): Attachment
         setUploading(false);
       }
 
+      if (generation.current !== batch) {
+        return { ok: false, abandoned: true, storedNames: [], errors: [] };
+      }
+
       const current = stagedRef.current;
       return {
         ok: current.every((entry) => entry.status === "uploaded"),
+        abandoned: false,
         storedNames: current
           .filter((entry) => entry.status === "uploaded")
           .map((entry) => entry.file.name),

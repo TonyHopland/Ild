@@ -184,6 +184,9 @@ export default function EditPanel({
       // is still this save's to send.
       while (attachments.hasPending()) {
         const outcome = await attachments.uploadAll(saved.id);
+        // The dialog moved to another work item under this save: what is staged
+        // now belongs to that one, and this form is gone.
+        if (outcome.abandoned) return;
         if (!outcome.ok) {
           // The item is saved and some files are on it; the form stays open with
           // the stragglers still staged, so pressing Save again sends only those.

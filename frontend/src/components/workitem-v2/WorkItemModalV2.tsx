@@ -92,12 +92,16 @@ export default function WorkItemModalV2({
     detail.attachments.staged.length > 0;
 
   const requestClose = useCallback(() => {
+    // An upload already on its way cannot be called back, so closing over it
+    // would land files the human is in the middle of discarding. The staged
+    // rows show the batch running; closing waits for it.
+    if (detail.attachments.uploading) return;
     if (hasUnsavedChanges) {
       setShowCloseConfirm(true);
     } else {
       onClose();
     }
-  }, [hasUnsavedChanges, onClose]);
+  }, [detail.attachments.uploading, hasUnsavedChanges, onClose]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
