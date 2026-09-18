@@ -17,6 +17,8 @@ import {
   aiProviderService,
 } from "../../services/auth";
 import { useSignalR } from "../../hooks/useSignalR";
+import { useAttachmentStaging } from "./useAttachmentStaging";
+import { attachedNote } from "../../utils/attachments";
 
 /**
  * Shared data + actions for the V2 work item dialog. Loads the runs, repositories,
@@ -48,6 +50,11 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const [mergeLoading, setMergeLoading] = useState(false);
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [mergeMessage, setMergeMessage] = useState<string | null>(null);
+  const [respondError, setRespondError] = useState<string | null>(null);
+
+  // Staged on the work item, not on the view that staged them: the edit form and
+  // the feedback pane attach to the same item and share one list.
+  const attachments = useAttachmentStaging(workItem?.id);
 
   const reloadRepositories = useCallback(async () => {
     try {
@@ -565,22 +572,44 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     [workItem?.id, onSave],
   );
 
+  // Answering a parked run uploads the staged files first: the note names them,
+  // so an answer submitted before they landed would tell the agent about
+  // attachments the item does not carry. Neither a failed upload nor a refused
+  // submission touches the staged list, so a retry re-sends only what did not
+  // land — which is also why this does not go through runAction, where a failure
+  // would reach no further than the console.
+  const submitAnswer = async (submit: (id: string, input: string) => Promise<unknown>) => {
+    if (!workItem) return;
+    setRespondError(null);
+    let storedNames: string[] = [];
+    if (attachments.staged.length > 0) {
+      const outcome = await attachments.uploadAll(workItem.id);
+      if (!outcome.ok) {
+        setRespondError(outcome.errors.join(" "));
+        return;
+      }
+      storedNames = outcome.storedNames;
+    }
+    try {
+      await submit(workItem.id, attachedNote(feedbackInput, storedNames));
+      attachments.clear();
+      const updated = await workItemService.getById(workItem.id);
+      onSave(updated);
+    } catch (error) {
+      setRespondError((error as { message?: string })?.message ?? "Failed to submit the answer.");
+    }
+  };
+
   const handleApprove = () =>
-    runAction(
-      (id) => workItemService.humanFeedbackInput(id, feedbackInput || ""),
-      "submit feedback",
-    );
+    submitAnswer((id, input) => workItemService.humanFeedbackInput(id, input));
 
   // Pass any typed feedback through to the OnFailure successor as {{PreviousNode.Output}}.
   const handleReject = () =>
-    runAction(
-      (id) => workItemService.humanFeedbackReject(id, feedbackInput || undefined),
-      "reject",
-    );
+    submitAnswer((id, input) => workItemService.humanFeedbackReject(id, input || undefined));
 
   // Route the parked node to one of its named custom edges (a Human/PR button).
   const handleEdge = (name: string) =>
-    runAction((id) => workItemService.humanFeedbackEdge(id, name, feedbackInput || ""), "respond");
+    submitAnswer((id, input) => workItemService.humanFeedbackEdge(id, name, input));
 
   // Merge the linked PR on the remote (and optionally delete the branch), then
   // continue the loop along OnSuccess. A merge failure leaves the item parked,
@@ -700,6 +729,9 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     handleApprove,
     handleReject,
     handleEdge,
+    respondError,
+    attachments,
+    refetchWorkItem,
     mergeLoading,
     mergeError,
     mergeMessage,

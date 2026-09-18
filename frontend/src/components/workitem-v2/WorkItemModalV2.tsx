@@ -71,10 +71,16 @@ export default function WorkItemModalV2({
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [showTerminal, setShowTerminal] = useState(false);
 
+  // Leaving the edit view without saving discards the files staged in it too:
+  // one staging list serves both the form and the feedback pane, so a screenshot
+  // dropped here and then cancelled would otherwise ride along with the next
+  // answer to the run.
+  const clearStaged = detail.attachments.clear;
   const exitEdit = useCallback(() => {
     setEditMode(false);
     setEditDirty(false);
-  }, []);
+    clearStaged();
+  }, [clearStaged]);
 
   // Closing must not silently discard an in-progress edit, the create form, or
   // typed feedback. The create form (null workItem) is always an open form, so

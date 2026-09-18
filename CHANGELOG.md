@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **An agent can now open the files attached to its work item — a screenshot arrives as a picture it can see.**
 
+- **Attach images and files to a work item** — when you create or edit it, or when you answer a run that is waiting for you. The work item lists what it carries, and each file can be downloaded or removed.
+
 ### Changed
 
 - **The form for adding a forward now labels each box, so it is clear which is the name, which is the destination, and which port a client connects to on `127.0.0.1`.**

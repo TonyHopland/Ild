@@ -2,6 +2,8 @@ import { api } from "./api";
 import {
   User,
   WorkItem,
+  WorkItemAttachment,
+  AttachmentLimits,
   LoopTemplate,
   LoopRun,
   Repository,
@@ -340,6 +342,25 @@ export const workItemService = {
   ): Promise<WorktreeFileContent> => {
     const body: WorktreeFileSaveRequest = { path, content };
     return api.put<WorktreeFileContent>(`/workitems/${id}/files/content`, body);
+  },
+
+  /**
+   * Attach one file. The route takes up to ten per request, but a caller that
+   * sends them one at a time knows exactly which files landed when a batch
+   * fails partway, and never holds more than one file in memory.
+   */
+  uploadAttachment: async (id: string, file: File): Promise<WorkItemAttachment[]> => {
+    const form = new FormData();
+    form.append("files", file, file.name);
+    return api.postForm<WorkItemAttachment[]>(`/workitems/${id}/attachments`, form);
+  },
+
+  downloadAttachment: async (id: string, attachmentId: string): Promise<Blob> => {
+    return api.getBlob(`/workitems/${id}/attachments/${attachmentId}`);
+  },
+
+  deleteAttachment: async (id: string, attachmentId: string): Promise<void> => {
+    return api.delete<void>(`/workitems/${id}/attachments/${attachmentId}`);
   },
 };
 
@@ -698,6 +719,9 @@ export const settingsService = {
   },
   put: async (key: string, value: string): Promise<AppSetting> => {
     return api.put<AppSetting>(`/settings/${key}`, { value });
+  },
+  getAttachmentLimits: async (): Promise<AttachmentLimits> => {
+    return api.get<AttachmentLimits>("/settings/attachments");
   },
 };
 
