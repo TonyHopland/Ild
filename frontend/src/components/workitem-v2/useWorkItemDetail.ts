@@ -592,12 +592,12 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     }
     try {
       await submit(workItem.id, attachedNote(feedbackInput, storedNames));
-      attachments.clear();
-      const updated = await workItemService.getById(workItem.id);
-      onSave(updated);
     } catch (error) {
       setRespondError((error as { message?: string })?.message ?? "Failed to submit the answer.");
+      return;
     }
+    attachments.clear();
+    refetchWorkItem();
   };
 
   const handleApprove = () =>
