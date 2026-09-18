@@ -160,9 +160,14 @@ export default function AiProviders() {
   const cliAuthLabel = (t: string) => (t === "copilot" ? "GitHub Copilot" : "Claude Code");
 
   // What the selected type's adapter says about a model, straight from the API.
-  const modelSupport: AdapterModelSupport =
-    adapters.find((a) => a.type === type)?.modelSupport ?? "Unsupported";
-  const supportsModel = modelSupport !== "Unsupported";
+  // Matched case-insensitively: the API accepts and stores a type verbatim but
+  // resolves its adapter ignoring case, so "Claude-Code" is the same provider
+  // type as "claude-code". Undefined means no adapter declared anything — an
+  // unregistered type, or a list that failed to load.
+  const modelSupport: AdapterModelSupport | undefined = adapters.find(
+    (a) => a.type.toLowerCase() === type.toLowerCase(),
+  )?.modelSupport;
+  const supportsModel = modelSupport === "Required" || modelSupport === "Optional";
 
   const handleSetDefault = async (provider: AiProvider) => {
     await aiProviderService.setDefault(provider.id);
@@ -175,7 +180,10 @@ export default function AiProviders() {
       name,
       type,
       baseUrl: cliAuth ? "" : baseUrl,
-      model: supportsModel ? model : "",
+      // Only an adapter that actually declares Unsupported means "this type has
+      // no model". A type nothing was declared for keeps whatever is stored,
+      // rather than silently losing it to an edit that never showed the field.
+      model: modelSupport === "Unsupported" ? "" : model,
       isDefault,
       parallelism,
     };

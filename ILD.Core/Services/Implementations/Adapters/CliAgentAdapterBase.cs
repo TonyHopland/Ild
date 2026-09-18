@@ -46,8 +46,9 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     /// <summary>
     /// Defaults to <see cref="AdapterModelSupport.Unsupported"/>: an adapter whose
     /// CLI model flag nobody has verified declares nothing and is left as it was.
-    /// Overriding this is what wires the provider's model through, so the override
-    /// and the flag in the arg list are added together (ADR-0009).
+    /// Overriding this is what offers the field in the UI, so the override and the
+    /// flag in the arg list have to be added together — declaring support without
+    /// passing the flag silently drops the model the user chose.
     /// </summary>
     public virtual AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
 

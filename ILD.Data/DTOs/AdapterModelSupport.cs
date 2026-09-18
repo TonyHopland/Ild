@@ -2,8 +2,8 @@ namespace ILD.Data.DTOs;
 
 /// <summary>
 /// Whether an adapter's CLI accepts a model selector, and what a blank
-/// <see cref="Entities.AiProvider.Model"/> means for it. Declared per adapter
-/// (ADR-0009) rather than inferred from the provider type, so the UI and the
+/// <see cref="Entities.AiProvider.Model"/> means for it. Declared by the adapter
+/// rather than inferred from the provider type, so the UI and the
 /// connection-field validation both read one answer instead of keeping their
 /// own list of types.
 /// </summary>

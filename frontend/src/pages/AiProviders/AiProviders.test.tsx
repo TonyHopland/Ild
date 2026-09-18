@@ -1159,4 +1159,89 @@ describe("AI Providers page", () => {
     const putReq = requests.find((r) => r.method === "PUT" && r.url.includes("/aiproviders/ai-1"));
     expect((putReq!.body as { model?: string }).model).toBe("gpt-5");
   });
+
+  test("a type stored in a different case still matches its adapter", async () => {
+    // The API accepts "Claude-Code" and stores it verbatim while resolving the
+    // adapter case-insensitively, so the form has to match it the same way.
+    const providers = [
+      {
+        id: "ai-1",
+        name: "Claude Max",
+        type: "Claude-Code",
+        baseUrl: "",
+        apiKey: "",
+        model: "opus",
+        isDefault: true,
+        createdAt: "2025-01-01T00:00:00Z",
+      },
+    ];
+
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    renderRouted(
+      routingFetch({
+        providers,
+        types: ["claude-code"],
+        schema: [],
+        onWrite: () => providers[0],
+        requests,
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText("AI Providers")).toBeTruthy());
+
+    fireEvent.click(screen.getByText("Edit"));
+
+    const input = (await screen.findByLabelText("Model (optional)")) as HTMLInputElement;
+    expect(input.value).toBe("opus");
+
+    fireEvent.click(screen.getByText("Update"));
+    await waitFor(() => expect(screen.queryByText("Edit Provider")).toBeFalsy());
+
+    const putReq = requests.find((r) => r.method === "PUT" && r.url.includes("/aiproviders/ai-1"));
+    expect((putReq!.body as { model?: string }).model).toBe("opus");
+  });
+
+  test("a type no adapter declared keeps its stored model instead of losing it", async () => {
+    // Nothing came back for this type — an unregistered one, or a list that
+    // failed to load. That is not the same as an adapter saying Unsupported, so
+    // an unrelated edit must not blank a model the form never showed.
+    const providers = [
+      {
+        id: "ai-1",
+        name: "Mystery",
+        type: "mystery",
+        baseUrl: "http://mystery.local",
+        apiKey: "",
+        model: "some-model",
+        isDefault: true,
+        createdAt: "2025-01-01T00:00:00Z",
+      },
+    ];
+
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    renderRouted(
+      routingFetch({
+        providers,
+        types: ["pi"],
+        schema: [],
+        onWrite: () => providers[0],
+        requests,
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText("AI Providers")).toBeTruthy());
+
+    fireEvent.click(screen.getByText("Edit"));
+    await waitFor(() => expect(screen.getByText("Edit Provider")).toBeTruthy());
+
+    expect(screen.queryByLabelText("Model")).toBeFalsy();
+    expect(screen.queryByLabelText("Model (optional)")).toBeFalsy();
+
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Mystery renamed" } });
+    fireEvent.click(screen.getByText("Update"));
+    await waitFor(() => expect(screen.queryByText("Edit Provider")).toBeFalsy());
+
+    const putReq = requests.find((r) => r.method === "PUT" && r.url.includes("/aiproviders/ai-1"));
+    expect((putReq!.body as { model?: string }).model).toBe("some-model");
+  });
 });
