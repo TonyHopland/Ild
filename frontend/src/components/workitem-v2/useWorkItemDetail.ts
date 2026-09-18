@@ -144,6 +144,14 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     setFeedbackInput("");
   }, [workItem?.id, workItem?.status]);
 
+  // An answer is composed after its uploads, which the human keeps typing
+  // through, so what they end up with is read here rather than from the render
+  // the button was pressed in.
+  const feedbackInputRef = useRef(feedbackInput);
+  useEffect(() => {
+    feedbackInputRef.current = feedbackInput;
+  }, [feedbackInput]);
+
   useEffect(() => {
     // When parked at a PR node, prefill the feedback textarea with any
     // unread PR comments so the human can edit them before approving or
@@ -589,20 +597,24 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     setRespondLoading(true);
     setRespondError(null);
     try {
-      let storedNames: string[] = [];
-      // Like the save, this asks the staging list rather than the render the
-      // press came from, and keeps asking until nothing is pending: a file
-      // dropped while an upload was in flight is part of the answer too.
-      while (attachments.hasPending()) {
-        const outcome = await attachments.uploadAll(workItem.id);
-        if (!outcome.ok) {
-          setRespondError(outcome.errors.join(" "));
-          return;
-        }
-        storedNames = outcome.storedNames;
+      // The staging list answers both questions here, never the render the
+      // press came from: it says what is left to send — a file dropped while an
+      // upload was in flight is part of this answer too — and, once nothing is
+      // pending, what the note must name. An attempt that landed every file and
+      // failed only at the submit has nothing left to upload, and its retry
+      // still has to name what is already on the item.
+      let outcome = await attachments.uploadAll(workItem.id);
+      while (outcome.ok && attachments.hasPending()) {
+        outcome = await attachments.uploadAll(workItem.id);
+      }
+      if (!outcome.ok) {
+        setRespondError(outcome.errors.join(" "));
+        return;
       }
       try {
-        await submit(workItem.id, attachedNote(feedbackInput, storedNames));
+        // The typed text comes from the ref for the same reason: the uploads
+        // above can take seconds, and the human types on through them.
+        await submit(workItem.id, attachedNote(feedbackInputRef.current, outcome.storedNames));
       } catch (error) {
         setRespondError((error as { message?: string })?.message ?? "Failed to submit the answer.");
         return;

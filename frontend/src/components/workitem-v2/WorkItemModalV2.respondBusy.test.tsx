@@ -110,6 +110,75 @@ async function waitForLimits() {
   await waitFor(() => expect(feedback().textContent).toContain("25 MB"));
 }
 
+async function type(text: string) {
+  await act(async () => {
+    fireEvent.change(feedback().querySelector("textarea") as HTMLTextAreaElement, {
+      target: { value: text },
+    });
+    await Promise.resolve();
+  });
+}
+
+describe("the note an answer carries", () => {
+  test("a retry after a refused answer still names the files already stored", async () => {
+    mockServices();
+    const upload = vi.spyOn(authServices.workItemService, "uploadAttachment").mockResolvedValue([]);
+    const answer = vi
+      .spyOn(authServices.workItemService, "humanFeedbackInput")
+      .mockRejectedValueOnce({ status: 400, message: "Input is too long." })
+      .mockResolvedValue(undefined);
+    await renderDialog();
+    await waitForLimits();
+    await stage(new File(["x"], "a.png", { type: "image/png" }));
+    await type("Looks good");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(feedback().textContent).toContain("Input is too long."));
+
+    // The file landed on the first attempt, so the retry has nothing to send —
+    // but the note still has to tell the agent the file is there.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(answer).toHaveBeenCalledTimes(2));
+    expect(answer.mock.calls[1][1]).toBe("Looks good\n\nAttached files: a.png");
+    expect(upload).toHaveBeenCalledTimes(1);
+  });
+
+  test("carries what the human had typed by the time the uploads finished", async () => {
+    mockServices();
+    const upload = deferred<never[]>();
+    vi.spyOn(authServices.workItemService, "uploadAttachment").mockReturnValue(upload.promise);
+    const answer = vi
+      .spyOn(authServices.workItemService, "humanFeedbackInput")
+      .mockResolvedValue(undefined);
+    await renderDialog();
+    await waitForLimits();
+    await stage(new File(["x"], "a.png", { type: "image/png" }));
+    await type("half");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      await Promise.resolve();
+    });
+
+    // The upload is slow and the human finishes the sentence while it runs.
+    await type("half a sentence, now finished");
+    await act(async () => {
+      upload.resolve([]);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
+    expect(answer.mock.calls[0][1]).toBe("half a sentence, now finished\n\nAttached files: a.png");
+  });
+});
+
 describe("answering while an answer is already in flight", () => {
   test("the answer buttons are held until the upload and the answer are done", async () => {
     mockServices();
