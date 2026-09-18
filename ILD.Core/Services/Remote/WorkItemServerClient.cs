@@ -268,7 +268,13 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
     {
         var msg = Build(opts, HttpMethod.Delete, $"{AttachmentsPath(workItemId)}/{attachmentId}");
         using var resp = await _http.SendAsync(msg, ct);
-        return resp.IsSuccessStatusCode;
+        // False means the attachment is not there. Anything else the server says
+        // is a failure of the server, and reporting it as "already gone" would
+        // tell a user their file was deleted when it is still sitting in a
+        // database that happens to be unreachable.
+        if (resp.StatusCode == HttpStatusCode.NotFound) return false;
+        EnsureSuccess(resp, msg);
+        return true;
     }
 
     /// <summary>The form field the server's attachment endpoint reads files from.</summary>

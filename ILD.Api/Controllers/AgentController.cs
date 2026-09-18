@@ -293,12 +293,22 @@ public class AgentController : ControllerBase
     [HttpGet("workitems/{id}/attachments/{attachmentId:guid}")]
     public async Task<IActionResult> GetWorkItemAttachment(string id, Guid attachmentId, CancellationToken cancellationToken)
     {
-        var attachment = await _workItems.GetAttachmentAsync(id, attachmentId, cancellationToken);
-        // Served as an attachment so an uploaded page cannot run on ILD's
-        // origin; nosniff comes from the security-headers middleware.
-        return attachment == null
-            ? NotFound()
-            : File(attachment.Value.Content, attachment.Value.ContentType, attachment.Value.FileName);
+        try
+        {
+            var attachment = await _workItems.GetAttachmentAsync(id, attachmentId, cancellationToken);
+            // Served as an attachment so an uploaded page cannot run on ILD's
+            // origin; nosniff comes from the security-headers middleware.
+            return attachment == null
+                ? NotFound()
+                : File(attachment.Value.Content, attachment.Value.ContentType, attachment.Value.FileName);
+        }
+        catch (HttpRequestException ex)
+        {
+            // The same shape this surface answers every other WorkItem-server
+            // outage with, so an agent can tell a missing file from an
+            // unreachable one.
+            return StatusCode(503, new { error = "WorkItemServer unreachable", detail = ex.Message });
+        }
     }
 
     // -- Branch sync (ADR-0014) ------------------------------------------------

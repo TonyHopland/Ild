@@ -240,10 +240,17 @@ public sealed class WorkItemAttachmentService : IWorkItemAttachmentService
     /// <summary>
     /// The name as it is stored: the last segment only, since a caller is free
     /// to send a path and nothing here is a directory, and never blank.
+    ///
+    /// Both separators, not <see cref="Path.GetFileName(string?)"/>, which knows
+    /// only this platform's: a browser hands over <c>C:\fakepath\photo.png</c>
+    /// for a file input, and on Linux that would be stored whole, backslashes and
+    /// all.
     /// </summary>
     private static string FileNameOf(string? supplied)
     {
-        var name = Path.GetFileName(supplied?.Trim() ?? string.Empty);
+        var trimmed = (supplied ?? string.Empty).Trim();
+        var lastSeparator = trimmed.LastIndexOfAny(['/', '\\']);
+        var name = lastSeparator < 0 ? trimmed : trimmed[(lastSeparator + 1)..];
         return string.IsNullOrWhiteSpace(name) ? "attachment" : name;
     }
 

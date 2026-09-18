@@ -109,17 +109,26 @@ public sealed class WorkItemAttachmentRequestTests : IAsyncLifetime
         Assert.Equal(new[] { "POST workitems/{id}/attachments" }, raising);
     }
 
-    [Fact]
-    public async Task A_file_name_carrying_a_path_is_stored_as_its_last_segment()
+    [Theory]
+    [InlineData("../../etc/passwd", "passwd")]
+    // What a browser hands over for a file input, whatever it is running on.
+    [InlineData(@"C:\fakepath\photo.png", "photo.png")]
+    [InlineData(@"\\share\pictures\holiday.jpg", "holiday.jpg")]
+    // A name that is only a path leaves nothing to store it under. The Windows
+    // form of it cannot be sent from here: a trailing backslash escapes the
+    // closing quote of the header .NET writes, so the part arrives with no file
+    // name at all rather than with that one.
+    [InlineData("/var/tmp/", "attachment")]
+    public async Task A_file_name_carrying_a_path_is_stored_as_its_last_segment(string sent, string stored)
     {
         var id = await CreateWorkItemAsync();
 
-        using var body = AttachmentUpload.Of("../../etc/passwd", "text/plain", Encoding.UTF8.GetBytes("root"));
+        using var body = AttachmentUpload.Of(sent, "text/plain", Encoding.UTF8.GetBytes("root"));
         var resp = await _client.PostAsync($"/workitems/{id}/attachments", body);
 
         Assert.Equal(HttpStatusCode.Created, resp.StatusCode);
         var created = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement[0];
-        Assert.Equal("passwd", created.GetProperty("fileName").GetString());
+        Assert.Equal(stored, created.GetProperty("fileName").GetString());
     }
 
     [Fact]

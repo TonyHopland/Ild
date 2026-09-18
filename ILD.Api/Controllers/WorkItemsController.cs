@@ -513,12 +513,33 @@ public class WorkItemsController : ControllerBase
     // oversized upload is refused before it is forwarded, and the per-item total
     // — which only the server can know — comes back as its own 400.
 
-    [HttpGet("{id}/attachments")]
-    public async Task<IActionResult> ListAttachments(string id, CancellationToken cancellationToken)
+    /// <summary>
+    /// The outage shape every WorkItem-server-backed route in this controller
+    /// answers with (see <see cref="GetAll"/>). It is what keeps "the server
+    /// holding your files is unreachable" apart from "there is no such
+    /// attachment" — a 404 would send someone looking for a file that is sitting
+    /// safely in a database nobody can currently reach.
+    /// </summary>
+    private async Task<IActionResult> ForwardToWorkItemServerAsync(Func<Task<IActionResult>> forward)
     {
-        var attachments = await _workItemManager.ListAttachmentsAsync(id, cancellationToken);
-        return attachments == null ? NotFound() : Ok(attachments);
+        try
+        {
+            return await forward();
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogWarning(ex, "WorkItemServer unreachable for an attachment request");
+            return StatusCode(503, new { error = "WorkItemServer unreachable", detail = ex.Message });
+        }
     }
+
+    [HttpGet("{id}/attachments")]
+    public Task<IActionResult> ListAttachments(string id, CancellationToken cancellationToken)
+        => ForwardToWorkItemServerAsync(async () =>
+        {
+            var attachments = await _workItemManager.ListAttachmentsAsync(id, cancellationToken);
+            return attachments == null ? NotFound() : (IActionResult)Ok(attachments);
+        });
 
     /// <summary>
     /// The files arrive as a form this action reads itself, and the cap on how
@@ -558,24 +579,28 @@ public class WorkItemsController : ControllerBase
             uploads.Add(new RemoteAttachmentUpload(
                 file.FileName, file.ContentType, await ReadExactlyAsync(file, cancellationToken)));
 
-        return AttachmentHttpResult.ToActionResult(
-            await _workItemManager.AddAttachmentsAsync(id, uploads, cancellationToken));
+        return await ForwardToWorkItemServerAsync(async () => AttachmentHttpResult.ToActionResult(
+            await _workItemManager.AddAttachmentsAsync(id, uploads, cancellationToken)));
     }
 
     [HttpGet("{id}/attachments/{attachmentId:guid}")]
-    public async Task<IActionResult> DownloadAttachment(string id, Guid attachmentId, CancellationToken cancellationToken)
-    {
-        var attachment = await _workItemManager.GetAttachmentAsync(id, attachmentId, cancellationToken);
-        // Served as an attachment so an uploaded page cannot run on ILD's
-        // origin; nosniff comes from the security-headers middleware.
-        return attachment == null
-            ? NotFound()
-            : File(attachment.Value.Content, attachment.Value.ContentType, attachment.Value.FileName);
-    }
+    public Task<IActionResult> DownloadAttachment(string id, Guid attachmentId, CancellationToken cancellationToken)
+        => ForwardToWorkItemServerAsync(async () =>
+        {
+            var attachment = await _workItemManager.GetAttachmentAsync(id, attachmentId, cancellationToken);
+            // Served as an attachment so an uploaded page cannot run on ILD's
+            // origin; nosniff comes from the security-headers middleware.
+            return attachment == null
+                ? NotFound()
+                : (IActionResult)File(attachment.Value.Content, attachment.Value.ContentType, attachment.Value.FileName);
+        });
 
     [HttpDelete("{id}/attachments/{attachmentId:guid}")]
-    public async Task<IActionResult> DeleteAttachment(string id, Guid attachmentId, CancellationToken cancellationToken)
-        => await _workItemManager.DeleteAttachmentAsync(id, attachmentId, cancellationToken) ? NoContent() : NotFound();
+    public Task<IActionResult> DeleteAttachment(string id, Guid attachmentId, CancellationToken cancellationToken)
+        => ForwardToWorkItemServerAsync(async () =>
+            await _workItemManager.DeleteAttachmentAsync(id, attachmentId, cancellationToken)
+                ? NoContent()
+                : (IActionResult)NotFound());
 
     /// <summary>
     /// The file as one array of exactly its length. A <see cref="MemoryStream"/>
