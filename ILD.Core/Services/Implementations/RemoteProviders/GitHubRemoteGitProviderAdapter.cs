@@ -130,6 +130,13 @@ public sealed class GitHubRemoteGitProviderAdapter : RemoteGitProviderAdapterBas
     /// ids come back as <c>fullDatabaseId</c>, not the deprecated
     /// <c>databaseId</c>: this repository's own review comment ids overflow the
     /// 32-bit Int that field returns.
+    ///
+    /// Threads are walked to the end; the comments within one thread are not,
+    /// and stop at GraphQL's own maximum of 100. Past that the tail of a single
+    /// conversation falls back to the root of its reply chain for a thread id
+    /// and reports unresolved — those comments are still read and still
+    /// delivered, so it costs the reply route on one very long thread, not the
+    /// item.
     /// </summary>
     protected override async Task<IReadOnlyList<RemotePrReviewThread>> GetReviewThreadsAsync(
         HttpClient http, ResolvedRemoteRepository repo, string prNumber)

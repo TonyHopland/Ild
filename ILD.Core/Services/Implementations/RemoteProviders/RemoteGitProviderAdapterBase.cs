@@ -693,11 +693,15 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     /// this feature exists to stop. A null instead reaches the caller as
     /// "could not read", and an unreadable ledger changes no delivery state.
     ///
-    /// The walk stops on a short page rather than an empty one, so a forge that
-    /// caps the page size below what was asked for still terminates in one
-    /// round trip. Both spellings of the size go out: GitHub reads
-    /// <c>per_page</c>, Gitea/Forgejo read <c>limit</c>, and each ignores the
-    /// other's.
+    /// Both spellings of the size go out — GitHub reads <c>per_page</c>,
+    /// Gitea/Forgejo read <c>limit</c>, and each ignores the other's — but a
+    /// short page is NOT taken as the end on its own, because a forge is free to
+    /// cap what it was asked for: Gitea clamps to its <c>MAX_RESPONSE_ITEMS</c>,
+    /// 50 by default, so "shorter than the 100 I wanted" is its every page. The
+    /// walk follows the <c>Link</c> header's <c>rel="next"</c>, which both
+    /// families send on paged list routes and which says exactly whether more
+    /// exists; a response with no <c>Link</c> at all is the one case left to a
+    /// short page, and neither supported forge both caps and omits it.
     /// </summary>
     private static async Task<IReadOnlyList<JsonElement>?> ReadAllPagesAsync(HttpClient http, string url)
     {
@@ -724,12 +728,27 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
             }
 
             all.AddRange(batch);
-            if (batch.Count < ListPageSize)
+            if (batch.Count == 0)
                 break;
+
+            var link = resp.Headers.TryGetValues("Link", out var values) ? string.Join(",", values) : null;
+            if (link is not null)
+            {
+                if (!HasNextPage(link)) break;
+            }
+            else if (batch.Count < ListPageSize)
+            {
+                break;
+            }
         }
 
         return all;
     }
+
+    /// <summary>Whether a <c>Link</c> header offers a next page (RFC 5988, as both forge families send it).</summary>
+    private static bool HasNextPage(string link)
+        => link.Contains("rel=\"next\"", StringComparison.OrdinalIgnoreCase)
+            || link.Contains("rel=next", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// The provider's own review threads, when it has a thread concept to report

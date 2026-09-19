@@ -101,6 +101,20 @@ public static class PrCommentMarker
 
     public static bool IsStamped(string? body)
         => body is not null && body.Contains(Prefix, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Whether ILD wrote this item — the one place that question is answered,
+    /// because it cannot be answered from <see cref="RemotePrReviewItem.Body"/>
+    /// alone. An item's body is capped where it is read, and the marker sits at
+    /// the end, so on the PR node's own answer — a rendered
+    /// <c>{{PreviousNode.Output}}</c>, routinely far longer than the cap — the
+    /// stored body has had the marker cut off it.
+    /// <see cref="RemotePrReviewItem.PostedByIld"/> is decided at the boundary
+    /// from the full text and is therefore the authority; the body is still
+    /// checked as well, for an item built by hand rather than read from a forge.
+    /// </summary>
+    public static bool WasPostedByIld(RemotePrReviewItem item)
+        => item.PostedByIld || IsStamped(item.Body);
 }
 
 /// <summary>

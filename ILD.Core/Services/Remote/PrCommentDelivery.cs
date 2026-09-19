@@ -52,7 +52,7 @@ public static class PrCommentDelivery
         // items are left undelivered so a later complete review restating them
         // still fires.
         var candidates = fetched.Items
-            .Where(item => !PrCommentMarker.IsStamped(item.Body))
+            .Where(item => !PrCommentMarker.WasPostedByIld(item))
             .Where(item => item.ReviewId is null || !incompleteReviews.Contains(item.ReviewId))
             .ToList();
 
@@ -76,7 +76,11 @@ public static class PrCommentDelivery
         var deliver = new List<RemotePrReviewItem>();
         foreach (var item in candidates)
         {
-            if (state.WatchedFrom is { } from && item.CreatedAt <= from)
+            // Both sides to UTC first: the stamp is UtcNow, while a forge that
+            // times its comments with an offset rather than a Z parses to Local,
+            // and comparing the two raw would skew the window by the host's
+            // offset — long enough to record a real comment as history.
+            if (state.WatchedFrom is { } from && item.CreatedAt.ToUniversalTime() <= from.ToUniversalTime())
             {
                 recorded.Add(item);
                 continue;

@@ -148,7 +148,7 @@ public sealed class PrReviewService : IPrReviewService
             && string.Equals(run.HumanFeedbackReason, HumanFeedbackReasons.PrAwaitingMerge, StringComparison.Ordinal);
 
     private static bool WrittenByIld(RemotePrReviewItem item, IReadOnlyList<string> postedIds)
-        => PrCommentMarker.IsStamped(item.Body)
+        => PrCommentMarker.WasPostedByIld(item)
             || (item.CommentId is not null
                 && postedIds.Contains(PrCommentLedger.KeyFor(item.Kind, item.CommentId), StringComparer.Ordinal));
 

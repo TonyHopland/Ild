@@ -3,6 +3,7 @@ using System.Text;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.RemoteProviders;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 
@@ -96,6 +97,30 @@ public class RemotePrReviewLedgerPagingTests
     private static HttpResponseMessage Json(string body)
         => new(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
 
+    /// <summary>
+    /// A page as a real forge serves one: the body plus the <c>Link</c> header
+    /// that says whether another follows. Both GitHub and Gitea send it on paged
+    /// list routes, and it is the only thing that distinguishes "the end" from
+    /// "the page size I was given", so a double that omits it cannot show
+    /// whether the walk terminates for the right reason.
+    /// </summary>
+    private static HttpResponseMessage Page(string body, bool hasNext)
+    {
+        var resp = Json(body);
+        resp.Headers.TryAddWithoutValidation(
+            "Link",
+            hasNext
+                ? "<https://api.github.com/x?page=2>; rel=\"next\", <https://api.github.com/x?page=9>; rel=\"last\""
+                : "<https://api.github.com/x?page=1>; rel=\"prev\", <https://api.github.com/x?page=1>; rel=\"first\"");
+        return resp;
+    }
+
+    /// <summary>Gitea clamps a page to its own MAX_RESPONSE_ITEMS (50 by default), whatever was asked for.</summary>
+    private static string GiteaCappedPage(int from, int count)
+        => "[" + string.Join(",", Enumerable.Range(from, count).Select(i =>
+            "{\"id\":" + (6000000 + i) + ",\"user\":{\"login\":\"tony\"},\"created_at\":\"2026-09-18T19:00:00Z\","
+            + "\"body\":\"comment " + i + "\"}")) + "]";
+
     /// <summary>A full page of pull-request-level comments, as a forge's page one.</summary>
     private static string FullPageOfIssueComments()
         => "[" + string.Join(",", Enumerable.Range(1, 100).Select(i =>
@@ -119,7 +144,7 @@ public class RemotePrReviewLedgerPagingTests
             .Map(u => u.Contains("/pulls/7/reviews", StringComparison.Ordinal), () => "[]")
             .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), () => "[]")
             .MapUrl(u => u.Contains("/issues/7/comments", StringComparison.Ordinal),
-                u => PageOf(u) == 1 ? Json(FullPageOfIssueComments()) : secondPage(u))
+                u => PageOf(u) == 1 ? Page(FullPageOfIssueComments(), hasNext: true) : secondPage(u))
             .Map(u => u.EndsWith("/graphql", StringComparison.Ordinal), () => "{\"data\":null}")
             .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}");
 
@@ -129,9 +154,9 @@ public class RemotePrReviewLedgerPagingTests
         // A forge serves these oldest first, so past one page the NEWEST — the
         // ones that should fire the edge — are the ones that fall off.
         using var db = new TestDb();
-        var handler = PagedIssueComments(_ => Json(
+        var handler = PagedIssueComments(_ => Page(
             "[{\"id\":4060000999,\"user\":{\"login\":\"tony\"},\"created_at\":\"2026-09-19T19:00:00Z\","
-            + "\"body\":\"the newest thing anybody said\"}]"));
+            + "\"body\":\"the newest thing anybody said\"}]", hasNext: false));
 
         var ledger = await CreateService(db, handler, "GitHub", "https://github.com")
             .GetPullRequestReviewLedgerAsync("https://github.com/team/repo", "7");
@@ -162,6 +187,83 @@ public class RemotePrReviewLedgerPagingTests
     }
 
     [Fact]
+    public async Task A_forge_that_serves_a_smaller_page_than_it_was_asked_for_is_still_read_to_the_end()
+    {
+        // Gitea clamps to MAX_RESPONSE_ITEMS (50 by default) however large a
+        // limit it is handed, so EVERY page it serves is shorter than the 100
+        // asked for. Reading "short" as "the end" loses everything past the
+        // oldest 50 — the same silent truncation, on the other forge family.
+        using var db = new TestDb();
+        var handler = new RoutingHandler()
+            .Map(u => u.Contains("/pulls/5/reviews", StringComparison.Ordinal), () => "[]")
+            .Map(u => u.Contains("/pulls/5/comments", StringComparison.Ordinal), () => "[]")
+            .MapUrl(u => u.Contains("/issues/5/comments", StringComparison.Ordinal), u => PageOf(u) switch
+            {
+                1 => Page(GiteaCappedPage(1, 50), hasNext: true),
+                2 => Page(GiteaCappedPage(51, 50), hasNext: true),
+                _ => Page(GiteaCappedPage(101, 7), hasNext: false),
+            })
+            .Map(u => u.EndsWith("/pulls/5", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}");
+
+        var ledger = await CreateService(db, handler, "Forgejo", "https://gitea.example")
+            .GetPullRequestReviewLedgerAsync("https://gitea.example/team/repo.git", "5");
+
+        Assert.Equal(107, ledger.Items.Count);
+        Assert.Contains(ledger.Items, i => i.CommentId == "6000107");
+    }
+
+    [Fact]
+    public async Task A_page_that_fills_what_was_asked_for_without_a_link_header_is_not_assumed_to_be_the_last()
+    {
+        using var db = new TestDb();
+        var handler = new RoutingHandler()
+            .Map(u => u.Contains("/pulls/7/reviews", StringComparison.Ordinal), () => "[]")
+            .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), () => "[]")
+            .MapUrl(u => u.Contains("/issues/7/comments", StringComparison.Ordinal),
+                u => PageOf(u) == 1 ? Json(FullPageOfIssueComments()) : Json("[]"))
+            .Map(u => u.EndsWith("/graphql", StringComparison.Ordinal), () => "{\"data\":null}")
+            .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}");
+
+        var ledger = await CreateService(db, handler, "GitHub", "https://github.com")
+            .GetPullRequestReviewLedgerAsync("https://github.com/team/repo", "7");
+
+        Assert.Equal(100, ledger.Items.Count);
+        Assert.Contains(handler.Urls, u => u.Contains("/issues/7/comments", StringComparison.Ordinal) && PageOf(u) == 2);
+    }
+
+    [Fact]
+    public async Task A_comment_too_long_to_keep_whole_is_still_known_to_be_ilds()
+    {
+        // The PR node's own answer is a rendered {{PreviousNode.Output}}, easily
+        // past the body cap, and the marker sits at the end — so the stored body
+        // has had it cut off. Deciding from that body alone, the loop would read
+        // its own answer as a reviewer's and start another round.
+        using var db = new TestDb();
+        var longAnswer = PrCommentMarker.Stamp(new string('x', 4000), Guid.NewGuid());
+        var handler = new RoutingHandler()
+            .Map(u => u.Contains("/pulls/7/reviews", StringComparison.Ordinal), () => "[]")
+            .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), () => "[]")
+            .Map(u => u.Contains("/issues/7/comments", StringComparison.Ordinal),
+                () => "[{\"id\":4053396920,\"user\":{\"login\":\"ild\"},\"created_at\":\"2026-09-18T19:00:00Z\","
+                    + "\"body\":" + System.Text.Json.JsonSerializer.Serialize(longAnswer) + "}]")
+            .Map(u => u.EndsWith("/graphql", StringComparison.Ordinal), () => "{\"data\":null}")
+            .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}");
+
+        var ledger = await CreateService(db, handler, "GitHub", "https://github.com")
+            .GetPullRequestReviewLedgerAsync("https://github.com/team/repo", "7");
+
+        var ours = Assert.Single(ledger.Items);
+        Assert.False(PrCommentMarker.IsStamped(ours.Body), "the body must be truncated past the marker for this to be the real case");
+        Assert.True(ours.PostedByIld);
+
+        // …and the throttle must reach the same conclusion from the item alone.
+        var watching = PrCommentDelivery.Decide(
+            new RemotePrReviewLedger(Array.Empty<RemotePrReviewSummary>(), Array.Empty<RemotePrReviewItem>(), Head, null),
+            Head, null).Ledger;
+        Assert.Empty(PrCommentDelivery.Decide(ledger, Head, watching).Items);
+    }
+
+    [Fact]
     public async Task A_list_that_fits_on_one_page_is_still_one_request()
     {
         using var db = new TestDb();
@@ -176,7 +278,7 @@ public class RemotePrReviewLedgerPagingTests
         await CreateService(db, handler, "GitHub", "https://github.com")
             .GetPullRequestReviewLedgerAsync("https://github.com/team/repo", "7");
 
-        Assert.Single(handler.Urls.Where(u => u.Contains("/issues/7/comments", StringComparison.Ordinal)));
+        Assert.Single(handler.Urls, u => u.Contains("/issues/7/comments", StringComparison.Ordinal));
     }
 
     [Fact]
