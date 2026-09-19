@@ -99,15 +99,41 @@ function renderBoard(openItemId: string) {
 const dialog = () => screen.getByRole("dialog");
 const openTitle = () => within(dialog()).getByRole("heading", { level: 2 }).textContent;
 
-async function openCard(title: string) {
-  const card = document.querySelector(
-    `.work-item-card[aria-label^="${title},"]`,
-  ) as HTMLElement | null;
+/**
+ * A node that appears in a render later than the one already waited for. The
+ * assertion is what makes this wait: waitFor retries only while its callback
+ * throws, so a callback that merely returns the query's result settles on the
+ * first try, null and all.
+ */
+async function waitForNode<T extends Element>(find: () => T | null): Promise<T> {
+  return await waitFor(() => {
+    const node = find();
+    expect(node).not.toBeNull();
+    return node as T;
+  });
+}
+
+/**
+ * A dialog resets its own view state — edit mode, the open tab — in the effect
+ * that runs when it mounts. Letting that effect run before driving the dialog
+ * keeps it from landing on top of the first click.
+ */
+async function dialogSettled(title: string) {
+  await waitFor(() => expect(openTitle()).toBe(title));
   await act(async () => {
-    fireEvent.click(card as HTMLElement);
     await Promise.resolve();
   });
-  await waitFor(() => expect(openTitle()).toBe(title));
+}
+
+async function openCard(title: string) {
+  const card = await waitForNode(() =>
+    document.querySelector<HTMLElement>(`.work-item-card[aria-label^="${title},"]`),
+  );
+  await act(async () => {
+    fireEvent.click(card);
+    await Promise.resolve();
+  });
+  await dialogSettled(title);
 }
 
 async function click(button: HTMLElement) {
@@ -119,7 +145,7 @@ async function click(button: HTMLElement) {
 
 async function stageInEditForm(fileName: string) {
   await click(within(dialog()).getByRole("button", { name: "Edit" }));
-  const form = await waitFor(() => dialog().querySelector("form") as HTMLFormElement);
+  const form = await waitForNode(() => dialog().querySelector("form"));
   await act(async () => {
     fireEvent.change(form.querySelector('input[type="file"]') as HTMLInputElement, {
       target: { files: [new File(["x"], fileName, { type: "text/plain" })] },
@@ -150,7 +176,7 @@ describe("a dialog belongs to the work item it was opened for", () => {
     );
 
     renderBoard("wi-a");
-    await waitFor(() => expect(openTitle()).toBe("Item A"));
+    await dialogSettled("Item A");
 
     await stageInEditForm("a.txt");
     await click(within(dialog()).getByRole("button", { name: "Update" }));
@@ -210,8 +236,8 @@ describe("a dialog belongs to the work item it was opened for", () => {
     vi.spyOn(authServices.workItemService, "getById").mockReturnValue(reconcile.promise);
 
     renderBoard("wi-a");
-    await waitFor(() => expect(openTitle()).toBe("Item A"));
-    const feedback = dialog().querySelector(".wiv2-feedback") as HTMLElement;
+    await dialogSettled("Item A");
+    const feedback = await waitForNode(() => dialog().querySelector<HTMLElement>(".wiv2-feedback"));
     await waitFor(() => expect(feedback.textContent).toContain("25 MB"));
 
     await act(async () => {
