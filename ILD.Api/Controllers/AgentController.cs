@@ -631,7 +631,7 @@ public class AgentController : ControllerBase
             return NotFound();
 
         var result = await reviews.ResolveAsync(id, request.ThreadId, CallerRunId());
-        return Ok(new { ok = result.Ok, threadId = result.Id, message = result.Message });
+        return Ok(new { ok = result.Ok, threadId = request.ThreadId, message = result.Message });
     }
 
     [HttpGet("repositories")]
