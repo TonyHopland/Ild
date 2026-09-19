@@ -20,8 +20,11 @@ interface AttachmentListProps {
  * out, and a blob URL opened in a tab would run on ILD's own origin.
  */
 export default function AttachmentList({ workItem, onRemoved }: AttachmentListProps) {
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Each row answers for itself. The rows act independently — a download on one
+  // while another is being removed — so a single "busy" or a single error would
+  // let one row's request re-enable another's controls and wipe its message.
+  const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set());
+  const [errors, setErrors] = useState<ReadonlyMap<string, string>>(() => new Map());
 
   const attachments = workItem.attachments ?? [];
 
@@ -30,14 +33,23 @@ export default function AttachmentList({ workItem, onRemoved }: AttachmentListPr
     fallback: string,
     action: () => Promise<void>,
   ) => {
-    setBusyId(attachment.id);
-    setError(null);
+    setBusy((prev) => new Set(prev).add(attachment.id));
+    setErrors((prev) => {
+      const next = new Map(prev);
+      next.delete(attachment.id);
+      return next;
+    });
     try {
       await action();
     } catch (e) {
-      setError((e as { message?: string })?.message ?? fallback);
+      const message = (e as { message?: string })?.message ?? fallback;
+      setErrors((prev) => new Map(prev).set(attachment.id, message));
     } finally {
-      setBusyId(null);
+      setBusy((prev) => {
+        const next = new Set(prev);
+        next.delete(attachment.id);
+        return next;
+      });
     }
   };
 
@@ -65,34 +77,36 @@ export default function AttachmentList({ workItem, onRemoved }: AttachmentListPr
   }
 
   return (
-    <>
-      <ul className="wiv2-attach-list">
-        {attachments.map((attachment) => (
-          <li key={attachment.id} className="wiv2-attach-list-entry">
-            <span className="wiv2-attach-name">{attachment.fileName}</span>
-            <span className="wiv2-attach-size">{formatBytes(attachment.sizeBytes)}</span>
-            <button
-              type="button"
-              className="btn btn-sm btn-secondary"
-              aria-label={`Download ${attachment.fileName}`}
-              onClick={() => void download(attachment)}
-              disabled={busyId === attachment.id}
-            >
-              Download
-            </button>
-            <button
-              type="button"
-              className="wiv2-attach-remove"
-              aria-label={`Remove attachment ${attachment.fileName}`}
-              onClick={() => void remove(attachment)}
-              disabled={busyId === attachment.id}
-            >
-              ×
-            </button>
-          </li>
-        ))}
-      </ul>
-      {error && <span className="preview-message preview-error">{error}</span>}
-    </>
+    <ul className="wiv2-attach-list">
+      {attachments.map((attachment) => (
+        <li key={attachment.id} className="wiv2-attach-list-entry">
+          <span className="wiv2-attach-name">{attachment.fileName}</span>
+          <span className="wiv2-attach-size">{formatBytes(attachment.sizeBytes)}</span>
+          <button
+            type="button"
+            className="btn btn-sm btn-secondary"
+            aria-label={`Download ${attachment.fileName}`}
+            onClick={() => void download(attachment)}
+            disabled={busy.has(attachment.id)}
+          >
+            Download
+          </button>
+          <button
+            type="button"
+            className="wiv2-attach-remove"
+            aria-label={`Remove attachment ${attachment.fileName}`}
+            onClick={() => void remove(attachment)}
+            disabled={busy.has(attachment.id)}
+          >
+            ×
+          </button>
+          {errors.get(attachment.id) && (
+            <span className="preview-message preview-error wiv2-attach-row-error">
+              {errors.get(attachment.id)}
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
   );
 }
