@@ -589,9 +589,19 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         using var prDoc = JsonDocument.Parse(await prResp.Content.ReadAsStringAsync());
         var headSha = prDoc.RootElement.TryGetProperty("head", out var head) ? ReadString(head, "sha") : null;
 
+        // Every one of these is paged. A forge serves 30 per page by default,
+        // oldest first, so on a busy pull request the NEWEST comments are the
+        // ones that fall off page one — which is this feature's founding bug in
+        // a new form: they would never enter the ledger, never be delivered, and
+        // never fire the edge.
+        var reviewPages = await ReadAllPagesAsync(http, $"{apiRepo}/pulls/{prNumber}/reviews");
+        if (reviewPages is null)
+            return RemotePrReviewLedger.Unavailable(
+                $"Could not read the reviews on pull request #{prNumber} from {ProviderType}.");
+
         var reviews = new List<RemotePrReviewSummary>();
         var items = new List<RemotePrReviewItem>();
-        foreach (var review in await GetArrayAsync(http, $"{apiRepo}/pulls/{prNumber}/reviews"))
+        foreach (var review in reviewPages)
         {
             var body = ReadString(review, "body");
             var summary = new RemotePrReviewSummary(
@@ -607,7 +617,11 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
                 items.Add(suppressed with { Body = Truncate(suppressed.Body, MaxReviewItemLength) ?? suppressed.Body });
         }
 
-        var comments = await GetArrayAsync(http, $"{apiRepo}/pulls/{prNumber}/comments");
+        var comments = await ReadAllPagesAsync(http, $"{apiRepo}/pulls/{prNumber}/comments");
+        if (comments is null)
+            return RemotePrReviewLedger.Unavailable(
+                $"Could not read the review comments on pull request #{prNumber} from {ProviderType}.");
+
         var threads = await GetReviewThreadsAsync(http, repo, prNumber);
         var threadByComment = new Dictionary<string, RemotePrReviewThread>(StringComparer.Ordinal);
         foreach (var thread in threads)
@@ -635,7 +649,12 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
                 PrCommentMarker.IsStamped(ReadString(comment, "body"))));
         }
 
-        foreach (var comment in await GetArrayAsync(http, $"{apiRepo}/issues/{prNumber}/comments"))
+        var issueComments = await ReadAllPagesAsync(http, $"{apiRepo}/issues/{prNumber}/comments");
+        if (issueComments is null)
+            return RemotePrReviewLedger.Unavailable(
+                $"Could not read the comments on pull request #{prNumber} from {ProviderType}.");
+
+        foreach (var comment in issueComments)
         {
             var id = ReadId(comment);
             if (id is null) continue;
@@ -655,6 +674,61 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         }
 
         return new RemotePrReviewLedger(reviews, items, headSha, null);
+    }
+
+    /// <summary>Items asked for per page — GitHub's maximum, and what Gitea honours as <c>limit</c>.</summary>
+    private const int ListPageSize = 100;
+
+    /// <summary>
+    /// Ceiling on the page walk, so a pathological pull request cannot hold the
+    /// heartbeat open. Far more items than any reviewed pull request carries.
+    /// </summary>
+    private const int MaxListPages = 20;
+
+    /// <summary>
+    /// Every page of a paged REST collection, or null when the forge would not
+    /// serve one. Deliberately not <see cref="GetArrayAsync"/>: that swallows a
+    /// failure into an empty array, which here is indistinguishable from "the
+    /// last page", and a ledger silently missing its tail is the very failure
+    /// this feature exists to stop. A null instead reaches the caller as
+    /// "could not read", and an unreadable ledger changes no delivery state.
+    ///
+    /// The walk stops on a short page rather than an empty one, so a forge that
+    /// caps the page size below what was asked for still terminates in one
+    /// round trip. Both spellings of the size go out: GitHub reads
+    /// <c>per_page</c>, Gitea/Forgejo read <c>limit</c>, and each ignores the
+    /// other's.
+    /// </summary>
+    private static async Task<IReadOnlyList<JsonElement>?> ReadAllPagesAsync(HttpClient http, string url)
+    {
+        var all = new List<JsonElement>();
+        var separator = url.Contains('?', StringComparison.Ordinal) ? '&' : '?';
+
+        for (var page = 1; page <= MaxListPages; page++)
+        {
+            using var resp = await http.GetAsync($"{url}{separator}per_page={ListPageSize}&limit={ListPageSize}&page={page}");
+            if (!resp.IsSuccessStatusCode)
+                return null;
+
+            List<JsonElement> batch;
+            try
+            {
+                using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+                if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                    return null;
+                batch = doc.RootElement.EnumerateArray().Select(e => e.Clone()).ToList();
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+
+            all.AddRange(batch);
+            if (batch.Count < ListPageSize)
+                break;
+        }
+
+        return all;
     }
 
     /// <summary>

@@ -115,11 +115,21 @@ public static class PrCommentMarker
 /// Hashes are scoped to <see cref="Head"/> and dropped when it moves — the same
 /// finding restated against new code is a new finding; ids live for the run.
 /// </summary>
+/// <param name="WatchedFrom">
+/// Set only when this ledger was opened by a <em>write</em> — the PR node
+/// recording the comment it just posted — rather than by a watch. Such a ledger
+/// has never looked at the pull request, so without this it would claim to have
+/// seen nothing, and the first tick after the edge is wired would hand the agent
+/// the PR's whole history, ILD's own pre-marker replies included. It means
+/// "everything already on the pull request at this instant is history"; the
+/// first delivery pass records that history and clears it.
+/// </param>
 public record PrCommentLedger(
     string? Head,
     IReadOnlyList<string> PostedIds,
     IReadOnlyList<string> DeliveredIds,
-    IReadOnlyList<string> DeliveredHashes
+    IReadOnlyList<string> DeliveredHashes,
+    DateTime? WatchedFrom = null
 )
 {
     /// <summary>Kept per list, newest first, so a long-lived run cannot grow this column without bound.</summary>
@@ -174,13 +184,15 @@ public static class PrCommentLedgerJson
         string? Head,
         IReadOnlyList<string>? PostedIds,
         IReadOnlyList<string>? DeliveredIds,
-        IReadOnlyList<string>? DeliveredHashes);
+        IReadOnlyList<string>? DeliveredHashes,
+        DateTime? WatchedFrom);
 
     private const int CurrentVersion = 1;
 
     public static string Serialize(PrCommentLedger ledger)
         => JsonSerializer.Serialize(
-            new Wire(CurrentVersion, ledger.Head, ledger.PostedIds, ledger.DeliveredIds, ledger.DeliveredHashes),
+            new Wire(CurrentVersion, ledger.Head, ledger.PostedIds, ledger.DeliveredIds, ledger.DeliveredHashes,
+                ledger.WatchedFrom),
             Options);
 
     public static PrCommentLedger? TryParse(string? json)
@@ -190,11 +202,14 @@ public static class PrCommentLedgerJson
         {
             var wire = JsonSerializer.Deserialize<Wire>(json, Options);
             if (wire is null || wire.Version != CurrentVersion) return null;
+            // A blob written before WatchedFrom existed simply has none, which
+            // reads as a ledger that has watched — what those all were.
             return new PrCommentLedger(
                 wire.Head,
                 wire.PostedIds ?? Array.Empty<string>(),
                 wire.DeliveredIds ?? Array.Empty<string>(),
-                wire.DeliveredHashes ?? Array.Empty<string>());
+                wire.DeliveredHashes ?? Array.Empty<string>(),
+                wire.WatchedFrom);
         }
         catch (JsonException) { return null; }
     }

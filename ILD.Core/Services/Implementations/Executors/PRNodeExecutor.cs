@@ -191,7 +191,12 @@ public sealed class PRNodeExecutor : INodeExecutor
             // not the round.
             if (posted.Id is not null && sp.GetService<ILoopRunStore>() is { } runs)
             {
-                var ledger = (PrCommentLedgerJson.TryParse(ctx.Run.PrCommentLedger) ?? PrCommentLedger.Empty)
+                // Opening a ledger here rather than merging into one means the
+                // run has never watched this pull request — nothing has read it.
+                // Stamp that moment, so whoever watches first treats what was
+                // already there as history instead of delivering all of it.
+                var ledger = (PrCommentLedgerJson.TryParse(ctx.Run.PrCommentLedger)
+                        ?? PrCommentLedger.Empty with { WatchedFrom = DateTime.UtcNow })
                     .WithPosted(PrCommentLedger.KeyFor("issue", posted.Id));
                 var ledgerJson = PrCommentLedgerJson.Serialize(ledger);
                 // Both: the targeted write persists it, and the instance carries

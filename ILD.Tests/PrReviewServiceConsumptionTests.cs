@@ -123,7 +123,9 @@ public class PrReviewServiceConsumptionTests
 
         await h.Build().ReplyAsync("wi-1", "11", "That compiles.", h.Run.Id);
 
-        var ledgerWithoutTheId = PrCommentLedgerJson.TryParse(h.RecordedLedger) with { PostedIds = Array.Empty<string>() };
+        var recorded = PrCommentLedgerJson.TryParse(h.RecordedLedger);
+        Assert.NotNull(recorded);
+        var ledgerWithoutTheId = recorded! with { PostedIds = Array.Empty<string>() };
         var ourReply = Ledger(Inline("4053396920", body: sent!));
 
         Assert.Empty(PrCommentDelivery.Decide(ourReply, HeadB, ledgerWithoutTheId).Items);

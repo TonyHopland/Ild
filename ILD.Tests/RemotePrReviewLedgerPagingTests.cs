@@ -24,9 +24,18 @@ public class RemotePrReviewLedgerPagingTests
         public List<string> GraphQlBodies { get; } = new();
         public List<string> Urls { get; } = new();
 
+        private readonly List<(Func<string, bool> Match, Func<string, HttpResponseMessage> Respond)> _urlRules = new();
+
         public RoutingHandler Map(Func<string, bool> match, Func<string> body)
         {
             _rules.Add((match, body));
+            return this;
+        }
+
+        /// <summary>A rule that can see the URL, so a test can answer page 1 and page 2 differently.</summary>
+        public RoutingHandler MapUrl(Func<string, bool> match, Func<string, HttpResponseMessage> respond)
+        {
+            _urlRules.Add((match, respond));
             return this;
         }
 
@@ -36,6 +45,10 @@ public class RemotePrReviewLedgerPagingTests
             Urls.Add(url);
             if (url.EndsWith("/graphql", StringComparison.Ordinal) && request.Content is not null)
                 GraphQlBodies.Add(await request.Content.ReadAsStringAsync(cancellationToken));
+
+            foreach (var (match, respond) in _urlRules)
+                if (match(url))
+                    return respond(url);
 
             foreach (var (match, body) in _rules)
             {
@@ -79,6 +92,92 @@ public class RemotePrReviewLedgerPagingTests
             + (cursor is null ? "null" : "\"" + cursor + "\"") + "},"
             + "\"nodes\":[{\"id\":\"" + threadId + "\",\"isResolved\":false,\"comments\":{\"nodes\":["
             + string.Join(",", commentIds.Select(id => "{\"fullDatabaseId\":\"" + id + "\"}")) + "]}}]}}}}}";
+
+    private static HttpResponseMessage Json(string body)
+        => new(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+
+    /// <summary>A full page of pull-request-level comments, as a forge's page one.</summary>
+    private static string FullPageOfIssueComments()
+        => "[" + string.Join(",", Enumerable.Range(1, 100).Select(i =>
+            "{\"id\":" + (5000000 + i) + ",\"user\":{\"login\":\"tony\"},\"created_at\":\"2026-09-18T19:00:00Z\","
+            + "\"body\":\"older comment " + i + "\"}")) + "]";
+
+    /// <summary>
+    /// The requested page. Split on '&amp;' rather than searched for, because
+    /// "page=1" is a substring of "per_page=100" and a fake that matches on the
+    /// substring serves page one for ever.
+    /// </summary>
+    private static int PageOf(string url)
+    {
+        var value = new Uri(url).Query.TrimStart('?').Split('&')
+            .FirstOrDefault(p => p.StartsWith("page=", StringComparison.Ordinal));
+        return value is null ? 1 : int.Parse(value["page=".Length..]);
+    }
+
+    private static RoutingHandler PagedIssueComments(Func<string, HttpResponseMessage> secondPage) =>
+        new RoutingHandler()
+            .Map(u => u.Contains("/pulls/7/reviews", StringComparison.Ordinal), () => "[]")
+            .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), () => "[]")
+            .MapUrl(u => u.Contains("/issues/7/comments", StringComparison.Ordinal),
+                u => PageOf(u) == 1 ? Json(FullPageOfIssueComments()) : secondPage(u))
+            .Map(u => u.EndsWith("/graphql", StringComparison.Ordinal), () => "{\"data\":null}")
+            .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}");
+
+    [Fact]
+    public async Task The_newest_comments_on_a_busy_pull_request_are_not_left_on_page_two()
+    {
+        // A forge serves these oldest first, so past one page the NEWEST — the
+        // ones that should fire the edge — are the ones that fall off.
+        using var db = new TestDb();
+        var handler = PagedIssueComments(_ => Json(
+            "[{\"id\":4060000999,\"user\":{\"login\":\"tony\"},\"created_at\":\"2026-09-19T19:00:00Z\","
+            + "\"body\":\"the newest thing anybody said\"}]"));
+
+        var ledger = await CreateService(db, handler, "GitHub", "https://github.com")
+            .GetPullRequestReviewLedgerAsync("https://github.com/team/repo", "7");
+
+        Assert.Equal(101, ledger.Items.Count);
+        var newest = ledger.Items.Single(i => i.CommentId == "4060000999");
+        Assert.Contains("newest thing", newest.Body, StringComparison.Ordinal);
+        Assert.Contains(handler.Urls, u => u.Contains("/issues/7/comments", StringComparison.Ordinal) && PageOf(u) == 2);
+        // …and it stopped there rather than walking to the ceiling.
+        Assert.DoesNotContain(handler.Urls, u => u.Contains("/issues/7/comments", StringComparison.Ordinal) && PageOf(u) == 3);
+    }
+
+    [Fact]
+    public async Task A_page_the_forge_refuses_is_a_message_rather_than_a_ledger_missing_its_tail()
+    {
+        // Swallowed, a failed second page is indistinguishable from "that was
+        // the last page" — and a ledger short of its newest items quietly stops
+        // firing for them. An unreadable ledger changes no delivery state.
+        using var db = new TestDb();
+        var handler = PagedIssueComments(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError));
+
+        var ledger = await CreateService(db, handler, "GitHub", "https://github.com")
+            .GetPullRequestReviewLedgerAsync("https://github.com/team/repo", "7");
+
+        Assert.Empty(ledger.Items);
+        Assert.False(string.IsNullOrWhiteSpace(ledger.Message));
+        Assert.Contains("comments", ledger.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task A_list_that_fits_on_one_page_is_still_one_request()
+    {
+        using var db = new TestDb();
+        var handler = new RoutingHandler()
+            .Map(u => u.Contains("/pulls/7/reviews", StringComparison.Ordinal), () => "[]")
+            .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), () => "[]")
+            .Map(u => u.Contains("/issues/7/comments", StringComparison.Ordinal),
+                () => "[{\"id\":1,\"user\":{\"login\":\"tony\"},\"created_at\":\"2026-09-18T19:00:00Z\",\"body\":\"ping\"}]")
+            .Map(u => u.EndsWith("/graphql", StringComparison.Ordinal), () => "{\"data\":null}")
+            .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}");
+
+        await CreateService(db, handler, "GitHub", "https://github.com")
+            .GetPullRequestReviewLedgerAsync("https://github.com/team/repo", "7");
+
+        Assert.Single(handler.Urls.Where(u => u.Contains("/issues/7/comments", StringComparison.Ordinal)));
+    }
 
     [Fact]
     public async Task A_pull_request_with_more_threads_than_one_page_walks_the_cursor()

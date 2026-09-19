@@ -66,18 +66,31 @@ public static class PrCommentDelivery
             ? new HashSet<string>(state.DeliveredHashes, StringComparer.Ordinal)
             : new HashSet<string>(StringComparer.Ordinal);
 
+        // A ledger opened by a write rather than a watch has never looked at the
+        // pull request, so everything already on it at that moment is history,
+        // not something to hand an agent — otherwise wiring the edge after a
+        // round has posted would deliver the PR's whole past in one firing.
+        // The history is recorded as delivered, because once WatchedFrom is
+        // cleared only the ids and fingerprints stand between it and a firing.
+        var recorded = new List<RemotePrReviewItem>();
         var deliver = new List<RemotePrReviewItem>();
         foreach (var item in candidates)
         {
+            if (state.WatchedFrom is { } from && item.CreatedAt <= from)
+            {
+                recorded.Add(item);
+                continue;
+            }
             if (KeyOf(item) is { } key && suppressedIds.Contains(key))
                 continue;
             var fingerprint = PrCommentLedger.Fingerprint(item.Path, item.Line, item.Body);
             if (!suppressedHashes.Add(fingerprint))
                 continue;
             deliver.Add(item);
+            recorded.Add(item);
         }
 
-        return new PrCommentDecision(deliver, Record(state, head, deliver));
+        return new PrCommentDecision(deliver, Record(state, head, recorded) with { WatchedFrom = null });
     }
 
     /// <summary>

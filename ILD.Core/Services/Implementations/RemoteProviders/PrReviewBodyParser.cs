@@ -59,7 +59,10 @@ public static class PrReviewBodyParser
                 break;
 
             var location = Location.Match(line);
-            if (!location.Success)
+            // A line number too large to be one is not a location: this parser
+            // promises never to throw, and int.Parse on a reviewer's prose is
+            // the one place that promise could be broken.
+            if (!location.Success || !int.TryParse(location.Groups["line"].Value, out var lineNumber))
                 continue;
 
             var body = ReadBody(lines, ref index);
@@ -72,7 +75,7 @@ public static class PrReviewBodyParser
                 ThreadId: null,
                 ReviewId: review.Id,
                 Path: location.Groups["path"].Value.Trim(),
-                Line: int.Parse(location.Groups["line"].Value),
+                Line: lineNumber,
                 Body: body,
                 Author: review.Author,
                 Commit: review.HeadSha,
@@ -108,9 +111,9 @@ public static class PrReviewBodyParser
 
     /// <summary>
     /// The prose under a location line, up to whatever ends it: the next
-    /// location, the fenced excerpt of the code it is about (kept, it doubles
-    /// the batch and reads as a second finding), the section's own trailer, or
-    /// the end of the section. Leaves <paramref name="index"/> on the last line
+    /// location, the fenced excerpt of the code it is about (dropped — kept, it
+    /// would double the batch and read as a second finding), the section's own
+    /// trailer, or the end of the section. Leaves <paramref name="index"/> on the last line
     /// consumed, so the caller's loop reconsiders the line that stopped it.
     /// </summary>
     private static string ReadBody(string[] lines, ref int index)
