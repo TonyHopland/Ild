@@ -301,23 +301,41 @@ export function useAttachmentStaging(workItemId: string | undefined): Attachment
     [applyStaged],
   );
 
-  // One batch at a time owns the staging list. A second caller — the edit form
-  // saving while an answer is still uploading — joins the batch already walking
-  // it instead of starting another over the same entries: two walks would each
-  // pick up the same pending file and store it twice, and whichever finished
-  // first would report on a list the other was still working through and let go
-  // of `uploading` while files were still going up.
-  const inFlight = useRef<Promise<UploadOutcome> | null>(null);
+  // One batch at a time walks the staging list: two walks would each pick up the
+  // same pending file and store it twice. A caller whose work the running batch
+  // is already doing — the edit form saving while an answer uploads the same
+  // list for the same item — joins it and takes its outcome. A caller asking for
+  // anything else waits for it and then walks itself, because the batch that is
+  // running belongs to an item this caller is not saving, and its outcome says
+  // nothing about these files.
+  const inFlight = useRef<{
+    outcome: Promise<UploadOutcome>;
+    targetWorkItemId: string;
+    generation: number;
+  } | null>(null);
 
   const uploadAll = useCallback(
     (targetWorkItemId: string): Promise<UploadOutcome> => {
-      const joined = inFlight.current;
-      if (joined) return joined;
-      const batch = drain(targetWorkItemId).finally(() => {
-        inFlight.current = null;
+      const running = inFlight.current;
+      if (
+        running &&
+        running.targetWorkItemId === targetWorkItemId &&
+        running.generation === generation.current
+      ) {
+        return running.outcome;
+      }
+
+      const outcome = (async () => {
+        // Queued rather than concurrent: whatever is walking the list finishes
+        // before this one starts.
+        if (running) await running.outcome.catch(() => {});
+        return drain(targetWorkItemId);
+      })().finally(() => {
+        if (inFlight.current?.outcome === outcome) inFlight.current = null;
       });
-      inFlight.current = batch;
-      return batch;
+
+      inFlight.current = { outcome, targetWorkItemId, generation: generation.current };
+      return outcome;
     },
     [drain],
   );

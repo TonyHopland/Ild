@@ -111,6 +111,54 @@ describe("one batch at a time owns the staging list", () => {
     expect(result.current.uploading).toBe(false);
   });
 
+  test("a save for another work item waits for the running batch, it does not take its outcome", async () => {
+    stubLimits();
+    const first = deferred<never[]>();
+    const upload = vi
+      .spyOn(workItemService, "uploadAttachment")
+      .mockImplementationOnce(() => first.promise)
+      .mockResolvedValue([]);
+
+    const { result, rerender } = renderHook(({ id }: { id: string }) => useAttachmentStaging(id), {
+      initialProps: { id: "wi-a" },
+    });
+    await waitFor(() => expect(result.current.limits).not.toBeNull());
+    act(() => result.current.add([new File(["a"], "for-a.png", { type: "image/png" })]));
+
+    let forA!: ReturnType<typeof result.current.uploadAll>;
+    await act(async () => {
+      forA = result.current.uploadAll("wi-a");
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(1));
+
+    // The dialog moves to another work item and that item's save starts while
+    // the first batch is still settling.
+    await act(async () => {
+      rerender({ id: "wi-b" });
+      await Promise.resolve();
+    });
+    act(() => result.current.add([new File(["b"], "for-b.png", { type: "image/png" })]));
+
+    let forB!: Awaited<ReturnType<typeof result.current.uploadAll>>;
+    let outcomeA!: Awaited<ReturnType<typeof result.current.uploadAll>>;
+    await act(async () => {
+      const queued = result.current.uploadAll("wi-b");
+      first.resolve([]);
+      [outcomeA, forB] = await Promise.all([forA, queued]);
+    });
+
+    // B's save must do B's work, not inherit the abandoned batch A left behind.
+    expect(outcomeA.abandoned).toBe(true);
+    expect(forB.abandoned).toBe(false);
+    expect(forB.ok).toBe(true);
+    expect(forB.storedNames).toEqual(["for-b.png"]);
+    expect(upload.mock.calls.map((call) => [call[0], (call[1] as File).name])).toEqual([
+      ["wi-a", "for-a.png"],
+      ["wi-b", "for-b.png"],
+    ]);
+  });
+
   test("emptying the list under a batch abandons it rather than reporting success", async () => {
     stubLimits();
     const first = deferred<never[]>();
