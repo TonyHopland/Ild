@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AttachmentLimits } from "../../types";
+import { AttachmentLimits, WorkItemAttachment } from "../../types";
 import { settingsService, workItemService } from "../../services/auth";
 import { oversizeMessage, stagedFileName } from "../../utils/attachments";
 
@@ -10,6 +10,11 @@ export interface StagedAttachment {
   status: "pending" | "uploaded";
   /** The attachment this became on the work item, once it landed. */
   attachmentId: string | null;
+  /**
+   * The name the work item stores it under, which is not always the browser's:
+   * the server trims a name and keeps only its last path segment.
+   */
+  storedName: string | null;
   error: string | null;
 }
 
@@ -53,12 +58,31 @@ export interface AttachmentStaging {
    * same files and must not disagree while the dialog is open.
    */
   forgetUploaded: (attachmentId: string) => void;
+  /**
+   * The names an answer should tell the agent about: every file this list has
+   * stored, minus any the work item no longer holds. Matching is by the id the
+   * upload returned rather than by name, because two files can share a name and
+   * the stored one is not always the browser's. A read that could not say what
+   * the item holds, or an upload that answered without metadata, leaves the
+   * file named — it did land, and guessing it away would under-report.
+   */
+  namesStoredOn: (held: WorkItemAttachment[] | null | undefined) => string[];
   handlePaste: (event: React.ClipboardEvent) => void;
   uploadAll: (workItemId: string) => Promise<UploadOutcome>;
 }
 
 const messageOf = (error: unknown, fallback: string) =>
   (error as { message?: string })?.message ?? fallback;
+
+/**
+ * What the files that landed are called. The name the work item recorded is the
+ * truth — the server trims it and keeps only its last path segment — and the
+ * browser's own name stands in only for an upload that answered without any.
+ */
+const namesOf = (entries: StagedAttachment[]) =>
+  entries
+    .filter((entry) => entry.status === "uploaded")
+    .map((entry) => entry.storedName ?? entry.file.name);
 
 /**
  * The files a human has picked, dropped or pasted but not yet uploaded. They
@@ -154,6 +178,7 @@ export function useAttachmentStaging(workItemId: string | undefined): Attachment
           file,
           status: "pending" as const,
           attachmentId: null,
+          storedName: null,
           error: null,
         })),
       ]);
@@ -187,6 +212,15 @@ export function useAttachmentStaging(workItemId: string | undefined): Attachment
     [applyStaged],
   );
 
+  const namesStoredOn = useCallback((held: WorkItemAttachment[] | null | undefined) => {
+    const onItem = held ? new Set(held.map((attachment) => attachment.id)) : null;
+    return namesOf(
+      stagedRef.current.filter(
+        (entry) => !onItem || !entry.attachmentId || onItem.has(entry.attachmentId),
+      ),
+    );
+  }, []);
+
   // Wired to the form and the feedback pane, not to the picker: the textareas a
   // screenshot is pasted into are siblings of it, so a handler inside the picker
   // would never see the event. A paste carrying no file is left alone.
@@ -218,13 +252,20 @@ export function useAttachmentStaging(workItemId: string | undefined): Attachment
           attempted.add(entry.key);
           try {
             const created = await workItemService.uploadAttachment(targetWorkItemId, entry.file);
-            // One file per request, so the response describes this one — its id
-            // is the handle the work item's own list removes it by.
-            const attachmentId = created?.[0]?.id ?? null;
+            // One file per request, so the response describes this one: its id is
+            // the handle everything else refers to it by, and its name is what
+            // the work item actually stores, which the server may have trimmed.
+            const stored = created?.[0];
             applyStaged((prev) =>
               prev.map((s) =>
                 s.key === entry.key
-                  ? { ...s, status: "uploaded" as const, attachmentId, error: null }
+                  ? {
+                      ...s,
+                      status: "uploaded" as const,
+                      attachmentId: stored?.id ?? null,
+                      storedName: stored?.fileName ?? null,
+                      error: null,
+                    }
                   : s,
               ),
             );
@@ -249,9 +290,7 @@ export function useAttachmentStaging(workItemId: string | undefined): Attachment
       return {
         ok: current.every((entry) => entry.status === "uploaded"),
         abandoned: false,
-        storedNames: current
-          .filter((entry) => entry.status === "uploaded")
-          .map((entry) => entry.file.name),
+        storedNames: namesOf(current),
         errors: current.map((entry) => entry.error).filter((e): e is string => !!e),
       };
     },
@@ -269,6 +308,7 @@ export function useAttachmentStaging(workItemId: string | undefined): Attachment
     hasPending,
     clearUploaded,
     forgetUploaded,
+    namesStoredOn,
     handlePaste,
     uploadAll,
   };

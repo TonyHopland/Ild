@@ -27,8 +27,10 @@ export function oversizeMessage(fileName: string, maxBytesPerFile: number): stri
 export function attachedNote(typed: string, fileNames: string[]): string {
   if (fileNames.length === 0) return typed;
   const list = `Attached files: ${fileNames.join(", ")}`;
-  const text = typed.trim();
-  return text ? `${text}\n\n${list}` : list;
+  // Whatever the human typed is recorded as they typed it, here as much as when
+  // nothing is attached; the trim only decides whether there is anything to put
+  // the list under.
+  return typed.trim() ? `${typed}\n\n${list}` : list;
 }
 
 const pad = (value: number) => String(value).padStart(2, "0");

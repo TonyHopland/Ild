@@ -625,10 +625,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
           .getById(workItem.id)
           .then((fresh) => fresh.attachments)
           .catch(() => undefined);
-        if (held) {
-          const onItem = new Set(held.map((attachment) => attachment.fileName));
-          storedNames = storedNames.filter((name) => onItem.has(name));
-        }
+        storedNames = attachments.namesStoredOn(held);
       }
       try {
         // The typed text comes from the ref for the same reason: the uploads

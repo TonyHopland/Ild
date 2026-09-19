@@ -104,6 +104,93 @@ async function click(button: HTMLElement) {
   });
 }
 
+describe("telling two attachments apart", () => {
+  test("names the one the item still holds when both were called the same", async () => {
+    mockServices();
+    let held = [attachment("att-1", "shot.png"), attachment("att-2", "shot.png")];
+    let next = 0;
+    vi.spyOn(authServices.workItemService, "uploadAttachment").mockImplementation(() =>
+      Promise.resolve([held[next++]]),
+    );
+    vi.spyOn(authServices.workItemService, "getById").mockImplementation(() =>
+      Promise.resolve(makeParkedWorkItem(held)),
+    );
+    const answer = vi
+      .spyOn(authServices.workItemService, "humanFeedbackInput")
+      .mockRejectedValueOnce({ status: 400, message: "Input must be 8192 characters or fewer." })
+      .mockResolvedValue(undefined);
+
+    renderBoard(makeParkedWorkItem());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(feedback().textContent).toContain("25 MB"));
+
+    // Two pastes of the same screenshot: the names are identical, only the
+    // attachments they became are not.
+    await act(async () => {
+      fireEvent.change(feedback().querySelector('input[type="file"]') as HTMLInputElement, {
+        target: {
+          files: [
+            new File(["one"], "shot.png", { type: "image/png" }),
+            new File(["two"], "shot.png", { type: "image/png" }),
+          ],
+        },
+      });
+      fireEvent.change(feedback().querySelector("textarea") as HTMLTextAreaElement, {
+        target: { value: "Looks good" },
+      });
+      await Promise.resolve();
+    });
+    await click(screen.getByRole("button", { name: "Approve" }));
+    await waitFor(() =>
+      expect(feedback().textContent).toContain("Input must be 8192 characters or fewer."),
+    );
+
+    // One of the two is removed outside this dialog before the retry.
+    held = [attachment("att-2", "shot.png")];
+    await click(screen.getByRole("button", { name: "Approve" }));
+
+    await waitFor(() => expect(answer).toHaveBeenCalledTimes(2));
+    expect(answer.mock.calls[1][1]).toBe("Looks good\n\nAttached files: shot.png");
+  });
+
+  test("names a file by what the work item stored it as", async () => {
+    mockServices();
+    // The server trims the name it is given before storing it.
+    const held = [attachment("att-1", "report.txt")];
+    vi.spyOn(authServices.workItemService, "uploadAttachment").mockResolvedValue(held);
+    vi.spyOn(authServices.workItemService, "getById").mockImplementation(() =>
+      Promise.resolve(makeParkedWorkItem(held)),
+    );
+    const answer = vi
+      .spyOn(authServices.workItemService, "humanFeedbackInput")
+      .mockResolvedValue(undefined);
+
+    renderBoard(makeParkedWorkItem());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(feedback().textContent).toContain("25 MB"));
+
+    await act(async () => {
+      fireEvent.change(feedback().querySelector('input[type="file"]') as HTMLInputElement, {
+        target: { files: [new File(["x"], "  report.txt  ", { type: "text/plain" })] },
+      });
+      fireEvent.change(feedback().querySelector("textarea") as HTMLTextAreaElement, {
+        target: { value: "Looks good" },
+      });
+      await Promise.resolve();
+    });
+    await click(screen.getByRole("button", { name: "Approve" }));
+
+    await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
+    // Naming the browser's version would both misname it and, once the item is
+    // read back, drop it from the note altogether.
+    expect(answer.mock.calls[0][1]).toBe("Looks good\n\nAttached files: report.txt");
+  });
+});
+
 describe("a file removed from the work item after it was uploaded", () => {
   test("is not named in the answer, and stops showing as attached", async () => {
     mockServices();
