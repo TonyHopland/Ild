@@ -120,6 +120,32 @@ export interface WorkItem {
    * Done, the retention sweep of the run row, and the ILD instance (WI-203).
    */
   pullRequests?: WorkItemPullRequest[] | null;
+  /**
+   * The files attached to this item, held by the WorkItem server. The metadata
+   * rides on the item itself, so a view that lists them needs no second fetch;
+   * the bytes are only ever fetched one attachment at a time.
+   */
+  attachments?: WorkItemAttachment[] | null;
+}
+
+/** One file attached to a {@link WorkItem} — its metadata, never its bytes. */
+export interface WorkItemAttachment {
+  id: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  createdAt?: string | null;
+}
+
+/**
+ * What an upload has to stay within, as configured on this instance. Read-only,
+ * and the server enforces them regardless — a client reads them so it can refuse
+ * a file the human picked before spending the upload on it.
+ */
+export interface AttachmentLimits {
+  maxBytesPerFile: number;
+  maxFilesPerRequest: number;
+  maxTotalBytesPerWorkItem: number;
 }
 
 /**

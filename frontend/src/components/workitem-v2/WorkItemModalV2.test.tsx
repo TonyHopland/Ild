@@ -1035,6 +1035,105 @@ describe("WorkItemModalV2", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  test("Escape with a file staged in the edit prompts to discard", async () => {
+    mockServices();
+    const onClose = vi.fn();
+    await renderDialog(makeWorkItem(), { onClose });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.change(document.querySelector('input[type="file"]') as HTMLInputElement, {
+        target: { files: [new File(["x"], "shot.png", { type: "image/png" })] },
+      });
+      await Promise.resolve();
+    });
+
+    // A staged file is an unsaved change like any typed one — closing must ask
+    // before throwing it away.
+    await pressEscapeUntil(() => {
+      expect(screen.getByText(/Discard unsaved changes/)).toBeTruthy();
+    });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  test("an edit whose reread fails after the uploads is not reported as a failed save", async () => {
+    mockServices();
+    const item = makeWorkItem();
+    vi.spyOn(authServices.workItemService, "update").mockResolvedValue(item);
+    vi.spyOn(authServices.workItemService, "getById").mockRejectedValue({
+      message: "WorkItemServer unreachable",
+    });
+    const upload = vi.spyOn(authServices.workItemService, "uploadAttachment").mockResolvedValue([]);
+    await renderDialog(item);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.change(document.querySelector('input[type="file"]') as HTMLInputElement, {
+        target: { files: [new File(["x"], "shot.png", { type: "image/png" })] },
+      });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Update" }));
+      await Promise.resolve();
+    });
+
+    // The save and the upload are done; only the refresh afterwards failed, so
+    // the edit closes rather than telling the human to save again.
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Update" })).toBeNull());
+    expect(screen.queryByText(/Failed to save/)).toBeNull();
+  });
+
+  test("a file staged while the save is in flight is uploaded, not discarded", async () => {
+    mockServices();
+    const item = makeWorkItem();
+    let releaseUpdate!: (value: WorkItem) => void;
+    const updating = new Promise<WorkItem>((resolve) => {
+      releaseUpdate = resolve;
+    });
+    vi.spyOn(authServices.workItemService, "update").mockReturnValue(updating);
+    vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(item);
+    const upload = vi.spyOn(authServices.workItemService, "uploadAttachment").mockResolvedValue([]);
+    await renderDialog(item);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Changed title" } });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Update" }));
+      await Promise.resolve();
+    });
+
+    // Nothing was staged when Update was pressed; this file arrives while the
+    // save request is still out, and the close must not throw it away.
+    await act(async () => {
+      fireEvent.change(document.querySelector('input[type="file"]') as HTMLInputElement, {
+        target: { files: [new File(["x"], "late.png", { type: "image/png" })] },
+      });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      releaseUpdate(item);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(1));
+    expect((upload.mock.calls[0][1] as File).name).toBe("late.png");
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Update" })).toBeNull());
+  });
+
   test("expanded run node survives a tab switch (panels stay mounted)", async () => {
     mockServices();
     await renderDialog(makeWorkItem());

@@ -11,6 +11,8 @@ interface FeedbackActionsProps {
    * Only wired in for PR-awaiting-merge feedback.
    */
   onMerge?: (deleteBranch: boolean) => void;
+  /** An answer is in flight; pressing again would submit it a second time. */
+  busy?: boolean;
 }
 
 // Tokens in the comma-separated actions string that map to the fixed
@@ -29,6 +31,7 @@ export default function FeedbackActions({
   onReject,
   onEdge,
   onMerge,
+  busy = false,
 }: FeedbackActionsProps) {
   const [confirmingMerge, setConfirmingMerge] = useState(false);
   const [deleteBranch, setDeleteBranch] = useState(true);
@@ -45,7 +48,12 @@ export default function FeedbackActions({
   return (
     <div className="feedback-actions">
       {actionList.includes("OnSuccess") && (
-        <button type="button" className="btn btn-sm btn-primary" onClick={onApprove}>
+        <button
+          type="button"
+          className="btn btn-sm btn-primary"
+          onClick={onApprove}
+          disabled={busy}
+        >
           Approve
         </button>
       )}
@@ -64,12 +72,13 @@ export default function FeedbackActions({
           type="button"
           className="btn btn-sm btn-warning"
           onClick={() => onEdge(name)}
+          disabled={busy}
         >
           {name}
         </button>
       ))}
       {actionList.includes("OnFailure") && (
-        <button type="button" className="btn btn-sm btn-danger" onClick={onReject}>
+        <button type="button" className="btn btn-sm btn-danger" onClick={onReject} disabled={busy}>
           Reject
         </button>
       )}

@@ -17,6 +17,8 @@ import {
   aiProviderService,
 } from "../../services/auth";
 import { useSignalR } from "../../hooks/useSignalR";
+import { useAttachmentLimits, useAttachmentStaging } from "./useAttachmentStaging";
+import { attachedNote } from "../../utils/attachments";
 
 /**
  * Shared data + actions for the V2 work item dialog. Loads the runs, repositories,
@@ -48,6 +50,20 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const [mergeLoading, setMergeLoading] = useState(false);
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [mergeMessage, setMergeMessage] = useState<string | null>(null);
+  const [respondError, setRespondError] = useState<string | null>(null);
+  const [respondLoading, setRespondLoading] = useState(false);
+  // The answer buttons render disabled while one is in flight, but only once
+  // this render has happened. The guard is a ref because "each staged file is
+  // uploaded once" must not depend on how soon React gets to re-render.
+  const responding = useRef(false);
+
+  // One staging list per act, not per work item. Saving the form and answering
+  // the run both attach to the same item, but they are separate pieces of work
+  // that start, fail and are abandoned independently — sharing a list makes one
+  // of them able to discard what the other is still holding.
+  const attachmentLimits = useAttachmentLimits();
+  const attachments = useAttachmentStaging(workItem?.id, attachmentLimits);
+  const editAttachments = useAttachmentStaging(workItem?.id, attachmentLimits);
 
   const reloadRepositories = useCallback(async () => {
     try {
@@ -131,6 +147,14 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   useEffect(() => {
     setFeedbackInput("");
   }, [workItem?.id, workItem?.status]);
+
+  // An answer is composed after its uploads, which the human keeps typing
+  // through, so what they end up with is read here rather than from the render
+  // the button was pressed in.
+  const feedbackInputRef = useRef(feedbackInput);
+  useEffect(() => {
+    feedbackInputRef.current = feedbackInput;
+  }, [feedbackInput]);
 
   useEffect(() => {
     // When parked at a PR node, prefill the feedback textarea with any
@@ -565,22 +589,76 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     [workItem?.id, onSave],
   );
 
+  // Answering a parked run uploads the staged files first: the note names them,
+  // so an answer submitted before they landed would tell the agent about
+  // attachments the item does not carry. Neither a failed upload nor a refused
+  // submission touches the staged list, so a retry re-sends only what did not
+  // land — which is also why this does not go through runAction, where a failure
+  // would reach no further than the console.
+  const submitAnswer = async (submit: (id: string, input: string) => Promise<unknown>) => {
+    if (!workItem || responding.current) return;
+    responding.current = true;
+    setRespondLoading(true);
+    setRespondError(null);
+    try {
+      // The staging list answers both questions here, never the render the
+      // press came from: it says what is left to send — a file dropped while an
+      // upload was in flight is part of this answer too — and, once nothing is
+      // pending, what the note must name. An attempt that landed every file and
+      // failed only at the submit has nothing left to upload, and its retry
+      // still has to name what is already on the item.
+      let outcome = await attachments.uploadAll(workItem.id);
+      while (outcome.ok && attachments.hasPending()) {
+        outcome = await attachments.uploadAll(workItem.id);
+      }
+      // The dialog moved to another work item while the files were going up, so
+      // there is no longer an answer to this one being composed here.
+      if (outcome.abandoned) return;
+      if (!outcome.ok) {
+        setRespondError(outcome.errors.join(" "));
+        return;
+      }
+      // The note must name what the item holds now. This dialog's own copy of it
+      // cannot answer that: it predates these uploads, and it predates any file
+      // removed from the overview since an earlier attempt stored it. Reading
+      // the item back settles both. A read that fails leaves the names as the
+      // uploads left them — a refreshed note is not worth failing an answer for.
+      let storedNames = outcome.storedNames;
+      if (storedNames.length > 0) {
+        const held = await workItemService
+          .getById(workItem.id)
+          .then((fresh) => fresh.attachments)
+          .catch(() => undefined);
+        storedNames = attachments.namesStoredOn(held);
+      }
+      try {
+        // The typed text comes from the ref for the same reason: the uploads
+        // above can take seconds, and the human types on through them.
+        await submit(workItem.id, attachedNote(feedbackInputRef.current, storedNames));
+      } catch (error) {
+        setRespondError((error as { message?: string })?.message ?? "Failed to submit the answer.");
+        return;
+      }
+      // Only the files this answer named are done with; one staged while the
+      // answer was being submitted is not on the item and stays for the next.
+      attachments.clearUploaded();
+      refetchWorkItem();
+    } finally {
+      responding.current = false;
+      setRespondLoading(false);
+    }
+  };
+
   const handleApprove = () =>
-    runAction(
-      (id) => workItemService.humanFeedbackInput(id, feedbackInput || ""),
-      "submit feedback",
-    );
+    submitAnswer((id, input) => workItemService.humanFeedbackInput(id, input));
 
   // Pass any typed feedback through to the OnFailure successor as {{PreviousNode.Output}}.
   const handleReject = () =>
-    runAction(
-      (id) => workItemService.humanFeedbackReject(id, feedbackInput || undefined),
-      "reject",
-    );
+    submitAnswer((id, input) => workItemService.humanFeedbackReject(id, input || undefined));
 
   // Route the parked node to one of its named custom edges (a Human/PR button).
   const handleEdge = (name: string) =>
-    runAction((id) => workItemService.humanFeedbackEdge(id, name, feedbackInput || ""), "respond");
+    submitAnswer((id, input) => workItemService.humanFeedbackEdge(id, name, input));
 
   // Merge the linked PR on the remote (and optionally delete the branch), then
   // continue the loop along OnSuccess. A merge failure leaves the item parked,
@@ -700,6 +778,11 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     handleApprove,
     handleReject,
     handleEdge,
+    respondError,
+    respondLoading,
+    attachments,
+    editAttachments,
+    refetchWorkItem,
     mergeLoading,
     mergeError,
     mergeMessage,
