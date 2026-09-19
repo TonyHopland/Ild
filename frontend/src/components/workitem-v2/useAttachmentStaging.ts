@@ -8,6 +8,8 @@ export interface StagedAttachment {
   key: string;
   file: File;
   status: "pending" | "uploaded";
+  /** The attachment this became on the work item, once it landed. */
+  attachmentId: string | null;
   error: string | null;
 }
 
@@ -45,6 +47,12 @@ export interface AttachmentStaging {
   hasPending: () => boolean;
   /** Drops what an upload has landed, leaving anything staged since untouched. */
   clearUploaded: () => void;
+  /**
+   * Drops the entry that became this attachment, for when it is removed from the
+   * work item: the staging rows and the item's own list are two views of the
+   * same files and must not disagree while the dialog is open.
+   */
+  forgetUploaded: (attachmentId: string) => void;
   handlePaste: (event: React.ClipboardEvent) => void;
   uploadAll: (workItemId: string) => Promise<UploadOutcome>;
 }
@@ -145,6 +153,7 @@ export function useAttachmentStaging(workItemId: string | undefined): Attachment
           key: `staged-${nextKey.current++}`,
           file,
           status: "pending" as const,
+          attachmentId: null,
           error: null,
         })),
       ]);
@@ -169,6 +178,12 @@ export function useAttachmentStaging(workItemId: string | undefined): Attachment
 
   const clearUploaded = useCallback(
     () => applyStaged((prev) => prev.filter((entry) => entry.status !== "uploaded")),
+    [applyStaged],
+  );
+
+  const forgetUploaded = useCallback(
+    (attachmentId: string) =>
+      applyStaged((prev) => prev.filter((entry) => entry.attachmentId !== attachmentId)),
     [applyStaged],
   );
 
@@ -202,10 +217,15 @@ export function useAttachmentStaging(workItemId: string | undefined): Attachment
           if (!entry) break;
           attempted.add(entry.key);
           try {
-            await workItemService.uploadAttachment(targetWorkItemId, entry.file);
+            const created = await workItemService.uploadAttachment(targetWorkItemId, entry.file);
+            // One file per request, so the response describes this one — its id
+            // is the handle the work item's own list removes it by.
+            const attachmentId = created?.[0]?.id ?? null;
             applyStaged((prev) =>
               prev.map((s) =>
-                s.key === entry.key ? { ...s, status: "uploaded" as const, error: null } : s,
+                s.key === entry.key
+                  ? { ...s, status: "uploaded" as const, attachmentId, error: null }
+                  : s,
               ),
             );
           } catch (error) {
@@ -248,6 +268,7 @@ export function useAttachmentStaging(workItemId: string | undefined): Attachment
     clear,
     hasPending,
     clearUploaded,
+    forgetUploaded,
     handlePaste,
     uploadAll,
   };

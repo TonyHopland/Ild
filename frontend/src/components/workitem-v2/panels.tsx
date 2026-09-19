@@ -879,7 +879,13 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
       </div>
       <div className="wiv2-meta-row wiv2-meta-col">
         <span className="detail-label">Attachments</span>
-        <AttachmentList workItem={workItem} onChanged={detail.refetchWorkItem} />
+        <AttachmentList
+          workItem={workItem}
+          onRemoved={(attachmentId) => {
+            detail.attachments.forgetUploaded(attachmentId);
+            detail.refetchWorkItem();
+          }}
+        />
       </div>
       <div className="wiv2-meta-row wiv2-meta-col">
         <span className="detail-label">Dependencies</span>

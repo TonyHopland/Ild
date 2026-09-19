@@ -5,8 +5,12 @@ import { formatBytes } from "../../utils/attachments";
 
 interface AttachmentListProps {
   workItem: WorkItem;
-  /** Refetches the item so a removal shows without reloading the page. */
-  onChanged: () => void;
+  /**
+   * A file has left the work item: the list needs rereading so the removal shows
+   * without a page reload, and anything else holding this attachment — the
+   * staging rows, the note an answer is about to carry — has to let go of it.
+   */
+  onRemoved: (attachmentId: string) => void;
 }
 
 /**
@@ -15,7 +19,7 @@ interface AttachmentListProps {
  * name: the token travels in a header, so a bare href would fetch them signed
  * out, and a blob URL opened in a tab would run on ILD's own origin.
  */
-export default function AttachmentList({ workItem, onChanged }: AttachmentListProps) {
+export default function AttachmentList({ workItem, onRemoved }: AttachmentListProps) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -53,7 +57,7 @@ export default function AttachmentList({ workItem, onChanged }: AttachmentListPr
   const remove = (attachment: WorkItemAttachment) =>
     act(attachment, `Failed to remove ${attachment.fileName}.`, async () => {
       await workItemService.deleteAttachment(workItem.id, attachment.id);
-      onChanged();
+      onRemoved(attachment.id);
     });
 
   if (attachments.length === 0) {

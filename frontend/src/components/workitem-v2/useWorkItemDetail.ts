@@ -614,10 +614,26 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
         setRespondError(outcome.errors.join(" "));
         return;
       }
+      // The note must name what the item holds now. This dialog's own copy of it
+      // cannot answer that: it predates these uploads, and it predates any file
+      // removed from the overview since an earlier attempt stored it. Reading
+      // the item back settles both. A read that fails leaves the names as the
+      // uploads left them — a refreshed note is not worth failing an answer for.
+      let storedNames = outcome.storedNames;
+      if (storedNames.length > 0) {
+        const held = await workItemService
+          .getById(workItem.id)
+          .then((fresh) => fresh.attachments)
+          .catch(() => undefined);
+        if (held) {
+          const onItem = new Set(held.map((attachment) => attachment.fileName));
+          storedNames = storedNames.filter((name) => onItem.has(name));
+        }
+      }
       try {
         // The typed text comes from the ref for the same reason: the uploads
         // above can take seconds, and the human types on through them.
-        await submit(workItem.id, attachedNote(feedbackInputRef.current, outcome.storedNames));
+        await submit(workItem.id, attachedNote(feedbackInputRef.current, storedNames));
       } catch (error) {
         setRespondError((error as { message?: string })?.message ?? "Failed to submit the answer.");
         return;

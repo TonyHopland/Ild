@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, act, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import WorkItemModalV2 from "./WorkItemModalV2";
-import { WorkItem, WorkItemStatus, WorkItemPriority } from "../../types";
+import { WorkItem, WorkItemAttachment, WorkItemStatus, WorkItemPriority } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
 
@@ -37,6 +37,20 @@ function makeParkedWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     dependencyIds: [],
     dependentIds: [],
     ...overrides,
+  };
+}
+
+/**
+ * The metadata the work item carries once a file has been stored on it, as a
+ * read of the item returns it. The note an answer carries is reconciled against
+ * this, so a stand-in item has to hold what its uploads put there.
+ */
+function stored(fileName: string): WorkItemAttachment {
+  return {
+    id: `att-${fileName}`,
+    fileName,
+    contentType: "application/octet-stream",
+    sizeBytes: 10,
   };
 }
 
@@ -136,7 +150,10 @@ describe("answering a run that waits for human input", () => {
     const answer = vi
       .spyOn(authServices.workItemService, "humanFeedbackInput")
       .mockResolvedValue(undefined);
-    vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(makeParkedWorkItem());
+    // A read of the item after the uploads finds both files on it.
+    vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(
+      makeParkedWorkItem({ attachments: [stored("a.png"), stored("b.pdf")] }),
+    );
     await renderDialog(makeParkedWorkItem());
     await waitForLimits();
 
@@ -180,7 +197,10 @@ describe("answering a run that waits for human input", () => {
     const edge = vi
       .spyOn(authServices.workItemService, "humanFeedbackEdge")
       .mockResolvedValue(undefined);
-    vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(makeParkedWorkItem());
+    // Both answers store a file, so a read of the item finds both.
+    vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(
+      makeParkedWorkItem({ attachments: [stored("a.png"), stored("b.pdf")] }),
+    );
     await renderDialog(
       makeParkedWorkItem({ humanFeedbackActions: "OnSuccess,Needs work,OnFailure" }),
     );
@@ -219,7 +239,11 @@ describe("failures while answering with files", () => {
     const answer = vi
       .spyOn(authServices.workItemService, "humanFeedbackInput")
       .mockResolvedValue(undefined);
-    vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(makeParkedWorkItem());
+    // a.png lands on the first attempt and b.pdf on the retry, so a read of the
+    // item finds both by the time the answer is composed.
+    vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(
+      makeParkedWorkItem({ attachments: [stored("a.png"), stored("b.pdf")] }),
+    );
     await renderDialog(makeParkedWorkItem());
     await waitForLimits();
 
@@ -247,7 +271,11 @@ describe("failures while answering with files", () => {
     const answer = vi
       .spyOn(authServices.workItemService, "humanFeedbackInput")
       .mockRejectedValue({ status: 400, message: "Input must be 8192 characters or fewer." });
-    vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(makeParkedWorkItem());
+    // The upload landed even though the answer was refused, so a read of the
+    // item finds the file there for the retry.
+    vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(
+      makeParkedWorkItem({ attachments: [stored("a.png")] }),
+    );
     await renderDialog(makeParkedWorkItem());
     await waitForLimits();
 
