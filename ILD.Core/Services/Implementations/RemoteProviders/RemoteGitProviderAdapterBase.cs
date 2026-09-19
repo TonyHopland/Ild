@@ -566,15 +566,32 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     protected const int MaxReviewItemLength = MaxCheckSummaryLength;
 
     /// <summary>
-    /// Assembled from the three REST collections this provider family already
-    /// exposes: the submitted reviews (whose bodies also carry the findings that
+    /// No review ledger by default. The shape it is assembled from is GitHub's,
+    /// not this base class's "GitHub and Gitea agree" middle ground: a Forgejo
+    /// 9.0.3 (Gitea 1.22.0 API) instance has no
+    /// <c>pulls/{index}/comments</c> collection at all — its review comments
+    /// hang off <c>pulls/{index}/reviews/{id}/comments</c>, one request per
+    /// review — and no reply route. Inheriting the GitHub read there would 404
+    /// on every tick and report an outage for something simply not implemented,
+    /// so the honest answer is that the ledger is not supported, the same
+    /// degradation <see cref="GetCheckLogAsync"/> and
+    /// <see cref="ResolveReviewThreadAsync"/> already give.
+    /// </summary>
+    public virtual Task<RemotePrReviewLedger> GetPullRequestReviewLedgerAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+        => Task.FromResult(RemotePrReviewLedger.Unavailable(
+            $"Reading a pull request's review is not supported for {ProviderType} — its API has no pull-request review-comment collection to read one from."));
+
+    /// <summary>
+    /// The ledger as GitHub's REST API serves it, for adapters whose API is that
+    /// shape: the submitted reviews (whose bodies also carry the findings that
     /// never became threads), the inline review comments, and the comments on
     /// the pull request itself. Inline comments take <c>original_commit_id</c>
     /// and <c>original_line</c> — the commit and line the reviewer wrote against
     /// — because <c>commit_id</c>/<c>line</c> drift as the branch moves, and the
     /// per-head repeat suppression keys on what was reviewed.
     /// </summary>
-    public virtual async Task<RemotePrReviewLedger> GetPullRequestReviewLedgerAsync(
+    protected async Task<RemotePrReviewLedger> ReadRestReviewLedgerAsync(
         HttpClient http, ResolvedRemoteRepository repo, string prNumber)
     {
         ApplyHeaders(http, repo.Provider);
@@ -785,7 +802,18 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         return roots;
     }
 
-    public virtual async Task<RemotePrWriteResult> ReplyToReviewThreadAsync(
+    /// <summary>
+    /// No thread reply by default, for the same reason as the ledger: the
+    /// <c>comments/{id}/replies</c> route is GitHub's, and a Gitea-family API
+    /// has nothing of the shape. Saying so beats posting into a 404.
+    /// </summary>
+    public virtual Task<RemotePrWriteResult> ReplyToReviewThreadAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string commentId, string body)
+        => Task.FromResult(new RemotePrWriteResult(
+            false, null, $"Replying to a review thread is not supported for {ProviderType} — its API has no reply route on a review comment."));
+
+    /// <summary>A reply as GitHub's REST API takes one, for adapters of that shape.</summary>
+    protected async Task<RemotePrWriteResult> PostRestThreadReplyAsync(
         HttpClient http, ResolvedRemoteRepository repo, string prNumber, string commentId, string body)
     {
         ApplyHeaders(http, repo.Provider);

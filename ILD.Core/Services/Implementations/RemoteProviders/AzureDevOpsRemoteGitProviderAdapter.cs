@@ -221,22 +221,10 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
         return new RemotePrWriteResult(true, await PrCommentHelper.ReadCreatedIdAsync(resp), null);
     }
 
-    /// <summary>
-    /// Azure DevOps models a review as comment threads on the pull request, not
-    /// as the reviews/comments pair the base class reads, and has no equivalent
-    /// of a review body carrying suppressed findings. Rather than bend one REST
-    /// surface into the other's shape, this says plainly that the ledger is not
-    /// available here — the degradation <see cref="GetCheckLogAsync"/> uses.
-    /// </summary>
-    public override Task<RemotePrReviewLedger> GetPullRequestReviewLedgerAsync(
-        HttpClient http, ResolvedRemoteRepository repo, string prNumber)
-        => Task.FromResult(RemotePrReviewLedger.Unavailable(
-            "Reading a pull request's review is not supported for Azure DevOps — its reviews are comment threads with no equivalent ledger."));
-
-    public override Task<RemotePrWriteResult> ReplyToReviewThreadAsync(
-        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string commentId, string body)
-        => Task.FromResult(new RemotePrWriteResult(
-            false, null, "Replying to a review thread is not supported for Azure DevOps."));
+    // The review ledger and thread replies are not overridden here: Azure
+    // DevOps models a review as comment threads with no equivalent collection,
+    // and the base class's default already answers "not supported for
+    // AzureDevOps" without a request. One owner for that message.
 
     public override async Task<RemotePrStatus> GetPullRequestStatusAsync(
         HttpClient http, ResolvedRemoteRepository repo, string prNumber)

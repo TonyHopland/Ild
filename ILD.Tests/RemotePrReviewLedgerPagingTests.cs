@@ -115,8 +115,8 @@ public class RemotePrReviewLedgerPagingTests
         return resp;
     }
 
-    /// <summary>Gitea clamps a page to its own MAX_RESPONSE_ITEMS (50 by default), whatever was asked for.</summary>
-    private static string GiteaCappedPage(int from, int count)
+    /// <summary>A page a server capped below what was asked for, whatever the reason.</summary>
+    private static string CappedPage(int from, int count)
         => "[" + string.Join(",", Enumerable.Range(from, count).Select(i =>
             "{\"id\":" + (6000000 + i) + ",\"user\":{\"login\":\"tony\"},\"created_at\":\"2026-09-18T19:00:00Z\","
             + "\"body\":\"comment " + i + "\"}")) + "]";
@@ -189,27 +189,51 @@ public class RemotePrReviewLedgerPagingTests
     [Fact]
     public async Task A_forge_that_serves_a_smaller_page_than_it_was_asked_for_is_still_read_to_the_end()
     {
-        // Gitea clamps to MAX_RESPONSE_ITEMS (50 by default) however large a
-        // limit it is handed, so EVERY page it serves is shorter than the 100
-        // asked for. Reading "short" as "the end" loses everything past the
-        // oldest 50 — the same silent truncation, on the other forge family.
+        // A server is free to cap what it was handed, so every page can come
+        // back shorter than the 100 asked for. Reading "short" as "the end"
+        // loses everything past the first page; the Link header is what says
+        // whether more exists.
         using var db = new TestDb();
         var handler = new RoutingHandler()
-            .Map(u => u.Contains("/pulls/5/reviews", StringComparison.Ordinal), () => "[]")
-            .Map(u => u.Contains("/pulls/5/comments", StringComparison.Ordinal), () => "[]")
-            .MapUrl(u => u.Contains("/issues/5/comments", StringComparison.Ordinal), u => PageOf(u) switch
+            .Map(u => u.Contains("/pulls/7/reviews", StringComparison.Ordinal), () => "[]")
+            .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), () => "[]")
+            .MapUrl(u => u.Contains("/issues/7/comments", StringComparison.Ordinal), u => PageOf(u) switch
             {
-                1 => Page(GiteaCappedPage(1, 50), hasNext: true),
-                2 => Page(GiteaCappedPage(51, 50), hasNext: true),
-                _ => Page(GiteaCappedPage(101, 7), hasNext: false),
+                1 => Page(CappedPage(1, 50), hasNext: true),
+                2 => Page(CappedPage(51, 50), hasNext: true),
+                _ => Page(CappedPage(101, 7), hasNext: false),
             })
-            .Map(u => u.EndsWith("/pulls/5", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}");
+            .Map(u => u.EndsWith("/graphql", StringComparison.Ordinal), () => "{\"data\":null}")
+            .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}");
 
-        var ledger = await CreateService(db, handler, "Forgejo", "https://gitea.example")
-            .GetPullRequestReviewLedgerAsync("https://gitea.example/team/repo.git", "5");
+        var ledger = await CreateService(db, handler, "GitHub", "https://github.com")
+            .GetPullRequestReviewLedgerAsync("https://github.com/team/repo", "7");
 
         Assert.Equal(107, ledger.Items.Count);
         Assert.Contains(ledger.Items, i => i.CommentId == "6000107");
+    }
+
+    [Fact]
+    public async Task A_forge_without_the_routes_the_ledger_is_read_from_says_so_without_asking()
+    {
+        // Checked against the live Forgejo 9.0.3 (Gitea 1.22.0 API): there is no
+        // pulls/{index}/comments collection and no reply route at all — review
+        // comments hang off pulls/{index}/reviews/{id}/comments. Inheriting the
+        // GitHub read there would 404 every tick and report an outage for
+        // something simply not implemented.
+        using var db = new TestDb();
+        var handler = new RoutingHandler();
+
+        var service = CreateService(db, handler, "Forgejo", "https://gitea.example");
+        var ledger = await service.GetPullRequestReviewLedgerAsync("https://gitea.example/team/repo.git", "5");
+
+        Assert.Empty(ledger.Items);
+        Assert.Contains("not supported", ledger.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Forgejo", ledger.Message, StringComparison.Ordinal);
+        var reply = await service.ReplyToReviewThreadAsync("https://gitea.example/team/repo.git", "5", "1", "hi");
+        Assert.False(reply.Ok);
+        Assert.Contains("not supported", reply.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(handler.Urls);
     }
 
     [Fact]
@@ -324,26 +348,28 @@ public class RemotePrReviewLedgerPagingTests
     }
 
     [Fact]
-    public async Task Without_a_thread_api_a_reply_chain_still_shares_one_thread_id()
+    public async Task With_no_threads_reported_a_reply_chain_still_shares_one_thread_id()
     {
-        // Forgejo has no review-thread resource, so the root of the reply chain
-        // is the only thread identity there is — and the repeat suppression
-        // needs items in one conversation to agree on it.
+        // GraphQL can answer with no threads at all — a stripped response, a
+        // token without the scope — and then the root of the reply chain is the
+        // only thread identity there is. The repeat suppression needs items in
+        // one conversation to agree on it.
         using var db = new TestDb();
         var handler = new RoutingHandler()
-            .Map(u => u.Contains("/pulls/5/reviews", StringComparison.Ordinal), () => "[]")
-            .Map(u => u.Contains("/pulls/5/comments", StringComparison.Ordinal), () =>
+            .Map(u => u.Contains("/pulls/7/reviews", StringComparison.Ordinal), () => "[]")
+            .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), () =>
                 "[{\"id\":1,\"path\":\"src/A.cs\",\"line\":10,\"original_commit_id\":\"" + Head + "\","
                 + "\"user\":{\"login\":\"alice\"},\"created_at\":\"2026-09-18T17:34:44Z\",\"body\":\"root\"},"
                 + "{\"id\":2,\"in_reply_to_id\":1,\"path\":\"src/A.cs\",\"line\":10,\"original_commit_id\":\"" + Head + "\","
                 + "\"user\":{\"login\":\"bob\"},\"created_at\":\"2026-09-18T18:00:00Z\",\"body\":\"reply\"},"
                 + "{\"id\":3,\"in_reply_to_id\":2,\"path\":\"src/A.cs\",\"line\":10,\"original_commit_id\":\"" + Head + "\","
                 + "\"user\":{\"login\":\"alice\"},\"created_at\":\"2026-09-18T18:10:00Z\",\"body\":\"reply to the reply\"}]")
-            .Map(u => u.Contains("/issues/5/comments", StringComparison.Ordinal), () => "[]")
-            .Map(u => u.EndsWith("/pulls/5", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}");
+            .Map(u => u.Contains("/issues/7/comments", StringComparison.Ordinal), () => "[]")
+            .Map(u => u.EndsWith("/graphql", StringComparison.Ordinal), () => "{\"data\":null}")
+            .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}");
 
-        var ledger = await CreateService(db, handler, "Forgejo", "https://gitea.example")
-            .GetPullRequestReviewLedgerAsync("https://gitea.example/team/repo.git", "5");
+        var ledger = await CreateService(db, handler, "GitHub", "https://github.com")
+            .GetPullRequestReviewLedgerAsync("https://github.com/team/repo", "7");
 
         Assert.Equal(new[] { "1", "1", "1" }, ledger.Items.OrderBy(i => i.CommentId).Select(i => i.ThreadId).ToArray());
     }
@@ -402,7 +428,8 @@ public class RemotePrReviewLedgerPagingTests
         var ledger = await service.GetPullRequestReviewLedgerAsync(repo, "7");
 
         Assert.Empty(ledger.Items);
-        Assert.Contains("Azure DevOps", ledger.Message);
+        Assert.Contains("not supported", ledger.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("AzureDevOps", ledger.Message, StringComparison.Ordinal);
         Assert.False((await service.ReplyToReviewThreadAsync(repo, "7", "1", "hi")).Ok);
         Assert.False((await service.ResolveReviewThreadAsync(repo, "7", "t1")).Ok);
         Assert.Empty(handler.Urls);

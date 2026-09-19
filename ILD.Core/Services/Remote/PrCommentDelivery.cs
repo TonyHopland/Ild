@@ -140,9 +140,20 @@ public static class PrCommentDelivery
     }
 
     /// <summary>
-    /// The ledger key for an item, or null for a suppressed finding, which the
-    /// forge never gave an id of its own — those are recognised by content alone.
+    /// What identifies an item across ticks. A comment has the forge's own id.
+    /// A suppressed finding has none — it exists only inside a review body — so
+    /// it is keyed by the review that carried it and the place it points at,
+    /// which is just as stable. Leaving it to the content fingerprint alone
+    /// would mean no key at all that outlives a head change, and since the
+    /// fingerprints are dropped on every head change, the loop's own push would
+    /// re-deliver the same old review's findings every single round.
     /// </summary>
     private static string? KeyOf(RemotePrReviewItem item)
-        => item.CommentId is null ? null : PrCommentLedger.KeyFor(item.Kind, item.CommentId);
+    {
+        if (item.CommentId is not null)
+            return PrCommentLedger.KeyFor(item.Kind, item.CommentId);
+        return item.ReviewId is not null && item.Path is not null
+            ? PrCommentLedger.KeyFor(item.Kind, $"{item.ReviewId}:{item.Path}:{item.Line}")
+            : null;
+    }
 }

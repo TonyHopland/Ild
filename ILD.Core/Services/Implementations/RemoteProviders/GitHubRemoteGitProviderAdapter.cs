@@ -112,6 +112,15 @@ public sealed class GitHubRemoteGitProviderAdapter : RemoteGitProviderAdapterBas
             : window;
     }
 
+    /// <summary>The review ledger is GitHub's REST shape, so this is where it is opted into.</summary>
+    public override Task<RemotePrReviewLedger> GetPullRequestReviewLedgerAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+        => ReadRestReviewLedgerAsync(http, repo, prNumber);
+
+    public override Task<RemotePrWriteResult> ReplyToReviewThreadAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string commentId, string body)
+        => PostRestThreadReplyAsync(http, repo, prNumber, commentId, body);
+
     private const string ReviewThreadsQuery =
         "query($owner: String!, $repo: String!, $number: Int!, $cursor: String) { "
         + "repository(owner: $owner, name: $repo) { pullRequest(number: $number) { "

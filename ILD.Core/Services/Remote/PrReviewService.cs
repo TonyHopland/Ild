@@ -99,9 +99,16 @@ public sealed class PrReviewService : IPrReviewService
         if (!string.IsNullOrEmpty(fetched.Message))
             return new RemotePrWriteResult(false, null, fetched.Message);
 
-        if (!fetched.Items.Any(i => string.Equals(i.CommentId, commentId, StringComparison.Ordinal)))
+        // Only an inline review comment has a thread to answer on. A
+        // pull-request-level comment or a suppressed finding would be refused by
+        // the forge anyway; saying which it is here is the useful answer.
+        var comment = fetched.Items.FirstOrDefault(i => string.Equals(i.CommentId, commentId, StringComparison.Ordinal));
+        if (comment is null)
             return new RemotePrWriteResult(false, null,
                 $"No comment with id '{commentId}' on this work item's pull request. The review ledger lists the comment ids that can be answered.");
+        if (comment.Kind != "review")
+            return new RemotePrWriteResult(false, null,
+                $"Comment '{commentId}' is not an inline review comment ({comment.Kind}), so it has no thread to reply on. Answer an item whose kind is 'review'.");
 
         var result = await _remote.ReplyToReviewThreadAsync(
             target.RepoUrl, target.PrNumber, commentId,

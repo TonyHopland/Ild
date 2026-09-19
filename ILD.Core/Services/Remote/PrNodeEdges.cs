@@ -110,7 +110,11 @@ public static class PrNodeEdges
     {
         var body = string.IsNullOrWhiteSpace(detail) ? DetailFor(edge, snapshot, workItemId) : detail.Trim();
         var text = body.Length == 0 ? Headline(edge) : $"{Headline(edge)}\n\n{body}";
+        // A pointer that would leave no room for the reason it points past is
+        // not worth the reason: drop it rather than truncate into the marker.
         var pointer = ReviewPointer(edge, workItemId);
+        if (pointer.Length > MaxReasonLength / 2) pointer = string.Empty;
+
         var budget = MaxReasonLength - pointer.Length;
         return (text.Length <= budget ? text : Truncate(text, budget)) + pointer;
     }
