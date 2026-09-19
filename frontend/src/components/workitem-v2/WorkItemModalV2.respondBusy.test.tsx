@@ -192,6 +192,83 @@ describe("the note an answer carries", () => {
   });
 });
 
+describe("a batch that stored some of its files and failed on one", () => {
+  test("shows the item as it now stands before reporting the failure", async () => {
+    mockServices();
+    const stored = { id: "att-1", fileName: "a.png", contentType: "image/png", sizeBytes: 1 };
+    vi.spyOn(authServices.workItemService, "uploadAttachment").mockImplementation(
+      (_id: string, file: File) =>
+        file.name === "b.pdf"
+          ? Promise.reject({ status: 503, message: "WorkItemServer unreachable" })
+          : Promise.resolve([stored]),
+    );
+    const onSave = vi.fn();
+    const reread = vi
+      .spyOn(authServices.workItemService, "getById")
+      .mockResolvedValue({ ...makeParkedWorkItem(), attachments: [stored] });
+    await renderDialog({ onSave });
+    await waitForLimits();
+    await stage(
+      new File(["a"], "a.png", { type: "image/png" }),
+      new File(["b"], "b.pdf", { type: "application/pdf" }),
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(feedback().textContent).toContain("WorkItemServer unreachable"));
+    // a.png is on the item, so the copy everything else reads has to carry it —
+    // the overview beside the error would otherwise show the item as it was.
+    await waitFor(() => expect(reread).toHaveBeenCalled());
+    const calls = onSave.mock.calls;
+    const published = calls[calls.length - 1]?.[0] as WorkItem | undefined;
+    expect(published?.attachments?.map((a) => a.fileName)).toEqual(["a.png"]);
+    // The straggler stays staged for the retry.
+    expect(feedback().textContent).toContain("b.pdf");
+  });
+});
+
+describe("an answer that has been submitted", () => {
+  test("holds its controls until the dialog is showing what the run did next", async () => {
+    mockServices();
+    const answer = vi
+      .spyOn(authServices.workItemService, "humanFeedbackInput")
+      .mockResolvedValue(undefined);
+    // The item is reread once the answer is in; until it arrives the dialog is
+    // still showing a run that is waiting for input.
+    const refreshed = deferred<WorkItem>();
+    vi.spyOn(authServices.workItemService, "getById").mockReturnValue(refreshed.promise);
+    await renderDialog();
+    await waitForLimits();
+
+    const approve = screen.getByRole("button", { name: "Approve" });
+    await act(async () => {
+      fireEvent.click(approve);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
+    expect((approve as HTMLButtonElement).disabled).toBe(true);
+
+    // A second press here would answer a question that has already been
+    // answered, because the pane still shows the parked item.
+    await act(async () => {
+      fireEvent.click(approve);
+      await Promise.resolve();
+    });
+    expect(answer).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      refreshed.resolve(makeParkedWorkItem());
+      await Promise.resolve();
+    });
+    await waitFor(() => expect((approve as HTMLButtonElement).disabled).toBe(false));
+    expect(answer).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("answering while an answer is already in flight", () => {
   test("the answer buttons are held until the upload and the answer are done", async () => {
     mockServices();

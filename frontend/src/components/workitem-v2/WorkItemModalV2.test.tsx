@@ -1059,6 +1059,59 @@ describe("WorkItemModalV2", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
+  test("a save that stores some files and fails on one publishes what landed", async () => {
+    mockServices();
+    const item = makeWorkItem();
+    const stored = {
+      id: "att-1",
+      fileName: "a.png",
+      contentType: "image/png",
+      sizeBytes: 1,
+    };
+    vi.spyOn(authServices.workItemService, "update").mockResolvedValue(item);
+    vi.spyOn(authServices.workItemService, "getById").mockResolvedValue({
+      ...item,
+      attachments: [stored],
+    });
+    vi.spyOn(authServices.workItemService, "uploadAttachment").mockImplementation(
+      (_id: string, file: File) =>
+        file.name === "b.pdf"
+          ? Promise.reject({ status: 503, message: "WorkItemServer unreachable" })
+          : Promise.resolve([stored]),
+    );
+    const onSave = vi.fn();
+    await renderDialog(item, { onSave });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.change(document.querySelector('input[type="file"]') as HTMLInputElement, {
+        target: {
+          files: [
+            new File(["a"], "a.png", { type: "image/png" }),
+            new File(["b"], "b.pdf", { type: "application/pdf" }),
+          ],
+        },
+      });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Update" }));
+      await Promise.resolve();
+    });
+
+    // The form stays open for the retry, and what the parent now holds includes
+    // the file that did land rather than the item as it was before the batch.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Update" })).toBeTruthy());
+    await waitFor(() => {
+      const calls = onSave.mock.calls;
+      const published = calls[calls.length - 1]?.[0] as WorkItem | undefined;
+      expect(published?.attachments?.map((a) => a.fileName)).toEqual(["a.png"]);
+    });
+  });
+
   test("an edit whose reread fails after the uploads is not reported as a failed save", async () => {
     mockServices();
     const item = makeWorkItem();

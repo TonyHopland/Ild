@@ -886,7 +886,7 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
             // are two views of the same files on the same item.
             detail.attachments.forgetUploaded(attachmentId);
             detail.editAttachments.forgetUploaded(attachmentId);
-            detail.refetchWorkItem();
+            void detail.refetchWorkItem();
           }}
         />
       </div>

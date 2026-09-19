@@ -191,8 +191,11 @@ export default function EditPanel({
           // now belongs to that one, and this form is gone.
           if (outcome.abandoned) return;
           if (!outcome.ok) {
-            // The item is saved and some files are on it; the form stays open with
-            // the stragglers still staged, so pressing Save again sends only those.
+            // The item is saved and some files are on it; the form stays open
+            // with the stragglers still staged, so pressing Save again sends only
+            // those. What already landed is published too — the overview and the
+            // board would otherwise hold the copy from before the batch.
+            onSave(await workItemService.getById(saved.id).catch(() => saved));
             setSubmitError(outcome.errors.join(" "));
             return;
           }

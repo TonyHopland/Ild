@@ -386,9 +386,12 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     }
   }, [workItem?.id]);
 
+  // Returns the read so a caller that has just changed the item can wait for the
+  // dialog to be showing what it did before letting go of its controls. A read
+  // that fails leaves the last-known copy in place, as it always has.
   const refetchWorkItem = useCallback(() => {
-    if (!workItem) return;
-    void workItemService
+    if (!workItem) return Promise.resolve();
+    return workItemService
       .getById(workItem.id)
       .then((updated) => onSave(updated))
       .catch(() => {});
@@ -482,7 +485,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     };
 
     const refetchSoon = () => {
-      refetchWorkItem();
+      void refetchWorkItem();
       // Delayed refetch to catch conversation data that may not be persisted yet
       delayedTimers.push(setTimeout(refetchWorkItem, 500));
     };
@@ -499,7 +502,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
 
     const onEventLogged = (message: TypedSignalRMessage<"EventLogged">) => {
       if (message.payload.runId !== runId) return;
-      refetchWorkItem();
+      void refetchWorkItem();
     };
 
     // A halt parks the run mid-AI-node; refetch so the work item flips to
@@ -633,6 +636,10 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
         // there is no longer an answer to this one being composed here.
         if (outcome.abandoned) return;
         if (!outcome.ok) {
+          // Some of them did land. The retry keeps the stragglers staged, and
+          // the overview beside it has to show what is already on the item
+          // rather than the copy from before the batch.
+          await refetchWorkItem();
           setRespondError(outcome.errors.join(" "));
           return;
         }
@@ -645,7 +652,13 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
         if (storedNames.length > 0) {
           const held = await workItemService
             .getById(workItem.id)
-            .then((fresh) => fresh.attachments)
+            .then((fresh) => {
+              // This read is also the freshest copy anyone has of the item, so
+              // the dialog shows what the uploads put there whatever the answer
+              // does next.
+              onSave(fresh);
+              return fresh.attachments;
+            })
             .catch(() => undefined);
           storedNames = attachments.namesStoredOn(held);
         }
@@ -662,7 +675,10 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
         // Only the files this answer named are done with; one staged while the
         // answer was being submitted is not on the item and stays for the next.
         attachments.clearUploaded();
-        refetchWorkItem();
+        // The answer is in, and the run has moved on: the controls stay held
+        // until the dialog is showing that, so a second press cannot answer a
+        // question that has already been answered.
+        await refetchWorkItem();
       });
     } finally {
       responding.current = false;
@@ -732,7 +748,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const handleReclaimRun = useCallback(
     async (runId: string) => {
       await loopRunService.cleanup(runId);
-      refetchWorkItem();
+      void refetchWorkItem();
       refreshRuns();
     },
     [refetchWorkItem, refreshRuns],
