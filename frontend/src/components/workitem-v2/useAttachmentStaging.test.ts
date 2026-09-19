@@ -76,6 +76,81 @@ describe("the work item a staged file belongs to", () => {
   });
 });
 
+describe("one batch at a time owns the staging list", () => {
+  test("a second upload joins the batch already running instead of sending again", async () => {
+    stubLimits();
+    const first = deferred<never[]>();
+    const upload = vi
+      .spyOn(workItemService, "uploadAttachment")
+      .mockImplementationOnce(() => first.promise)
+      .mockResolvedValue([]);
+
+    const { result } = renderHook(() => useAttachmentStaging("wi-1"));
+    await waitFor(() => expect(result.current.limits).not.toBeNull());
+    act(() => result.current.add([new File(["a"], "a.png", { type: "image/png" })]));
+
+    let running!: ReturnType<typeof result.current.uploadAll>;
+    await act(async () => {
+      running = result.current.uploadAll("wi-1");
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(1));
+
+    // The edit form saves while the answer's batch is still out.
+    let joinedOutcome!: Awaited<ReturnType<typeof result.current.uploadAll>>;
+    let outcome!: Awaited<ReturnType<typeof result.current.uploadAll>>;
+    await act(async () => {
+      const joined = result.current.uploadAll("wi-1");
+      first.resolve([]);
+      [outcome, joinedOutcome] = await Promise.all([running, joined]);
+    });
+
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(joinedOutcome).toBe(outcome);
+    expect(outcome.ok).toBe(true);
+    expect(result.current.uploading).toBe(false);
+  });
+
+  test("emptying the list under a batch abandons it rather than reporting success", async () => {
+    stubLimits();
+    const first = deferred<never[]>();
+    const upload = vi
+      .spyOn(workItemService, "uploadAttachment")
+      .mockImplementationOnce(() => first.promise)
+      .mockResolvedValue([]);
+
+    const { result } = renderHook(() => useAttachmentStaging("wi-1"));
+    await waitFor(() => expect(result.current.limits).not.toBeNull());
+    act(() =>
+      result.current.add([
+        new File(["a"], "a.png", { type: "image/png" }),
+        new File(["b"], "b.pdf", { type: "application/pdf" }),
+      ]),
+    );
+
+    let running!: ReturnType<typeof result.current.uploadAll>;
+    await act(async () => {
+      running = result.current.uploadAll("wi-1");
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(1));
+
+    // Cancelling an edit wipes the list while b.pdf has not been sent yet.
+    let outcome!: Awaited<ReturnType<typeof result.current.uploadAll>>;
+    await act(async () => {
+      result.current.clear();
+      first.resolve([]);
+      outcome = await running;
+    });
+
+    // Reporting ok here would answer the run naming none of the files, having
+    // sent only some of them.
+    expect(outcome.abandoned).toBe(true);
+    expect(outcome.ok).toBe(false);
+    expect(upload).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("staging before the limits have arrived", () => {
   test("a file the limits turn out to rule out is dropped when they land", async () => {
     const limits = deferred<{

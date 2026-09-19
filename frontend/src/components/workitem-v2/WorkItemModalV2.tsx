@@ -478,6 +478,10 @@ export default function WorkItemModalV2({
                   type="button"
                   className="btn btn-sm btn-edit"
                   onClick={() => setEditMode(true)}
+                  // The edit form saves onto the same staging list an answer is
+                  // uploading from, and leaving it discards that list; neither
+                  // belongs on top of a batch still going up.
+                  disabled={detail.attachments.uploading}
                 >
                   Edit
                 </button>

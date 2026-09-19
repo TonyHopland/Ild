@@ -222,6 +222,34 @@ describe("answering while an answer is already in flight", () => {
   });
 });
 
+describe("editing while an answer is uploading", () => {
+  test("is not offered until the batch is done", async () => {
+    mockServices();
+    const upload = deferred<never[]>();
+    vi.spyOn(authServices.workItemService, "uploadAttachment").mockReturnValue(upload.promise);
+    vi.spyOn(authServices.workItemService, "humanFeedbackInput").mockResolvedValue(undefined);
+    await renderDialog();
+    await waitForLimits();
+    await stage(new File(["x"], "shot.png", { type: "image/png" }));
+
+    const edit = screen.getByRole("button", { name: "Edit" });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      await Promise.resolve();
+    });
+
+    // The edit form saves from the same staging list, and leaving it empties
+    // that list — neither belongs on top of a batch still going up.
+    await waitFor(() => expect((edit as HTMLButtonElement).disabled).toBe(true));
+
+    await act(async () => {
+      upload.resolve([]);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect((edit as HTMLButtonElement).disabled).toBe(false));
+  });
+});
+
 describe("staging a file while the answer is being submitted", () => {
   test("keeps it staged instead of clearing it away with the answer", async () => {
     mockServices();

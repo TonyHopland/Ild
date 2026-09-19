@@ -192,6 +192,10 @@ export function useAttachmentStaging(workItemId: string | undefined): Attachment
   );
 
   const clear = useCallback(() => {
+    // A batch walking this list has nothing left to walk, and must not go on to
+    // report on files it never sent: emptying the list abandons it, exactly as
+    // moving to another work item does.
+    generation.current += 1;
     applyStaged(() => []);
     setStagingError(null);
   }, [applyStaged]);
@@ -234,7 +238,7 @@ export function useAttachmentStaging(workItemId: string | undefined): Attachment
     [add],
   );
 
-  const uploadAll = useCallback(
+  const drain = useCallback(
     async (targetWorkItemId: string): Promise<UploadOutcome> => {
       setUploading(true);
       // A file dropped while the batch is in flight belongs to this save too, so
@@ -295,6 +299,27 @@ export function useAttachmentStaging(workItemId: string | undefined): Attachment
       };
     },
     [applyStaged],
+  );
+
+  // One batch at a time owns the staging list. A second caller — the edit form
+  // saving while an answer is still uploading — joins the batch already walking
+  // it instead of starting another over the same entries: two walks would each
+  // pick up the same pending file and store it twice, and whichever finished
+  // first would report on a list the other was still working through and let go
+  // of `uploading` while files were still going up.
+  const inFlight = useRef<Promise<UploadOutcome> | null>(null);
+
+  const uploadAll = useCallback(
+    (targetWorkItemId: string): Promise<UploadOutcome> => {
+      const joined = inFlight.current;
+      if (joined) return joined;
+      const batch = drain(targetWorkItemId).finally(() => {
+        inFlight.current = null;
+      });
+      inFlight.current = batch;
+      return batch;
+    },
+    [drain],
   );
 
   return {
