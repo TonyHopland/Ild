@@ -228,6 +228,13 @@ public class LoopRun : IHasUpdatedAt
     [MaxLength(512)]
     public string? PrPolledEdgeStates { get; set; }
 
+    // What this run has already been handed — or written itself — on its PR's
+    // review (JSON-serialised PrCommentLedger). Unlike PrPolledEdgeStates this
+    // is NOT reset when the run re-parks at the PR node: resetting it would
+    // re-deliver every comment after every round. Null until the run first
+    // watches the pull request.
+    public string? PrCommentLedger { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     public DateTime? UpdatedAt { get; set; }

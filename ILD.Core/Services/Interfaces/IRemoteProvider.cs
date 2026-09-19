@@ -35,6 +35,34 @@ public interface IRemoteProvider
     /// </summary>
     Task<RemoteCiLog> GetCheckLogAsync(string repoUrl, string checkId, int tailLines, int offset);
 
+    /// <summary>
+    /// Everything said on a pull request's review — inline comments with their
+    /// thread state, the findings a review body suppressed, and each review's
+    /// verdict. Never throws: an unresolvable repository or a forge that will
+    /// not answer comes back as
+    /// <see cref="RemotePrReviewLedger.Unavailable"/>.
+    /// </summary>
+    Task<RemotePrReviewLedger> GetPullRequestReviewLedgerAsync(string repoUrl, string prNumber);
+
+    /// <summary>
+    /// Answer one review comment on its own thread. Never throws; a refusal
+    /// comes back as <see cref="RemotePrWriteResult.Ok"/> false with a message.
+    /// </summary>
+    Task<RemotePrWriteResult> ReplyToReviewThreadAsync(string repoUrl, string prNumber, string commentId, string body);
+
+    /// <summary>
+    /// Mark a review thread resolved. Providers whose API has no such concept
+    /// answer with a message rather than claiming success.
+    /// </summary>
+    Task<RemotePrWriteResult> ResolveReviewThreadAsync(string repoUrl, string prNumber, string threadId);
+
     Task<bool> DeleteBranchAsync(string repoUrl, string branchName);
-    Task<bool> CreatePullRequestCommentAsync(string repoUrl, string prNumber, string body);
+
+    /// <summary>
+    /// Post a comment on the pull request itself. <see cref="RemotePrWriteResult.Ok"/>
+    /// carries the meaning the old <c>bool</c> had — the PR node fails only when
+    /// it is false — while the id is best-effort, so a post the provider accepted
+    /// but did not name records nothing and fails nothing.
+    /// </summary>
+    Task<RemotePrWriteResult> CreatePullRequestCommentAsync(string repoUrl, string prNumber, string body);
 }

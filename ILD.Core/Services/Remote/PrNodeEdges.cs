@@ -4,7 +4,7 @@ using ILD.Data.DTOs;
 namespace ILD.Core.Services.Remote;
 
 /// <summary>
-/// The seven reserved custom-edge names a PR node may declare, the state each
+/// The eight reserved custom-edge names a PR node may declare, the state each
 /// fires on, and the priority used to pick a single edge when several states
 /// newly become true in one heartbeat tick. The PR heartbeat poller emits a
 /// <c>NodeSignal.Custom</c> for the highest-priority edge that is both
@@ -18,6 +18,14 @@ public static class PrNodeEdges
     public const string OnRejected = "on_rejected";
     public const string OnMergeConflict = "on_merge_conflict";
     public const string OnCiFailed = "on_ci_failed";
+
+    /// <summary>
+    /// Review or comment items the run has not been handed yet. Unlike the other
+    /// seven this is not a state of the snapshot — it is decided from the run's
+    /// own delivery ledger (see <c>PrCommentDelivery</c>), which is what keeps a
+    /// comment ILD itself posted from starting a round.
+    /// </summary>
+    public const string OnComment = "on_comment";
     public const string OnApproved = "on_approved";
     public const string OnCiPassed = "on_ci_passed";
     public const string OnMerged = "on_merged";
@@ -29,6 +37,7 @@ public static class PrNodeEdges
         OnRejected,
         OnMergeConflict,
         OnCiFailed,
+        OnComment,
         OnApproved,
         OnCiPassed,
         OnMerged,
@@ -89,34 +98,57 @@ public static class PrNodeEdges
     /// <paramref name="workItemId"/> — which the agent has no placeholder for —
     /// is spelled into the call so the next step is a tool call it can make
     /// rather than a link it cannot follow.
+    ///
+    /// The review edges get the same treatment through
+    /// <c>get_pr_review</c>, and that pointer is budgeted rather than merely
+    /// appended: a batched <c>on_comment</c> reason is the case that overflows,
+    /// and truncation takes the tail, so an appended pointer would be the first
+    /// thing a long batch lost — leaving a half-list and no way to read the rest.
     /// </summary>
     public static string Describe(
         string? edge, RemotePrSnapshot? snapshot = null, string? detail = null, string? workItemId = null)
     {
         var body = string.IsNullOrWhiteSpace(detail) ? DetailFor(edge, snapshot, workItemId) : detail.Trim();
         var text = body.Length == 0 ? Headline(edge) : $"{Headline(edge)}\n\n{body}";
-        return text.Length <= MaxReasonLength ? text : Truncate(text);
+        var pointer = ReviewPointer(edge, workItemId);
+        var budget = MaxReasonLength - pointer.Length;
+        return (text.Length <= budget ? text : Truncate(text, budget)) + pointer;
     }
 
     private const string TruncationMarker = "\n… (truncated)";
 
     /// <summary>
-    /// Cut to <see cref="MaxReasonLength"/> counting the marker, so the cap is
-    /// the length a caller can rely on, and never between the halves of a
-    /// surrogate pair — CI output carries emoji and box-drawing characters.
+    /// Cut to <paramref name="max"/> characters counting the marker, so the cap
+    /// is a length a caller can rely on, and never between the halves of a
+    /// surrogate pair — CI output and review bodies carry emoji.
     /// </summary>
-    private static string Truncate(string text)
+    private static string Truncate(string text, int max)
     {
-        var cut = MaxReasonLength - TruncationMarker.Length;
+        var cut = max - TruncationMarker.Length;
         if (char.IsHighSurrogate(text[cut - 1])) cut--;
         return text[..cut] + TruncationMarker;
     }
+
+    /// <summary>
+    /// The way out of a reason that can only hold so much of a review. Offered
+    /// on the two review edges only, and only when there is a work item id to
+    /// spell into the call — an agent that has to guess it will not make it.
+    /// <c>on_rejected</c> gets it too because while changes are requested it
+    /// outranks <c>on_comment</c> every tick, so that round would otherwise see
+    /// the review's prose and never the comments behind it.
+    /// </summary>
+    private static string ReviewPointer(string? edge, string? workItemId)
+        => edge is OnComment or OnRejected && !string.IsNullOrWhiteSpace(workItemId)
+            ? "\n\nThis is not the whole review. To read every comment on it — inline and suppressed, with its thread id and whether that thread is resolved — call "
+              + $"get_pr_review(workItemId: \"{workItemId}\")."
+            : string.Empty;
 
     private static string Headline(string? edge) => edge switch
     {
         OnRejected => "A reviewer requested changes on the pull request.",
         OnMergeConflict => "The pull request conflicts with its target branch and cannot be merged.",
         OnCiFailed => "CI failed on the pull request.",
+        OnComment => "New comments arrived on the pull request.",
         OnApproved => "The pull request was approved.",
         OnCiPassed => "CI passed on the pull request.",
         OnMerged => "The pull request was merged.",

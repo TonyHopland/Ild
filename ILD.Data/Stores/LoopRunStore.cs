@@ -300,6 +300,11 @@ public class LoopRunStore : ILoopRunStore
             .Where(r => r.Id == runId)
             .ExecuteUpdateAsync(s => s.SetProperty(r => r.SteeringNote, (string?)null));
 
+    public async Task SetPrCommentLedgerAsync(Guid runId, string? json)
+        => await _db.LoopRuns
+            .Where(r => r.Id == runId)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.PrCommentLedger, json));
+
     public async Task CreateRunNodeAsync(LoopRunNode runNode)
     {
         _db.LoopRunNodes.Add(runNode);

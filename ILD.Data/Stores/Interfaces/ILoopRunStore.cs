@@ -145,6 +145,16 @@ public interface ILoopRunStore
     Task ClearSteeringNoteAsync(Guid runId);
 
     /// <summary>
+    /// Persist what the run has been handed of its PR's review, touching only
+    /// that column. Every other writer on the PR path writes the whole row —
+    /// the heartbeat's snapshot write on each tick, the engine's park write one
+    /// step after the PR node posts — so a single-column write is what keeps a
+    /// just-recorded delivery from being reverted to whatever instance those
+    /// writers happen to hold.
+    /// </summary>
+    Task SetPrCommentLedgerAsync(Guid runId, string? json);
+
+    /// <summary>
     /// Refresh a tracked <see cref="LoopRun"/> instance with the row's current
     /// column values, discarding unsaved in-memory changes. Used by the engine
     /// before persisting so a stale instance held across a long node execution

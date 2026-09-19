@@ -28,8 +28,27 @@ public interface IRemoteGitProviderAdapter
     /// </summary>
     Task<RemoteCiLog> GetCheckLogAsync(HttpClient http, ResolvedRemoteRepository repo, string checkId, int tailLines, int offset);
 
+    /// <summary>
+    /// The whole review ledger for a pull request: every inline comment with the
+    /// commit it was written against and its thread's state, every finding a
+    /// review body carries without surfacing it as a thread, and every review's
+    /// verdict. A forge that cannot be read answers with
+    /// <see cref="RemotePrReviewLedger.Unavailable"/>.
+    /// </summary>
+    Task<RemotePrReviewLedger> GetPullRequestReviewLedgerAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber);
+
+    /// <summary>Answer one review comment on its own thread, with the provider credentials.</summary>
+    Task<RemotePrWriteResult> ReplyToReviewThreadAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string commentId, string body);
+
+    /// <summary>
+    /// Mark a review thread resolved. Providers whose API has no thread concept
+    /// say so rather than claiming success — the same degradation
+    /// <see cref="GetCheckLogAsync"/> uses.
+    /// </summary>
+    Task<RemotePrWriteResult> ResolveReviewThreadAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string threadId);
+
     Task<bool> DeleteBranchAsync(HttpClient http, ResolvedRemoteRepository repo, string branchName);
-    Task<bool> CreatePullRequestCommentAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string body);
+    Task<RemotePrWriteResult> CreatePullRequestCommentAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string body);
     bool VerifyWebhookSignature(string body, IReadOnlyDictionary<string, string> headers, string secret);
     WebhookPayload? ParseWebhookPayload(string body, IReadOnlyDictionary<string, string> headers);
 }

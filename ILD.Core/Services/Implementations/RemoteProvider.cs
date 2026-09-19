@@ -124,12 +124,53 @@ public class RemoteProviderService : IRemoteProvider
         catch { return false; }
     }
 
-    public async Task<bool> CreatePullRequestCommentAsync(string repoUrl, string prNumber, string body)
+    public async Task<RemotePrWriteResult> CreatePullRequestCommentAsync(string repoUrl, string prNumber, string body)
     {
         var resolved = await ResolveAsync(repoUrl);
-        if (resolved == null) return false;
+        if (resolved == null) return NoProvider;
         try { return await resolved.Adapter.CreatePullRequestCommentAsync(_http, resolved, prNumber, body); }
-        catch { return false; }
+        catch (Exception ex) { return Refused(ex, "PR comment post", repoUrl); }
+    }
+
+    public async Task<RemotePrReviewLedger> GetPullRequestReviewLedgerAsync(string repoUrl, string prNumber)
+    {
+        var resolved = await ResolveAsync(repoUrl);
+        if (resolved == null)
+            return RemotePrReviewLedger.Unavailable("No remote provider is configured for this repository.");
+        try { return await resolved.Adapter.GetPullRequestReviewLedgerAsync(_http, resolved, prNumber); }
+        catch (Exception ex)
+        {
+            // As with the CI log: the agent-facing message says only what the
+            // agent can act on, and the transport detail goes to the server log,
+            // which is otherwise the only place it would be lost.
+            _log?.LogWarning(ex, "Review ledger fetch failed for PR {PrNumber} on {RepoUrl}", prNumber, repoUrl);
+            return RemotePrReviewLedger.Unavailable("Could not read the review on this pull request — the provider request failed.");
+        }
+    }
+
+    public async Task<RemotePrWriteResult> ReplyToReviewThreadAsync(string repoUrl, string prNumber, string commentId, string body)
+    {
+        var resolved = await ResolveAsync(repoUrl);
+        if (resolved == null) return NoProvider;
+        try { return await resolved.Adapter.ReplyToReviewThreadAsync(_http, resolved, prNumber, commentId, body); }
+        catch (Exception ex) { return Refused(ex, "review reply", repoUrl); }
+    }
+
+    public async Task<RemotePrWriteResult> ResolveReviewThreadAsync(string repoUrl, string prNumber, string threadId)
+    {
+        var resolved = await ResolveAsync(repoUrl);
+        if (resolved == null) return NoProvider;
+        try { return await resolved.Adapter.ResolveReviewThreadAsync(_http, resolved, prNumber, threadId); }
+        catch (Exception ex) { return Refused(ex, "thread resolution", repoUrl); }
+    }
+
+    private static readonly RemotePrWriteResult NoProvider =
+        new(false, null, "No remote provider is configured for this repository.");
+
+    private RemotePrWriteResult Refused(Exception ex, string what, string repoUrl)
+    {
+        _log?.LogWarning(ex, "{What} failed on {RepoUrl}", what, repoUrl);
+        return new RemotePrWriteResult(false, null, "The provider request failed.");
     }
 
     private async Task<ResolvedRemoteRepository?> ResolveAsync(string repoUrl)

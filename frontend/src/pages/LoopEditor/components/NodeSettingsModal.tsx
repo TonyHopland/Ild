@@ -561,10 +561,13 @@ export function NodeSettingsModal({
               </div>
               <small className="config-help-text">
                 The PR heartbeat fires these reserved edges on PR state changes (in priority order):
-                on_rejected, on_merge_conflict, on_ci_failed, on_approved, on_ci_passed, on_merged,
-                on_abandoned. Only wired edges route; there is no fallback to on_success/on_failure,
-                so wire <strong>on_merged</strong> and <strong>on_abandoned</strong> to a Cleanup
-                path or the run parks forever once the PR closes.
+                on_rejected, on_merge_conflict, on_ci_failed, on_comment, on_approved, on_ci_passed,
+                on_merged, on_abandoned. Only wired edges route; there is no fallback to
+                on_success/on_failure, so wire <strong>on_merged</strong> and{" "}
+                <strong>on_abandoned</strong> to a Cleanup path or the run parks forever once the PR
+                closes. <strong>on_comment</strong> carries review and comment items the run has not
+                been handed yet — while a review has changes requested, on_rejected outranks it
+                every tick, and that round reads the comments with the get_pr_review tool instead.
               </small>
               <CustomEdgesEditor
                 names={customEdgeNames}

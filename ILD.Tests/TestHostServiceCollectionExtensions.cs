@@ -146,7 +146,16 @@ internal static class TestHostServiceCollectionExtensions
         public Task<bool> DeleteBranchAsync(string repoUrl, string branchName)
             => throw Unexpected(nameof(IRemoteProvider));
 
-        public Task<bool> CreatePullRequestCommentAsync(string repoUrl, string prNumber, string body)
+        public Task<RemotePrWriteResult> CreatePullRequestCommentAsync(string repoUrl, string prNumber, string body)
+            => throw Unexpected(nameof(IRemoteProvider));
+
+        public Task<RemotePrReviewLedger> GetPullRequestReviewLedgerAsync(string repoUrl, string prNumber)
+            => throw Unexpected(nameof(IRemoteProvider));
+
+        public Task<RemotePrWriteResult> ReplyToReviewThreadAsync(string repoUrl, string prNumber, string commentId, string body)
+            => throw Unexpected(nameof(IRemoteProvider));
+
+        public Task<RemotePrWriteResult> ResolveReviewThreadAsync(string repoUrl, string prNumber, string threadId)
             => throw Unexpected(nameof(IRemoteProvider));
     }
 

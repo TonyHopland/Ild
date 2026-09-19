@@ -201,7 +201,7 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
             .ToList();
     }
 
-    public override async Task<bool> CreatePullRequestCommentAsync(
+    public override async Task<RemotePrWriteResult> CreatePullRequestCommentAsync(
         HttpClient http, ResolvedRemoteRepository repo, string prNumber, string body)
     {
         ApplyHeaders(http, repo.Provider);
@@ -215,8 +215,28 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
                 comments = new[] { new { parentCommentId = 0, content = body, commentType = "text" } },
                 status = "active",
             });
-        return resp.IsSuccessStatusCode;
+        if (!resp.IsSuccessStatusCode)
+            return new RemotePrWriteResult(false, null, $"The comment was refused (HTTP {(int)resp.StatusCode}).");
+
+        return new RemotePrWriteResult(true, await PrCommentHelper.ReadCreatedIdAsync(resp), null);
     }
+
+    /// <summary>
+    /// Azure DevOps models a review as comment threads on the pull request, not
+    /// as the reviews/comments pair the base class reads, and has no equivalent
+    /// of a review body carrying suppressed findings. Rather than bend one REST
+    /// surface into the other's shape, this says plainly that the ledger is not
+    /// available here — the degradation <see cref="GetCheckLogAsync"/> uses.
+    /// </summary>
+    public override Task<RemotePrReviewLedger> GetPullRequestReviewLedgerAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+        => Task.FromResult(RemotePrReviewLedger.Unavailable(
+            "Reading a pull request's review is not supported for Azure DevOps — its reviews are comment threads with no equivalent ledger."));
+
+    public override Task<RemotePrWriteResult> ReplyToReviewThreadAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string commentId, string body)
+        => Task.FromResult(new RemotePrWriteResult(
+            false, null, "Replying to a review thread is not supported for Azure DevOps."));
 
     public override async Task<RemotePrStatus> GetPullRequestStatusAsync(
         HttpClient http, ResolvedRemoteRepository repo, string prNumber)

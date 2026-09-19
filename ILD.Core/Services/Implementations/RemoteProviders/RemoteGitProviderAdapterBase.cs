@@ -327,10 +327,10 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         return ReadId(run);
     }
 
-    /// <summary>An <c>id</c> field as a string, whether the provider sends it as a number or a string.</summary>
-    private static string? ReadId(JsonElement element)
+    /// <summary>An id field as a string, whether the provider sends it as a number or a string.</summary>
+    private static string? ReadId(JsonElement element, string property = "id")
     {
-        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty("id", out var id))
+        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(property, out var id))
             return null;
         return id.ValueKind switch
         {
@@ -339,6 +339,14 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
             _ => null,
         };
     }
+
+    private static int? ReadInt(JsonElement element, string property)
+        => element.ValueKind == JsonValueKind.Object
+            && element.TryGetProperty(property, out var value)
+            && value.ValueKind == JsonValueKind.Number
+            && value.TryGetInt32(out var number)
+                ? number
+                : null;
 
     /// <summary>
     /// No log to fetch by default: a provider whose checks are commit statuses
@@ -550,10 +558,167 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         return value.ValueKind == JsonValueKind.String ? value.GetString() : null;
     }
 
+    /// <summary>
+    /// How much of one review item's prose the ledger carries. A suppressed
+    /// finding runs to several hundred characters and a review can hold a dozen
+    /// of them; the same budget a check's own output gets, for the same reason.
+    /// </summary>
+    protected const int MaxReviewItemLength = MaxCheckSummaryLength;
+
+    /// <summary>
+    /// Assembled from the three REST collections this provider family already
+    /// exposes: the submitted reviews (whose bodies also carry the findings that
+    /// never became threads), the inline review comments, and the comments on
+    /// the pull request itself. Inline comments take <c>original_commit_id</c>
+    /// and <c>original_line</c> — the commit and line the reviewer wrote against
+    /// — because <c>commit_id</c>/<c>line</c> drift as the branch moves, and the
+    /// per-head repeat suppression keys on what was reviewed.
+    /// </summary>
+    public virtual async Task<RemotePrReviewLedger> GetPullRequestReviewLedgerAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+    {
+        ApplyHeaders(http, repo.Provider);
+        var apiRepo = $"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}";
+
+        // Deliberately not GetObjectAsync: a forge that will not answer at all
+        // must reach the caller as "could not read", not as an empty review.
+        using var prResp = await http.GetAsync($"{apiRepo}/pulls/{prNumber}");
+        if (!prResp.IsSuccessStatusCode)
+            return RemotePrReviewLedger.Unavailable(
+                $"Could not read pull request #{prNumber} from {ProviderType} (HTTP {(int)prResp.StatusCode}).");
+        using var prDoc = JsonDocument.Parse(await prResp.Content.ReadAsStringAsync());
+        var headSha = prDoc.RootElement.TryGetProperty("head", out var head) ? ReadString(head, "sha") : null;
+
+        var reviews = new List<RemotePrReviewSummary>();
+        var items = new List<RemotePrReviewItem>();
+        foreach (var review in await GetArrayAsync(http, $"{apiRepo}/pulls/{prNumber}/reviews"))
+        {
+            var body = ReadString(review, "body");
+            var summary = new RemotePrReviewSummary(
+                ReadId(review) ?? string.Empty,
+                NormalizeReviewState(ReadString(review, "state")),
+                body,
+                ReadString(review, "commit_id"),
+                ReadDate(review, "submitted_at") ?? DateTime.MinValue,
+                ReadUserLogin(review),
+                PrReviewBodyParser.IsIncomplete(body));
+            reviews.Add(summary);
+            foreach (var suppressed in PrReviewBodyParser.Suppressed(summary))
+                items.Add(suppressed with { Body = Truncate(suppressed.Body, MaxReviewItemLength) ?? suppressed.Body });
+        }
+
+        var comments = await GetArrayAsync(http, $"{apiRepo}/pulls/{prNumber}/comments");
+        var threads = await GetReviewThreadsAsync(http, repo, prNumber);
+        var threadByComment = new Dictionary<string, RemotePrReviewThread>(StringComparer.Ordinal);
+        foreach (var thread in threads)
+            foreach (var commentId in thread.CommentIds)
+                threadByComment[commentId] = thread;
+        var replyRoots = ReplyRoots(comments);
+
+        foreach (var comment in comments)
+        {
+            var id = ReadId(comment);
+            if (id is null) continue;
+            var thread = threadByComment.GetValueOrDefault(id);
+            items.Add(new RemotePrReviewItem(
+                "review",
+                id,
+                thread?.ThreadId ?? replyRoots.GetValueOrDefault(id, id),
+                ReadId(comment, "pull_request_review_id"),
+                ReadString(comment, "path"),
+                ReadInt(comment, "original_line") ?? ReadInt(comment, "line"),
+                Truncate(ReadString(comment, "body"), MaxReviewItemLength) ?? string.Empty,
+                ReadUserLogin(comment),
+                ReadString(comment, "original_commit_id") ?? ReadString(comment, "commit_id"),
+                ReadDate(comment, "created_at") ?? DateTime.MinValue,
+                thread?.Resolved ?? false,
+                PrCommentMarker.IsStamped(ReadString(comment, "body"))));
+        }
+
+        foreach (var comment in await GetArrayAsync(http, $"{apiRepo}/issues/{prNumber}/comments"))
+        {
+            var id = ReadId(comment);
+            if (id is null) continue;
+            items.Add(new RemotePrReviewItem(
+                "issue",
+                id,
+                ThreadId: null,
+                ReviewId: null,
+                Path: null,
+                Line: null,
+                Truncate(ReadString(comment, "body"), MaxReviewItemLength) ?? string.Empty,
+                ReadUserLogin(comment),
+                headSha,
+                ReadDate(comment, "created_at") ?? DateTime.MinValue,
+                Resolved: false,
+                PrCommentMarker.IsStamped(ReadString(comment, "body"))));
+        }
+
+        return new RemotePrReviewLedger(reviews, items, headSha, null);
+    }
+
+    /// <summary>
+    /// The provider's own review threads, when it has a thread concept to report
+    /// (GitHub, over GraphQL). Empty by default, which leaves every comment keyed
+    /// by the root of its reply chain and no thread reported as resolved.
+    /// </summary>
+    protected virtual Task<IReadOnlyList<RemotePrReviewThread>> GetReviewThreadsAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+        => Task.FromResult<IReadOnlyList<RemotePrReviewThread>>(Array.Empty<RemotePrReviewThread>());
+
+    /// <summary>Each inline comment's root comment, walking <c>in_reply_to_id</c> back up the chain.</summary>
+    private static Dictionary<string, string> ReplyRoots(IReadOnlyList<JsonElement> comments)
+    {
+        var parents = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var comment in comments)
+        {
+            var id = ReadId(comment);
+            var parent = ReadId(comment, "in_reply_to_id");
+            if (id is not null && parent is not null)
+                parents[id] = parent;
+        }
+
+        var roots = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var id in parents.Keys)
+        {
+            var root = id;
+            // Bounded by the chain's length; a provider that ever reported a
+            // cycle would otherwise hang the heartbeat.
+            for (var hops = 0; hops < parents.Count && parents.TryGetValue(root, out var parent); hops++)
+                root = parent;
+            roots[id] = root;
+        }
+
+        return roots;
+    }
+
+    public virtual async Task<RemotePrWriteResult> ReplyToReviewThreadAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string commentId, string body)
+    {
+        ApplyHeaders(http, repo.Provider);
+        using var resp = await http.PostAsJsonAsync(
+            $"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/pulls/{prNumber}/comments/{Uri.EscapeDataString(commentId)}/replies",
+            new { body });
+        if (!resp.IsSuccessStatusCode)
+            return new RemotePrWriteResult(false, null, $"The reply was refused by {ProviderType} (HTTP {(int)resp.StatusCode}).");
+
+        return new RemotePrWriteResult(true, await PrCommentHelper.ReadCreatedIdAsync(resp), null);
+    }
+
+    /// <summary>
+    /// No thread resolution by default: outside GitHub's GraphQL API a review
+    /// thread is not a resolvable object, so saying so is the answer — the same
+    /// degradation <see cref="GetCheckLogAsync"/> uses.
+    /// </summary>
+    public virtual Task<RemotePrWriteResult> ResolveReviewThreadAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string threadId)
+        => Task.FromResult(new RemotePrWriteResult(
+            false, null, $"Resolving review threads is not supported by {ProviderType} — its API has no thread to resolve."));
+
     public Task UnregisterWebhookAsync(HttpClient http, ResolvedRemoteRepository repo, string callbackUrl)
         => Task.CompletedTask;
 
-    public virtual Task<bool> CreatePullRequestCommentAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string body)
+    public virtual Task<RemotePrWriteResult> CreatePullRequestCommentAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string body)
         => PrCommentHelper.CreatePullRequestCommentAsync(http, repo, prNumber, body, ApplyHeaders);
 
     public virtual bool VerifyWebhookSignature(string body, IReadOnlyDictionary<string, string> headers, string secret)

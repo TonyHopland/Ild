@@ -41,7 +41,7 @@ public class PRNodeExecutorTests
 
         var remote = new Mock<IRemoteProvider>();
         remote.Setup(r => r.CreatePullRequestCommentAsync("https://example.com/owner/repo.git", "42", It.IsAny<string>()))
-            .ReturnsAsync(true);
+            .ReturnsAsync(new RemotePrWriteResult(true, "1", null));
 
         var rendering = new Mock<IPromptRenderingService>();
         rendering.Setup(r => r.RenderAsync(It.IsAny<string>(), It.IsAny<Guid>(), It.IsAny<WorkItemView>(), It.IsAny<string?>()))
@@ -73,8 +73,12 @@ public class PRNodeExecutorTests
         await foreach (var o in executor.ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
             outcomes.Add(o);
 
+        // The rendered template is what gets posted, with ILD's own marker after
+        // it so the comment does not fire the comment edge back at the loop.
         remote.Verify(r => r.CreatePullRequestCommentAsync(
-            "https://example.com/owner/repo.git", "42", "Update on Title"), Times.Once);
+            "https://example.com/owner/repo.git", "42",
+            It.Is<string>(posted => posted.StartsWith("Update on Title", StringComparison.Ordinal)
+                && PrCommentMarker.IsStamped(posted))), Times.Once);
         Assert.Contains(outcomes, o => o is NodeOutcome.WaitingAction);
         Assert.DoesNotContain(outcomes, o => o is NodeOutcome.PrCreated);
         Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
@@ -438,7 +442,7 @@ public class PRNodeExecutorTests
         providerStore.Setup(s => s.GetRemoteProviderByIdAsync(It.IsAny<Guid>())).ReturnsAsync((RemoteProvider?)null);
         var remote = new Mock<IRemoteProvider>();
         remote.Setup(r => r.CreatePullRequestCommentAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
-            .ReturnsAsync(false);
+            .ReturnsAsync(new RemotePrWriteResult(false, null, null));
 
         var services = new ServiceCollection();
         services.AddSingleton(workItems.Object);

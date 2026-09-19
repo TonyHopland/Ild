@@ -168,14 +168,36 @@ public sealed class PRNodeExecutor : INodeExecutor
                 try { commentBody = await rendering.RenderAsync(cfg.PrCommentTemplate, ctx.Run.Id, wi, ctx.Run.PreviousNodeOutput); }
                 catch { }
             }
-            bool posted = false;
+            // Stamp it: unmarked, this comment is indistinguishable from a
+            // reviewer's and fires on_comment on the next heartbeat — round,
+            // comment, round, comment, each one a full verification gate.
+            RemotePrWriteResult? posted = null;
             string? commentErr = null;
-            try { posted = await remote.CreatePullRequestCommentAsync(repo.CloneUrl, prNumber, commentBody); }
-            catch (Exception ex) { commentErr = ex.Message; }
-            if (!posted)
+            try
             {
-                yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"PR comment failed: {commentErr ?? "remote returned false"}");
+                posted = await remote.CreatePullRequestCommentAsync(
+                    repo.CloneUrl, prNumber, PrCommentMarker.Stamp(commentBody, ctx.Run.Id));
+            }
+            catch (Exception ex) { commentErr = ex.Message; }
+            if (posted is not { Ok: true })
+            {
+                yield return new NodeOutcome.Fail(EdgeType.OnFailure,
+                    $"PR comment failed: {commentErr ?? posted?.Message ?? "remote returned false"}");
                 yield break;
+            }
+
+            // The marker's second half, which no one can edit away. Optional
+            // store: an id the provider did not name costs the ledger an entry,
+            // not the round.
+            if (posted.Id is not null && sp.GetService<ILoopRunStore>() is { } runs)
+            {
+                var ledger = (PrCommentLedgerJson.TryParse(ctx.Run.PrCommentLedger) ?? PrCommentLedger.Empty)
+                    .WithPosted(PrCommentLedger.KeyFor("issue", posted.Id));
+                var ledgerJson = PrCommentLedgerJson.Serialize(ledger);
+                // Both: the targeted write persists it, and the instance carries
+                // it into the engine's park write one step from here.
+                ctx.Run.PrCommentLedger = ledgerJson;
+                await runs.SetPrCommentLedgerAsync(ctx.Run.Id, ledgerJson);
             }
         }
 

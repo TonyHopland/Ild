@@ -13,13 +13,20 @@ public class PrSyncService : IPrSyncService
     private readonly IEventLogStore _eventLogStore;
     private readonly IWorkItemManager _workItems;
     private readonly ILoopEngine _loopEngine;
+    private readonly IPrStatusPoller _poller;
 
-    public PrSyncService(ILoopRunStore loopRunStore, IEventLogStore eventLogStore, IWorkItemManager workItems, ILoopEngine loopEngine)
+    public PrSyncService(
+        ILoopRunStore loopRunStore,
+        IEventLogStore eventLogStore,
+        IWorkItemManager workItems,
+        ILoopEngine loopEngine,
+        IPrStatusPoller poller)
     {
         _loopRunStore = loopRunStore;
         _eventLogStore = eventLogStore;
         _workItems = workItems;
         _loopEngine = loopEngine;
+        _poller = poller;
     }
 
     public async Task HandleWebhookAsync(WebhookPayload payload)
@@ -38,6 +45,12 @@ public class PrSyncService : IPrSyncService
                 Data = payload.Comment,
                 Timestamp = DateTime.UtcNow,
             });
+
+            // A comment only makes the heartbeat early. Firing on_comment here
+            // would bypass every throttle it has — the delivered ledger, ILD's
+            // own marker, the cut-short-review check — since all of them live in
+            // the poll pass and none of them here.
+            _poller.Pulse();
         }
 
         var edgeName = MapWebhookToEdge(payload, out var merged);

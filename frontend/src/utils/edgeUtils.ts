@@ -33,7 +33,7 @@ export function nodeAllowsCustomEdges(nodeType: NodeType): boolean {
   return customEdgeNodeTypes.has(nodeType);
 }
 
-// The seven reserved PR-node custom edges fired by the PR heartbeat poller, in
+// The eight reserved PR-node custom edges fired by the PR heartbeat poller, in
 // priority order (highest first). Mirrors ILD.Core PrNodeEdges. Wiring one
 // routes the run away from the parked PR node when that state is observed; an
 // unwired edge never fires. There is NO fallback to on_success/on_failure — to
@@ -42,6 +42,7 @@ export const PR_RESERVED_EDGE_NAMES = [
   "on_rejected",
   "on_merge_conflict",
   "on_ci_failed",
+  "on_comment",
   "on_approved",
   "on_ci_passed",
   "on_merged",
@@ -52,7 +53,7 @@ export const PR_RESERVED_EDGE_NAMES = [
  * The custom-edge names a node declares, used to populate the "Which edge?"
  * dropdown when connecting from the custom handle. AI nodes derive them from
  * their match rules' edge names; Human nodes from their `customEdges` list; PR
- * nodes from their `customEdges` plus the seven reserved heartbeat edges so the
+ * nodes from their `customEdges` plus the eight reserved heartbeat edges so the
  * editor can always wire them.
  */
 export function getCustomEdgeNames(node: Node | undefined | null): string[] {

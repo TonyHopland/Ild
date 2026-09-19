@@ -223,7 +223,7 @@ public class TemplateFieldRenderSiteTests
         var wi = Wi(Guid.NewGuid());
         var (services, remote, repo) = PrServices(wi);
         remote.Setup(r => r.CreatePullRequestCommentAsync(repo.CloneUrl, "42", It.IsAny<string>()))
-            .ReturnsAsync(true);
+            .ReturnsAsync(new RemotePrWriteResult(true, "1", null));
 
         await RunAsync(
             new PRNodeExecutor(),
@@ -236,7 +236,9 @@ public class TemplateFieldRenderSiteTests
             },
             services.BuildServiceProvider());
 
-        remote.Verify(r => r.CreatePullRequestCommentAsync(repo.CloneUrl, "42", $"Update on {Title}"), Times.Once);
+        remote.Verify(r => r.CreatePullRequestCommentAsync(repo.CloneUrl, "42",
+            It.Is<string>(posted => posted.StartsWith($"Update on {Title}", StringComparison.Ordinal)
+                && PrCommentMarker.IsStamped(posted))), Times.Once);
     }
 
     // ---- 7-8. Condition node: output and case subject ----------------------
