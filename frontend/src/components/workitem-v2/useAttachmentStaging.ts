@@ -85,14 +85,45 @@ const namesOf = (entries: StagedAttachment[]) =>
     .map((entry) => entry.storedName ?? entry.file.name);
 
 /**
- * The files a human has picked, dropped or pasted but not yet uploaded. They
- * belong to the work item they were staged on — switching item empties the list —
- * and each one is marked done on its own successful upload, so a save that fails
- * partway can be retried without landing a second copy of what already arrived.
+ * What this instance may accept, read once for the dialog and shared by the
+ * staging lists in it: they weigh files against the same instance's maximum, and
+ * one read answers for all of them. A failed read leaves the limits unknown and
+ * the server the only enforcer.
  */
-export function useAttachmentStaging(workItemId: string | undefined): AttachmentStaging {
-  const [staged, setStaged] = useState<StagedAttachment[]>([]);
+export function useAttachmentLimits(): AttachmentLimits | null {
   const [limits, setLimits] = useState<AttachmentLimits | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    settingsService
+      .getAttachmentLimits()
+      .then((result) => {
+        if (!cancelled) setLimits(result);
+      })
+      .catch(() => {
+        // Inventing a limit would refuse files an instance configured higher
+        // accepts, so there simply is no client-side gate until this arrives.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return limits;
+}
+
+/**
+ * The files a human has picked, dropped or pasted but not yet uploaded, for one
+ * act — saving the form, or answering the run. They belong to the work item they
+ * were staged on, and each is marked done on its own successful upload, so a
+ * save that fails partway can be retried without landing a second copy of what
+ * already arrived.
+ */
+export function useAttachmentStaging(
+  workItemId: string | undefined,
+  limits: AttachmentLimits | null,
+): AttachmentStaging {
+  const [staged, setStaged] = useState<StagedAttachment[]>([]);
   const [stagingError, setStagingError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
 
@@ -107,37 +138,21 @@ export function useAttachmentStaging(workItemId: string | undefined): Attachment
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    settingsService
-      .getAttachmentLimits()
-      .then((result) => {
-        if (cancelled) return;
-        setLimits(result);
-        // A file staged before the limits arrived was never weighed against
-        // them. It is weighed now, while it is still only staged: the work item
-        // asks that no request carrying an oversize file is ever sent, and
-        // until this runs the gate has nothing to gate on.
-        const refusals: string[] = [];
-        applyStaged((prev) =>
-          prev.filter((entry) => {
-            if (entry.status === "uploaded" || entry.file.size <= result.maxBytesPerFile) {
-              return true;
-            }
-            refusals.push(oversizeMessage(entry.file.name, result.maxBytesPerFile));
-            return false;
-          }),
-        );
-        if (refusals.length > 0) setStagingError(refusals.join(" "));
-      })
-      .catch(() => {
-        // Without the limits there is nothing to check against, and inventing
-        // one would refuse files an instance configured higher accepts. The
-        // server stays the enforcer either way.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [applyStaged]);
+    if (!limits) return;
+    // A file staged before the limits arrived was never weighed against them. It
+    // is weighed now, while it is still only staged: the work item asks that no
+    // request carrying an oversize file is ever sent, and until the limits are
+    // here the gate has nothing to gate on.
+    const refusals: string[] = [];
+    applyStaged((prev) =>
+      prev.filter((entry) => {
+        if (entry.status === "uploaded" || entry.file.size <= limits.maxBytesPerFile) return true;
+        refusals.push(oversizeMessage(entry.file.name, limits.maxBytesPerFile));
+        return false;
+      }),
+    );
+    if (refusals.length > 0) setStagingError(refusals.join(" "));
+  }, [limits, applyStaged]);
 
   // Every reset starts a new generation. An upload batch that began under an
   // older one has to stop: the files it would find now were staged for the work

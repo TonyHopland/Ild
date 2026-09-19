@@ -882,7 +882,10 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
         <AttachmentList
           workItem={workItem}
           onRemoved={(attachmentId) => {
+            // Either list may be holding it: the answer's and the edit form's
+            // are two views of the same files on the same item.
             detail.attachments.forgetUploaded(attachmentId);
+            detail.editAttachments.forgetUploaded(attachmentId);
             detail.refetchWorkItem();
           }}
         />

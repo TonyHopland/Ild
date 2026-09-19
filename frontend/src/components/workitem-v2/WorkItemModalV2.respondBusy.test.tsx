@@ -317,6 +317,60 @@ describe("closing while an upload is on its way", () => {
   });
 });
 
+describe("an answer waiting to be retried", () => {
+  test("survives an edit opened and cancelled beside it", async () => {
+    mockServices();
+    const upload = vi
+      .spyOn(authServices.workItemService, "uploadAttachment")
+      .mockResolvedValue([
+        { id: "att-1", fileName: "a.txt", contentType: "text/plain", sizeBytes: 1 },
+      ]);
+    const answer = vi
+      .spyOn(authServices.workItemService, "humanFeedbackInput")
+      .mockRejectedValueOnce({ status: 400, message: "Input must be 8192 characters or fewer." })
+      .mockResolvedValue(undefined);
+    await renderDialog();
+    await waitForLimits();
+    await stage(new File(["x"], "a.txt", { type: "text/plain" }));
+    await act(async () => {
+      fireEvent.change(feedback().querySelector("textarea") as HTMLTextAreaElement, {
+        target: { value: "Looks good" },
+      });
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(feedback().textContent).toContain("Input must be 8192 characters or fewer."),
+    );
+
+    // The file is on the item and the answer is waiting to be retried. Opening
+    // an edit and cancelling it discards what was staged in the edit — nothing
+    // else.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(feedback().textContent).toContain("a.txt"));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(answer).toHaveBeenCalledTimes(2));
+    expect(answer.mock.calls[1][1]).toBe("Looks good\n\nAttached files: a.txt");
+    expect(upload).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("closing with a file staged in the feedback pane", () => {
   test("Escape asks before discarding it", async () => {
     mockServices();

@@ -1,20 +1,20 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { renderHook, act, cleanup, waitFor } from "@testing-library/react";
 import { useAttachmentStaging } from "./useAttachmentStaging";
-import { settingsService, workItemService } from "../../services/auth";
+import { AttachmentLimits } from "../../types";
+import { workItemService } from "../../services/auth";
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
 });
 
-function stubLimits() {
-  vi.spyOn(settingsService, "getAttachmentLimits").mockResolvedValue({
-    maxBytesPerFile: 25 * 1024 * 1024,
-    maxFilesPerRequest: 10,
-    maxTotalBytesPerWorkItem: 250 * 1024 * 1024,
-  });
-}
+/** What the dialog read once and hands to every staging list in it. */
+const LIMITS: AttachmentLimits = {
+  maxBytesPerFile: 25 * 1024 * 1024,
+  maxFilesPerRequest: 10,
+  maxTotalBytesPerWorkItem: 250 * 1024 * 1024,
+};
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -33,17 +33,18 @@ function fileOfSize(name: string, bytes: number, type = "application/octet-strea
 
 describe("the work item a staged file belongs to", () => {
   test("a batch stops when the dialog moves on, and never sends the next item's file", async () => {
-    stubLimits();
     const first = deferred<never[]>();
     const upload = vi
       .spyOn(workItemService, "uploadAttachment")
       .mockImplementationOnce(() => first.promise)
       .mockResolvedValue([]);
 
-    const { result, rerender } = renderHook(({ id }: { id: string }) => useAttachmentStaging(id), {
-      initialProps: { id: "wi-1" },
-    });
-    await waitFor(() => expect(result.current.limits).not.toBeNull());
+    const { result, rerender } = renderHook(
+      ({ id }: { id: string }) => useAttachmentStaging(id, LIMITS),
+      {
+        initialProps: { id: "wi-1" },
+      },
+    );
     act(() => result.current.add([new File(["a"], "first.png", { type: "image/png" })]));
 
     let running!: ReturnType<typeof result.current.uploadAll>;
@@ -78,15 +79,13 @@ describe("the work item a staged file belongs to", () => {
 
 describe("one batch at a time owns the staging list", () => {
   test("a second upload joins the batch already running instead of sending again", async () => {
-    stubLimits();
     const first = deferred<never[]>();
     const upload = vi
       .spyOn(workItemService, "uploadAttachment")
       .mockImplementationOnce(() => first.promise)
       .mockResolvedValue([]);
 
-    const { result } = renderHook(() => useAttachmentStaging("wi-1"));
-    await waitFor(() => expect(result.current.limits).not.toBeNull());
+    const { result } = renderHook(() => useAttachmentStaging("wi-1", LIMITS));
     act(() => result.current.add([new File(["a"], "a.png", { type: "image/png" })]));
 
     let running!: ReturnType<typeof result.current.uploadAll>;
@@ -112,17 +111,18 @@ describe("one batch at a time owns the staging list", () => {
   });
 
   test("a save for another work item waits for the running batch, it does not take its outcome", async () => {
-    stubLimits();
     const first = deferred<never[]>();
     const upload = vi
       .spyOn(workItemService, "uploadAttachment")
       .mockImplementationOnce(() => first.promise)
       .mockResolvedValue([]);
 
-    const { result, rerender } = renderHook(({ id }: { id: string }) => useAttachmentStaging(id), {
-      initialProps: { id: "wi-a" },
-    });
-    await waitFor(() => expect(result.current.limits).not.toBeNull());
+    const { result, rerender } = renderHook(
+      ({ id }: { id: string }) => useAttachmentStaging(id, LIMITS),
+      {
+        initialProps: { id: "wi-a" },
+      },
+    );
     act(() => result.current.add([new File(["a"], "for-a.png", { type: "image/png" })]));
 
     let forA!: ReturnType<typeof result.current.uploadAll>;
@@ -160,15 +160,13 @@ describe("one batch at a time owns the staging list", () => {
   });
 
   test("emptying the list under a batch abandons it rather than reporting success", async () => {
-    stubLimits();
     const first = deferred<never[]>();
     const upload = vi
       .spyOn(workItemService, "uploadAttachment")
       .mockImplementationOnce(() => first.promise)
       .mockResolvedValue([]);
 
-    const { result } = renderHook(() => useAttachmentStaging("wi-1"));
-    await waitFor(() => expect(result.current.limits).not.toBeNull());
+    const { result } = renderHook(() => useAttachmentStaging("wi-1", LIMITS));
     act(() =>
       result.current.add([
         new File(["a"], "a.png", { type: "image/png" }),
@@ -201,25 +199,20 @@ describe("one batch at a time owns the staging list", () => {
 
 describe("staging before the limits have arrived", () => {
   test("a file the limits turn out to rule out is dropped when they land", async () => {
-    const limits = deferred<{
-      maxBytesPerFile: number;
-      maxFilesPerRequest: number;
-      maxTotalBytesPerWorkItem: number;
-    }>();
-    vi.spyOn(settingsService, "getAttachmentLimits").mockReturnValue(limits.promise);
     const upload = vi.spyOn(workItemService, "uploadAttachment").mockResolvedValue([]);
 
-    const { result } = renderHook(() => useAttachmentStaging("wi-1"));
+    // The dialog reads the limits once and hands them down; until that read
+    // answers, the list is holding files nothing has weighed.
+    const { result, rerender } = renderHook(
+      ({ limits }: { limits: AttachmentLimits | null }) => useAttachmentStaging("wi-1", limits),
+      { initialProps: { limits: null as AttachmentLimits | null } },
+    );
     act(() => result.current.add([fileOfSize("big.bin", 30 * 1024 * 1024)]));
     act(() => result.current.add([fileOfSize("small.txt", 12, "text/plain")]));
     expect(result.current.staged.map((entry) => entry.file.name)).toEqual(["big.bin", "small.txt"]);
 
     await act(async () => {
-      limits.resolve({
-        maxBytesPerFile: 25 * 1024 * 1024,
-        maxFilesPerRequest: 10,
-        maxTotalBytesPerWorkItem: 250 * 1024 * 1024,
-      });
+      rerender({ limits: LIMITS });
       await Promise.resolve();
     });
 
@@ -238,15 +231,13 @@ describe("staging before the limits have arrived", () => {
 
 describe("useAttachmentStaging", () => {
   test("a file staged while the batch is in flight is uploaded by that same save", async () => {
-    stubLimits();
     const first = deferred<never[]>();
     const upload = vi
       .spyOn(workItemService, "uploadAttachment")
       .mockImplementationOnce(() => first.promise)
       .mockResolvedValue([]);
 
-    const { result } = renderHook(() => useAttachmentStaging("wi-1"));
-    await waitFor(() => expect(result.current.limits).not.toBeNull());
+    const { result } = renderHook(() => useAttachmentStaging("wi-1", LIMITS));
 
     act(() => result.current.add([new File(["a"], "a.png", { type: "image/png" })]));
 
@@ -268,13 +259,11 @@ describe("useAttachmentStaging", () => {
   });
 
   test("a file the server refuses is attempted once per save", async () => {
-    stubLimits();
     const upload = vi
       .spyOn(workItemService, "uploadAttachment")
       .mockRejectedValue({ message: "Attachments for this work item exceed the total allowed." });
 
-    const { result } = renderHook(() => useAttachmentStaging("wi-1"));
-    await waitFor(() => expect(result.current.limits).not.toBeNull());
+    const { result } = renderHook(() => useAttachmentStaging("wi-1", LIMITS));
 
     act(() => result.current.add([new File(["a"], "a.png", { type: "image/png" })]));
 

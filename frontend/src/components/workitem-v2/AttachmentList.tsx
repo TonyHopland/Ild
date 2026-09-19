@@ -25,8 +25,14 @@ export default function AttachmentList({ workItem, onRemoved }: AttachmentListPr
   // let one row's request re-enable another's controls and wipe its message.
   const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set());
   const [errors, setErrors] = useState<ReadonlyMap<string, string>>(() => new Map());
+  // What this view has deleted. The work item is reread afterwards, but that
+  // read is best-effort: a file the server has accepted the deletion of is gone
+  // whether or not the reread arrives, and must not still be offered here.
+  const [deleted, setDeleted] = useState<ReadonlySet<string>>(() => new Set());
 
-  const attachments = workItem.attachments ?? [];
+  const attachments = (workItem.attachments ?? []).filter(
+    (attachment) => !deleted.has(attachment.id),
+  );
 
   const act = async (
     attachment: WorkItemAttachment,
@@ -69,6 +75,7 @@ export default function AttachmentList({ workItem, onRemoved }: AttachmentListPr
   const remove = (attachment: WorkItemAttachment) =>
     act(attachment, `Failed to remove ${attachment.fileName}.`, async () => {
       await workItemService.deleteAttachment(workItem.id, attachment.id);
+      setDeleted((prev) => new Set(prev).add(attachment.id));
       onRemoved(attachment.id);
     });
 

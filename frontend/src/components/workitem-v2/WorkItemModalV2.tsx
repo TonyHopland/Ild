@@ -71,11 +71,10 @@ export default function WorkItemModalV2({
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [showTerminal, setShowTerminal] = useState(false);
 
-  // Leaving the edit view without saving discards the files staged in it too:
-  // one staging list serves both the form and the feedback pane, so a screenshot
-  // dropped here and then cancelled would otherwise ride along with the next
-  // answer to the run.
-  const clearStaged = detail.attachments.clear;
+  // Leaving the edit view without saving discards the files staged in it — and
+  // only those: the answer has its own list, which a cancelled edit has no
+  // business emptying.
+  const clearStaged = detail.editAttachments.clear;
   const exitEdit = useCallback(() => {
     setEditMode(false);
     setEditDirty(false);
@@ -89,19 +88,20 @@ export default function WorkItemModalV2({
   const hasUnsavedChanges =
     ((editMode || isCreate) && editDirty) ||
     detail.feedbackInput.trim().length > 0 ||
-    detail.attachments.staged.length > 0;
+    detail.attachments.staged.length > 0 ||
+    detail.editAttachments.staged.length > 0;
 
   const requestClose = useCallback(() => {
     // An upload already on its way cannot be called back, so closing over it
     // would land files the human is in the middle of discarding. The staged
     // rows show the batch running; closing waits for it.
-    if (detail.attachments.uploading) return;
+    if (detail.attachments.uploading || detail.editAttachments.uploading) return;
     if (hasUnsavedChanges) {
       setShowCloseConfirm(true);
     } else {
       onClose();
     }
-  }, [detail.attachments.uploading, hasUnsavedChanges, onClose]);
+  }, [detail.attachments.uploading, detail.editAttachments.uploading, hasUnsavedChanges, onClose]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -481,7 +481,7 @@ export default function WorkItemModalV2({
                   // The edit form saves onto the same staging list an answer is
                   // uploading from, and leaving it discards that list; neither
                   // belongs on top of a batch still going up.
-                  disabled={detail.attachments.uploading}
+                  disabled={detail.attachments.uploading || detail.editAttachments.uploading}
                 >
                   Edit
                 </button>

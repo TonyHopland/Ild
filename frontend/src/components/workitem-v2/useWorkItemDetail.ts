@@ -17,7 +17,7 @@ import {
   aiProviderService,
 } from "../../services/auth";
 import { useSignalR } from "../../hooks/useSignalR";
-import { useAttachmentStaging } from "./useAttachmentStaging";
+import { useAttachmentLimits, useAttachmentStaging } from "./useAttachmentStaging";
 import { attachedNote } from "../../utils/attachments";
 
 /**
@@ -57,9 +57,13 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   // uploaded once" must not depend on how soon React gets to re-render.
   const responding = useRef(false);
 
-  // Staged on the work item, not on the view that staged them: the edit form and
-  // the feedback pane attach to the same item and share one list.
-  const attachments = useAttachmentStaging(workItem?.id);
+  // One staging list per act, not per work item. Saving the form and answering
+  // the run both attach to the same item, but they are separate pieces of work
+  // that start, fail and are abandoned independently — sharing a list makes one
+  // of them able to discard what the other is still holding.
+  const attachmentLimits = useAttachmentLimits();
+  const attachments = useAttachmentStaging(workItem?.id, attachmentLimits);
+  const editAttachments = useAttachmentStaging(workItem?.id, attachmentLimits);
 
   const reloadRepositories = useCallback(async () => {
     try {
@@ -777,6 +781,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     respondError,
     respondLoading,
     attachments,
+    editAttachments,
     refetchWorkItem,
     mergeLoading,
     mergeError,

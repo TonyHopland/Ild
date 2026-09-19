@@ -9,9 +9,15 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const LIMITS = {
+  maxBytesPerFile: 25 * 1024 * 1024,
+  maxFilesPerRequest: 10,
+  maxTotalBytesPerWorkItem: 250 * 1024 * 1024,
+};
+
 /** The picker as it is mounted: inside a form that owns the paste handler. */
 function Harness() {
-  const staging = useAttachmentStaging("wi-1");
+  const staging = useAttachmentStaging("wi-1", LIMITS);
   return (
     <form onPaste={staging.handlePaste}>
       <textarea aria-label="Notes" />

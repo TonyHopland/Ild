@@ -129,6 +129,30 @@ describe("each attachment row answers for itself", () => {
     await waitFor(() => expect(button("Download second.png").disabled).toBe(false));
   });
 
+  test("a removed file stops being listed even when the refresh behind it fails", async () => {
+    mockServices();
+    const remove = vi
+      .spyOn(authServices.workItemService, "deleteAttachment")
+      .mockResolvedValue(undefined);
+    // The reread after a removal is best-effort; the file is gone regardless.
+    vi.spyOn(authServices.workItemService, "getById").mockRejectedValue({
+      status: 503,
+      message: "WorkItemServer unreachable",
+    });
+    await renderDialog();
+
+    await click(button("Remove attachment first.png"));
+
+    await waitFor(() => expect(remove).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Remove attachment first.png" })).toBeNull(),
+    );
+    // The other file is untouched, and the failed reread is not reported as a
+    // failed removal.
+    expect(button("Remove attachment second.png")).toBeTruthy();
+    expect(screen.queryByText("WorkItemServer unreachable")).toBeNull();
+  });
+
   test("a row's failure is its own, and another row's action does not wipe it", async () => {
     mockServices();
     vi.spyOn(authServices.workItemService, "deleteAttachment").mockRejectedValue({

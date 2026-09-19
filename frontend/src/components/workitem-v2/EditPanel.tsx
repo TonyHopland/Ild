@@ -73,7 +73,7 @@ export default function EditPanel({
   const [createdId, setCreatedId] = useState<string | null>(null);
 
   const overridesProvider = aiProviderOverride !== AiProviderOverrideMode.None;
-  const attachments = detail.attachments;
+  const attachments = detail.editAttachments;
 
   // Advice on the branch name, debounced while typing. Deliberately never gates
   // the submit button: a warning means the name is taken *right now*, and the
