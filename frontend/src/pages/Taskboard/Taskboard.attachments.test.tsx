@@ -125,6 +125,15 @@ async function dialogSettled(title: string) {
   });
 }
 
+/**
+ * A control inside whichever dialog is open. Waiting for it rather than reading
+ * it once covers the beat in which a switch has torn one dialog down and not yet
+ * put the next one up.
+ */
+async function dialogButton(name: string) {
+  return await waitFor(() => within(dialog()).getByRole("button", { name }));
+}
+
 async function openCard(title: string) {
   const card = await waitForNode(() =>
     document.querySelector<HTMLElement>(`.work-item-card[aria-label^="${title},"]`),
@@ -144,7 +153,7 @@ async function click(button: HTMLElement) {
 }
 
 async function stageInEditForm(fileName: string) {
-  await click(within(dialog()).getByRole("button", { name: "Edit" }));
+  await click(await dialogButton("Edit"));
   const form = await waitForNode(() => dialog().querySelector("form"));
   await act(async () => {
     fireEvent.change(form.querySelector('input[type="file"]') as HTMLInputElement, {
@@ -179,7 +188,7 @@ describe("a dialog belongs to the work item it was opened for", () => {
     await dialogSettled("Item A");
 
     await stageInEditForm("a.txt");
-    await click(within(dialog()).getByRole("button", { name: "Update" }));
+    await click(await dialogButton("Update"));
     await waitFor(() => expect(upload).toHaveBeenCalledTimes(1));
 
     // Item A's upload is still out while the human moves on, stages on B and
@@ -188,7 +197,7 @@ describe("a dialog belongs to the work item it was opened for", () => {
     await stageInEditForm("b.txt");
     await openCard("Item C");
     await stageInEditForm("c.txt");
-    await click(within(dialog()).getByRole("button", { name: "Update" }));
+    await click(await dialogButton("Update"));
 
     await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
     await act(async () => {

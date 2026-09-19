@@ -57,6 +57,23 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   // uploaded once" must not depend on how soon React gets to re-render.
   const responding = useRef(false);
 
+  // Everything the dialog does that writes — creating, saving an edit,
+  // answering the run, and the uploads inside them — runs through whileBusy, so
+  // the dialog has one thing to ask about whether it is in the middle of
+  // something. Asking the individual acts instead means every new act has to be
+  // remembered in every place that cares, and the close guard was already three
+  // flags behind.
+  const [actsInFlight, setActsInFlight] = useState(0);
+  const whileBusy = useCallback(async <T>(act: () => Promise<T>): Promise<T> => {
+    setActsInFlight((count) => count + 1);
+    try {
+      return await act();
+    } finally {
+      setActsInFlight((count) => count - 1);
+    }
+  }, []);
+  const busy = actsInFlight > 0;
+
   // One staging list per act, not per work item. Saving the form and answering
   // the run both attach to the same item, but they are separate pieces of work
   // that start, fail and are abandoned independently — sharing a list makes one
@@ -601,48 +618,52 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     setRespondLoading(true);
     setRespondError(null);
     try {
-      // The staging list answers both questions here, never the render the
-      // press came from: it says what is left to send — a file dropped while an
-      // upload was in flight is part of this answer too — and, once nothing is
-      // pending, what the note must name. An attempt that landed every file and
-      // failed only at the submit has nothing left to upload, and its retry
-      // still has to name what is already on the item.
-      let outcome = await attachments.uploadAll(workItem.id);
-      while (outcome.ok && attachments.hasPending()) {
-        outcome = await attachments.uploadAll(workItem.id);
-      }
-      // The dialog moved to another work item while the files were going up, so
-      // there is no longer an answer to this one being composed here.
-      if (outcome.abandoned) return;
-      if (!outcome.ok) {
-        setRespondError(outcome.errors.join(" "));
-        return;
-      }
-      // The note must name what the item holds now. This dialog's own copy of it
-      // cannot answer that: it predates these uploads, and it predates any file
-      // removed from the overview since an earlier attempt stored it. Reading
-      // the item back settles both. A read that fails leaves the names as the
-      // uploads left them — a refreshed note is not worth failing an answer for.
-      let storedNames = outcome.storedNames;
-      if (storedNames.length > 0) {
-        const held = await workItemService
-          .getById(workItem.id)
-          .then((fresh) => fresh.attachments)
-          .catch(() => undefined);
-        storedNames = attachments.namesStoredOn(held);
-      }
-      try {
-        // The typed text comes from the ref for the same reason: the uploads
-        // above can take seconds, and the human types on through them.
-        await submit(workItem.id, attachedNote(feedbackInputRef.current, storedNames));
-      } catch (error) {
-        setRespondError((error as { message?: string })?.message ?? "Failed to submit the answer.");
-        return;
-      }
-      // Only the files this answer named are done with; one staged while the
-      // answer was being submitted is not on the item and stays for the next.
-      attachments.clearUploaded();
-      refetchWorkItem();
+      await whileBusy(async () => {
+        // The staging list answers both questions here, never the render the
+        // press came from: it says what is left to send — a file dropped while an
+        // upload was in flight is part of this answer too — and, once nothing is
+        // pending, what the note must name. An attempt that landed every file and
+        // failed only at the submit has nothing left to upload, and its retry
+        // still has to name what is already on the item.
+        let outcome = await attachments.uploadAll(workItem.id);
+        while (outcome.ok && attachments.hasPending()) {
+          outcome = await attachments.uploadAll(workItem.id);
+        }
+        // The dialog moved to another work item while the files were going up, so
+        // there is no longer an answer to this one being composed here.
+        if (outcome.abandoned) return;
+        if (!outcome.ok) {
+          setRespondError(outcome.errors.join(" "));
+          return;
+        }
+        // The note must name what the item holds now. This dialog's own copy of it
+        // cannot answer that: it predates these uploads, and it predates any file
+        // removed from the overview since an earlier attempt stored it. Reading
+        // the item back settles both. A read that fails leaves the names as the
+        // uploads left them — a refreshed note is not worth failing an answer for.
+        let storedNames = outcome.storedNames;
+        if (storedNames.length > 0) {
+          const held = await workItemService
+            .getById(workItem.id)
+            .then((fresh) => fresh.attachments)
+            .catch(() => undefined);
+          storedNames = attachments.namesStoredOn(held);
+        }
+        try {
+          // The typed text comes from the ref for the same reason: the uploads
+          // above can take seconds, and the human types on through them.
+          await submit(workItem.id, attachedNote(feedbackInputRef.current, storedNames));
+        } catch (error) {
+          setRespondError(
+            (error as { message?: string })?.message ?? "Failed to submit the answer.",
+          );
+          return;
+        }
+        // Only the files this answer named are done with; one staged while the
+        // answer was being submitted is not on the item and stays for the next.
+        attachments.clearUploaded();
+        refetchWorkItem();
+      });
     } finally {
       responding.current = false;
       setRespondLoading(false);
@@ -780,6 +801,8 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     handleEdge,
     respondError,
     respondLoading,
+    busy,
+    whileBusy,
     attachments,
     editAttachments,
     refetchWorkItem,

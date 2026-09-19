@@ -92,16 +92,17 @@ export default function WorkItemModalV2({
     detail.editAttachments.staged.length > 0;
 
   const requestClose = useCallback(() => {
-    // An upload already on its way cannot be called back, so closing over it
-    // would land files the human is in the middle of discarding. The staged
-    // rows show the batch running; closing waits for it.
-    if (detail.attachments.uploading || detail.editAttachments.uploading) return;
+    // A write already on its way cannot be called back, so closing over it
+    // would land files the human is in the middle of discarding — the save that
+    // is still running would upload them. Closing waits for whatever the dialog
+    // is doing, not for the uploading part of it alone.
+    if (detail.busy) return;
     if (hasUnsavedChanges) {
       setShowCloseConfirm(true);
     } else {
       onClose();
     }
-  }, [detail.attachments.uploading, detail.editAttachments.uploading, hasUnsavedChanges, onClose]);
+  }, [detail.busy, hasUnsavedChanges, onClose]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -481,7 +482,7 @@ export default function WorkItemModalV2({
                   // The edit form saves onto the same staging list an answer is
                   // uploading from, and leaving it discards that list; neither
                   // belongs on top of a batch still going up.
-                  disabled={detail.attachments.uploading || detail.editAttachments.uploading}
+                  disabled={detail.busy}
                 >
                   Edit
                 </button>

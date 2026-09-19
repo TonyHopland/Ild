@@ -55,7 +55,20 @@ function mockServices() {
     invoke: vi.fn(),
     connectionState: "connected",
   } as unknown as ReturnType<typeof signalRHook.useSignalR>);
-  vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
+  // The edit form's repository select is required, so the item's repository has
+  // to be among the options or the browser refuses to submit the form.
+  vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([
+    {
+      id: "repo-1",
+      name: "my-repo",
+      remoteProviderId: "rp-1",
+      cloneUrl: "",
+      defaultBranch: null,
+      worktreesPath: null,
+      defaultIntakeStatus: WorkItemStatus.Backlog,
+      createdAt: "2025-01-01T00:00:00Z",
+    },
+  ]);
   vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.workItemService, "getRuns").mockResolvedValue([]);
@@ -274,6 +287,90 @@ describe("staging a file while the answer is being submitted", () => {
 
     await waitFor(() => expect(feedback().textContent).toContain("late.png"));
     expect(upload).not.toHaveBeenCalled();
+  });
+});
+
+describe("closing while the dialog is in the middle of something", () => {
+  test("neither Escape nor Close dismisses the save request that precedes the uploads", async () => {
+    mockServices();
+    const saving = deferred<WorkItem>();
+    vi.spyOn(authServices.workItemService, "update").mockReturnValue(saving.promise);
+    const upload = vi.spyOn(authServices.workItemService, "uploadAttachment").mockResolvedValue([]);
+    const onClose = vi.fn();
+    await renderDialog({ onClose });
+    await waitForLimits();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.change(document.querySelector('input[type="file"]') as HTMLInputElement, {
+        target: { files: [new File(["x"], "shot.png", { type: "image/png" })] },
+      });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Update" }));
+      await Promise.resolve();
+    });
+
+    // The save request is out and nothing has been uploaded yet: this is the
+    // window in which a dismissal used to be accepted, leaving the save to
+    // upload files the human had just discarded.
+    expect(upload).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Escape" });
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      await Promise.resolve();
+    });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Discard unsaved changes/)).toBeNull();
+
+    await act(async () => {
+      saving.resolve(makeParkedWorkItem());
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(1));
+  });
+
+  test("nor the answer's submit, after its uploads are done", async () => {
+    mockServices();
+    vi.spyOn(authServices.workItemService, "uploadAttachment").mockResolvedValue([]);
+    const submitted = deferred<void>();
+    const answer = vi
+      .spyOn(authServices.workItemService, "humanFeedbackInput")
+      .mockReturnValue(submitted.promise);
+    const onClose = vi.fn();
+    await renderDialog({ onClose });
+    await waitForLimits();
+    await stage(new File(["x"], "shot.png", { type: "image/png" }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      await Promise.resolve();
+    });
+
+    // Waiting for the submit to be out puts the dialog past its uploads: the
+    // only thing still running is the answer itself.
+    await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Escape" });
+      await Promise.resolve();
+    });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Discard unsaved changes/)).toBeNull();
+
+    await act(async () => {
+      submitted.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(feedback()).toBeTruthy());
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Escape" });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 });
 
