@@ -134,6 +134,8 @@ describe("ChatBubble turn state", () => {
   });
 
   test("a send that fails with no answer from the server clears the turn it put up", async () => {
+    // The chat was idle when the send went out, so there is no earlier turn to
+    // put back and the view is right to end up idle.
     await openResumed(chatSession());
     chatService.sendMessage.mockRejectedValue(new Error("Network error."));
     chatService.getById.mockRejectedValue(new Error("Network error."));
@@ -143,6 +145,42 @@ describe("ChatBubble turn state", () => {
     expect(await screen.findByText("Network error.")).toBeTruthy();
     await waitFor(() => expect(screen.queryByLabelText("Stop")).toBeNull());
     expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  test("a send that never reached the server leaves the turn it did not replace alone", async () => {
+    // A send only displaces a turn if it arrives. This one fails on the way out,
+    // so the turn it claimed to replace is still running and still streaming —
+    // the reply on screen belongs to it and must not be wiped on its behalf.
+    await openResumed(chatSession({ activeTurnId: "t1" }));
+    emit("ChatTurnProgress", { chatSessionId: "s1", delta: "half an answer" });
+    expect(screen.getByText("half an answer")).toBeTruthy();
+
+    chatService.sendMessage.mockRejectedValue(new Error("Network error."));
+    chatService.getById.mockResolvedValue(chatSession({ activeTurnId: "t1" }));
+
+    await sendMessageText("are you still there?");
+
+    expect(await screen.findByText("Network error.")).toBeTruthy();
+    await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(3));
+    expect(screen.getByLabelText("Stop")).toBeTruthy();
+    expect(screen.getByRole("status")).toBeTruthy();
+    expect(screen.getByText("half an answer")).toBeTruthy();
+  });
+
+  test("a send that never reached the server keeps the stop button when the read fails too", async () => {
+    // Both requests fail, so nothing can confirm anything: the view must fall
+    // back to what it knew, which is that t1 was running — not to idle, which
+    // would take away the only control that can stop it.
+    await openResumed(chatSession({ activeTurnId: "t1" }));
+    chatService.sendMessage.mockRejectedValue(new Error("Network error."));
+    chatService.getById.mockRejectedValue(new Error("Network error."));
+
+    await sendMessageText("are you still there?");
+
+    expect(await screen.findByText("Network error.")).toBeTruthy();
+    await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(3));
+    expect(screen.getByLabelText("Stop")).toBeTruthy();
+    expect(screen.getByRole("status")).toBeTruthy();
   });
 
   test("a turn announced while a failed send unwinds survives it", async () => {
@@ -180,6 +218,52 @@ describe("ChatBubble turn state", () => {
     // And it is that turn's completion that ends it, not the failed send's.
     emit("ChatTurnCompleted", { chatSessionId: "s1", turnId: "t5", interrupted: false });
     expect(screen.queryByLabelText("Stop")).toBeNull();
+  });
+
+  test("a long transcript is merged whole, keeping order and what arrived meanwhile", async () => {
+    // The snapshot is a whole transcript rather than the single message an append
+    // carries, and it is always behind by whatever landed while it was in flight.
+    // Merging it may add what was missed and reorder, never drop or duplicate.
+    const history = Array.from({ length: 60 }, (_, i) =>
+      msg({ id: `m${i}`, content: `body ${i}`, sequence: i }),
+    );
+    openList(summary("s1", "Long chat"));
+    chatService.getById.mockResolvedValueOnce(
+      chatSession({ name: "Long chat", messages: history }),
+    );
+    let answerJoinRead!: (session: ChatSession) => void;
+    chatService.getById.mockReturnValueOnce(
+      new Promise<ChatSession>((resolve) => {
+        answerJoinRead = resolve;
+      }),
+    );
+
+    fireEvent.click(await screen.findByLabelText("Open chat"));
+    fireEvent.click(await screen.findByText("Long chat"));
+    await screen.findByLabelText("Chat message");
+
+    // Learned over the hub while the read was in flight, so the snapshot cannot
+    // know about it.
+    emit("ChatMessageAppended", {
+      chatSessionId: "s1",
+      message: msg({ id: "live", content: "arrived meanwhile", sequence: 60 }),
+    });
+
+    // The server answers with the same transcript out of order, plus one the
+    // client had not seen.
+    await act(async () => {
+      answerJoinRead(
+        chatSession({
+          name: "Long chat",
+          messages: [msg({ id: "late", content: "body 61", sequence: 61 }), ...history].reverse(),
+        }),
+      );
+    });
+
+    const rendered = [...document.querySelectorAll(".chat-msg")].map((n) => n.textContent);
+    expect(rendered).toHaveLength(history.length + 2);
+    expect(rendered).toEqual([...history.map((m) => m.content), "arrived meanwhile", "body 61"]);
+    expect(screen.getAllByText("body 5")).toHaveLength(1);
   });
 
   test("a state read answered after the user left never lands on the chat they moved to", async () => {

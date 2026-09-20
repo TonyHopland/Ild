@@ -91,16 +91,17 @@ public sealed class ChatTurnRunner : IChatTurnRunner
 
             turn.Task = Task.Run(async () =>
             {
+                // How the turn ended comes back from the execution itself, rather
+                // than being sampled once it is over: a stop landing after the reply
+                // was persisted would otherwise announce an interrupt of a reply the
+                // service had already written as a complete one.
+                var interrupted = false;
                 try
                 {
-                    await RunTurnAsync(chatSessionId, userMessage, openWorkItemId, openLoopDocument, turn.Cts.Token).ConfigureAwait(false);
+                    interrupted = await RunTurnAsync(chatSessionId, userMessage, openWorkItemId, openLoopDocument, turn.Cts.Token).ConfigureAwait(false);
                 }
                 finally
                 {
-                    // Read before retiring: whoever takes the turn out of the map
-                    // disposes its CancellationTokenSource, and a disposed one can
-                    // no longer be asked whether it was cancelled.
-                    var interrupted = turn.Cts.IsCancellationRequested;
                     Retire(chatSessionId, turn);
                     await _notifier.TurnCompletedAsync(chatSessionId, turn.Id, interrupted).ConfigureAwait(false);
                 }
@@ -214,7 +215,11 @@ public sealed class ChatTurnRunner : IChatTurnRunner
         }
     }
 
-    private async Task RunTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, string? openLoopDocument, CancellationToken ct)
+    // Returns whether the turn ended cancelled, taken while the execution is still
+    // the only thing that has run: the reply's own interrupted flag is taken from
+    // this same token by the service that persists it, so reading it any later can
+    // contradict what the transcript already says.
+    private async Task<bool> RunTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, string? openLoopDocument, CancellationToken ct)
     {
         // The caller retires this turn when it ends, whether it finished or threw,
         // so nothing is left behind for a chat that is never used again.
@@ -223,10 +228,12 @@ public sealed class ChatTurnRunner : IChatTurnRunner
             using var scope = _scopes.CreateScope();
             var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
             await chat.ExecuteTurnAsync(chatSessionId, userMessage, openWorkItemId, openLoopDocument, ct).ConfigureAwait(false);
+            return ct.IsCancellationRequested;
         }
         catch (Exception ex)
         {
             _log.LogError(ex, "Chat turn failed for {ChatSessionId}", chatSessionId);
+            return ct.IsCancellationRequested;
         }
     }
 }

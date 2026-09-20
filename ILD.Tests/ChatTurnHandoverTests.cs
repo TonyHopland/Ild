@@ -147,6 +147,77 @@ public sealed class ChatTurnHandoverTests
         Assert.Null(runner.ActiveTurnId(chatId));
     }
 
+    // Disposed with the turn's DI scope, which the runner closes once the service
+    // has finished with the turn — the one moment that sits after the reply is
+    // persisted and before the turn is announced finished.
+    private sealed class RunsWhenTheTurnsScopeCloses : IDisposable
+    {
+        public Action? OnDispose { get; set; }
+
+        public void Dispose() => OnDispose?.Invoke();
+    }
+
+    [Fact]
+    public async Task A_stop_landing_after_the_reply_was_persisted_does_not_report_it_interrupted()
+    {
+        var started = new ConcurrentQueue<Guid>();
+        var completed = new ConcurrentQueue<(Guid TurnId, bool Interrupted)>();
+
+        // What the service wrote on the reply. ChatService takes it from the turn's
+        // own token at the moment it persists (ChatService.ExecuteTurnAsync), so a
+        // stop arriving after that leaves a reply flagged as a complete one.
+        bool? persistedInterrupted = null;
+        CancellationToken turnToken = default;
+        var chat = new Mock<IChatService>();
+        chat.Setup(c => c.ExecuteTurnAsync(
+                It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .Returns((Guid _, string _, string? _, string? _, CancellationToken ct) =>
+            {
+                turnToken = ct;
+                persistedInterrupted = ct.IsCancellationRequested;
+                return Task.CompletedTask;
+            });
+
+        var notifier = new Mock<IChatNotifier>();
+        notifier.Setup(n => n.TurnStartedAsync(It.IsAny<Guid>(), It.IsAny<Guid>()))
+            .Returns((Guid _, Guid turnId) => { started.Enqueue(turnId); return Task.CompletedTask; });
+        notifier.Setup(n => n.TurnCompletedAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<bool>()))
+            .Returns((Guid _, Guid turnId, bool interrupted) => { completed.Enqueue((turnId, interrupted)); return Task.CompletedTask; });
+
+        var hook = new RunsWhenTheTurnsScopeCloses();
+        var services = new ServiceCollection()
+            .AddScoped(_ => hook)
+            // Resolved with the service so the scope owns it and closes it at the
+            // same point, without the runner knowing anything about it.
+            .AddScoped(sp => { sp.GetRequiredService<RunsWhenTheTurnsScopeCloses>(); return chat.Object; })
+            .BuildServiceProvider();
+        var runner = ActivatorUtilities.CreateInstance<ChatTurnRunner>(
+            services, notifier.Object, NullLogger<ChatTurnRunner>.Instance);
+        var chatId = Guid.NewGuid();
+
+        Task? stop = null;
+        hook.OnDispose = () =>
+        {
+            // The stop lands here, in the gap the turn used to be judged in. It is
+            // not awaited: it cancels before it waits for this very turn, so waiting
+            // for the token is waiting for the part that matters without waiting on
+            // ourselves.
+            stop = runner.InterruptAsync(chatId);
+            var deadline = DateTime.UtcNow.Add(Patience);
+            while (!turnToken.IsCancellationRequested && DateTime.UtcNow < deadline)
+                Thread.Sleep(5);
+        };
+
+        await runner.SubmitAsync(chatId, "one").WaitAsync(Patience);
+        await WaitUntilAsync(() => completed.Count == 1, "the turn should report itself finished");
+        await (stop ?? Task.CompletedTask).WaitAsync(Patience);
+
+        Assert.False(persistedInterrupted, "the reply was persisted before the stop, so it is not interrupted");
+        Assert.True(turnToken.IsCancellationRequested, "the stop should have landed while the turn was ending");
+        var (_, interrupted) = Assert.Single(completed);
+        Assert.False(interrupted, "the turn was announced interrupted though its reply was persisted as complete");
+    }
+
     // Polls a background step that nothing can be awaited on, with a deadline far
     // beyond what it needs — a failure means it never happened, not that it was slow.
     private static async Task WaitUntilAsync(Func<bool> condition, string because)

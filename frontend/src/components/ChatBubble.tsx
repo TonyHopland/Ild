@@ -260,10 +260,18 @@ export default function ChatBubble() {
       // we have since learned about: a snapshot may never overrule a newer fact.
       if (sessionIdRef.current !== id || epochRef.current !== epoch) return;
 
-      // Merged, never replaced. The snapshot predates whatever arrived over the
-      // hub while it was in flight, so it may add what we missed but must not
-      // drop what we know — the new turn's own user message, say.
-      for (const message of view.messages) upsertMessage(message);
+      // Merged in one pass, never replaced. The snapshot predates whatever
+      // arrived over the hub while it was in flight, so it may add what we
+      // missed but must not drop what we know — the new turn's own user message,
+      // say. A whole transcript arrives at once here, unlike the single message
+      // an append carries, so it is merged as one.
+      setMessages((prev) => {
+        const known = new Set(prev.map((m) => m.id));
+        const missing = view.messages.filter((m) => !known.has(m.id));
+        return missing.length === 0
+          ? prev
+          : [...prev, ...missing].sort((a, b) => a.sequence - b.sequence);
+      });
 
       const active = view.activeTurnId ?? null;
       // A streamed partial belongs to the turn that produced it, and only that
@@ -272,7 +280,7 @@ export default function ChatBubble() {
       if (active !== turnRef.current) setStreaming("");
       applyTurn(active);
     },
-    [upsertMessage, applyTurn],
+    [applyTurn],
   );
 
   // Join the active chat's group whenever we are connected, and leave it on
@@ -426,8 +434,12 @@ export default function ChatBubble() {
     if (!content || !session) return;
     setInput("");
     // The message interrupts whatever was running, so the chat is busy from here
-    // whichever turn the server ends up naming.
+    // whichever turn the server ends up naming. The turn being displaced is kept:
+    // a send that never reaches the server displaces nothing, and only the turn
+    // value from before it can say so.
+    const displaced = turnRef.current;
     applyTurn(PENDING_TURN);
+    const pendingEpoch = epochRef.current;
     try {
       // The open Loop Editor's live, possibly-unsaved document travels with each
       // message so the agent can read and edit the loop the user is looking at
@@ -442,15 +454,18 @@ export default function ChatBubble() {
       );
     } catch (e) {
       setError((e as { message?: string })?.message ?? "Could not send message.");
+      // Put back the turn this send claimed to replace before anything reads the
+      // turn value again: the send may never have reached the runner, and that
+      // turn is then still running. Skipped once something else has moved the
+      // turn on — a start announced while this send was unwinding.
+      if (epochRef.current === pendingEpoch) applyTurn(displaced);
       // The message may still have reached the runner, and a turn it did not
-      // reach may be running regardless — so ask the server rather than declaring
-      // the chat idle and taking away the only control that can stop it.
+      // reach may be running regardless — so ask the server rather than trusting
+      // either guess. On failure the view keeps the turn it had before the send.
       try {
         await refreshActiveState(session.id);
-      } catch {
-        // Nothing left to ask. Clear only what this send put up, so a turn we
-        // have learned about in the meantime is left alone.
-        if (turnRef.current === PENDING_TURN) applyTurn(null);
+      } catch (err) {
+        console.error(err);
       }
     }
   };
