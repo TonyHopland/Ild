@@ -221,10 +221,134 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
         return new RemotePrWriteResult(true, await PrCommentHelper.ReadCreatedIdAsync(resp), null);
     }
 
-    // The review ledger and thread replies are not overridden here: Azure
-    // DevOps models a review as comment threads with no equivalent collection,
-    // and the base class's default already answers "not supported for
-    // AzureDevOps" without a request. One owner for that message.
+    /// <summary>Thread statuses Azure DevOps treats as closed; anything else leaves the thread open.</summary>
+    private static readonly HashSet<string> ResolvedThreadStatuses =
+        new(StringComparer.OrdinalIgnoreCase) { "fixed", "closed", "wontFix", "byDesign" };
+
+    /// <summary>
+    /// Azure DevOps keeps the whole review in one place —
+    /// <c>pullRequests/{id}/threads</c> carries the thread id, its comments, the
+    /// file and line it is anchored to and its status — so the ledger is a
+    /// single request and needs no second API. A thread anchored to a file is an
+    /// inline comment; one that is not is the pull request's own discussion.
+    /// System comments ("updated the source branch") are events, not review, and
+    /// are dropped as they are everywhere else this payload is read.
+    ///
+    /// There are no reviews in the GitHub sense to enumerate, and no review body
+    /// to hide findings in, so the reviews list is empty and nothing is
+    /// suppressed. The iteration the thread was left on stands in for the commit
+    /// a comment was written against, which is what the per-head repeat
+    /// suppression keys on.
+    /// </summary>
+    public override async Task<RemotePrReviewLedger> GetPullRequestReviewLedgerAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+    {
+        ApplyHeaders(http, repo.Provider);
+
+        var pr = await GetObjectAsync(http, Versioned(PrApi(repo, prNumber)));
+        if (pr is null)
+            return RemotePrReviewLedger.Unavailable(
+                $"Could not read pull request {prNumber} from Azure DevOps.");
+        var headSha = ReadString(Child(pr, "lastMergeSourceCommit"), "commitId");
+
+        var items = new List<RemotePrReviewItem>();
+        foreach (var thread in await GetArrayAsync(http, Versioned($"{PrApi(repo, prNumber)}/threads"), CollectionProperty))
+        {
+            var threadId = ReadScalar(thread, "id");
+            if (threadId is null) continue;
+
+            var context = Child(thread, "threadContext");
+            var path = ReadString(context, "filePath");
+            var line = ReadScalar(Child(context, "rightFileStart"), "line")
+                ?? ReadScalar(Child(context, "leftFileStart"), "line");
+            var resolved = ResolvedThreadStatuses.Contains(ReadString(thread, "status") ?? string.Empty);
+            var commit = ReadScalar(Child(Child(thread, "pullRequestThreadContext"), "iterationContext"), "secondComparingIteration")
+                ?? headSha;
+
+            if (!thread.TryGetProperty("comments", out var comments) || comments.ValueKind != JsonValueKind.Array)
+                continue;
+
+            foreach (var comment in comments.EnumerateArray())
+            {
+                var content = ReadString(comment, "content");
+                if (string.IsNullOrWhiteSpace(content)
+                    || string.Equals(ReadString(comment, "commentType"), "system", StringComparison.OrdinalIgnoreCase)
+                    || (comment.TryGetProperty("isDeleted", out var deleted) && deleted.ValueKind == JsonValueKind.True))
+                    continue;
+
+                items.Add(new RemotePrReviewItem(
+                    path is null ? "issue" : "review",
+                    // Comment ids restart per thread, so they are qualified by it.
+                    $"{threadId}-{ReadScalar(comment, "id") ?? "0"}",
+                    path is null ? null : threadId,
+                    ReviewId: null,
+                    path,
+                    int.TryParse(line, out var lineNumber) ? lineNumber : null,
+                    Truncate(content, MaxReviewItemLength) ?? string.Empty,
+                    ReadString(Child(comment, "author"), "displayName") ?? string.Empty,
+                    commit,
+                    ReadDate(comment, "publishedDate") ?? DateTime.MinValue,
+                    resolved,
+                    PrCommentMarker.IsStamped(content)));
+            }
+        }
+
+        return new RemotePrReviewLedger(Array.Empty<RemotePrReviewSummary>(), items, headSha, null);
+    }
+
+    /// <summary>
+    /// An answer on the thread the comment sits in: Azure DevOps replies are
+    /// comments on the same thread, keyed to the comment they answer by
+    /// <c>parentCommentId</c>. The ledger qualifies a comment id by its thread,
+    /// so both halves are already in hand.
+    /// </summary>
+    public override async Task<RemotePrWriteResult> ReplyToReviewThreadAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string commentId, string body)
+    {
+        var (threadId, parentId) = SplitQualifiedCommentId(commentId);
+        if (threadId is null)
+            return new RemotePrWriteResult(false, null,
+                $"'{commentId}' is not an Azure DevOps comment id — the ledger reports them as <thread>-<comment>.");
+
+        ApplyHeaders(http, repo.Provider);
+        using var resp = await http.PostAsJsonAsync(
+            Versioned($"{PrApi(repo, prNumber)}/threads/{Uri.EscapeDataString(threadId)}/comments"),
+            new { parentCommentId = parentId, content = body, commentType = "text" });
+        if (!resp.IsSuccessStatusCode)
+            return new RemotePrWriteResult(false, null, $"The reply was refused by Azure DevOps (HTTP {(int)resp.StatusCode}).");
+
+        var created = await PrCommentHelper.ReadCreatedIdAsync(resp);
+        return new RemotePrWriteResult(true, created is null ? null : $"{threadId}-{created}", null);
+    }
+
+    /// <summary>
+    /// Resolving is a thread status change rather than a mutation of its own:
+    /// PATCH the thread to <c>fixed</c>, which is what the web UI's "Resolve"
+    /// does.
+    /// </summary>
+    public override async Task<RemotePrWriteResult> ResolveReviewThreadAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string threadId)
+    {
+        ApplyHeaders(http, repo.Provider);
+        using var request = new HttpRequestMessage(
+            HttpMethod.Patch, Versioned($"{PrApi(repo, prNumber)}/threads/{Uri.EscapeDataString(threadId)}"))
+        {
+            Content = JsonContent.Create(new { status = "fixed" }),
+        };
+        using var resp = await http.SendAsync(request);
+        return resp.IsSuccessStatusCode
+            ? new RemotePrWriteResult(true, threadId, null)
+            : new RemotePrWriteResult(false, null, $"Azure DevOps refused to resolve the thread (HTTP {(int)resp.StatusCode}).");
+    }
+
+    /// <summary>The <c>&lt;thread&gt;-&lt;comment&gt;</c> pair the ledger qualifies an Azure comment id with.</summary>
+    private static (string? ThreadId, int ParentId) SplitQualifiedCommentId(string commentId)
+    {
+        var separator = commentId.LastIndexOf('-');
+        if (separator <= 0 || !int.TryParse(commentId[(separator + 1)..], out var parentId))
+            return (null, 0);
+        return (commentId[..separator], parentId);
+    }
 
     public override async Task<RemotePrStatus> GetPullRequestStatusAsync(
         HttpClient http, ResolvedRemoteRepository repo, string prNumber)

@@ -328,7 +328,7 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     }
 
     /// <summary>An id field as a string, whether the provider sends it as a number or a string.</summary>
-    private static string? ReadId(JsonElement element, string property = "id")
+    protected static string? ReadId(JsonElement element, string property = "id")
     {
         if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(property, out var id))
             return null;
@@ -340,7 +340,7 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         };
     }
 
-    private static int? ReadInt(JsonElement element, string property)
+    protected static int? ReadInt(JsonElement element, string property)
         => element.ValueKind == JsonValueKind.Object
             && element.TryGetProperty(property, out var value)
             && value.ValueKind == JsonValueKind.Number
@@ -543,15 +543,15 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         }
     }
 
-    private static string ReadUserLogin(JsonElement element)
+    protected static string ReadUserLogin(JsonElement element)
         => element.TryGetProperty("user", out var user) ? ReadString(user, "login") ?? string.Empty : string.Empty;
 
-    private static DateTime? ReadDate(JsonElement element, string property)
+    protected static DateTime? ReadDate(JsonElement element, string property)
         => element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String && value.TryGetDateTime(out var dt)
             ? dt
             : null;
 
-    private static string? ReadString(JsonElement element, string property)
+    protected static string? ReadString(JsonElement element, string property)
     {
         if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(property, out var value))
             return null;
@@ -720,7 +720,7 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     /// exists; a response with no <c>Link</c> at all is the one case left to a
     /// short page, and neither supported forge both caps and omits it.
     /// </summary>
-    private static async Task<IReadOnlyList<JsonElement>?> ReadAllPagesAsync(HttpClient http, string url)
+    protected static async Task<IReadOnlyList<JsonElement>?> ReadAllPagesAsync(HttpClient http, string url)
     {
         var all = new List<JsonElement>();
         var separator = url.Contains('?', StringComparison.Ordinal) ? '&' : '?';

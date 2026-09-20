@@ -24,6 +24,7 @@ public class RemotePrReviewLedgerPagingTests
         private readonly List<(Func<string, bool> Match, Func<string> Body)> _rules = new();
         public List<string> GraphQlBodies { get; } = new();
         public List<string> Urls { get; } = new();
+        public List<(HttpMethod Method, string Url, string Body)> Bodies { get; } = new();
 
         private readonly List<(Func<string, bool> Match, Func<string, HttpResponseMessage> Respond)> _urlRules = new();
 
@@ -44,8 +45,13 @@ public class RemotePrReviewLedgerPagingTests
         {
             var url = request.RequestUri!.ToString();
             Urls.Add(url);
-            if (url.EndsWith("/graphql", StringComparison.Ordinal) && request.Content is not null)
-                GraphQlBodies.Add(await request.Content.ReadAsStringAsync(cancellationToken));
+            if (request.Content is not null)
+            {
+                var sent = await request.Content.ReadAsStringAsync(cancellationToken);
+                Bodies.Add((request.Method, url, sent));
+                if (url.EndsWith("/graphql", StringComparison.Ordinal))
+                    GraphQlBodies.Add(sent);
+            }
 
             foreach (var (match, respond) in _urlRules)
                 if (match(url))
@@ -214,25 +220,81 @@ public class RemotePrReviewLedgerPagingTests
     }
 
     [Fact]
-    public async Task A_forge_without_the_routes_the_ledger_is_read_from_says_so_without_asking()
+    public async Task Forgejo_reads_its_review_comments_from_under_each_review()
     {
         // Checked against the live Forgejo 9.0.3 (Gitea 1.22.0 API): there is no
-        // pulls/{index}/comments collection and no reply route at all — review
-        // comments hang off pulls/{index}/reviews/{id}/comments. Inheriting the
-        // GitHub read there would 404 every tick and report an outage for
-        // something simply not implemented.
+        // pulls/{index}/comments collection, so the comments hang off each
+        // review — one request per review — and a comment carries a resolver
+        // once someone has resolved it.
+        const string repo = "https://gitea.example/team/repo.git";
+        using var db = new TestDb();
+        var handler = new RoutingHandler()
+            .Map(u => u.Contains("/pulls/5/reviews/41/comments", StringComparison.Ordinal), () =>
+                "[{\"id\":901,\"path\":\"src/A.cs\",\"position\":10,\"original_position\":10,"
+                + "\"original_commit_id\":\"" + Head + "\",\"user\":{\"login\":\"alice\"},"
+                + "\"created_at\":\"2026-09-18T17:34:44Z\",\"body\":\"this allocation is wrong\","
+                + "\"resolver\":{\"login\":\"tony\"}}]")
+            .Map(u => u.Contains("/pulls/5/reviews", StringComparison.Ordinal), () =>
+                "[{\"id\":41,\"state\":\"COMMENT\",\"body\":\"a review\",\"commit_id\":\"" + Head + "\","
+                + "\"submitted_at\":\"2026-09-18T17:34:45Z\",\"user\":{\"login\":\"alice\"}}]")
+            .Map(u => u.Contains("/issues/5/comments", StringComparison.Ordinal), () =>
+                "[{\"id\":7001,\"user\":{\"login\":\"tony\"},\"created_at\":\"2026-09-18T19:00:00Z\",\"body\":\"ping\"}]")
+            .Map(u => u.EndsWith("/pulls/5", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}");
+
+        var service = CreateService(db, handler, "Forgejo", "https://gitea.example");
+        var ledger = await service.GetPullRequestReviewLedgerAsync(repo, "5");
+
+        Assert.Null(ledger.Message);
+        Assert.Equal(Head, ledger.HeadSha);
+        var inline = ledger.Items.Single(i => i.CommentId == "901");
+        Assert.Equal("src/A.cs", inline.Path);
+        Assert.Equal(10, inline.Line);
+        Assert.Equal("alice", inline.Author);
+        Assert.Equal(Head, inline.Commit);
+        Assert.True(inline.Resolved);
+        Assert.Equal("41", inline.ThreadId);
+        var issue = ledger.Items.Single(i => i.CommentId == "7001");
+        Assert.Null(issue.Path);
+        Assert.Contains("ping", issue.Body, StringComparison.Ordinal);
+        Assert.Equal("41", Assert.Single(ledger.Reviews).Id);
+    }
+
+    [Fact]
+    public async Task Forgejo_answers_on_the_same_file_and_line_because_it_has_no_reply_route()
+    {
+        const string repo = "https://gitea.example/team/repo.git";
+        using var db = new TestDb();
+        var handler = new RoutingHandler()
+            .Map(u => u.Contains("/pulls/5/reviews/41/comments", StringComparison.Ordinal), () =>
+                "[{\"id\":901,\"path\":\"src/A.cs\",\"position\":10,\"original_position\":10,"
+                + "\"user\":{\"login\":\"alice\"},\"created_at\":\"2026-09-18T17:34:44Z\",\"body\":\"wrong\"}]")
+            .MapUrl(u => u.Contains("/pulls/5/reviews", StringComparison.Ordinal) && !u.Contains("/comments", StringComparison.Ordinal),
+                _ => Json("[{\"id\":41,\"state\":\"COMMENT\",\"commit_id\":\"" + Head + "\","
+                    + "\"submitted_at\":\"2026-09-18T17:34:45Z\",\"user\":{\"login\":\"alice\"}}]"))
+            .Map(u => u.Contains("/issues/5/comments", StringComparison.Ordinal), () => "[]")
+            .Map(u => u.EndsWith("/pulls/5", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}");
+
+        var result = await CreateService(db, handler, "Forgejo", "https://gitea.example")
+            .ReplyToReviewThreadAsync(repo, "5", "901", "That compiles.");
+
+        Assert.True(result.Ok);
+        var posted = Assert.Single(handler.Bodies.Where(b => b.Url.EndsWith("/pulls/5/reviews", StringComparison.Ordinal)));
+        Assert.Contains("\"path\":\"src/A.cs\"", posted.Body, StringComparison.Ordinal);
+        Assert.Contains("That compiles.", posted.Body, StringComparison.Ordinal);
+        Assert.Contains("COMMENT", posted.Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Forgejo_cannot_resolve_a_thread_and_says_so_without_asking()
+    {
         using var db = new TestDb();
         var handler = new RoutingHandler();
 
-        var service = CreateService(db, handler, "Forgejo", "https://gitea.example");
-        var ledger = await service.GetPullRequestReviewLedgerAsync("https://gitea.example/team/repo.git", "5");
+        var result = await CreateService(db, handler, "Forgejo", "https://gitea.example")
+            .ResolveReviewThreadAsync("https://gitea.example/team/repo.git", "5", "41");
 
-        Assert.Empty(ledger.Items);
-        Assert.Contains("not supported", ledger.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("Forgejo", ledger.Message, StringComparison.Ordinal);
-        var reply = await service.ReplyToReviewThreadAsync("https://gitea.example/team/repo.git", "5", "1", "hi");
-        Assert.False(reply.Ok);
-        Assert.Contains("not supported", reply.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(result.Ok);
+        Assert.Contains("not supported", result.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(handler.Urls);
     }
 
@@ -414,24 +476,96 @@ public class RemotePrReviewLedgerPagingTests
         Assert.Contains("404", ledger.Message);
     }
 
+    private const string AzureRepo = "https://dev.azure.com/org/project/_git/repo";
+
+    /// <summary>The threads payload Azure DevOps serves, with the file, line and status already on it.</summary>
+    private static string AzureThreads() =>
+        "{\"value\":[{\"id\":77,\"status\":\"active\","
+        + "\"threadContext\":{\"filePath\":\"/src/A.cs\",\"rightFileStart\":{\"line\":92}},"
+        + "\"pullRequestThreadContext\":{\"iterationContext\":{\"secondComparingIteration\":3}},"
+        + "\"comments\":[{\"id\":1,\"content\":\"this allocation is wrong\",\"commentType\":\"text\","
+        + "\"author\":{\"displayName\":\"Alice\"},\"publishedDate\":\"2026-09-18T17:34:44Z\"},"
+        + "{\"id\":2,\"content\":\"updated the source branch\",\"commentType\":\"system\","
+        + "\"author\":{\"displayName\":\"Azure\"},\"publishedDate\":\"2026-09-18T17:35:00Z\"}]},"
+        + "{\"id\":78,\"status\":\"fixed\",\"comments\":[{\"id\":1,\"content\":\"a note on the pull request\","
+        + "\"commentType\":\"text\",\"author\":{\"displayName\":\"Tony\"},\"publishedDate\":\"2026-09-18T19:00:00Z\"}]}]}";
+
+    private static RoutingHandler AzurePr() => new RoutingHandler()
+        // The query string is what separates the thread LIST from a route under
+        // it; matching the prefix alone would shadow /threads/77/comments.
+        .Map(u => u.Contains("/pullrequests/7/threads?", StringComparison.Ordinal), AzureThreads)
+        .Map(u => u.Contains("/pullrequests/7?", StringComparison.Ordinal),
+            () => "{\"lastMergeSourceCommit\":{\"commitId\":\"" + Head + "\"}}");
+
     [Fact]
-    public async Task Azure_devops_says_it_has_no_ledger_rather_than_asking_for_shapes_it_does_not_have()
+    public async Task Azure_devops_reads_the_whole_review_from_its_threads()
     {
-        // Left to the base class this would put GitHub-shaped routes on an
-        // Azure api base, on every heartbeat tick of every parked run, and
-        // report whatever came back as the review.
-        const string repo = "https://dev.azure.com/org/project/_git/repo";
         using var db = new TestDb();
-        var handler = new RoutingHandler();
+        var handler = AzurePr();
 
-        var service = CreateService(db, handler, "AzureDevOps", "https://dev.azure.com/org");
-        var ledger = await service.GetPullRequestReviewLedgerAsync(repo, "7");
+        var ledger = await CreateService(db, handler, "AzureDevOps", "https://dev.azure.com/org")
+            .GetPullRequestReviewLedgerAsync(AzureRepo, "7");
 
-        Assert.Empty(ledger.Items);
-        Assert.Contains("not supported", ledger.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("AzureDevOps", ledger.Message, StringComparison.Ordinal);
-        Assert.False((await service.ReplyToReviewThreadAsync(repo, "7", "1", "hi")).Ok);
-        Assert.False((await service.ResolveReviewThreadAsync(repo, "7", "t1")).Ok);
-        Assert.Empty(handler.Urls);
+        Assert.Null(ledger.Message);
+        var inline = ledger.Items.Single(i => i.Kind == "review");
+        Assert.Equal("77-1", inline.CommentId);
+        Assert.Equal("77", inline.ThreadId);
+        Assert.Equal("/src/A.cs", inline.Path);
+        Assert.Equal(92, inline.Line);
+        Assert.Equal("Alice", inline.Author);
+        Assert.Equal("3", inline.Commit);
+        Assert.False(inline.Resolved);
+        // A thread with no file is the pull request's own discussion, and a
+        // closed one reports resolved.
+        var issue = ledger.Items.Single(i => i.Kind == "issue");
+        Assert.Equal("78-1", issue.CommentId);
+        Assert.True(issue.Resolved);
+        // "updated the source branch" is an event, not review.
+        Assert.DoesNotContain(ledger.Items, i => i.Body.Contains("updated the source branch", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Azure_devops_answers_on_the_thread_the_comment_sits_in()
+    {
+        using var db = new TestDb();
+        var handler = AzurePr().Map(u => u.Contains("/threads/77/comments", StringComparison.Ordinal), () => "{\"id\":9}");
+
+        var result = await CreateService(db, handler, "AzureDevOps", "https://dev.azure.com/org")
+            .ReplyToReviewThreadAsync(AzureRepo, "7", "77-1", "That compiles.");
+
+        Assert.True(result.Ok);
+        Assert.Equal("77-9", result.Id);
+        var posted = Assert.Single(handler.Bodies.Where(b => b.Url.Contains("/threads/77/comments", StringComparison.Ordinal)));
+        Assert.Contains("\"parentCommentId\":1", posted.Body, StringComparison.Ordinal);
+        Assert.Contains("That compiles.", posted.Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Azure_devops_resolves_a_thread_by_setting_its_status()
+    {
+        using var db = new TestDb();
+        var handler = AzurePr().MapUrl(
+            u => u.Contains("/threads/77?", StringComparison.Ordinal), _ => Json("{\"id\":77,\"status\":\"fixed\"}"));
+
+        var result = await CreateService(db, handler, "AzureDevOps", "https://dev.azure.com/org")
+            .ResolveReviewThreadAsync(AzureRepo, "7", "77");
+
+        Assert.True(result.Ok);
+        var patched = Assert.Single(handler.Bodies.Where(b => b.Method == HttpMethod.Patch));
+        Assert.Contains("fixed", patched.Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task An_azure_comment_id_that_is_not_thread_qualified_is_refused_by_name()
+    {
+        using var db = new TestDb();
+        var handler = AzurePr();
+
+        var result = await CreateService(db, handler, "AzureDevOps", "https://dev.azure.com/org")
+            .ReplyToReviewThreadAsync(AzureRepo, "7", "notathread", "hi");
+
+        Assert.False(result.Ok);
+        Assert.Contains("notathread", result.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(handler.Urls, u => u.Contains("/comments", StringComparison.Ordinal));
     }
 }
