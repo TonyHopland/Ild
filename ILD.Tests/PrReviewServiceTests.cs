@@ -49,6 +49,7 @@ public class PrReviewServiceTests
         public Mock<IRemoteProvider> Remote { get; } = new();
         public string? RecordedLedger { get; private set; }
         public int LedgerWrites { get; private set; }
+        public string? RecordedQueue { get; private set; }
 
         public Harness(RemotePrReviewLedger? ledger, bool parkedAtPrNode = false, string? prUrl = PrUrl)
         {
@@ -61,8 +62,14 @@ public class PrReviewServiceTests
                 HumanFeedbackReason = parkedAtPrNode ? HumanFeedbackReasons.PrAwaitingMerge : null,
             };
             Runs.Setup(s => s.GetCurrentByWorkItemAsync("wi-1")).ReturnsAsync(Run);
+            Runs.Setup(s => s.GetByIdAsync(Run.Id)).ReturnsAsync(() => Run);
             Runs.Setup(s => s.SetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>()))
                 .Callback<Guid, string?>((_, json) => { RecordedLedger = json; LedgerWrites++; })
+                .Returns(Task.CompletedTask);
+            // The queue is a column like any other: what the service writes is
+            // what the next read of the run sees.
+            Runs.Setup(s => s.SetPrCommentQueueAsync(It.IsAny<Guid>(), It.IsAny<string?>()))
+                .Callback<Guid, string?>((_, json) => { RecordedQueue = json; Run.PrCommentQueue = json; })
                 .Returns(Task.CompletedTask);
             if (ledger is not null)
                 Remote.Setup(r => r.GetPullRequestReviewLedgerAsync(RepoUrl, "7")).ReturnsAsync(ledger);
@@ -156,36 +163,60 @@ public class PrReviewServiceTests
     }
 
     [Fact]
-    public async Task A_reply_goes_out_under_the_servers_own_credentials_carrying_the_marker()
+    public async Task A_reply_is_queued_against_the_run_and_nothing_reaches_the_forge()
     {
+        // An agent never writes to a pull request. The answer is recorded and
+        // the PR node sends it at the end of the round, which is the whole
+        // point: a human sits between the agent and anything public — including
+        // a chat agent, which has no loop run of its own driving it.
         var h = new Harness(Ledger(Inline("4049159495", threadId: "PRRT_thread_1")));
-        string? sent = null;
-        h.Remote.Setup(r => r.ReplyToReviewThreadAsync(RepoUrl, "7", "4049159495", It.IsAny<string>()))
-            .Callback<string, string, string, string>((_, _, _, body) => sent = body)
-            .ReturnsAsync(new RemotePrWriteResult(true, "4053396920", null));
 
         var result = await h.Build().ReplyAsync("wi-1", "4049159495", "That compiles: C# allows a long array length.", h.Run.Id);
 
         Assert.True(result.Ok);
-        Assert.Contains("That compiles: C# allows a long array length.", sent!, StringComparison.Ordinal);
-        Assert.True(PrCommentMarker.IsStamped(sent), $"the reply carries no marker:\n{sent}");
+        Assert.Contains("Queued", result.Message, StringComparison.OrdinalIgnoreCase);
+        h.Remote.Verify(
+            r => r.ReplyToReviewThreadAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()),
+            Times.Never);
+
+        var queued = Assert.Single(PrCommentQueueJson.TryParse(h.RecordedQueue));
+        Assert.Equal(PrQueuedWrite.Reply, queued.Kind);
+        Assert.Equal("4049159495", queued.TargetId);
+        Assert.Equal("That compiles: C# allows a long array length.", queued.Body);
+        // Where it would land, so the queue reads without opening the transcript.
+        Assert.Equal("src/A.cs", queued.Path);
+        Assert.Equal(10, queued.Line);
     }
 
     [Fact]
-    public async Task A_replys_own_id_is_recorded_so_it_never_starts_a_round()
+    public async Task Queuing_a_reply_records_nothing_in_the_ledger_until_it_is_actually_posted()
     {
+        // The marker and the posted id belong where the post happens. A reply a
+        // human drops before the PR node runs must never have been recorded as
+        // something ILD wrote.
         var h = new Harness(Ledger(Inline("4049159495")));
-        h.Remote.Setup(r => r.ReplyToReviewThreadAsync(RepoUrl, "7", "4049159495", It.IsAny<string>()))
-            .ReturnsAsync(new RemotePrWriteResult(true, "4053396920", null));
 
         await h.Build().ReplyAsync("wi-1", "4049159495", "Answered.", h.Run.Id);
 
-        Assert.NotNull(h.RecordedLedger);
-        var ourReply = new RemotePrReviewLedger(
-            new[] { Review("r2", HeadB) },
-            new[] { Inline("4053396920", body: "Answered.", author: "ild-service-account") },
-            HeadB, null);
-        Assert.Empty(PrCommentDelivery.Decide(ourReply, HeadB, PrCommentLedgerJson.TryParse(h.RecordedLedger)).Items);
+        Assert.Null(h.RecordedLedger);
+        Assert.Equal(0, h.LedgerWrites);
+    }
+
+    [Fact]
+    public async Task A_queued_write_a_human_drops_is_gone_and_nothing_else_is()
+    {
+        var h = new Harness(Ledger(Inline("4049159495", threadId: "PRRT_thread_1")));
+        h.Remote.Setup(r => r.SupportsThreadResolutionAsync(RepoUrl)).ReturnsAsync(true);
+        var service = h.Build();
+        var reply = await service.ReplyAsync("wi-1", "4049159495", "Answered.", h.Run.Id);
+        await service.ResolveAsync("wi-1", "PRRT_thread_1", h.Run.Id);
+        Assert.Equal(2, PrCommentQueueJson.TryParse(h.RecordedQueue).Count);
+
+        Assert.True(await service.DropQueuedAsync(h.Run.Id, reply.Id!));
+
+        var left = Assert.Single(PrCommentQueueJson.TryParse(h.RecordedQueue));
+        Assert.Equal(PrQueuedWrite.Resolve, left.Kind);
+        Assert.False(await service.DropQueuedAsync(h.Run.Id, "never-queued"));
     }
 
     [Fact]
@@ -201,16 +232,20 @@ public class PrReviewServiceTests
     }
 
     [Fact]
-    public async Task Resolving_closes_the_thread_the_answer_went_to()
+    public async Task A_resolve_is_queued_too_and_closes_nothing_yet()
     {
         var h = new Harness(Ledger(Inline("4049159495", threadId: "PRRT_thread_1")));
-        h.Remote.Setup(r => r.ResolveReviewThreadAsync(RepoUrl, "7", "PRRT_thread_1"))
-            .ReturnsAsync(new RemotePrWriteResult(true, "PRRT_thread_1", null));
+        h.Remote.Setup(r => r.SupportsThreadResolutionAsync(RepoUrl)).ReturnsAsync(true);
 
         var result = await h.Build().ResolveAsync("wi-1", "PRRT_thread_1", h.Run.Id);
 
         Assert.True(result.Ok);
-        h.Remote.Verify(r => r.ResolveReviewThreadAsync(RepoUrl, "7", "PRRT_thread_1"), Times.Once);
+        Assert.Contains("Queued", result.Message, StringComparison.OrdinalIgnoreCase);
+        h.Remote.Verify(
+            r => r.ResolveReviewThreadAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        var queued = Assert.Single(PrCommentQueueJson.TryParse(h.RecordedQueue));
+        Assert.Equal(PrQueuedWrite.Resolve, queued.Kind);
+        Assert.Equal("PRRT_thread_1", queued.TargetId);
     }
 
     [Fact]
@@ -228,14 +263,18 @@ public class PrReviewServiceTests
     [Fact]
     public async Task A_provider_that_cannot_resolve_threads_answers_rather_than_claiming_success()
     {
+        // Queued, the refusal would only surface when the PR node tried — long
+        // after the agent stopped listening. A provider that can never resolve
+        // is asked before anything is queued, so the answer arrives in the
+        // agent's hands and nothing is left waiting that cannot happen.
         var h = new Harness(Ledger(Inline("4049159495", threadId: "PRRT_thread_1")));
-        h.Remote.Setup(r => r.ResolveReviewThreadAsync(RepoUrl, "7", "PRRT_thread_1"))
-            .ReturnsAsync(new RemotePrWriteResult(false, null, "Resolving review threads is not supported by this provider."));
+        h.Remote.Setup(r => r.SupportsThreadResolutionAsync(RepoUrl)).ReturnsAsync(false);
 
         var result = await h.Build().ResolveAsync("wi-1", "PRRT_thread_1", h.Run.Id);
 
         Assert.False(result.Ok);
         Assert.Contains("not supported", result.Message);
+        Assert.Null(h.RecordedQueue);
     }
 
     [Fact]

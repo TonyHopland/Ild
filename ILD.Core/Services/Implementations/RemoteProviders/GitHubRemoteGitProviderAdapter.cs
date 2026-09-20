@@ -112,6 +112,8 @@ public sealed class GitHubRemoteGitProviderAdapter : RemoteGitProviderAdapterBas
             : window;
     }
 
+    public override bool SupportsThreadResolution => true;
+
     /// <summary>The review ledger is GitHub's REST shape, so this is where it is opted into.</summary>
     public override Task<RemotePrReviewLedger> GetPullRequestReviewLedgerAsync(
         HttpClient http, ResolvedRemoteRepository repo, string prNumber)

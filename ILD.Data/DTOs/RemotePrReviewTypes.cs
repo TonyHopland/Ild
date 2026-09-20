@@ -129,6 +129,57 @@ public static class PrCommentMarker
 /// Hashes are scoped to <see cref="Head"/> and dropped when it moves — the same
 /// finding restated against new code is a new finding; ids live for the run.
 /// </summary>
+/// <summary>
+/// Something a round intends to write on the pull request, recorded rather than
+/// done. Agents never post: they queue, and the PR node drains the queue at the
+/// end of the round, where it posts its own comment. That is what puts a human
+/// between an agent and a public pull request — the queue is visible from the
+/// moment it is written until the round reaches the node, and anything in it can
+/// be dropped. <see cref="Path"/> and <see cref="Line"/> are carried only so the
+/// person reading the queue can see where an answer would land without opening
+/// the transcript.
+/// </summary>
+public record PrQueuedWrite(
+    string Id,
+    string Kind,
+    string TargetId,
+    string? Body,
+    string? Path,
+    int? Line,
+    DateTime QueuedAt
+)
+{
+    public const string Reply = "reply";
+    public const string Resolve = "resolve";
+
+    /// <summary>Cap on one run's queue, so a looping agent cannot grow the column without bound.</summary>
+    public const int MaxQueued = 100;
+}
+
+/// <summary>
+/// The wire form of a run's queue of intended pull-request writes, persisted on
+/// <c>LoopRun.PrCommentQueue</c>. Degrades to an empty queue on a blob it cannot
+/// read — a queue that cannot be parsed must not be posted.
+/// </summary>
+public static class PrCommentQueueJson
+{
+    private static readonly JsonSerializerOptions Options = JsonSerializerOptions.Web;
+
+    public static string Serialize(IReadOnlyList<PrQueuedWrite> queued)
+        => JsonSerializer.Serialize(queued, Options);
+
+    public static IReadOnlyList<PrQueuedWrite> TryParse(string? json)
+    {
+        if (string.IsNullOrEmpty(json)) return Array.Empty<PrQueuedWrite>();
+        try
+        {
+            return JsonSerializer.Deserialize<List<PrQueuedWrite>>(json, Options)
+                ?? (IReadOnlyList<PrQueuedWrite>)Array.Empty<PrQueuedWrite>();
+        }
+        catch (JsonException) { return Array.Empty<PrQueuedWrite>(); }
+    }
+}
+
 /// <param name="WatchedFrom">
 /// Set only when this ledger was opened by a <em>write</em> — the PR node
 /// recording the comment it just posted — rather than by a watch. Such a ledger

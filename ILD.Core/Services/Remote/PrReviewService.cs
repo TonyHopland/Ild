@@ -24,6 +24,18 @@ public interface IPrReviewService
 }
 
 /// <summary>
+/// The operator's half of the same queue: what a round intends to write on its
+/// pull request, and the power to drop any of it before the PR node sends it.
+/// Deliberately not on <see cref="IPrReviewService"/> — that is the surface an
+/// agent reaches, and an agent has no business dropping the queue.
+/// </summary>
+public interface IPrWriteQueue
+{
+    Task<IReadOnlyList<PrQueuedWrite>> QueuedAsync(Guid runId);
+    Task<bool> DropQueuedAsync(Guid runId, string writeId);
+}
+
+/// <summary>
 /// The agent-facing half of a review, and the reason an answer stops coming
 /// back: a reason text can only carry so much of a batched review, so this is
 /// where an agent reads the rest — every inline comment, every finding the
@@ -37,8 +49,17 @@ public interface IPrReviewService
 /// tools being pointed at an arbitrary pull request elsewhere in the forge.
 /// Reading, replying and resolving is the whole surface: approving, merging,
 /// closing and dismissing are decisions it must not be able to take.
+///
+/// Reading is the only half that happens here. An agent never writes to a pull
+/// request: a reply or a resolve is RECORDED as an intent against the run and
+/// the PR node drains the queue at the end of the round, where it posts its own
+/// comment. That is what keeps a human between an agent and a public pull
+/// request — including a chat agent, which has no loop run of its own driving it
+/// and would otherwise post the moment it was asked to. Validation still happens
+/// here, at queue time, so an id this pull request does not hold is refused
+/// while the agent is still listening rather than silently failing later.
 /// </summary>
-public sealed class PrReviewService : IPrReviewService
+public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
 {
     private readonly ILoopRunStore _runs;
     private readonly IRemoteProvider _remote;
@@ -110,14 +131,9 @@ public sealed class PrReviewService : IPrReviewService
             return new RemotePrWriteResult(false, null,
                 $"Comment '{commentId}' is not an inline review comment ({comment.Kind}), so it has no thread to reply on. Answer an item whose kind is 'review'.");
 
-        var result = await _remote.ReplyToReviewThreadAsync(
-            target.RepoUrl, target.PrNumber, commentId,
-            PrCommentMarker.Stamp(body, callerRunId ?? target.Run.Id));
-
-        if (result is { Ok: true, Id: not null })
-            await RecordPostedAsync(target.Run, fetched, PrCommentLedger.KeyFor("review", result.Id));
-
-        return result;
+        return await QueueAsync(target.Run,
+            new PrQueuedWrite(NewIntentId(), PrQueuedWrite.Reply, commentId, body, comment.Path, comment.Line, DateTime.UtcNow),
+            "Queued: this answer goes out when the PR node next runs, and can be dropped before then.");
     }
 
     public async Task<RemotePrWriteResult> ResolveAsync(string workItemId, string threadId, Guid? callerRunId)
@@ -130,11 +146,74 @@ public sealed class PrReviewService : IPrReviewService
         if (!string.IsNullOrEmpty(fetched.Message))
             return new RemotePrWriteResult(false, null, fetched.Message);
 
-        if (!fetched.Items.Any(i => string.Equals(i.ThreadId, threadId, StringComparison.Ordinal)))
+        var thread = fetched.Items.FirstOrDefault(i => string.Equals(i.ThreadId, threadId, StringComparison.Ordinal));
+        if (thread is null)
             return new RemotePrWriteResult(false, null,
                 $"No review thread with id '{threadId}' on this work item's pull request. The review ledger lists the thread ids that can be resolved.");
 
-        return await _remote.ResolveReviewThreadAsync(target.RepoUrl, target.PrNumber, threadId);
+        // Only once the thread is known to exist: a provider that can never
+        // resolve says so now rather than answering "queued" for something the
+        // PR node could only fail at later, when nobody is listening.
+        if (!await _remote.SupportsThreadResolutionAsync(target.RepoUrl))
+            return new RemotePrWriteResult(false, null,
+                "Resolving review threads is not supported for this repository's provider. Reply to the thread instead.");
+
+        return await QueueAsync(target.Run,
+            new PrQueuedWrite(NewIntentId(), PrQueuedWrite.Resolve, threadId, null, thread.Path, thread.Line, DateTime.UtcNow),
+            "Queued: this thread is closed when the PR node next runs, and can be dropped before then.");
+    }
+
+    /// <summary>
+    /// Everything a run has said it intends to write, oldest first — what the
+    /// work item's PR view shows a person while the round is still running.
+    /// </summary>
+    public async Task<IReadOnlyList<PrQueuedWrite>> QueuedAsync(Guid runId)
+        => PrCommentQueueJson.TryParse((await _runs.GetByIdAsync(runId))?.PrCommentQueue);
+
+    /// <summary>
+    /// Drop one intent before it goes out. Nothing is lost by dropping: the
+    /// thread stays open and the finding stays undelivered, so a later review
+    /// raises it again rather than it vanishing.
+    /// </summary>
+    public async Task<bool> DropQueuedAsync(Guid runId, string writeId)
+    {
+        var run = await _runs.GetByIdAsync(runId);
+        if (run is null) return false;
+
+        var queued = PrCommentQueueJson.TryParse(run.PrCommentQueue);
+        var kept = queued.Where(q => !string.Equals(q.Id, writeId, StringComparison.Ordinal)).ToList();
+        if (kept.Count == queued.Count) return false;
+
+        await WriteQueueAsync(run, kept);
+        return true;
+    }
+
+    private static string NewIntentId() => Guid.NewGuid().ToString("N")[..12];
+
+    /// <summary>
+    /// Append an intent to the run's queue. The run row is re-read immediately
+    /// before the write so two tools queuing in the same moment are unlikely to
+    /// lose one; a lost intent is not silent damage — the finding it answered
+    /// stays undelivered and comes back on the next review.
+    /// </summary>
+    private async Task<RemotePrWriteResult> QueueAsync(LoopRun run, PrQueuedWrite intent, string message)
+    {
+        var fresh = await _runs.GetByIdAsync(run.Id) ?? run;
+        var queued = PrCommentQueueJson.TryParse(fresh.PrCommentQueue).ToList();
+        if (queued.Count >= PrQueuedWrite.MaxQueued)
+            return new RemotePrWriteResult(false, null,
+                $"This run already has {queued.Count} pull-request writes waiting for the PR node; nothing more is queued until they go out.");
+
+        queued.Add(intent);
+        await WriteQueueAsync(run, queued);
+        return new RemotePrWriteResult(true, intent.Id, message);
+    }
+
+    private async Task WriteQueueAsync(LoopRun run, IReadOnlyList<PrQueuedWrite> queued)
+    {
+        var json = queued.Count == 0 ? null : PrCommentQueueJson.Serialize(queued);
+        run.PrCommentQueue = json;
+        await _runs.SetPrCommentQueueAsync(run.Id, json);
     }
 
     private sealed record Target(LoopRun Run, string RepoUrl, string PrNumber);

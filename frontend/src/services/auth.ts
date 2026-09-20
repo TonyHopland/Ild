@@ -445,6 +445,15 @@ export const loopRunService = {
     return api.post<void>(`/loopruns/${id}/resume-steer`, { note: note ?? null });
   },
 
+  /**
+   * Drops one of the pull-request writes the round intends to make, before the
+   * PR node makes it. The thread stays open and the finding stays undelivered,
+   * so a later review raises it again rather than it vanishing.
+   */
+  dropQueuedPrWrite: async (id: string, writeId: string): Promise<void> => {
+    return api.delete<void>(`/loopruns/${id}/pr-queue/${encodeURIComponent(writeId)}`);
+  },
+
   retryFromNode: async (id: string, runNodeId: string): Promise<void> => {
     return api.post<void>(`/loopruns/${id}/nodes/${runNodeId}/retry`, {});
   },

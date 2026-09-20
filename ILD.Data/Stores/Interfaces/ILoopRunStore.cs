@@ -155,6 +155,13 @@ public interface ILoopRunStore
     Task SetPrCommentLedgerAsync(Guid runId, string? json);
 
     /// <summary>
+    /// Persist what the run intends to write on its pull request, touching only
+    /// that column — the same discipline the ledger needs, and for the same
+    /// reason: every other writer on this path writes the whole row.
+    /// </summary>
+    Task SetPrCommentQueueAsync(Guid runId, string? json);
+
+    /// <summary>
     /// Refresh a tracked <see cref="LoopRun"/> instance with the row's current
     /// column values, discarding unsaved in-memory changes. Used by the engine
     /// before persisting so a stale instance held across a long node execution

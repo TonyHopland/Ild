@@ -235,6 +235,12 @@ public class LoopRun : IHasUpdatedAt
     // watches the pull request.
     public string? PrCommentLedger { get; set; }
 
+    // Replies and resolutions this run intends to write on its PR, recorded by
+    // the agent tools and drained by the PR node at the end of the round
+    // (JSON-serialised PrQueuedWrite list). Agents never post directly; this is
+    // where a human can see what is about to be said and drop any of it.
+    public string? PrCommentQueue { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     public DateTime? UpdatedAt { get; set; }

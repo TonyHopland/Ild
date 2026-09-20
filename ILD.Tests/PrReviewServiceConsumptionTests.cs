@@ -36,6 +36,7 @@ public class PrReviewServiceConsumptionTests
         public Mock<ILoopRunStore> Runs { get; } = new();
         public Mock<IRemoteProvider> Remote { get; } = new();
         public string? RecordedLedger { get; private set; }
+        public string? RecordedQueue { get; private set; }
         public int LedgerWrites { get; private set; }
 
         public Harness(RemotePrReviewLedger ledger)
@@ -48,6 +49,11 @@ public class PrReviewServiceConsumptionTests
                 Status = LoopRunStatus.Running,
             };
             Runs.Setup(s => s.GetCurrentByWorkItemAsync("wi-1")).ReturnsAsync(Run);
+            Runs.Setup(s => s.GetByIdAsync(Run.Id)).ReturnsAsync(() => Run);
+            Runs.Setup(s => s.SetPrCommentQueueAsync(It.IsAny<Guid>(), It.IsAny<string?>()))
+                .Callback<Guid, string?>((_, json) => { RecordedQueue = json; Run.PrCommentQueue = json; })
+                .Returns(Task.CompletedTask);
+            Remote.Setup(r => r.SupportsThreadResolutionAsync(RepoUrl)).ReturnsAsync(true);
             Runs.Setup(s => s.SetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>()))
                 .Callback<Guid, string?>((_, json) => { RecordedLedger = json; LedgerWrites++; })
                 .Returns(Task.CompletedTask);
@@ -75,60 +81,37 @@ public class PrReviewServiceConsumptionTests
     }
 
     [Fact]
-    public async Task A_reply_the_provider_refused_records_nothing()
+    public async Task Queuing_a_reply_reaches_the_forge_for_the_read_only_and_never_to_write()
     {
-        // The guard is on the verdict, not on whether an id came back: a
-        // refusal that still echoes one must not put it in the ledger, where it
-        // would suppress a real comment that later takes that id.
+        // The ledger is still fetched — that is how the comment id is validated
+        // while the agent is listening — but nothing is written.
         var h = new Harness(Ledger(Inline("11")));
-        h.Remote.Setup(r => r.ReplyToReviewThreadAsync(RepoUrl, "7", "11", It.IsAny<string>()))
-            .ReturnsAsync(new RemotePrWriteResult(false, "4053396920", "403 from the forge"));
-
-        var result = await h.Build().ReplyAsync("wi-1", "11", "Answered.", h.Run.Id);
-
-        Assert.False(result.Ok);
-        Assert.Equal(0, h.LedgerWrites);
-    }
-
-    [Fact]
-    public async Task A_reply_the_provider_accepted_without_naming_it_is_still_a_success()
-    {
-        // Same semantics as the PR node's own comment: an id the response did
-        // not carry costs the ledger one entry, not the reply. The marker is
-        // still on the body, which is what stops it firing the edge.
-        var h = new Harness(Ledger(Inline("11")));
-        string? sent = null;
-        h.Remote.Setup(r => r.ReplyToReviewThreadAsync(RepoUrl, "7", "11", It.IsAny<string>()))
-            .Callback<string, string, string, string>((_, _, _, body) => sent = body)
-            .ReturnsAsync(new RemotePrWriteResult(true, null, null));
 
         var result = await h.Build().ReplyAsync("wi-1", "11", "Answered.", h.Run.Id);
 
         Assert.True(result.Ok);
+        h.Remote.Verify(r => r.GetPullRequestReviewLedgerAsync(RepoUrl, "7"), Times.Once);
+        h.Remote.Verify(
+            r => r.ReplyToReviewThreadAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()),
+            Times.Never);
         Assert.Equal(0, h.LedgerWrites);
-        Assert.True(PrCommentMarker.IsStamped(sent));
     }
 
     [Fact]
-    public async Task The_marker_still_covers_a_reply_whose_recorded_id_was_lost()
+    public async Task A_queue_that_has_grown_absurd_refuses_rather_than_growing_further()
     {
-        // The heartbeat and an agent write the ledger from separate scopes, so a
-        // recorded id can lose a race. That is exactly what the marker is the
-        // second half of.
+        // A looping agent must not be able to grow a run's column without bound,
+        // and the refusal has to be readable rather than a silent drop.
         var h = new Harness(Ledger(Inline("11")));
-        string? sent = null;
-        h.Remote.Setup(r => r.ReplyToReviewThreadAsync(RepoUrl, "7", "11", It.IsAny<string>()))
-            .Callback<string, string, string, string>((_, _, _, body) => sent = body)
-            .ReturnsAsync(new RemotePrWriteResult(true, "4053396920", null));
+        var service = h.Build();
+        for (var i = 0; i < PrQueuedWrite.MaxQueued; i++)
+            Assert.True((await service.ReplyAsync("wi-1", "11", $"answer {i}", h.Run.Id)).Ok);
 
-        await h.Build().ReplyAsync("wi-1", "11", "That compiles.", h.Run.Id);
+        var refused = await service.ReplyAsync("wi-1", "11", "one too many", h.Run.Id);
 
-        var recorded = PrCommentLedgerJson.TryParse(h.RecordedLedger);
-        Assert.NotNull(recorded);
-        var ledgerWithoutTheId = recorded! with { PostedIds = Array.Empty<string>() };
-        var ourReply = Ledger(Inline("4053396920", body: sent!));
-
-        Assert.Empty(PrCommentDelivery.Decide(ourReply, HeadB, ledgerWithoutTheId).Items);
+        Assert.False(refused.Ok);
+        Assert.Contains("waiting for the PR node", refused.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(PrQueuedWrite.MaxQueued, PrCommentQueueJson.TryParse(h.RecordedQueue).Count);
     }
 
     [Fact]

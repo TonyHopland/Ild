@@ -164,6 +164,12 @@ public class RemoteProviderService : IRemoteProvider
         catch (Exception ex) { return Refused(ex, "thread resolution", repoUrl); }
     }
 
+    public async Task<bool> SupportsThreadResolutionAsync(string repoUrl)
+    {
+        var resolved = await ResolveAsync(repoUrl);
+        return resolved?.Adapter.SupportsThreadResolution ?? false;
+    }
+
     private static readonly RemotePrWriteResult NoProvider =
         new(false, null, "No remote provider is configured for this repository.");
 

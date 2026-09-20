@@ -56,6 +56,14 @@ public interface IRemoteProvider
     /// </summary>
     Task<RemotePrWriteResult> ResolveReviewThreadAsync(string repoUrl, string prNumber, string threadId);
 
+    /// <summary>
+    /// Whether this repository's provider can resolve a review thread at all.
+    /// Asked before an agent's resolve is queued, so a provider that can never
+    /// do it says so then rather than answering "queued" for something that will
+    /// never happen. False for a repository no provider matches.
+    /// </summary>
+    Task<bool> SupportsThreadResolutionAsync(string repoUrl);
+
     Task<bool> DeleteBranchAsync(string repoUrl, string branchName);
 
     /// <summary>

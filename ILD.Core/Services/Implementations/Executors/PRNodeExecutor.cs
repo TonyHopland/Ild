@@ -5,6 +5,7 @@ using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations.Executors;
 
@@ -150,16 +151,25 @@ public sealed class PRNodeExecutor : INodeExecutor
                     await remote.EnablePullRequestAutoMergeAsync(repo.CloneUrl, prNumber);
             }
         }
-        else if (!string.IsNullOrEmpty(cfg.PrCommentTemplate))
+        else if (!string.IsNullOrEmpty(cfg.PrCommentTemplate) || HasQueuedWrites(ctx.Run))
         {
             // PR already exists for this run — render the comment template and
             // post it on the existing PR. Each re-visit of this node posts a
-            // fresh comment.
+            // fresh comment. This is also where the round's queued replies and
+            // resolutions go out: agents record what they intend to write and
+            // nothing reaches the pull request until here, so a human has the
+            // whole round to see it and drop any of it.
             var remote = sp.GetRequiredService<IRemoteProvider>();
             var prNumber = RemotePrUrl.ExtractPrNumber(prUrl);
             if (string.IsNullOrEmpty(prNumber))
             {
                 yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"Cannot derive PR number from '{prUrl}' to post comment");
+                yield break;
+            }
+            if (string.IsNullOrEmpty(cfg.PrCommentTemplate))
+            {
+                await DrainQueuedWritesAsync(ctx, sp, remote, repo.CloneUrl, prNumber);
+                yield return new NodeOutcome.WaitingAction(HumanFeedbackReasons.PrAwaitingMerge, renderedPrompt ?? prUrl);
                 yield break;
             }
             string commentBody = cfg.PrCommentTemplate;
@@ -204,11 +214,80 @@ public sealed class PRNodeExecutor : INodeExecutor
                 ctx.Run.PrCommentLedger = ledgerJson;
                 await runs.SetPrCommentLedgerAsync(ctx.Run.Id, ledgerJson);
             }
+
+            await DrainQueuedWritesAsync(ctx, sp, remote, repo.CloneUrl, prNumber);
         }
 
         // Surface the rendered prompt template to the work item as the parked
         // node's content — mirrors the Human node, which parks on its rendered
         // prompt. Falls back to the PR URL when the node has no prompt template.
         yield return new NodeOutcome.WaitingAction(HumanFeedbackReasons.PrAwaitingMerge, renderedPrompt ?? prUrl);
+    }
+
+    private static bool HasQueuedWrites(LoopRun run)
+        => PrCommentQueueJson.TryParse(run.PrCommentQueue).Count > 0;
+
+    /// <summary>
+    /// Write what the round said it intended to write. This is the only place a
+    /// reply or a resolution reaches the pull request: the agent tools record
+    /// them, a human can drop any of them up to this moment, and whatever is
+    /// still queued goes out here — where the node's own comment goes out, and
+    /// stamped the same way, so an answer never fires <c>on_comment</c> back at
+    /// the loop.
+    ///
+    /// A refused write does not fail the node. Nothing is lost by it: the thread
+    /// stays open and the finding stays undelivered, so the next review raises
+    /// it again — whereas failing here would park the run on something no human
+    /// asked for. The queue is cleared either way, so a provider that keeps
+    /// refusing cannot make the node retry for ever.
+    /// </summary>
+    private static async Task DrainQueuedWritesAsync(
+        NodeExecutionContext ctx, IServiceProvider sp, IRemoteProvider remote, string cloneUrl, string prNumber)
+    {
+        var queued = PrCommentQueueJson.TryParse(ctx.Run.PrCommentQueue);
+        if (queued.Count == 0)
+            return;
+
+        var log = sp.GetService<ILogger<PRNodeExecutor>>();
+        var posted = new List<string>();
+
+        foreach (var write in queued)
+        {
+            try
+            {
+                var result = write.Kind == PrQueuedWrite.Resolve
+                    ? await remote.ResolveReviewThreadAsync(cloneUrl, prNumber, write.TargetId)
+                    : await remote.ReplyToReviewThreadAsync(
+                        cloneUrl, prNumber, write.TargetId,
+                        PrCommentMarker.Stamp(write.Body ?? string.Empty, ctx.Run.Id));
+
+                if (!result.Ok)
+                    log?.LogWarning("Queued PR {Kind} on {Target} was refused: {Message}",
+                        write.Kind, write.TargetId, result.Message);
+                else if (write.Kind == PrQueuedWrite.Reply && result.Id is not null)
+                    posted.Add(PrCommentLedger.KeyFor("review", result.Id));
+            }
+            catch (Exception ex)
+            {
+                log?.LogWarning(ex, "Queued PR {Kind} on {Target} could not be written", write.Kind, write.TargetId);
+            }
+        }
+
+        if (sp.GetService<ILoopRunStore>() is not { } runs)
+            return;
+
+        ctx.Run.PrCommentQueue = null;
+        await runs.SetPrCommentQueueAsync(ctx.Run.Id, null);
+
+        if (posted.Count == 0)
+            return;
+
+        var ledger = PrCommentLedgerJson.TryParse(ctx.Run.PrCommentLedger)
+            ?? PrCommentLedger.Empty with { WatchedFrom = DateTime.UtcNow };
+        foreach (var key in posted)
+            ledger = ledger.WithPosted(key);
+        var json = PrCommentLedgerJson.Serialize(ledger);
+        ctx.Run.PrCommentLedger = json;
+        await runs.SetPrCommentLedgerAsync(ctx.Run.Id, json);
     }
 }

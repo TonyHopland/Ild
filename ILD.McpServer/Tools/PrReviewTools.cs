@@ -13,7 +13,9 @@ namespace ILD.McpServer.Tools;
 /// reach the agent.
 ///
 /// Read, reply and resolve is the whole surface: approving, merging, closing and
-/// dismissing are deliberately absent.
+/// dismissing are deliberately absent. Reading happens immediately; a reply or a
+/// resolution is only ever QUEUED here — the PR node writes it at the end of the
+/// round, which is what keeps a human between an agent and a public pull request.
 ///
 /// Drift warning: this shape must stay in lockstep with the agent-API endpoints
 /// (<c>AgentController</c>) it calls.
@@ -35,7 +37,7 @@ public sealed class PrReviewTools
             + (string.IsNullOrWhiteSpace(sinceCommit) ? string.Empty : $"?sinceCommit={Uri.EscapeDataString(sinceCommit)}"));
 
     [McpServerTool(Name = "reply_to_pr_review_comment")]
-    [Description("Answer one review comment where it was made, on its own thread. Use for a finding you are NOT changing the code for — an answer posted anywhere else leaves the thread open and the same objection comes back on every later review. The commentId comes from get_pr_review; only an id that work item's own pull request holds is accepted. Returns {ok, commentId, message}: ok=false with a message is a refusal you can read, not a crash.")]
+    [Description("Answer one review comment where it was made, on its own thread. Use for a finding you are NOT changing the code for — an answer posted anywhere else leaves the thread open and the same objection comes back on every later review. The commentId comes from get_pr_review; only an id that work item's own pull request holds is accepted. Nothing is posted when you call this: the answer is QUEUED against the run and the PR node sends it at the end of the round, so a human can read it and drop it first. Returns {ok, commentId, message} where commentId identifies the queued item; ok=false with a message is a refusal you can read, not a crash.")]
     public Task<string> ReplyToPrReviewComment(
         [Description("Work item GUID.")] string workItemId,
         [Description("Id of the review comment to answer, from get_pr_review's items[].commentId.")] string commentId,
@@ -45,7 +47,7 @@ public sealed class PrReviewTools
             new { commentId, body });
 
     [McpServerTool(Name = "resolve_pr_review_thread")]
-    [Description("Mark a review thread resolved, once you have fixed or answered what it raised. Use it after replying, so the finding stops being re-delivered on every later review. The threadId comes from get_pr_review; only a thread that work item's own pull request holds is accepted. Returns {ok, threadId, message}. GitHub and Azure DevOps can resolve a thread; Forgejo has no API for it and answers with a message saying so — that is an answer, not a failure.")]
+    [Description("Mark a review thread resolved, once you have fixed or answered what it raised. Use it after replying, so the finding stops being re-delivered on every later review. The threadId comes from get_pr_review; only a thread that work item's own pull request holds is accepted. Nothing happens on the forge when you call this: the resolution is QUEUED against the run and the PR node applies it at the end of the round, where a human can still drop it. Returns {ok, threadId, message}. GitHub and Azure DevOps can resolve a thread; Forgejo has no API for it and answers with a message saying so — that is an answer, not a failure.")]
     public Task<string> ResolvePrReviewThread(
         [Description("Work item GUID.")] string workItemId,
         [Description("Id of the review thread to close, from get_pr_review's items[].threadId.")] string threadId)

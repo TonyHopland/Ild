@@ -157,6 +157,9 @@ internal static class TestHostServiceCollectionExtensions
 
         public Task<RemotePrWriteResult> ResolveReviewThreadAsync(string repoUrl, string prNumber, string threadId)
             => throw Unexpected(nameof(IRemoteProvider));
+
+        public Task<bool> SupportsThreadResolutionAsync(string repoUrl)
+            => throw Unexpected(nameof(IRemoteProvider));
     }
 
     private sealed class ThrowingAgentAdapterRegistry : IAgentAdapterRegistry

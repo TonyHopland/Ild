@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A Claude Code or GitHub Copilot provider can now pick its model, so one provider runs Opus and another Sonnet. Leave it blank to keep the CLI's own default.**
 
-- **A loop can now wake itself when someone comments on its pull request, read the whole review — including the findings the review body hides — and answer each one on the thread it was raised on.**
+- **A loop can now wake itself when someone comments on its pull request, read the whole review — including the findings the review body hides — and answer each one on the thread it was raised on. Nothing an agent writes reaches the pull request until the PR node sends it, so you can read what it intends to say and drop any of it first.**
 
 ### Changed
 

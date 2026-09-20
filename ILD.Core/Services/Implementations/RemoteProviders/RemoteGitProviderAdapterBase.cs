@@ -827,6 +827,14 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     }
 
     /// <summary>
+    /// Whether this provider can mark a review thread resolved at all. Asked
+    /// before an agent queues a resolve, so it is told "not supported" there and
+    /// then rather than being answered "queued" for something that can never
+    /// happen.
+    /// </summary>
+    public virtual bool SupportsThreadResolution => false;
+
+    /// <summary>
     /// No thread resolution by default: outside GitHub's GraphQL API a review
     /// thread is not a resolvable object, so saying so is the answer — the same
     /// degradation <see cref="GetCheckLogAsync"/> uses.

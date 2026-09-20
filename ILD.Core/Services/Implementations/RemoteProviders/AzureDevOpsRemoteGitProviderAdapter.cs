@@ -221,6 +221,8 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
         return new RemotePrWriteResult(true, await PrCommentHelper.ReadCreatedIdAsync(resp), null);
     }
 
+    public override bool SupportsThreadResolution => true;
+
     /// <summary>Thread statuses Azure DevOps treats as closed; anything else leaves the thread open.</summary>
     private static readonly HashSet<string> ResolvedThreadStatuses =
         new(StringComparer.OrdinalIgnoreCase) { "fixed", "closed", "wontFix", "byDesign" };

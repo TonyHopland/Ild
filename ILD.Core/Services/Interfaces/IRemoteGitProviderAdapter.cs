@@ -40,6 +40,9 @@ public interface IRemoteGitProviderAdapter
     /// <summary>Answer one review comment on its own thread, with the provider credentials.</summary>
     Task<RemotePrWriteResult> ReplyToReviewThreadAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string commentId, string body);
 
+    /// <summary>Whether this provider can resolve a review thread at all.</summary>
+    bool SupportsThreadResolution { get; }
+
     /// <summary>
     /// Mark a review thread resolved. Providers whose API has no thread concept
     /// say so rather than claiming success — the same degradation

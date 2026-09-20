@@ -8,13 +8,76 @@ import {
   WorkItemStatus,
   WorktreePreviewService,
 } from "../../types";
-import { repositoryService } from "../../services/auth";
+import { loopRunService, repositoryService } from "../../services/auth";
 import { useStoredPreviewEnv } from "../../hooks/useStoredPreviewEnv";
 import { makeLoopTagMatcher, parseConversation, parseTags } from "../../utils/workItemJson";
 import { prStatusBadges } from "../../utils/prStatusBadges";
 import MarkdownRenderer from "../MarkdownRenderer";
 import FeedbackActions from "../FeedbackActions";
 import type { WorkItemDetail } from "./useWorkItemDetail";
+
+/**
+ * What the round is about to say on the pull request, and the chance to stop
+ * it. Agents never write to a pull request themselves — they record an intent
+ * and the PR node sends it at the end of the round — so this is the window in
+ * which a person can read each answer and drop any of it. Rendered whatever the
+ * run's status, because that window opens while the round is still running.
+ *
+ * Dropping loses nothing: the thread stays open and the finding stays
+ * undelivered, so the next review raises it again.
+ */
+export function QueuedPrWrites({
+  workItem,
+  detail,
+}: {
+  workItem: WorkItem;
+  detail: WorkItemDetail;
+}) {
+  const [dropping, setDropping] = useState<string | null>(null);
+  const queued = detail.currentRun?.prQueuedWrites ?? [];
+  if (queued.length === 0) return null;
+
+  const runId = workItem.currentLoopRunId;
+  const drop = async (writeId: string) => {
+    if (!runId) return;
+    setDropping(writeId);
+    try {
+      await loopRunService.dropQueuedPrWrite(runId, writeId);
+      detail.refreshRuns();
+    } finally {
+      setDropping(null);
+    }
+  };
+
+  return (
+    <div className="wiv2-pr-queue">
+      <div className="wiv2-pr-queue-title">
+        Waiting to go out on the pull request ({queued.length})
+      </div>
+      <div className="wiv2-pr-queue-hint">
+        Sent when the PR node next runs. Drop anything you do not want said — the thread stays open
+        and the finding comes back on the next review.
+      </div>
+      {queued.map((write) => (
+        <div key={write.id} className="wiv2-pr-queue-item">
+          <div className="wiv2-pr-queue-where">
+            {write.kind === "resolve" ? "Resolve thread" : "Reply"}
+            {write.path ? ` · ${write.path}${write.line ? `:${write.line}` : ""}` : ""}
+          </div>
+          {write.body && <div className="wiv2-pr-queue-body">{write.body}</div>}
+          <button
+            type="button"
+            className="wiv2-pr-queue-drop"
+            disabled={dropping === write.id}
+            onClick={() => void drop(write.id)}
+          >
+            {dropping === write.id ? "Dropping…" : "Drop"}
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 /** Prominent feedback banner shown in the Action tab while the item waits on a human. */
 export function FeedbackBanner({
