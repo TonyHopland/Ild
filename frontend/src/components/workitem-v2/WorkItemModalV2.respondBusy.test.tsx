@@ -269,6 +269,41 @@ describe("an answer that has been submitted", () => {
   });
 });
 
+describe("an answer whose refresh never arrives", () => {
+  test("says so and keeps the controls held rather than offering to answer again", async () => {
+    mockServices();
+    const answer = vi
+      .spyOn(authServices.workItemService, "humanFeedbackInput")
+      .mockResolvedValue(undefined);
+    // The answer is in, but the item cannot be read back, so this view is still
+    // showing a run that is waiting for input.
+    vi.spyOn(authServices.workItemService, "getById").mockRejectedValue({
+      status: 503,
+      message: "WorkItemServer unreachable",
+    });
+    await renderDialog();
+    await waitForLimits();
+
+    const approve = screen.getByRole("button", { name: "Approve" });
+    await act(async () => {
+      fireEvent.click(approve);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(feedback().textContent).toContain("could not be refreshed"));
+    expect((approve as HTMLButtonElement).disabled).toBe(true);
+
+    // A second press must not answer again: the run already has its answer.
+    await act(async () => {
+      fireEvent.click(approve);
+      await Promise.resolve();
+    });
+    expect(answer).toHaveBeenCalledTimes(1);
+    expect((approve as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
 describe("answering while an answer is already in flight", () => {
   test("the answer buttons are held until the upload and the answer are done", async () => {
     mockServices();

@@ -386,15 +386,20 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     }
   }, [workItem?.id]);
 
-  // Returns the read so a caller that has just changed the item can wait for the
-  // dialog to be showing what it did before letting go of its controls. A read
-  // that fails leaves the last-known copy in place, as it always has.
-  const refetchWorkItem = useCallback(() => {
-    if (!workItem) return Promise.resolve();
+  // Reports whether the dialog is now showing the item as the server has it, so
+  // a caller that has just changed it can tell "refreshed" from "still showing
+  // what it showed before". A read that fails leaves the last-known copy in
+  // place, as it always has; callers that only want the refresh ignore the
+  // answer.
+  const refetchWorkItem = useCallback((): Promise<boolean> => {
+    if (!workItem) return Promise.resolve(false);
     return workItemService
       .getById(workItem.id)
-      .then((updated) => onSave(updated))
-      .catch(() => {});
+      .then((updated) => {
+        onSave(updated);
+        return true;
+      })
+      .catch(() => false);
   }, [workItem?.id, onSave]);
 
   // Live stream + state sync for running work items.
@@ -620,6 +625,10 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     responding.current = true;
     setRespondLoading(true);
     setRespondError(null);
+    // Set when the answer is in but the dialog could not be brought up to date:
+    // the controls stay held rather than offering to answer again a question the
+    // run has already been given an answer to.
+    let answeredButUnrefreshed = false;
     try {
       await whileBusy(async () => {
         // The staging list answers both questions here, never the render the
@@ -677,12 +686,21 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
         attachments.clearUploaded();
         // The answer is in, and the run has moved on: the controls stay held
         // until the dialog is showing that, so a second press cannot answer a
-        // question that has already been answered.
-        await refetchWorkItem();
+        // question that has already been answered. If the item cannot be read
+        // back, this view is still showing the run as waiting, and the only
+        // honest thing it can do is say so and stay held.
+        if (!(await refetchWorkItem())) {
+          answeredButUnrefreshed = true;
+          setRespondError(
+            "Your answer was accepted, but this view could not be refreshed — reload the page to see where the run is now.",
+          );
+        }
       });
     } finally {
-      responding.current = false;
-      setRespondLoading(false);
+      if (!answeredButUnrefreshed) {
+        responding.current = false;
+        setRespondLoading(false);
+      }
     }
   };
 
